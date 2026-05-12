@@ -843,7 +843,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         else:
             current_segments = []
         native_timing_plan = None
-        if current_segments:
+        if current_segments and edge_type != "diamond":
             native_timing_plan = plan_subtitle_timing_edit_via_swift(
                 segments=current_segments,
                 line=int(line_num),

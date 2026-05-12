@@ -7,6 +7,15 @@ from statistics import median
 from time import time
 from typing import Any, Iterable
 
+from core.engine.subtitle_accuracy_utils import (
+    clean_text as _clean_text,
+    compact_len,
+    compact_text as _compact_text,
+    line_count as _line_count,
+    safe_bool as _safe_bool,
+    safe_float as _safe_float,
+    safe_int as _safe_int,
+)
 from core.engine.llm_correction_guard import contains_timecode, normalized_text, validate_llm_chunks
 from core.native_text_similarity import similarity_ratio
 
@@ -44,51 +53,6 @@ _INTERJECTION_TOKENS = {
     "아이",
     "흠",
 }
-
-
-def _safe_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in {"0", "false", "off", "no", "n", "끔", "아니오"}
-    return bool(value)
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return float(default)
-        return float(value)
-    except Exception:
-        return float(default)
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return int(default)
-        return int(round(float(value)))
-    except Exception:
-        return int(default)
-
-
-def compact_len(text: Any) -> int:
-    return len(re.sub(r"\s+", "", str(text or "")))
-
-
-def _compact_text(text: Any) -> str:
-    return re.sub(r"\s+", "", str(text or "")).strip().lower()
-
-
-def _clean_text(text: Any) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip()
-
-
-def _line_count(text: Any) -> int:
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    return max(1, len(lines))
 
 
 def _profile_examples(profile: dict[str, Any] | None) -> list[str]:

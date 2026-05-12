@@ -1,4 +1,5 @@
 import json
+import threading
 import os
 import tempfile
 import unittest
@@ -191,6 +192,58 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             finally:
                 trainer._poll_timer.stop()
                 trainer.deleteLater()
+
+    def test_native_input_snapshot_requests_immediate_stop_when_learning(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            owner = _DummyOwner()
+            trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
+            trainer._poll_timer.stop()
+            try:
+                trainer._current_learning_mode = "lite"
+                calls = []
+
+                def fake_stop(**kwargs):
+                    calls.append(dict(kwargs))
+                    return {"stop_requested": True}
+
+                trainer.request_immediate_stop = fake_stop
+
+                handled = trainer._handle_native_input_snapshot(
+                    {
+                        "recent": True,
+                        "event_type": "key_down",
+                        "age_sec": 0.02,
+                    }
+                )
+
+                self.assertTrue(handled)
+                self.assertTrue(trainer._stop_requested.is_set())
+                self.assertEqual(calls[0]["reason"], "native_user_input_interrupt")
+                self.assertLessEqual(calls[0]["join_timeout_sec"], 0.01)
+            finally:
+                trainer._poll_timer.stop()
+                trainer._native_input_watchdog_stop.set()
+                trainer.deleteLater()
+
+    def test_fast_shutdown_can_skip_cleanup_and_recovery(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            owner = _DummyOwner()
+            trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
+            trainer._poll_timer.stop()
+            trainer._worker_thread = threading.Thread(target=lambda: None)
+            with patch("core.personalization.idle_trainer._cleanup_lora_training_runtime") as cleanup, patch(
+                "core.personalization.idle_trainer.recover_interrupted_training_jobs"
+            ) as recover:
+                result = trainer.shutdown(timeout_sec=0.0, cleanup=False, recover=False)
+
+            self.assertTrue(result["stopped"])
+            cleanup.assert_not_called()
+            recover.assert_not_called()
+            trainer.deleteLater()
 
     def test_enqueue_full_training_jobs_requeues_completed_jobs(self):
         with tempfile.TemporaryDirectory() as tmpdir:

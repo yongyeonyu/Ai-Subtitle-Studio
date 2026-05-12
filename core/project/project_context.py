@@ -27,6 +27,7 @@ from core.project.project_assets import (
     project_uses_external_text_assets,
     sanitize_stt_track_rows,
 )
+from core.project.project_format import project_primary_fps, project_total_duration
 
 STT_SEGMENT_METADATA_KEYS = (
     "stt_candidates",
@@ -252,8 +253,7 @@ def project_voice_activity_segments(project: dict[str, Any]) -> list[dict[str, A
         raw_segments = (project.get("analysis", {}) or {}).get("voice_activity_segments", [])
     if not isinstance(raw_segments, list):
         return []
-    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
-    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    primary_fps = project_primary_fps(project)
     out = []
     for idx, item in enumerate(raw_segments):
         if not isinstance(item, dict):
@@ -298,8 +298,7 @@ def project_voice_activity_segments(project: dict[str, Any]) -> list[dict[str, A
 
 
 def project_cut_boundary_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
-    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
-    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    primary_fps = project_primary_fps(project)
     analysis = project.get("analysis", {}) or {}
     raw = analysis.get("cut_boundaries")
     if not isinstance(raw, list):
@@ -310,8 +309,7 @@ def project_cut_boundary_segments(project: dict[str, Any]) -> list[dict[str, Any
 
 
 def project_cut_boundary_provisional_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
-    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
-    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    primary_fps = project_primary_fps(project)
     return project_cut_provisional_boundaries(project, primary_fps=primary_fps)
 
 
@@ -319,6 +317,8 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
     editor_state = project.get("editor_state", {}) or {}
     stt_state = editor_state.get("stt", {}) or {}
     raw_segments = stt_state.get("preview_segments")
+    if not isinstance(raw_segments, list) or not raw_segments:
+        raw_segments = project.get("_hot_open_stt_preview_segments_cache")
     if not isinstance(raw_segments, list) or not raw_segments:
         raw_segments = editor_state.get("stt_preview_segments")
     if not isinstance(raw_segments, list) or not raw_segments:
@@ -356,11 +356,55 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
                             raw_segments.append(item)
     if not isinstance(raw_segments, list):
         return []
-    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
-    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    primary_fps = project_primary_fps(project)
     normalized = _normalize_stt_preview_segments(raw_segments, primary_fps=primary_fps)
+    normalized = _trim_segments_to_project_duration(normalized, project, primary_fps=primary_fps)
     _attach_clip_context_from_boundaries(normalized, project_clip_boundaries(project))
     return normalized
+
+
+def _project_total_duration(project: dict[str, Any]) -> float:
+    total = project_total_duration(project)
+    if total > 0.0:
+        return total
+    boundaries = project_clip_boundaries(project)
+    return max((_safe_float(boundary.get("end"), 0.0) for boundary in boundaries if isinstance(boundary, dict)), default=0.0)
+
+
+def _trim_segments_to_project_duration(
+    rows: list[dict[str, Any]],
+    project: dict[str, Any],
+    *,
+    primary_fps: float,
+) -> list[dict[str, Any]]:
+    total_duration = _project_total_duration(project)
+    if total_duration <= 0.0 or not rows:
+        return list(rows or [])
+    tolerance = max(0.1, 2.0 / max(1.0, float(primary_fps or 30.0)))
+    out: list[dict[str, Any]] = []
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        start = _safe_float(item.get("start", item.get("timeline_start", 0.0)), 0.0)
+        end = _safe_float(item.get("end", item.get("timeline_end", start)), start)
+        if start > total_duration + tolerance:
+            continue
+        if end > total_duration + tolerance:
+            fps = normalize_fps(item.get("timeline_frame_rate") or item.get("frame_rate") or primary_fps or 30.0)
+            clamped_end = max(start, total_duration)
+            item["end"] = clamped_end
+            item["timeline_end"] = clamped_end
+            if item.get("end_frame") is not None or item.get("timeline_end_frame") is not None:
+                end_frame = sec_to_frame(clamped_end, fps)
+                item["end_frame"] = end_frame
+                item["timeline_end_frame"] = end_frame
+                frame_range = dict(item.get("frame_range") or {})
+                frame_range["end"] = end_frame
+                frame_range["timeline_frame_rate"] = fps
+                item["frame_range"] = frame_range
+        out.append(item)
+    return out
 
 
 def _attach_clip_context_from_boundaries(segments: list[dict[str, Any]], boundaries: list[dict[str, Any]]) -> None:
@@ -403,6 +447,8 @@ def project_segments_to_editor(
     editor_subtitles = editor_state.get("subtitles", {}) or {}
     vector_canvas = ((editor_state.get("rendering", {}) or {}).get("subtitle_canvas", {}) or {})
     raw_segments = _segments_from_subtitle_canvas_vector(vector_canvas)
+    if (not raw_segments) and isinstance(project.get("_hot_open_subtitle_segments_cache"), list):
+        raw_segments = [dict(seg) for seg in list(project.get("_hot_open_subtitle_segments_cache") or []) if isinstance(seg, dict)]
     if (not raw_segments) and project_uses_external_text_assets(project):
         raw_segments = load_external_subtitle_segments(project)
     if not isinstance(raw_segments, list):
@@ -411,6 +457,11 @@ def project_segments_to_editor(
         raw_segments = project.get("segments")
     if not isinstance(raw_segments, list):
         raw_segments = (project.get("subtitles", {}) or {}).get("segments", [])
+    if (
+        (not isinstance(raw_segments, list) or not raw_segments)
+        and project_uses_external_text_assets(project)
+    ):
+        raw_segments = load_external_subtitle_segments(project)
 
     boundaries = project_clip_boundaries(project)
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
@@ -431,8 +482,7 @@ def project_segments_to_editor(
         for b_idx, boundary in enumerate(boundaries)
         if boundary.get("file")
     }
-    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
-    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    primary_fps = project_primary_fps(project)
     status_threshold = recheck_threshold() if raw_segments else None
 
     out = []
@@ -525,6 +575,7 @@ def project_segments_to_editor(
                 item[key] = seg.get(key)
         item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
+    out = _trim_segments_to_project_duration(out, project, primary_fps=primary_fps)
     if out and include_analysis_candidates and project_uses_external_text_assets(project):
         _attach_external_stt_candidates(out, load_external_stt_tracks(project))
         _attach_lattice_candidates_from_artifact(out, project)

@@ -461,7 +461,7 @@
     "editor_roughcut_draft_max_major_segments": 10,
     "roughcut_major_segment_ui_enabled": true,
     "roughcut_legacy_table_fallback": true,
-    "roughcut_run_after_subtitle_generation": false,
+    "roughcut_run_after_subtitle_generation": true,
     "roughcut_auto_load_subtitles_on_enter": true,
     "roughcut_start_button_mode_routing": true,
     "roughcut_llm_enabled": true,

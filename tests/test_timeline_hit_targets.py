@@ -1241,6 +1241,92 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual([row["timeline_sec"] for row in editor.timeline.scan_boundary_times], [10.0])
         self.assertTrue(editor.dirty)
 
+    def test_scan_boundary_ignores_stale_auto_rows_after_backend_completion(self):
+        class DummyTimeline:
+            def __init__(self):
+                self.scan_boundary_times = []
+                self.canvas = type("Canvas", (), {})()
+
+            def set_scan_boundary_times(self, times):
+                self.scan_boundary_times = list(times or [])
+                return True
+
+        class DummyBackend:
+            def __init__(self):
+                self._cut_boundary_prescan_completed = True
+                self._cut_boundary_prescan_thread = None
+                self._cut_boundary_follower_thread = None
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.timeline = DummyTimeline()
+                self._window = type("Window", (), {"backend": DummyBackend(), "backend_fast": None})()
+                self._auto_cut_boundary_scan_active = False
+                self._auto_cut_boundary_scan_lines = []
+
+            def window(self):
+                return self._window
+
+            def _snap_to_frame(self, sec):
+                return round(float(sec), 3)
+
+        editor = DummyEditor()
+
+        editor._set_auto_cut_boundary_scan_lines([{"timeline_sec": 12.0, "status": "provisional"}])
+
+        self.assertEqual(editor._auto_cut_boundary_scan_lines, [])
+        self.assertEqual(editor.timeline.scan_boundary_times, [])
+
+    def test_scan_boundary_hides_checked_audio_rows_from_ui_preview_only(self):
+        class DummyTimeline:
+            def __init__(self):
+                self.scan_boundary_times = []
+                self.canvas = type("Canvas", (), {})()
+
+            def set_scan_boundary_times(self, times):
+                self.scan_boundary_times = list(times or [])
+                return True
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.timeline = DummyTimeline()
+                self._auto_cut_boundary_scan_active = True
+                self._auto_cut_boundary_scan_lines = []
+
+            def _snap_to_frame(self, sec):
+                return round(float(sec), 3)
+
+            def _scan_cut_should_ignore_stale_preview_rows(self, rows):
+                return False
+
+        editor = DummyEditor()
+
+        editor._set_auto_cut_boundary_scan_lines(
+            [
+                {
+                    "timeline_sec": 12.0,
+                    "status": "checked",
+                    "scan_checked": True,
+                    "source": "audio_gain_provisional",
+                    "audio_gain_db_delta": 11.0,
+                },
+                {
+                    "timeline_sec": 18.0,
+                    "status": "provisional",
+                    "source": "visual_provisional",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            [row["timeline_sec"] for row in editor._auto_cut_boundary_scan_lines],
+            [18.0],
+        )
+        self.assertEqual(
+            [row["timeline_sec"] for row in editor.timeline.scan_boundary_times],
+            [18.0],
+        )
+
     def test_scan_verify_cut_boundary_candidate_forces_medium_profile(self):
         class FakeCv2:
             CAP_PROP_FPS = 5

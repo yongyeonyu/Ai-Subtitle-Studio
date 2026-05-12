@@ -22,6 +22,10 @@ FOLLOWER_CHECKED_LINE_COLOR = "#8E8E93"
 INITIAL_MIDDLE_BORDER_COLOR = "#8E8E93"
 PROVISIONAL_VISUAL_COMPARE_WIDTH = 1280
 PROVISIONAL_VISUAL_COMPARE_HEIGHT = 720
+PROVISIONAL_PACKET_BUCKET_SEC = 0.25
+PROVISIONAL_PACKET_MIN_GAP_SEC = 0.20
+PROVISIONAL_PIONEER_MIN_GAP_SEC = 0.45
+PROVISIONAL_PACKET_RAW_CANDIDATES = 180
 FOLLOWER_VERIFY_COMPARE_WIDTH = 1920
 FOLLOWER_VERIFY_COMPARE_HEIGHT = 1080
 PROVISIONAL_VISUAL_SCAN_PROFILE = {
@@ -222,11 +226,40 @@ def build_provisional_native_settings(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     tuned = dict(settings or {})
     profile = build_provisional_visual_scan_profile(sample_step_sec=sample_step_sec)
+
+    def _safe_float(key: str, default: float) -> float:
+        try:
+            return float(tuned.get(key, default) or default)
+        except Exception:
+            return float(default)
+
+    def _safe_int(key: str, default: int) -> int:
+        try:
+            return int(tuned.get(key, default) or default)
+        except Exception:
+            return int(default)
+
     tuned["scan_cut_boundary_level"] = "low"
     tuned["cut_boundary_level"] = "low"
     tuned["scan_cut_level"] = "low"
     tuned["scan_cut_compare_max_width"] = PROVISIONAL_VISUAL_COMPARE_WIDTH
     tuned["scan_cut_compare_max_height"] = PROVISIONAL_VISUAL_COMPARE_HEIGHT
+    tuned["scan_cut_pioneer_min_gap_sec"] = max(
+        0.20,
+        min(_safe_float("scan_cut_pioneer_min_gap_sec", PROVISIONAL_PIONEER_MIN_GAP_SEC), PROVISIONAL_PIONEER_MIN_GAP_SEC),
+    )
+    tuned["scan_cut_pioneer_packet_min_gap_sec"] = max(
+        0.10,
+        min(_safe_float("scan_cut_pioneer_packet_min_gap_sec", PROVISIONAL_PACKET_MIN_GAP_SEC), PROVISIONAL_PACKET_MIN_GAP_SEC),
+    )
+    tuned["scan_cut_pioneer_packet_bucket_sec"] = max(
+        0.10,
+        min(_safe_float("scan_cut_pioneer_packet_bucket_sec", PROVISIONAL_PACKET_BUCKET_SEC), PROVISIONAL_PACKET_BUCKET_SEC),
+    )
+    tuned["scan_cut_pioneer_packet_scout_raw_candidates"] = max(
+        PROVISIONAL_PACKET_RAW_CANDIDATES,
+        _safe_int("scan_cut_pioneer_packet_scout_raw_candidates", PROVISIONAL_PACKET_RAW_CANDIDATES),
+    )
     tuned["scan_cut_boundary_resolved_level"] = str(profile.get("level") or "low")
     tuned["scan_cut_boundary_resolved_mask"] = str(profile.get("mask") or "")
     return tuned, profile
@@ -299,6 +332,21 @@ def build_follower_native_verify_settings(
     tuned["scan_cut_follower_local_color_confirm_frames"] = max(
         2,
         _safe_int("scan_cut_follower_local_color_confirm_frames", 6),
+    )
+    tuned["scan_cut_follower_same_scene_color_enabled"] = bool(
+        tuned.get("scan_cut_follower_same_scene_color_enabled", True)
+    )
+    tuned["scan_cut_follower_same_scene_color_max_score"] = min(
+        _safe_float("scan_cut_follower_same_scene_color_max_score", 11.0),
+        11.0,
+    )
+    tuned["scan_cut_follower_same_scene_color_max_luma_delta"] = min(
+        _safe_float("scan_cut_follower_same_scene_color_max_luma_delta", 9.0),
+        9.0,
+    )
+    tuned["scan_cut_follower_same_scene_color_max_chroma_delta"] = min(
+        _safe_float("scan_cut_follower_same_scene_color_max_chroma_delta", 8.5),
+        8.5,
     )
     tuned["scan_cut_follower_gray_dominance_margin"] = max(
         0.10,
@@ -390,12 +438,18 @@ def reviewed_middle_source_rows(
         status = str(row.get("status", "") or "").strip().lower()
         audio_checked = bool(is_audio_gain_boundary(row) and row.get("scan_checked"))
         relocated_support = bool(row.get("follower_relocated") or row.get("rollback_relocated"))
+        middle_merge_preferred = bool(
+            row.get("middle_merge_preferred")
+            or row.get("same_scene_color_similarity")
+        )
         strict_reviewed = bool(
             row.get("verified")
             or row.get("confirmed")
             or row.get("visual_verify_skipped")
             or status in FOLLOWER_FINAL_BOUNDARY_STATUSES
         )
+        if audio_checked and middle_merge_preferred and not strict_reviewed:
+            continue
         is_reviewed = bool(
             strict_reviewed
             or audio_checked

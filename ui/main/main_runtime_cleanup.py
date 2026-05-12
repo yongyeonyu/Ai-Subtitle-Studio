@@ -664,8 +664,35 @@ class MainRuntimeCleanupMixin:
         except Exception:
             pass
         try:
-            self._pause_personalization_for_foreground_activity("app_exit", hold_ms=3_600_000)
-            self._shutdown_personalization_idle_trainer(timeout_sec=0.0)
+            trainer = getattr(self, "_personalization_idle_trainer", None)
+            self._lora_foreground_busy_until_ms = int(time.time() * 1000) + 3_600_000
+            self._lora_foreground_busy_reason = "app_exit"
+            if trainer is not None:
+                request_stop = getattr(trainer, "request_immediate_stop", None)
+                if callable(request_stop):
+                    request_stop(
+                        reason="app_exit",
+                        hold_ms=3_600_000,
+                        join_timeout_sec=0.0,
+                        cleanup=False,
+                    )
+                else:
+                    try:
+                        trainer.suspend_for_foreground_activity(
+                            reason="app_exit",
+                            hold_ms=3_600_000,
+                            cleanup=False,
+                        )
+                    except TypeError:
+                        trainer.suspend_for_foreground_activity(
+                            reason="app_exit",
+                            hold_ms=3_600_000,
+                        )
+            self._shutdown_personalization_idle_trainer(
+                timeout_sec=0.0,
+                cleanup=False,
+                recover=False,
+            )
             stopped_any = True
         except Exception:
             pass

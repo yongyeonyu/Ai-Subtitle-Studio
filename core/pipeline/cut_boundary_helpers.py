@@ -21,7 +21,12 @@ from core.cut_boundary_native_plan import (
     provisional_boundary_row,
     reviewed_middle_source_rows,
 )
-from core.media_fingerprint import media_fingerprint_digest
+from core.pipeline.cut_boundary_cache import (
+    cut_boundary_cache_file_entries,
+    cut_boundary_cache_path_for_start,
+    cut_boundary_cache_settings_payload,
+    truthy_setting,
+)
 from core.pipeline.cut_boundary_prescan_policy import (
     cut_boundary_adaptive_prescan_plan,
     fast_cut_boundary_prescan_settings,
@@ -31,15 +36,7 @@ from core.runtime.logger import get_logger
 from core.settings import load_settings
 
 
-def _truthy_setting(value, default: bool = False) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"", "auto"}:
-            return bool(default)
-        return lowered not in {"0", "false", "no", "off", "미사용", "사용안함", "disabled"}
-    return bool(value)
+_truthy_setting = truthy_setting
 
 
 class PipelineCutBoundaryMixin:
@@ -186,80 +183,11 @@ class PipelineCutBoundaryMixin:
             get_logger().log(f"  ⚠️ [컷 경계] 완료 임시선 정리 저장 실패: {exc}")
 
     def _cut_boundary_cache_settings_payload(self, settings: dict) -> dict:
-        settings = dict(settings or {})
-        try:
-            duration_sec = max(0.0, float(settings.get("cut_boundary_media_duration_sec", 0.0) or 0.0))
-        except Exception:
-            duration_sec = 0.0
-        duration_bucket = int(duration_sec // 300.0 * 300.0) if duration_sec > 0.0 else 0
-        return {
-            "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 2.0),
-            "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
-            "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
-            "scan_cut_mode": settings.get("scan_cut_mode", ""),
-            "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
-            "scan_cut_boundary_resolved_level": settings.get("scan_cut_boundary_resolved_level", ""),
-            "scan_cut_boundary_resolved_mask": settings.get("scan_cut_boundary_resolved_mask", ""),
-            "scan_cut_boundary_provisional_level": settings.get("scan_cut_boundary_provisional_level", ""),
-            "scan_cut_boundary_provisional_mask": settings.get("scan_cut_boundary_provisional_mask", ""),
-            "cut_boundary_auto_long_media_sec": settings.get("cut_boundary_auto_long_media_sec", 15.0 * 60.0),
-            "cut_boundary_auto_short_media_sec": settings.get("cut_boundary_auto_short_media_sec", 10.0 * 60.0),
-            "cut_boundary_media_duration_bucket_sec": duration_bucket,
-            "cut_boundary_adaptive_level_enabled": bool(settings.get("cut_boundary_adaptive_level_enabled", False)),
-            "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
-            "scan_cut_compare_max_width": settings.get("scan_cut_compare_max_width", 1920),
-            "scan_cut_compare_max_height": settings.get("scan_cut_compare_max_height", 1080),
-            "scan_cut_follower_deferred_until_pioneer_done": bool(settings.get("scan_cut_follower_deferred_until_pioneer_done", False)),
-            "scan_cut_follower_stream_start_percent": settings.get("scan_cut_follower_stream_start_percent", 25),
-            "scan_cut_follower_stream_batch_size": settings.get("scan_cut_follower_stream_batch_size", 16),
-            "scan_cut_follower_verify_micro_batch_max": settings.get("scan_cut_follower_verify_micro_batch_max", 16),
-            "scan_cut_realtime_preview_enabled": _truthy_setting(settings.get("scan_cut_realtime_preview_enabled"), True),
-            "scan_cut_audio_gain_enabled": settings.get("scan_cut_audio_gain_enabled", True),
-            "scan_cut_audio_gain_threshold_db": settings.get("scan_cut_audio_gain_threshold_db", 10.0),
-            "scan_cut_audio_gain_window_sec": settings.get("scan_cut_audio_gain_window_sec", None),
-            "scan_cut_audio_gain_min_gap_sec": settings.get("scan_cut_audio_gain_min_gap_sec", None),
-        }
+        return cut_boundary_cache_settings_payload(settings)
 
     def _cut_boundary_cache_path_for_start(self, files: list[str], settings: dict) -> str:
         """Return reusable cut-boundary cache path for the current media/settings."""
-        import hashlib
-        try:
-            from core.runtime import config
-            cache_root = os.path.join(config.OUTPUT_DIR, "cut_boundary_cache")
-        except Exception:
-            cache_root = os.path.join("output", "cut_boundary_cache")
-
-        os.makedirs(cache_root, exist_ok=True)
-
-        payload = {
-            "version": 7,
-            "cut_boundary_api_version": CUT_BOUNDARY_API_VERSION,
-            "cut_boundary_algorithm_version": CUT_BOUNDARY_ALGORITHM_VERSION,
-            "cut_boundary_algorithm_id": CUT_BOUNDARY_ALGORITHM_ID,
-            "files": [],
-            "settings": self._cut_boundary_cache_settings_payload(settings),
-        }
-
-        for p in list(files or []):
-            try:
-                st = os.stat(p)
-                payload["files"].append({
-                    "path": os.path.abspath(p),
-                    "size": int(st.st_size),
-                    "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
-                    "fingerprint_digest": media_fingerprint_digest(p, sample_bytes=256 * 1024, include_samples=True),
-                })
-            except Exception:
-                payload["files"].append({
-                    "path": os.path.abspath(str(p)),
-                    "size": 0,
-                    "mtime_ns": 0,
-                    "fingerprint_digest": "",
-                })
-
-        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        key = hashlib.sha256(raw).hexdigest()[:24]
-        return os.path.join(cache_root, f"cut_boundaries_{key}.json")
+        return cut_boundary_cache_path_for_start(files, settings)
 
     def _load_cut_boundary_cache_for_start(self, project_path: str, files: list[str], settings: dict) -> list[dict] | None:
         """Load cached cut boundaries and hydrate only project.analysis.cut_boundaries.
@@ -409,30 +337,13 @@ class PipelineCutBoundaryMixin:
                 "cut_boundary_algorithm_id": CUT_BOUNDARY_ALGORITHM_ID,
                 "created_at": time.time(),
                 "cache_type": "cut_boundaries_only",
-                "files": [],
+                "files": cut_boundary_cache_file_entries(files),
                 "settings": self._cut_boundary_cache_settings_payload(settings),
                 # ✅ 핵심: 프로젝트 전체가 아니라 컷 경계 데이터만 저장
                 "analysis": {
                     "cut_boundaries": list(rows or []),
                 },
             }
-
-            for p in list(files or []):
-                try:
-                    st = os.stat(p)
-                    payload["files"].append({
-                        "path": os.path.abspath(str(p)),
-                        "size": int(st.st_size),
-                        "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
-                        "fingerprint_digest": media_fingerprint_digest(p, sample_bytes=256 * 1024, include_samples=True),
-                    })
-                except Exception:
-                    payload["files"].append({
-                        "path": os.path.abspath(str(p)),
-                        "size": 0,
-                        "mtime_ns": 0,
-                        "fingerprint_digest": "",
-                    })
 
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -1281,11 +1192,25 @@ class PipelineCutBoundaryMixin:
                 try:
                     visual_gap_sec = max(
                         0.0,
-                        float(settings.get("scan_cut_follower_visual_candidate_compact_gap_sec", 0.75) or 0.75),
+                        float(settings.get("scan_cut_follower_visual_candidate_compact_gap_sec", 0.45) or 0.45),
                     )
                 except Exception:
-                    visual_gap_sec = 0.75
-                if audio_gap_sec <= 0.0 and visual_gap_sec <= 0.0:
+                    visual_gap_sec = 0.45
+                try:
+                    packet_gap_sec = max(
+                        0.0,
+                        float(settings.get("scan_cut_follower_packet_candidate_compact_gap_sec", 0.20) or 0.20),
+                    )
+                except Exception:
+                    packet_gap_sec = 0.20
+                try:
+                    scene_gap_sec = max(
+                        0.0,
+                        float(settings.get("scan_cut_follower_scene_candidate_compact_gap_sec", 0.40) or 0.40),
+                    )
+                except Exception:
+                    scene_gap_sec = 0.40
+                if audio_gap_sec <= 0.0 and visual_gap_sec <= 0.0 and packet_gap_sec <= 0.0 and scene_gap_sec <= 0.0:
                     return rows, []
 
                 def _row_sec(row: dict) -> float:
@@ -1299,6 +1224,30 @@ class PipelineCutBoundaryMixin:
                         return int(row.get("clip_idx", 0) or 0)
                     except Exception:
                         return 0
+
+                def _row_family(row: dict) -> str:
+                    if is_audio_gain_boundary(row):
+                        return "audio"
+                    detector = str(row.get("detector") or "").strip().lower()
+                    source = str(row.get("source") or "").strip().lower()
+                    reason = str(row.get("reason") or "").strip().lower()
+                    combined = " ".join(part for part in (detector, source, reason) if part)
+                    if "packet" in combined:
+                        return "packet"
+                    if "scene" in combined:
+                        return "scene"
+                    if "pipe" in combined or "pixel_flow" in combined or "dense_flow" in combined:
+                        return "visual_flow"
+                    return "visual"
+
+                def _family_gap_sec(family: str) -> float:
+                    if family == "audio":
+                        return audio_gap_sec
+                    if family == "packet":
+                        return packet_gap_sec
+                    if family == "scene":
+                        return scene_gap_sec
+                    return visual_gap_sec
 
                 def _rank(row: dict) -> tuple[float, float, float, float]:
                     audio = is_audio_gain_boundary(row)
@@ -1340,9 +1289,10 @@ class PipelineCutBoundaryMixin:
                         cluster = [row]
                         continue
                     same_clip = _row_clip(row) == _row_clip(cluster[-1])
-                    audio_cluster = is_audio_gain_boundary(row) and all(is_audio_gain_boundary(item) for item in cluster)
-                    gap = audio_gap_sec if audio_cluster else visual_gap_sec
-                    if same_clip and gap > 0.0 and (_row_sec(row) - _row_sec(cluster[-1])) <= gap:
+                    family = _row_family(row)
+                    cluster_family = _row_family(cluster[-1])
+                    gap = _family_gap_sec(family)
+                    if same_clip and family == cluster_family and gap > 0.0 and (_row_sec(row) - _row_sec(cluster[-1])) <= gap:
                         cluster.append(row)
                         continue
                     _flush_cluster()
@@ -1721,6 +1671,7 @@ class PipelineCutBoundaryMixin:
                                 )
                             verified_batch: list[dict] = []
                             relocated_batch: list[dict] = []
+                            checked_batch: list[dict] = []
 
                             def _collect_verified(row: dict, _current_rows: list[dict]):
                                 if isinstance(row, dict):
@@ -1740,6 +1691,11 @@ class PipelineCutBoundaryMixin:
                                 except Exception:
                                     pass
 
+                            def _collect_checked(row: dict, _current_rows: list[dict]):
+                                if not isinstance(row, dict):
+                                    return
+                                checked_batch.append(dict(row))
+
                             verify_settings = _follower_verify_settings(reason, len(rows))
                             returned_verified = verify_media_cut_boundary_rows(
                                 job["path"],
@@ -1752,6 +1708,7 @@ class PipelineCutBoundaryMixin:
                                 settings_preloaded=True,
                                 found_callback=_collect_verified,
                                 provisional_callback=_collect_relocated,
+                                checked_callback=_collect_checked,
                             )
                             if not verified_batch:
                                 verified_batch = [
@@ -1763,7 +1720,7 @@ class PipelineCutBoundaryMixin:
                             _commit_follower_results(
                                 verified_batch,
                                 relocated_batch,
-                                rows,
+                                checked_batch or rows,
                                 force_save=(reason != "stream"),
                             )
                             with follower_progress_lock:
@@ -1790,15 +1747,16 @@ class PipelineCutBoundaryMixin:
                                 pass
                     with list_lock:
                         final_detected = [dict(item) for item in detected]
+                        final_reviewed_rows = [dict(item) for item in reviewed_middle_rows]
                         final_middle_source_rows = self._reviewed_cut_boundary_rows_for_middle_segments(
-                            reviewed_middle_rows,
+                            final_reviewed_rows,
                             detected_rows=final_detected,
                         )
                     self._clear_completed_cut_boundary_provisionals(
                         project_path,
                         settings=settings,
                         detected=final_detected,
-                        reviewed_rows=final_middle_source_rows,
+                        reviewed_rows=final_reviewed_rows,
                     )
                     self._save_cut_boundary_cache_for_start(files, settings, final_detected)
                     self._cut_boundary_prescan_completed = True

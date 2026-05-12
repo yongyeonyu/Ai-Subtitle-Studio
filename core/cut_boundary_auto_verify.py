@@ -692,6 +692,48 @@ def build_strict_verify_helpers(deps: dict):
 
         return best
 
+    def _frame_mean_color_similarity(
+        color_map: dict,
+        *,
+        frame: int,
+    ) -> dict:
+        left = color_map.get(int(frame))
+        right = color_map.get(int(frame) + 1)
+        if (
+            not left
+            or not right
+            or not isinstance(left, (list, tuple))
+            or not isinstance(right, (list, tuple))
+        ):
+            return {"available": False, "score": 0.0, "luma_delta": 0.0, "chroma_delta": 0.0}
+        n = min(len(left), len(right))
+        if n <= 0:
+            return {"available": False, "score": 0.0, "luma_delta": 0.0, "chroma_delta": 0.0}
+        luma_total = 0.0
+        chroma_total = 0.0
+        used = 0
+        for idx in range(n):
+            try:
+                a0, a1, a2 = left[idx]
+                b0, b1, b2 = right[idx]
+                luma = abs(float(a0) - float(b0))
+                chroma = (abs(float(a1) - float(b1)) + abs(float(a2) - float(b2))) / 2.0
+            except Exception:
+                continue
+            luma_total += luma
+            chroma_total += chroma
+            used += 1
+        if used <= 0:
+            return {"available": False, "score": 0.0, "luma_delta": 0.0, "chroma_delta": 0.0}
+        luma_avg = luma_total / float(used)
+        chroma_avg = chroma_total / float(used)
+        return {
+            "available": True,
+            "score": (luma_avg * 0.25) + (chroma_avg * 0.75),
+            "luma_delta": luma_avg,
+            "chroma_delta": chroma_avg,
+        }
+
     def _auto_grid_v3_manual_verify_impl(
         cap,
         cv2_mod,
@@ -1060,11 +1102,6 @@ def build_strict_verify_helpers(deps: dict):
                 provisional_candidates.append(local_color)
             return _strict_provisional_hint("color_avg_failed", fps=fps, candidates=provisional_candidates)
 
-        try:
-            color_map.clear()
-        except Exception:
-            pass
-
         flow_check = _auto_dense_flow_cut_check(
             cap,
             cv2_mod,
@@ -1074,6 +1111,38 @@ def build_strict_verify_helpers(deps: dict):
         )
         if not flow_check.get("passed", True):
             return {"passed": False, "reason": "dense_flow_motion_reject", "dense_flow": dict(flow_check)}
+
+        same_scene_similarity = _frame_mean_color_similarity(
+            color_map,
+            frame=int(selected_frame if selected_frame is not None else coarse_frame),
+        )
+        same_scene_enabled = bool(settings.get("scan_cut_follower_same_scene_color_enabled", True))
+        same_scene_max_score = float(settings.get("scan_cut_follower_same_scene_color_max_score", max(8.5, color_threshold * 0.62)) or max(8.5, color_threshold * 0.62))
+        same_scene_max_luma = float(settings.get("scan_cut_follower_same_scene_color_max_luma_delta", 9.0) or 9.0)
+        same_scene_max_chroma = float(settings.get("scan_cut_follower_same_scene_color_max_chroma_delta", 8.5) or 8.5)
+        if (
+            same_scene_enabled
+            and bool(same_scene_similarity.get("available"))
+            and float(same_scene_similarity.get("score", 0.0) or 0.0) <= same_scene_max_score
+            and float(same_scene_similarity.get("luma_delta", 0.0) or 0.0) <= same_scene_max_luma
+            and float(same_scene_similarity.get("chroma_delta", 0.0) or 0.0) <= same_scene_max_chroma
+        ):
+            return {
+                "passed": False,
+                "reason": "same_scene_color_similarity",
+                "same_scene_color_similarity": True,
+                "color_similarity": {
+                    "score": float(same_scene_similarity.get("score", 0.0) or 0.0),
+                    "luma_delta": float(same_scene_similarity.get("luma_delta", 0.0) or 0.0),
+                    "chroma_delta": float(same_scene_similarity.get("chroma_delta", 0.0) or 0.0),
+                },
+                "dense_flow": dict(flow_check),
+            }
+
+        try:
+            color_map.clear()
+        except Exception:
+            pass
 
         selected_mode = success_window_mode if str(selected_gray.get("kind") or "") == "window" else success_adj_mode
         return {

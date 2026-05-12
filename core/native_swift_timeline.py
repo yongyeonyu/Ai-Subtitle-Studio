@@ -2,24 +2,20 @@ from __future__ import annotations
 
 import atexit
 import json
-import os
 import subprocess
 import threading
 from typing import Any
 
 import numpy as np
 
-from core.native_swift_subtitle import find_native_cli_path
+from core.native_swift_subtitle import find_native_cli_path, native_swift_runtime_enabled
 
 _WORKER: subprocess.Popen | None = None
 _WORKER_LOCK = threading.Lock()
 
 
 def _enabled() -> bool:
-    value = os.environ.get("AI_SUBTITLE_STUDIO_SWIFT_TIMELINE", "").lower()
-    if value in {"0", "false", "off", "no"}:
-        return False
-    return value in {"1", "true", "on", "yes"} or bool(os.environ.get("AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES"))
+    return native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_TIMELINE")
 
 
 def _vad_payload(vad_segments: list | tuple | None) -> str:

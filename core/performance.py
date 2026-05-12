@@ -101,7 +101,8 @@ def apple_silicon_runtime_profile(
         sustained = balanced
         chip_reason = "generic_apple_silicon"
 
-    logical_cap = logical if max_profile else max(1, logical - 1)
+    interactive_reserve = 1 if logical > 1 else 0
+    logical_cap = max(1, logical - interactive_reserve)
     balanced = max(1, min(logical_cap, balanced))
     wide = max(1, min(logical_cap, wide))
     sustained = max(1, min(logical_cap, sustained))
@@ -123,7 +124,6 @@ def apple_silicon_runtime_profile(
         local_llm_workers = 1
 
     llm_resource_max = max(1, min(logical_cap, performance + min(efficiency, 2), 6))
-    interactive_reserve = 0 if max_profile else (1 if logical > 1 else 0)
     emergency_reserve = 1 if logical > 1 else 0
     # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
     # The generic CPU profile still exposes wide/balanced workers for audio and
@@ -223,8 +223,9 @@ def native_thread_budget(settings: dict[str, Any] | None = None) -> int:
     logical = max(1, int(profile.get("logical_cores", 1) or 1))
     physical = max(1, int(profile.get("physical_cores", logical) or logical))
     perf = max(1, int(profile.get("performance_cores", physical) or physical))
+    reserve = max(0, int(runtime_scheduler_reserve_cores(settings, task="cpu")))
     if hardware_max_profile_enabled(settings):
-        default = max(perf, physical, logical)
+        default = max(1, logical - reserve)
     else:
         default = min(max(1, perf), physical)
     profile_requested = 0
@@ -413,7 +414,7 @@ def runtime_scheduler_reserve_cores(
         "lora_full",
     }:
         return 1 if logical > 1 else 0
-    if task_text in {
+    interactive_tasks = {
         "cpu",
         "io",
         "prefetch",
@@ -423,9 +424,14 @@ def runtime_scheduler_reserve_cores(
         "lora",
         "cleanup",
         "shutdown",
+        "subtitle_prepass",
+    }
+    if task_text in {
         "exit",
     }:
         return 0
+    if task_text in interactive_tasks:
+        return max(1 if logical > 1 else 0, configured)
     return min(configured, 1)
 
 

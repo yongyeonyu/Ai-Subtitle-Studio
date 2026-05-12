@@ -27,7 +27,8 @@ from core.project.project_context import (
     project_stt_preview_segments,
     segment_signature,
 )
-from core.project.project_assets import externalize_project_text_assets
+from core.project.project_assets import PROJECT_EXTERNAL_STORAGE, externalize_project_text_assets
+from core.project.project_format import PROJECT_STORAGE_SCHEMA, PROJECT_VIDEO_SCHEMA
 from core.project.project_srt import parse_srt_to_segments
 from core.cut_boundary import split_segments_by_cut_boundaries
 from core.roughcut.models import RoughCutDraftState, RoughCutResult, RoughCutSegment
@@ -253,13 +254,21 @@ class ProjectContextTests(unittest.TestCase):
                 payload = load_project(str(project_path), hydrate_text_assets=False)
 
         middle_rows = list(((payload.get("analysis", {}) or {}).get("middle_segments")) or [])
+        preliminary_rows = list(((payload.get("analysis", {}) or {}).get("preliminary_middle_segments")) or [])
         self.assertEqual([row["major_id"] for row in middle_rows], ["A", "B"])
+        self.assertEqual([row["major_id"] for row in preliminary_rows], ["A", "B"])
+        self.assertEqual(preliminary_rows[0]["segment_stage"], "preliminary")
+        self.assertEqual(preliminary_rows[0]["segment_stage_name"], "예비 중분류 세그먼트")
         self.assertEqual([row["title"] for row in middle_rows], ["도입 주제", "후반 주제"])
         self.assertEqual(middle_rows[0]["tags"], ["오프닝", "제품 소개"])
         self.assertEqual(middle_rows[1]["tags"], ["실내", "시트", "디자인 특징"])
         self.assertEqual(middle_rows[1]["keywords"], ["실내", "시트", "디자인 특징"])
         self.assertEqual(
             [(row["timeline_start_frame"], row["timeline_end_frame"]) for row in middle_rows],
+            [(0, 3600), (3600, 7200)],
+        )
+        self.assertEqual(
+            [(row["timeline_start_frame"], row["timeline_end_frame"]) for row in preliminary_rows],
             [(0, 3600), (3600, 7200)],
         )
         self.assertEqual(
@@ -686,7 +695,7 @@ class ProjectContextTests(unittest.TestCase):
             )
             loaded = load_project(str(path))
 
-        self.assertEqual(loaded["version"], "03.00.26")
+        self.assertEqual(loaded["version"], "04.00.01")
         self.assertEqual(project_active_work_mode(loaded), "roughcut")
         self.assertEqual(project_roughcut_state(loaded)["source_signature"], "sig")
         self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")
@@ -794,6 +803,162 @@ class ProjectContextTests(unittest.TestCase):
         editor_segment = project_segments_to_editor(loaded)[0]
         self.assertEqual(editor_segment["start_frame"], 24)
         self.assertEqual(editor_segment["end_frame"], 36)
+        self.assertEqual(loaded["video"]["schema"], PROJECT_VIDEO_SCHEMA)
+        self.assertEqual(loaded["video"]["primary_fps"], 24.0)
+        self.assertEqual(loaded["video"]["duration_sec"], 2.0)
+        self.assertEqual(loaded["storage_schema"], PROJECT_STORAGE_SCHEMA)
+
+    def test_saved_project_writes_video_header_first_and_drops_legacy_runtime_duplicates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"fake")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 2.0, "fps": 24.0, "width": 1920, "height": 1080},
+            ):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[{"start": 0.0, "end": 0.5, "text": "헤더", "speaker": "00"}],
+                )
+
+            raw = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(list(raw.keys())[:3], ["video", "app", "version"])
+        self.assertNotIn("media", raw)
+        self.assertNotIn("frame_timebase", raw)
+        self.assertNotIn("frame_timebase", raw.get("editor_state", {}))
+        self.assertEqual(raw["video"]["schema"], PROJECT_VIDEO_SCHEMA)
+        self.assertEqual(raw["video"]["width"], 1920)
+        self.assertEqual(raw["video"]["height"], 1080)
+        self.assertEqual(raw["video"]["primary_fps"], 24.0)
+        self.assertEqual(raw["storage_schema"], PROJECT_STORAGE_SCHEMA)
+
+    def test_load_project_hydrates_timeline_timebase_from_video_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"fake")
+            project = {
+                "video": {
+                    "schema": PROJECT_VIDEO_SCHEMA,
+                    "primary_path": str(media),
+                    "media_kind": "video",
+                    "duration_sec": 10.0,
+                    "primary_fps": 59.94,
+                    "frame_duration": 1.0 / 59.94,
+                    "total_frames": 599,
+                    "width": 1920,
+                    "height": 1080,
+                    "resolution": "1920x1080",
+                    "clip_count": 1,
+                    "clips": [
+                        {
+                            "id": "clip_a",
+                            "order": 0,
+                            "path": str(media),
+                            "type": "video",
+                            "duration_sec": 10.0,
+                            "fps": 59.94,
+                            "frame_count": 599,
+                            "width": 1920,
+                            "height": 1080,
+                            "timeline_start_sec": 0.0,
+                            "timeline_end_sec": 10.0,
+                            "timeline_start_frame": 0,
+                            "timeline_end_frame": 599,
+                        }
+                    ],
+                    "timebase": {
+                        "unit": "frame",
+                        "canonical_unit": "frame",
+                        "mode": "project_video_header",
+                        "primary_fps": 59.94,
+                        "frame_duration": 1.0 / 59.94,
+                        "timeline_start_frame": 0,
+                        "timeline_end_frame": 599,
+                        "total_frames": 599,
+                        "seconds_are_derived": True,
+                        "time_fields_are_compatibility": False,
+                    },
+                },
+                "app": "AI Subtitle Studio",
+                "version": "04.00.01",
+                "phase": "PHASE2",
+                "project_name": "header_only",
+                "storage_schema": PROJECT_STORAGE_SCHEMA,
+                "timeline": {
+                    "total_duration": 10.0,
+                    "tracks": [
+                        {
+                            "id": "video_track_0",
+                            "type": "video",
+                            "clips": [
+                                {
+                                    "id": "clip_a",
+                                    "source_path": str(media),
+                                    "type": "video",
+                                    "source_duration": 10.0,
+                                    "timeline_start": 0.0,
+                                    "timeline_end": 10.0,
+                                }
+                            ],
+                        }
+                    ],
+                },
+                "subtitles": {"storage": "vector_canvas", "segment_count": 1},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[str(media)],
+                    segments=[
+                        {
+                            "start": 60.0 / 59.94,
+                            "end": 120.0 / 59.94,
+                            "text": "헤더 fps",
+                            "speaker": "00",
+                            "start_frame": 60,
+                            "end_frame": 120,
+                            "timeline_start_frame": 60,
+                            "timeline_end_frame": 120,
+                            "frame_rate": 59.94,
+                            "timeline_frame_rate": 59.94,
+                            "frame_range": {
+                                "unit": "frame",
+                                "start": 60,
+                                "end": 120,
+                                "timeline_frame_rate": 59.94,
+                            },
+                        }
+                    ],
+                    primary_fps=59.94,
+                ),
+                "workspace": {},
+            }
+            path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            loaded = load_project(str(path))
+
+        self.assertEqual(loaded["timeline"]["timebase"]["primary_fps"], 59.94)
+        self.assertEqual(loaded["frame_timebase"]["primary_fps"], 59.94)
+        seg = project_segments_to_editor(loaded)[0]
+        self.assertAlmostEqual(seg["start"], 60.0 / 59.94, places=4)
+        self.assertAlmostEqual(seg["end"], 120.0 / 59.94, places=4)
 
     def test_save_project_persists_voice_activity_segments_with_frames(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1635,6 +1800,160 @@ class ProjectContextTests(unittest.TestCase):
         self.assertNotIn("stt_candidates", lazy_segments[0])
         self.assertIn("_external_stt_tracks_cache", eager_loaded)
         self.assertEqual(eager_segments[0]["stt_candidates"][0]["text"], "후보")
+
+    def test_project_open_reuses_hot_text_caches_after_save(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            project = {
+                "project_name": "hot-open",
+                "project_path": str(path),
+                "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[],
+                    primary_fps=30.0,
+                ),
+            }
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=[{"id": "seg-1", "start": 0.0, "end": 1.0, "text": "즉시 열기", "speaker": "00"}],
+                stt_tracks={"STT1": [{"start": 0.0, "end": 1.0, "text": "미리보기", "stt_score": 91.0}]},
+            )
+            project["_hot_open_stt_preview_segments_cache"] = [
+                {"start": 0.0, "end": 1.0, "text": "미리보기", "stt_preview_source": "STT1"}
+            ]
+            write_project_file(str(path), project)
+
+            lazy_loaded = load_project(str(path), hydrate_text_assets=False)
+            with patch("core.project.project_assets.parse_srt_to_segments", side_effect=AssertionError("should not parse srt")):
+                lazy_segments = project_segments_to_editor(lazy_loaded, include_analysis_candidates=False)
+                lazy_previews = project_stt_preview_segments(lazy_loaded)
+
+        self.assertEqual(lazy_segments[0]["text"], "즉시 열기")
+        self.assertEqual(lazy_previews[0]["text"], "미리보기")
+        self.assertEqual(lazy_previews[0]["stt_preview_source"], "STT1")
+
+    def test_project_open_recovers_sibling_external_srt_assets_when_manifest_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            asset_dir = path.parent / "project.assets" / "subtitles"
+            asset_dir.mkdir(parents=True, exist_ok=True)
+            (asset_dir / "final.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n최종 자막\n\n",
+                encoding="utf-8",
+            )
+            (asset_dir / "stt1.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nSTT1 후보\n\n",
+                encoding="utf-8",
+            )
+            (asset_dir / "stt2.srt").write_text(
+                "1\n00:00:00,500 --> 00:00:01,500\nSTT2 후보\n\n",
+                encoding="utf-8",
+            )
+            path.write_text(
+                json.dumps(
+                    {
+                        "project_name": "recover-assets",
+                        "project_path": str(path),
+                        "timeline": {
+                            "total_duration": 2.0,
+                            "timebase": {"primary_fps": 30.0},
+                            "tracks": [{"clips": [{"timeline_start": 0.0, "timeline_end": 2.0, "fps": 30.0}]}],
+                        },
+                        "media": [{"path": str(path.parent / "clip.mp4"), "duration": 2.0, "offset": 0.0}],
+                        "subtitles": {"storage": "editor_state.rendering.subtitle_canvas", "segment_count": 0},
+                        "editor_state": build_editor_state(mode="single", media_files=[], segments=[], primary_fps=30.0),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = load_project(str(path), hydrate_text_assets=False)
+            segments = project_segments_to_editor(loaded, include_analysis_candidates=False)
+            previews = project_stt_preview_segments(loaded)
+
+        self.assertEqual([row["text"] for row in segments], ["최종 자막"])
+        self.assertEqual([row["text"] for row in previews], ["STT1 후보", "STT2 후보"])
+
+    def test_save_project_restores_external_asset_manifest_from_sibling_assets_when_segments_are_temporarily_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            asset_dir = path.parent / "project.assets" / "subtitles"
+            asset_dir.mkdir(parents=True, exist_ok=True)
+            (asset_dir / "final.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n최종 자막\n\n",
+                encoding="utf-8",
+            )
+            (asset_dir / "stt1.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nSTT1 후보\n\n",
+                encoding="utf-8",
+            )
+            (asset_dir / "stt2.srt").write_text(
+                "1\n00:00:00,500 --> 00:00:01,500\nSTT2 후보\n\n",
+                encoding="utf-8",
+            )
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "project_path": str(path),
+                        "workspace": {},
+                        "timeline": {
+                            "total_duration": 2.0,
+                            "timebase": {"primary_fps": 30.0},
+                            "tracks": [{"clips": [{"timeline_start": 0.0, "timeline_end": 2.0, "fps": 30.0, "source_path": str(media)}]}],
+                        },
+                        "media": [{"path": str(media), "duration": 2.0, "offset": 0.0}],
+                        "subtitles": {"storage": "editor_state.rendering.subtitle_canvas", "segment_count": 0},
+                        "editor_state": build_editor_state(mode="single", media_files=[str(media)], segments=[], primary_fps=30.0),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 2.0, "fps": 30.0}):
+                save_project(str(path), media_paths=[str(media)], segments=[])
+
+            repaired = load_project(str(path), hydrate_text_assets=False)
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(raw_payload["subtitles"]["storage"], PROJECT_EXTERNAL_STORAGE)
+        self.assertIn("asset_storage", raw_payload)
+        self.assertIn("final", raw_payload["asset_storage"]["tracks"])
+        self.assertIn("stt_stt1", raw_payload["asset_storage"]["tracks"])
+        self.assertIn("stt_stt2", raw_payload["asset_storage"]["tracks"])
+        self.assertEqual([row["text"] for row in project_segments_to_editor(repaired, include_analysis_candidates=False)], ["최종 자막"])
+
+    def test_project_open_discards_hot_open_segments_beyond_media_duration(self):
+        project = {
+            "project_path": "/tmp/project.json",
+            "timeline": {
+                "total_duration": 10.0,
+                "timebase": {"primary_fps": 30.0},
+                "tracks": [{"clips": [{"timeline_start": 0.0, "timeline_end": 10.0, "fps": 30.0}]}],
+            },
+            "_hot_open_subtitle_segments_cache": [
+                {"start": 1.0, "end": 2.0, "text": "정상", "speaker": "00"},
+                {"start": 2800.0, "end": 2810.0, "text": "stale", "speaker": "00"},
+            ],
+            "_hot_open_stt_preview_segments_cache": [
+                {"start": 0.0, "end": 1.0, "text": "STT1", "stt_preview_source": "STT1"},
+                {"start": 2900.0, "end": 2910.0, "text": "stale-preview", "stt_preview_source": "STT2"},
+            ],
+        }
+
+        segments = project_segments_to_editor(project, include_analysis_candidates=False)
+        previews = project_stt_preview_segments(project)
+
+        self.assertEqual([row["text"] for row in segments], ["정상"])
+        self.assertEqual([row["text"] for row in previews], ["STT1"])
 
     def test_project_segments_to_editor_reuses_persisted_subtitle_status(self):
         project = {

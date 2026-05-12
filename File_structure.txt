@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.01-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_1_RELEASED
-Last-Updated: 2026-05-10
+Document-Version: 04.00.02-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
+Last-Updated: 2026-05-12
 Updated-By: Codex
 Scope: Actual project filesystem map generated from tracked source files plus untracked non-ignored release files. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
@@ -9,9 +9,9 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 ================================================================================
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-10
-Phase: MAC_NATIVE_APPSTORE_V4_0_1_RELEASED
-App Version: 04.00.01
+Last Updated: 2026-05-12
+Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
+App Version: 04.00.02
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -91,6 +91,7 @@ ai_subtitle_studio/
 │   │   ├── stt_vad.py
 │   │   ├── torch_acceleration.py
 │   │   ├── transcribe_policy_helpers.py
+│   │   ├── transcribe_worker_io.py
 │   │   ├── vad_backend_router.py
 │   │   ├── whisper_coreml.py
 │   │   ├── whisper_cpp.py
@@ -108,11 +109,13 @@ ai_subtitle_studio/
 │   │   ├── srt_writer.py
 │   │   ├── subtitle_accuracy_graph.py
 │   │   ├── subtitle_accuracy_pipeline.py
+│   │   ├── subtitle_accuracy_utils.py
 │   │   ├── subtitle_engine.py
 │   │   ├── subtitle_macro_chunks.py
 │   │   ├── subtitle_native_word_split.py
 │   │   ├── subtitle_one_click_fix.py
 │   │   ├── subtitle_prompts.py
+│   │   ├── subtitle_segment_filter.py
 │   │   ├── subtitle_settings.py
 │   │   ├── subtitle_text_policy.py
 │   │   ├── subtitle_timing.py
@@ -130,7 +133,8 @@ ai_subtitle_studio/
 │   │   ├── provider_router.py
 │   │   └── secure_keys.py
 │   ├── native
-│   │   └── _native_cut_boundary.cpp
+│   │   ├── _native_cut_boundary.cpp
+│   │   └── _native_text_cleanup.cpp
 │   ├── optimization
 │   │   ├── __init__.py
 │   │   ├── backend_policy.py
@@ -180,6 +184,7 @@ ai_subtitle_studio/
 │   │   ├── __init__.py
 │   │   ├── backend_core.py
 │   │   ├── background_prefetch.py
+│   │   ├── cut_boundary_cache.py
 │   │   ├── cut_boundary_helpers.py
 │   │   ├── cut_boundary_prescan_policy.py
 │   │   ├── multiclip_pipeline.py
@@ -197,6 +202,7 @@ ai_subtitle_studio/
 │   │   ├── project_assets.py
 │   │   ├── project_context.py
 │   │   ├── project_frames.py
+│   │   ├── project_format.py
 │   │   ├── project_io.py
 │   │   ├── project_manager.py
 │   │   ├── project_model_settings.py
@@ -309,6 +315,7 @@ ai_subtitle_studio/
 │   ├── native_cut_boundary.py
 │   ├── native_json.py
 │   ├── native_macos_acceleration.py
+│   ├── native_macos_input.py
 │   ├── native_macos_memory.py
 │   ├── native_swift_common_split.py
 │   ├── native_swift_policy.py
@@ -318,6 +325,7 @@ ai_subtitle_studio/
 │   ├── native_swift_timeline.py
 │   ├── native_swift_waveform.py
 │   ├── native_text_similarity.py
+│   ├── native_text_cleanup.py
 │   ├── notifier.py
 │   ├── path_manager.py
 │   ├── performance.py
@@ -356,6 +364,7 @@ ai_subtitle_studio/
 │           ├── Sources
 │           │   ├── AIStudioCore
 │           │   │   ├── CommonSplitPlanner.swift
+│           │   │   ├── InputActivity.swift
 │           │   │   ├── MemoryPressure.swift
 │           │   │   ├── NativePolicyEngine.swift
 │           │   │   ├── ProjectJSON.swift
@@ -465,10 +474,12 @@ ai_subtitle_studio/
 │   ├── test_native_cut_boundary.py
 │   ├── test_native_ffmpeg_manager.py
 │   ├── test_native_macos_acceleration.py
+│   ├── test_native_macos_input.py
 │   ├── test_native_macos_memory.py
 │   ├── test_native_policy_engine.py
 │   ├── test_native_swift_adaptive.py
 │   ├── test_native_swift_core_worker.py
+│   ├── test_native_text_cleanup.py
 │   ├── test_native_text_similarity.py
 │   ├── test_npu_acceleration.py
 │   ├── test_ollama_provider.py
@@ -587,6 +598,7 @@ ai_subtitle_studio/
 │   │   ├── editor_roughcut_draft.py
 │   │   ├── editor_scan_cut_core.py
 │   │   ├── editor_segments.py
+│   │   ├── editor_segments_bulk_load.py
 │   │   ├── editor_speaker_ops.py
 │   │   ├── editor_stt_mode.py
 │   │   ├── editor_timeline_video.py
@@ -710,9 +722,6 @@ ai_subtitle_studio/
 │   ├── queue_widget.py
 │   ├── responsive_profile.py
 │   └── style.py
-├── voice_data
-│   ├── spk2_goodrain.wav
-│   └── spk3_voice.wav
 ├── .gitignore
 ├── ACTION_ITEMS.md
 ├── AGENTS.md
@@ -726,4 +735,5 @@ ai_subtitle_studio/
 ├── RELEASE_v03.25.01.md
 ├── RELEASE_v04.00.00.md
 ├── RELEASE_v04.00.01.md
+├── RELEASE_v04.00.02.md
 └── requirements-mac.txt

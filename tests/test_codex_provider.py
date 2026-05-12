@@ -44,6 +44,14 @@ class CodexProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Codex CLI를 찾을 수 없습니다"):
                 codex_provider.split_text(DEFAULT_CODEX_LABEL, "prompt")
 
+    def test_codex_cli_available_reports_missing_binary_without_raising(self):
+        with patch("core.llm.codex_provider.shutil.which", return_value=None), \
+                patch.dict(os.environ, {"AI_SUBTITLE_CODEX_BIN": ""}, clear=False):
+            available, detail = codex_provider.codex_cli_available()
+
+        self.assertFalse(available)
+        self.assertIn("Codex CLI를 찾을 수 없습니다", detail)
+
     def test_split_text_invokes_codex_exec_safely(self):
         captured = {}
 

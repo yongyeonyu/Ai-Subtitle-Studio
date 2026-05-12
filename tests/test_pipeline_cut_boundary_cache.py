@@ -816,6 +816,101 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
                 any(name == "_sig_preview_cut_boundary_scan_lines" and args and args[0] for name, args in backend.emitted)
             )
 
+    def test_delayed_follower_preserves_close_packet_and_audio_candidates_for_verify(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "sample.project.json")
+            media_path = os.path.join(tmpdir, "clip.mp4")
+            with open(media_path, "wb") as f:
+                f.write(b"media")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump({"analysis": {}}, f)
+
+            backend = _DummyBackend(project_path)
+            backend._load_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._save_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._clear_completed_cut_boundary_provisionals = lambda *_args, **_kwargs: None
+            backend._force_cut_boundary_topicless_segments_to_project = lambda *_args, **_kwargs: None
+            backend._emit_cut_boundary_count_to_sidebar = lambda *_args, **_kwargs: None
+            backend._cut_boundary_placeholder_duration = lambda _files=None: 1450.0
+            backend._cut_boundary_adaptive_prescan_plan = lambda *_args, **_kwargs: {
+                "stream_start_percent": 25,
+                "stream_batch_size": 16,
+                "stream_min_interval_sec": 0.0,
+                "follower_start_after_pioneer": True,
+                "provisional_sample_step_sec": 1.0,
+                "pioneer_sequential_decode": False,
+            }
+
+            verify_calls = []
+
+            def fake_scan(path, **kwargs):
+                rows = [
+                    {
+                        "timeline_sec": 100.00,
+                        "time": 100.00,
+                        "clip_local_sec": 100.00,
+                        "clip_idx": 0,
+                        "source": "visual_provisional",
+                        "detector": "packet-energy-pixel-flow-v1",
+                        "score": 91.0,
+                        "refine_pending": True,
+                    },
+                    {
+                        "timeline_sec": 100.25,
+                        "time": 100.25,
+                        "clip_local_sec": 100.25,
+                        "clip_idx": 0,
+                        "source": "visual_provisional",
+                        "detector": "packet-energy-pixel-flow-v1",
+                        "score": 88.0,
+                        "refine_pending": True,
+                    },
+                    {
+                        "timeline_sec": 100.35,
+                        "time": 100.35,
+                        "clip_local_sec": 100.35,
+                        "clip_idx": 0,
+                        "source": "audio_gain_provisional",
+                        "audio_gain_db_delta": 12.0,
+                        "score": 20.0,
+                        "refine_pending": True,
+                    },
+                ]
+                found_callback = kwargs.get("found_callback")
+                if callable(found_callback):
+                    emitted = []
+                    for row in rows:
+                        emitted.append(dict(row))
+                        found_callback(dict(row), list(emitted))
+                completion_callback = kwargs.get("completion_callback")
+                if callable(completion_callback):
+                    completion_callback({"clip_idx": 0, "worker_total": 1, "worker_completed": 1, "done": True})
+                return rows
+
+            def fake_verify(path, rows, **kwargs):
+                verify_calls.append([dict(row) for row in list(rows or [])])
+                return []
+
+            with mock.patch("core.pipeline.cut_boundary_helpers.load_settings", return_value={"cut_boundary_detection_enabled": True}), \
+                 mock.patch("core.cut_boundary.cut_boundary_enabled", return_value=True), \
+                 mock.patch("core.cut_boundary.cut_boundary_scan_profile", return_value={"positions": (0, 2, 4, 6, 8), "mask": "x5", "sample_step_sec": 1.0}), \
+                 mock.patch("core.cut_boundary.scan_media_cut_boundary_provisionals", side_effect=fake_scan), \
+                 mock.patch("core.cut_boundary.verify_media_cut_boundary_rows", side_effect=fake_verify), \
+                 mock.patch("core.cut_boundary.sync_project_cut_boundaries", lambda *_args, **_kwargs: None):
+                backend._auto_scan_cut_boundaries_for_start_sync(project_path, [media_path])
+
+            follower = getattr(backend, "_cut_boundary_follower_thread", None)
+            self.assertIsNotNone(follower)
+            follower.join(timeout=2.0)
+            self.assertFalse(follower.is_alive())
+
+            flattened = sorted(
+                round(float(row.get("timeline_sec", 0.0) or 0.0), 2)
+                for batch in verify_calls
+                for row in batch
+            )
+            self.assertEqual(flattened, [100.0, 100.25, 100.35])
+
     def test_pioneer_uses_low_profile_while_follower_keeps_resolved_profile(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = os.path.join(tmpdir, "sample.project.json")

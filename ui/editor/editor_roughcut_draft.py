@@ -14,6 +14,50 @@ from core.runtime.logger import get_logger
 
 
 class EditorRoughcutDraftMixin:
+    def _cut_boundary_runtime_settled_for_roughcut(self) -> bool:
+        if bool(getattr(self, "_auto_cut_boundary_scan_active", False)):
+            return False
+        try:
+            main_w = self.window()
+        except Exception:
+            main_w = None
+        for backend in (
+            getattr(main_w, "backend", None),
+            getattr(main_w, "backend_fast", None),
+        ):
+            if backend is None:
+                continue
+            try:
+                prescan = getattr(backend, "_cut_boundary_prescan_thread", None)
+                follower = getattr(backend, "_cut_boundary_follower_thread", None)
+                if (prescan is not None and prescan.is_alive()) or (follower is not None and follower.is_alive()):
+                    return False
+            except Exception:
+                continue
+        runtime_rows = [
+            dict(row)
+            for row in list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
+            if isinstance(row, dict)
+            and str(row.get("reason", "") or "") != "manual_roughcut_middle_right_click"
+        ]
+        if runtime_rows:
+            return False
+        try:
+            project_path = str(getattr(main_w, "_current_project_path", "") or "")
+        except Exception:
+            project_path = ""
+        if not project_path or not os.path.exists(project_path):
+            return True
+        try:
+            from core.project.project_io import read_project_file
+
+            project = read_project_file(project_path)
+            analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+            provisional_rows = list(analysis.get("cut_boundary_provisional_boundaries") or [])
+            return not bool(provisional_rows)
+        except Exception:
+            return True
+
     def _draft_reference_major_segments(self) -> list[dict]:
         try:
             window_owner = self.window()
@@ -120,6 +164,11 @@ class EditorRoughcutDraftMixin:
 
     def _apply_roughcut_middle_segments_to_ui(self, rows: list[dict], result) -> None:
         rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+        preliminary_rows = [
+            dict(row)
+            for row in list(getattr(self, "_pending_preliminary_middle_segments", []) or [])
+            if isinstance(row, dict)
+        ]
         try:
             main_w = self.window()
         except Exception:
@@ -140,6 +189,11 @@ class EditorRoughcutDraftMixin:
         for obj in (self, main_w, timeline, canvas, global_canvas):
             if obj is None:
                 continue
+            for attr in ("_preliminary_middle_segments", "preliminary_middle_segments"):
+                try:
+                    setattr(obj, attr, list(preliminary_rows))
+                except Exception:
+                    pass
             for attr in row_attrs:
                 try:
                     setattr(obj, attr, list(rows))
@@ -249,10 +303,24 @@ class EditorRoughcutDraftMixin:
             return False
 
     def _roughcut_draft_post_generation_autorun_enabled(self) -> bool:
-        value = self._draft_settings_snapshot().get("roughcut_run_after_subtitle_generation", False)
+        settings = self._draft_settings_snapshot()
+        value = settings.get("roughcut_run_after_subtitle_generation", None)
         if isinstance(value, str):
-            return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
-        return bool(value)
+            enabled = value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+        elif value is None:
+            enabled = None
+        else:
+            enabled = bool(value)
+        llm_enabled = bool(settings.get("roughcut_llm_enabled", False))
+        if not llm_enabled:
+            return False
+        if enabled is True:
+            return True
+        # 레거시 기본값이 False로 저장된 프로젝트라도 러프컷 LLM을 켠 경우에는
+        # 생성 완료 후 자동 실행이 자연스럽게 이어지도록 보정한다.
+        if self._roughcut_draft_runtime_enabled():
+            return True
+        return bool(enabled)
 
     def _roughcut_playback_active(self) -> bool:
         try:
@@ -277,9 +345,11 @@ class EditorRoughcutDraftMixin:
     def _schedule_post_generation_roughcut_draft(self, force: bool = False):
         if force and not self._roughcut_draft_post_generation_autorun_enabled():
             self._set_roughcut_draft_status("disabled")
+            get_logger().log("⏭️ 러프컷 자동 실행 생략: 생성 완료 후 자동 실행 설정이 꺼져 있습니다.")
             return
         if not self._roughcut_draft_runtime_enabled():
             self._set_roughcut_draft_status("disabled")
+            get_logger().log("⏭️ 러프컷 자동 실행 생략: 컷 경계/러프컷 런타임이 비활성화되어 있습니다.")
             return
         timer = getattr(self, "_roughcut_draft_timer", None)
         if timer is None:
@@ -291,6 +361,12 @@ class EditorRoughcutDraftMixin:
     def _run_post_generation_roughcut_draft(self):
         if not self._roughcut_draft_runtime_enabled():
             self._set_roughcut_draft_status("disabled")
+            return
+        if not self._cut_boundary_runtime_settled_for_roughcut():
+            timer = getattr(self, "_roughcut_draft_timer", None)
+            if timer is not None:
+                self._set_roughcut_draft_status("queued")
+                timer.start(900)
             return
         if self._roughcut_playback_active():
             timer = getattr(self, "_roughcut_draft_timer", None)
@@ -540,10 +616,20 @@ class EditorRoughcutDraftMixin:
                 project_path,
                 segments=segments,
                 middle_segments=list(candidate.get("segments", []) or []),
+                preliminary_middle_segments=(
+                    list(candidate.get("segments", []) or [])
+                    if refinement_source == "llm_refined"
+                    else []
+                ),
                 user_settings=dict(getattr(self, "settings", {}) or {}),
                 roughcut_state=roughcut_state,
                 active_work_mode=EDITOR_MODE,
                 persist_analysis_artifacts=False,
+            )
+            self._pending_preliminary_middle_segments = (
+                list(candidate.get("segments", []) or [])
+                if refinement_source == "llm_refined"
+                else []
             )
             self._apply_roughcut_middle_segments_to_ui(list(candidate.get("segments", []) or []), result)
             setattr(main_w, "_editor_roughcut_result", result)
@@ -573,6 +659,10 @@ class EditorRoughcutDraftMixin:
             self._set_roughcut_draft_status("failed")
             get_logger().log(f"⚠️ 러프컷 초안 저장 실패: {exc}")
         finally:
+            try:
+                self._pending_preliminary_middle_segments = []
+            except Exception:
+                pass
             self._schedule_post_roughcut_model_release()
             if refinement_source in {"llm_refined", "local_after_generation_fallback"}:
                 self._roughcut_draft_thread = None

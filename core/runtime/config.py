@@ -1,4 +1,4 @@
-# Version: 04.00.01
+# Version: 04.00.02
 # Phase: PHASE12_MacNativeV4Release
 
 
@@ -13,7 +13,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "04.00.01"
+APP_VERSION = "04.00.02"
 MACBOOK_ONLY_APP = True
 SUPPORTED_OS_NAMES = ("Darwin",)
 APP_STORE_TARGET = True
@@ -204,7 +204,9 @@ DEFAULT_ADV_SETTINGS = {
     "scan_cut_provisional_compare_max_height": 360,
     "scan_cut_pioneer_packet_scout_enabled": True,
     "scan_cut_pioneer_packet_scout_timeout_sec": 60.0,
-    "scan_cut_pioneer_packet_scout_raw_candidates": 120,
+    "scan_cut_pioneer_packet_scout_raw_candidates": 180,
+    "scan_cut_pioneer_packet_bucket_sec": 0.25,
+    "scan_cut_pioneer_packet_min_gap_sec": 0.20,
     "scan_cut_pioneer_packet_delta_threshold": 1.4,
     "scan_cut_pioneer_packet_mad_multiplier": 3.0,
     "scan_cut_pioneer_pipe_enabled": False,
@@ -219,7 +221,10 @@ DEFAULT_ADV_SETTINGS = {
     "scan_cut_pioneer_pipe_flow_residual_threshold": 10.0,
     "scan_cut_pioneer_pipe_timeout_sec": 120.0,
     "scan_cut_pioneer_pipe_max_candidates": 360,
-    "scan_cut_pioneer_min_gap_sec": 1.0,
+    "scan_cut_pioneer_min_gap_sec": 0.45,
+    "scan_cut_follower_visual_candidate_compact_gap_sec": 0.45,
+    "scan_cut_follower_packet_candidate_compact_gap_sec": 0.20,
+    "scan_cut_follower_scene_candidate_compact_gap_sec": 0.40,
     "scan_cut_pioneer_dense_flow_confirm_enabled": True,
     "scan_cut_pioneer_strict_multiplier": 0.72,
     "vad_detection_cache_enabled": True,
@@ -352,7 +357,7 @@ DEFAULT_ROUGHCUT_SETTINGS = {
     "editor_roughcut_draft_max_major_segments": 10,
     "roughcut_major_segment_ui_enabled": True,
     "roughcut_legacy_table_fallback": True,
-    "roughcut_run_after_subtitle_generation": False,
+    "roughcut_run_after_subtitle_generation": True,
     "roughcut_auto_load_subtitles_on_enter": True,
     "roughcut_start_button_mode_routing": True,
     "roughcut_llm_enabled": False,

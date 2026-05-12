@@ -37,6 +37,8 @@ from core.project.project_assets import (
     PROJECT_EXTERNAL_STORAGE,
     externalize_project_text_assets,
     hydrate_project_text_asset_cache,
+    load_external_stt_tracks,
+    load_external_subtitle_segments,
     project_uses_external_text_assets,
 )
 from core.roughcut.cut_boundary_placeholder import (
@@ -71,12 +73,16 @@ from core.project.project_frames import (
     _clip_frame_fields as _clip_frame_fields_impl,
     _get_media_probe as _get_media_probe_impl,
 )
-from core.media_info import probe_media
+from core.media_info import probe_media, probe_media_many
+from core.project.project_format import (
+    PROJECT_SCHEMA_VERSION,
+    PROJECT_STORAGE_SCHEMA,
+    build_storage_project_payload,
+    hydrate_project_runtime_views,
+    project_primary_fps,
+)
 from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import normalize_work_mode
-
-PROJECT_SCHEMA_VERSION = "03.00.26"
-PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.vector.v1"
 
 __all__ = [
     "PROJECTS_DIR",
@@ -180,6 +186,25 @@ def _get_media_duration(filepath: str) -> float:
 
 def _get_media_probe(filepath: str) -> dict:
     return _get_media_probe_impl(filepath, probe_func=probe_media)
+
+
+def _probe_media_rows(filepaths: list[str] | None) -> list[dict]:
+    paths = [str(path) for path in list(filepaths or []) if path]
+    if not paths:
+        return []
+    batch_rows = list(probe_media_many(paths))
+    out: list[dict] = []
+    for idx, path in enumerate(paths):
+        info = dict(batch_rows[idx] or {}) if idx < len(batch_rows) else {}
+        if not (
+            float(info.get("duration", 0.0) or 0.0) > 0.0
+            or float(info.get("fps", 0.0) or 0.0) > 0.0
+            or int(info.get("width", 0) or 0) > 0
+            or int(info.get("height", 0) or 0) > 0
+        ):
+            info = _get_media_probe(path)
+        out.append(dict(info or {}))
+    return out
 
 
 def _sanitize_project_workspace_fields(project: dict) -> dict:
@@ -339,6 +364,33 @@ def _store_project_middle_segments(project: dict, rows) -> list[dict]:
     if rows_are_placeholder_only(project.get("roughcut_segments", [])):
         project["roughcut_segments"] = list(saved_rows)
     return saved_rows
+
+
+def _store_project_preliminary_middle_segments(project: dict, rows) -> list[dict]:
+    if not isinstance(project, dict):
+        return []
+    project.setdefault("analysis", {})
+    saved_rows = _project_middle_segment_rows(rows)
+    stamped_rows: list[dict] = []
+    for row in list(saved_rows or []):
+        item = dict(row)
+        item["segment_stage"] = "preliminary"
+        item["segment_stage_name"] = "예비 중분류 세그먼트"
+        item["source"] = str(item.get("source") or "roughcut_llm_preliminary")
+        item["preview_lane"] = "global_top"
+        item["preview_reference"] = "cut_boundary_topicless_middle_segments"
+        stamped_rows.append(item)
+    if stamped_rows:
+        project["analysis"]["preliminary_middle_segments_schema"] = "middle_segments.preliminary.v1"
+        project["analysis"]["preliminary_middle_segments"] = list(stamped_rows)
+        project["analysis"]["preliminary_middle_segments_updated_at"] = datetime.now().isoformat()
+        project["preliminary_middle_segments"] = list(stamped_rows)
+    else:
+        project["analysis"].pop("preliminary_middle_segments_schema", None)
+        project["analysis"].pop("preliminary_middle_segments", None)
+        project["analysis"].pop("preliminary_middle_segments_updated_at", None)
+        project.pop("preliminary_middle_segments", None)
+    return stamped_rows
 
 
 def _project_roughcut_source_segments(segments: list[dict] | None) -> list[dict]:
@@ -554,7 +606,9 @@ def _finalize_project_middle_segment_artifacts(
         editor_mode="multiclip" if len(media_files) > 1 else "single",
     )
     project["roughcut_state"] = merge_editor_roughcut_draft_state(project.get("roughcut_state", {}) or {}, candidate)
-    return _store_project_middle_segments(project, candidate.get("segments") or [])
+    candidate_rows = candidate.get("segments") or []
+    _store_project_preliminary_middle_segments(project, candidate_rows)
+    return _store_project_middle_segments(project, candidate_rows)
 
 
 def _external_text_storage_enabled(project: dict, user_settings: dict | None = None) -> bool:
@@ -587,6 +641,24 @@ def _externalize_project_payload(
         for track_rows in stt_tracks.values()
     )
     if not has_subtitles and not has_stt:
+        recovered_subtitles = load_external_subtitle_segments(project)
+        recovered_stt_tracks = load_external_stt_tracks(project)
+        recovered_has_subtitles = any(
+            str(row.get("text", "") or "").strip()
+            for row in list(recovered_subtitles or [])
+            if isinstance(row, dict)
+        )
+        recovered_has_stt = any(
+            isinstance(track_rows, list) and any(str(row.get("text", "") or "").strip() for row in track_rows if isinstance(row, dict))
+            for track_rows in recovered_stt_tracks.values()
+        )
+        if recovered_has_subtitles or recovered_has_stt:
+            return externalize_project_text_assets(
+                filepath,
+                project,
+                final_segments=list(recovered_subtitles or []),
+                stt_tracks=dict(recovered_stt_tracks or {}),
+            )
         project.pop("asset_storage", None)
         subtitles = project.setdefault("subtitles", {})
         subtitles.pop("external_track", None)
@@ -655,18 +727,23 @@ def create_project(
     cumulative = 0.0
 
     if media_paths:
+        probe_rows = _probe_media_rows(list(media_paths or []))
         for i, path in enumerate(media_paths):
             ext = os.path.splitext(path)[1].lower()
             m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-            info = _get_media_probe(path)
+            info = dict(probe_rows[i] or {}) if i < len(probe_rows) else _get_media_probe(path)
             dur = float(info.get("duration", 0.0) or 0.0)
             fps = normalize_fps(info.get("fps", 0.0) or 30.0)
+            width = int(info.get("width", 0) or 0)
+            height = int(info.get("height", 0) or 0)
 
             clips.append({
                 "id": _make_clip_id(),
                 "source_path": path,
                 "type": m_type,
                 "source_duration": dur,
+                "width": width,
+                "height": height,
                 "in_point": 0.0,
                 "out_point": dur,
                 "timeline_start": cumulative,
@@ -796,7 +873,10 @@ def create_project(
                 "path": c["source_path"],
                 "type": c["type"],
                 "duration": c["source_duration"],
-                "offset": c["timeline_start"]
+                "offset": c["timeline_start"],
+                "fps": c["fps"],
+                "width": c.get("width", 0),
+                "height": c.get("height", 0),
             }
             for c in clips
         ]
@@ -826,7 +906,7 @@ def create_project(
         except Exception:
             pass
 
-    primary_fps = normalize_fps(clips[0].get("fps") if clips else 30.0)
+    primary_fps = project_primary_fps(project)
     _prefill_project_cut_boundary_artifacts(
         project,
         clips=clips,
@@ -878,6 +958,7 @@ def save_project(
     provisional_cut_boundaries: Optional[List[dict]] = None,
     recovery_state: Optional[dict] = None,
     persist_analysis_artifacts: bool = True,
+    preliminary_middle_segments: Optional[List[dict]] = None,
 ):
     """기존 프로젝트 JSON 업데이트"""
     if not os.path.exists(filepath):
@@ -913,17 +994,22 @@ def save_project(
     if current_media_paths is not None and media_changed:
         clips = []
         cumulative = 0.0
+        probe_rows = _probe_media_rows(list(current_media_paths or []))
         for i, path in enumerate(current_media_paths):
             ext = os.path.splitext(path)[1].lower()
             m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-            info = _get_media_probe(path)
+            info = dict(probe_rows[i] or {}) if i < len(probe_rows) else _get_media_probe(path)
             dur = float(info.get("duration", 0.0) or 0.0)
             fps = normalize_fps(info.get("fps", 0.0) or 30.0)
+            width = int(info.get("width", 0) or 0)
+            height = int(info.get("height", 0) or 0)
             clips.append({
                 "id": _make_clip_id(),
                 "source_path": path,
                 "type": m_type,
                 "source_duration": dur,
+                "width": width,
+                "height": height,
                 "in_point": 0.0,
                 "out_point": dur,
                 "timeline_start": cumulative,
@@ -947,7 +1033,10 @@ def save_project(
                 "path": c["source_path"],
                 "type": c["type"],
                 "duration": c["source_duration"],
-                "offset": c["timeline_start"]
+                "offset": c["timeline_start"],
+                "fps": c["fps"],
+                "width": c.get("width", 0),
+                "height": c.get("height", 0),
             }
             for c in clips
         ]
@@ -959,8 +1048,7 @@ def save_project(
 
     # ── 세그먼트 ──
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
-    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or {}
-    primary_fps = normalize_fps(timebase.get("primary_fps") or (clips[0].get("fps") if clips else 30.0))
+    primary_fps = project_primary_fps(project)
     existing_cut_boundaries = project_cut_boundaries(project, primary_fps=primary_fps)
     existing_provisional_cut_boundaries = (
         normalize_cut_boundaries(provisional_cut_boundaries, primary_fps=primary_fps)
@@ -976,6 +1064,9 @@ def save_project(
         if explicit_stt_preview_update
         else project_stt_preview_segments(project)
     )
+    project["_hot_open_stt_preview_segments_cache"] = [
+        dict(row) for row in list(effective_stt_preview_segments or []) if isinstance(row, dict)
+    ]
     new_segs = None
     if segments is not None:
         from core.cut_boundary import magnetize_segments_to_cut_boundaries
@@ -1094,7 +1185,7 @@ def save_project(
             stt_preview_segments=effective_stt_preview_segments,
             cut_boundaries=existing_cut_boundaries,
             provisional_cut_boundaries=existing_provisional_cut_boundaries,
-            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+            primary_fps=primary_fps,
         )
     elif media_paths is not None:
         clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
@@ -1115,7 +1206,7 @@ def save_project(
             stt_preview_segments=effective_stt_preview_segments,
             cut_boundaries=existing_cut_boundaries,
             provisional_cut_boundaries=existing_provisional_cut_boundaries,
-            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+            primary_fps=primary_fps,
         )
     elif stt_preview_segments is not None:
         project["editor_state"] = build_editor_state(
@@ -1139,7 +1230,7 @@ def save_project(
             stt_preview_segments=stt_preview_segments,
             cut_boundaries=existing_cut_boundaries,
             provisional_cut_boundaries=existing_provisional_cut_boundaries,
-            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+            primary_fps=primary_fps,
         )
     elif segments is not None:
         project["editor_state"] = build_editor_state(
@@ -1163,7 +1254,7 @@ def save_project(
             stt_preview_segments=effective_stt_preview_segments,
             cut_boundaries=existing_cut_boundaries,
             provisional_cut_boundaries=existing_provisional_cut_boundaries,
-            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+            primary_fps=primary_fps,
         )
 
     # ── 사용자 설정 ──
@@ -1198,6 +1289,8 @@ def save_project(
         selected_middle_segments = _selected_roughcut_candidate_segments(project.get("roughcut_state", {}) or {})
         if selected_middle_segments:
             _store_project_middle_segments(project, selected_middle_segments)
+    if preliminary_middle_segments is not None:
+        _store_project_preliminary_middle_segments(project, preliminary_middle_segments)
 
     editor_stt = (project.get("editor_state", {}) or {}).get("stt", {}) or {}
     candidate_tracks = editor_stt.get("candidate_tracks")
@@ -1362,6 +1455,7 @@ def load_project(filepath: str, *, hydrate_text_assets: bool = True) -> dict | N
     if not os.path.exists(filepath):
         return None
     project = _read_json(filepath)
+    hydrate_project_runtime_views(project)
     project["version"] = PROJECT_SCHEMA_VERSION
     project["phase"] = "PHASE2"
     project.setdefault("roughcut_state", {})
@@ -1461,6 +1555,9 @@ def add_media_to_project(filepath: str, new_paths: list):
     existing_paths = {c["source_path"] for c in clips}
     max_order = max((c.get("order", 0) for c in clips), default=-1)
     cumulative = max((c.get("timeline_end", 0.0) for c in clips), default=0.0)
+    incoming_paths = [str(path) for path in list(new_paths or []) if path and path not in existing_paths]
+    probe_rows = _probe_media_rows(incoming_paths) if incoming_paths else []
+    probe_idx = 0
 
     for path in new_paths:
         if path in existing_paths:
@@ -1468,14 +1565,19 @@ def add_media_to_project(filepath: str, new_paths: list):
         max_order += 1
         ext = os.path.splitext(path)[1].lower()
         m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-        info = _get_media_probe(path)
+        info = dict(probe_rows[probe_idx] or {}) if probe_idx < len(probe_rows) else _get_media_probe(path)
+        probe_idx += 1
         dur = float(info.get("duration", 0.0) or 0.0)
         fps = normalize_fps(info.get("fps", 0.0) or 30.0)
+        width = int(info.get("width", 0) or 0)
+        height = int(info.get("height", 0) or 0)
         clips.append({
             "id": _make_clip_id(),
             "source_path": path,
             "type": m_type,
             "source_duration": dur,
+            "width": width,
+            "height": height,
             "in_point": 0.0,
             "out_point": dur,
             "timeline_start": cumulative,
@@ -1499,10 +1601,14 @@ def add_media_to_project(filepath: str, new_paths: list):
             "path": c["source_path"],
             "type": c["type"],
             "duration": c["source_duration"],
-            "offset": c["timeline_start"]
+            "offset": c["timeline_start"],
+            "fps": c.get("fps", 0.0),
+            "width": c.get("width", 0),
+            "height": c.get("height", 0),
         }
         for c in clips
     ]
+    primary_fps = project_primary_fps(project)
     existing_segments = project_segments_to_editor(project)
     project["editor_state"] = build_editor_state(
         mode="multiclip" if len(project["media"]) > 1 else "single",
@@ -1520,7 +1626,7 @@ def add_media_to_project(filepath: str, new_paths: list):
         ],
         cut_boundaries=project_cut_boundaries(project),
         provisional_cut_boundaries=project_cut_provisional_boundaries(project),
-        primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+        primary_fps=primary_fps,
     )
     project.setdefault("roughcut_state", {})
 
@@ -1583,6 +1689,7 @@ def merge_srt_to_project(filepath: str) -> int | None:
 
     project.setdefault("subtitles", {})
     project["subtitles"]["segments"] = all_segments
+    primary_fps = project_primary_fps(project)
     project["editor_state"] = build_editor_state(
         mode="multiclip" if len(clips) > 1 else "single",
         media_files=[clip.get("source_path", "") for clip in clips if clip.get("source_path")],
@@ -1607,7 +1714,7 @@ def merge_srt_to_project(filepath: str) -> int | None:
         ],
         cut_boundaries=project_cut_boundaries(project),
         provisional_cut_boundaries=project_cut_provisional_boundaries(project),
-        primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+        primary_fps=primary_fps,
     )
     project.setdefault("roughcut_state", {})
     project["updated_at"] = datetime.now().isoformat()
@@ -1635,6 +1742,9 @@ def _read_json(filepath: str) -> dict:
 
 
 def _write_json(filepath: str, data: dict):
+    payload = data
     if isinstance(data, dict):
         data["project_path"] = os.path.abspath(filepath)
-    write_project_file(filepath, data)
+        payload = build_storage_project_payload(data)
+        payload["project_path"] = os.path.abspath(filepath)
+    write_project_file(filepath, payload)

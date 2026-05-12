@@ -135,6 +135,48 @@ class RoughcutUiV2Tests(unittest.TestCase):
         finally:
             dialog.close()
 
+    def test_collect_roughcut_llm_settings_enables_post_generation_autorun(self):
+        dialog = SettingsDialog(
+            {
+                "selected_model": "base-model",
+                "selected_llm_provider": "ollama",
+                "editor_roughcut_draft_enabled": True,
+            }
+        )
+        try:
+            dialog.chk_roughcut_llm_enabled.setChecked(True)
+            dialog.chk_roughcut_llm_override.setChecked(True)
+            dialog._set_combo_data(dialog.combo_roughcut_llm_provider, "openai")
+            dialog.input_roughcut_llm_model.setText("gpt-roughcut")
+
+            collected = dialog._collect_roughcut_llm_settings()
+
+            self.assertTrue(collected["roughcut_llm_enabled"])
+            self.assertTrue(collected["roughcut_run_after_subtitle_generation"])
+        finally:
+            dialog.close()
+
+    def test_collect_roughcut_llm_settings_disables_post_generation_autorun_when_llm_is_off(self):
+        dialog = SettingsDialog(
+            {
+                "selected_model": "base-model",
+                "selected_llm_provider": "ollama",
+                "editor_roughcut_draft_enabled": True,
+            }
+        )
+        try:
+            dialog.chk_roughcut_llm_enabled.setChecked(False)
+            dialog.chk_roughcut_llm_override.setChecked(False)
+            dialog._set_combo_data(dialog.combo_roughcut_llm_provider, "none")
+            dialog.input_roughcut_llm_model.setText("사용 안함")
+
+            collected = dialog._collect_roughcut_llm_settings()
+
+            self.assertFalse(collected["roughcut_llm_enabled"])
+            self.assertFalse(collected["roughcut_run_after_subtitle_generation"])
+        finally:
+            dialog.close()
+
     def test_ai_tab_exposes_api_tokens_and_model_download_controls(self):
         dialog = SettingsDialog({})
         try:

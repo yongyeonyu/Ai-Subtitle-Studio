@@ -38,6 +38,101 @@ def _segments(count: int = 7) -> list[dict]:
 
 
 class EditorRoughcutDraftTests(unittest.TestCase):
+    def test_post_generation_autorun_ignores_legacy_false_when_roughcut_llm_is_enabled(self):
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self.settings = {
+                    "editor_roughcut_draft_enabled": True,
+                    "roughcut_run_after_subtitle_generation": False,
+                    "roughcut_llm_enabled": True,
+                }
+
+            def _draft_settings_snapshot(self):
+                return dict(self.settings)
+
+        editor = _Editor()
+
+        self.assertTrue(editor._roughcut_draft_post_generation_autorun_enabled())
+
+    def test_post_generation_autorun_skips_when_roughcut_llm_is_disabled(self):
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self.settings = {
+                    "editor_roughcut_draft_enabled": True,
+                    "roughcut_run_after_subtitle_generation": True,
+                    "roughcut_llm_enabled": False,
+                }
+
+            def _draft_settings_snapshot(self):
+                return dict(self.settings)
+
+        editor = _Editor()
+
+        self.assertFalse(editor._roughcut_draft_post_generation_autorun_enabled())
+
+    def test_post_generation_draft_waits_for_cut_boundary_settle_when_project_has_provisionals(self):
+        class _Timer:
+            def __init__(self):
+                self.started = []
+
+            def start(self, ms):
+                self.started.append(int(ms))
+
+        class _Main:
+            def __init__(self, path):
+                self._current_project_path = path
+                self._multiclip_files = []
+                self._multiclip_boundaries = []
+                self.backend = None
+                self.backend_fast = None
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self, path):
+                self.settings = {
+                    "editor_roughcut_draft_enabled": True,
+                    "roughcut_run_after_subtitle_generation": True,
+                }
+                self._main = _Main(path)
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_status = "idle"
+                self._roughcut_draft_thread = None
+                self._auto_cut_boundary_scan_active = False
+                self._auto_cut_boundary_scan_lines = []
+                self.video_player = None
+
+            def window(self):
+                return self._main
+
+            def _draft_settings_snapshot(self):
+                return dict(self.settings)
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _get_current_segments(self):
+                return _segments(6)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/project.json"
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "analysis": {
+                            "cut_boundary_provisional_boundaries": [
+                                {"timeline_sec": 12.5, "timeline_frame": 375, "fps": 30.0, "status": "provisional"}
+                            ]
+                        }
+                    },
+                    fh,
+                    ensure_ascii=False,
+                )
+            editor = _Editor(path)
+
+            editor._run_post_generation_roughcut_draft()
+
+        self.assertEqual(editor._roughcut_draft_status, "queued")
+        self.assertEqual(editor._roughcut_draft_timer.started, [900])
+
     def test_draft_reference_major_segments_prefers_project_topicless_segments(self):
         class _Main:
             def __init__(self, path):
@@ -591,6 +686,36 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertEqual(prepare.call_args.args[1].model, "roughcut-local")
         self.assertEqual(call_ollama.call_args.args[0], "roughcut-local")
 
+    def test_editor_draft_codex_missing_cli_skips_chunk_retries(self):
+        from core.llm.codex_provider import DEFAULT_CODEX_LABEL
+        from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
+
+        settings = {
+            "selected_llm_provider": "none",
+            "selected_model": "사용 안함",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "openai",
+            "roughcut_llm_model": DEFAULT_CODEX_LABEL,
+            "roughcut_llm_rows_auto_enabled": False,
+            "roughcut_llm_max_context_rows": 5,
+        }
+        with mock.patch(
+            "core.llm.codex_provider.codex_cli_available",
+            return_value=(False, "Codex CLI를 찾을 수 없습니다."),
+        ) as available, mock.patch(
+            "core.roughcut.editor_draft._call_openai_json",
+            return_value={"major_segments": []},
+        ) as call_openai, mock.patch(
+            "core.roughcut.editor_draft.prepare_roughcut_llm_model_for_run"
+        ) as prepare:
+            result = run_editor_roughcut_llm_draft(_segments(12), settings=settings)
+
+        self.assertIsNone(result)
+        available.assert_called_once()
+        prepare.assert_not_called()
+        call_openai.assert_not_called()
+
     def test_editor_draft_ollama_call_uses_shared_python_client_provider(self):
         from core.roughcut.editor_draft import _call_ollama_json
 
@@ -712,6 +837,10 @@ class EditorRoughcutDraftTests(unittest.TestCase):
             editor._apply_post_generation_roughcut_draft(result, segments, candidate)
 
         save_project.assert_called_once()
+        self.assertEqual(
+            save_project.call_args.kwargs.get("preliminary_middle_segments"),
+            list(candidate.get("segments", []) or []),
+        )
         self.assertEqual(editor._roughcut_draft_status, "done")
         self.assertEqual(editor.release_calls, 1)
         self.assertEqual(editor.redraw_calls, 1)
@@ -719,6 +848,10 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertIsNone(editor._roughcut_draft_thread)
         self.assertEqual(
             [row["major_id"] for row in getattr(editor, "_middle_segments")],
+            [segment.major_id for segment in result.segments],
+        )
+        self.assertEqual(
+            [row["major_id"] for row in getattr(editor, "_preliminary_middle_segments")],
             [segment.major_id for segment in result.segments],
         )
 
@@ -836,6 +969,28 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertEqual([segment.major_id for segment in result.segments], ["A", "B"])
         self.assertAlmostEqual(result.segments[0].start, 0.0)
         self.assertAlmostEqual(result.segments[0].end, result.segments[1].start)
+
+    def test_llm_groups_merge_back_toward_reference_segments_when_oversplit(self):
+        result = build_editor_roughcut_draft_result(
+            _segments(8),
+            settings={"editor_roughcut_draft_max_major_segments": 10},
+            llm_payload={
+                "major_segments": [
+                    {"major_id": "A", "title": "도입1", "start_subtitle_id": 0, "end_subtitle_id": 1, "confidence": 0.8},
+                    {"major_id": "B", "title": "도입2", "start_subtitle_id": 2, "end_subtitle_id": 3, "confidence": 0.8},
+                    {"major_id": "C", "title": "후반1", "start_subtitle_id": 4, "end_subtitle_id": 5, "confidence": 0.8},
+                    {"major_id": "D", "title": "후반2", "start_subtitle_id": 6, "end_subtitle_id": 7, "confidence": 0.8},
+                ]
+            },
+            reference_major_segments=[
+                {"major_id": "A", "title": "주제없음", "summary": "임시 중분류 앞", "start": 0.0, "end": 4.8},
+                {"major_id": "B", "title": "주제없음", "summary": "임시 중분류 뒤", "start": 4.8, "end": 9.6},
+            ],
+        )
+
+        self.assertEqual([segment.major_id for segment in result.segments], ["A", "B"])
+        self.assertEqual(len(result.segments[0].subtitle_ids), 4)
+        self.assertEqual(len(result.segments[1].subtitle_ids), 4)
 
     def test_llm_single_major_group_is_rejected_when_reference_has_multiple_segments(self):
         result = build_editor_roughcut_draft_result(

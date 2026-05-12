@@ -473,6 +473,35 @@ class EditorScanCutCoreMixin:
             except Exception:
                 pass
 
+    def _scan_cut_should_ignore_stale_preview_rows(self, rows: list[dict]) -> bool:
+        if not rows or bool(getattr(self, "_auto_cut_boundary_scan_active", False)):
+            return False
+        if any(str(row.get("reason", "") or "") == "manual_roughcut_middle_right_click" for row in rows if isinstance(row, dict)):
+            return False
+        try:
+            main_w = self.window()
+        except Exception:
+            return False
+        for backend in (
+            getattr(main_w, "backend", None),
+            getattr(main_w, "backend_fast", None),
+        ):
+            if backend is None:
+                continue
+            try:
+                prescan = getattr(backend, "_cut_boundary_prescan_thread", None)
+                follower = getattr(backend, "_cut_boundary_follower_thread", None)
+                scan_busy = bool(
+                    (prescan is not None and prescan.is_alive())
+                    or (follower is not None and follower.is_alive())
+                )
+                scan_completed = bool(getattr(backend, "_cut_boundary_prescan_completed", False))
+            except Exception:
+                continue
+            if scan_completed and not scan_busy:
+                return True
+        return False
+
     def _set_auto_cut_boundary_scan_lines(self, times) -> None:
         if not times:
             self._auto_cut_boundary_scan_lines = []
@@ -480,6 +509,24 @@ class EditorScanCutCoreMixin:
             if timeline is not None and hasattr(timeline, "set_scan_boundary_times"):
                 timeline.set_scan_boundary_times([])
             return
+
+        def _visible_preview_row(row) -> bool:
+            if not isinstance(row, dict):
+                return False
+            if str(row.get("reason", "") or "") == "manual_roughcut_middle_right_click":
+                return True
+            if bool(
+                row.get("scan_checked")
+                or row.get("rollback_relocated")
+                or row.get("follower_relocated")
+                or row.get("middle_merge_preferred")
+                or row.get("same_scene_color_similarity")
+            ):
+                return False
+            status = str(row.get("status", "") or "").strip().lower()
+            if status in {"checked", "verified", "confirmed", "accepted", "done"}:
+                return False
+            return True
 
         def _normalise_row(item):
             if isinstance(item, dict):
@@ -507,6 +554,8 @@ class EditorScanCutCoreMixin:
             row = _normalise_row(item)
             if row is not None:
                 cleaned.append(row)
+        if self._scan_cut_should_ignore_stale_preview_rows(cleaned):
+            return
         try:
             merged = []
 
@@ -554,9 +603,13 @@ class EditorScanCutCoreMixin:
                     continue
                 if _status_rank(row) >= _status_rank(old):
                     dedup[key] = row
-            cleaned = [dedup[key] for key in sorted(dedup.keys()) if key > 0.0]
+            cleaned = [
+                dedup[key]
+                for key in sorted(dedup.keys())
+                if key > 0.0 and _visible_preview_row(dedup[key])
+            ]
         except Exception:
-            cleaned = list(cleaned)
+            cleaned = [row for row in list(cleaned) if _visible_preview_row(row)]
         self._auto_cut_boundary_scan_lines = list(cleaned)
         timeline = getattr(self, "timeline", None)
         if timeline is None or not hasattr(timeline, "set_scan_boundary_times"):

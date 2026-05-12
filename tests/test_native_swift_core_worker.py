@@ -8,7 +8,12 @@ from unittest import mock
 
 import core.native_swift_subtitle as native_subtitle
 from core.native_swift_project import read_project_via_swift, write_project_via_swift
-from core.native_swift_subtitle import find_native_cli_path, parse_srt_via_swift, stop_native_core_worker
+from core.native_swift_subtitle import (
+    find_native_cli_path,
+    native_swift_runtime_enabled,
+    parse_srt_via_swift,
+    stop_native_core_worker,
+)
 
 
 class NativeSwiftCoreWorkerTests(unittest.TestCase):
@@ -17,6 +22,22 @@ class NativeSwiftCoreWorkerTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         stop_native_core_worker()
+
+    def test_swift_runtime_defaults_on_for_macos_and_keeps_disable_switch(self):
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch("core.native_swift_subtitle.sys.platform", "darwin"):
+            self.assertTrue(native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_PROJECT_IO"))
+
+        with mock.patch.dict(os.environ, {"AI_SUBTITLE_STUDIO_SWIFT_CORE": "0"}, clear=True), mock.patch(
+            "core.native_swift_subtitle.sys.platform",
+            "darwin",
+        ):
+            self.assertFalse(native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_PROJECT_IO"))
+
+        with mock.patch.dict(os.environ, {"AI_SUBTITLE_STUDIO_SWIFT_TIMELINE": "0"}, clear=True), mock.patch(
+            "core.native_swift_subtitle.sys.platform",
+            "darwin",
+        ):
+            self.assertFalse(native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_TIMELINE"))
 
     def test_core_worker_reuses_single_swift_process_across_srt_and_project_tasks(self):
         if find_native_cli_path() is None:

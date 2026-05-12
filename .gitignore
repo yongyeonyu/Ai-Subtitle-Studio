@@ -38,6 +38,7 @@ dataset/lora_personalization/
 # ── 출력 파일 (음성/영상) ──
 output/
 test video/
+voice_data/
 
 # ── 프로젝트 데이터 (사용자 로컬) ──
 projects/

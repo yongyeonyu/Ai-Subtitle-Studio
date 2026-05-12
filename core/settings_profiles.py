@@ -370,7 +370,9 @@ CUT_BOUNDARY_DEFAULTS: dict[str, Any] = {
     "scan_cut_provisional_compare_max_height": 360,
     "scan_cut_pioneer_packet_scout_enabled": True,
     "scan_cut_pioneer_packet_scout_timeout_sec": 60.0,
-    "scan_cut_pioneer_packet_scout_raw_candidates": 120,
+    "scan_cut_pioneer_packet_scout_raw_candidates": 180,
+    "scan_cut_pioneer_packet_bucket_sec": 0.25,
+    "scan_cut_pioneer_packet_min_gap_sec": 0.20,
     "scan_cut_pioneer_packet_delta_threshold": 1.4,
     "scan_cut_pioneer_packet_mad_multiplier": 3.0,
     "scan_cut_pioneer_pipe_enabled": False,
@@ -385,7 +387,7 @@ CUT_BOUNDARY_DEFAULTS: dict[str, Any] = {
     "scan_cut_pioneer_pipe_flow_residual_threshold": 10.0,
     "scan_cut_pioneer_pipe_timeout_sec": 120.0,
     "scan_cut_pioneer_pipe_max_candidates": 360,
-    "scan_cut_pioneer_min_gap_sec": 1.0,
+    "scan_cut_pioneer_min_gap_sec": 0.45,
     "scan_cut_pioneer_dense_flow_confirm_enabled": True,
     "scan_cut_pioneer_strict_multiplier": 0.72,
     "scan_cut_pioneer_gpu_refine_enabled": True,
@@ -423,6 +425,9 @@ CUT_BOUNDARY_DEFAULTS: dict[str, Any] = {
     "scan_cut_follower_stream_start_percent": 25,
     "scan_cut_follower_stream_batch_size": 16,
     "scan_cut_follower_stream_min_interval_sec": 0.75,
+    "scan_cut_follower_visual_candidate_compact_gap_sec": 0.45,
+    "scan_cut_follower_packet_candidate_compact_gap_sec": 0.20,
+    "scan_cut_follower_scene_candidate_compact_gap_sec": 0.40,
     "scan_cut_high_cost_visual_skip_enabled": True,
     "scan_cut_high_cost_min_pixels": 8_000_000,
     "scan_cut_high_cost_min_bitrate": 80_000_000,
@@ -1067,6 +1072,10 @@ def materialize_user_settings(
     out = hardcoded_default_settings(dataset_dir=dataset_dir)
     if input_settings:
         out.update(deepcopy(input_settings))
+    if bool(out.get("roughcut_llm_enabled", False)):
+        # 러프컷 자동 실행 토글은 현재 별도 UI 제어가 없어서 레거시 False 기본값이 남기 쉽다.
+        # 러프컷 LLM을 사용하는 프로젝트는 생성 완료 후 자동 실행되도록 저장값도 함께 보정한다.
+        out["roughcut_run_after_subtitle_generation"] = True
     out = sanitize_persisted_settings(out)
     if input_has_user_llm:
         out["subtitle_llm_user_selected"] = True

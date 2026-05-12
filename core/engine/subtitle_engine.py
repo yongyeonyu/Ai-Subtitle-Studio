@@ -10,7 +10,6 @@ core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장
 [복구] 불필요한 초강력 시간태그 삭제 알고리즘 제거 (에디터 네비게이션 태그 오해 해소)
 """
 import re
-import difflib  
 import threading
 import time
 
@@ -40,6 +39,14 @@ from core.engine.subtitle_text_policy import (
     enforce_final_subtitle_text_policy as _enforce_final_subtitle_text_policy,
     split_visible_len as _split_visible_len,
     strip_stt_control_tokens as _strip_stt_control_tokens,
+)
+from core.engine.subtitle_segment_filter import (
+    absorb_tiny_segments as _absorb_tiny,
+    configure_segment_filter as _configure_segment_filter,
+    dedup_close_segments as _dedup_close,
+    global_dedup_segments as _global_dedup,
+    pre_merge_segments as _pre_merge,
+    sanitize_segments as _sanitize,
 )
 from core.engine.subtitle_accuracy_pipeline import (
     append_accuracy_decision,
@@ -111,11 +118,7 @@ def _effective_llm_workers(model: str, configured_workers: int, settings: dict, 
     return _effective_llm_workers_impl(model, configured_workers, settings, segment_count, local_worker_cap=_LOCAL_OLLAMA_WORKER_CAP)
 
 # ━━━ 🛠️ [시스템 고정 상수] ━━━
-_MIN_CHARS       = 5     
-_PRE_MERGE_MULT  = 3.0   
 _ENFORCE_RATIO   = 1.5   
-_HALLUC_MIN_DUR  = 0.8   
-_HALLUC_MAX_CHARS = 10   
 _LLM_SKIP_DUR    = 1.0
 _LOCAL_LLM_BACKOFF_SEC = 60.0
 _LOCAL_LLM_UNAVAILABLE_UNTIL = 0.0
@@ -165,198 +168,6 @@ def _local_ollama_ready(model: str, context: str) -> bool:
         return True
     _mark_local_llm_unavailable(model, context, "서버 응답 없음")
     return False
-
-# 💡 [신규 이식] media_processor에서 이사 온 환각 방지 리스트
-_HALLUC_PHRASES = [
-    "한국어 대화", "자막 생성",
-    "번역 중", "처리 중", "대화 내용", "Korean conversation",
-    "subtitle", "transcription", "Thank you for watching"
-]
-
-def _sanitize(segments: list[dict], corrections: dict) -> list[dict]:
-    result = []
-    for seg in segments:
-        text = _clean(seg.get("text", ""), corrections)
-        if not text:
-            continue
-            
-        # 💡 [환각 문구 검사]
-        is_halluc = False
-        for phrase in _HALLUC_PHRASES:
-            if phrase in text:
-                get_logger().log(f"[삭제-환각문구] '{text[:15]}...'")
-                is_halluc = True
-                break
-        if is_halluc:
-            continue
-            
-        if not re.search(r"[가-힣a-zA-Z]", text):
-            continue
-            
-        clean_len = len(text.replace(" ", "").replace("\n", ""))
-        duration = seg.get("end", 0) - seg.get("start", 0)
-        
-        # 💡 [환청/복사 버그 필터]
-        if duration < _HALLUC_MIN_DUR and len(text) > _HALLUC_MAX_CHARS:
-             get_logger().log(f"[삭제-환청지어내기] 짧은 구간 과다 텍스트 제거({duration:.2f}초): '{text[:10]}...'")
-             continue
-
-        # 💡 [초단문 차단]
-        if duration <= _MIN_DURATION: 
-            get_logger().log(f"[삭제-초단문] {_MIN_DURATION}초 이하 차단({duration:.2f}초): '{text[:15]}...'")
-            continue
-            
-        # 💡 [발음 속도(CPS) 차단]
-        cps = clean_len / max(0.01, duration)
-        if cps > _MAX_CPS:
-            get_logger().log(f"[삭제-환각복붙] 발음 속도({_MAX_CPS}자 초과) 차단(CPS:{cps:.1f}): '{text[:15]}...'")
-            continue
-            
-        result.append({**seg, "text": text})
-    return result
-    
-def _dedup_close(segments: list[dict]) -> list[dict]:
-    if not segments:
-        return segments
-    result = [segments[0]]
-    for seg in segments[1:]:
-        prev = result[-1]
-        gap  = seg["start"] - prev["end"]
-        t    = seg["text"].replace(" ", "").replace("\n", "")
-        pt   = prev["text"].replace(" ", "").replace("\n", "")
-
-        if t == pt:
-            continue
-            
-        if gap < _DEDUP_WINDOW and t and pt and (t in pt or pt in t):
-            get_logger().log(f"[삭제-근접포함] 이전 텍스트 겹침 삭제 (Gap: {gap:.2f}s): '{seg['text'][:15]}...'")
-            continue
-            
-        if gap < 2.0 and len(t) >= 3 and len(pt) >= 3:
-            match = difflib.SequenceMatcher(None, pt, t).find_longest_match(0, len(pt), 0, len(t))
-            matched_len = match.size
-            if matched_len >= 5 and (matched_len / len(t)) >= 0.8:
-                get_logger().log(f"[삭제-유사중복] 꼬리물기 중복 삭제: '{seg['text'][:15]}...'")
-                continue
-
-        if gap < 0.15 and len(t) < 4:
-            continue
-            
-        result.append(seg)
-    return result
-
-def _global_dedup(segments: list[dict]) -> list[dict]:
-    result = []
-    history = []
-    for seg in segments:
-        t = seg["text"].replace(" ", "").replace("\n", "")
-        if len(t) < 5:
-            result.append(seg)
-            history.append(t)
-            continue
-        
-        is_halluc = False
-        for past_t in reversed(history[-40:]):
-            if len(past_t) < 5:
-                continue
-            if t in past_t or past_t in t:
-                is_halluc = True
-                break
-            match = difflib.SequenceMatcher(None, past_t, t).find_longest_match(0, len(past_t), 0, len(t))
-            if match.size >= 8 and (match.size / len(t)) >= 0.7:
-                is_halluc = True
-                break
-                
-        if is_halluc:
-            get_logger().log(f"[삭제-과거복붙] 앵무새 환각 삭제: '{seg['text'][:15]}...'")
-            continue
-            
-        result.append(seg)
-        history.append(t)
-    return result
-
-def _absorb_tiny(segments: list[dict], threshold: int) -> list[dict]:
-    tiny = max(_MIN_CHARS, int(threshold * 0.3))
-    changed = True
-    while changed:
-        changed = False
-        i = 0
-        while i < len(segments):
-            seg = segments[i]
-            clen = len(seg["text"].replace(" ", "").replace("\n", ""))
-            if clen > tiny:
-                i += 1
-                continue
-
-            if i > 0:
-                prev = segments[i - 1]
-                gap  = seg["start"] - prev["end"]
-                if gap < _GAP_BREAK_SEC:
-                    merged_text = (prev["text"] + " " + seg["text"]).strip()
-                    get_logger().log(f"[흡수-앞] 파편 -> 앞 문장 병합: '{merged_text[:15]}...'")
-                    segments[i - 1] = {**prev,
-                                       "end":  seg["end"],
-                                       "text": merged_text,
-                                       "words": prev.get("words", []) + seg.get("words", [])}
-                    segments.pop(i)
-                    changed = True
-                    continue
-
-            if i < len(segments) - 1:
-                nxt = segments[i + 1]
-                gap = nxt["start"] - seg["end"]
-                if gap < _GAP_BREAK_SEC:
-                    merged_text = (seg["text"] + " " + nxt["text"]).strip()
-                    get_logger().log(f"[흡수-뒤] 파편 -> 뒤 문장 병합: '{merged_text[:15]}...'")
-                    segments[i + 1] = {**nxt,
-                                       "start": seg["start"],
-                                       "text":  merged_text,
-                                       "words": seg.get("words", []) + nxt.get("words", [])}
-                    segments.pop(i)
-                    changed = True
-                    continue
-
-            i += 1
-    return segments
-
-def _pre_merge(segments: list[dict], threshold: int) -> list[dict]:
-    if len(segments) < 2:
-        return segments
-    max_chars = threshold * _PRE_MERGE_MULT
-    groups    = [[segments[0]]]
-
-    for seg in segments[1:]:
-        prev = groups[-1][-1]
-        gap  = seg["start"] - prev["end"]
-        g_len = sum(len(s["text"].replace(" ", "").replace("\n", "")) for s in groups[-1])
-        c_len = len(seg["text"].replace(" ", "").replace("\n", ""))
-        p_len = len(prev["text"].replace(" ", "").replace("\n", ""))
-
-        if (gap < _GAP_BREAK_SEC
-                and (c_len <= threshold * 0.5 or p_len <= threshold * 0.5 or g_len <= threshold)
-                and g_len + c_len <= max_chars):
-            groups[-1].append(seg)
-        else:
-            groups.append([seg])
-
-    result = []
-    for grp in groups:
-        if len(grp) == 1:
-            result.append(grp[0])
-        else:
-            all_words = []
-            for s in grp:
-                all_words.extend(s.get("words", []))
-            merged_text = " ".join(s["text"].strip() for s in grp).strip()
-            get_logger().log(f"[병합-문맥] {len(grp)}개 합체: '{merged_text[:15]}...'")
-            result.append({
-                "start":   grp[0]["start"],
-                "end":     grp[-1]["end"],
-                "text":    merged_text,
-                "speaker": grp[0].get("speaker", "SPEAKER_00"),
-                "words":   all_words,
-            })
-    return result
 
 def is_natural_break(word: str, next_word: str, rules: dict) -> bool:
     w_clean = re.sub(r'[^\w가-힣]', '', word) 
@@ -1810,6 +1621,7 @@ def _optimizer_context() -> tuple[dict, list[dict], str, dict, int, str, str, di
     _MAX_DURATION = _setting_float(loaded_settings, "sub_max_duration", 6.0)
     _MAX_CPS = _setting_int(loaded_settings, "sub_max_cps", 12)
     _DEDUP_WINDOW = _setting_float(loaded_settings, "sub_dedup_window", 0.5)
+    _configure_segment_filter(loaded_settings)
 
     if "user_prompt" in loaded_settings:
         user_prompt = loaded_settings["user_prompt"]

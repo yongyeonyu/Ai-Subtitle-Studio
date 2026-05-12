@@ -142,12 +142,13 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     if memory_gb >= 32 and logical >= 12:
         local_llm_workers = 3
 
+    interactive_reserve = _positive_int(chip_plan.get("interactive_reserve_cores"), 1 if logical > 1 else 0)
     if chip_pipeline:
         balanced_workers = _positive_int(chip_pipeline.get("cut_follower_workers"), balanced_workers)
         wide_workers = _positive_int(chip_pipeline.get("audio_workers"), wide_workers)
         llm_workers = _positive_int(chip_pipeline.get("llm_resource_max"), llm_workers)
         local_llm_workers = _positive_int(chip_pipeline.get("local_llm_workers"), local_llm_workers)
-    native_threads = _positive_int(chip_cpu.get("native_threads"), logical)
+    native_threads = _positive_int(chip_cpu.get("native_threads"), max(1, logical - interactive_reserve))
     ffmpeg_threads = _positive_int(chip_pipeline.get("ffmpeg_filter_threads"), balanced_workers)
     direct_ffmpeg_chunk_min_sec = float(chip_pipeline.get("direct_ffmpeg_chunk_min_sec", 1.0) or 1.0)
     # BENCH LOCK 2026-05-10: keep follower streaming deliberately less chatty.
@@ -173,7 +174,7 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("runtime_native_threads_auto_enabled", True)
     set_opt("runtime_native_threads", native_threads)
     set_opt("runtime_scheduler_auto_enabled", True)
-    set_opt("runtime_scheduler_reserve_cores", int(chip_plan.get("interactive_reserve_cores", 0) or 0))
+    set_opt("runtime_scheduler_reserve_cores", int(interactive_reserve))
     set_opt("runtime_scheduler_ramp_up_enabled", False)
 
     set_opt("stt_backend_policy", "native")

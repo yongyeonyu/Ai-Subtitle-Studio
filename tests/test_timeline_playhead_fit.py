@@ -21,7 +21,12 @@ from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_canvas import TimelineCanvasBase
-from ui.timeline.timeline_global import GlobalCanvasBase, MINIMAP_TOP_LANE_BG
+from ui.timeline.timeline_global import (
+    GlobalCanvasBase,
+    MINIMAP_PRELIMINARY_LANE_BG,
+    MINIMAP_REFERENCE_LANE_BG,
+    MINIMAP_TOP_LANE_BG,
+)
 
 
 class _DummyEditor(EditorSegmentsMixin):
@@ -2160,6 +2165,47 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertEqual(image.pixelColor(inside_x, top_lane_center_y).name(), bg)
             self.assertNotEqual(image.pixelColor(border_x, top_lane_center_y).name(), bg)
+        finally:
+            timeline.close()
+
+    def test_global_canvas_preliminary_lane_renders_above_topicless_reference_lane(self):
+        timeline = TimelineWidget()
+        try:
+            canvas = timeline.global_canvas
+            canvas.resize(420, canvas.height())
+            canvas.total_duration = 20.0
+            canvas.update_segments([], 20.0)
+            canvas.set_vad_segments([])
+            canvas._preliminary_middle_segments = [
+                {
+                    "start": 2.0,
+                    "end": 8.0,
+                    "major_id": "A",
+                    "title": "예비 실내 소개",
+                    "status": "provisional",
+                }
+            ]
+            canvas._cut_boundary_topicless_middle_segments = [
+                {
+                    "start": 1.0,
+                    "end": 10.0,
+                    "major_id": "A",
+                    "title": "주제없음",
+                    "status": "provisional",
+                    "is_topicless_placeholder": True,
+                }
+            ]
+
+            pixmap = canvas._build_static_cache()
+            image = pixmap.toImage()
+            preview_inside_y = 5
+            reference_inside_y = 15
+            inside_x = canvas._sec_to_px(5.0)
+            border_x = canvas._sec_to_px(1.0)
+
+            self.assertNotEqual(image.pixelColor(inside_x, preview_inside_y).name(), QColor(MINIMAP_PRELIMINARY_LANE_BG).name())
+            self.assertEqual(image.pixelColor(inside_x, reference_inside_y).name(), QColor(MINIMAP_REFERENCE_LANE_BG).name())
+            self.assertNotEqual(image.pixelColor(border_x, reference_inside_y).name(), QColor(MINIMAP_REFERENCE_LANE_BG).name())
         finally:
             timeline.close()
 

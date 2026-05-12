@@ -148,7 +148,9 @@ def roughcut_markers(result: Any) -> list[dict]:
 
 def roughcut_major_markers(result: Any) -> list[dict]:
     markers: list[dict] = []
-    if isinstance(result, dict):
+    if isinstance(result, list):
+        segments = list(result)
+    elif isinstance(result, dict):
         segments = result.get("segments", []) or []
     else:
         segments = getattr(result, "segments", None) or []
@@ -210,6 +212,40 @@ def roughcut_major_color(major_id: str, fallback_index: int = 0) -> str:
 def roughcut_major_markers_for_widget(widget: Any) -> list[dict]:
     result = find_roughcut_result(widget)
     return roughcut_major_markers(result) if result is not None else []
+
+
+def _rows_attr_for_widget(widget: Any, attr_names: tuple[str, ...]) -> list[dict]:
+    owner = widget
+    while owner is not None:
+        for attr in attr_names:
+            rows = getattr(owner, attr, None)
+            if isinstance(rows, list) and rows:
+                return [dict(row) for row in rows if isinstance(row, dict)]
+        owner = owner.parent() if hasattr(owner, "parent") else None
+
+    try:
+        window = widget.window()
+    except Exception:
+        window = None
+    if window is not None:
+        for attr in attr_names:
+            rows = getattr(window, attr, None)
+            if isinstance(rows, list) and rows:
+                return [dict(row) for row in rows if isinstance(row, dict)]
+    return []
+
+
+def preliminary_major_markers_for_widget(widget: Any) -> list[dict]:
+    rows = _rows_attr_for_widget(widget, ("_preliminary_middle_segments", "preliminary_middle_segments"))
+    return roughcut_major_markers(rows) if rows else []
+
+
+def topicless_major_markers_for_widget(widget: Any) -> list[dict]:
+    rows = _rows_attr_for_widget(
+        widget,
+        ("_cut_boundary_topicless_middle_segments", "cut_boundary_topicless_middle_segments"),
+    )
+    return roughcut_major_markers(rows) if rows else []
 
 
 def editor_analysis_markers(

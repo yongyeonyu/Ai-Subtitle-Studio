@@ -39,7 +39,8 @@ class RuntimeMultiProcessTests(unittest.TestCase):
             })
 
         self.assertEqual(settings["runtime_performance_profile"], "max")
-        self.assertEqual(settings["runtime_native_threads"], 10)
+        self.assertEqual(settings["runtime_native_threads"], 9)
+        self.assertEqual(settings["runtime_scheduler_reserve_cores"], 1)
         self.assertFalse(settings["runtime_scheduler_ramp_up_enabled"])
         self.assertEqual(settings["io_workers"], 8)
         self.assertEqual(settings["audio_chunk_route_max_workers"], 8)
@@ -85,8 +86,9 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         plan = settings["_apple_m_pipeline_parallel_plan"]
         self.assertTrue(plan["chip_aware"])
         self.assertEqual(plan["chip_profile"]["chip_name"], "Apple M5")
-        self.assertEqual(settings["runtime_native_threads"], 10)
-        self.assertEqual(settings["io_workers"], 10)
+        self.assertEqual(settings["runtime_native_threads"], 9)
+        self.assertEqual(settings["runtime_scheduler_reserve_cores"], 1)
+        self.assertEqual(settings["io_workers"], 9)
         self.assertEqual(settings["ffmpeg_filter_threads"], 8)
         self.assertEqual(settings["scan_cut_pioneer_cpu_max_workers"], 4)
         self.assertEqual(settings["scan_cut_follower_cpu_max_workers"], 4)

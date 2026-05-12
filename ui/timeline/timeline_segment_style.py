@@ -79,6 +79,7 @@ def subtitle_render_detail_mode(
     pps: float,
     editing: bool = False,
     scenegraph: bool = False,
+    playback_active: bool = False,
 ) -> str:
     """Return a lightweight subtitle paint mode for dense timelines."""
     if scenegraph:
@@ -87,6 +88,10 @@ def subtitle_render_detail_mode(
         return "full"
     count = max(0, int(visible_segment_count or 0))
     zoom = max(0.0, float(pps or 0.0))
+    if playback_active:
+        if count >= 36 or zoom < 28.0:
+            return "ultra"
+        return "dense"
     if count >= 180 or (count >= 72 and zoom < 24.0) or (count >= 32 and zoom < 10.0):
         return "ultra"
     if count >= 56 or (count >= 28 and zoom < 40.0):

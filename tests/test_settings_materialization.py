@@ -122,6 +122,32 @@ class SettingsMaterializationTests(unittest.TestCase):
         self.assertTrue(materialized["openai_api_key_saved"])
         self.assertTrue(materialized["huggingface_token_saved"])
 
+    def test_materialize_user_settings_enables_roughcut_autorun_when_roughcut_is_enabled(self):
+        from core.settings_profiles import materialize_user_settings
+
+        materialized = materialize_user_settings(
+            {
+                "editor_roughcut_draft_enabled": True,
+                "roughcut_llm_enabled": True,
+                "roughcut_run_after_subtitle_generation": False,
+            }
+        )
+
+        self.assertTrue(materialized["roughcut_run_after_subtitle_generation"])
+
+    def test_materialize_user_settings_keeps_roughcut_autorun_off_when_llm_is_disabled(self):
+        from core.settings_profiles import materialize_user_settings
+
+        materialized = materialize_user_settings(
+            {
+                "editor_roughcut_draft_enabled": True,
+                "roughcut_llm_enabled": False,
+                "roughcut_run_after_subtitle_generation": False,
+            }
+        )
+
+        self.assertFalse(materialized["roughcut_run_after_subtitle_generation"])
+
     def test_project_data_manager_save_writes_materialized_settings(self):
         from core.project import data_manager
 

@@ -123,6 +123,7 @@ class SettingsRoughcutMixin:
         return {
             "roughcut_llm_enabled": enabled,
             "roughcut_llm_use_override": enabled,
+            "roughcut_run_after_subtitle_generation": bool(enabled),
             "roughcut_llm_provider": self.combo_roughcut_llm_provider.currentData() if enabled else "none",
             "roughcut_llm_model": self.input_roughcut_llm_model.text().strip() if enabled else "사용 안함",
             "roughcut_llm_api_key_mode": self.combo_roughcut_api_key_mode.currentData() or "inherit",

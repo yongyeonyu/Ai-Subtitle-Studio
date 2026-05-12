@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from typing import Any
 
 import numpy as np
 
-from core.native_swift_subtitle import find_native_cli_path
+from core.native_swift_subtitle import find_native_cli_path, native_swift_runtime_enabled
 
 
 def _enabled() -> bool:
-    value = os.environ.get("AI_SUBTITLE_STUDIO_SWIFT_WAVEFORM", "").lower()
-    if value in {"0", "false", "off", "no"}:
-        return False
-    return value in {"1", "true", "on", "yes"} or bool(os.environ.get("AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES"))
+    return native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_WAVEFORM")
 
 
 def downsample_f32le_via_swift(

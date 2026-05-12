@@ -612,6 +612,8 @@ class MainWindow(
                 if hasattr(canvas, "scan_boundary_times"):
                     canvas.scan_boundary_times = []
                 for attr in (
+                    "_preliminary_middle_segments",
+                    "preliminary_middle_segments",
                     "_cut_boundary_topicless_middle_segments",
                     "_roughcut_segments",
                     "roughcut_segments",
@@ -784,6 +786,8 @@ class MainWindow(
             return
 
         for attr in (
+            "_preliminary_middle_segments",
+            "preliminary_middle_segments",
             "_project_boundary_times",
             "_auto_cut_boundary_scan_lines",
             "_cut_boundary_topicless_middle_segments",
@@ -827,6 +831,8 @@ class MainWindow(
                     if obj is None:
                         continue
                     for attr in (
+                        "_preliminary_middle_segments",
+                        "preliminary_middle_segments",
                         "_cut_boundary_topicless_middle_segments",
                         "_roughcut_segments",
                         "roughcut_segments",
@@ -1492,12 +1498,34 @@ class MainWindow(
         if self._editor_widget and hasattr(self._editor_widget, "video_player"):
             self._editor_widget.video_player.resizeEvent(None)
 
-    def _shutdown_personalization_idle_trainer(self, *, timeout_sec: float = 3.0):
+    def _shutdown_personalization_idle_trainer(
+        self,
+        *,
+        timeout_sec: float = 3.0,
+        cleanup: bool = True,
+        recover: bool = True,
+    ):
         trainer = getattr(self, "_personalization_idle_trainer", None)
         if trainer is None:
             return {"stopped": True, "busy": False}
         try:
-            result = trainer.shutdown(timeout_sec=timeout_sec)
+            try:
+                import inspect
+
+                params = inspect.signature(trainer.shutdown).parameters
+                kwargs = {}
+                if "timeout_sec" in params:
+                    kwargs["timeout_sec"] = timeout_sec
+                if "cleanup" in params:
+                    kwargs["cleanup"] = cleanup
+                if "recover" in params:
+                    kwargs["recover"] = recover
+                result = trainer.shutdown(**kwargs)
+            except (TypeError, ValueError):
+                try:
+                    result = trainer.shutdown(timeout_sec=timeout_sec)
+                except TypeError:
+                    result = trainer.shutdown()
         except Exception as exc:
             get_logger().log(f"⚠️ 개인화 학습 종료 처리 실패: {exc}")
             return {"stopped": False, "busy": True}

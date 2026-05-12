@@ -10,6 +10,7 @@ from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication, QTextEdit
 
 from ui.editor.editor_actions import EditorActionsMixin
+from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 from ui.editor.editor_lifecycle import EditorLifecycleMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
@@ -86,11 +87,15 @@ class _Timeline:
         self.playhead_calls = []
         self.auto_gap_segments_enabled = True
         self.canvas = type("Canvas", (), {"playhead_sec": 0.0, "segments": []})()
+        self.global_canvas = type("GlobalCanvas", (), {"total_duration": 0.0, "segments": []})()
         self.scroll = _TimelineScroll()
 
     def update_segments(self, segs, active_sec, total_dur):
         self.updated = (list(segs), active_sec, total_dur)
         self.canvas.segments = list(segs)
+        self.canvas.total_duration = float(total_dur or 0.0)
+        self.global_canvas.total_duration = float(total_dur or 0.0)
+        self.global_canvas.segments = list(segs)
 
     def set_active(self, sec):
         self.active_calls.append(float(sec))
@@ -290,6 +295,7 @@ class _ProjectOpenEditor:
         self._cached_segs = []
         self.reload_called_with = None
         self.completed = False
+        self.completed_kwargs = None
         self.scheduled = False
         self.timestamp_refreshes = []
         self.video_context_refreshes = 0
@@ -319,11 +325,40 @@ class _ProjectOpenEditor:
     def _global_to_local_sec(self, sec):
         return float(sec)
 
-    def _set_process_completed(self):
+    def _set_process_completed(self, **kwargs):
         self.completed = True
+        self.completed_kwargs = dict(kwargs)
 
     def _schedule_timeline(self):
         self.scheduled = True
+
+
+class _CanvasStateEditor(EditorCanvasStateMixin):
+    def __init__(self):
+        self.video_fps = 30.0
+        self.timeline = _Timeline()
+        self._cached_segs = []
+        self._live_stt_preview_segments = []
+        self.scheduled = False
+
+    def _reload_segments_from_list(self, segments, preserve_view=False, mark_dirty=False):
+        self._cached_segs = [dict(seg) for seg in list(segments or [])]
+        total_dur = max((float(seg.get("end", 0.0) or 0.0) for seg in self._cached_segs), default=0.0)
+        self.timeline.update_segments(self._cached_segs, None, total_dur)
+
+    def _get_current_segments(self):
+        return list(self._cached_segs)
+
+    def _schedule_timeline(self):
+        self.scheduled = True
+        segs = list(self._cached_segs)
+        preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        combined = sorted(
+            segs + preview,
+            key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
+        )
+        total_dur = max((float(seg.get("end", 0.0) or 0.0) for seg in combined), default=0.0)
+        self.timeline.update_segments(combined, None, total_dur)
 
 
 class _ProjectOpenWindow(ProjectUIMixin, EditorLifecycleMixin):
@@ -489,6 +524,17 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             "project_name": "same-runtime",
             "timeline": {"tracks": [{"clips": [{"source_path": "/tmp/sample.mp4"}]}]},
             "editor_state": {},
+            "analysis": {
+                "preliminary_middle_segments": [
+                    {
+                        "start": 0.0,
+                        "end": 2.0,
+                        "major_id": "A",
+                        "title": "예비 실외 도입",
+                        "segment_stage_name": "예비 중분류 세그먼트",
+                    }
+                ]
+            },
         }
 
         with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
@@ -504,12 +550,188 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.reload_called_with, segments)
         self.assertFalse(editor.timeline.auto_gap_segments_enabled)
         self.assertTrue(editor.completed)
+        self.assertEqual(editor.completed_kwargs, {"suppress_post_generation_tasks": True})
         self.assertTrue(editor.scheduled)
         self.assertGreaterEqual(window.runtime_schedule_count, 1)
         self.assertIsNotNone(editor.video_player.provider)
         self.assertEqual(editor.video_player.provider(), segments)
         self.assertEqual(editor.video_player.context_segments, segments)
         self.assertEqual(editor.video_player.display_time, 0.0)
+        self.assertEqual(getattr(editor, "_preliminary_middle_segments")[0]["major_id"], "A")
+
+    def test_apply_loaded_canvas_state_uses_segment_frame_rate_from_project_rows(self):
+        editor = _CanvasStateEditor()
+        rows = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "프레임 보존",
+                "speaker": "00",
+                "start_frame": 60,
+                "end_frame": 120,
+                "timeline_start_frame": 60,
+                "timeline_end_frame": 120,
+                "frame_rate": 59.94,
+                "timeline_frame_rate": 59.94,
+                "frame_range": {
+                    "unit": "frame",
+                    "start": 60,
+                    "end": 120,
+                    "timeline_frame_rate": 59.94,
+                },
+            }
+        ]
+
+        loaded = editor.apply_loaded_canvas_state(rows, mark_dirty=False)
+
+        self.assertAlmostEqual(loaded[0]["start"], 60.0 / 59.94, places=4)
+        self.assertAlmostEqual(loaded[0]["end"], 120.0 / 59.94, places=4)
+        self.assertLess(loaded[0]["end"], 2.1)
+
+    def test_project_open_clears_stale_preview_and_duration_before_restore(self):
+        class _ProjectCanvasEditor(_CanvasStateEditor):
+            def __init__(self):
+                super().__init__()
+                self.video_player = _VideoPlayer(total_time=0.0)
+                self.text_edit = _TextEdit()
+                self.completed = False
+                self.completed_kwargs = None
+                self.timestamp_refreshes = []
+                self.video_context_refreshes = 0
+                self.memory_rebuilds = []
+                self._live_stt_preview_segments = [
+                    {"start": 2000.0, "end": 2010.0, "text": "stale", "stt_preview_source": "STT1"}
+                ]
+                self.timeline.canvas.total_duration = 44.0 * 60.0
+                self.timeline.global_canvas.total_duration = 44.0 * 60.0
+
+            def _rebuild_subtitle_memory_cache(self, segments=None):
+                rows = [dict(seg) for seg in (segments if segments is not None else self._cached_segs)]
+                self._cached_segs = rows
+                self.memory_rebuilds.append(rows)
+                return {}
+
+            def _refresh_editor_timestamp_metadata(self, *, full=False):
+                self.timestamp_refreshes.append(bool(full))
+                return len(self._cached_segs)
+
+            def _refresh_video_subtitle_context(self):
+                self.video_context_refreshes += 1
+
+            def _video_subtitle_context_for_player(self):
+                return [dict(seg) for seg in self._cached_segs]
+
+            def _global_to_local_sec(self, sec):
+                return float(sec)
+
+            def _set_process_completed(self, **kwargs):
+                self.completed = True
+                self.completed_kwargs = dict(kwargs)
+
+        editor = _ProjectCanvasEditor()
+        window = _ProjectOpenWindow(editor)
+        segments = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "첫 줄",
+                "speaker": "00",
+                "start_frame": 60,
+                "end_frame": 120,
+                "timeline_start_frame": 60,
+                "timeline_end_frame": 120,
+                "frame_rate": 59.94,
+                "timeline_frame_rate": 59.94,
+                "frame_range": {
+                    "unit": "frame",
+                    "start": 60,
+                    "end": 120,
+                    "timeline_frame_rate": 59.94,
+                },
+            }
+        ]
+        project = {
+            "timeline": {
+                "total_duration": 1450.265483,
+                "timebase": {"primary_fps": 59.94},
+            },
+            "analysis": {},
+            "editor_state": {"stt": {"preview_segments": []}},
+        }
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            opened = window._open_project_segments_in_editor(
+                "/tmp/sample_project.json",
+                project,
+                ["/tmp/sample.mp4"],
+                segments,
+            )
+
+        self.assertTrue(opened)
+        self.assertEqual(editor._live_stt_preview_segments, [])
+        self.assertLess(editor.timeline.canvas.total_duration, 3.0)
+        self.assertAlmostEqual(editor.timeline.canvas.total_duration, 120.0 / 59.94, places=4)
+
+    def test_project_open_uses_video_header_primary_fps_when_timeline_timebase_is_missing(self):
+        class _ProjectCanvasEditor(_CanvasStateEditor):
+            def __init__(self):
+                super().__init__()
+                self.timeline = _Timeline()
+                self._live_stt_preview_segments = []
+                self._set_loaded_boundary_rows = lambda *_args, **_kwargs: None
+                self._set_loaded_scan_boundary_rows = lambda *_args, **_kwargs: None
+                self._set_loaded_vad_segments = lambda *_args, **_kwargs: None
+                self._set_loaded_editor_segments = lambda rows, **_kwargs: setattr(self, "_cached_segs", list(rows or []))
+                self._video_subtitle_context_for_player = lambda: [dict(seg) for seg in self._cached_segs]
+                self._global_to_local_sec = lambda sec: float(sec)
+                self._set_process_completed = lambda **_kwargs: None
+
+        editor = _ProjectCanvasEditor()
+        window = _ProjectOpenWindow(editor)
+        segments = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "첫 줄",
+                "speaker": "00",
+                "start_frame": 60,
+                "end_frame": 120,
+                "timeline_start_frame": 60,
+                "timeline_end_frame": 120,
+                "frame_rate": 59.94,
+                "timeline_frame_rate": 59.94,
+                "frame_range": {
+                    "unit": "frame",
+                    "start": 60,
+                    "end": 120,
+                    "timeline_frame_rate": 59.94,
+                },
+            }
+        ]
+        project = {
+            "video": {
+                "primary_fps": 59.94,
+                "duration_sec": 1450.265483,
+                "timebase": {"primary_fps": 59.94},
+            },
+            "timeline": {
+                "total_duration": 1450.265483,
+            },
+            "analysis": {},
+            "editor_state": {"stt": {"preview_segments": []}},
+        }
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            opened = window._open_project_segments_in_editor(
+                "/tmp/sample_project.json",
+                project,
+                ["/tmp/sample.mp4"],
+                segments,
+            )
+
+        self.assertTrue(opened)
+        self.assertAlmostEqual(editor.video_fps, 59.94, places=2)
+        self.assertAlmostEqual(editor.timeline.canvas.total_duration, 120.0 / 59.94, places=4)
 
     def test_init_editor_uses_deferred_media_and_native_fast_open_bootstrap(self):
         owner = _LifecycleOwner()

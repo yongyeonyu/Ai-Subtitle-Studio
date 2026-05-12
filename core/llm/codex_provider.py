@@ -50,17 +50,24 @@ def is_codex_model(model_name: str) -> bool:
     return "codex" in lowered and ("chatgpt" in lowered or "cli" in lowered or "구독" in text)
 
 
-def _codex_binary() -> str:
+def codex_cli_available() -> tuple[bool, str]:
     explicit = str(os.environ.get("AI_SUBTITLE_CODEX_BIN", "") or "").strip()
     if explicit:
         expanded = os.path.expanduser(explicit)
         if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
-            return expanded
-        raise RuntimeError("Codex CLI를 찾을 수 없습니다. AI_SUBTITLE_CODEX_BIN 경로를 확인해 주세요.")
+            return True, expanded
+        return False, "AI_SUBTITLE_CODEX_BIN 경로를 확인해 주세요."
     found = shutil.which("codex")
     if found:
-        return found
-    raise RuntimeError("Codex CLI를 찾을 수 없습니다. 설치 후 터미널에서 `codex`로 로그인해 주세요.")
+        return True, found
+    return False, "Codex CLI를 찾을 수 없습니다. 설치 후 터미널에서 `codex`로 로그인해 주세요."
+
+
+def _codex_binary() -> str:
+    available, detail = codex_cli_available()
+    if available:
+        return detail
+    raise RuntimeError(detail)
 
 
 def _timeout(default: int) -> int:

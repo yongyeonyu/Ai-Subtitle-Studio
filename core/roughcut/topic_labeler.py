@@ -345,6 +345,7 @@ def apply_major_topic_labels(
         llm_client=llm_client,
     )
     topic_map = _topic_map_from_llm(result.data, rows_by_major) if result.ok else {}
+    llm_topic_map_applied = bool(topic_map)
     if not topic_map:
         topic_map = _heuristic_topic_map(segment_items, rows_by_major)
     if not topic_map:
@@ -355,6 +356,13 @@ def apply_major_topic_labels(
         major_id = _major_id(segment)
         label = topic_map.get(major_id)
         if not label:
+            out.append(segment)
+            continue
+        if (
+            not llm_topic_map_applied
+            and str(segment.narrative_function or "") == "roughcut_llm_major_segment"
+            and str(segment.title or "").strip()
+        ):
             out.append(segment)
             continue
         summary = label.get("summary") or segment.summary

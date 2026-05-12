@@ -520,9 +520,20 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         project_stt_preview_segments,
         project_voice_activity_segments,
     )
+    from core.project.project_format import project_primary_fps
 
     confirmed_boundaries = get_boundary_times(project)
     boundaries = project_clip_boundaries(project)
+    analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+    preliminary_middle_segments = [
+        dict(row)
+        for row in list(
+            analysis.get("preliminary_middle_segments")
+            or project.get("preliminary_middle_segments")
+            or []
+        )
+        if isinstance(row, dict)
+    ]
     if len(media) > 1:
         owner._multiclip_files = list(media)
         owner._multiclip_boundaries = boundaries
@@ -543,9 +554,35 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
     if editor is None:
         return False
     try:
+        primary_fps = float(project_primary_fps(project) or 30.0)
+        try:
+            setattr(editor, "video_fps", primary_fps)
+        except Exception:
+            pass
+        timeline = getattr(editor, "timeline", None)
+        if timeline is not None:
+            try:
+                reset_single = getattr(timeline, "_reset_single_media_context", None)
+                if callable(reset_single) and len(media) <= 1:
+                    reset_single(clear_duration=True)
+                else:
+                    canvas = getattr(timeline, "canvas", None)
+                    global_canvas = getattr(timeline, "global_canvas", None)
+                    if canvas is not None:
+                        canvas.total_duration = 0.0
+                        canvas._segments_content_duration = 0.0
+                    if global_canvas is not None:
+                        global_canvas.total_duration = 0.0
+            except Exception:
+                pass
+        try:
+            setattr(editor, "_live_stt_preview_segments", [])
+        except Exception:
+            pass
         provisional_boundaries = project_cut_boundary_provisional_segments(project)
         voice_activity = project_voice_activity_segments(project)
-        timeline = getattr(editor, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        global_canvas = getattr(timeline, "global_canvas", None) if timeline is not None else None
         if timeline is not None and hasattr(timeline, "set_auto_gap_segments_enabled"):
             timeline.set_auto_gap_segments_enabled(False)
 
@@ -556,12 +593,24 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
             boundary_times=owner._project_boundary_times or [],
             provisional_boundaries=provisional_boundaries,
             voice_activity_segments=voice_activity,
+            stt_preview_segments=[],
             mark_dirty=False,
         )
+        for obj in (owner, editor, timeline, canvas, global_canvas):
+            if obj is None:
+                continue
+            for attr in ("_preliminary_middle_segments", "preliminary_middle_segments"):
+                try:
+                    setattr(obj, attr, list(preliminary_middle_segments))
+                except Exception:
+                    pass
         if len(media) > 1 and hasattr(editor, "_apply_multiclip_state_from_owner"):
             editor._apply_multiclip_state_from_owner()
         if hasattr(editor, "_set_process_completed"):
-            editor._set_process_completed()
+            try:
+                editor._set_process_completed(suppress_post_generation_tasks=True)
+            except TypeError:
+                editor._set_process_completed()
         if hasattr(editor, "_schedule_timeline"):
             editor._schedule_timeline()
         runtime_refresh = getattr(owner, "_refresh_opened_editor_runtime", None)

@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.01-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.01-30D158?style=for-the-badge)](RELEASE_v04.00.01.md)
+[![App Version](https://img.shields.io/badge/app-04.00.02-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.02-30D158?style=for-the-badge)](RELEASE_v04.00.02.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -37,7 +37,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Korean Whisper KomixV2 STT candidates, including alias, Hugging Face original, and MLX variants, are available as clearly labeled STT2 choices.
 - Swift WhisperKit persistent STT routes through the Python transcription pipeline as the default macOS STT1 backend; MLX and whisper.cpp remain fallback/native comparison paths.
 - The first Swift-native core package now owns the lossless subtitle segment model plus SRT parsing/formatting, with Python kept as a fallback during migration.
-- Project JSON I/O now has a Swift-native validation and atomic-write bridge, so packaged macOS builds can move project persistence out of Python while keeping Python as a fallback during migration.
+- Project JSON I/O now keeps a canonical ordered on-disk layout with the `video` header first for frame/FPS-based reloads; Swift-native validation/read support remains available, while Swift project write is opt-in until it can preserve that ordering contract.
 - Timeline waveform peak/downsample generation now has a Swift-native bridge for packaged macOS builds, with NumPy retained as the development fallback.
 - Timeline minimap waveform column generation now has a Swift-native bridge so packaged macOS builds avoid Python loops when rebuilding zoom/resize paint caches.
 - Subtitle quality scoring now has an adaptive Swift-native batch scorer for large macOS batches, while small edits keep the lower-overhead Python path.
@@ -50,6 +50,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Ten-step engine dashboard: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Runtime sidebar display of the current file's automatic audio-filter and VAD choices.
 - Process-level project JSON caching plus safe atomic project and settings writes.
+- Project save/load uses frame-quantized subtitle/STT timing, external SRT assets, and project-path-aware hydration so STT1/STT2 and final subtitle lanes reload without tail segments beyond the real video duration.
 - STT1/STT2 candidate comparison with persistent project metadata.
 - Cut-boundary assisted subtitle timing.
 - Accuracy-first audio routing with clip or chunk-level preprocessing decisions.
@@ -141,10 +142,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.01` |
-| Latest release checkpoint | `v04.00.01` |
-| Handoff document version | `04.00.01-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_1_RELEASED` |
+| App version in code | `04.00.02` |
+| Latest release checkpoint | `v04.00.02` |
+| Handoff document version | `04.00.02-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_2_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -175,7 +176,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.01.md`](RELEASE_v04.00.01.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.02.md`](RELEASE_v04.00.02.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

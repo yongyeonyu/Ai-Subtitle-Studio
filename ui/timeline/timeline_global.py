@@ -11,7 +11,12 @@ from PyQt6.QtWidgets import QSizePolicy
 
 from core.runtime import config
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
-from ui.timeline.timeline_analysis import analysis_markers_for_widget, roughcut_major_markers_for_widget
+from ui.timeline.timeline_analysis import (
+    analysis_markers_for_widget,
+    preliminary_major_markers_for_widget,
+    roughcut_major_markers_for_widget,
+    topicless_major_markers_for_widget,
+)
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
 GlobalCanvasBase = accelerated_widget_base("timeline")
@@ -21,6 +26,8 @@ MINIMAP_TOP_LANE_BG = "#141D21"
 MINIMAP_BOTTOM_LANE_BG = "#0F1518"
 MINIMAP_DIVIDER = QColor("#2D3942")
 MINIMAP_MAJOR_BORDER = QColor("#FFFFFF")
+MINIMAP_PRELIMINARY_LANE_BG = "#122229"
+MINIMAP_REFERENCE_LANE_BG = "#101A1E"
 MINIMAP_SUBTITLE_FILL = QColor(132, 98, 22, 170)
 MINIMAP_SUBTITLE_BORDER = QColor("#FFD400")
 MINIMAP_PENDING_FILL = QColor(255, 69, 58, 185)
@@ -195,6 +202,26 @@ class GlobalCanvas(GlobalCanvasBase):
             )
             for marker in roughcut_major_markers_for_widget(self)
         )
+        preliminary_signature = tuple(
+            (
+                round(float(marker.get("start", 0.0) or 0.0), 3),
+                round(float(marker.get("end", marker.get("start", 0.0)) or 0.0), 3),
+                str(marker.get("display_label", "") or marker.get("label", "") or ""),
+                str(marker.get("color", "") or ""),
+                str(marker.get("status", "") or ""),
+            )
+            for marker in preliminary_major_markers_for_widget(self)
+        )
+        topicless_signature = tuple(
+            (
+                round(float(marker.get("start", 0.0) or 0.0), 3),
+                round(float(marker.get("end", marker.get("start", 0.0)) or 0.0), 3),
+                str(marker.get("display_label", "") or marker.get("label", "") or ""),
+                str(marker.get("color", "") or ""),
+                str(marker.get("status", "") or ""),
+            )
+            for marker in topicless_major_markers_for_widget(self)
+        )
         return (
             self.width(),
             self.height(),
@@ -203,6 +230,8 @@ class GlobalCanvas(GlobalCanvasBase):
             len(self.vad_segments),
             id(self._waveform),
             major_signature,
+            preliminary_signature,
+            topicless_signature,
         )
 
     def _build_waveform_columns(self, width: int, total: float) -> list[tuple[int, bool]]:
@@ -284,8 +313,62 @@ class GlobalCanvas(GlobalCanvasBase):
                 max(1, lane.height() - (min_h_pad * 2)),
             )
 
+        preliminary_markers = preliminary_major_markers_for_widget(self)
+        topicless_markers = topicless_major_markers_for_widget(self)
         major_markers = roughcut_major_markers_for_widget(self)
-        if total > 0 and major_markers:
+        if total > 0 and preliminary_markers:
+            preview_lane = QRect(top_lane.x(), top_lane.y(), top_lane.width(), max(1, top_lane.height() // 2))
+            reference_lane = QRect(
+                top_lane.x(),
+                preview_lane.bottom() + 1,
+                top_lane.width(),
+                max(1, top_lane.height() - preview_lane.height() - 1),
+            )
+            p.fillRect(preview_lane, QColor(MINIMAP_PRELIMINARY_LANE_BG))
+            p.fillRect(reference_lane, QColor(MINIMAP_REFERENCE_LANE_BG))
+            p.setPen(QPen(MINIMAP_DIVIDER, 1))
+            p.drawLine(0, reference_lane.y() - 1, w, reference_lane.y() - 1)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            for marker in preliminary_markers:
+                try:
+                    start = max(0.0, float(marker.get("start", 0.0) or 0.0))
+                    end = max(start, float(marker.get("end", start) or start))
+                except Exception:
+                    continue
+                rect = _rect_for_lane(start, end, preview_lane, min_h_pad=2)
+                if rect.isEmpty():
+                    continue
+                border = QColor(str(marker.get("color", MINIMAP_MAJOR_BORDER.name())))
+                fill = QColor(border)
+                fill.setAlpha(70)
+                p.setBrush(fill)
+                p.setPen(QPen(border, 1))
+                rounded = QRectF(rect.adjusted(0, 0, -1, -1))
+                radius = max(1.5, min(4.0, rounded.height() / 2.3))
+                p.drawRoundedRect(rounded, radius, radius)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for marker in topicless_markers:
+                try:
+                    start = max(0.0, float(marker.get("start", 0.0) or 0.0))
+                    end = max(start, float(marker.get("end", start) or start))
+                except Exception:
+                    continue
+                rect = _rect_for_lane(start, end, reference_lane, min_h_pad=2)
+                if rect.isEmpty():
+                    continue
+                border = QColor(str(marker.get("color", MINIMAP_MAJOR_BORDER.name())))
+                border.setAlpha(215)
+                p.setPen(QPen(border, 1))
+                rounded = QRectF(rect.adjusted(0, 0, -1, -1))
+                radius = max(1.5, min(4.0, rounded.height() / 2.3))
+                p.drawRoundedRect(rounded, radius, radius)
+            if w >= 90:
+                p.setPen(QColor("#9FB2BC"))
+                p.setFont(QFont(config.FONT, 7))
+                p.drawText(preview_lane.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "예비")
+                p.drawText(reference_lane.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "임시")
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        elif total > 0 and major_markers:
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setBrush(Qt.BrushStyle.NoBrush)
             for marker in major_markers:

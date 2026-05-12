@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.01-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_1_RELEASED
-Last-Updated: 2026-05-10
+Document-Version: 04.00.02-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
+Last-Updated: 2026-05-12
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.01"
-document_version: "04.00.01-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_1_RELEASED"
+app_version: "04.00.02"
+document_version: "04.00.02-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_2_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -54,7 +54,7 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v04.00.01 Mac-native release completed the prior queue:
+The v04.00.02 Mac-native release completed the prior queue:
 
 - The repository now targets macOS Apple Silicon only on this branch; Windows launcher and Windows-only dependency files were removed from the active release path.
 - Apple Silicon scheduling now includes chip-aware worker budgeting, FFmpeg thread caps, pioneer/follower cut-boundary planning, and accelerator slot distribution for the detected Mac.
@@ -65,6 +65,9 @@ The v04.00.01 Mac-native release completed the prior queue:
 - Generation completion now waits for real saveable subtitle segments before marking the editor complete, then retries the completion autosave until segments are available.
 - Exit confirmation now asks to save unsaved editor changes before quick exit or window close cleanup runs.
 - Project JSON backups now live under `프로젝트백업/` instead of filling the project root with numbered backup files.
+- Canonical project JSON saves now keep the `video` header first, use frame/FPS metadata as the reload contract, and reload external subtitle/STT assets through project-path-aware readers.
+- Background LoRA and app-exit cleanup now tolerate old and new trainer shutdown signatures so input or quit requests can pause runtime work without blocking the UI.
+- Correction-dictionary cleanup, STT worker I/O, subtitle segment filtering, subtitle accuracy helpers, cut-boundary cache handling, and editor segment bulk loading have smaller native-ready modules.
 - Release verification should be re-read from the latest `RELEASE_v*.md` only.
 
 Future work should start from a new user request rather than this completed backlog.

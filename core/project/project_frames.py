@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from core.frame_time import frame_count, frame_duration, frame_to_sec, normalize_fps, sec_to_frame
 from core.media_info import probe_media
+from core.project.project_format import refresh_project_video_header
 
 ProbeFunc = Callable[[str], dict]
 
@@ -183,16 +184,27 @@ def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None 
     first_info = {}
     if clips:
         first_path = str(clips[0].get("source_path", "") or "")
-        first_info = _get_media_probe(first_path, probe_func=probe_func) if first_path else {}
+        if not (
+            float(clips[0].get("fps", 0.0) or 0.0) > 0.0
+            and float(clips[0].get("source_duration", 0.0) or 0.0) > 0.0
+        ):
+            first_info = _get_media_probe(first_path, probe_func=probe_func) if first_path else {}
     primary_fps = normalize_fps((clips[0].get("fps") or first_info.get("fps")) if clips else 30.0)
 
     for clip in clips:
         path = str(clip.get("source_path", "") or "")
-        info = _get_media_probe(path, probe_func=probe_func) if path else {}
+        needs_probe = bool(path) and not (
+            float(clip.get("fps", 0.0) or 0.0) > 0.0
+            and float(clip.get("source_duration", 0.0) or 0.0) > 0.0
+        )
+        info = _get_media_probe(path, probe_func=probe_func) if needs_probe else {}
         fps = normalize_fps(clip.get("fps") or info.get("fps") or 30.0)
         start = float(clip.get("timeline_start", 0.0) or 0.0)
         end = float(clip.get("timeline_end", start) or start)
         clip.update(_clip_frame_fields(start, end, fps, primary_fps))
+        clip["source_duration"] = float(clip.get("source_duration", info.get("duration", end - start)) or max(0.0, end - start))
+        clip["width"] = int(clip.get("width", info.get("width", 0)) or 0)
+        clip["height"] = int(clip.get("height", info.get("height", 0)) or 0)
 
     total_duration = float(project.get("timeline", {}).get("total_duration", 0.0) or 0.0)
     total_frames = frame_count(total_duration, primary_fps)
@@ -362,6 +374,7 @@ def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None 
             "topicless_middle_segments",
             "roughcut_topicless_segments",
             "middle_segments",
+            "preliminary_middle_segments",
         ):
             _augment_frame_synced_ranges(analysis.get(key), primary_fps)
         segments = analysis.get("voice_activity_segments")
@@ -408,8 +421,10 @@ def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None 
             editor_state["analysis"]["voice_activity_timebase"] = dict(project["timeline"]["timebase"])
 
     _augment_frame_synced_ranges(project.get("middle_segments"), primary_fps)
+    _augment_frame_synced_ranges(project.get("preliminary_middle_segments"), primary_fps)
     _augment_frame_synced_ranges(project.get("roughcut_segments"), primary_fps)
     for key in ("roughcut", "roughcut_draft", "roughcut_result"):
         box = project.get(key)
         if isinstance(box, dict):
             _augment_frame_synced_ranges(box.get("segments"), primary_fps)
+    refresh_project_video_header(project)

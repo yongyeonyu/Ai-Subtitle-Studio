@@ -54,6 +54,7 @@ func printUsage() {
       native-policy-lora-score-json
       native-policy-jsonl-worker
       native-memory-snapshot-json
+      native-input-activity-json
 
     """.utf8))
 }
@@ -149,6 +150,8 @@ func run() throws {
                         let object = try ProjectJSON.readObject(from: URL(fileURLWithPath: path))
                         response = ["summary": ProjectJSON.summary(for: object)]
                     }
+                case "input_activity_snapshot":
+                    response = InputActivity.snapshot(payload: payload)
                 default:
                     response = ["error": "Unsupported core task: \(task)"]
                 }
@@ -498,6 +501,10 @@ func run() throws {
     case "native-memory-snapshot-json":
         let payload = try readJSONObjectFromStdin()
         try writeJSONObject(MemoryPressure.snapshot(payload: payload))
+
+    case "native-input-activity-json":
+        let payload = try readJSONObjectFromStdin()
+        try writeJSONObject(InputActivity.snapshot(payload: payload))
 
     case "native-policy-jsonl-worker":
         var cachedPolicyIndexes: [String: [String: Any]] = [:]

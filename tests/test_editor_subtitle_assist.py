@@ -276,7 +276,7 @@ class SubtitleAssistTests(unittest.TestCase):
                     texts.append(widget.text())
                 elif item.spacerItem() is not None:
                     texts.append("stretch")
-            self.assertEqual(texts, ["Lock Edit", "stretch", "자막자석", "반복재생", "+", "-", "O", "ㅁ"])
+            self.assertEqual(texts, ["Lock Edit", "반복재생", "stretch", "자막자석", "+", "-", "O", "ㅁ"])
             self.assertEqual(timeline.magnet_btn.minimumHeight(), 24)
             self.assertEqual(timeline.magnet_btn.maximumHeight(), 24)
             self.assertIn("자막자석", timeline.magnet_btn.toolTip())

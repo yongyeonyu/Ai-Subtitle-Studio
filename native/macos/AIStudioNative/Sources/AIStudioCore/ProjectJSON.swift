@@ -39,7 +39,7 @@ public enum ProjectJSON {
         guard JSONSerialization.isValidJSONObject(stripped) else {
             throw ProjectJSONError.invalidJSON
         }
-        var options: JSONSerialization.WritingOptions = [.prettyPrinted, .sortedKeys]
+        var options: JSONSerialization.WritingOptions = [.prettyPrinted]
         if #available(macOS 10.15, *) {
             options.insert(.withoutEscapingSlashes)
         }

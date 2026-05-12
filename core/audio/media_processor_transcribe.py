@@ -8,7 +8,6 @@ import json
 import os
 import re
 import shutil
-import tempfile
 import threading
 import wave
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +37,11 @@ from core.audio.transcribe_policy_helpers import (
     stt_word_timestamps_for_pass,
     wav_duration,
 )
+from core.audio.transcribe_worker_io import (
+    clone_ensemble_chunk_dir,
+    parse_worker_json_line,
+    whisper_worker_options,
+)
 from core.audio.whisperkit_empty_fallback import (
     stop_empty_whisperkit_worker,
     whisperkit_empty_fallback_overrides,
@@ -53,16 +57,7 @@ from core.subtitle_quality.models import attach_asr_metadata
 from core.subtitle_quality.vad_alignment_checker import annotate_segment_vad_alignment
 
 
-def _parse_worker_json_line(line: str):
-    line = (line or "").strip()
-    if not line or not line.startswith("{"):
-        return None
-    try:
-        return json.loads(line)
-    except Exception as e:
-        get_logger().log(f"  ⚠️ JSON 파싱 오류: {e}")
-        get_logger().log(f"  ⚠️ raw line: {line[:200] if line else 'empty'}")
-        return None
+_parse_worker_json_line = parse_worker_json_line
 
 
 class VideoProcessorTranscribeMixin:
@@ -85,6 +80,8 @@ class VideoProcessorTranscribeMixin:
     _whisper_runtime_accelerator = staticmethod(whisper_runtime_accelerator)
     _ensemble_scheduler_context = staticmethod(ensemble_scheduler_context)
     _ensemble_scheduler_suffix = staticmethod(ensemble_scheduler_suffix)
+    _clone_ensemble_chunk_dir = staticmethod(clone_ensemble_chunk_dir)
+    _whisper_worker_options = staticmethod(whisper_worker_options)
 
     def _collect_transcribe_result(
         self,
@@ -189,40 +186,6 @@ class VideoProcessorTranscribeMixin:
                         pass
         return result
 
-    @staticmethod
-    def _clone_ensemble_chunk_dir(chunk_dir: str, label: str) -> str:
-        source = os.path.abspath(str(chunk_dir or ""))
-        parent = os.path.dirname(source) or None
-        prefix = f".ensemble_{str(label or 'stt').lower()}_"
-        target = tempfile.mkdtemp(prefix=prefix, dir=parent)
-
-        def _ignored(name: str) -> bool:
-            text = str(name or "")
-            return text in {"_stt_recheck", "_fast_stt2_recheck"} or text.startswith(".ensemble_")
-
-        def _link_or_copy(src: str, dst: str) -> None:
-            try:
-                os.link(src, dst)
-            except Exception:
-                shutil.copy2(src, dst)
-
-        try:
-            shutil.rmtree(target, ignore_errors=True)
-            os.makedirs(target, exist_ok=True)
-            for root, dirs, files in os.walk(source):
-                dirs[:] = [name for name in dirs if not _ignored(name)]
-                rel_root = os.path.relpath(root, source)
-                out_root = target if rel_root == "." else os.path.join(target, rel_root)
-                os.makedirs(out_root, exist_ok=True)
-                for name in files:
-                    if _ignored(name):
-                        continue
-                    _link_or_copy(os.path.join(root, name), os.path.join(out_root, name))
-        except Exception:
-            shutil.rmtree(target, ignore_errors=True)
-            raise
-        return target
-
     def _release_after_transcribe_job(self, log_label: str = "STT", *, force_stop: bool = False) -> None:
         try:
             settings = self._load_all_settings()
@@ -288,27 +251,6 @@ class VideoProcessorTranscribeMixin:
                 get_logger().log(f"🧹 [{log_context}] VAD 모델/가속기 메모리 정리 완료")
             except Exception:
                 pass
-
-    @staticmethod
-    def _whisper_worker_options(settings: dict) -> dict:
-        if not bool((settings or {}).get("stt_rescue_whisper_mode", False)):
-            return {}
-        return {
-            "beam_size": 7,
-            "best_of": 7,
-            "condition_on_previous_text": False,
-            "compression_ratio_threshold": 2.2,
-            "log_prob_threshold": -0.85,
-            "no_speech_threshold": 0.48,
-            "vad_filter": True,
-            "vad_parameters": {
-                "threshold": 0.35,
-                "min_speech_duration_ms": 80,
-                "min_silence_duration_ms": 180,
-                "speech_pad_ms": 220,
-            },
-            "hallucination_silence_threshold": 0.6,
-        }
 
     def _normalize_scored_stt_tracks(
         self,

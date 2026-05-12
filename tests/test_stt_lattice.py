@@ -11,6 +11,7 @@ from core.audio.stt_lattice import (
     select_stt_lattice_text,
 )
 from core.project.project_context import build_editor_state, project_segments_to_editor
+from core.project.project_io import read_project_file
 from core.project.project_manager import save_project
 
 
@@ -202,7 +203,7 @@ class STTLatticeTests(unittest.TestCase):
                     "stt_lattice_persist_enabled": True,
                 },
             )
-            saved = json.loads(project_path.read_text(encoding="utf-8"))
+            saved = read_project_file(str(project_path))
             reloaded_segments = project_segments_to_editor(saved)
             artifact_path = Path(saved["analysis"]["stt_lattice_artifact_path"])
             artifact = json.loads(artifact_path.read_text(encoding="utf-8"))

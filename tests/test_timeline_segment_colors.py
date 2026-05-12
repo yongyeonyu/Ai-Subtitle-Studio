@@ -218,6 +218,14 @@ class TimelineSegmentColorTests(unittest.TestCase):
             "ultra",
         )
         self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=24, pps=80.0, editing=False, scenegraph=False, playback_active=True),
+            "dense",
+        )
+        self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=48, pps=20.0, editing=False, scenegraph=False, playback_active=True),
+            "ultra",
+        )
+        self.assertEqual(
             subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=False, scenegraph=True),
             "gpu",
         )

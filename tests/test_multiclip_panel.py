@@ -350,7 +350,7 @@ class MulticlipPanelTests(unittest.TestCase):
                 patch("ui.main.main_file_ops.QMessageBox", _FakeMessageBox),
                 patch("ui.main.main_file_ops.ask_yes_no", return_value=True),
                 patch("ui.main.main_file_ops.show_message") as show_message,
-                patch("ui.main.main_file_ops.tempfile.gettempdir", return_value=tmp),
+                patch("ui.editor.editor_save_manager.tempfile.gettempdir", return_value=tmp),
                 patch("core.runtime.config.OUTPUT_DIR", output_dir),
                 patch("core.auto_tracker.TRACKER_FILE", tracker_path),
                 patch("core.media_info.clear_media_probe_cache_memory") as clear_media_probe_cache_memory,

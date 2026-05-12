@@ -499,6 +499,11 @@ def build_auto_grid_scan_helpers(deps: dict):
             except Exception:
                 return int(default)
 
+        packet_bucket_sec = max(
+            0.10,
+            min(1.0, _settings_float("scan_cut_pioneer_packet_bucket_sec", 0.25)),
+        )
+
         audio_gain_window_sec = max(
             0.50,
             _settings_float("scan_cut_audio_gain_window_sec", max(1.0, scan_interval_sec)),
@@ -905,7 +910,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             except Exception:
                 return None
             timeout_sec = max(5.0, _settings_float("scan_cut_pioneer_packet_scout_timeout_sec", max(20.0, duration * 0.03)))
-            max_raw_candidates = max(20, _settings_int("scan_cut_pioneer_packet_scout_raw_candidates", 120))
+            max_raw_candidates = max(20, _settings_int("scan_cut_pioneer_packet_scout_raw_candidates", 180))
             max_candidates = max(1, _settings_int("scan_cut_pioneer_pipe_max_candidates", 360))
             cmd = [
                 ffprobe_binary(),
@@ -935,7 +940,8 @@ def build_auto_grid_scan_helpers(deps: dict):
             lines = str(proc.stdout or "").splitlines()
             if not lines:
                 return None
-            bucket_count = max(1, int(math.ceil(duration)) + 2)
+            bucket_span_sec = max(0.10, float(packet_bucket_sec or 0.25))
+            bucket_count = max(1, int(math.ceil(duration / bucket_span_sec)) + 2)
             energy = np.zeros(bucket_count, dtype=np.float32)
             keyframes = np.zeros(bucket_count, dtype=np.float32)
             for line in lines:
@@ -947,7 +953,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                     size = float(parts[1])
                 except Exception:
                     continue
-                idx = int(max(0, min(bucket_count - 1, round(sec))))
+                idx = int(max(0, min(bucket_count - 1, round(sec / bucket_span_sec))))
                 energy[idx] += size
                 if len(parts) >= 3 and "K" in parts[2]:
                     keyframes[idx] += 1.0
@@ -967,18 +973,22 @@ def build_auto_grid_scan_helpers(deps: dict):
                 median + (mad * _settings_float("scan_cut_pioneer_packet_mad_multiplier", 3.0)),
             )
             scored = []
-            for idx in range(1, min(bucket_count - 1, int(duration) + 1)):
+            max_bucket_idx = min(bucket_count - 1, int(math.ceil(duration / bucket_span_sec)) + 1)
+            for idx in range(1, max_bucket_idx):
                 score = float(delta[idx]) + (0.18 if keyframes[idx] > 0 else 0.0)
                 if score < adaptive_threshold:
                     continue
                 if score < float(delta[idx - 1]) or score < float(delta[idx + 1]):
                     continue
-                scored.append((score, float(delta[idx]), float(idx)))
+                scored.append((score, float(delta[idx]), float(idx) * bucket_span_sec))
             scored.sort(key=lambda item: item[0], reverse=True)
             selected = sorted(scored[:max_raw_candidates], key=lambda item: item[2])
             rows_local = []
             last_sec = -999999.0
-            min_gap = max(0.5, float(min_gap_sec or 1.0))
+            min_gap = max(
+                0.10,
+                float(_settings_float("scan_cut_pioneer_packet_min_gap_sec", min_gap_sec or 0.20)),
+            )
             for score, packet_delta, sec in selected:
                 if sec - last_sec < min_gap:
                     continue
@@ -1480,6 +1490,7 @@ def build_auto_grid_scan_helpers(deps: dict):
         **kwargs,
     ):
         provisional_callback = kwargs.pop("provisional_callback", None)
+        checked_callback = kwargs.pop("checked_callback", None)
         settings = dict(settings or {})
         settings_preloaded = bool(kwargs.pop("settings_preloaded", False))
         if not settings_preloaded:
@@ -1630,6 +1641,14 @@ def build_auto_grid_scan_helpers(deps: dict):
                         except Exception:
                             pass
                 if not verified or not verified.get("passed"):
+                    if isinstance(verified, dict) and bool(verified.get("same_scene_color_similarity")):
+                        checked = dict(row)
+                        checked["same_scene_color_similarity"] = True
+                        checked["middle_merge_preferred"] = True
+                        if isinstance(verified.get("color_similarity"), dict):
+                            checked["color_similarity"] = dict(verified.get("color_similarity") or {})
+                        checked["reason"] = str(verified.get("reason") or "same_scene_color_similarity")
+                        return {"checked": checked}
                     if isinstance(verified, dict) and verified.get("rollback_relocated") and verified.get("provisional_frame") is not None:
                         provisional_frame = int(verified.get("provisional_frame") or coarse_frame)
                         provisional_local_sec = float(verified.get("provisional_sec", provisional_frame / fps) or (provisional_frame / fps))
@@ -1712,12 +1731,22 @@ def build_auto_grid_scan_helpers(deps: dict):
             def _apply_verify_result(result):
                 fixed = None
                 provisional_hint = None
+                checked_hint = None
                 if isinstance(result, dict) and result.get("verified"):
                     fixed = result.get("verified")
+                elif isinstance(result, dict) and result.get("checked"):
+                    checked_hint = result.get("checked")
                 elif isinstance(result, dict) and result.get("provisional"):
                     provisional_hint = result.get("provisional")
                 elif isinstance(result, dict):
                     fixed = result
+                if checked_hint is not None:
+                    if callable(checked_callback):
+                        try:
+                            checked_callback(dict(checked_hint), list(verified_rows))
+                        except Exception:
+                            pass
+                    return
                 if provisional_hint is not None:
                     if callable(provisional_callback):
                         try:

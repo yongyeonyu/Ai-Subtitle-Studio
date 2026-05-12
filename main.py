@@ -7,6 +7,7 @@ import socket
 import faulthandler
 import threading
 import warnings
+import traceback
 
 try:
     faulthandler.enable(all_threads=True)
@@ -19,12 +20,64 @@ os.environ.setdefault(
 )
 os.environ.setdefault("AV_LOG_LEVEL", "16")
 
+# PyQt can be configured externally to abort the whole process when a Python
+# slot raises. That is useful for local debugger sessions but too dangerous for
+# the app: one recoverable UI exception becomes a macOS crash report. Keep the
+# explicit opt-in for debugging, otherwise force the production-safe behavior.
+if str(os.environ.get("AI_SUBTITLE_ALLOW_PYQT_FATAL_EXCEPTIONS", "") or "").strip().lower() not in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    os.environ.pop("PYQT_FATAL_EXCEPTIONS", None)
+
 _STDERR_NOISE_FILTER_INSTALLED = False
 _STDERR_NOISE_FILTER_ORIGINAL_FD = None
 _STDERR_NOISE_PATTERNS = (
     b"TSM AdjustCapsLockLEDForKeyTransitionHandling",
     b"error messaging the mach port for IMKCFRunLoopWakeUpReliable",
 )
+_PREV_SYS_EXCEPTHOOK = sys.excepthook
+
+
+def _runtime_exception_log_path() -> str:
+    base = os.path.dirname(os.path.abspath(__file__))
+    folder = os.path.join(base, "output", "runtime")
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except Exception:
+        folder = base
+    return os.path.join(folder, "qt_slot_exceptions.log")
+
+
+def _log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
+    try:
+        text = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        with open(_runtime_exception_log_path(), "a", encoding="utf-8") as handle:
+            handle.write("\n--- uncaught Python/Qt exception ---\n")
+            handle.write(text)
+            if not text.endswith("\n"):
+                handle.write("\n")
+    except Exception:
+        pass
+
+
+def _safe_excepthook(exc_type, exc_value, exc_traceback) -> None:
+    _log_uncaught_exception(exc_type, exc_value, exc_traceback)
+    try:
+        if _PREV_SYS_EXCEPTHOOK is not None and _PREV_SYS_EXCEPTHOOK is not _safe_excepthook:
+            _PREV_SYS_EXCEPTHOOK(exc_type, exc_value, exc_traceback)
+            return
+    except Exception:
+        pass
+    try:
+        traceback.print_exception(exc_type, exc_value, exc_traceback)
+    except Exception:
+        pass
+
+
+sys.excepthook = _safe_excepthook
 
 
 def _env_flag_enabled(name: str, default: bool = True) -> bool:

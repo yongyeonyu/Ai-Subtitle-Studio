@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import threading
 import time
 from collections import defaultdict
@@ -26,6 +27,7 @@ from core.personalization.lora_store_common import read_jsonl
 from core.personalization.lora_vector_retriever import build_lora_retrieval_index
 from core.personalization.subtitle_pattern_index import save_subtitle_pattern_index
 from core.runtime.multi_process import manual_lora_runtime_settings
+from core.runtime.config import IS_MAC
 from core.runtime.logger import get_logger
 from core.personalization.stt1_whisper_adapter_runner import save_stt1_whisper_adapter_training_plan
 from core.personalization.text_lora_runner import (
@@ -72,6 +74,9 @@ LOW_RESOURCE_INDEX_DEFERRED_REASON = "low_resource_index_refresh_deferred"
 LOW_RESOURCE_TO_HEAVY_IDLE_MS = 900_000
 AUDIO_EXTRACTION_JOB_TYPES = {"build_voice_profiles", "build_stt1_whisper_adapter"}
 FOREGROUND_ACTIVITY_HOLD_MS = 600_000
+NATIVE_INPUT_WATCHDOG_ACTIVE_INTERVAL_SEC = 0.12
+NATIVE_INPUT_WATCHDOG_IDLE_INTERVAL_SEC = 0.45
+NATIVE_INPUT_RECENT_THRESHOLD_SEC = 0.24
 
 
 def _cancel_requested(cancel_callback) -> bool:
@@ -1124,15 +1129,98 @@ class PersonalizationIdleTrainer(QObject):
         self._current_learning_mode = ""
         self._current_low_resource = True
         self._last_stop_cleanup_at = 0.0
+        self._last_native_input_interrupt_at = 0.0
+        self._native_input_watchdog_stop = threading.Event()
+        self._native_input_watchdog_thread: threading.Thread | None = None
         self._learning_status_signal.connect(self._notify_learning_status_changed_on_main)
         recover_interrupted_training_jobs(self.store_dir, reason="trainer_startup")
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(LOW_RESOURCE_POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll)
         self._poll_timer.start()
+        self._start_native_input_watchdog()
 
     def note_user_activity(self) -> None:
         self.last_user_activity_ms = QDateTime.currentMSecsSinceEpoch()
+
+    def _native_input_watchdog_enabled(self) -> bool:
+        if not IS_MAC:
+            return False
+        if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
+            return False
+        value = str(os.environ.get("AI_SUBTITLE_STUDIO_NATIVE_INPUT_WATCHDOG", "1") or "1").strip().lower()
+        return value not in {"0", "false", "off", "no", "disable", "disabled"}
+
+    def _start_native_input_watchdog(self) -> None:
+        if not self._native_input_watchdog_enabled():
+            return
+        thread = self._native_input_watchdog_thread
+        if thread is not None and thread.is_alive():
+            return
+        self._native_input_watchdog_stop.clear()
+        self._native_input_watchdog_thread = threading.Thread(
+            target=self._native_input_watchdog_loop,
+            daemon=True,
+            name="personalization-native-input-watchdog",
+        )
+        self._native_input_watchdog_thread.start()
+
+    def _native_input_watchdog_loop(self) -> None:
+        misses = 0
+        while not self._native_input_watchdog_stop.is_set():
+            active = self.is_busy() or bool(self._current_learning_mode)
+            try:
+                from core.native_macos_input import recent_native_user_input_detected
+
+                detected, snapshot = recent_native_user_input_detected(
+                    threshold_sec=NATIVE_INPUT_RECENT_THRESHOLD_SEC,
+                )
+            except Exception:
+                detected, snapshot = False, {}
+            if snapshot:
+                misses = 0
+            else:
+                misses += 1
+            if detected:
+                self._handle_native_input_snapshot(snapshot)
+            interval = (
+                NATIVE_INPUT_WATCHDOG_ACTIVE_INTERVAL_SEC
+                if active
+                else NATIVE_INPUT_WATCHDOG_IDLE_INTERVAL_SEC
+            )
+            if misses >= 4:
+                interval = max(interval, 2.0)
+            self._native_input_watchdog_stop.wait(interval)
+
+    def _handle_native_input_snapshot(self, snapshot: dict[str, Any] | None) -> bool:
+        if not isinstance(snapshot, dict):
+            return False
+        recent = bool(snapshot.get("recent", False))
+        if not recent:
+            try:
+                recent = float(snapshot.get("age_sec", 9999.0) or 9999.0) <= NATIVE_INPUT_RECENT_THRESHOLD_SEC
+            except Exception:
+                recent = False
+        if not recent:
+            return False
+        self.note_user_activity()
+        active = self.is_busy() or bool(self._current_learning_mode)
+        if not active:
+            return False
+        now = time.monotonic()
+        if (now - float(self._last_native_input_interrupt_at or 0.0)) < 0.35:
+            self._stop_requested.set()
+            return True
+        self._last_native_input_interrupt_at = now
+        self._stop_requested.set()
+        event_type = str(snapshot.get("event_type") or "input").strip() or "input"
+        get_logger().log(f"⏹️ [LoRA 학습] 사용자 입력 감지({event_type})로 백그라운드 학습을 즉시 중단합니다.")
+        self.request_immediate_stop(
+            reason="native_user_input_interrupt",
+            hold_ms=0,
+            join_timeout_sec=0.01,
+        )
+        return True
 
     def queue_summary(self) -> dict[str, int]:
         counts = defaultdict(int)
@@ -1294,6 +1382,7 @@ class PersonalizationIdleTrainer(QObject):
         *,
         reason: str = "foreground_activity",
         hold_ms: int | float | None = None,
+        cleanup: bool = True,
     ) -> dict[str, Any]:
         now = QDateTime.currentMSecsSinceEpoch()
         try:
@@ -1306,7 +1395,7 @@ class PersonalizationIdleTrainer(QObject):
         self._suspend_reason = str(reason or "foreground_activity")
         self._stop_requested.set()
         self._current_learning_mode = ""
-        if was_busy:
+        if was_busy and cleanup:
             self._cleanup_after_stop(self._suspend_reason, include_gpu=True)
         self._notify_learning_status_changed()
         return {
@@ -1323,8 +1412,9 @@ class PersonalizationIdleTrainer(QObject):
         reason: str = "user_input_interrupt",
         hold_ms: int | float | None = 0,
         join_timeout_sec: float = 0.03,
+        cleanup: bool = True,
     ) -> dict[str, Any]:
-        result = self.suspend_for_foreground_activity(reason=reason, hold_ms=hold_ms)
+        result = self.suspend_for_foreground_activity(reason=reason, hold_ms=hold_ms, cleanup=cleanup)
         thread = self._worker_thread
         joined = False
         if thread is not None and thread.is_alive():
@@ -1337,9 +1427,10 @@ class PersonalizationIdleTrainer(QObject):
             recover_interrupted_training_jobs(self.store_dir, reason=reason)
             self._current_learning_mode = ""
             self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
-            self._cleanup_after_stop(reason, include_gpu=True, throttle_sec=0.0)
+            if cleanup:
+                self._cleanup_after_stop(reason, include_gpu=True, throttle_sec=0.0)
             self._notify_learning_status_changed()
-        elif bool(result.get("was_busy")):
+        elif bool(result.get("was_busy")) and cleanup:
             self._cleanup_after_stop(reason, include_gpu=True)
         return {
             **result,
@@ -1347,17 +1438,31 @@ class PersonalizationIdleTrainer(QObject):
             "joined": joined,
         }
 
-    def shutdown(self, *, timeout_sec: float = 3.0) -> dict[str, Any]:
+    def shutdown(
+        self,
+        *,
+        timeout_sec: float = 3.0,
+        cleanup: bool = True,
+        recover: bool = True,
+    ) -> dict[str, Any]:
         self._poll_timer.stop()
+        self._native_input_watchdog_stop.set()
         self._stop_requested.set()
         self._suspend_reason = "shutdown"
         self._current_learning_mode = ""
-        self._cleanup_after_stop("shutdown", include_gpu=True, throttle_sec=0.0)
+        if cleanup:
+            self._cleanup_after_stop("shutdown", include_gpu=True, throttle_sec=0.0)
         thread = self._worker_thread
         alive = bool(thread is not None and thread.is_alive())
         if alive:
             try:
                 thread.join(timeout=max(0.0, float(timeout_sec)))
+            except RuntimeError:
+                pass
+        watchdog = self._native_input_watchdog_thread
+        if watchdog is not None and watchdog.is_alive() and watchdog is not threading.current_thread():
+            try:
+                watchdog.join(timeout=0.05 if cleanup else 0.0)
             except RuntimeError:
                 pass
         still_alive = bool(thread is not None and thread.is_alive())
@@ -1366,7 +1471,8 @@ class PersonalizationIdleTrainer(QObject):
             self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
             self._notify_learning_status_changed()
             return {"stopped": False, "busy": True}
-        recover_interrupted_training_jobs(self.store_dir, reason="shutdown")
+        if recover:
+            recover_interrupted_training_jobs(self.store_dir, reason="shutdown")
         self._current_learning_mode = ""
         self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
         self._notify_learning_status_changed()

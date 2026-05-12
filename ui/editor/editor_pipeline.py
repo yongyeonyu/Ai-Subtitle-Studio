@@ -434,9 +434,10 @@ class EditorPipelineMixin:
                 pass
             backend._auto_scan_cut_boundaries_for_start(project_path, media_files)
 
-    def _set_process_completed(self):
+    def _set_process_completed(self, *, suppress_post_generation_tasks: bool = False):
         if bool(getattr(self, "_process_completed_finalized", False)):
-            self._schedule_generation_completion_autosave(delay_ms=250)
+            if not bool(suppress_post_generation_tasks):
+                self._schedule_generation_completion_autosave(delay_ms=250)
             return
         self._process_completed_finalized = True
         try:
@@ -467,6 +468,9 @@ class EditorPipelineMixin:
             main_w.sync_menu_from_editor(self)
         if hasattr(main_w, "_refresh_saved_status_label"):
             main_w._refresh_saved_status_label(is_dirty=True)
+        if bool(suppress_post_generation_tasks):
+            QTimer.singleShot(0, self._post_completion_sync)
+            return
         if hasattr(main_w, "_start_post_completion_idle_timer"):
             main_w._start_post_completion_idle_timer()
         try:
@@ -1007,12 +1011,46 @@ class EditorPipelineMixin:
             if not project_path:
                 return
 
+            from core.project.project_io import read_project_file
             from core.roughcut.cut_boundary_placeholder import (
                 extract_topicless_placeholders_from_project,
                 rows_are_placeholder_only,
             )
+            project = read_project_file(project_path)
+            analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+            reviewed_rows = [
+                dict(row)
+                for row in list(analysis.get("cut_boundary_reviewed_rows") or [])
+                if isinstance(row, dict)
+            ]
+            preliminary_rows = [
+                dict(row)
+                for row in list(
+                    analysis.get("preliminary_middle_segments")
+                    or project.get("preliminary_middle_segments")
+                    or []
+                )
+                if isinstance(row, dict)
+            ]
+            provisional_rows = [
+                dict(row)
+                for row in list(analysis.get("cut_boundary_provisional_boundaries") or [])
+                if isinstance(row, dict)
+            ]
             rows = extract_topicless_placeholders_from_project(project_path)
             rows = [dict(row) for row in list(rows or [])]
+
+            if not provisional_rows:
+                try:
+                    if hasattr(self, "_set_auto_cut_boundary_scan_active"):
+                        self._set_auto_cut_boundary_scan_active(False)
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, "_set_auto_cut_boundary_scan_lines"):
+                        self._set_auto_cut_boundary_scan_lines([])
+                except Exception:
+                    pass
 
             # Editor 자체에 반영
             for attr in (
@@ -1027,6 +1065,15 @@ class EditorPipelineMixin:
             ):
                 try:
                     setattr(self, attr, list(rows))
+                except Exception:
+                    pass
+            try:
+                self._cut_boundary_reviewed_rows = list(reviewed_rows)
+            except Exception:
+                pass
+            for attr in ("_preliminary_middle_segments", "preliminary_middle_segments"):
+                try:
+                    setattr(self, attr, list(preliminary_rows))
                 except Exception:
                     pass
 
@@ -1067,6 +1114,15 @@ class EditorPipelineMixin:
             for obj in (timeline, canvas, global_canvas):
                 if obj is None:
                     continue
+                try:
+                    setattr(obj, "_cut_boundary_reviewed_rows", list(reviewed_rows))
+                except Exception:
+                    pass
+                for attr in ("_preliminary_middle_segments", "preliminary_middle_segments"):
+                    try:
+                        setattr(obj, attr, list(preliminary_rows))
+                    except Exception:
+                        pass
                 for attr in (
                     "_cut_boundary_topicless_middle_segments",
                     "_roughcut_segments",
@@ -1120,6 +1176,15 @@ class EditorPipelineMixin:
             for owner in (self, main_w):
                 if owner is None:
                     continue
+                try:
+                    setattr(owner, "_cut_boundary_reviewed_rows", list(reviewed_rows))
+                except Exception:
+                    pass
+                for attr in ("_preliminary_middle_segments", "preliminary_middle_segments"):
+                    try:
+                        setattr(owner, attr, list(preliminary_rows))
+                    except Exception:
+                        pass
                 for name in refresh_names:
                     fn = getattr(owner, name, None)
                     if not callable(fn):

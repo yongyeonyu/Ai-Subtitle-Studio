@@ -12,6 +12,21 @@ from core.frame_time import normalize_fps, normalize_segments_to_frame_grid
 
 
 class EditorCanvasStateMixin:
+    def _loaded_canvas_state_fps(self, segments: list[dict] | None = None) -> float:
+        for seg in list(segments or []):
+            if not isinstance(seg, dict):
+                continue
+            frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+            for key in (
+                "timeline_frame_rate",
+                "frame_rate",
+            ):
+                if seg.get(key) not in (None, ""):
+                    return normalize_fps(seg.get(key))
+            if frame_range.get("timeline_frame_rate") not in (None, ""):
+                return normalize_fps(frame_range.get("timeline_frame_rate"))
+        return normalize_fps(getattr(self, "video_fps", 30.0) or 30.0)
+
     def apply_canvas_aux_state(
         self,
         *,
@@ -72,7 +87,7 @@ class EditorCanvasStateMixin:
 
         ordered = normalize_segments_to_frame_grid(
             ordered,
-            normalize_fps(getattr(self, "video_fps", 30.0) or 30.0),
+            self._loaded_canvas_state_fps(ordered),
             min_frames=1,
             collapse_micro_gaps=True,
             max_gap_frames=1,

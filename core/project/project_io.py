@@ -10,6 +10,7 @@ from collections import OrderedDict
 from typing import Any
 
 from core.json_file import write_json_file_atomic
+from core.project.project_format import build_storage_project_payload, hydrate_project_runtime_views
 
 _PROJECT_FILE_CACHE_MAX = 4
 _PROJECT_FILE_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
@@ -18,6 +19,9 @@ _PROJECT_RUNTIME_KEYS = {
     "_project_file_path",
     "_external_subtitle_segments_cache",
     "_external_stt_tracks_cache",
+    "_hot_open_subtitle_segments_cache",
+    "_hot_open_stt_preview_segments_cache",
+    "project_path",
 }
 
 
@@ -110,7 +114,7 @@ def _project_payload_for_disk(project: dict[str, Any]) -> dict[str, Any]:
             payload["analysis"] = analysis
     except Exception:
         pass
-    return payload
+    return build_storage_project_payload(payload)
 
 
 def _read_project_payload_from_disk(key: str) -> dict[str, Any]:
@@ -140,6 +144,7 @@ def read_project_file(filepath: str) -> dict[str, Any]:
 
     data = _read_project_payload_from_disk(key)
     project = _attach_project_path(data if isinstance(data, dict) else {}, key)
+    hydrate_project_runtime_views(project)
     _cache_project_payload(key, signature, project)
     return project
 
@@ -152,12 +157,18 @@ def write_project_file(filepath: str, project: dict[str, Any]) -> None:
         os.makedirs(folder, exist_ok=True)
     payload = _project_payload_for_disk(project)
     wrote_native = False
-    try:
-        from core.native_swift_project import write_project_via_swift
+    if str(os.environ.get("AI_SUBTITLE_STUDIO_SWIFT_PROJECT_WRITE", "0") or "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        try:
+            from core.native_swift_project import write_project_via_swift
 
-        wrote_native = write_project_via_swift(key, payload)
-    except Exception:
-        wrote_native = False
+            wrote_native = write_project_via_swift(key, payload)
+        except Exception:
+            wrote_native = False
     if not wrote_native:
         write_json_file_atomic(key, payload, indent=2, backup=False)
     prime_project_file_cache(key, project)

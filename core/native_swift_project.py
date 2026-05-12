@@ -1,18 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from typing import Any
 
-from core.native_swift_subtitle import find_native_cli_path, request_native_core_task
+from core.native_swift_subtitle import find_native_cli_path, native_swift_runtime_enabled, request_native_core_task
 
 
 def _enabled() -> bool:
-    value = os.environ.get("AI_SUBTITLE_STUDIO_SWIFT_PROJECT_IO", "").lower()
-    if value in {"0", "false", "off", "no"}:
-        return False
-    return value in {"1", "true", "on", "yes"} or bool(os.environ.get("AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES"))
+    return native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_PROJECT_IO")
 
 
 def read_project_via_swift(filepath: str) -> dict[str, Any] | None:

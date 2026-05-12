@@ -258,6 +258,19 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor._set_auto_cut_boundary_scan_lines.assert_called_with([])
         editor._refresh_cut_boundary_placeholder_from_project.assert_called_once()
 
+    def test_set_process_completed_can_skip_post_generation_side_effects_for_project_open(self):
+        editor = _CompletionEditor()
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
+            editor._set_process_completed(suppress_post_generation_tasks=True)
+
+        editor.sm.complete_ai.assert_called_once()
+        editor._post_completion_sync.assert_called_once()
+        editor._set_auto_cut_boundary_scan_active.assert_not_called()
+        editor._set_auto_cut_boundary_scan_lines.assert_not_called()
+        editor._refresh_cut_boundary_placeholder_from_project.assert_not_called()
+        editor._on_save.assert_not_called()
+
     def test_project_save_suppresses_stale_provisional_boundaries_after_scan_completed(self):
         editor = _SaveBoundaryEditor()
 

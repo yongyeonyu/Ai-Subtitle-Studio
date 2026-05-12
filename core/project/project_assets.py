@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from core.frame_time import frame_to_sec, normalize_fps, normalize_segments_to_frame_grid, sec_to_nearest_frame
+from core.project.project_format import project_primary_fps
 from core.project.project_srt import parse_srt_to_segments, strip_whisper_control_tokens
 from core.utils import seconds_to_srt_time
 
@@ -142,25 +143,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _project_primary_fps(project: dict[str, Any] | None) -> float:
-    if not isinstance(project, dict):
-        return 30.0
-    timeline = project.get("timeline", {}) if isinstance(project.get("timeline"), dict) else {}
-    timebase = timeline.get("timebase", {}) if isinstance(timeline.get("timebase"), dict) else {}
-    fps = _safe_float(timebase.get("primary_fps"), 0.0)
-    if fps > 0.0:
-        return fps
-    frame_timebase = project.get("frame_timebase", {}) if isinstance(project.get("frame_timebase"), dict) else {}
-    fps = _safe_float(frame_timebase.get("primary_fps"), 0.0)
-    if fps > 0.0:
-        return fps
-    tracks = timeline.get("tracks", []) if isinstance(timeline.get("tracks"), list) else []
-    for track in tracks:
-        clips = track.get("clips", []) if isinstance(track, dict) and isinstance(track.get("clips"), list) else []
-        for clip in clips:
-            fps = _safe_float(clip.get("fps"), 0.0) if isinstance(clip, dict) else 0.0
-            if fps > 0.0:
-                return fps
-    return 30.0
+    return project_primary_fps(project)
 
 
 def _safe_path_name(name: str) -> str:
@@ -193,6 +176,48 @@ def resolve_project_asset_path(project: dict[str, Any] | None, path: str | None)
     if base:
         return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(base)), text))
     return os.path.abspath(text)
+
+
+def _project_file_path(project: dict[str, Any] | None) -> str:
+    if not isinstance(project, dict):
+        return ""
+    for key in ("_project_file_path", "project_path"):
+        value = str(project.get(key) or "").strip()
+        if value:
+            return os.path.abspath(os.path.expanduser(value))
+    return ""
+
+
+def _inferred_track_path(project: dict[str, Any] | None, key: str) -> str:
+    project_path = _project_file_path(project)
+    if not project_path:
+        return ""
+    filename = {
+        _FINAL_TRACK: "final.srt",
+        f"{_STT_TRACK_PREFIX}stt1": "stt1.srt",
+        f"{_STT_TRACK_PREFIX}stt2": "stt2.srt",
+    }.get(str(key or "").strip())
+    if not filename:
+        return ""
+    path = os.path.join(project_asset_dir(project_path), "subtitles", filename)
+    return path if os.path.exists(path) else ""
+
+
+def _inferred_track_ref(project: dict[str, Any] | None, key: str) -> dict[str, Any]:
+    path = _inferred_track_path(project, key)
+    if not path:
+        return {}
+    project_path = _project_file_path(project)
+    stored_path = relative_asset_path(project_path, path) if project_path else path
+    track: dict[str, Any] = {
+        "schema": PROJECT_TEXT_ASSET_SCHEMA,
+        "key": str(key or "").strip(),
+        "format": "srt",
+        "path": stored_path,
+    }
+    if str(key).startswith(_STT_TRACK_PREFIX):
+        track["source"] = str(key)[len(_STT_TRACK_PREFIX) :].upper()
+    return track
 
 
 def _segment_start(seg: dict[str, Any]) -> float:
@@ -617,7 +642,8 @@ def _track_from_project(project: dict[str, Any], key: str) -> dict[str, Any]:
         external_tracks = subtitles.get("external_tracks")
         if isinstance(external_tracks, dict) and isinstance(external_tracks.get(_FINAL_TRACK), dict):
             return external_tracks[_FINAL_TRACK]
-    return {}
+    inferred = _inferred_track_ref(project, key)
+    return inferred if inferred else {}
 
 
 def _track_ref(track: dict[str, Any]) -> dict[str, Any]:
@@ -631,6 +657,9 @@ def _track_ref(track: dict[str, Any]) -> dict[str, Any]:
 def load_external_subtitle_segments(project: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(project, dict):
         return []
+    hot_cached = project.get("_hot_open_subtitle_segments_cache")
+    if isinstance(hot_cached, list) and hot_cached:
+        return [dict(row) for row in hot_cached if isinstance(row, dict)]
     track = _track_from_project(project, _FINAL_TRACK)
     path = resolve_project_asset_path(project, track.get("path"))
     primary_fps = _project_primary_fps(project)
@@ -658,7 +687,9 @@ def load_external_stt_tracks(project: dict[str, Any] | None) -> dict[str, list[d
         track = tracks.get(key)
         if not isinstance(track, dict):
             track = external_stt.get(source) if isinstance(external_stt, dict) else {}
-        if not isinstance(track, dict):
+        if not isinstance(track, dict) or not track:
+            track = _track_from_project(project, key)
+        if not isinstance(track, dict) or not track:
             continue
         path = resolve_project_asset_path(project, track.get("path"))
         if not path or not os.path.exists(path):
@@ -740,6 +771,9 @@ def externalize_project_text_assets(
     ]
     final_track = _track_manifest(project_path, _FINAL_TRACK, final_info, final_metadata)
     tracks_manifest[_FINAL_TRACK] = final_track
+    project["_hot_open_subtitle_segments_cache"] = [
+        dict(row) for row in list(final_info.get("rows") or []) if isinstance(row, dict)
+    ]
 
     stt_external_tracks: dict[str, Any] = {}
     for source in ("STT1", "STT2"):
@@ -829,9 +863,15 @@ def project_uses_external_text_assets(project: dict[str, Any] | None) -> bool:
         return False
     subtitles = project.get("subtitles", {}) if isinstance(project.get("subtitles"), dict) else {}
     asset_storage = project.get("asset_storage", {}) if isinstance(project.get("asset_storage"), dict) else {}
-    return (
+    if (
         str(subtitles.get("storage", "") or "") == PROJECT_EXTERNAL_STORAGE
         or str(asset_storage.get("mode", "") or "") == PROJECT_EXTERNAL_STORAGE
+    ):
+        return True
+    return bool(
+        _inferred_track_path(project, _FINAL_TRACK)
+        or _inferred_track_path(project, f"{_STT_TRACK_PREFIX}stt1")
+        or _inferred_track_path(project, f"{_STT_TRACK_PREFIX}stt2")
     )
 
 

@@ -930,6 +930,66 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
         self.assertEqual(result["frame"], 14)
         self.assertEqual(result["mode"], "gray_window_color_avg")
 
+    def test_strict_verify_rejects_same_scene_when_frame_colors_are_too_similar(self):
+        def capture_maps(_cap, _cv2, **kwargs):
+            start_frame = int(kwargs["start_frame"])
+            end_frame = int(kwargs["end_frame"])
+            if kwargs.get("capture_gray", True):
+                return ({frame_no: frame_no for frame_no in range(start_frame, end_frame + 1)}, {})
+            color_map = {}
+            for frame_no in range(start_frame, end_frame + 1):
+                if frame_no <= 10:
+                    color_map[frame_no] = [(40.0, 90.0, 120.0)] * 5
+                else:
+                    color_map[frame_no] = [(42.0, 92.0, 121.0)] * 5
+            return ({}, color_map)
+
+        def gray_delta(a, b, **_kwargs):
+            pair = (int(a), int(b))
+            if pair == (10, 11):
+                return 130.0, 5, [130.0]
+            if pair == (9, 13):
+                return 155.0, 5, [155.0]
+            return 0.0, 0, []
+
+        strict_verify = build_strict_verify_helpers(
+            {
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "get_level_positions": lambda scan_profile, sample_positions: tuple(sample_positions or (0, 1, 2, 3, 4)),
+                "_auto_capture_verify_maps": capture_maps,
+                "_auto_gray_delta": gray_delta,
+                "_auto_color_avg_delta": lambda *_args, **_kwargs: (24.0, 5, [24.0]),
+                "_auto_gray_delta_mps": gray_delta,
+                "_auto_color_avg_delta_mps": lambda *_args, **_kwargs: (24.0, 5, [24.0]),
+                "_mps_available": lambda: False,
+            }
+        )["_auto_grid_v3_manual_verify_strict"]
+
+        result = strict_verify(
+            object(),
+            object(),
+            fps=10.0,
+            frame_count=60,
+            coarse_frame=10,
+            settings={
+                "scan_cut_auto_verify_rollback_frames": 8,
+                "scan_cut_auto_verify_forward_frames": 8,
+                "scan_cut_color_avg_window_frames": 3,
+                "scan_cut_auto_verify_window_stages": [4, 1],
+                "scan_cut_follower_local_color_confirm_frames": 4,
+                "scan_cut_follower_dense_flow_enabled": False,
+                "scan_cut_follower_same_scene_color_enabled": True,
+                "scan_cut_follower_same_scene_color_max_score": 6.0,
+                "scan_cut_follower_same_scene_color_max_luma_delta": 4.0,
+                "scan_cut_follower_same_scene_color_max_chroma_delta": 3.0,
+            },
+            sample_positions=(0, 1, 2, 3, 4),
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["reason"], "same_scene_color_similarity")
+        self.assertTrue(result["same_scene_color_similarity"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -289,7 +289,7 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertEqual(workers, 4)
         self.assertIn("extreme_cpu_load", meta["reductions"])
 
-    def test_native_runtime_env_budget_uses_logical_cores_for_max_profile(self):
+    def test_native_runtime_env_budget_keeps_one_core_for_interaction_in_max_profile(self):
         snapshot = {
             "system": "Darwin",
             "machine": "arm64",
@@ -306,11 +306,11 @@ class PerformanceMediaCacheTest(unittest.TestCase):
             "runtime_native_threads_auto_enabled": True,
         }
         with patch("core.performance.hardware_profile", return_value=snapshot):
-            self.assertEqual(native_thread_budget(settings), 10)
+            self.assertEqual(native_thread_budget(settings), 9)
             env = native_runtime_env_overrides(settings)
 
-        self.assertEqual(env["AI_SUBTITLE_NATIVE_THREADS"], "10")
-        self.assertEqual(env["OMP_NUM_THREADS"], "10")
+        self.assertEqual(env["AI_SUBTITLE_NATIVE_THREADS"], "9")
+        self.assertEqual(env["OMP_NUM_THREADS"], "9")
         self.assertEqual(env["AI_SUBTITLE_NATIVE_JSON"], "1")
         self.assertEqual(env["AI_SUBTITLE_NATIVE_TEXT_SIMILARITY"], "1")
         self.assertEqual(env["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"], "1")
@@ -339,7 +339,9 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         )
 
         self.assertEqual(profile["chip_name"], "Apple M5")
-        self.assertEqual(profile["cpu"]["wide_workers"], 10)
+        self.assertEqual(profile["interactive_reserve_cores"], 1)
+        self.assertEqual(profile["cpu"]["native_threads"], 9)
+        self.assertEqual(profile["cpu"]["wide_workers"], 9)
         self.assertEqual(profile["cpu"]["balanced_workers"], 7)
         self.assertEqual(profile["gpu"]["stt_slots"], 1)
         self.assertEqual(profile["npu"]["coreml_slots"], 1)
@@ -370,7 +372,7 @@ class PerformanceMediaCacheTest(unittest.TestCase):
 
         self.assertEqual(ceiling, 9)
 
-    def test_runtime_scheduler_reserve_cores_uses_full_budget_for_max_profile(self):
+    def test_runtime_scheduler_reserve_cores_keeps_one_core_for_interaction_in_max_profile(self):
         snapshot = {
             "system": "Darwin",
             "machine": "arm64",
@@ -387,8 +389,9 @@ class PerformanceMediaCacheTest(unittest.TestCase):
             "runtime_scheduler_reserve_cores": 1,
         }
         with patch("core.performance.hardware_profile", return_value=snapshot):
-            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="cut_pioneer"), 0)
-            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="stt"), 0)
+            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="cut_pioneer"), 1)
+            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="stt"), 1)
+            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="subtitle_prepass"), 1)
 
     def test_runtime_scheduler_reserve_cores_keeps_one_core_for_manual_lora(self):
         snapshot = {

@@ -77,6 +77,10 @@ class CutBoundaryNativePlanTests(unittest.TestCase):
 
         self.assertEqual(tuned["scan_cut_compare_max_width"], 1280)
         self.assertEqual(tuned["scan_cut_compare_max_height"], 720)
+        self.assertEqual(tuned["scan_cut_pioneer_packet_bucket_sec"], 0.25)
+        self.assertEqual(tuned["scan_cut_pioneer_packet_min_gap_sec"], 0.20)
+        self.assertEqual(tuned["scan_cut_pioneer_min_gap_sec"], 0.45)
+        self.assertGreaterEqual(tuned["scan_cut_pioneer_packet_scout_raw_candidates"], 180)
         self.assertEqual(profile["grid_size"], 3)
         self.assertEqual(profile["positions"], (1, 3, 5, 7))
         self.assertEqual(profile["mask"], "cross4")
@@ -103,6 +107,10 @@ class CutBoundaryNativePlanTests(unittest.TestCase):
         self.assertGreaterEqual(tuned["scan_cut_follower_gray_agreement_frames"], 3)
         self.assertGreaterEqual(tuned["scan_cut_follower_gray_color_agreement_frames"], 3)
         self.assertGreaterEqual(tuned["scan_cut_follower_local_color_confirm_frames"], 2)
+        self.assertTrue(bool(tuned["scan_cut_follower_same_scene_color_enabled"]))
+        self.assertLessEqual(float(tuned["scan_cut_follower_same_scene_color_max_score"]), 11.0)
+        self.assertLessEqual(float(tuned["scan_cut_follower_same_scene_color_max_luma_delta"]), 9.0)
+        self.assertLessEqual(float(tuned["scan_cut_follower_same_scene_color_max_chroma_delta"]), 8.5)
         self.assertGreaterEqual(tuned["scan_cut_native_peak_bonus_scale"], 0.05)
         self.assertGreaterEqual(tuned["scan_cut_native_peak_contrast_scale"], 0.05)
         self.assertGreaterEqual(tuned["scan_cut_native_peak_sharpness_scale"], 0.02)
@@ -147,6 +155,25 @@ class CutBoundaryNativePlanTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(int(rows[0]["timeline_frame"]), 1650)
         self.assertEqual(rows[0]["source"], "audio_gain_provisional")
+
+    def test_reviewed_middle_sources_skip_audio_checked_rows_marked_for_merge(self):
+        rows = reviewed_middle_source_rows(
+            [
+                {
+                    "timeline_sec": 55.0,
+                    "timeline_frame": 1650,
+                    "fps": 30.0,
+                    "status": "checked",
+                    "scan_checked": True,
+                    "source": "audio_gain_provisional",
+                    "audio_gain_db_delta": 12.0,
+                    "same_scene_color_similarity": True,
+                    "middle_merge_preferred": True,
+                }
+            ]
+        )
+
+        self.assertEqual(rows, [])
 
     def test_reviewed_middle_sources_keep_relocated_rows_as_snap_only_helpers(self):
         rows = reviewed_middle_source_rows(

@@ -4,12 +4,15 @@ import atexit
 import json
 import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any
 
 _CORE_WORKER: subprocess.Popen | None = None
 _CORE_WORKER_LOCK = threading.Lock()
+_TRUE_VALUES = {"1", "true", "on", "yes"}
+_FALSE_VALUES = {"0", "false", "off", "no"}
 
 
 def _candidate_cli_paths() -> list[Path]:
@@ -42,12 +45,40 @@ def find_native_cli_path() -> Path | None:
 
 
 def native_cli_path() -> Path | None:
-    swift_core = os.environ.get("AI_SUBTITLE_STUDIO_SWIFT_CORE", "").lower()
-    if swift_core in {"0", "false", "off", "no"}:
-        return None
-    if swift_core not in {"1", "true", "on", "yes"} and not os.environ.get("AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES"):
+    if not native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_CORE"):
         return None
     return find_native_cli_path()
+
+
+def _env_state(name: str) -> bool | None:
+    value = str(os.environ.get(name, "") or "").strip().lower()
+    if value in _FALSE_VALUES:
+        return False
+    if value in _TRUE_VALUES:
+        return True
+    return None
+
+
+def native_swift_runtime_enabled(feature_env: str | None = None, *, default_on_macos: bool = True) -> bool:
+    """Return whether Swift-native acceleration should be attempted.
+
+    This branch is macOS-only in practice, so native Swift is the default when
+    running on macOS. Explicit environment flags still win, which keeps tests,
+    fallback diagnosis, and emergency disable switches simple.
+    """
+
+    core_state = _env_state("AI_SUBTITLE_STUDIO_SWIFT_CORE")
+    if core_state is False:
+        return False
+    if feature_env and feature_env != "AI_SUBTITLE_STUDIO_SWIFT_CORE":
+        feature_state = _env_state(feature_env)
+        if feature_state is not None:
+            return feature_state
+    if core_state is True:
+        return True
+    if os.environ.get("AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES"):
+        return True
+    return bool(default_on_macos and sys.platform == "darwin")
 
 
 def _json_default(value: Any) -> Any:
@@ -178,6 +209,7 @@ atexit.register(stop_native_core_worker)
 __all__ = [
     "find_native_cli_path",
     "native_cli_path",
+    "native_swift_runtime_enabled",
     "parse_srt_via_swift",
     "request_native_core_task",
     "stop_native_core_worker",

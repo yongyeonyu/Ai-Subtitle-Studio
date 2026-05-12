@@ -47,6 +47,8 @@ DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT = """너는 자막 생성이 완료된 뒤 
 최종 목표는 기존 중분류를 보존하는 것이 아니라 생성된 자막 전체를 이해하고 주제별 흐름에 맞는 가장 자연스러운 중분류를 다시 만드는 것이다.
 영상/음성 기반으로 먼저 만들어진 확정컷 중분류는 출발점일 뿐이며, 최종 중분류는 반드시 자막 내용과 서사 흐름을 기준으로 다시 확정한다.
 같은 주제로 이어지는 구간은 여러 확정컷을 하나의 중분류로 합칠 수 있고, 하나의 확정컷 안에서도 자막 주제가 분명히 갈라지면 둘 이상의 중분류로 다시 나눌 수 있다.
+임시 중분류와 음성 경계는 "나눌 후보"일 뿐이며, 자막 주제가 이어지면 인접한 임시 중분류 여러 개를 하나로 합치는 쪽을 기본값으로 생각한다.
+자막 내용이 분명히 달라지지 않았다면 중분류를 늘리지 말고, 애매하면 먼저 합친다. 분할보다 병합을 우선 검토하고, 같은 장소/같은 주제/같은 설명 흐름이면 더 크게 묶는다.
 전체 자막에 도입, 전개, 비교, 전환, 마무리처럼 여러 주제 흐름이 보이는데도 중분류를 하나만 반환하면 잘못된 결과다.
 중분류 경계는 개별 자막 문장이 아니라 화면 전환, 주제 전환, 장소 전환, 행동 단계 전환처럼 시청자가 장면이 바뀌었다고 느끼는 지점을 우선한다.
 음향 환경이 바뀌는 전환점도 강한 중분류 후보다. 예를 들어 실외에서 실내로 들어오거나, 차량/매장/스튜디오처럼 공간의 울림과 배경소음이 확실히 달라지면 같은 화제가 이어져도 새 중분류를 우선 검토한다.
@@ -71,6 +73,8 @@ def _roughcut_llm_connection_unavailable(exc: Exception) -> bool:
     return any(
         token in message
         for token in (
+            "codex cli를 찾을 수 없습니다",
+            "ai_subtitle_codex_bin 경로",
             "connection refused",
             "errno 61",
             "urlopen error",
@@ -78,6 +82,18 @@ def _roughcut_llm_connection_unavailable(exc: Exception) -> bool:
             "actively refused",
         )
     )
+
+
+def _roughcut_llm_runtime_unavailable_reason(model: str) -> str:
+    if not is_codex_model(model):
+        return ""
+    try:
+        from core.llm.codex_provider import codex_cli_available
+
+        available, detail = codex_cli_available()
+        return "" if available else str(detail or "Codex CLI unavailable")
+    except Exception as exc:
+        return str(exc)
 
 
 def is_fast_recognition_mode(settings: dict[str, Any] | None) -> bool:
@@ -261,7 +277,7 @@ def build_editor_roughcut_draft_prompt(
             "subtitle_rows 전체를 먼저 끝까지 읽고 영상 전체 내용을 파악한다.",
             "reference_major_segments로 전달된 임시 중분류 구간을 확인한다.",
             "audio_boundary_hints와 reviewed_cut_boundaries를 참고해 음성 전환과 컷 전환 후보를 다시 본다.",
-            "임시 중분류를 참고하되 필요하면 합치거나 분리해서 최종 major_segments를 출력한다.",
+            "임시 중분류를 참고하되 자막 주제가 이어지면 먼저 합치고, 명확할 때만 분리해서 최종 major_segments를 출력한다.",
         ],
         "output_contract": {
             "json_only": True,
@@ -330,6 +346,18 @@ def run_editor_roughcut_llm_draft(
     model = str(llm_config.model or "").strip()
     provider = str(llm_config.provider or "").strip().lower()
     if not llm_config.enabled or not model or "사용 안함" in model or provider == "none":
+        return None
+    unavailable_reason = _roughcut_llm_runtime_unavailable_reason(model)
+    if unavailable_reason:
+        try:
+            from core.runtime.logger import get_logger
+
+            get_logger().log(
+                "⏩ 러프컷 LLM 자동 실행 생략: "
+                f"{unavailable_reason} 로컬 규칙 초안으로 즉시 대체합니다."
+            )
+        except Exception:
+            pass
         return None
     try:
         prepare_roughcut_llm_model_for_run(settings, llm_config)
@@ -461,6 +489,12 @@ def build_editor_roughcut_draft_result(
         local_groups=local_groups,
     ):
         groups = reference_groups if len(reference_groups) >= 2 else local_groups
+    elif groups and reference_groups:
+        groups = _merge_llm_groups_by_reference_pressure(
+            groups,
+            subtitles,
+            reference_groups=reference_groups,
+        )
     if not groups:
         groups = reference_groups
     if not groups:
@@ -1019,6 +1053,106 @@ def _should_reject_overcollapsed_llm_groups(
     if local_count >= 2 and duration >= 90.0:
         return True
     return False
+
+
+def _merge_major_group_bucket(
+    bucket: list[dict[str, Any]],
+    *,
+    major_id: str,
+    title_hint: str = "",
+    summary_hint: str = "",
+) -> dict[str, Any]:
+    subtitles: list[SubtitleSegment] = []
+    tags: list[str] = []
+    statuses: list[str] = []
+    confidences: list[float] = []
+    for group in list(bucket or []):
+        subtitles.extend(list(group.get("subtitles", []) or []))
+        statuses.append(str(group.get("status") or "provisional"))
+        confidences.append(_confidence(group))
+        for tag in list(group.get("tags", ()) or ()):
+            tag_text = str(tag).strip()
+            if tag_text and tag_text not in tags:
+                tags.append(tag_text)
+    return {
+        "major_id": str(major_id or "A"),
+        "title": str(title_hint or _title_from_subtitles(subtitles) or f"중분류 {major_id}"),
+        "summary": str(summary_hint or _summary_from_subtitles(subtitles)),
+        "tags": tuple(tags[:8]),
+        "confidence": sum(confidences) / len(confidences) if confidences else 0.58,
+        "status": "needs_review" if "needs_review" in statuses else ("provisional" if "provisional" in statuses else "confirmed"),
+        "subtitles": subtitles,
+    }
+
+
+def _merge_llm_groups_by_reference_pressure(
+    groups: list[dict[str, Any]],
+    subtitles: list[SubtitleSegment],
+    reference_groups: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    if len(groups or []) <= 1:
+        return list(groups or [])
+    refs = list(reference_groups or [])
+    if len(refs) < 2:
+        return list(groups or [])
+    if len(groups) <= len(refs):
+        return list(groups or [])
+
+    subtitle_index = {id(item): idx for idx, item in enumerate(list(subtitles or []))}
+
+    def _span(group: dict[str, Any]) -> tuple[int, int] | None:
+        indices = [
+            int(subtitle_index[id(item)])
+            for item in list(group.get("subtitles", []) or [])
+            if id(item) in subtitle_index
+        ]
+        if not indices:
+            return None
+        return min(indices), max(indices)
+
+    ref_spans: list[tuple[int, int, dict[str, Any]]] = []
+    for ref in refs:
+        span = _span(ref)
+        if span is None:
+            continue
+        ref_spans.append((span[0], span[1], ref))
+    if len(ref_spans) < 2:
+        return list(groups or [])
+
+    merged: list[dict[str, Any]] = []
+    used_group_ids: set[int] = set()
+    for ref_index, (ref_lo, ref_hi, ref) in enumerate(ref_spans):
+        bucket = []
+        for group in groups:
+            span = _span(group)
+            if span is None:
+                continue
+            group_lo, group_hi = span
+            if group_hi < ref_lo or group_lo > ref_hi:
+                continue
+            bucket.append(group)
+        if not bucket:
+            continue
+        for group in bucket:
+            used_group_ids.add(id(group))
+        merged.append(
+            _merge_major_group_bucket(
+                bucket,
+                major_id=str(ref.get("major_id") or _major_code(ref_index)),
+                title_hint=("" if "주제없음" in str(ref.get("title") or "") else str(ref.get("title") or "")),
+                summary_hint=("" if "임시 중분류" in str(ref.get("summary") or "") else str(ref.get("summary") or "")),
+            )
+        )
+
+    leftovers = [group for group in groups if id(group) not in used_group_ids]
+    if leftovers:
+        merged.extend(leftovers)
+    if len(merged) >= len(groups):
+        return list(groups or [])
+    merged.sort(
+        key=lambda item: min((subtitle.start for subtitle in item.get("subtitles", []) or []), default=0.0)
+    )
+    return merged
 
 
 def _major_groups_from_llm_payload(payload: dict[str, Any] | None, subtitles: list[SubtitleSegment]) -> list[dict[str, Any]]:
