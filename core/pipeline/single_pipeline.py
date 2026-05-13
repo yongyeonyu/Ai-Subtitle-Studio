@@ -368,7 +368,16 @@ class SinglePipelineMixin:
                     diag_model_key = "QUALITY:" + get_model_key(diagnostic_settings)
                     startup_diagnostic = attach_expected_processing_time(
                         startup_diagnostic,
-                        get_expected_time(diag_model_key, diag_duration),
+                        get_expected_time(
+                            diag_model_key,
+                            diag_duration,
+                            settings=diagnostic_settings,
+                            startup_diagnostic=startup_diagnostic,
+                            target_file=target_file,
+                            queue_index=queue_index,
+                            total_files=len(self.files_to_process),
+                        ),
+                        source="runtime_eta",
                     )
                     if not hasattr(self, "_startup_diagnostics"):
                         self._startup_diagnostics = {}
@@ -478,7 +487,15 @@ class SinglePipelineMixin:
 
                 expected_time = float(startup_diagnostic.get("estimated_processing_sec", 0.0) or 0.0)
                 if expected_time <= 0:
-                    expected_time = get_expected_time(model_key, video_duration_sec)
+                    expected_time = get_expected_time(
+                        model_key,
+                        video_duration_sec,
+                        settings=s,
+                        startup_diagnostic=startup_diagnostic,
+                        target_file=target_file,
+                        queue_index=queue_index,
+                        total_files=len(self.files_to_process),
+                    )
                 if expected_time > 0:
                     self._ui_emit(
                         "_sig_update_queue",
@@ -563,6 +580,17 @@ class SinglePipelineMixin:
             def _preview_stt_segments(chunk_segs, _label="STT", _preview_opt_queue=preview_opt_queue):
                 if not chunk_segs or not self._active:
                     return
+                try:
+                    from core.pipeline.stt_preview_optimizer import raw_stt_preview_segments
+
+                    raw_preview = raw_stt_preview_segments(
+                        chunk_segs,
+                        source_label=str(_label or "STT"),
+                    )
+                    if raw_preview and self._active:
+                        self._ui_emit("_sig_preview_stt_segments", raw_preview)
+                except Exception:
+                    pass
                 _preview_opt_queue.put(([dict(seg) for seg in chunk_segs or []], str(_label or "STT")))
 
             def do_preview_optimize(_preview_opt_queue=preview_opt_queue, _preview_opt_sentinel=preview_opt_sentinel):
@@ -919,7 +947,16 @@ class SinglePipelineMixin:
                 s = load_settings()
                 model_key = "QUALITY:" + get_model_key(s)
                 proc_time = time.time() - process_start_time
-                add_history(model_key, video_duration_sec, proc_time)
+                add_history(
+                    model_key,
+                    video_duration_sec,
+                    proc_time,
+                    settings=s,
+                    startup_diagnostic=startup_diagnostic,
+                    target_file=target_file,
+                    queue_index=queue_index,
+                    total_files=len(self.files_to_process),
+                )
             except Exception:
                 pass
 

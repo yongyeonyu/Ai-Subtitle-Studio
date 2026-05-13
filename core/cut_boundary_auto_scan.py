@@ -1718,6 +1718,11 @@ def build_auto_grid_scan_helpers(deps: dict):
                         "verify_backend": follower_backend,
                     }
                 )
+                fixed["boundary_kind"] = "visual"
+                fixed.pop("line_color", None)
+                fixed.pop("line_style", None)
+                fixed.pop("provisional_type", None)
+                fixed.pop("ui_label", None)
                 return {"verified": fixed}
 
             def _apply_verify_result(result):

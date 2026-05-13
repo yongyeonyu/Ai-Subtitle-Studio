@@ -4,11 +4,30 @@
 import unittest
 from unittest.mock import patch
 
-from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments
+from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments, raw_stt_preview_segments
 from core.cut_boundary import magnetize_segments_to_cut_boundaries
 
 
 class SttPreviewOptimizerTest(unittest.TestCase):
+    def test_raw_preview_candidates_are_available_before_optimizer(self):
+        result = raw_stt_preview_segments(
+            [{"start": 0.5, "end": 1.25, "text": "즉시 후보"}],
+            source_label="STT2",
+            clip_offset=10.0,
+            clip_idx=3,
+            clip_path="/tmp/clip.mp4",
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "즉시 후보")
+        self.assertEqual(result[0]["stt_preview_source"], "STT2")
+        self.assertFalse(result[0]["stt_preview_optimized"])
+        self.assertEqual(result[0]["stt_preview_optimizer"], "raw_realtime")
+        self.assertAlmostEqual(result[0]["start"], 10.5)
+        self.assertAlmostEqual(result[0]["end"], 11.25)
+        self.assertEqual(result[0]["_clip_idx"], 3)
+        self.assertEqual(result[0]["_clip_file"], "/tmp/clip.mp4")
+
     def test_preview_candidates_run_through_candidate_rules_optimizer(self):
         raw = [{"start": 1.0, "end": 3.0, "text": "원본 후보"}]
         optimized = [{"start": 1.0, "end": 2.0, "text": "정리 후보"}]

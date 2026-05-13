@@ -96,6 +96,77 @@ def _roughcut_llm_runtime_unavailable_reason(model: str) -> str:
         return str(exc)
 
 
+def _int_setting(settings: dict[str, Any], key: str, default: int, *, minimum: int = 1, maximum: int = 9999) -> int:
+    try:
+        value = int(float(settings.get(key, default)))
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _roughcut_effective_llm_model(settings: dict[str, Any] | None) -> tuple[str, str]:
+    source = settings or {}
+    merged = merge_roughcut_settings(source)
+    use_override = bool(merged.get("roughcut_llm_use_override", False))
+    provider = str(merged.get("roughcut_llm_provider") or "inherit").strip()
+    model = str(merged.get("roughcut_llm_model") or "").strip()
+    if not use_override or provider == "inherit":
+        provider = str(source.get("selected_llm_provider") or "ollama").strip()
+    if not use_override or model in ("", "inherit"):
+        model = str(source.get("selected_model") or "").strip()
+    return provider, model
+
+
+def _roughcut_llm_uses_codex(settings: dict[str, Any] | None) -> bool:
+    _provider, model = _roughcut_effective_llm_model(settings)
+    return is_codex_model(model)
+
+
+def _effective_roughcut_context_policy(
+    settings: dict[str, Any] | None,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    merged = merge_roughcut_settings(settings or {})
+    policy = resolve_roughcut_context_policy(merged, subtitle_rows=rows)
+    if not _roughcut_llm_uses_codex(settings) or not bool(merged.get("roughcut_llm_rows_auto_enabled", True)):
+        return policy
+
+    max_context = _int_setting(merged, "roughcut_codex_max_context_rows", 240, minimum=1, maximum=500)
+    chunk_rows = _int_setting(merged, "roughcut_codex_chunk_rows", 72, minimum=1, maximum=max_context)
+    lookahead_rows = _int_setting(merged, "roughcut_codex_lookahead_rows", 20, minimum=0, maximum=max(0, max_context - 1))
+    max_context = max(max_context, int(policy.get("max_context_rows", 1) or 1))
+    chunk_rows = min(max_context, max(chunk_rows, int(policy.get("chunk_rows", 1) or 1)))
+    lookahead_rows = min(max(0, max_context - 1), max(lookahead_rows, int(policy.get("lookahead_rows", 0) or 0)))
+
+    adjusted = dict(policy)
+    adjusted["max_context_rows"] = max_context
+    adjusted["chunk_rows"] = chunk_rows
+    adjusted["lookahead_rows"] = lookahead_rows
+    adjusted["codex_wide_context"] = True
+    reason = str(adjusted.get("reason") or "").strip()
+    adjusted["reason"] = f"{reason}+codex_wide_context" if reason else "codex_wide_context"
+    return adjusted
+
+
+def _roughcut_call_timeout(model: str, settings: dict[str, Any] | None, timeout: int) -> int:
+    try:
+        base = max(1, int(float(timeout or 45)))
+    except Exception:
+        base = 45
+    if not is_codex_model(model):
+        return base
+    merged = merge_roughcut_settings(settings or {})
+    codex_timeout = _int_setting(merged, "roughcut_codex_timeout_sec", 180, minimum=30, maximum=900)
+    return max(base, codex_timeout)
+
+
+def _roughcut_codex_timed_out(model: str, exc: Exception) -> bool:
+    if not is_codex_model(model):
+        return False
+    message = str(exc or "").lower()
+    return any(token in message for token in ("시간이 초과", "timeout", "timed out"))
+
+
 def is_fast_recognition_mode(settings: dict[str, Any] | None) -> bool:
     settings = settings or {}
     return str(settings.get("stt_quality_preset", "") or "").strip().lower() == "fast"
@@ -137,7 +208,7 @@ def describe_editor_roughcut_llm_scope(
 ) -> dict[str, Any]:
     merged = merge_roughcut_settings(settings or {})
     rows = _subtitle_prompt_rows(segments)
-    policy = resolve_roughcut_context_policy(merged, subtitle_rows=rows)
+    policy = _effective_roughcut_context_policy(settings or {}, rows)
     max_rows = max(1, int(policy.get("max_context_rows", 80) or 80))
     chunk_rows = max(1, min(max_rows, int(policy.get("chunk_rows", 12) or 12)))
     lookahead_rows = max(0, min(max_rows - 1, int(policy.get("lookahead_rows", 8) or 8)))
@@ -180,7 +251,7 @@ def describe_editor_roughcut_llm_scope(
 
     core_ranges = _plan_editor_roughcut_core_ranges(
         rows,
-        merged,
+        settings or merged,
         max_rows=max_rows,
         target_rows=chunk_rows,
         cut_boundaries=cut_boundaries,
@@ -229,7 +300,7 @@ def build_editor_roughcut_draft_prompt(
     reviewed_cut_boundaries: list[dict[str, Any]] | None = None,
 ) -> str:
     rows = _subtitle_prompt_rows(segments)
-    policy = resolve_roughcut_context_policy(settings or {}, subtitle_rows=rows)
+    policy = _effective_roughcut_context_policy(settings or {}, rows)
     max_rows = max(1, int(policy.get("max_context_rows", 80) or 80))
     scoped_rows = rows[:max_rows]
     instructions = str((settings or {}).get("editor_roughcut_draft_prompt") or DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT).strip()
@@ -361,6 +432,7 @@ def run_editor_roughcut_llm_draft(
         return None
     try:
         prepare_roughcut_llm_model_for_run(settings, llm_config)
+        call_timeout = _roughcut_call_timeout(model, settings, timeout)
         scope = describe_editor_roughcut_llm_scope(
             segments,
             settings,
@@ -374,7 +446,7 @@ def run_editor_roughcut_llm_draft(
                 reference_major_segments=reference_major_segments,
                 reviewed_cut_boundaries=reviewed_cut_boundaries,
             )
-            return _call_editor_roughcut_json(provider, model, prompt, timeout=timeout)
+            return _call_editor_roughcut_json(provider, model, prompt, timeout=call_timeout)
 
         subtitles = _normalize_subtitles(segments)
         if not subtitles:
@@ -409,7 +481,7 @@ def run_editor_roughcut_llm_draft(
             )
             payload = None
             try:
-                payload = _call_editor_roughcut_json(provider, model, prompt, timeout=timeout)
+                payload = _call_editor_roughcut_json(provider, model, prompt, timeout=call_timeout)
             except Exception as exc:
                 if _roughcut_llm_connection_unavailable(exc):
                     try:
@@ -417,6 +489,16 @@ def run_editor_roughcut_llm_draft(
 
                         get_logger().log(
                             "⚠️ 에디터 러프컷 LLM 연결 불가: chunk 재시도를 중단하고 로컬 규칙 초안으로 대체합니다."
+                        )
+                    except Exception:
+                        pass
+                    return None
+                if _roughcut_codex_timed_out(model, exc):
+                    try:
+                        from core.runtime.logger import get_logger
+
+                        get_logger().log(
+                            "⚠️ 에디터 러프컷 Codex CLI 시간 초과: 남은 chunk 재시도를 중단하고 로컬 규칙 초안으로 대체합니다."
                         )
                     except Exception:
                         pass
@@ -1449,6 +1531,15 @@ def _plan_editor_roughcut_core_ranges(
 def _roughcut_chunk_bounds(settings: dict[str, Any], *, max_rows: int, target_rows: int) -> tuple[int, int, int]:
     min_raw = int(settings.get("roughcut_llm_chunk_min_rows", 8) or 8)
     max_raw = int(settings.get("roughcut_llm_chunk_max_rows", 18) or 18)
+    if _roughcut_llm_uses_codex(settings) and bool(merge_roughcut_settings(settings).get("roughcut_llm_rows_auto_enabled", True)):
+        codex_chunk = _int_setting(
+            merge_roughcut_settings(settings),
+            "roughcut_codex_chunk_rows",
+            72,
+            minimum=1,
+            maximum=max(1, max_rows),
+        )
+        max_raw = max(max_raw, codex_chunk, int(target_rows or 0))
     min_core = max(1, min(max_rows, min_raw))
     max_core = max(min_core, min(max_rows, max_raw))
     target_core = max(min_core, min(max_core, int(target_rows or max_rows)))

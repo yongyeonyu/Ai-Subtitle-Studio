@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.04-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_4_RELEASED
-Last-Updated: 2026-05-13
+Document-Version: 04.00.05-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_5_RELEASED
+Last-Updated: 2026-05-14
 Updated-By: Codex
 Scope: Actual project filesystem map generated from tracked source files plus untracked non-ignored release files. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
@@ -9,9 +9,9 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 ================================================================================
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-13
-Phase: MAC_NATIVE_APPSTORE_V4_0_4_RELEASED
-App Version: 04.00.04
+Last Updated: 2026-05-14
+Phase: MAC_NATIVE_APPSTORE_V4_0_5_RELEASED
+App Version: 04.00.05
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -319,9 +319,11 @@ ai_subtitle_studio/
 │   ├── native_macos_input.py
 │   ├── native_macos_memory.py
 │   ├── native_swift_common_split.py
+│   ├── native_swift_cut_boundary_cache.py
 │   ├── native_swift_policy.py
 │   ├── native_swift_project.py
 │   ├── native_swift_quality.py
+│   ├── native_swift_startup_diagnostics.py
 │   ├── native_swift_subtitle.py
 │   ├── native_swift_timeline.py
 │   ├── native_swift_waveform.py
@@ -333,6 +335,7 @@ ai_subtitle_studio/
 │   ├── pipeline_status.py
 │   ├── platform_compat.py
 │   ├── renderer.py
+│   ├── runtime_eta.py
 │   ├── settings.py
 │   ├── settings_profiles.py
 │   ├── settings_simplifier.py
@@ -366,14 +369,18 @@ ai_subtitle_studio/
 │           ├── Sources
 │           │   ├── AIStudioCore
 │           │   │   ├── CommonSplitPlanner.swift
+│           │   │   ├── CutBoundaryCachePlanner.swift
 │           │   │   ├── InputActivity.swift
 │           │   │   ├── MemoryPressure.swift
 │           │   │   ├── NativePolicyEngine.swift
 │           │   │   ├── ProjectJSON.swift
+│           │   │   ├── RuntimeETAEstimator.swift
 │           │   │   ├── SRTCodec.swift
+│           │   │   ├── StartupDiagnostics.swift
 │           │   │   ├── SubtitleQualityScorer.swift
 │           │   │   ├── SubtitleSegment.swift
 │           │   │   ├── TimelineColumns.swift
+│           │   │   ├── TimelineEditing.swift
 │           │   │   └── WaveformPeaks.swift
 │           │   ├── AIStudioMacUI
 │           │   │   └── NativeTimelineView.swift
@@ -382,8 +389,11 @@ ai_subtitle_studio/
 │           ├── Tests
 │           │   └── AIStudioCoreTests
 │           │       ├── CommonSplitPlannerTests.swift
+│           │       ├── CutBoundaryCachePlannerTests.swift
 │           │       ├── ProjectJSONTests.swift
+│           │       ├── RuntimeETAEstimatorTests.swift
 │           │       ├── SRTCodecTests.swift
+│           │       ├── StartupDiagnosticsNativeTests.swift
 │           │       ├── SubtitleQualityScorerTests.swift
 │           │       ├── TimelineColumnsTests.swift
 │           │       └── WaveformPeaksTests.swift
@@ -509,6 +519,7 @@ ai_subtitle_studio/
 │   ├── test_roughcut_title_suggester.py
 │   ├── test_roughcut_ui_v2.py
 │   ├── test_roughcut_v2_output_compat.py
+│   ├── test_runtime_eta.py
 │   ├── test_runtime_memory_manager.py
 │   ├── test_runtime_multi_process.py
 │   ├── test_runtime_optimization_profile.py
@@ -732,6 +743,7 @@ ai_subtitle_studio/
 ├── check_list.md
 ├── File_structure.txt
 ├── main.py
+├── NATIVE_LIB_PLAN.md
 ├── README.md
 ├── RELEASE_v03.24.02.md
 ├── RELEASE_v03.24.03.md
@@ -742,4 +754,5 @@ ai_subtitle_studio/
 ├── RELEASE_v04.00.02.md
 ├── RELEASE_v04.00.03.md
 ├── RELEASE_v04.00.04.md
+├── RELEASE_v04.00.05.md
 └── requirements-mac.txt

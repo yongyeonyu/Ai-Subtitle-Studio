@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.04-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.04-30D158?style=for-the-badge)](RELEASE_v04.00.04.md)
+[![App Version](https://img.shields.io/badge/app-04.00.05-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.05-30D158?style=for-the-badge)](RELEASE_v04.00.05.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -49,9 +49,13 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Compact QML popup/menu surfaces use outside-click dismissal, hover/press feedback, and Korean-only bottom/global menu labels.
 - Ten-step engine dashboard: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Runtime sidebar display of the current file's automatic audio-filter and VAD choices.
+- Runtime ETA prediction now uses per-variant history with media/FPS/cache features and recent-run weighting, and the active queue row keeps elapsed-versus-expected time updated even before the full backend pipeline clock is ready.
 - Fast/Auto/High now lock benchmarked VAD defaults instead of exposing a separate VAD settings menu; automatic audio preset detection can still retune only the audio frontend stack.
 - Correction-dictionary cleanup now has a SQLite-backed indexed runtime path while keeping the JSON dictionary as the editable source of truth.
 - Manual `<<` / `>>` cut-boundary hits are persisted as confirmed project cut boundaries for later subtitle magnet alignment.
+- Live STT previews now stay in timeline/STT preview lanes only; the editor text pane and playback subtitle overlay remain reserved for committed subtitle segments.
+- Cut-boundary helper rows can still be saved into project metadata for verification and timing work, but follower-checked provisional lines and terminal helper boundaries are hidden from the normal editor UI after confirmation.
+- Roughcut Codex CLI calls now use wider context and longer timeouts, then fall back to local-rule draft generation if the Codex CLI times out.
 - Process-level project JSON caching plus safe atomic project and settings writes.
 - Project save/load uses frame-quantized subtitle/STT timing, external SRT assets, and project-path-aware hydration so STT1/STT2 and final subtitle lanes reload without tail segments beyond the real video duration.
 - STT1/STT2 candidate comparison with persistent project metadata.
@@ -145,10 +149,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.04` |
-| Latest release checkpoint | `v04.00.04` |
-| Handoff document version | `04.00.04-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_4_RELEASED` |
+| App version in code | `04.00.05` |
+| Latest release checkpoint | `v04.00.05` |
+| Handoff document version | `04.00.05-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_5_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -179,7 +183,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.04.md`](RELEASE_v04.00.04.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.05.md`](RELEASE_v04.00.05.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

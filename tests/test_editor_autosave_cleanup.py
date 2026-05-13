@@ -77,6 +77,42 @@ class _PendingProjectRefreshEditor(EditorSaveManagerMixin):
         return SimpleNamespace(_current_project_path=self._current_project_path)
 
 
+class _CompletedRecoverySaveEditor(EditorSaveManagerMixin):
+    def __init__(self):
+        self._saved_segments_signature = ""
+        self._autosave_requires_manual_save = False
+        self._subtitle_generation_completed = True
+        self._process_completed_finalized = True
+        self._segment_state = []
+        self._has_unsaved_changes = Mock(return_value=True)
+        self._flush_pending_segment_queue_now = Mock()
+        self._warn_pending_stt_before_save = Mock(return_value=True)
+        self._persist_editor_srts = Mock(return_value=True)
+        self._auto_save_project = Mock(return_value="/tmp/project.json")
+        self._remember_saved_segments = Mock()
+        self._remember_saved_project_file = Mock()
+        self._mark_save_completed = Mock(return_value=True)
+        self._sync_queue_saved_state = Mock()
+        self._should_auto_export_after_editor_save = Mock(return_value=False)
+        self._schedule_auto_export_saved_subtitle_videos = Mock()
+        self._recover_generation_segments_from_backend_backup = Mock(side_effect=self._recover_impl)
+        self._window = SimpleNamespace(_refresh_saved_status_label=Mock(), _current_project_path="/tmp/project.json")
+        self.settings = {}
+
+    def _recover_impl(self):
+        self._segment_state = [{"start": 0.0, "end": 1.0, "text": "복구 자막"}]
+        return True
+
+    def _get_current_segments(self):
+        return [dict(seg) for seg in self._segment_state]
+
+    def window(self):
+        return self._window
+
+    def _current_project_path_for_dirty_check(self):
+        return "/tmp/project.json"
+
+
 class _CompletionEditor(EditorPipelineMixin):
     def __init__(self):
         self._segment_state = [{"start": 0.0, "end": 1.0, "text": "ok"}]
@@ -190,6 +226,26 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertFalse(editor._autosave_requires_manual_save)
         editor._flush_pending_segment_queue_now.assert_not_called()
         editor._get_current_segments.assert_not_called()
+
+    def test_manual_save_recovers_backend_backup_when_completion_temporarily_has_no_segments(self):
+        editor = _CompletedRecoverySaveEditor()
+
+        result = EditorSaveManagerMixin._on_save(
+            editor,
+            skip_auto_next=True,
+            schedule_analysis_refresh=False,
+            queue_learning=False,
+            auto_export=False,
+        )
+
+        self.assertTrue(result)
+        editor._flush_pending_segment_queue_now.assert_called_once()
+        editor._recover_generation_segments_from_backend_backup.assert_called_once()
+        editor._persist_editor_srts.assert_called_once()
+        saved_segments = editor._persist_editor_srts.call_args.args[0]
+        self.assertEqual([seg["text"] for seg in saved_segments], ["복구 자막"])
+        editor._auto_save_project.assert_called_once()
+        editor._mark_save_completed.assert_called_once_with(touch_saved_time=True)
 
     def test_pending_internal_project_refresh_does_not_mark_clean_editor_dirty(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -319,6 +375,15 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor._set_auto_cut_boundary_scan_active.assert_called_with(False)
         editor._set_auto_cut_boundary_scan_lines.assert_called_with([])
         editor._refresh_cut_boundary_placeholder_from_project.assert_called_once()
+
+    def test_set_process_completed_rebuilds_editor_to_drop_live_preview_artifacts(self):
+        editor = _CompletionEditor()
+        editor._clear_live_generation_preview_artifacts = Mock(return_value=True)
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
+            editor._set_process_completed()
+
+        editor._clear_live_generation_preview_artifacts.assert_called_once()
 
     def test_set_process_completed_can_skip_post_generation_side_effects_for_project_open(self):
         editor = _CompletionEditor()

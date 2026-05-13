@@ -710,6 +710,9 @@ class EditorScanCutCoreMixin:
         if self._scan_cut_should_ignore_stale_preview_rows(cleaned):
             return
         try:
+            # The backend emits preview rows as a full snapshot of the current
+            # provisional state. Re-merging previously rendered rows here can
+            # resurrect lines that the follower already checked and removed.
             merged = []
 
             def _is_verified_row(row) -> bool:
@@ -740,10 +743,6 @@ class EditorScanCutCoreMixin:
                         return
                     merged[match_idx] = {**old, **row}
 
-            for item in list(getattr(self, "_auto_cut_boundary_scan_lines", []) or []):
-                row = _normalise_row(item)
-                if row is not None:
-                    _upsert(row)
             for row in cleaned:
                 _upsert(row)
 

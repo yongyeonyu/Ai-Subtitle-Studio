@@ -1,5 +1,6 @@
 import unittest
 
+from core.cut_boundary import normalize_cut_boundaries
 from core.cut_boundary_audio import (
     AUDIO_GAIN_BOUNDARY_SOURCE,
     AUDIO_GAIN_LINE_COLOR,
@@ -54,6 +55,35 @@ class CutBoundaryAudioTests(unittest.TestCase):
         self.assertIn(rows[0]["deep_boundary_decision"], {"verify", "keep"})
         self.assertGreater(rows[0]["deep_boundary_score"], 0.0)
         self.assertAlmostEqual(rows[0]["timeline_sec"], 108.0, places=3)
+
+    def test_verified_visual_cut_drops_stale_audio_provisional_paint(self):
+        rows = normalize_cut_boundaries(
+            [
+                {
+                    "timeline_sec": 180.21336750307566,
+                    "timeline_frame": 10802,
+                    "fps": 59.940059661865234,
+                    "source": "visual",
+                    "status": "verified",
+                    "verified": True,
+                    "boundary_kind": "audio",
+                    "provisional_type": "audio_gain",
+                    "line_color": AUDIO_GAIN_LINE_COLOR,
+                    "line_style": "solid",
+                    "audio_gain_db_delta": 13.638,
+                }
+            ],
+            primary_fps=59.940059661865234,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "visual")
+        self.assertEqual(rows[0]["status"], "verified")
+        self.assertEqual(rows[0]["boundary_kind"], "visual")
+        self.assertEqual(rows[0]["audio_gain_db_delta"], 13.638)
+        self.assertNotIn("provisional_type", rows[0])
+        self.assertNotIn("line_color", rows[0])
+        self.assertNotIn("line_style", rows[0])
 
 
 if __name__ == "__main__":

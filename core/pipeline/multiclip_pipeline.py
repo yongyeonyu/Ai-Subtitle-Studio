@@ -390,6 +390,20 @@ class MulticlipPipelineMixin:
                     ):
                         if not chunk_segs or not self._active:
                             return
+                        try:
+                            from core.pipeline.stt_preview_optimizer import raw_stt_preview_segments
+
+                            raw_preview = raw_stt_preview_segments(
+                                chunk_segs,
+                                source_label=str(_label or "STT"),
+                                clip_offset=clip_offset,
+                                clip_idx=clip_idx,
+                                clip_path=clip_path,
+                            )
+                            if raw_preview and hasattr(self.ui, "_sig_preview_stt_segments"):
+                                self.ui._sig_preview_stt_segments.emit(raw_preview)
+                        except Exception:
+                            pass
                         preview_queue.put(
                             {
                                 "segments": [dict(seg) for seg in chunk_segs or []],
@@ -611,7 +625,15 @@ class MulticlipPipelineMixin:
                     info_txt = info["info_txt"]
                     len_txt = info["len_txt"]
 
-                    expected = get_expected_time(model_key, clip_dur)
+                    expected = get_expected_time(
+                        model_key,
+                        clip_dur,
+                        settings=s,
+                        media_info=info,
+                        target_file=target_file,
+                        queue_index=i,
+                        total_files=total_files,
+                    )
                     if expected > 0:
                         total_expected += expected
 

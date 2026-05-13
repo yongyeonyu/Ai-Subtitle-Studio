@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication, QTextEdit
 from ui.editor.editor_actions import EditorActionsMixin
 from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 from ui.editor.editor_lifecycle import EditorLifecycleMixin
+from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
 from ui.editor.editor_widget import EditorWidget
@@ -152,6 +153,24 @@ class _SaveFlushEditor(EditorActionsMixin):
     def _flush_queue(self):
         self.flushed = True
         self._segment_queue = []
+
+
+class _BatchedSaveFlushEditor(EditorActionsMixin):
+    def __init__(self):
+        self._queue_timer = _ActiveQueueTimer()
+        self._segment_queue = [
+            {"start": 0.0, "end": 1.0, "text": "첫째"},
+            {"start": 1.0, "end": 2.0, "text": "둘째"},
+            {"start": 2.0, "end": 3.0, "text": "셋째"},
+        ]
+        self.flush_calls = 0
+
+    def _flush_queue(self):
+        self.flush_calls += 1
+        if len(self._segment_queue) > 1:
+            self._segment_queue = list(self._segment_queue[1:])
+        else:
+            self._segment_queue = []
 
 
 class _LivePreviewEditor(EditorSegmentsMixin):
@@ -1073,7 +1092,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(subtitle_drafts, [])
         self.assertEqual([seg["text"] for seg in stt_previews], ["네이티브 후보"])
 
-    def test_live_stt_preview_is_visible_in_editor_without_saved_commit(self):
+    def test_live_stt_preview_stays_out_of_editor_without_saved_commit(self):
         editor = _ActualSelectionEditor()
         try:
             editor.preview_stt_segments([
@@ -1081,12 +1100,33 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             ])
             editor._flush_live_editor_preview_queue()
 
-            self.assertIn("실시간 드래프트", editor.text_edit.toPlainText())
+            self.assertNotIn("실시간 드래프트", editor.text_edit.toPlainText())
+            self.assertEqual(editor._live_editor_preview_segments, [])
             self.assertEqual([seg for seg in editor._get_current_segments() if not seg.get("is_gap")], [])
         finally:
             editor.text_edit.close()
 
-    def test_live_stt_preview_updates_existing_editor_draft_text_in_place(self):
+    def test_live_stt_preview_clears_existing_editor_preview_block(self):
+        editor = _ActualSelectionEditor()
+        try:
+            cursor = QTextCursor(editor.text_edit.document())
+            cursor.insertText("이전 STT 드래프트")
+            cursor.block().setUserData(
+                SubtitleBlockData("00", 1.0, stt_pending=True, live_preview=True, live_preview_source="STT1")
+            )
+
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "새 STT 드래프트", "stt_preview_source": "STT1"}
+            ])
+
+            self.assertNotIn("이전 STT 드래프트", editor.text_edit.toPlainText())
+            self.assertNotIn("새 STT 드래프트", editor.text_edit.toPlainText())
+            self.assertIsNone(editor.text_edit.document().begin().userData())
+            self.assertEqual(editor._live_editor_preview_segments, [])
+        finally:
+            editor.text_edit.close()
+
+    def test_live_stt_preview_updates_timeline_draft_without_editor_text(self):
         editor = _ActualSelectionEditor()
         try:
             editor.preview_stt_segments([
@@ -1098,14 +1138,57 @@ class ProjectSegmentReloadTests(unittest.TestCase):
                 {"start": 1.0, "end": 2.0, "text": "갱신된 실시간 드래프트", "stt_preview_source": "STT1"}
             ])
 
-            self.assertEqual(editor.text_edit.toPlainText(), "갱신된 실시간 드래프트")
-            self.assertEqual(len(editor._live_editor_preview_segments), 1)
-            self.assertEqual(editor._live_editor_preview_segments[0]["text"], "갱신된 실시간 드래프트")
+            self.assertNotIn("갱신된 실시간 드래프트", editor.text_edit.toPlainText())
+            self.assertEqual(editor._live_editor_preview_segments, [])
+            self.assertEqual(len(editor._live_stt_preview_segments), 1)
+            self.assertEqual(editor._live_stt_preview_segments[0]["text"], "갱신된 실시간 드래프트")
             self.assertEqual([seg for seg in editor._get_current_segments() if not seg.get("is_gap")], [])
         finally:
             editor.text_edit.close()
 
-    def test_live_stt_preview_autoscrolls_editor_to_latest_draft(self):
+    def test_generation_completion_cleanup_rebuilds_editor_without_live_preview_rows(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor.preview_stt_segments([
+                {"start": 50.0, "end": 51.0, "text": "실시간 드래프트", "stt_preview_source": "STT1"}
+            ])
+            editor._flush_live_editor_preview_queue()
+            editor.append_segments([
+                {"start": 1.0, "end": 2.0, "text": "확정 자막", "speaker": "00"}
+            ])
+            editor._flush_queue()
+
+            self.assertNotIn("실시간 드래프트", editor.text_edit.toPlainText())
+            self.assertEqual(
+                [seg["text"] for seg in editor._get_current_segments() if not seg.get("is_gap")],
+                ["확정 자막"],
+            )
+
+            cleared = EditorPipelineMixin._clear_live_generation_preview_artifacts(editor)
+
+            self.assertFalse(cleared)
+            self.assertNotIn("실시간 드래프트", editor.text_edit.toPlainText())
+            self.assertEqual(
+                [line for line in editor.text_edit.toPlainText().splitlines() if line.strip()],
+                ["확정 자막"],
+            )
+            rebuilt = [seg for seg in editor._get_current_segments(force_rebuild=True) if not seg.get("is_gap")]
+            self.assertEqual(len(rebuilt), 1)
+            self.assertEqual(rebuilt[0]["text"], "확정 자막")
+            self.assertAlmostEqual(rebuilt[0]["start"], 1.0)
+            self.assertAlmostEqual(rebuilt[0]["end"], 2.2)
+            self.assertEqual(
+                [line for line in editor.text_edit.toPlainText().splitlines() if line.strip()],
+                ["확정 자막"],
+            )
+            self.assertEqual(len(editor._live_stt_preview_segments), 1)
+            self.assertEqual(editor._live_stt_preview_segments[0]["text"], "실시간 드래프트")
+            self.assertEqual(editor._live_stt_preview_segments[0]["stt_preview_source"], "STT1")
+            self.assertEqual(editor._live_editor_preview_segments, [])
+        finally:
+            editor.text_edit.close()
+
+    def test_live_stt_preview_follows_timeline_without_editor_autoscroll(self):
         editor = _ActualSelectionEditor()
         try:
             editor.preview_stt_segments([
@@ -1114,7 +1197,8 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             ])
             editor._flush_live_editor_preview_queue()
 
-            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 1)
+            self.assertEqual(editor.text_edit.toPlainText(), "")
+            self.assertEqual(editor._live_editor_preview_segments, [])
             self.assertAlmostEqual(editor._active_seg_start, 3.0)
             self.assertEqual(editor.timeline.active_calls[-1], 3.0)
         finally:
@@ -1136,8 +1220,8 @@ class ProjectSegmentReloadTests(unittest.TestCase):
                 "text": "첫 드래프트",
             })
 
-            self.assertTrue(focused)
-            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
+            self.assertFalse(focused)
+            self.assertEqual(editor.text_edit.toPlainText(), "")
             self.assertAlmostEqual(editor._active_seg_start, 1.0)
             self.assertEqual(editor.timeline.active_calls[-1], 1.0)
             self.assertEqual(editor.timeline.playhead_calls[-1], (1.0, True))
@@ -1161,7 +1245,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.timeline.playhead_calls[-1], (4.25, True))
         self.assertEqual(editor.video_player.seek_calls[-1], 4.25)
 
-    def test_processing_segment_focus_inserts_visible_editor_draft_when_missing(self):
+    def test_processing_segment_focus_does_not_insert_editor_draft_when_missing(self):
         editor = _ActualSelectionEditor()
         try:
             focused = editor._focus_editor_block_for_processing_segment({
@@ -1171,9 +1255,9 @@ class ProjectSegmentReloadTests(unittest.TestCase):
                 "text": "LLM 검수 중인 자막",
             })
 
-            self.assertTrue(focused)
-            self.assertEqual(editor.text_edit.toPlainText(), "LLM 검수 중인 자막")
-            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+            self.assertFalse(focused)
+            self.assertEqual(editor.text_edit.toPlainText(), "")
+            self.assertEqual(getattr(editor, "_live_editor_preview_segments", []), [])
             self.assertEqual(editor.timeline.playhead_calls[-1], (7.0, True))
             self.assertEqual(editor.video_player.seek_calls[-1], 7.0)
             self.assertEqual([seg for seg in editor._get_current_segments() if not seg.get("is_gap")], [])
@@ -1543,6 +1627,15 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         self.assertTrue(editor._queue_timer.stopped)
         self.assertTrue(editor.flushed)
+        self.assertEqual(editor._segment_queue, [])
+
+    def test_save_flush_drains_all_batched_queue_passes_before_completion(self):
+        editor = _BatchedSaveFlushEditor()
+
+        editor._flush_pending_segment_queue_now()
+
+        self.assertTrue(editor._queue_timer.stopped)
+        self.assertEqual(editor.flush_calls, 3)
         self.assertEqual(editor._segment_queue, [])
 
 

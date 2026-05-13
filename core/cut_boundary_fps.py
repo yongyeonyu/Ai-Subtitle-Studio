@@ -15,6 +15,7 @@ def install_fps_normalizers(namespace: dict) -> None:
     CUT_BOUNDARY_SCHEMA = namespace["CUT_BOUNDARY_SCHEMA"]
     CUT_BOUNDARY_PROVISIONAL_SCHEMA = namespace["CUT_BOUNDARY_PROVISIONAL_SCHEMA"]
     cut_boundary_enabled = namespace["cut_boundary_enabled"]
+    clear_stale_verified_visual_style = namespace.get("_clear_stale_verified_visual_style")
 
     # === FRAME FPS NORMALIZE PATCH START ===
 
@@ -244,6 +245,8 @@ def install_fps_normalizers(namespace: dict) -> None:
             row.setdefault("detector", "opencv-gray-pyramid60")
             row.setdefault("reason", "visual_cut_boundary")
             row.setdefault("index", idx + 1)
+            if callable(clear_stale_verified_visual_style):
+                clear_stale_verified_visual_style(row)
 
             out.append(row)
 

@@ -504,6 +504,88 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertTrue(result.segments)
         self.assertEqual(len(segments), 12)
 
+    def test_post_generation_uses_roughcut_override_model_even_when_subtitle_model_is_disabled(self):
+        from core.llm.codex_provider import DEFAULT_CODEX_LABEL
+
+        class _Signal:
+            def __init__(self):
+                self.calls = []
+
+            def emit(self, result, segments, payload):
+                self.calls.append((result, segments, payload))
+
+        class _Main:
+            _multiclip_files = []
+            _multiclip_boundaries = []
+
+        class _Player:
+            total_time = 100.0
+
+        class _Editor(EditorSegmentsMixin):
+            def __init__(self):
+                self.settings = {
+                    "editor_roughcut_draft_enabled": True,
+                    "selected_llm_provider": "none",
+                    "selected_model": "사용 안함",
+                    "roughcut_llm_enabled": True,
+                    "roughcut_llm_use_override": True,
+                    "roughcut_llm_provider": "openai",
+                    "roughcut_llm_model": DEFAULT_CODEX_LABEL,
+                    "roughcut_llm_rows_auto_enabled": False,
+                    "roughcut_llm_max_context_rows": 12,
+                    "roughcut_major_min_subtitle_count": 1,
+                    "editor_roughcut_draft_max_major_segments": 10,
+                }
+                self._roughcut_draft_status = "idle"
+                self._roughcut_draft_thread = None
+                self._roughcut_draft_generation = 0
+                self._roughcut_llm_cooldown_until = 0.0
+                self.sig_roughcut_draft_ready = _Signal()
+                self.video_player = _Player()
+                self.media_path = "/tmp/source.mp4"
+                self._main = _Main()
+
+            def window(self):
+                return self._main
+
+            def _draft_settings_snapshot(self):
+                return dict(self.settings)
+
+            def _get_current_segments(self):
+                return _segments(6)
+
+        editor = _Editor()
+
+        class _ImmediateThread:
+            def __init__(self, target, *args, **kwargs):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        llm_payload = {
+            "major_segments": [
+                {
+                    "major_id": "A",
+                    "title": "첫 묶음",
+                    "start_subtitle_id": 0,
+                    "end_subtitle_id": 5,
+                    "confidence": 0.8,
+                }
+            ]
+        }
+        with mock.patch("ui.editor.editor_roughcut_draft.threading.Thread", _ImmediateThread), \
+             mock.patch("core.roughcut.run_editor_roughcut_llm_draft", return_value=llm_payload) as run_llm:
+            editor._run_post_generation_roughcut_draft()
+
+        self.assertIsNotNone(editor._roughcut_draft_thread)
+        run_llm.assert_called_once()
+        self.assertEqual(len(editor.sig_roughcut_draft_ready.calls), 1)
+        result, segments, payload = editor.sig_roughcut_draft_ready.calls[0]
+        self.assertEqual(payload["refinement_source"], "llm_refined")
+        self.assertTrue(result.segments)
+        self.assertEqual(len(segments), 6)
+
     def test_post_generation_released_local_llm_uses_local_draft_without_thread(self):
         class _Signal:
             def __init__(self):
@@ -715,6 +797,69 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         available.assert_called_once()
         prepare.assert_not_called()
         call_openai.assert_not_called()
+
+    def test_editor_draft_codex_uses_wide_chunks_and_longer_timeout(self):
+        from core.llm.codex_provider import DEFAULT_CODEX_LABEL
+        from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
+
+        settings = {
+            "selected_llm_provider": "none",
+            "selected_model": "사용 안함",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "openai",
+            "roughcut_llm_model": DEFAULT_CODEX_LABEL,
+            "roughcut_llm_rows_auto_enabled": True,
+        }
+
+        scope = describe_editor_roughcut_llm_scope(_segments(492), settings)
+        self.assertEqual(scope["mode"], "chunked")
+        self.assertLessEqual(scope["chunk_count"], 8)
+        self.assertGreaterEqual(scope["chunk_rows"], 72)
+        self.assertTrue(scope["policy"].get("codex_wide_context"))
+
+        with mock.patch(
+            "core.llm.codex_provider.codex_cli_available",
+            return_value=(True, "/usr/local/bin/codex"),
+        ), mock.patch(
+            "core.roughcut.editor_draft.prepare_roughcut_llm_model_for_run"
+        ), mock.patch(
+            "core.roughcut.editor_draft._call_openai_json",
+            return_value={"major_segments": []},
+        ) as call_openai:
+            result = run_editor_roughcut_llm_draft(_segments(6), settings=settings, timeout=45)
+
+        self.assertEqual(result, {"major_segments": []})
+        call_openai.assert_called_once()
+        self.assertGreaterEqual(call_openai.call_args.kwargs["timeout"], 180)
+
+    def test_chunked_codex_timeout_aborts_after_first_roughcut_llm_call(self):
+        from core.llm.codex_provider import DEFAULT_CODEX_LABEL
+        from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
+
+        settings = {
+            "selected_llm_provider": "none",
+            "selected_model": "사용 안함",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "openai",
+            "roughcut_llm_model": DEFAULT_CODEX_LABEL,
+            "roughcut_llm_rows_auto_enabled": False,
+            "roughcut_llm_max_context_rows": 5,
+        }
+        with mock.patch(
+            "core.llm.codex_provider.codex_cli_available",
+            return_value=(True, "/usr/local/bin/codex"),
+        ), mock.patch(
+            "core.roughcut.editor_draft.prepare_roughcut_llm_model_for_run"
+        ), mock.patch(
+            "core.roughcut.editor_draft._call_openai_json",
+            side_effect=RuntimeError("Codex CLI 실행 시간이 초과되었습니다."),
+        ) as call_openai:
+            result = run_editor_roughcut_llm_draft(_segments(12), settings=settings)
+
+        self.assertIsNone(result)
+        self.assertEqual(call_openai.call_count, 1)
 
     def test_editor_draft_ollama_call_uses_shared_python_client_provider(self):
         from core.roughcut.editor_draft import _call_ollama_json

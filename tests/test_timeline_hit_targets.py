@@ -1328,6 +1328,60 @@ class TimelineHitTargetTests(unittest.TestCase):
             [18.0],
         )
 
+    def test_scan_boundary_replaces_preview_snapshot_instead_of_reviving_removed_rows(self):
+        class DummyTimeline:
+            def __init__(self):
+                self.scan_boundary_times = []
+                self.canvas = type("Canvas", (), {})()
+
+            def set_scan_boundary_times(self, times):
+                self.scan_boundary_times = list(times or [])
+                return True
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.timeline = DummyTimeline()
+                self._auto_cut_boundary_scan_active = True
+                self._auto_cut_boundary_scan_lines = [
+                    {
+                        "timeline_sec": 9.0,
+                        "status": "provisional",
+                        "source": "audio_gain_provisional",
+                    },
+                    {
+                        "timeline_sec": 18.0,
+                        "status": "provisional",
+                        "source": "visual_provisional",
+                    },
+                ]
+
+            def _snap_to_frame(self, sec):
+                return round(float(sec), 3)
+
+            def _scan_cut_should_ignore_stale_preview_rows(self, rows):
+                return False
+
+        editor = DummyEditor()
+
+        editor._set_auto_cut_boundary_scan_lines(
+            [
+                {
+                    "timeline_sec": 18.0,
+                    "status": "provisional",
+                    "source": "visual_provisional",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            [row["timeline_sec"] for row in editor._auto_cut_boundary_scan_lines],
+            [18.0],
+        )
+        self.assertEqual(
+            [row["timeline_sec"] for row in editor.timeline.scan_boundary_times],
+            [18.0],
+        )
+
     def test_scan_verify_cut_boundary_candidate_forces_medium_profile(self):
         class FakeCv2:
             CAP_PROP_FPS = 5

@@ -55,6 +55,8 @@ func printUsage() {
       native-policy-jsonl-worker
       native-memory-snapshot-json
       native-input-activity-json
+      runtime-eta-predict-json
+      runtime-eta-record-json
 
     """.utf8))
 }
@@ -152,6 +154,20 @@ func run() throws {
                     }
                 case "input_activity_snapshot":
                     response = InputActivity.snapshot(payload: payload)
+                case "runtime_eta_predict":
+                    response = RuntimeETAEstimator.predict(payload: payload)
+                case "runtime_eta_record":
+                    response = RuntimeETAEstimator.record(payload: payload)
+                case "startup_diagnostic_build":
+                    response = StartupDiagnosticsNative.build(payload: payload)
+                case "startup_diagnostic_attach_expected":
+                    response = StartupDiagnosticsNative.attachExpected(payload: payload)
+                case "startup_diagnostic_format_log":
+                    response = StartupDiagnosticsNative.formatLog(payload: payload)
+                case "cut_boundary_cache_settings_payload":
+                    response = CutBoundaryCachePlanner.settingsPayload(payload: payload)
+                case "cut_boundary_cache_plan":
+                    response = CutBoundaryCachePlanner.plan(payload: payload)
                 default:
                     response = ["error": "Unsupported core task: \(task)"]
                 }
@@ -505,6 +521,14 @@ func run() throws {
     case "native-input-activity-json":
         let payload = try readJSONObjectFromStdin()
         try writeJSONObject(InputActivity.snapshot(payload: payload))
+
+    case "runtime-eta-predict-json":
+        let payload = try readJSONObjectFromStdin()
+        try writeJSONObject(RuntimeETAEstimator.predict(payload: payload))
+
+    case "runtime-eta-record-json":
+        let payload = try readJSONObjectFromStdin()
+        try writeJSONObject(RuntimeETAEstimator.record(payload: payload))
 
     case "native-policy-jsonl-worker":
         var cachedPolicyIndexes: [String: [String: Any]] = [:]

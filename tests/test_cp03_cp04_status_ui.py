@@ -1298,6 +1298,40 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         queue._refresh_sidebar_queue_cache()
         self.assertEqual(queue._sidebar_queue_cache_items[0]["eta"], "00:05 / 57:31")
 
+    def test_active_row_elapsed_time_keeps_ticking_without_backend_active_flag(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.backend = SimpleNamespace(_active=False, pipeline_start_time=0.0)
+                self.backend_fast = None
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+
+        with patch("ui.queue_widget.time.time", return_value=100.0):
+            queue.update_queue_status(0, "[STT] STT1/STT2 병렬 인식 중", "15:54", "", "15:54")
+
+        with patch("ui.queue_widget.time.time", return_value=306.0):
+            queue._update_live_queue_header()
+
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "03:26 / 15:54")
+        self.assertEqual(queue._sidebar_queue_cache_items[0]["eta"], "03:26 / 15:54")
+
     def test_zero_or_unknown_queue_eta_displays_unavailable(self):
         class DummyTimer:
             def start(self, _interval):

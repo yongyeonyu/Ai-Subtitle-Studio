@@ -42,6 +42,89 @@ STAGE_CONFIDENCE_COLORS = {
     "gray": "#8E8E93",
 }
 
+_HIDDEN_BOUNDARY_MARKER_STYLE = {"visible": False}
+_FOLLOWER_FINAL_BOUNDARY_STATUSES = {"checked", "verified", "confirmed", "accepted", "done", "reviewed"}
+_AUDIO_BOUNDARY_LINE_HINTS = {"#39ff14", "audio_gain", "green", "neon_green"}
+_PROVISIONAL_BOUNDARY_SOURCES = {
+    "audio_gain_provisional",
+    "visual_provisional",
+    "cut_boundary_provisional",
+    "cut_boundary_follower",
+}
+_AUTO_CONFIRMED_BOUNDARY_SOURCES = {"visual", "visual_cut", "fused_cut_boundary", "fused"}
+_AUTO_CONFIRMED_BOUNDARY_REASONS = {
+    "visual_cut_boundary",
+    "fused_cut_boundary",
+    "audio_gain_boundary",
+}
+
+
+def _cut_boundary_marker_hidden_after_follower(marker) -> bool:
+    if not isinstance(marker, dict):
+        return False
+    source = str(marker.get("source", "") or "").strip().lower()
+    reason = str(marker.get("reason", "") or "").strip().lower()
+    if source == "manual_verified" or reason.startswith("relative_") or reason.startswith("manual_"):
+        return False
+    status = str(marker.get("status", "") or "").strip().lower()
+    detector = str(marker.get("detector", "") or marker.get("detector_name", "") or "").strip().lower()
+    stage = str(marker.get("detector_stage", "") or "").strip().lower()
+    provisional_type = str(marker.get("provisional_type", "") or "").strip().lower()
+    boundary_kind = str(marker.get("boundary_kind", "") or "").strip().lower()
+    line_color = str(marker.get("line_color", "") or "").strip().lower()
+    audio_gain_hint = any(
+        key in marker and marker.get(key) not in (None, "")
+        for key in ("audio_gain_db_delta", "audio_gain_delta_db", "audio_gain_score", "audio_peak_delta_db")
+    )
+    terminal_reason = any(
+        token in reason
+        for token in ("timeline_end", "duration_end", "end_frame", "terminal")
+    )
+    if (
+        bool(marker.get("is_terminal_boundary"))
+        or bool(marker.get("terminal_boundary"))
+        or bool(marker.get("timeline_end_boundary"))
+        or terminal_reason
+    ):
+        return True
+    follower_done = (
+        status in _FOLLOWER_FINAL_BOUNDARY_STATUSES
+        or bool(marker.get("scan_checked"))
+        or bool(marker.get("verified"))
+        or bool(marker.get("confirmed"))
+        or bool(marker.get("follower_checked"))
+        or bool(marker.get("follower_relocated"))
+        or bool(marker.get("rollback_relocated"))
+        or bool(marker.get("middle_merge_preferred"))
+        or bool(marker.get("same_scene_color_similarity"))
+        or stage in {"follower_checked", "follower_done", "follower_reviewed"}
+    )
+    if not follower_done:
+        return False
+    audio_hint = (
+        source == "audio_gain_provisional"
+        or audio_gain_hint
+        or detector.startswith("audio-gain")
+        or provisional_type == "audio_gain"
+        or boundary_kind == "audio"
+        or line_color in _AUDIO_BOUNDARY_LINE_HINTS
+    )
+    provisional_hint = (
+        source in _PROVISIONAL_BOUNDARY_SOURCES
+        or "provisional" in source
+        or bool(marker.get("_live_cut_boundary_preview"))
+        or bool(provisional_type)
+    )
+    auto_cut_metadata_hint = (
+        reason in _AUTO_CONFIRMED_BOUNDARY_REASONS
+        or reason.startswith("cut_boundary_")
+        or bool(marker.get("cut_boundary_algorithm_id"))
+        or bool(marker.get("cut_boundary_algorithm_version"))
+        or bool(marker.get("candidate_key"))
+    )
+    automatic_confirmed_hint = source in _AUTO_CONFIRMED_BOUNDARY_SOURCES and auto_cut_metadata_hint
+    return bool(audio_hint or provisional_hint or automatic_confirmed_hint)
+
 
 def subtitle_confidence_chips(seg: dict) -> list[dict]:
     confidence = dict(seg.get("subtitle_stage_confidence") or {})
@@ -88,10 +171,10 @@ def subtitle_render_detail_mode(
         return "full"
     count = max(0, int(visible_segment_count or 0))
     zoom = max(0.0, float(pps or 0.0))
+    # Playback must not remove labels that are readable while paused. Keep text
+    # detail based on density/zoom only so subtitle segments remain legible.
     if playback_active:
-        if count >= 36 or zoom < 28.0:
-            return "ultra"
-        return "dense"
+        return "full"
     if count >= 180 or (count >= 72 and zoom < 24.0) or (count >= 32 and zoom < 10.0):
         return "ultra"
     if count >= 56 or (count >= 28 and zoom < 40.0):
@@ -112,6 +195,8 @@ def cut_boundary_scan_marker_verified(marker) -> bool:
 
 
 def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
+    if _cut_boundary_marker_hidden_after_follower(marker):
+        return dict(_HIDDEN_BOUNDARY_MARKER_STYLE)
     if hover:
         return {"color": "#00B7FF", "width": 3, "style": "solid"}
     if isinstance(marker, dict):
@@ -158,6 +243,23 @@ def official_boundary_marker_visual(marker) -> dict:
         if source == "manual_verified" or reason.startswith("relative_") or reason.startswith("manual_"):
             raw_color = str(marker.get("line_color", "") or "").strip() or "#7FDBFF"
             return {"color": raw_color, "width": 2, "style": "solid"}
+        if _cut_boundary_marker_hidden_after_follower(marker):
+            return dict(_HIDDEN_BOUNDARY_MARKER_STYLE)
+        status = str(marker.get("status", "") or "").strip().lower()
+        provisional_type = str(marker.get("provisional_type", "") or "").strip().lower()
+        boundary_kind = str(marker.get("boundary_kind", "") or "").strip().lower()
+        line_color = str(marker.get("line_color", "") or "").strip().lower()
+        stale_audio_visual = (
+            source in {"visual", "visual_cut", "fused_cut_boundary", "fused"}
+            and (status in {"verified", "confirmed", "accepted", "done"} or bool(marker.get("verified") or marker.get("confirmed")))
+            and (
+                provisional_type == "audio_gain"
+                or boundary_kind == "audio"
+                or line_color in {"#39ff14", "audio_gain", "green", "neon_green"}
+            )
+        )
+        if stale_audio_visual:
+            return dict(_HIDDEN_BOUNDARY_MARKER_STYLE)
         raw_color = str(marker.get("line_color", "") or "").strip()
         if raw_color:
             color_aliases = {

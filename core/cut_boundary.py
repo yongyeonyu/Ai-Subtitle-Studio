@@ -24,6 +24,37 @@ CUT_BOUNDARY_SCHEMA = "cut_boundaries.v1"
 CUT_BOUNDARY_PROVISIONAL_SCHEMA = "cut_boundaries.provisional.v1"
 CUT_SEGMENT_SCHEMA = "cut_boundary_segments.v1"
 MIN_SLICE_SEC = 0.02
+_VERIFIED_CUT_STATUSES = {"verified", "confirmed", "accepted", "done"}
+_AUDIO_PROVISIONAL_LINE_COLORS = {"#39ff14", "audio_gain", "green", "neon_green"}
+
+
+def _clear_stale_verified_visual_style(row: dict[str, Any]) -> None:
+    """Verified visual cuts should not keep audio-provisional paint hints."""
+    if not isinstance(row, dict):
+        return
+    source = str(row.get("source", "") or "").strip().lower()
+    status = str(row.get("status", "") or "").strip().lower()
+    if source not in {"visual", "visual_cut", "fused_cut_boundary", "fused"}:
+        return
+    if status not in _VERIFIED_CUT_STATUSES and not bool(row.get("verified") or row.get("confirmed")):
+        return
+    line_color = str(row.get("line_color", "") or "").strip().lower()
+    provisional_type = str(row.get("provisional_type", "") or "").strip().lower()
+    boundary_kind = str(row.get("boundary_kind", "") or "").strip().lower()
+    detector_stage = str(row.get("detector_stage", "") or "").strip().lower()
+    stale_audio_style = (
+        line_color in _AUDIO_PROVISIONAL_LINE_COLORS
+        or provisional_type == "audio_gain"
+        or boundary_kind == "audio"
+        or detector_stage == "audio_pioneer"
+    )
+    if not stale_audio_style:
+        return
+    row.pop("line_color", None)
+    row.pop("line_style", None)
+    row.pop("ui_label", None)
+    row.pop("provisional_type", None)
+    row["boundary_kind"] = "visual"
 
 
 def normalize_cut_boundaries(
@@ -74,6 +105,7 @@ def normalize_cut_boundaries(
         row.setdefault("detector", "opencv-gray-pyramid60")
         row.setdefault("reason", "visual_cut_boundary")
         row.setdefault("index", idx + 1)
+        _clear_stale_verified_visual_style(row)
         out.append(row)
     out.sort(key=lambda item: (float(item.get("timeline_sec", 0.0) or 0.0), int(item.get("timeline_frame", 0) or 0)))
     for idx, item in enumerate(out, start=1):

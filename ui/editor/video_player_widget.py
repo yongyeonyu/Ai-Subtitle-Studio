@@ -1578,11 +1578,80 @@ class VideoPlayerWidget(QWidget):
         else:
             self._subtitle_display_time_sec = self.snap_sec_to_frame(sec)
         if refresh:
+            self._refresh_provider_for_subtitle_time()
             self._refresh_subtitle_now()
+
+    def _subtitle_context_covers_time(self, sec: float) -> bool:
+        if int(getattr(self, "_subtitle_count", 0) or 0) <= 0:
+            return False
+        starts = getattr(self, "_subtitle_starts", []) or []
+        ends = getattr(self, "_subtitle_ends", []) or []
+        if not starts or not ends:
+            return False
+        try:
+            lookup = max(0.0, float(sec or 0.0))
+            return float(starts[0]) - 0.001 <= lookup <= float(ends[-1]) + 0.001
+        except Exception:
+            return False
+
+    def _refresh_provider_for_subtitle_time(self):
+        provider = getattr(self, "_subtitle_provider", None)
+        if not callable(provider):
+            return
+        lookup_time = self._subtitle_lookup_time()
+        now = time.monotonic()
+        if not self._subtitle_context_covers_time(lookup_time):
+            last_force = float(getattr(self, "_last_subtitle_context_miss_force_at", 0.0) or 0.0)
+            last_lookup = getattr(self, "_last_subtitle_context_miss_lookup", None)
+            try:
+                moved_far = last_lookup is None or abs(float(last_lookup) - lookup_time) >= 0.5
+            except Exception:
+                moved_far = True
+            if moved_far or (now - last_force) >= 0.75:
+                self._last_subtitle_context_miss_force_at = now
+                self._last_subtitle_context_miss_lookup = lookup_time
+                self._refresh_provider_segments(force=True)
+            return
+        self._refresh_provider_segments(force=False)
+        if self._find_subtitle_at(lookup_time):
+            return
+        last_force = float(getattr(self, "_last_empty_subtitle_provider_force_at", 0.0) or 0.0)
+        if (now - last_force) >= 0.75:
+            self._last_empty_subtitle_provider_force_at = now
+            self._refresh_provider_segments(force=True)
+
+    def _subtitle_overlay_needs_reapply(self, text: str) -> bool:
+        if not text:
+            return False
+        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
+        if quick_overlay is not None:
+            try:
+                if quick_overlay.text() != text:
+                    return True
+                return bool(quick_overlay.isHidden())
+            except Exception:
+                return False
+        item = self._scene_subtitle_item()
+        if item is not None:
+            try:
+                if item.text() != text:
+                    return True
+                return not bool(item.isVisible())
+            except Exception:
+                return False
+        label = getattr(self, "sub_label", None)
+        if label is not None:
+            try:
+                if label.text() != text:
+                    return True
+                return bool(label.isHidden())
+            except Exception:
+                return False
+        return False
 
     def _refresh_subtitle_now(self):
         cur_sub = self._find_subtitle_at(self._subtitle_lookup_time())
-        if cur_sub == self._last_sub:
+        if cur_sub == self._last_sub and not self._subtitle_overlay_needs_reapply(cur_sub):
             return
         self._last_sub = cur_sub
         self._set_subtitle_overlay_text(cur_sub)
@@ -1974,6 +2043,7 @@ class VideoPlayerWidget(QWidget):
             pass
         if is_playing:
             self.current_playback_frame_time()
+            self.set_subtitle_display_time(self.current_time, refresh=False)
         else:
             if bool(getattr(self, "_provider_refresh_requested", False)):
                 self._refresh_provider_segments(force=False)
@@ -1988,11 +2058,7 @@ class VideoPlayerWidget(QWidget):
             self.time_label.setText(f"{format_time(self.current_time)} / {format_time(self.total_time)}")
         self._update_frame_count_label()
         
-        cur_sub = self._find_subtitle_at(self._subtitle_lookup_time())
-
-        if cur_sub != self._last_sub:
-            self._last_sub = cur_sub
-            self._set_subtitle_overlay_text(cur_sub)
+        self._refresh_subtitle_now()
 
     def closeEvent(self, event):
         self.shutdown_backend()

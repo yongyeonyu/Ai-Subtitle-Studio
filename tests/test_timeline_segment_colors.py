@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from core.audio.stt_candidate_scorer import stt_score_to_color
 from ui.timeline.timeline_paint import (
     SEGMENT_TEXT_KIND_STYLES,
+    official_boundary_marker_visual,
     scan_boundary_marker_label,
     segment_text_kind,
     scan_boundary_marker_visual,
@@ -219,11 +220,15 @@ class TimelineSegmentColorTests(unittest.TestCase):
         )
         self.assertEqual(
             subtitle_render_detail_mode(visible_segment_count=24, pps=80.0, editing=False, scenegraph=False, playback_active=True),
-            "dense",
+            "full",
         )
         self.assertEqual(
             subtitle_render_detail_mode(visible_segment_count=48, pps=20.0, editing=False, scenegraph=False, playback_active=True),
-            "ultra",
+            "full",
+        )
+        self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=False, scenegraph=False, playback_active=True),
+            "full",
         )
         self.assertEqual(
             subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=False, scenegraph=True),
@@ -603,6 +608,79 @@ class TimelineSegmentColorTests(unittest.TestCase):
         style = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "verified"}, hover=True)
 
         self.assertEqual(style, {"color": "#00B7FF", "width": 3, "style": "solid"})
+
+    def test_official_boundary_visual_hides_stale_audio_provisional_paint(self):
+        style = official_boundary_marker_visual(
+            {
+                "timeline_sec": 180.21336750307566,
+                "timeline_frame": 10802,
+                "source": "visual",
+                "status": "verified",
+                "verified": True,
+                "boundary_kind": "audio",
+                "provisional_type": "audio_gain",
+                "line_color": "#39FF14",
+                "line_style": "solid",
+            }
+        )
+
+        self.assertFalse(style.get("visible", True))
+
+    def test_official_boundary_visual_hides_checked_audio_provisional_rows(self):
+        style = official_boundary_marker_visual(
+            {
+                "timeline_sec": 613.346,
+                "timeline_frame": 36796,
+                "source": "audio_gain_provisional",
+                "status": "checked",
+                "scan_checked": True,
+                "boundary_kind": "audio",
+                "line_color": "#39FF14",
+            }
+        )
+
+        self.assertFalse(style.get("visible", True))
+
+    def test_official_boundary_visual_hides_sanitized_verified_auto_rows(self):
+        style = official_boundary_marker_visual(
+            {
+                "timeline_sec": 648.048,
+                "timeline_frame": 38964,
+                "source": "visual",
+                "reason": "visual_cut_boundary",
+                "verified": True,
+                "cut_boundary_algorithm_id": "cut_boundary_auto",
+            }
+        )
+
+        self.assertFalse(style.get("visible", True))
+
+    def test_official_boundary_visual_keeps_non_cut_verified_visual_rows(self):
+        style = official_boundary_marker_visual(
+            {
+                "timeline_sec": 648.048,
+                "timeline_frame": 38964,
+                "source": "visual",
+                "reason": "verified_reference_marker",
+                "verified": True,
+                "line_color": "#F5F7FA",
+            }
+        )
+
+        self.assertEqual(style, {"color": "#F5F7FA", "width": 1, "style": "solid"})
+
+    def test_official_boundary_visual_hides_terminal_end_rows(self):
+        style = official_boundary_marker_visual(
+            {
+                "timeline_sec": 904.13,
+                "source": "visual",
+                "status": "confirmed",
+                "reason": "timeline_end_frame",
+                "timeline_end_boundary": True,
+            }
+        )
+
+        self.assertFalse(style.get("visible", True))
 
     def test_scan_boundary_visual_marks_follower_work_without_blue_confirmed_line(self):
         style = scan_boundary_marker_visual(

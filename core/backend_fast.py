@@ -186,7 +186,14 @@ class CoreBackendFast(CoreBackend):
                 chunks = [f for f in os.listdir(chunk_dir) if f.endswith('.wav')]
                 video_duration_sec = len(chunks) * 30.0
 
-            expected_time = get_expected_time(model_key, video_duration_sec)
+            expected_time = get_expected_time(
+                model_key,
+                video_duration_sec,
+                settings=s,
+                target_file=target_file,
+                queue_index=queue_index,
+                total_files=len(self.files_to_process),
+            )
             self._expected_map = getattr(self, "_expected_map", {})
             self._expected_map[target_file] = float(expected_time) if expected_time and expected_time > 0 else -1.0
 
@@ -228,6 +235,17 @@ class CoreBackendFast(CoreBackend):
         def _preview_stt_segments(chunk_segs, label="STT"):
             if not chunk_segs or not self._active:
                 return
+            try:
+                from core.pipeline.stt_preview_optimizer import raw_stt_preview_segments
+
+                raw_preview = raw_stt_preview_segments(
+                    chunk_segs,
+                    source_label=str(label or "STT"),
+                )
+                if raw_preview:
+                    self._ui_emit("_sig_preview_stt_segments", raw_preview)
+            except Exception:
+                pass
             preview_opt_queue.put(([dict(seg) for seg in chunk_segs or []], str(label or "STT")))
 
         def do_preview_optimize():
@@ -413,9 +431,18 @@ class CoreBackendFast(CoreBackend):
 
         # ── 히스토리 기록 ──
         try:
-            model_key = get_model_key()
+            s = load_settings()
+            model_key = "QUALITY:" + get_model_key(s)
             proc_time = time.time() - process_start_time
-            add_history(model_key, video_duration_sec, proc_time)
+            add_history(
+                model_key,
+                video_duration_sec,
+                proc_time,
+                settings=s,
+                target_file=target_file,
+                queue_index=queue_index,
+                total_files=len(self.files_to_process),
+            )
         except Exception:
             pass
 

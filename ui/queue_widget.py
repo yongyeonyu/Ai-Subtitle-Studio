@@ -487,15 +487,50 @@ class QueueMixin:
             self._live_timer.stop()
         self.queue_header_lbl.setText(f"큐 리스트 : ({total}/{total}) - 100% 완료")
 
+    def _refresh_active_queue_elapsed(self, now: float | None = None) -> bool:
+        table = getattr(self, "queue_table", None)
+        if table is None:
+            return False
+        active_row = self._current_queue_active_row()
+        if active_row < 0:
+            return False
+        try:
+            status_item = table.item(active_row, 0)
+            status_text = str(status_item.text() if status_item else "")
+            row_done, _row_error, status_active = self._queue_status_flags(status_text)
+            if row_done or not status_active:
+                return False
+            now_value = float(now if now is not None else time.time())
+            if active_row not in self._file_start_times:
+                self._file_start_times[active_row] = now_value
+            start_at = float(self._file_start_times.get(active_row, now_value) or now_value)
+            elapsed = max(0.0, now_value - start_at)
+            eta_item = table.item(active_row, 4)
+            duration_item = table.item(active_row, 3)
+            expected_label = self._queue_expected_time_label(
+                active_row,
+                str(eta_item.text() if eta_item else ""),
+                str(duration_item.text() if duration_item else ""),
+            ) or "예상불가"
+            if eta_item is None:
+                eta_item = QTableWidgetItem("")
+                eta_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                table.setItem(active_row, 4, eta_item)
+            eta_item.setText(f"{self._format_queue_clock(elapsed)} / {expected_label}")
+            self._apply_queue_row_visual_state(active_row)
+            return True
+        except Exception:
+            return False
+
     def _update_live_queue_header(self):
         active_backend = None
         if getattr(self, 'backend_fast', None) and getattr(self.backend_fast, '_active', False):
             active_backend = self.backend_fast
         elif self.backend and getattr(self.backend, '_active', False):
             active_backend = self.backend
-        if not active_backend:
+        if not active_backend and not self._refresh_active_queue_elapsed():
             return
-        if getattr(active_backend, 'pipeline_start_time', 0) == 0:
+        if active_backend and getattr(active_backend, 'pipeline_start_time', 0) == 0:
             return
 
         now = time.time()
@@ -523,31 +558,14 @@ class QueueMixin:
         
         self.queue_header_lbl.setText(f"큐 리스트 : ({c}/{t}) - {pct}% 완료")
 
-        active_row = self._current_queue_active_row()
         for i in range(self.queue_table.rowCount()):
             si = self.queue_table.item(i, 0)
             if not si:
                 continue
-            status_text = si.text()
-            row_done, _row_error, status_active = self._queue_status_flags(status_text)
+            row_done, _row_error, _status_active = self._queue_status_flags(si.text())
             if row_done:
                 self._apply_queue_row_visual_state(i)
-                continue
-            if status_active and i == active_row:
-                if i not in self._file_start_times:
-                    self._file_start_times[i] = now
-                st = self._file_start_times.get(i, now)
-                ef = now - st
-                tc = self.queue_table.item(i, 4)
-                if tc:
-                    duration_item = self.queue_table.item(i, 3)
-                    expected_label = self._queue_expected_time_label(
-                        i,
-                        str(tc.text() if tc else ""),
-                        str(duration_item.text() if duration_item else ""),
-                    ) or "예상불가"
-                    tc.setText(f"{self._format_queue_clock(ef)} / {expected_label}")
-            self._apply_queue_row_visual_state(i)
+        self._refresh_active_queue_elapsed(now)
         if hasattr(self, "_sync_sidebar_queue_panel"):
             if hasattr(self, "_refresh_sidebar_queue_cache"):
                 self._refresh_sidebar_queue_cache()

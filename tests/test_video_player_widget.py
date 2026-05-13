@@ -693,6 +693,24 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_same_subtitle_time_reapplies_hidden_scene_overlay(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget.set_context_segments([
+                {"start": 0.0, "end": 2.0, "text": "현재 자막"},
+            ])
+            widget.set_subtitle_display_time(0.5)
+            widget.video_widget.subtitle_item.setVisible(False)
+
+            widget.set_subtitle_display_time(0.6)
+
+            self.assertTrue(widget.video_widget.subtitle_item.isVisible())
+            self.assertEqual(widget.video_widget.subtitle_item.text(), "현재 자막")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_playing_ui_tick_does_not_poll_subtitle_provider(self):
         widget = VideoPlayerWidget()
         provider = Mock(return_value=[{"start": 0.0, "end": 2.0, "text": "현재 자막"}])
@@ -706,6 +724,32 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                 widget._ui_tick()
 
             provider.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_subtitle_display_time_refreshes_provider_when_playhead_leaves_context(self):
+        widget = VideoPlayerWidget()
+        early_context = [{"start": 0.0, "end": 1.0, "text": "초반 자막"}]
+        current_context = [{"start": 117.0, "end": 118.0, "text": "현재 자막"}]
+        use_current_context = False
+
+        def provider():
+            return current_context if use_current_context else early_context
+
+        provider_mock = Mock(side_effect=provider)
+        try:
+            widget.set_subtitle_provider(provider_mock)
+            self.assertEqual(widget._find_subtitle_at(117.2), "")
+            provider_mock.reset_mock()
+            use_current_context = True
+
+            widget.set_subtitle_display_time(117.2)
+
+            provider_mock.assert_called_once()
+            self.assertEqual(widget._last_sub, "현재 자막")
+            self.assertEqual(widget.video_widget.subtitle_item.text(), "현재 자막")
         finally:
             widget.close()
             widget.deleteLater()

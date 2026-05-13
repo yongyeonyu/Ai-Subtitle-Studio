@@ -895,7 +895,7 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
         existing_preview = self._drop_overlapping_preview(existing_preview, preview, same_source_only=True)
         self._live_stt_preview_segments = existing_preview + preview
         self._redraw_timeline_with_live_preview()
-        self._queue_live_editor_preview_segments(preview)
+        self._clear_live_editor_preview_blocks()
         self._sync_live_preview_playhead_to_video(preview)
 
     def _sync_live_preview_playhead_to_video(self, preview: list[dict]) -> None:
@@ -1249,40 +1249,7 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
         return True
 
     def _queue_live_editor_preview_segments(self, preview: list[dict]) -> None:
-        if not hasattr(self, "text_edit") or not preview:
-            return
-        queued = getattr(self, "_live_editor_preview_queue", None)
-        if queued is None:
-            self._live_editor_preview_queue = []
-            queued = self._live_editor_preview_queue
-        seen = getattr(self, "_live_editor_preview_keys", None)
-        if seen is None:
-            self._live_editor_preview_keys = set()
-            seen = self._live_editor_preview_keys
-
-        for seg in preview:
-            if self._update_live_editor_preview_segment(seg, focus=True):
-                continue
-            key = self._live_editor_preview_key(seg)
-            if key in seen:
-                continue
-            source = key[0]
-            if source not in {"STT1", "STT"} and self._has_live_editor_preview_overlap(seg, prefer_primary=True):
-                continue
-            seen.add(key)
-            queued.append(dict(seg))
-
-        if not queued:
-            return
-        timer = getattr(self, "_live_editor_preview_timer", None)
-        if timer is not None:
-            try:
-                if not timer.isActive():
-                    timer.start(80)
-                return
-            except Exception:
-                pass
-        self._flush_live_editor_preview_queue()
+        self._clear_live_editor_preview_blocks()
 
     def _focus_editor_block_for_processing_segment(self, payload: dict | None, *, prefer_last: bool = False) -> bool:
         data = dict(payload or {})
@@ -1334,8 +1301,6 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
         if target_block is None and prefer_last:
             target_block = doc.lastBlock()
         if target_block is None or not target_block.isValid():
-            if requested_flat and self._insert_live_editor_preview_segment(data, source="WORK"):
-                return True
             self._sync_processing_segment_view(requested_start, show_thumbnail=True)
             return False
 
@@ -1393,74 +1358,46 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
         return False
 
     def _flush_live_editor_preview_queue(self) -> None:
-        if not hasattr(self, "text_edit"):
-            return
-        queue = list(getattr(self, "_live_editor_preview_queue", []) or [])
+        self._clear_live_editor_preview_blocks()
+
+    def _clear_live_editor_preview_blocks(self) -> bool:
         self._live_editor_preview_queue = []
-        if not queue:
-            return
-
-        drafts = []
-        for seg in sorted(queue, key=lambda row: (float(row.get("start", 0.0) or 0.0), float(row.get("end", 0.0) or 0.0))):
-            if self._has_live_editor_preview_overlap(seg, prefer_primary=True):
-                continue
-            text = str(seg.get("text", "") or "").replace("\u2028", "\n").strip()
-            if not text:
-                continue
-            draft = dict(seg)
-            draft["text"] = text
-            drafts.append(draft)
-        if not drafts:
-            return
-
+        self._live_editor_preview_segments = []
+        self._live_editor_preview_keys = set()
+        if not hasattr(self, "text_edit"):
+            return False
         doc = self.text_edit.document()
-        if not hasattr(self, "_live_editor_preview_segments"):
-            self._live_editor_preview_segments = []
+        to_remove = []
+        block = doc.begin()
+        while block.isValid():
+            data = block.userData()
+            if isinstance(data, SubtitleBlockData) and getattr(data, "live_preview", False):
+                to_remove.append(block.blockNumber())
+            block = block.next()
+        if not to_remove:
+            return False
+
         prev_inline = bool(getattr(self, "_inline_updating", False))
         prev_sync = bool(getattr(self, "_sync_lock", False))
         self._inline_updating = True
         self._sync_lock = True
-        focused_payload = None
         doc.blockSignals(True)
         try:
             cursor = QTextCursor(doc)
             cursor.beginEditBlock()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            if doc.blockCount() > 0 and doc.lastBlock().text().strip():
-                cursor.insertText("\n")
-            spk_id = str(getattr(self, "settings", {}).get("spk1_id", "00") if hasattr(self, "settings") else "00")
-            for index, seg in enumerate(drafts):
-                if index > 0:
-                    cursor.insertText("\n")
-                text = self._clean_live_editor_preview_text(seg.get("text", ""))
-                if not text:
+            for line_num in sorted(to_remove, reverse=True):
+                block = doc.findBlockByNumber(line_num)
+                if not block.isValid():
                     continue
-                try:
-                    start_sec = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
-                except Exception:
-                    start_sec = 0.0
-                source = str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1").strip().upper()
-                cursor.insertText(text.replace("\n", "\u2028"))
-                cursor.block().setUserData(
-                    SubtitleBlockData(
-                        spk_id,
-                        start_sec,
-                        stt_pending=True,
-                        live_preview=True,
-                        live_preview_source=source,
-                        live_preview_stage=f"{source} 실시간 드래프트",
-                    )
-                )
-                stored = dict(seg)
-                stored["start"] = start_sec
-                stored["stt_preview_source"] = source
-                self._live_editor_preview_segments.append(stored)
-                focused_payload = {
-                    "line": cursor.block().blockNumber(),
-                    "start": start_sec,
-                    "end": stored.get("end", start_sec),
-                    "text": text,
-                }
+                cursor.setPosition(block.position())
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+                if block.next().isValid():
+                    cursor.deleteChar()
+                elif block.previous().isValid():
+                    cursor.deletePreviousChar()
+                else:
+                    block.setUserData(None)
             cursor.endEditBlock()
         finally:
             doc.blockSignals(False)
@@ -1476,8 +1413,7 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
                 self.text_edit.timestampArea.update()
         except Exception:
             pass
-        self._set_live_preview_status(drafts)
-        self._focus_editor_block_for_processing_segment(focused_payload, prefer_last=True)
+        return True
 
     def _clean_live_editor_preview_text(self, text: str) -> str:
         text = str(text or "")

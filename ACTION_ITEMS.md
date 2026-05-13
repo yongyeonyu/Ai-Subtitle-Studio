@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.04-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_4_RELEASED
-Last-Updated: 2026-05-13
+Document-Version: 04.00.05-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_5_RELEASED
+Last-Updated: 2026-05-14
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.04"
-document_version: "04.00.04-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_4_RELEASED"
+app_version: "04.00.05"
+document_version: "04.00.05-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_5_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -55,15 +55,14 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v04.00.04 Mac-native release completed the prior queue:
+The v04.00.05 Mac-native release completed the prior queue:
 
-- Fast/Auto/High now own benchmark-locked VAD defaults on this branch, and direct VAD controls were removed from the simplified AI settings and advanced tuning dialog.
-- Automatic audio preset detection now tunes only the audio frontend stack and no longer overwrites mode-owned VAD policy.
-- Correction-dictionary runtime lookup now has a SQLite-backed indexed path while keeping `dataset_correction.json` as the editable source of truth.
-- Editor startup, file-open, save, and post-generation cleanup now defer heavy idle-learning and analysis work so foreground UI becomes interactive sooner.
-- Manual `<<` / `>>` cut hits are promoted into persistent confirmed cut boundaries for later subtitle magnet alignment work.
-- Quick-exit and close-event cleanup now schedule forced exit before runtime pause work so cleanup exceptions cannot trap the app open.
-- Project schema/version helpers now share one source of truth again instead of carrying stale `03.00.26` literals in older save helpers.
-- Release verification should be re-read from the latest `RELEASE_v*.md` only.
+- Runtime ETA prediction now learns from actual runs using mode/STT/media/cache variants, recent-history weighting, and a shared `core.runtime_eta` payload used by queue, startup diagnostics, and history writes.
+- Swift-native helpers now own runtime ETA estimation, startup diagnostic shaping, and cut-boundary cache planning while Python keeps orchestration and fallback paths.
+- Editor live STT previews now stay on timeline/STT lanes only, while confirmed subtitle segments remain the only rows rendered into the editor text pane and playback subtitle lane.
+- Generation-complete/save recovery now restores backend subtitle backups when transient empty-segment races appear during autosave or manual save.
+- Playback rendering now keeps segment text visible during playback and reapplies hidden video subtitle overlays when provider context is still valid.
+- Verified cut-boundary UI cleanup now strips stale audio provisional styling from real visual cuts and hides follower-checked helper lines plus terminal end-frame markers from the normal editor UI while preserving project metadata.
+- Codex roughcut draft calls now use wider context, longer timeout, override-model inheritance fixes, and a local-rule fallback after timeout.
 
 Future work should start from a new user request rather than this completed backlog.

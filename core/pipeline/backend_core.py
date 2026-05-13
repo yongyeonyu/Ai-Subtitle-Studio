@@ -331,7 +331,15 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
 
                 self._video_durations[target_file] = duration_sec
 
-                expected_time = get_expected_time(model_key, duration_sec)
+                expected_time = get_expected_time(
+                    model_key,
+                    duration_sec,
+                    settings=s,
+                    media_info=info,
+                    target_file=target_file,
+                    queue_index=i,
+                    total_files=len(self.files_to_process),
+                )
                 if expected_time > 0:
                     total_expected_time += expected_time
 

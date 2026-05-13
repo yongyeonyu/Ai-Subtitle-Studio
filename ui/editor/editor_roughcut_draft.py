@@ -438,8 +438,22 @@ class EditorRoughcutDraftMixin:
             payload["refinement_source"] = refinement_source
             self.sig_roughcut_draft_ready.emit(result, segments, payload)
 
-        model = str(settings.get("selected_model", "") or "").strip()
-        if len(segments) < min_count or not model or "사용 안함" in model:
+        try:
+            from core.roughcut import resolve_roughcut_llm_config
+
+            llm_config = resolve_roughcut_llm_config(settings, subtitle_rows=list(segments or []))
+            roughcut_provider = str(getattr(llm_config, "provider", "") or "").strip().lower()
+            roughcut_model = str(getattr(llm_config, "model", "") or "").strip()
+            roughcut_llm_ready = (
+                bool(getattr(llm_config, "enabled", False))
+                and roughcut_provider != "none"
+                and roughcut_model
+                and "사용 안함" not in roughcut_model
+            )
+        except Exception:
+            roughcut_model = str(settings.get("selected_model", "") or "").strip()
+            roughcut_llm_ready = bool(roughcut_model and "사용 안함" not in roughcut_model)
+        if len(segments) < min_count or not roughcut_llm_ready:
             try:
                 emit_candidate(None, "local_after_generation")
             except Exception as exc:

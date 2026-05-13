@@ -271,6 +271,7 @@ class SubtitleSceneOverlayItem(QGraphicsItem):
     def set_text(self, text: str):
         text = str(text or "")
         if self._text == text:
+            self.setVisible(bool(text))
             return
         self._text = text
         self.setVisible(bool(text))
@@ -387,6 +388,7 @@ class SubtitleQuickOverlay(QWidget):
     def set_text(self, text: str):
         text = str(text or "")
         if self._text == text:
+            self.setVisible(bool(text))
             return
         self._text = text
         self.setVisible(bool(text))

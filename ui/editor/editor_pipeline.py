@@ -446,6 +446,10 @@ class EditorPipelineMixin:
         except Exception as exc:
             get_logger().log(f"⚠️ 생성 완료 전 세그먼트 flush 실패: {exc}")
         try:
+            self._clear_live_generation_preview_artifacts()
+        except Exception as exc:
+            get_logger().log(f"⚠️ 생성 완료 preview 정리 실패: {exc}")
+        try:
             if getattr(self, 'is_auto_start', False):
                 self.sm.complete_auto_mode()
             else:
@@ -776,6 +780,95 @@ class EditorPipelineMixin:
         release = getattr(main_w, "_release_ai_models_for_editor_mode", None)
         if callable(release):
             release(force=True, preserve_roughcut_status=True)
+
+    def _clear_live_generation_preview_artifacts(self) -> bool:
+        """Rebuild the editor from confirmed rows to drop transient live previews."""
+        has_preview_state = any(
+            bool(getattr(self, attr, None))
+            for attr in (
+                "_live_editor_preview_segments",
+                "_live_editor_preview_queue",
+            )
+        )
+        has_live_blocks = False
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is not None and hasattr(text_edit, "document"):
+            try:
+                block = text_edit.document().begin()
+                while block.isValid():
+                    data = block.userData()
+                    if getattr(data, "live_preview", False):
+                        has_live_blocks = True
+                        break
+                    block = block.next()
+            except Exception:
+                has_live_blocks = False
+        if not has_preview_state and not has_live_blocks:
+            return False
+
+        try:
+            current = list(self._get_current_segments(force_rebuild=True) or [])
+        except TypeError:
+            current = list(self._get_current_segments() or [])
+        except Exception:
+            current = []
+        current = [dict(seg) for seg in current if isinstance(seg, dict)]
+        confirmed_rows = [
+            dict(seg)
+            for seg in current
+            if not bool(seg.get("is_gap"))
+            and (
+                str(seg.get("text", "") or "").strip()
+                or bool(seg.get("stt_pending"))
+                or bool(seg.get("stt_mode"))
+            )
+        ]
+        if confirmed_rows:
+            current = confirmed_rows
+
+        try:
+            timer = getattr(self, "_live_editor_preview_timer", None)
+            if timer is not None and hasattr(timer, "stop"):
+                timer.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_live_editor_preview_queue"):
+                self._live_editor_preview_queue = []
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_live_editor_preview_segments"):
+                self._live_editor_preview_segments = []
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_live_editor_preview_keys"):
+                self._live_editor_preview_keys = set()
+        except Exception:
+            pass
+
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if callable(reloader):
+            reloader(current, preserve_view=True, mark_dirty=False)
+        else:
+            try:
+                self._segment_cache_valid = False
+            except Exception:
+                pass
+            try:
+                refresher = getattr(self, "_refresh_video_subtitle_context", None)
+                if callable(refresher):
+                    refresher()
+            except Exception:
+                pass
+            try:
+                redraw = getattr(self, "_redraw_timeline", None)
+                if callable(redraw):
+                    redraw()
+            except Exception:
+                pass
+        return True
 
     def _post_completion_sync(self):
         """E fix: 자막 생성 완료 후 타임라인/글로벌 캔버스 재동기화"""

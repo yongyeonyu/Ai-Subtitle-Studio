@@ -8,6 +8,10 @@ import os
 
 from core.cut_boundary_api import CUT_BOUNDARY_ALGORITHM_ID, CUT_BOUNDARY_ALGORITHM_VERSION, CUT_BOUNDARY_API_VERSION
 from core.media_fingerprint import media_fingerprint_digest
+from core.native_swift_cut_boundary_cache import (
+    cut_boundary_cache_plan_via_swift,
+    cut_boundary_cache_settings_payload_via_swift,
+)
 
 
 def truthy_setting(value, default: bool = False) -> bool:
@@ -22,6 +26,9 @@ def truthy_setting(value, default: bool = False) -> bool:
 
 
 def cut_boundary_cache_settings_payload(settings: dict) -> dict:
+    native = cut_boundary_cache_settings_payload_via_swift(settings)
+    if isinstance(native, dict) and native:
+        return native
     settings = dict(settings or {})
     try:
         duration_sec = max(0.0, float(settings.get("cut_boundary_media_duration_sec", 0.0) or 0.0))
@@ -83,12 +90,18 @@ def cut_boundary_cache_file_entries(files: list[str]) -> list[dict]:
 
 
 def cut_boundary_cache_base_payload(files: list[str], settings: dict) -> dict:
+    file_entries = cut_boundary_cache_file_entries(files)
+    native = cut_boundary_cache_plan_via_swift(file_entries=file_entries, settings=settings)
+    if isinstance(native, dict):
+        payload = native.get("base_payload")
+        if isinstance(payload, dict):
+            return payload
     return {
         "version": 7,
         "cut_boundary_api_version": CUT_BOUNDARY_API_VERSION,
         "cut_boundary_algorithm_version": CUT_BOUNDARY_ALGORITHM_VERSION,
         "cut_boundary_algorithm_id": CUT_BOUNDARY_ALGORITHM_ID,
-        "files": cut_boundary_cache_file_entries(files),
+        "files": file_entries,
         "settings": cut_boundary_cache_settings_payload(settings),
     }
 
@@ -102,6 +115,12 @@ def cut_boundary_cache_path_for_start(files: list[str], settings: dict) -> str:
         cache_root = os.path.join("output", "cut_boundary_cache")
 
     os.makedirs(cache_root, exist_ok=True)
+    file_entries = cut_boundary_cache_file_entries(files)
+    native = cut_boundary_cache_plan_via_swift(file_entries=file_entries, settings=settings)
+    if isinstance(native, dict):
+        cache_path = str(native.get("cache_path") or "")
+        if cache_path:
+            return cache_path
     raw = json.dumps(cut_boundary_cache_base_payload(files, settings), ensure_ascii=False, sort_keys=True).encode("utf-8")
     key = hashlib.sha256(raw).hexdigest()[:24]
     return os.path.join(cache_root, f"cut_boundaries_{key}.json")

@@ -9,6 +9,11 @@ from datetime import datetime
 from typing import Any
 
 from core.media_info import probe_media
+from core.native_swift_startup_diagnostics import (
+    attach_expected_processing_time_via_swift,
+    build_startup_diagnostic_via_swift,
+    format_startup_diagnostic_log_via_swift,
+)
 from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 from core.project.project_io import read_project_file, write_project_file
 
@@ -292,6 +297,24 @@ def build_startup_diagnostic(
     duration_sec = _to_float(media.get("duration"), 0.0)
     fps = _to_float(media.get("fps"), 0.0)
     audio_info = probe_audio_stream_info(media_path)
+    native = build_startup_diagnostic_via_swift(
+        media_path,
+        media={
+            "duration_sec": duration_sec,
+            "fps": fps,
+            "width": _to_int(media.get("width"), 0),
+            "height": _to_int(media.get("height"), 0),
+            "info_txt": str(media.get("info_txt", "") or ""),
+        },
+        audio=audio_info,
+        settings=settings,
+        cut_boundaries=cut_boundaries,
+        provisional_cut_boundaries=provisional_cut_boundaries,
+        expected_time_sec=expected_time_sec,
+        speaker_count_hint=speaker_count_hint,
+    )
+    if isinstance(native, dict) and native.get("schema") == STARTUP_DIAGNOSTIC_SCHEMA:
+        return native
     audio_quality = _audio_quality(audio_info)
     cut_density = _cut_density_profile(cut_boundaries, provisional_cut_boundaries, duration_sec)
     speakers = _speaker_hint(settings, speaker_count_hint)
@@ -334,6 +357,13 @@ def attach_expected_processing_time(
     source: str = "history",
 ) -> dict[str, Any]:
     """Return a diagnostic copy with ETA fields attached."""
+    native = attach_expected_processing_time_via_swift(
+        diagnostic if isinstance(diagnostic, dict) else {},
+        expected_time_sec,
+        source=source,
+    )
+    if isinstance(native, dict):
+        return native
     updated = copy.deepcopy(diagnostic if isinstance(diagnostic, dict) else {})
     expected = _to_float(expected_time_sec, 0.0)
     updated["estimated_processing_sec"] = round(expected, 3) if expected > 0 else 0.0
@@ -359,6 +389,9 @@ def _reason_label(reason: str) -> str:
 
 def format_startup_diagnostic_log(diagnostic: dict[str, Any]) -> list[str]:
     """Format concise Korean log lines for the terminal/status panel."""
+    native = format_startup_diagnostic_log_via_swift(diagnostic if isinstance(diagnostic, dict) else {})
+    if isinstance(native, list):
+        return native
     if not isinstance(diagnostic, dict):
         return []
     media = diagnostic.get("media", {}) or {}

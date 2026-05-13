@@ -12,6 +12,7 @@ from core.native_swift_subtitle import (
     find_native_cli_path,
     native_swift_runtime_enabled,
     parse_srt_via_swift,
+    request_native_core_task,
     stop_native_core_worker,
 )
 
@@ -84,6 +85,126 @@ class NativeSwiftCoreWorkerTests(unittest.TestCase):
             self.assertIsInstance(loaded, dict)
             self.assertEqual(loaded["project_name"], "worker-test")
             self.assertNotIn("_project_file_path", loaded)
+
+    def test_core_worker_handles_runtime_eta_roundtrip(self):
+        if find_native_cli_path() is None:
+            self.skipTest("AIStudioNativeCLI release build is not available")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = str(Path(tmp) / "time_history.json")
+            payload = {
+                "store_path": store_path,
+                "model_key": "QUALITY:STT:test|LLM:codex|DIA:X",
+                "variant": {
+                    "mode": "precise",
+                    "stt_quality_preset": "precise",
+                    "stt_primary": "mlx-community/whisper-large-v3-mlx",
+                    "stt_secondary": "",
+                    "stt_ensemble_enabled": False,
+                    "llm_provider": "openai",
+                    "llm_model": "OpenAI Codex ChatGPT [구독/CLI/API키 불필요]",
+                    "diarization_enabled": False,
+                    "max_speakers": 1,
+                    "selected_vad": "silero",
+                    "selected_audio_ai": "deepfilter",
+                },
+                "media": {
+                    "duration_sec": 300.0,
+                    "fps": 29.97,
+                    "width": 1920,
+                    "height": 1080,
+                    "pixel_count": 1920 * 1080,
+                    "audio_quality_score": 84.0,
+                    "cut_density_per_min": 1.2,
+                    "speaker_hint": 1,
+                    "is_audio_only": False,
+                },
+                "runtime": {
+                    "queue_index": 0,
+                    "total_files": 1,
+                    "prefetch_audio_hit": False,
+                    "cut_boundary_cache_enabled": True,
+                    "vad_cache_enabled": True,
+                    "stt_runtime_reuse_enabled": True,
+                    "prefetch_ahead": 0,
+                    "auto_audio_tune_enabled": True,
+                    "cache_state": "cold",
+                    "cut_boundary_cache_state": "cold",
+                    "vad_cache_state": "cold",
+                    "speaker_cache_state": "disabled",
+                    "likely_warm_start": False,
+                    "cache_score": 0.45,
+                },
+                "processing_time_sec": 135.0,
+            }
+
+            env = {"AI_SUBTITLE_STUDIO_SWIFT_CORE": "1"}
+            with mock.patch.dict(os.environ, env, clear=False):
+                record = request_native_core_task("runtime_eta_record", payload)
+                predict = request_native_core_task("runtime_eta_predict", payload)
+
+            self.assertIsInstance(record, dict)
+            self.assertTrue(record.get("ok"))
+            self.assertIsInstance(predict, dict)
+            self.assertGreater(float(predict.get("predicted_processing_sec", 0.0) or 0.0), 0.0)
+
+    def test_core_worker_handles_startup_diagnostic_and_cut_cache_roundtrip(self):
+        if find_native_cli_path() is None:
+            self.skipTest("AIStudioNativeCLI release build is not available")
+
+        env = {"AI_SUBTITLE_STUDIO_SWIFT_CORE": "1"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            diagnostic = request_native_core_task(
+                "startup_diagnostic_build",
+                {
+                    "media_path": "/tmp/source/clip.mp4",
+                    "media_name": "clip.mp4",
+                    "media": {
+                        "duration_sec": 1450.249,
+                        "fps": 59.94,
+                        "width": 3840,
+                        "height": 2160,
+                        "info_txt": "3840x2160 (59.94fps)",
+                    },
+                    "audio": {
+                        "has_audio": True,
+                        "codec": "aac",
+                        "sample_rate": 48000,
+                        "channels": 2,
+                        "bit_rate": 160000,
+                        "duration_sec": 1450.249,
+                    },
+                    "settings": {"max_speakers": 2},
+                    "cut_boundaries": [{"timeline_sec": 120.0}, {"timeline_sec": 300.0}],
+                    "provisional_cut_boundaries": [{"timeline_sec": 180.0}],
+                    "expected_time_sec": 321.0,
+                },
+            )
+            cache_plan = request_native_core_task(
+                "cut_boundary_cache_plan",
+                {
+                    "files": [
+                        {
+                            "path": "/tmp/demo.mp4",
+                            "size": 123,
+                            "mtime_ns": 456,
+                            "fingerprint_digest": "abc",
+                        }
+                    ],
+                    "settings": {"scan_cut_compare_max_width": 1280, "scan_cut_compare_max_height": 720},
+                    "cache_root": "/tmp/cache",
+                    "version": 7,
+                    "cut_boundary_api_version": "v1",
+                    "cut_boundary_algorithm_version": "v2",
+                    "cut_boundary_algorithm_id": "algo",
+                },
+            )
+
+        self.assertIsInstance(diagnostic, dict)
+        self.assertEqual(diagnostic["recommended_pipeline"]["mode"], "precise")
+        self.assertEqual(diagnostic["estimated_processing_label"], "5분 21초")
+        self.assertIsInstance(cache_plan, dict)
+        self.assertIn("cache_path", cache_plan)
 
 
 if __name__ == "__main__":

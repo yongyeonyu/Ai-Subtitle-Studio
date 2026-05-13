@@ -273,10 +273,38 @@ class EditorActionsMixin:
                 timer.stop()
         except Exception:
             pass
+        flush = getattr(self, "_flush_queue", None)
+        if not callable(flush):
+            return
+        max_passes = 512
+        for _ in range(max_passes):
+            try:
+                queue = list(getattr(self, "_segment_queue", []) or [])
+            except Exception:
+                queue = []
+            if not queue:
+                break
+            before_count = len(queue)
+            try:
+                flush()
+            except Exception:
+                break
+            try:
+                remaining = list(getattr(self, "_segment_queue", []) or [])
+            except Exception:
+                remaining = []
+            if not remaining:
+                break
+            if len(remaining) >= before_count:
+                try:
+                    get_logger().log("⚠️ 생성 완료 queue flush가 더 진행되지 않아 남은 자막 배치를 보류합니다.")
+                except Exception:
+                    pass
+                break
         try:
-            queue = list(getattr(self, "_segment_queue", []) or [])
-            if queue and hasattr(self, "_flush_queue"):
-                self._flush_queue()
+            timer = getattr(self, "_queue_timer", None)
+            if timer is not None and hasattr(timer, "isActive") and timer.isActive():
+                timer.stop()
         except Exception:
             pass
 
@@ -494,6 +522,17 @@ class EditorActionsMixin:
                 pass
         self._flush_pending_segment_queue_now()
         segs = self._get_current_segments()
+        if not segs and (
+            bool(getattr(self, "_subtitle_generation_completed", False))
+            or bool(getattr(self, "_process_completed_finalized", False))
+        ):
+            recover = getattr(self, "_recover_generation_segments_from_backend_backup", None)
+            if callable(recover):
+                try:
+                    if recover():
+                        segs = self._get_current_segments()
+                except Exception:
+                    pass
         if not segs:
             get_logger().log("💾 저장 취소: 저장할 자막 세그먼트가 없습니다.")
             return False

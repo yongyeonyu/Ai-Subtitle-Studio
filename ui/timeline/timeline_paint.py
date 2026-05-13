@@ -434,7 +434,7 @@ class TimelinePaintMixin:
                 base_color = QColor(str(vs.get("color", "#34C759") or "#34C759"))
                 _append_batch(fill_batches, (base_color.name(), int(vs.get("alpha", 120) or 120)), rect)
                 _append_batch(border_batches, (base_color.name(), 230), rect)
-                if w >= 56 and not dense_segment_mode and not playback_active:
+                if w >= 56 and not dense_segment_mode:
                     label_items.append((vs, x1, w))
             _draw_color_batches(fill_batches)
             _draw_color_batches(border_batches, as_pen=True)
@@ -537,6 +537,8 @@ class TimelinePaintMixin:
             box_top = lane_top + 3
             box_h = max(12, lane_h - 6)
             radius = max(4.0, min(7.0, float(box_h) / 2.1))
+            was_antialias = p.renderHints() & QPainter.RenderHint.Antialiasing
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             label_items = []
             for marker in markers:
                 start = max(0.0, float(marker.get("start", 0.0) or 0.0))
@@ -562,7 +564,7 @@ class TimelinePaintMixin:
                 text = label or (marker.get("label", "") or "")
                 if not title and not text:
                     continue
-                if width >= 80 and text and not dense_segment_mode and not playback_active:
+                if width >= 80 and text and not dense_segment_mode:
                     label_items.append((text, color, rect))
             for text, color, rect in label_items:
                 label_rect = rect.adjusted(6.0, 0.0, -6.0, 0.0).toRect()
@@ -574,6 +576,7 @@ class TimelinePaintMixin:
                 p.setPen(color.lighter(135))
                 p.drawText(label_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, display)
                 p.restore()
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, bool(was_antialias))
 
         def _draw_cut_boundary_work_lane():
             official_rows = getattr(self, "boundary_times", []) or []
@@ -606,6 +609,22 @@ class TimelinePaintMixin:
             p.setFont(QFont(config.FONT, 8, QFont.Weight.Bold))
             detail_items = []
             official_secs: set[float] = set()
+            try:
+                timeline_end_sec = max(0.0, float(getattr(self, "total_duration", 0.0) or 0.0))
+            except Exception:
+                timeline_end_sec = 0.0
+            try:
+                fps = normalize_fps(self._get_fps() if hasattr(self, "_get_fps") else getattr(self, "frame_rate", 30.0))
+            except Exception:
+                fps = 30.0
+            end_boundary_slop = max(0.05, 2.0 / max(1.0, float(fps or 30.0)))
+
+            def _is_timeline_end_boundary(sec: float) -> bool:
+                return timeline_end_sec > 0.0 and float(sec) >= max(0.0, timeline_end_sec - end_boundary_slop)
+
+            def _boundary_visual_hidden(visual) -> bool:
+                return not isinstance(visual, dict) or bool(visual.get("hidden")) or visual.get("visible") is False
+
             for item in official_items:
                 try:
                     if isinstance(item, dict):
@@ -614,11 +633,15 @@ class TimelinePaintMixin:
                         sec = float(item or 0.0)
                 except Exception:
                     continue
+                if _is_timeline_end_boundary(sec):
+                    continue
                 x = self._x(sec)
                 if x < clip.left() - 8 or x > clip.right() + 8:
                     continue
-                official_secs.add(round(float(sec), 3))
                 visual = official_boundary_marker_visual(item)
+                if _boundary_visual_hidden(visual):
+                    continue
+                official_secs.add(round(float(sec), 3))
                 color = QColor(str(visual.get("color") or "#F5F7FA"))
                 width = max(1, int(visual.get("width", 1) or 1))
                 p.setPen(QPen(color, width, Qt.PenStyle.SolidLine))
@@ -628,12 +651,16 @@ class TimelinePaintMixin:
                     sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
                 except Exception:
                     continue
+                if _is_timeline_end_boundary(sec):
+                    continue
                 x = self._x(sec)
                 if x < clip.left() - 8 or x > clip.right() + 8:
                     continue
+                visual = scan_boundary_marker_visual(item)
+                if _boundary_visual_hidden(visual):
+                    continue
                 if cut_boundary_scan_marker_verified(item) and round(float(sec), 3) in official_secs:
                     x -= 1
-                visual = scan_boundary_marker_visual(item)
                 color = QColor(str(visual.get("color") or "#8E8E93"))
                 width = max(1, int(visual.get("width", 1) or 1))
                 style_name = str(visual.get("style") or "solid")
@@ -995,7 +1022,7 @@ class TimelinePaintMixin:
                 )
                 _append_batch(fills, (str(visual["fill"]), int(visual["alpha"])), rect)
                 _append_batch(borders, (str(visual["border"]), 255, int(visual["border_width"])), rect)
-                if rect.width() >= 52 and not dense_segment_mode and not playback_active:
+                if rect.width() >= 52 and not dense_segment_mode:
                     detail_items.append((seg, rect, selection_state, is_selected, visual))
             _draw_color_batches(fills)
             for (color_name, alpha, border_width), rects in borders.items():
@@ -1010,13 +1037,13 @@ class TimelinePaintMixin:
                     preview_text = str(seg.get("text", "") or "")
                     p.save()
                     p.setClipRect(text_rect.adjusted(0, 0, 1, 1))
-                    if playback_active or rect.width() < 132:
+                    if rect.width() < 132:
                         preview_text = p.fontMetrics().elidedText(preview_text.replace("\n", " "), Qt.TextElideMode.ElideRight, text_rect.width())
                         p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, preview_text)
                     else:
                         p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, preview_text)
                     p.restore()
-                    if badge_w and not playback_active:
+                    if badge_w:
                         badge_rect = QRect(rect.right() - badge_w - 4, rect.y() + 6, badge_w, 18)
                         badge_fill = QColor("#5A4600" if selection_state == "llm" else "#174A2A")
                         badge_border = QColor("#FFCC00" if selection_state == "llm" else "#34C759")
@@ -1226,7 +1253,7 @@ class TimelinePaintMixin:
                         p.fillRect(preview_rect, QColor(10, 132, 255, 36))
                     p.setPen(QPen(QColor("#0A84FF"), 2))
                     p.drawRect(rect.adjusted(0, 0, -1, -1))
-                chips = [] if playback_active else subtitle_confidence_chips(seg)
+                chips = subtitle_confidence_chips(seg)
                 chips_drawn = False
                 if chips and rect.width() >= 72 and rect.height() >= 30 and not compact_seg and (not dense_segment_mode or focus_detail):
                     chip_w = max(6, min(18, (rect.width() - 10) // max(1, len(chips))))
@@ -1254,7 +1281,6 @@ class TimelinePaintMixin:
                 selected_source = final_stt_selection_source(seg)
                 show_badge = bool(
                     selected_source
-                    and not playback_active
                     and rect.width() >= 104
                     and (not dense_segment_mode or focus_detail)
                     and (text_right - text_left) >= 70
@@ -1310,7 +1336,7 @@ class TimelinePaintMixin:
                         seg_text = str(seg.get("text", "") or "")
                         p.save()
                         p.setClipRect(text_rect.adjusted(0, 0, 1, 1))
-                        if playback_active or rect.width() < 164:
+                        if rect.width() < 164:
                             seg_text = p.fontMetrics().elidedText(seg_text.replace("\n", " "), Qt.TextElideMode.ElideRight, text_rect.width())
                             p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, seg_text)
                         else:
@@ -1336,7 +1362,7 @@ class TimelinePaintMixin:
                     p.setPen(QPen(QColor("#2D3942"), 1))
                     p.setBrush(QColor("#1B2429"))
                     p.drawRect(speaker_rect)
-                if not playback_active and not compact_seg and speaker_rect.width() >= 42 and (not dense_segment_mode or focus_detail):
+                if not compact_seg and speaker_rect.width() >= 42 and (not dense_segment_mode or focus_detail):
                     self._draw_speaker_names(p, speaker_rect, spk_color, _speaker_names(seg))
 
                 if (

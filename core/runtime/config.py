@@ -1,5 +1,5 @@
-# Version: 04.00.04
-# Phase: PHASE12_MacNativeV4Release
+# Version: 04.00.05
+# Phase: PHASE12_MacNativeV4_0_5Release
 
 
 # === OS / Platform Detection ===
@@ -13,7 +13,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "04.00.04"
+APP_VERSION = "04.00.05"
 MACBOOK_ONLY_APP = True
 SUPPORTED_OS_NAMES = ("Darwin",)
 APP_STORE_TARGET = True
@@ -379,6 +379,10 @@ DEFAULT_ROUGHCUT_SETTINGS = {
     "roughcut_llm_chunk_max_rows": 18,
     "roughcut_llm_lookahead_min_rows": 4,
     "roughcut_llm_lookahead_max_rows": 12,
+    "roughcut_codex_timeout_sec": 180,
+    "roughcut_codex_max_context_rows": 240,
+    "roughcut_codex_chunk_rows": 72,
+    "roughcut_codex_lookahead_rows": 20,
     "roughcut_llm_threads_auto_enabled": True,
     "roughcut_llm_threads": 4,
     "roughcut_llm_threads_resource_max": 4,

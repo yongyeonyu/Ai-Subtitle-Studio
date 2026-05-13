@@ -118,4 +118,47 @@ def optimize_stt_preview_segments(
     return preview
 
 
-__all__ = ["optimize_stt_preview_segments"]
+def raw_stt_preview_segments(
+    segments: list[dict],
+    *,
+    source_label: str = "STT1",
+    clip_offset: float = 0.0,
+    clip_idx: int | None = None,
+    clip_path: str | None = None,
+) -> list[dict]:
+    """Return lightweight preview rows immediately, before heavier candidate cleanup finishes."""
+    if not segments:
+        return []
+
+    label = str(source_label or "STT1").strip().upper() or "STT1"
+    offset = float(clip_offset or 0.0)
+    preview: list[dict] = []
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        try:
+            start = float(seg.get("start", 0.0) or 0.0) + offset
+            end = float(seg.get("end", start) or start) + offset
+        except Exception:
+            continue
+        text = str(seg.get("text", "") or "").strip()
+        if not text:
+            continue
+        row = dict(seg)
+        row["start"] = start
+        row["end"] = max(start + 0.05, end)
+        row["text"] = text
+        row["stt_preview_source"] = label
+        row["stt_pending"] = True
+        row["_live_stt_preview"] = True
+        row["stt_preview_optimized"] = False
+        row["stt_preview_optimizer"] = "raw_realtime"
+        if clip_idx is not None:
+            row["_clip_idx"] = clip_idx
+        if clip_path:
+            row["_clip_file"] = clip_path
+        preview.append(row)
+    return preview
+
+
+__all__ = ["optimize_stt_preview_segments", "raw_stt_preview_segments"]
