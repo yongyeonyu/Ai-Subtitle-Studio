@@ -171,6 +171,45 @@ class EditorTruthCaptureTests(unittest.TestCase):
             self.assertEqual(second["appended_rows"], 0)
             self.assertEqual(second["excluded_parenthetical_rows"], 0)
 
+    def test_deferred_editor_learning_waits_until_not_before_deadline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            root = Path(tmpdir)
+            media_path = root / "clip.mp4"
+            subtitle_path = root / "clip.srt"
+            project_path = root / "project.assproj"
+            media_path.write_bytes(b"video")
+            subtitle_path.write_text("", encoding="utf-8")
+
+            segments = [
+                {
+                    "line": 0,
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "지연 학습 테스트",
+                    "original_text": "지연 학습 태스트",
+                }
+            ]
+
+            queued = enqueue_deferred_editor_learning(
+                segments,
+                media_path=str(media_path),
+                subtitle_path=str(subtitle_path),
+                project_path=str(project_path),
+                trigger="manual_save",
+                settings={"editor_truth_capture_enabled": True},
+                store_dir=tmpdir,
+                defer_for_ms=60_000,
+            )
+            self.assertTrue(queued["queued"])
+
+            result = run_training_queue_once(tmpdir, low_resource=True)
+
+            self.assertFalse(result["processed"])
+            self.assertEqual(result["reason"], "no_ready_pending_job")
+            updated_queue = load_training_queue(tmpdir)
+            self.assertEqual(updated_queue["items"][0]["status"], "waiting")
+
     def test_build_editor_truth_records_skips_pending_gap_and_invalid_rows(self):
         built = build_editor_truth_records(
             [

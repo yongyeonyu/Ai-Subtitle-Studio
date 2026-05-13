@@ -178,6 +178,30 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             self.assertEqual(queue["items"][0]["status"], "waiting")
             self.assertIn("now supported", queue["items"][0]["last_error"])
 
+    def test_idle_trainer_can_defer_startup_recovery_until_window_is_visible(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            owner = _DummyOwner()
+            with patch(
+                "core.personalization.idle_trainer.recover_interrupted_training_jobs",
+                return_value={"recovered": 0, "items": []},
+            ) as recover:
+                trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir, recover_on_init=False)
+                trainer._poll_timer.stop()
+                try:
+                    recover.assert_not_called()
+                    self.assertTrue(trainer._startup_recovery_pending)
+
+                    result = trainer.recover_startup_jobs(reason="after_show")
+
+                    self.assertEqual(result["recovered"], 0)
+                    recover.assert_called_once_with(tmpdir, reason="after_show")
+                    self.assertTrue(trainer._startup_recovery_complete)
+                finally:
+                    trainer._poll_timer.stop()
+                    trainer.deleteLater()
+
     def test_idle_trainer_defaults_to_slow_low_resource_schedule(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)

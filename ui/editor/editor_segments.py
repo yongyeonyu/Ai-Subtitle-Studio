@@ -1732,17 +1732,27 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
         confirmed_segments: list[dict] | None = None,
     ) -> list[dict]:
         """Build non-persistent subtitle-lane drafts from live STT candidates."""
+        confirmed_segments = [
+            dict(seg) for seg in list(confirmed_segments or [])
+            if isinstance(seg, dict) and not seg.get("is_gap") and not seg.get("_live_subtitle_preview")
+        ]
         native_drafts = self._build_live_subtitle_preview_segments_native(
             preview_segments,
             confirmed_segments,
         )
         if native_drafts is not None:
-            return native_drafts
+            filtered_drafts = self._drop_overlapping_preview(
+                native_drafts,
+                confirmed_segments,
+                same_source_only=False,
+            )
+            for line, draft in enumerate(sorted(filtered_drafts, key=lambda seg: (
+                float(seg.get("start", 0.0) or 0.0),
+                float(seg.get("end", 0.0) or 0.0),
+            ))):
+                draft["line"] = -1000 - line
+            return filtered_drafts
         preview_segments = [dict(seg) for seg in list(preview_segments or []) if isinstance(seg, dict)]
-        confirmed_segments = [
-            dict(seg) for seg in list(confirmed_segments or [])
-            if isinstance(seg, dict) and not seg.get("is_gap") and not seg.get("_live_subtitle_preview")
-        ]
         preview_segments = self._drop_overlapping_preview(
             preview_segments,
             confirmed_segments,

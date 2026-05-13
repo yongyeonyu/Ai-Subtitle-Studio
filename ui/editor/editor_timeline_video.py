@@ -13,8 +13,9 @@ import os
 import time
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
+from PyQt6.QtMultimedia import QMediaPlayer
 
-from core.frame_time import normalize_fps, snap_sec_to_frame
+from core.frame_time import frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 from core.native_swift_timeline import plan_subtitle_timing_edit_via_swift
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
@@ -120,6 +121,27 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             return float(local_sec)
         return self._snap_to_frame(player.position() / 1000.0)
 
+    def _is_player_playing(self, player) -> bool:
+        if player is None:
+            return False
+        try:
+            state = player.playbackState()
+        except Exception:
+            return False
+        try:
+            if state == QMediaPlayer.PlaybackState.PlayingState:
+                return True
+        except Exception:
+            pass
+        try:
+            playback_state = getattr(player, "PlaybackState", None)
+            playing_state = getattr(playback_state, "PlayingState", None)
+            if playing_state is not None:
+                return state == playing_state
+        except Exception:
+            pass
+        return False
+
 
     # ---------------------------------------------------------
     # Common: Cursor ↔ Block Sync
@@ -129,7 +151,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         self._active_seg_start = seg["start"]
         # 재생 중에는 set_active()가 내부 smooth scroll을 유발하므로 canvas만 직접 갱신
         player = getattr(getattr(self, 'video_player', None), 'media_player', None)
-        is_playing = bool(player and player.playbackState() == player.PlaybackState.PlayingState)
+        is_playing = self._is_player_playing(player)
         if is_playing and hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
             self.timeline.canvas.set_active(seg["start"])
         else:
@@ -232,18 +254,15 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             settings = dict(getattr(self, "settings", {}) or {})
             if not settings.get("background_prefetch_enabled", True):
                 return
-            player_state = None
             try:
-                player_state = getattr(getattr(getattr(self, "video_player", None), "media_player", None), "playbackState", lambda: None)()
-                playing_state = getattr(getattr(getattr(self, "video_player", None), "media_player", None), "PlaybackState", None)
-                playing_state = getattr(playing_state, "PlayingState", None)
+                player_obj = getattr(getattr(self, "video_player", None), "media_player", None)
+                playing_now = self._is_player_playing(player_obj)
             except Exception:
-                player_state = None
-                playing_state = None
+                playing_now = False
             allow_during_playback = settings.get("background_prefetch_during_playback", False)
             if isinstance(allow_during_playback, str):
                 allow_during_playback = allow_during_playback.strip().lower() in {"1", "true", "yes", "on"}
-            if playing_state is not None and player_state == playing_state and not bool(allow_during_playback):
+            if playing_now and not bool(allow_during_playback):
                 return
             media_path = str(getattr(self, "media_path", "") or "")
             if not media_path:
@@ -394,7 +413,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         if not hasattr(self, 'video_player') or not hasattr(self, 'timeline'):
             return
         player = self.video_player.media_player
-        if player.playbackState() != player.PlaybackState.PlayingState:
+        if not self._is_player_playing(player):
             self._set_playhead_timer_interval(80)
             if not bool(getattr(self, "_playhead_idle_synced", False)):
                 if hasattr(self.timeline, "set_playback_center_lock"):
@@ -700,10 +719,21 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
         fps = self._current_frame_fps()
         current_global = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
-        local_frame = max(0, int(round(current_global * fps)))
+        local_frame = None
+        cached_manual_frame = getattr(self, "_manual_frame_idx", None)
+        if cached_manual_frame is not None:
+            try:
+                cached_manual_frame = max(0, int(cached_manual_frame))
+                cached_manual_sec = frame_to_sec(cached_manual_frame, fps)
+                if abs(cached_manual_sec - current_global) <= max(1.5 / max(fps, 1e-6), 0.030):
+                    local_frame = cached_manual_frame
+            except Exception:
+                local_frame = None
+        if local_frame is None:
+            local_frame = max(0, sec_to_nearest_frame(current_global, fps))
         target_frame = max(0, local_frame + (direction * frame_delta))
-        global_sec = self._snap_to_frame(target_frame / fps)
-        self._manual_frame_idx = max(0, int(round(global_sec * fps)))
+        global_sec = self._snap_to_frame(frame_to_sec(target_frame, fps))
+        self._manual_frame_idx = max(0, int(target_frame))
 
         if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
             ctx = self._resolve_active_context(global_sec=global_sec)

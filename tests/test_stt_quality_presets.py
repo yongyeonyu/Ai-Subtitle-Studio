@@ -27,7 +27,8 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertEqual(applied["selected_model"], "사용 안함 (Whisper 단독 진행)")
         self.assertNotIn("audio_preset", applied)
         self.assertNotIn("selected_audio_ai", applied)
-        self.assertNotIn("selected_vad", applied)
+        self.assertEqual(applied["selected_vad"], "silero")
+        self.assertAlmostEqual(applied["vad_threshold"], 0.40)
         self.assertEqual(applied["cut_boundary_level"], "off")
         self.assertFalse(applied["cut_boundary_detection_enabled"])
         self.assertTrue(applied["stt_candidate_scoring_enabled"])
@@ -47,13 +48,13 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertEqual(precise["selected_model"], "exaone3.5:2.4b")
         self.assertNotIn("audio_preset", balanced)
         self.assertNotIn("selected_audio_ai", balanced)
-        self.assertNotIn("selected_vad", balanced)
+        self.assertEqual(balanced["selected_vad"], "ten_vad")
         self.assertEqual(balanced["cut_boundary_level"], "low")
         self.assertTrue(balanced["cut_boundary_detection_enabled"])
         self.assertTrue(balanced["stt_candidate_scoring_enabled"])
         self.assertNotIn("audio_preset", precise)
         self.assertNotIn("selected_audio_ai", precise)
-        self.assertNotIn("selected_vad", precise)
+        self.assertEqual(precise["selected_vad"], "silero")
         self.assertEqual(precise["cut_boundary_level"], "medium")
         self.assertTrue(precise["cut_boundary_detection_enabled"])
         self.assertFalse(precise["stt_ensemble_enabled"])
@@ -89,7 +90,7 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertEqual(applied["stt_mode_vad_models"], ["silero", "ten_vad"])
         self.assertEqual(applied["selected_model"], "사용 안함 (STT 모드)")
 
-    def test_saved_user_preset_overrides_stage_settings_without_audio(self):
+    def test_saved_user_preset_overrides_stage_settings_but_keeps_mode_locked_vad(self):
         settings = apply_stt_quality_preset({}, "balanced")
         settings.update(
             {
@@ -106,7 +107,7 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertEqual(applied["selected_whisper_model"], "custom-stt")
         self.assertEqual(applied["selected_model"], "custom-llm")
         self.assertEqual(applied["selected_audio_ai"], "deepfilter")
-        self.assertEqual(applied["selected_vad"], "silero")
+        self.assertEqual(applied["selected_vad"], "ten_vad")
         user_settings = saved["stt_quality_user_presets"]["balanced"]["settings"]
         self.assertNotIn("selected_audio_ai", user_settings)
         self.assertNotIn("selected_vad", user_settings)
@@ -200,7 +201,7 @@ class STTQualityPresetTests(unittest.TestCase):
         applied = apply_recommended_stt_quality_defaults(settings, "precise")
 
         self.assertEqual(applied["selected_audio_ai"], "clearvoice")
-        self.assertEqual(applied["selected_vad"], "ten_vad")
+        self.assertEqual(applied["selected_vad"], "silero")
         self.assertEqual(applied["selected_whisper_model"], "user-stt1")
         self.assertEqual(applied["selected_whisper_model_secondary"], "user-stt2")
         self.assertEqual(applied["selected_model"], "user-subtitle-llm")

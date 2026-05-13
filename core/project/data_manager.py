@@ -22,6 +22,11 @@ import json
 import re
 import shutil
 
+from core.correction_dictionary_db import (
+    load_corrections as load_correction_dictionary,
+    save_correction as save_correction_dictionary_item,
+    save_corrections as save_correction_dictionary,
+)
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
@@ -92,20 +97,10 @@ def save_default_settings(settings: dict) -> None:
 
 # ── 교정사전 ──────────────────────────────────────────────────────────────
 def load_corrections() -> dict:
-    if os.path.exists(CORRECTION_FILE):
-        try:
-            with open(CORRECTION_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"소설가유모씨": "u_mo_c"}
+    return load_correction_dictionary(CORRECTION_FILE, default={"소설가유모씨": "u_mo_c"})
 
 def save_correction(corrections: dict, original: str, corrected: str) -> dict:
-    corrections[original] = corrected
-    os.makedirs(DATASET_DIR, exist_ok=True)
-    with open(CORRECTION_FILE, 'w', encoding='utf-8') as f:
-        json.dump(corrections, f, ensure_ascii=False, indent=4)
-    return corrections
+    return save_correction_dictionary_item(corrections, original, corrected, CORRECTION_FILE)
 
 
 def load_correction_memory() -> dict:
@@ -180,9 +175,7 @@ def cleanup_rules(corrections: dict, subtitle_rules: dict,
         after_count = len(corrections)
         removed = before_count - after_count
         try:
-            os.makedirs(DATASET_DIR, exist_ok=True)
-            with open(CORRECTION_FILE, 'w', encoding='utf-8') as f:
-                json.dump(corrections, f, ensure_ascii=False, indent=4)
+            corrections = save_correction_dictionary(corrections, CORRECTION_FILE)
             if removed > 0:
                 logger.log(f"  🧹 교정사전: 빈 키 {removed}개 제거 → {after_count}개 항목 저장")
             else:

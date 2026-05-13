@@ -23,7 +23,6 @@ USER_SELECTED_STT_MODEL_KEYS = (
 USER_SELECTED_ROUTE_KEYS = (
     "selected_audio_ai",
     "audio_preset",
-    "selected_vad",
     "selected_whisper_model",
     "selected_whisper_model_secondary",
     "selected_model",
@@ -125,6 +124,11 @@ STT_QUALITY_SAVED_SETTING_KEYS = {
     "stt_lora_style_learning_enabled",
     "stt_lora_protected_terms",
 }
+VAD_MODE_AUTOMATION_NOTE = (
+    "VAD는 Fast/Auto/High 모드별 벤치 고정값으로 자동 적용됩니다. "
+    "test video/X5_시승기_후반.MP4의 대사 밀도 높은 120~180초 구간과 "
+    "기존 subtitle pipeline 벤치 프로필을 기준으로 잠갔습니다."
+)
 
 
 def _quality_model() -> str:
@@ -257,6 +261,77 @@ def _cut_boundary_mapping(level: str) -> dict:
     }
 
 
+def _mode_locked_vad_mapping(preset_key: str) -> dict:
+    key = str(preset_key or "").strip().lower()
+    if key not in {"fast", "balanced", "precise", "stt"}:
+        key = {
+            "auto": "balanced",
+            "high": "precise",
+            "빠름": "fast",
+            "보통": "balanced",
+            "높음": "precise",
+        }.get(key, "balanced")
+    # BENCH LOCK 2026-05-13:
+    # - Fast    -> rnnoise_silero_fast
+    # - Auto    -> ffmpeg_ten_vad_balanced
+    # - High    -> deepfilter_silero_quality (with runtime dual-VAD verify)
+    # Source: tools/benchmark_subtitle_pipeline_variants.py profiles and
+    # test video/X5_시승기_후반.MP4 dialogue-dense 120~180s reference set.
+    profiles = {
+        "fast": {
+            "selected_vad": "silero",
+            "vad_threshold": 0.40,
+            "vad_min_speech": 0.16,
+            "vad_min_silence": 0.55,
+            "vad_speech_pad": 0.25,
+            "vad_window_size": 512,
+            "review_vad_speech_pad_sec": 0.30,
+            "review_vad_min_silence_sec": 0.55,
+            "vad_post_stt_align_enabled": True,
+        },
+        "balanced": {
+            "selected_vad": "ten_vad",
+            "vad_threshold": 0.46,
+            "ten_vad_threshold": 0.46,
+            "vad_min_speech": 0.20,
+            "vad_min_silence": 0.65,
+            "vad_speech_pad": 0.28,
+            "vad_window_size": 512,
+            "review_vad_speech_pad_sec": 0.28,
+            "review_vad_min_silence_sec": 0.65,
+            "vad_post_stt_align_enabled": True,
+        },
+        "precise": {
+            "selected_vad": "silero",
+            "vad_threshold": 0.42,
+            "vad_min_speech": 0.18,
+            "vad_min_silence": 0.70,
+            "vad_speech_pad": 0.22,
+            "vad_window_size": 512,
+            "review_vad_speech_pad_sec": 0.28,
+            "review_vad_min_silence_sec": 0.65,
+            "vad_post_stt_align_enabled": True,
+        },
+        "stt": {
+            "selected_vad": "ten_vad",
+            "vad_threshold": 0.46,
+            "ten_vad_threshold": 0.46,
+            "vad_min_speech": 0.20,
+            "vad_min_silence": 0.65,
+            "vad_speech_pad": 0.28,
+            "vad_window_size": 512,
+            "review_vad_speech_pad_sec": 0.28,
+            "review_vad_min_silence_sec": 0.65,
+            "vad_post_stt_align_enabled": True,
+        },
+    }
+    return dict(profiles.get(key, profiles["balanced"]))
+
+
+def mode_locked_vad_settings(preset_key: str) -> dict:
+    return _mode_locked_vad_mapping(preset_key)
+
+
 def load_stt_quality_presets() -> dict[str, dict]:
     quality_model = _quality_model()
     secondary_model = _secondary_model()
@@ -269,6 +344,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_whisper_model_secondary": secondary_model,
                 "selected_model": "사용 안함 (Whisper 단독 진행)",
                 "stt_candidate_scoring_enabled": True,
+                **_mode_locked_vad_mapping("fast"),
                 **_pipeline_mapping(30, 0.5, 4),
                 **_cut_boundary_mapping("off"),
                 **_stt_single_pass_mapping(
@@ -287,6 +363,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_whisper_model": quality_model,
                 "selected_model": "exaone3.5:2.4b",
                 "stt_candidate_scoring_enabled": True,
+                **_mode_locked_vad_mapping("balanced"),
                 **_pipeline_mapping(25, 1.5, 3),
                 **_cut_boundary_mapping("low"),
                 **_stt_single_pass_mapping(
@@ -306,6 +383,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_model": "exaone3.5:2.4b",
                 "stt_candidate_scoring_enabled": True,
                 "selected_whisper_model_secondary": secondary_model,
+                **_mode_locked_vad_mapping("precise"),
                 **_pipeline_mapping(35, 3.0, 2),
                 **_cut_boundary_mapping("medium"),
                 **_roughcut_llm_mapping("exaone3.5:7.8b"),
@@ -345,6 +423,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "stt_lora_bundle_auto_export_enabled": True,
                 "stt_lora_bundle_size_tier": "300MB",
                 "stt_lora_style_learning_enabled": True,
+                **_mode_locked_vad_mapping("stt"),
                 **_pipeline_mapping(20, 0.0, 1),
                 **_cut_boundary_mapping("low"),
                 **_decoder_settings(0.58, -1.8, 2.2, 0.4, 5, 1.1),

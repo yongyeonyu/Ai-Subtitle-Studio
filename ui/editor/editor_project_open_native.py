@@ -24,8 +24,8 @@ def schedule_native_open_editor_media(
     editor,
     media_path: str | None,
     *,
-    primary_delay_ms: int = 32,
-    waveform_delay_ms: int = 180,
+    primary_delay_ms: int = 72,
+    waveform_delay_ms: int = 260,
     prefer_fast_first_paint: bool = True,
 ) -> None:
     """Show the editor shell first, then hydrate media in a staged way."""
@@ -120,10 +120,10 @@ def schedule_native_editor_post_open_tasks(
 
         QTimer.singleShot(max(0, int(delay_ms)), _run)
 
-    _schedule(0, restore_workspace_callback)
-    _schedule(40, apply_project_ui_callback)
-    _schedule(100, load_multiclip_waveform_callback)
-    _schedule(180, preload_segments_callback)
+    _schedule(180, restore_workspace_callback)
+    _schedule(280, apply_project_ui_callback)
+    _schedule(440, load_multiclip_waveform_callback)
+    _schedule(680, preload_segments_callback)
 
 
 def normalized_open_path(path: str | None) -> str:
@@ -396,7 +396,8 @@ def schedule_editor_fit_to_view(editor, delay_ms: int = 120) -> None:
     if not hasattr(editor, "timeline"):
         return
     timeline = editor.timeline
-    delays = (0, delay_ms, max(delay_ms + 160, 300))
+    first_delay = max(80, int(delay_ms * 0.66))
+    delays = (first_delay, max(delay_ms, first_delay + 60), max(delay_ms + 180, 340))
     try:
         if hasattr(editor, "_schedule_initial_open_layout"):
             editor._schedule_initial_open_layout(delays=delays)
@@ -470,7 +471,7 @@ def schedule_opened_editor_runtime_refresh(
     refresh_callback: Callable[[object], None] | None = None,
 ) -> None:
     callback = refresh_callback or refresh_opened_editor_runtime
-    for delay_ms in (0, 120, 360, 720):
+    for delay_ms in (120, 320, 640, 1080):
         QTimer.singleShot(
             delay_ms,
             lambda e=editor, cb=callback: cb(e),

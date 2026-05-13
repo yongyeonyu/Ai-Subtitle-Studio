@@ -13,8 +13,9 @@ from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import QObject, Qt, QRectF, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 
+from core.frame_time import frame_to_sec
 from core.runtime import config
-from ui.editor.video_playback_backend import choose_video_backend
+from ui.editor.video_playback_backend import _BaseExternalBackend, choose_video_backend
 from ui.editor.video_overlay_widgets import SubtitleQuickOverlay, VideoSurfaceView
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
@@ -167,13 +168,23 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             choice = choose_video_backend()
 
         self.assertEqual(choice.name, "mpv")
-        self.assertEqual(choice.reason, "preferred_lightweight_gpu_backend")
+        self.assertEqual(choice.reason, "preferred_lightweight_simple_backend")
 
-    def test_video_backend_uses_vlc_when_mpv_is_unavailable(self):
+    def test_video_backend_uses_qt_when_mpv_is_unavailable(self):
         with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "auto"}, clear=True), \
              patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
              patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
              patch("ui.editor.video_playback_backend._mpv_available", return_value=False), \
+             patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
+            choice = choose_video_backend()
+
+        self.assertEqual(choice.name, "qt")
+        self.assertEqual(choice.reason, "qt_simple_fallback")
+
+    def test_video_backend_explicit_vlc_still_works(self):
+        with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "vlc"}, clear=True), \
+             patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
+             patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
              patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
             choice = choose_video_backend()
 
@@ -192,6 +203,46 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
         self.assertEqual(choice.name, "qt")
         self.assertEqual(choice.reason, "forced")
+
+    def test_external_video_backend_exposes_qt_playback_state_alias(self):
+        class _DummyExternalBackend(_BaseExternalBackend):
+            def __init__(self):
+                super().__init__()
+                self._playing = False
+
+            def _load_source(self, _path):
+                return
+
+            def _play(self):
+                self._playing = True
+
+            def _pause(self):
+                self._playing = False
+
+            def _stop(self):
+                self._playing = False
+
+            def _is_playing(self):
+                return self._playing
+
+            def _position_ms(self):
+                return 0
+
+            def _set_position_ms(self, _position_ms):
+                return
+
+            def _duration(self):
+                return 0
+
+        backend = _DummyExternalBackend()
+        try:
+            self.assertIs(backend.PlaybackState, QMediaPlayer.PlaybackState)
+            self.assertEqual(backend.playbackState(), backend.PlaybackState.PausedState)
+            backend.play()
+            self.assertEqual(backend.playbackState(), backend.PlaybackState.PlayingState)
+        finally:
+            backend.stop()
+            backend.deleteLater()
 
     def test_frame_step_buttons_emit_single_frame_direction(self):
         widget = VideoPlayerWidget()
@@ -367,6 +418,48 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_external_backend_disables_preview_proxy_by_default(self):
+        class _PreviewExternalBackend(_BaseExternalBackend):
+            backend_name = "mpv"
+
+            def __init__(self):
+                super().__init__()
+                self._playing = False
+
+            def _load_source(self, _path):
+                return
+
+            def _play(self):
+                self._playing = True
+
+            def _pause(self):
+                self._playing = False
+
+            def _stop(self):
+                self._playing = False
+
+            def _is_playing(self):
+                return self._playing
+
+            def _position_ms(self):
+                return 0
+
+            def _set_position_ms(self, _position_ms):
+                return
+
+            def _duration(self):
+                return 0
+
+        with patch("ui.editor.video_player_widget.create_video_backend", return_value=_PreviewExternalBackend()):
+            widget = VideoPlayerWidget()
+        try:
+            with tempfile.TemporaryDirectory() as tmp, patch.object(config, "DATASET_DIR", tmp):
+                self.assertFalse(widget._preview_proxy_enabled())
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_preview_display_rect_uses_full_default_16_9_bounds(self):
         widget = VideoPlayerWidget()
         try:
@@ -434,6 +527,31 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
             control_layout = label.parentWidget().layout()
             self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
+            self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.frame_count_label))
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_frame_count_label_shows_current_and_total_frames(self):
+        widget = VideoPlayerWidget()
+        try:
+            self.assertFalse(widget.frame_count_label.isHidden())
+            self.assertEqual(widget.frame_count_label.text(), "F 0 / 0")
+            widget.current_time = 2.0
+            widget._rebuild_frame_time_map(duration=10.0, fps=25.0)
+            control_layout = widget.frame_count_label.parentWidget().layout()
+
+            self.assertFalse(widget.frame_count_label.isHidden())
+            self.assertEqual(widget.frame_count_label.text(), "F 50 / 250")
+            self.assertGreater(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.time_label))
+            self.assertLess(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.info_label))
+
+            widget._apply_seek_state(4.0)
+
+            self.assertEqual(widget.frame_count_label.text(), "F 100 / 250")
+            state = widget._quick_control_bar_state()
+            self.assertEqual(state["frameText"], "F 100 / 250")
         finally:
             widget.close()
             widget.deleteLater()
@@ -483,6 +601,58 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         finally:
             widget.close()
             widget.deleteLater()
+            self.app.processEvents()
+
+    def test_external_backend_can_autoplay_once_loaded_event_arrives(self):
+        class _AutoPlayExternalBackend(_BaseExternalBackend):
+            def __init__(self):
+                super().__init__()
+                self._playing = False
+
+            def _load_source(self, _path):
+                return
+
+            def _play(self):
+                self._playing = True
+
+            def _pause(self):
+                self._playing = False
+
+            def _stop(self):
+                self._playing = False
+
+            def _is_playing(self):
+                return self._playing
+
+            def _position_ms(self):
+                return 0
+
+            def _set_position_ms(self, _position_ms):
+                return
+
+            def _duration(self):
+                return 1200
+
+        backend = _AutoPlayExternalBackend()
+        with patch("ui.editor.video_player_widget.create_video_backend", return_value=backend):
+            widget = VideoPlayerWidget()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                media_path = os.path.join(tmp, "sample.mp4")
+                with open(media_path, "wb") as f:
+                    f.write(b"video")
+
+                widget.load(media_path, defer_probe=True)
+                widget.toggle_play()
+                self.app.processEvents()
+
+                self.assertEqual(backend.playbackState(), backend.PlaybackState.PlayingState)
+                self.assertTrue(widget._video_surface_primed)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            backend.stop()
+            backend.deleteLater()
             self.app.processEvents()
 
     def test_scene_subtitle_overlay_loads_export_style_on_first_start(self):
@@ -797,6 +967,25 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_video_load_with_deferred_probe_avoids_sync_probe_and_thumbnail_extract(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch("core.media_info.probe_media") as probe_media, \
+                 patch.object(widget, "_playback_path_for", return_value=f.name), \
+                 patch.object(widget, "_set_media_source_if_needed", return_value=False), \
+                 patch.object(widget, "_extract_and_show_thumbnail") as extract_thumb, \
+                 patch.object(widget, "_schedule_initial_thumbnail_prepare") as schedule_thumb:
+                widget.load(f.name, [], defer_probe=True)
+
+            probe_media.assert_not_called()
+            extract_thumb.assert_not_called()
+            schedule_thumb.assert_called_once_with(f.name, 0.0, width=640)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_current_playback_time_uses_mapped_frame(self):
         widget = VideoPlayerWidget()
         try:
@@ -842,6 +1031,36 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         self.assertEqual(len(editor.applied_contexts), 1)
         self.assertFalse(editor.applied_contexts[0][1])
         self.assertFalse(editor.applied_contexts[0][2])
+
+    def test_frame_step_keeps_exact_indices_on_59_94fps_sources(self):
+        fps = 60000.0 / 1001.0
+        editor = _FrameStepEditor()
+        editor.video_fps = fps
+        editor.timeline.canvas.playhead_sec = frame_to_sec(312, fps)
+
+        editor._on_step_frame(1)
+        editor._on_step_frame(1)
+
+        self.assertEqual(len(editor.video_player.frame_seek_calls), 2)
+        self.assertAlmostEqual(editor.video_player.frame_seek_calls[0], frame_to_sec(313, fps), places=6)
+        self.assertAlmostEqual(editor.video_player.frame_seek_calls[1], frame_to_sec(314, fps), places=6)
+        self.assertEqual(editor._manual_frame_idx, 314)
+
+    def test_video_widget_frame_step_seek_preserves_exact_59_94_frame_label(self):
+        widget = VideoPlayerWidget()
+        try:
+            fps = 60000.0 / 1001.0
+            widget._rebuild_frame_time_map(duration=20.0, fps=fps)
+
+            widget.frame_step_seek(frame_to_sec(313, fps))
+
+            self.assertEqual(widget.current_frame, 313)
+            self.assertAlmostEqual(widget.current_time, frame_to_sec(313, fps), places=6)
+            self.assertEqual(widget.frame_count_label.text(), f"F 313 / {widget.frame_time_map.total_frames}")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
 
     def test_clip_context_waits_for_new_media_source_before_consuming_pending_seek(self):
         widget = VideoPlayerWidget()

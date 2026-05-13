@@ -29,6 +29,7 @@ from core.performance import balanced_task_slices, current_resource_snapshot
 from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.cut_boundary_backend_router import apply_cut_boundary_backend_settings, select_cut_boundary_backend
 from core.platform_compat import ffmpeg_binary, ffprobe_binary, hidden_subprocess_kwargs
+from core.visual_cut_jump import build_visual_cut_sample, score_visual_cut_pair
 
 
 def cut_boundary_memory_pressure_stage(settings: dict | None = None) -> str:
@@ -579,11 +580,11 @@ def build_auto_grid_scan_helpers(deps: dict):
                 min(4.0, _settings_float("scan_cut_pioneer_pipe_fps", 1.0 / max(0.25, scan_interval_sec))),
             )
             pipe_step_sec = 1.0 / pipe_fps if pipe_fps > 0.0 else max(1.0, scan_interval_sec)
-            pixel_threshold = max(1.0, _settings_float("scan_cut_pioneer_pipe_pixel_threshold", 15.0))
-            pixel_strong = max(pixel_threshold, _settings_float("scan_cut_pioneer_pipe_pixel_strong_threshold", 28.0))
-            residual_threshold = max(1.0, _settings_float("scan_cut_pioneer_pipe_flow_residual_threshold", 10.0))
-            flow_width = max(64, min(width, _settings_int("scan_cut_pioneer_pipe_flow_width", 160)))
-            flow_enabled = _setting_bool(settings.get("scan_cut_pioneer_pipe_dense_flow_enabled"), True)
+            score_threshold = max(8.0, _settings_float("scan_cut_pioneer_pipe_score_threshold", 40.0))
+            region_threshold = max(4.0, _settings_float("scan_cut_pioneer_pipe_region_threshold", 18.0))
+            regions_required = max(1, _settings_int("scan_cut_pioneer_pipe_regions_required", 2))
+            pixel_ratio_threshold = max(0.04, _settings_float("scan_cut_pioneer_pipe_pixel_ratio_threshold", 0.18))
+            motion_threshold = max(1.0, _settings_float("scan_cut_pioneer_pipe_motion_threshold", 6.0))
             timeout_sec = max(5.0, _settings_float("scan_cut_pioneer_pipe_timeout_sec", max(30.0, duration * 0.08)))
             max_candidates = max(1, _settings_int("scan_cut_pioneer_pipe_max_candidates", 360))
             min_gap = max(0.5, float(min_gap_sec or 1.0))
@@ -626,6 +627,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             frame_size = int(width * height)
             rows_local: list[dict] = []
             prev_gray = None
+            prev_sample = None
             last_emit_t = -999999.0
             frame_idx = 0
             started = time.monotonic()
@@ -647,50 +649,32 @@ def build_auto_grid_scan_helpers(deps: dict):
                     frame_idx += 1
                     if prev_gray is None:
                         prev_gray = gray.copy()
+                        prev_sample = build_visual_cut_sample(prev_gray, cv2, mode="fast4", width=width, settings=settings)
                         continue
 
-                    diff = cv2.absdiff(prev_gray, gray)
-                    pixel_score = float(np.mean(diff))
-                    pixel_p95 = float(np.percentile(diff, 95))
-                    flow_residual = 0.0
-                    flow_mag = 0.0
-                    if flow_enabled and (pixel_score >= pixel_threshold * 0.60 or pixel_p95 >= pixel_strong):
-                        try:
-                            flow_h = max(36, int(round(height * (flow_width / float(max(1, width))))))
-                            prev_small = cv2.resize(prev_gray, (flow_width, flow_h), interpolation=cv2.INTER_AREA)
-                            gray_small = cv2.resize(gray, (flow_width, flow_h), interpolation=cv2.INTER_AREA)
-                            flow = cv2.calcOpticalFlowFarneback(
-                                prev_small,
-                                gray_small,
-                                None,
-                                0.5,
-                                1,
-                                15,
-                                1,
-                                5,
-                                1.1,
-                                0,
-                            )
-                            yy, xx = np.mgrid[0:flow_h, 0:flow_width].astype(np.float32)
-                            warped = cv2.remap(
-                                prev_small,
-                                xx + flow[..., 0],
-                                yy + flow[..., 1],
-                                cv2.INTER_LINEAR,
-                                borderMode=cv2.BORDER_REPLICATE,
-                            )
-                            flow_residual = float(np.mean(cv2.absdiff(gray_small, warped)))
-                            flow_mag = float(np.mean(np.sqrt(flow[..., 0] * flow[..., 0] + flow[..., 1] * flow[..., 1])))
-                        except Exception:
-                            flow_residual = 0.0
-                            flow_mag = 0.0
-
-                    strong_pixel_cut = pixel_score >= pixel_strong or pixel_p95 >= pixel_strong * 2.6
-                    flow_confirmed_cut = pixel_score >= pixel_threshold and flow_residual >= residual_threshold
-                    if (strong_pixel_cut or flow_confirmed_cut) and (t - last_emit_t) >= min_gap:
+                    gray_sample = build_visual_cut_sample(gray, cv2, mode="fast4", width=width, settings=settings)
+                    metrics = score_visual_cut_pair(
+                        prev_sample,
+                        gray_sample,
+                        cv2,
+                        settings=settings,
+                        region_threshold=region_threshold,
+                    )
+                    score = float(metrics.get("score", 0.0) or 0.0)
+                    region_hits = int(metrics.get("region_hits", 0) or 0)
+                    pixel_ratio = float(metrics.get("pixel_ratio", 0.0) or 0.0)
+                    edge_ratio = float(metrics.get("edge_ratio", 0.0) or 0.0)
+                    motion_jump = float(metrics.get("motion_jump", 0.0) or 0.0)
+                    flow_residual = float(metrics.get("flow_residual", 0.0) or 0.0)
+                    flow_mag = float(metrics.get("flow_mean", 0.0) or 0.0)
+                    strong_visual_cut = (
+                        score >= score_threshold
+                        and region_hits >= regions_required
+                        and (pixel_ratio >= pixel_ratio_threshold or motion_jump >= motion_threshold)
+                    )
+                    if strong_visual_cut and (t - last_emit_t) >= min_gap:
                         timeline_sec = round(float(clip_offset or 0.0) + float(t), 3)
                         timeline_frame = sec_to_frame(timeline_sec, fps)
-                        score = max(pixel_score, flow_residual * 1.35, pixel_p95 * 0.28)
                         row = {
                             "schema": "cut_boundary.v1",
                             "id": f"pipe_cut_{int(clip_idx or 0):02d}_{timeline_frame:08d}",
@@ -705,11 +689,13 @@ def build_auto_grid_scan_helpers(deps: dict):
                             "frame_rate": fps,
                             "timeline_frame_rate": fps,
                             "source": "visual_provisional",
-                            "detector": "ffmpeg-pipe-pixel-flow-v1",
-                            "reason": "pixel_change_dense_flow_scout",
+                            "detector": "ffmpeg-pipe-visual-cut-jump-v2",
+                            "reason": "gray_pixel_edge_flow_scout",
                             "score": round(float(score), 3),
-                            "pixel_score": round(pixel_score, 3),
-                            "pixel_p95": round(pixel_p95, 3),
+                            "pixel_ratio": round(pixel_ratio, 6),
+                            "edge_ratio": round(edge_ratio, 6),
+                            "region_hits": int(region_hits),
+                            "motion_jump": round(motion_jump, 3),
                             "flow_residual": round(flow_residual, 3),
                             "flow_mag": round(flow_mag, 3),
                             "scan_interval_sec": round(pipe_step_sec, 3),
@@ -732,6 +718,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                             break
 
                     prev_gray = gray.copy()
+                    prev_sample = gray_sample
                     if callable(progress_callback) and (frame_idx <= 2 or frame_idx % max(1, int(round(pipe_fps * 8))) == 0):
                         try:
                             progress_callback({
@@ -805,6 +792,10 @@ def build_auto_grid_scan_helpers(deps: dict):
             try:
                 width = max(64, min(960, _settings_int("scan_cut_pioneer_pipe_width", 320)))
                 height = max(36, min(540, _settings_int("scan_cut_pioneer_pipe_height", 180)))
+                region_threshold = max(4.0, _settings_float("scan_cut_pioneer_pipe_region_threshold", 18.0))
+                score_threshold = max(8.0, _settings_float("scan_cut_pioneer_pipe_score_threshold", 40.0))
+                pixel_ratio_threshold = max(0.04, _settings_float("scan_cut_pioneer_pipe_pixel_ratio_threshold", 0.18))
+                motion_threshold = max(1.0, _settings_float("scan_cut_pioneer_pipe_motion_threshold", 6.0))
                 before_sec = max(0.0, float(local_sec) - 0.50)
                 after_sec = min(duration, float(local_sec) + 0.50)
 
@@ -826,44 +817,43 @@ def build_auto_grid_scan_helpers(deps: dict):
                 gray = _read_gray(after_sec)
                 if prev_gray is None or gray is None:
                     return None
-                diff = cv2.absdiff(prev_gray, gray)
-                pixel_score = float(np.mean(diff))
-                pixel_p95 = float(np.percentile(diff, 95))
-                flow_residual = 0.0
-                flow_mag = 0.0
-                if _setting_bool(settings.get("scan_cut_pioneer_pipe_dense_flow_enabled"), True):
-                    try:
-                        flow_width = max(64, min(width, _settings_int("scan_cut_pioneer_pipe_flow_width", 160)))
-                        flow_h = max(36, int(round(height * (flow_width / float(max(1, width))))))
-                        prev_small = cv2.resize(prev_gray, (flow_width, flow_h), interpolation=cv2.INTER_AREA)
-                        gray_small = cv2.resize(gray, (flow_width, flow_h), interpolation=cv2.INTER_AREA)
-                        flow = cv2.calcOpticalFlowFarneback(prev_small, gray_small, None, 0.5, 1, 15, 1, 5, 1.1, 0)
-                        yy, xx = np.mgrid[0:flow_h, 0:flow_width].astype(np.float32)
-                        warped = cv2.remap(
-                            prev_small,
-                            xx + flow[..., 0],
-                            yy + flow[..., 1],
-                            cv2.INTER_LINEAR,
-                            borderMode=cv2.BORDER_REPLICATE,
-                        )
-                        flow_residual = float(np.mean(cv2.absdiff(gray_small, warped)))
-                        flow_mag = float(np.mean(np.sqrt(flow[..., 0] * flow[..., 0] + flow[..., 1] * flow[..., 1])))
-                    except Exception:
-                        flow_residual = 0.0
-                        flow_mag = 0.0
-
-                pixel_threshold = max(1.0, _settings_float("scan_cut_pioneer_pipe_pixel_threshold", 15.0))
-                pixel_strong = max(pixel_threshold, _settings_float("scan_cut_pioneer_pipe_pixel_strong_threshold", 28.0))
-                residual_threshold = max(1.0, _settings_float("scan_cut_pioneer_pipe_flow_residual_threshold", 10.0))
+                prev_sample = build_visual_cut_sample(
+                    prev_gray,
+                    cv2,
+                    mode="full9",
+                    width=min(960, width * 3),
+                    settings=settings,
+                )
+                next_sample = build_visual_cut_sample(
+                    gray,
+                    cv2,
+                    mode="full9",
+                    width=min(960, width * 3),
+                    settings=settings,
+                )
+                metrics = score_visual_cut_pair(
+                    prev_sample,
+                    next_sample,
+                    cv2,
+                    settings=settings,
+                    region_threshold=region_threshold,
+                )
+                score = float(metrics.get("score", 0.0) or 0.0)
+                pixel_ratio = float(metrics.get("pixel_ratio", 0.0) or 0.0)
+                edge_ratio = float(metrics.get("edge_ratio", 0.0) or 0.0)
+                region_hits = int(metrics.get("region_hits", 0) or 0)
+                motion_jump = float(metrics.get("motion_jump", 0.0) or 0.0)
+                flow_residual = float(metrics.get("flow_residual", 0.0) or 0.0)
+                flow_mag = float(metrics.get("flow_mean", 0.0) or 0.0)
                 if not (
-                    pixel_score >= pixel_strong
-                    or pixel_p95 >= pixel_strong * 2.6
-                    or (pixel_score >= pixel_threshold and flow_residual >= residual_threshold)
+                    score >= score_threshold
+                    and region_hits >= 1
+                    and (pixel_ratio >= pixel_ratio_threshold or motion_jump >= motion_threshold)
                 ):
                     return None
                 timeline_sec = round(float(clip_offset or 0.0) + float(local_sec), 3)
                 timeline_frame = sec_to_frame(timeline_sec, fps)
-                score = max(pixel_score, flow_residual * 1.35, pixel_p95 * 0.28, packet_score)
+                score = max(score, float(packet_score or 0.0))
                 return {
                     "schema": "cut_boundary.v1",
                     "id": f"packet_cut_{int(clip_idx or 0):02d}_{timeline_frame:08d}",
@@ -878,13 +868,15 @@ def build_auto_grid_scan_helpers(deps: dict):
                     "frame_rate": fps,
                     "timeline_frame_rate": fps,
                     "source": "visual_provisional",
-                    "detector": "packet-energy-pixel-flow-v1",
-                    "reason": "packet_energy_pixel_flow_scout",
+                    "detector": "packet-energy-visual-cut-jump-v2",
+                    "reason": "packet_energy_gray_pixel_edge_flow_scout",
                     "score": round(float(score), 3),
                     "packet_score": round(float(packet_score), 3),
                     "packet_delta": round(float(packet_delta), 3),
-                    "pixel_score": round(pixel_score, 3),
-                    "pixel_p95": round(pixel_p95, 3),
+                    "pixel_ratio": round(pixel_ratio, 6),
+                    "edge_ratio": round(edge_ratio, 6),
+                    "region_hits": int(region_hits),
+                    "motion_jump": round(motion_jump, 3),
                     "flow_residual": round(flow_residual, 3),
                     "flow_mag": round(flow_mag, 3),
                     "scan_interval_sec": 1.0,

@@ -2,10 +2,11 @@
 # Phase: PHASE3
 """Selectable video playback backends for the editor preview.
 
-QtMultimedia is the production-safe default. python-mpv/libmpv can be faster,
-but on macOS it can abort the whole Python process from its native event thread
-when embedded with the current PyQt/QML stack, so it is kept behind an explicit
-unsafe experiment gate.
+The editor only needs lightweight, responsive preview playback, but stability is
+more important than chasing the absolute lightest backend. Embedded mpv stays as
+an explicit opt-in path; QtMultimedia remains the production-safe default.
+VLC remains available only as an explicit override because its Python wrapper
+may be importable even when the local libVLC runtime is incomplete.
 """
 from __future__ import annotations
 
@@ -77,10 +78,11 @@ def _embedded_mpv_enabled() -> bool:
     if env_value:
         return env_value in _TRUE_VALUES
     settings = _render_settings()
-    return _coerce_bool(settings.get("editor_embedded_mpv_enabled"), False) or _coerce_bool(
-        settings.get("editor_video_backend_unsafe_mpv_enabled"),
-        False,
-    )
+    if "editor_embedded_mpv_enabled" in settings:
+        return _coerce_bool(settings.get("editor_embedded_mpv_enabled"), False)
+    if "editor_video_backend_unsafe_mpv_enabled" in settings:
+        return _coerce_bool(settings.get("editor_video_backend_unsafe_mpv_enabled"), False)
+    return False
 
 
 def _running_under_pytest() -> bool:
@@ -124,17 +126,17 @@ def choose_video_backend(preferred: str | None = None) -> VideoBackendChoice:
     if (requested == "auto") and (_running_under_pytest() or _offscreen_qt()):
         return VideoBackendChoice("qt", "test_or_offscreen_safe")
     mpv_allowed = _embedded_mpv_enabled()
-    if requested == "auto" and bool(getattr(config, "IS_MAC", False)) and not mpv_allowed:
-        if _vlc_available():
-            return VideoBackendChoice("vlc", "libvlc_fallback")
+    if requested == "auto" and not mpv_allowed and _mpv_available():
         return VideoBackendChoice("qt", "embedded_mpv_disabled")
     if requested == "mpv" and not mpv_allowed:
         return VideoBackendChoice("qt", "embedded_mpv_disabled")
     if requested in {"auto", "mpv"} and _mpv_available():
-        return VideoBackendChoice("mpv", "preferred_lightweight_gpu_backend")
+        return VideoBackendChoice("mpv", "preferred_lightweight_simple_backend")
     if requested == "mpv":
         return VideoBackendChoice("qt", "mpv_unavailable")
-    if requested in {"auto", "vlc"} and _vlc_available():
+    if requested == "auto":
+        return VideoBackendChoice("qt", "qt_simple_fallback")
+    if requested == "vlc" and _vlc_available():
         return VideoBackendChoice("vlc", "libvlc_fallback")
     if requested == "vlc":
         return VideoBackendChoice("qt", "vlc_unavailable")
@@ -144,9 +146,15 @@ def choose_video_backend(preferred: str | None = None) -> VideoBackendChoice:
 class _BaseExternalBackend(QObject):
     durationChanged = pyqtSignal(int)
     mediaStatusChanged = pyqtSignal(object)
+    playbackStateChanged = pyqtSignal(object)
 
     backend_name = "external"
     uses_qt_audio = False
+    loads_source_asynchronously = True
+    # Match QMediaPlayer's enum surface so existing editor code can treat
+    # Qt, VLC, and MPV players uniformly.
+    PlaybackState = QMediaPlayer.PlaybackState
+    MediaStatus = QMediaPlayer.MediaStatus
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -178,21 +186,27 @@ class _BaseExternalBackend(QObject):
         self._source_path = source.toLocalFile() if hasattr(source, "toLocalFile") else str(source or "")
         self._last_end_emitted = False
         self._load_source(self._source_path)
-        self.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
+        QTimer.singleShot(
+            0,
+            lambda: self.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia),
+        )
 
     def playbackState(self):
         return QMediaPlayer.PlaybackState.PlayingState if self._is_playing() else QMediaPlayer.PlaybackState.PausedState
 
     def play(self) -> None:
         self._play()
+        self.playbackStateChanged.emit(self.playbackState())
         self._poll_timer.start()
 
     def pause(self) -> None:
         self._pause()
+        self.playbackStateChanged.emit(self.playbackState())
         self._poll()
 
     def stop(self) -> None:
         self._stop()
+        self.playbackStateChanged.emit(self.playbackState())
         self._poll_timer.stop()
 
     def position(self) -> int:

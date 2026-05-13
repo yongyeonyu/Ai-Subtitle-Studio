@@ -35,6 +35,7 @@ from ui.timeline.timeline_paint import (
     stt_candidate_selection_state,
     stt_candidate_unselected,
 )
+from ui.timeline.timeline_segment_style import official_boundary_marker_visual
 from ui.timeline.timeline_analysis import subtitle_detection_segments_for_editor
 from ui.editor.editor_helpers import make_gap_ud
 from ui.editor.editor_segments import EditorSegmentsMixin
@@ -1389,10 +1390,72 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(captured["settings"]["scan_cut_boundary_level"], "medium")
         self.assertGreaterEqual(captured["settings"]["scan_cut_follower_strict_multiplier"], 1.12)
+        self.assertLessEqual(captured["settings"]["scan_cut_auto_verify_rollback_frames"], 18)
+        self.assertLessEqual(captured["settings"]["scan_cut_auto_verify_forward_frames"], 14)
+        self.assertEqual(captured["settings"]["scan_cut_color_avg_window_frames"], 12)
         self.assertEqual(captured["frame_count"], 900)
         self.assertEqual(captured["scan_profile"]["level"], "medium")
         self.assertEqual(result["frame"], 205)
         self.assertAlmostEqual(result["sec"], 205.0 / 30.0, places=3)
+
+    def test_scan_verify_cut_boundary_candidate_promotes_strong_window_provisional_when_only_color_avg_fails(self):
+        class FakeCv2:
+            CAP_PROP_FPS = 5
+            CAP_PROP_FRAME_COUNT = 7
+
+        class FakeCap:
+            def get(self, prop):
+                if prop == FakeCv2.CAP_PROP_FPS:
+                    return 59.94
+                if prop == FakeCv2.CAP_PROP_FRAME_COUNT:
+                    return 2400.0
+                return 0.0
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {"scan_cut_boundary_level": "medium"}
+
+            def _current_frame_fps(self):
+                return 59.94
+
+            def _snap_to_frame(self, sec):
+                return round(float(sec), 6)
+
+            def _scan_get_cv2_module(self):
+                return FakeCv2()
+
+            def _scan_get_cv2_capture(self, _source_path):
+                return FakeCap()
+
+            def _scan_source_and_local_sec(self, global_sec):
+                return "/tmp/test.mp4", float(global_sec), {}
+
+            def _scan_cut_strict_verify_bundle(self):
+                def _profile(settings):
+                    return {"level": settings.get("scan_cut_boundary_level"), "positions": (0, 2, 4, 6, 8)}
+
+                def _verify(_cap, _cv2_mod, **_kwargs):
+                    return {
+                        "passed": False,
+                        "reason": "color_avg_failed",
+                        "provisional_frame": 312,
+                        "provisional_sec": 312.0 / 59.94,
+                        "provisional_score": 56.33,
+                        "provisional_regions": 9,
+                        "provisional_mode": "1f",
+                    }
+
+                return {"profile_fn": _profile, "verify_fn": _verify}
+
+        editor = DummyEditor()
+
+        result = editor._scan_verify_cut_boundary_candidate(312, 59.94, reason="strong_window")
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["frame"], 312)
+        self.assertEqual(result["mode"], "manual_provisional_1f")
+        self.assertEqual(result["reason"], "manual_provisional_color_override")
 
     def test_relative_refine_uses_strict_verified_frame(self):
         class DummyEditor:
@@ -1443,6 +1506,43 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(editor.coarse_reason, "strong_window")
         self.assertEqual(result, (44, 44.0 / 30.0, 123.0, 5, "strict_gray_window_color_avg"))
 
+    def test_strong_window_candidate_accepts_312_style_cut_even_with_stale_runtime_threshold(self):
+        class DummyEditor:
+            def __init__(self):
+                self.settings = {
+                    "scan_cut_strong_window_threshold": 75.0,
+                    "scan_cut_ignore_initial_seconds": 10.0,
+                }
+                self._scan_last_region_hits = 4
+                self._scan_last_visual_cut_metrics = {}
+
+        editor = DummyEditor()
+        editor._scan_last_visual_cut_metrics = {
+            "pixel_ratio": 0.831,
+            "motion_jump": 47.2,
+            "edge_ratio": 0.202,
+        }
+        accepted = scan_cut_relative_refine._rel_is_candidate(editor, 58.93, 43.19, 23.54)
+
+        editor._scan_last_visual_cut_metrics = {
+            "pixel_ratio": 0.661,
+            "motion_jump": 27.4,
+            "edge_ratio": 0.195,
+        }
+        rejected = scan_cut_relative_refine._rel_is_candidate(editor, 46.40, 44.45, 37.52)
+
+        self.assertEqual(accepted, (True, "strong_window"))
+        self.assertEqual(rejected, (False, ""))
+
+    def test_manual_scan_ignore_initial_seconds_clamps_stale_default(self):
+        class DummyEditor:
+            def __init__(self):
+                self.settings = {"scan_cut_ignore_initial_seconds": 10.0}
+
+        editor = DummyEditor()
+
+        self.assertEqual(scan_cut_relative_refine._rel_ignore_initial_seconds(editor), 5.0)
+
     def test_relative_refine_rejects_when_strict_verify_fails(self):
         class DummyEditor:
             def __init__(self):
@@ -1485,6 +1585,125 @@ class TimelineHitTargetTests(unittest.TestCase):
             result = scan_cut_relative_refine._rel_refine_boundary(editor, 40, 45, 30.0, "strong_window")
 
         self.assertIsNone(result)
+
+    def test_manual_found_cut_promotes_to_confirmed_boundary_ui_and_clears_provisional_duplicate(self):
+        class DummySignal:
+            def __init__(self):
+                self.calls = []
+
+            def emit(self, payload):
+                self.calls.append(list(payload or []))
+
+        class DummyOwner:
+            def __init__(self):
+                self._project_boundary_times = []
+                self._sig_update_project_boundary_times = DummySignal()
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {}
+                self._project_boundary_times = []
+                self._auto_cut_boundary_scan_lines = [
+                    {"timeline_sec": 5.205, "time": 5.205, "status": "provisional", "reason": "strong_window"}
+                ]
+                self.timeline = type("Timeline", (), {})()
+                self.timeline.set_boundary_times = Mock(return_value=True)
+                self.timeline.set_scan_boundary_times = Mock(return_value=True)
+                self.timeline.canvas = type("Canvas", (), {"boundary_times": [], "scan_boundary_times": []})()
+                self._owner = DummyOwner()
+
+            def _current_frame_fps(self):
+                return 59.94
+
+            def _snap_to_frame(self, sec):
+                return round(float(sec), 6)
+
+            def window(self):
+                return self._owner
+
+        editor = DummyEditor()
+        row = editor._build_confirmed_cut_boundary_record(
+            312.0 / 59.94,
+            frame=312,
+            score=83.34,
+            regions=12,
+            reason="relative_strict_manual_provisional_1f",
+        )
+
+        merged = editor._apply_confirmed_cut_boundary_to_ui(row)
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["source"], "manual_verified")
+        self.assertTrue(merged[0]["verified"])
+        self.assertEqual(merged[0]["status"], "confirmed")
+        self.assertEqual(editor._owner._project_boundary_times, merged)
+        self.assertEqual(editor._owner._sig_update_project_boundary_times.calls[-1], merged)
+        editor.timeline.set_boundary_times.assert_called_once_with(merged)
+        self.assertEqual(editor._auto_cut_boundary_scan_lines, [])
+        editor.timeline.set_scan_boundary_times.assert_called_with([])
+
+    def test_manual_found_cut_sanitizes_boundary_rows_before_storing(self):
+        class DummySignal:
+            def __init__(self):
+                self.calls = []
+
+            def emit(self, payload):
+                self.calls.append(list(payload or []))
+
+        class DummyOwner:
+            def __init__(self):
+                self._project_boundary_times = []
+                self._sig_update_project_boundary_times = DummySignal()
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {}
+                self._project_boundary_times = []
+                self._auto_cut_boundary_scan_lines = []
+                self.timeline = type("Timeline", (), {})()
+                self.timeline.set_boundary_times = Mock(return_value=True)
+                self.timeline.set_scan_boundary_times = Mock(return_value=True)
+                self.timeline.canvas = type("Canvas", (), {"boundary_times": [], "scan_boundary_times": []})()
+                self._owner = DummyOwner()
+
+            def _current_frame_fps(self):
+                return 59.94
+
+            def _snap_to_frame(self, sec):
+                return round(float(sec), 6)
+
+            def window(self):
+                return self._owner
+
+        editor = DummyEditor()
+        row = editor._build_confirmed_cut_boundary_record(
+            312.0 / 59.94,
+            frame=312,
+            score=83.34,
+            regions=12,
+            reason="relative_strict_manual_provisional_1f",
+        )
+        row["debug_payload"] = {"nested": ["should", "drop"]}
+
+        merged = editor._apply_confirmed_cut_boundary_to_ui(row, remove_nearby_provisionals=False)
+
+        self.assertEqual(len(merged), 1)
+        self.assertNotIn("debug_payload", merged[0])
+        self.assertEqual(merged[0]["timeline_frame"], 312)
+        self.assertEqual(merged[0]["source"], "manual_verified")
+
+    def test_official_boundary_marker_visual_distinguishes_manual_verified_rows(self):
+        visual = official_boundary_marker_visual(
+            {
+                "source": "manual_verified",
+                "line_color": "#7FDBFF",
+                "reason": "relative_strict_manual_provisional_1f",
+            }
+        )
+
+        self.assertEqual(visual["color"], "#7FDBFF")
+        self.assertEqual(visual["width"], 2)
+        self.assertEqual(visual["style"], "solid")
 
     def test_set_active_repaints_only_segment_region(self):
         canvas = self._canvas()

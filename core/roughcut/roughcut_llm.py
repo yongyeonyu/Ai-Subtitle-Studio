@@ -7,8 +7,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.llm.ollama_provider import running_local_llm_models, stop_local_llm_models, warmup_model
-
 from .roughcut_prompts import build_roughcut_prompt, validate_roughcut_action_response
 from .roughcut_llm_config import resolve_roughcut_llm_config
 from .roughcut_settings import merge_roughcut_settings
@@ -23,6 +21,24 @@ class RoughCutLLMActionResult:
     data: dict[str, Any] = field(default_factory=dict)
     prompt: str = ""
     error: str = ""
+
+
+def running_local_llm_models(*args, **kwargs):
+    from core.llm.ollama_provider import running_local_llm_models as _running_local_llm_models
+
+    return _running_local_llm_models(*args, **kwargs)
+
+
+def stop_local_llm_models(*args, **kwargs):
+    from core.llm.ollama_provider import stop_local_llm_models as _stop_local_llm_models
+
+    return _stop_local_llm_models(*args, **kwargs)
+
+
+def warmup_model(*args, **kwargs):
+    from core.llm.ollama_provider import warmup_model as _warmup_model
+
+    return _warmup_model(*args, **kwargs)
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:

@@ -10,6 +10,8 @@ import os
 from datetime import datetime
 from typing import Any
 
+from PyQt6.QtCore import QTimer
+
 from core.project.project_context import (
     STT_SEGMENT_METADATA_KEYS,
     build_editor_state,
@@ -26,9 +28,8 @@ from core.project.project_manager import (
 from core.project.project_assets import externalize_project_text_assets
 from core.cut_boundary import cut_boundary_enabled, project_cut_boundaries, split_segments_by_cut_boundaries, sync_project_cut_boundaries
 from core.frame_time import normalize_fps
+from core.project.project_format import PROJECT_SCHEMA_VERSION
 from core.work_mode import EDITOR_MODE, normalize_work_mode
-
-PROJECT_SCHEMA_VERSION = '03.00.26'
 
 
 def _safe_abs(path: str | None) -> str | None:
@@ -297,24 +298,30 @@ def restore_project_stt_preview_segments(editor, project: dict[str, Any] | None)
     return len(restored)
 
 
-def apply_project_ui_state(owner, editor, project_path: str) -> None:
-    if not project_path or not os.path.exists(project_path):
+def apply_project_ui_state(
+    owner,
+    editor,
+    project_path: str,
+    *,
+    project_data: dict[str, Any] | None = None,
+) -> None:
+    if not project_path and not isinstance(project_data, dict):
         return
-    try:
-        data = read_project_file(project_path)
-    except Exception:
-        return
+    if isinstance(project_data, dict):
+        data = project_data
+    else:
+        if not os.path.exists(project_path):
+            return
+        try:
+            data = read_project_file(project_path)
+        except Exception:
+            return
     ws = data.get('workspace', {}) or {}
     timeline = getattr(editor, 'timeline', None)
     lock_chk = getattr(timeline, 'lock_chk', None) if timeline else None
     try:
         if hasattr(editor, 'splitter') and editor.splitter is not None and ws.get('splitter_sizes'):
             editor.splitter.setSizes(list(ws.get('splitter_sizes', [])))
-    except Exception:
-        pass
-    try:
-        if timeline is not None and hasattr(timeline, 'fit_to_view'):
-            timeline.fit_to_view()
     except Exception:
         pass
     try:
@@ -345,16 +352,6 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
     except Exception:
         pass
     try:
-        restore_project_stt_preview_segments(editor, data)
-    except Exception:
-        pass
-    try:
-        restore_stt = getattr(editor, "_restore_stt_mode_project_state", None)
-        if callable(restore_stt):
-            restore_stt(data)
-    except Exception:
-        pass
-    try:
         if hasattr(owner, '_log_visible'):
             owner._log_visible = bool(ws.get('terminal_visible', False))
         if hasattr(owner, '_apply_log_visible'):
@@ -365,3 +362,46 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
             owner._project_panel_visible = bool(ws.get('project_panel_visible', True))
     except Exception:
         pass
+
+    def _apply_view_restore() -> None:
+        try:
+            sec = float(ws.get('last_playhead', 0.0) or 0.0)
+        except Exception:
+            sec = 0.0
+        try:
+            local_sec = editor._global_to_local_sec(sec) if hasattr(editor, "_global_to_local_sec") else sec
+        except Exception:
+            local_sec = sec
+        try:
+            video_player = getattr(editor, "video_player", None)
+            if video_player is not None and sec > 0.0 and hasattr(video_player, "seek"):
+                video_player.seek(local_sec)
+        except Exception:
+            pass
+        try:
+            if timeline is not None and hasattr(timeline, "show_time_window_seconds"):
+                timeline.show_time_window_seconds(
+                    15.0,
+                    center_sec=sec if sec > 0.0 else None,
+                )
+            elif timeline is not None and hasattr(timeline, "fit_to_view"):
+                timeline.fit_to_view()
+                if sec > 0.0 and hasattr(timeline, "center_to_sec"):
+                    timeline.center_to_sec(sec, smooth=False)
+        except Exception:
+            pass
+
+    def _apply_deferred_project_state() -> None:
+        try:
+            restore_project_stt_preview_segments(editor, data)
+        except Exception:
+            pass
+        try:
+            restore_stt = getattr(editor, "_restore_stt_mode_project_state", None)
+            if callable(restore_stt):
+                restore_stt(data)
+        except Exception:
+            pass
+
+    QTimer.singleShot(140, _apply_view_restore)
+    QTimer.singleShot(260, _apply_deferred_project_state)

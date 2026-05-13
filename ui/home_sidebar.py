@@ -5,6 +5,7 @@
 import os
 import re
 import sys
+import time
 from html import escape
 
 from PyQt6.QtCore import Qt, QTimer, QSize, QDateTime
@@ -18,7 +19,7 @@ from PyQt6.QtWidgets import (
 from core.runtime import config
 from core.settings import load_settings, save_settings
 from core.path_manager import load_settings as _path_load_settings, save_settings as _path_save_settings
-from core.pipeline_status import generation_stage_keys, generation_stage_keys_all
+from core.pipeline_status import generation_stage_keys, generation_stage_keys_all, generation_stage_label
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
     apply_recommended_stt_quality_defaults,
@@ -601,6 +602,254 @@ class HomeSidebarMixin:
                 return "완료"
         return "대기"
 
+    def _sidebar_parse_clock_seconds(self, value) -> float | None:
+        parser = getattr(self, "_parse_queue_seconds_value", None)
+        if callable(parser):
+            try:
+                parsed = parser(value)
+            except Exception:
+                parsed = None
+            if parsed is not None:
+                return float(parsed)
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            pass
+        if ":" not in text:
+            return None
+        parts = [part.strip() for part in text.split(":")]
+        if not parts or any(not part.isdigit() for part in parts):
+            return None
+        units = [int(part) for part in parts]
+        if len(units) == 2:
+            minutes, seconds = units
+            return float((minutes * 60) + seconds)
+        if len(units) == 3:
+            hours, minutes, seconds = units
+            return float((hours * 3600) + (minutes * 60) + seconds)
+        return None
+
+    def _sidebar_format_clock(self, seconds: float) -> str:
+        formatter = getattr(self, "_format_queue_clock", None)
+        if callable(formatter):
+            try:
+                return str(formatter(seconds))
+            except Exception:
+                pass
+        total = max(0, int(round(float(seconds or 0.0))))
+        hours, rem = divmod(total, 3600)
+        minutes, secs = divmod(rem, 60)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    def _sidebar_generation_active_row(self) -> int:
+        getter = getattr(self, "_current_queue_active_row", None)
+        if callable(getter):
+            try:
+                return int(getter())
+            except Exception:
+                pass
+        table = getattr(self, "queue_table", None)
+        try:
+            row = int(getattr(self, "_current_file_idx", 1) or 1) - 1
+        except Exception:
+            row = 0
+        if table is None:
+            return max(-1, row)
+        try:
+            return row if 0 <= row < int(table.rowCount()) else -1
+        except Exception:
+            return -1
+
+    def _sidebar_generation_row_status(self, row: int) -> str:
+        table = getattr(self, "queue_table", None)
+        if table is None or row < 0:
+            return ""
+        try:
+            item = table.item(row, 0)
+        except Exception:
+            item = None
+        try:
+            return str(item.text() if item is not None else "")
+        except Exception:
+            return ""
+
+    def _sidebar_generation_row_expected_seconds(self, row: int) -> float:
+        try:
+            expected = float((getattr(self, "_expected_seconds", {}) or {}).get(int(row), 0.0) or 0.0)
+        except Exception:
+            expected = 0.0
+        if expected > 0:
+            return expected
+        table = getattr(self, "queue_table", None)
+        if table is None or row < 0:
+            return 0.0
+        try:
+            eta_item = table.item(row, 4)
+            duration_item = table.item(row, 3)
+            eta_text = str(eta_item.text() if eta_item else "")
+            duration_text = str(duration_item.text() if duration_item else "")
+        except Exception:
+            eta_text = ""
+            duration_text = ""
+        labeler = getattr(self, "_queue_expected_time_label", None)
+        if callable(labeler):
+            try:
+                eta_text = str(labeler(int(row), eta_text, duration_text) or eta_text or duration_text)
+            except Exception:
+                eta_text = eta_text or duration_text
+        else:
+            eta_text = eta_text or duration_text
+        parsed = self._sidebar_parse_clock_seconds(eta_text)
+        return max(0.0, float(parsed or 0.0))
+
+    def _sidebar_generation_row_elapsed_seconds(self, row: int, now_ts: float) -> float:
+        start_times = dict(getattr(self, "_file_start_times", {}) or {})
+        complete_times = dict(getattr(self, "_file_complete_times", {}) or {})
+        started_at = float(start_times.get(int(row), 0.0) or 0.0)
+        if started_at <= 0.0:
+            return 0.0
+        ended_at = float(complete_times.get(int(row), 0.0) or 0.0)
+        if ended_at <= 0.0:
+            ended_at = float(now_ts)
+        return max(0.0, ended_at - started_at)
+
+    def _sidebar_generation_stage_text(self) -> str:
+        editor = self._active_editor()
+        stt_ensemble_enabled = bool(getattr(editor, "settings", {}) and getattr(editor, "settings", {}).get("stt_ensemble_enabled", False))
+        status_candidates: list[str] = []
+        if editor is not None:
+            label = getattr(editor, "status_lbl", None)
+            if label is not None:
+                try:
+                    status_candidates.append(str(label.text() or ""))
+                except Exception:
+                    pass
+            state_manager = getattr(editor, "sm", None)
+            if state_manager is not None:
+                for attr in ("custom_status", "_custom_status", "status_text"):
+                    try:
+                        value = str(getattr(state_manager, attr, "") or "")
+                    except Exception:
+                        value = ""
+                    if value:
+                        status_candidates.append(value)
+        active_row = self._sidebar_generation_active_row()
+        if active_row >= 0:
+            status_candidates.append(self._sidebar_generation_row_status(active_row))
+        for raw in status_candidates:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            if "오류" in text or "실패" in text or "중단" in text:
+                return "오류"
+            if "저장" in text:
+                return "저장"
+            if "완료" in text:
+                return "완료"
+            stage = generation_stage_label(text, stt_ensemble_enabled=stt_ensemble_enabled)
+            if stage:
+                return stage
+            plain = self._plain_queue_status(text)
+            if plain and plain not in {"-", "대기 중"}:
+                return plain
+        if self._is_subtitle_generation_running():
+            return "진행 중"
+        return "완료" if int(getattr(self, "_real_pct", 0) or 0) >= 100 else "대기"
+
+    def _generation_progress_snapshot(self) -> dict:
+        running = self._is_subtitle_generation_running()
+        now_ts = time.time()
+        active_row = self._sidebar_generation_active_row()
+        table = getattr(self, "queue_table", None)
+        try:
+            row_count = int(table.rowCount()) if table is not None else 0
+        except Exception:
+            row_count = 0
+        total_files = max(row_count, int(getattr(self, "_total_files", 0) or 0))
+        total_expected = 0.0
+        total_elapsed = 0.0
+        progress_elapsed = 0.0
+        known_expected_rows = 0
+        all_done = total_files > 0
+
+        flagger = getattr(self, "_queue_status_flags", None)
+        for row in range(total_files):
+            status_text = self._sidebar_generation_row_status(row)
+            if callable(flagger):
+                try:
+                    row_done, row_error, _row_active = flagger(status_text)
+                except Exception:
+                    row_done = row_error = False
+            else:
+                row_done = "완료" in status_text
+                row_error = any(token in status_text for token in ("오류", "실패", "중단"))
+            expected = self._sidebar_generation_row_expected_seconds(row)
+            elapsed = self._sidebar_generation_row_elapsed_seconds(row, now_ts)
+            if elapsed > 0.0:
+                total_elapsed += elapsed
+            if expected > 0.0:
+                total_expected += expected
+                known_expected_rows += 1
+                if row_done:
+                    progress_elapsed += expected
+                elif row == active_row and running:
+                    progress_elapsed += min(elapsed, expected)
+            if not row_done and not row_error:
+                all_done = False
+
+        percent = float(getattr(self, "_real_pct", 0) or 0.0)
+        if total_expected > 0.0 and known_expected_rows >= total_files and total_files > 0:
+            percent = (progress_elapsed / total_expected) * 100.0
+        if all_done and total_files > 0:
+            percent = 100.0
+        elif running:
+            percent = min(percent, 99.0)
+        percent = max(0.0, min(100.0, percent))
+
+        stage_text = self._sidebar_generation_stage_text()
+        title = f"자막 생성 | {stage_text}"
+        progress_text = f"{int(round(percent))}%"
+        subtitle = ""
+        if running or percent > 0.0 or total_expected > 0.0:
+            elapsed_text = self._sidebar_format_clock(total_elapsed)
+            expected_text = self._sidebar_format_clock(total_expected) if total_expected > 0.0 else "--:--"
+            subtitle = f"{elapsed_text} / {expected_text}"
+        tooltip_lines = [title, progress_text]
+        if subtitle:
+            tooltip_lines.append(subtitle)
+        return {
+            "running": running,
+            "title": title,
+            "subtitle": subtitle,
+            "percent": int(round(percent)),
+            "percentValue": float(percent),
+            "progressText": progress_text,
+            "tooltip": "\n".join(line for line in tooltip_lines if line),
+        }
+
+    def _sidebar_generation_nav_item(self) -> dict:
+        snapshot = self._generation_progress_snapshot()
+        return {
+            "id": "generation_status",
+            "title": snapshot["title"],
+            "subtitle": snapshot["subtitle"],
+            "badge": "AI",
+            "accent": "#00D46A" if snapshot["running"] or snapshot["percent"] > 0 else "#34C759",
+            "active": False,
+            "enabled": True,
+            "progressVisible": True,
+            "progressPercent": snapshot["percent"],
+            "progressText": snapshot["progressText"],
+            "fillColor": "#153A25",
+            "height": 38,
+            "tooltip": snapshot["tooltip"],
+        }
+
     def _roughcut_status_text(self) -> str:
         editor = self._active_editor()
         if editor is None:
@@ -712,6 +961,12 @@ class HomeSidebarMixin:
             "</table>"
         )
         label.setToolTip(tooltip)
+        refresher = getattr(self, "_refresh_sidebar_nav_menu", None)
+        if callable(refresher):
+            try:
+                refresher()
+            except Exception:
+                pass
 
     def _runtime_title_status_color(self) -> str:
         snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
@@ -1360,6 +1615,12 @@ class HomeSidebarMixin:
         if runtime_tip:
             tooltip = f"{tooltip}\n{runtime_tip}"
         label.setToolTip(tooltip)
+        refresher = getattr(self, "_refresh_sidebar_nav_menu", None)
+        if callable(refresher):
+            try:
+                refresher()
+            except Exception:
+                pass
         self._sync_sidebar_preset_panel(settings)
         self._sync_subtitle_quality_combos(settings.get("stt_quality_preset"))
         self._refresh_sidebar_runtime_monitor()

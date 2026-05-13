@@ -482,7 +482,15 @@ class SignalHandlersMixin:
 
     def _on_project_boundary_times_updated(self, times):
         try:
-            self._project_boundary_times = list(times or [])
+            from core.cut_boundary import sanitize_cut_boundary_rows
+
+            fps = 30.0
+            try:
+                editor = getattr(self, "_editor_widget", None)
+                fps = float(getattr(editor, "video_fps", 30.0) or 30.0) if editor is not None else 30.0
+            except Exception:
+                fps = 30.0
+            self._project_boundary_times = sanitize_cut_boundary_rows(list(times or []), primary_fps=fps)
         except Exception:
             self._project_boundary_times = []
         editor = getattr(self, "_editor_widget", None)

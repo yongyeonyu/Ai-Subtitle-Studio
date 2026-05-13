@@ -12,6 +12,7 @@ import re
 from collections import OrderedDict
 from typing import Any
 
+from core import correction_dictionary_db
 from core import native_text_cleanup
 from core.runtime.logger import get_logger
 
@@ -98,6 +99,8 @@ def _finalize_subtitle_text(text: str) -> str:
 def _apply_corrections_with_tracking(text: str, corrections: dict | None = None) -> tuple[str, list[tuple[str, str]]]:
     if not corrections or not text:
         return text, []
+    if len(corrections) >= correction_dictionary_db.INDEXED_QUERY_MIN_ENTRIES and not correction_dictionary_db.corrections_may_apply(text, corrections):
+        return text, []
     native_out = native_text_cleanup.apply_corrections(text, corrections)
     if native_out is not None:
         updated, applied_pairs = native_out
@@ -175,21 +178,31 @@ def enforce_final_subtitle_text_policy(
                 unique_texts.append(text)
             row_to_unique.append(mapped)
 
-        unique_out_texts: list[str]
-        unique_out_batches: list[list[tuple[str, str]]]
+        unique_out_texts: list[str] = []
+        unique_out_batches: list[list[tuple[str, str]]] = []
+        gate_enabled = len(corrections) >= correction_dictionary_db.INDEXED_QUERY_MIN_ENTRIES
+        maybe_flags = (
+            [correction_dictionary_db.corrections_may_apply(text, corrections) for text in unique_texts]
+            if gate_enabled
+            else [True] * len(unique_texts)
+        )
         native_batch = native_text_cleanup.apply_corrections_batch(unique_texts, corrections)
-        if native_batch is not None:
-            unique_out_texts, unique_out_batches = native_batch
+        use_native_batch = native_batch is not None
+        if use_native_batch:
+            use_native_batch = all(maybe_flags)
+        if use_native_batch:
+            unique_out_texts, unique_out_batches = native_batch or ([], [])
             for source_text, updated, applied_pairs in zip(unique_texts, unique_out_texts, unique_out_batches):
                 _clean_cache_put((*correction_token, source_text), str(updated), list(applied_pairs or []))
         else:
-            unique_out_texts = []
-            unique_out_batches = []
-            for text in unique_texts:
+            for text, maybe_apply in zip(unique_texts, maybe_flags):
                 cache_key = (*correction_token, text)
                 cached = _clean_cache_get(cache_key)
                 if cached is not None:
                     updated, applied_pairs = cached
+                elif not maybe_apply:
+                    updated, applied_pairs = text, []
+                    _clean_cache_put(cache_key, updated, applied_pairs)
                 else:
                     updated, applied_pairs = _apply_corrections_with_tracking(text, corrections)
                     _clean_cache_put(cache_key, updated, applied_pairs)

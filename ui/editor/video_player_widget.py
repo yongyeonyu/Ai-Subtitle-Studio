@@ -10,6 +10,7 @@ import hashlib
 import subprocess
 import tempfile
 import time
+import threading
 from bisect import bisect_right
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -21,7 +22,7 @@ from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from core.runtime import config
 from core.frame_time import build_frame_time_map, normalize_fps, sec_to_floor_frame, snap_sec_to_frame
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
-from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail
+from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail, thumbnail_cache_path
 from core.video_preview_proxy import preview_proxy_path_for
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
 from ui.editor.video_playback_backend import create_video_backend
@@ -56,6 +57,8 @@ class _MirrorLabel(QLabel):
 class _DormantAuxPlayer:
     backend_name = "dormant"
     uses_qt_audio = False
+    PlaybackState = QMediaPlayer.PlaybackState
+    MediaStatus = QMediaPlayer.MediaStatus
 
     def source(self):
         return QUrl()
@@ -131,6 +134,7 @@ class _WorkerProxy:
 class VideoPlayerWidget(QWidget):
     frame_step_requested = pyqtSignal(int)
     scan_cut_requested = pyqtSignal(int)
+    initial_thumbnail_ready = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -160,6 +164,7 @@ class VideoPlayerWidget(QWidget):
         self._subtitle_count: int = 0
         self._subtitle_cache_idx: int = -1
         self._last_time_label_ms: int = -250
+        self._last_frame_count_text: str = ""
         self._last_provider_refresh_at: float = 0.0
         self._subtitle_provider = None
         self._subtitle_provider_signature = ""
@@ -181,6 +186,7 @@ class VideoPlayerWidget(QWidget):
         self._last_unprimed_thumbnail_at: float = 0.0
         self._last_unprimed_thumbnail_sec: float | None = None
         self._source_display_name: str = ""
+        self._initial_thumbnail_request_key: str = ""
         self._proxy_build_proc = None
         self._proxy_build_src: str = ""
         self._proxy_build_dst: str = ""
@@ -203,6 +209,7 @@ class VideoPlayerWidget(QWidget):
             self.media_player.playbackStateChanged.connect(self._on_playback_state_changed)
         except Exception:
             pass
+        self.initial_thumbnail_ready.connect(self._on_initial_thumbnail_ready)
 
         _pretendard = "/Library/Fonts/Pretendard-Regular.ttf"
         if os.path.exists(_pretendard):
@@ -322,6 +329,7 @@ class VideoPlayerWidget(QWidget):
             self.current_time = self.frame_time_map.sec_for_frame(self.current_frame)
         except Exception:
             self.current_frame = 0
+        self._update_frame_count_label(force=True)
 
     def _apply_loaded_media_state(self):
         # Different clip sources must finish loading before we consume pending
@@ -534,6 +542,24 @@ class VideoPlayerWidget(QWidget):
         self.time_label.setStyleSheet("color: #A9B0B7; font-size: 11px; font-weight: 500; background: transparent; border: none;")
         ctrl_layout.addWidget(self.time_label)
 
+        self.frame_count_label = _MirrorLabel("F 0 / 0")
+        self.frame_count_label.setObjectName("VideoFrameCountLabel")
+        self.frame_count_label.setToolTip("현재 프레임 / 전체 프레임")
+        self.frame_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.frame_count_label.setWordWrap(False)
+        self.frame_count_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.frame_count_label.setStyleSheet(
+            "QLabel#VideoFrameCountLabel {"
+            " color: #8FE7FF;"
+            " background: transparent;"
+            " border: none;"
+            " padding: 0 4px;"
+            " font-size: 10px;"
+            " font-weight: 800;"
+            "}"
+        )
+        ctrl_layout.addWidget(self.frame_count_label)
+
         ctrl_layout.addStretch()
 
         self.info_label = _MirrorLabel("영상을 불러오는 중...")
@@ -572,7 +598,7 @@ class VideoPlayerWidget(QWidget):
         ctrl = self._build_control_bar()
         self._control_bar_widget = ctrl
         self._control_bar_widget.installEventFilter(self)
-        for label in (self.time_label, self.info_label, self.source_name_label):
+        for label in (self.time_label, self.info_label, self.frame_count_label, self.source_name_label):
             label.text_changed.connect(self._sync_quick_control_bar)
             label.visible_changed.connect(self._sync_quick_control_bar)
         self._quick_control_bar = self._create_quick_control_bar(ctrl)
@@ -899,6 +925,7 @@ class VideoPlayerWidget(QWidget):
         return {
             "timeText": str(getattr(self.time_label, "text", lambda: "")() or ""),
             "infoText": str(getattr(self.info_label, "text", lambda: "")() or ""),
+            "frameText": str(getattr(self.frame_count_label, "text", lambda: "")() or ""),
             "sourceNameText": (
                 str(getattr(self.source_name_label, "text", lambda: "")() or "")
                 if not bool(getattr(self.source_name_label, "isHidden", lambda: True)())
@@ -958,7 +985,9 @@ class VideoPlayerWidget(QWidget):
         return True
 
     def _preview_proxy_enabled(self) -> bool:
-        return self._legacy_preview_proxy_enabled(default=True)
+        backend_name = str(getattr(getattr(self, "media_player", None), "backend_name", "") or "").strip().lower()
+        default_enabled = backend_name not in {"mpv", "vlc"}
+        return self._legacy_preview_proxy_enabled(default=default_enabled)
 
     def _proxy_path_for(self, path: str) -> str:
         return preview_proxy_path_for(path)
@@ -1136,6 +1165,7 @@ class VideoPlayerWidget(QWidget):
         self._set_segments(segments or [])
         if self._pending_segments is None:
             self._pending_segments = list(self.segments)
+        self._initial_thumbnail_request_key = ""
         if os.path.exists(path):
             self._set_source_name_badge(path)
             self._current_source_path = path
@@ -1170,7 +1200,10 @@ class VideoPlayerWidget(QWidget):
             if playback_path:
                 self.info_label.setText("")
             if self._is_video_file(path) and self._pending_thumb_path is None:
-                self._extract_and_show_thumbnail(path)
+                if defer_probe:
+                    self._schedule_initial_thumbnail_prepare(path, 0.0, width=640)
+                else:
+                    self._extract_and_show_thumbnail(path)
             elif not self._is_video_file(path):
                 self.video_stack.setCurrentIndex(0)
             self._apply_loaded_media_state()
@@ -1226,6 +1259,80 @@ class VideoPlayerWidget(QWidget):
         except Exception:
             project_path = ""
         return str(default_thumbnail_cache_dir(project_path))
+
+    def _thumbnail_request_key(self, path: str, sec: float = 0.0, *, width: int = 640) -> str:
+        try:
+            normalized = os.path.normpath(str(path or ""))
+        except Exception:
+            normalized = str(path or "")
+        return f"{normalized}|{float(sec or 0.0):.3f}|{int(width or 640)}"
+
+    def _cached_thumbnail_path(self, path: str, sec: float = 0.0, *, width: int = 640) -> str:
+        try:
+            thumb_path = thumbnail_cache_path(
+                str(path or ""),
+                max(0.0, float(sec or 0.0)),
+                self._thumbnail_cache_dir(),
+                width=max(160, int(width or 640)),
+            )
+        except Exception:
+            return ""
+        return str(thumb_path) if thumb_path else ""
+
+    def _show_precomputed_thumbnail_at(self, path: str, sec: float = 0.0, *, width: int = 640) -> bool:
+        thumb_path = self._cached_thumbnail_path(path, sec, width=width)
+        if not thumb_path or not os.path.exists(thumb_path):
+            return False
+        return self._show_thumbnail_from_cache_path(thumb_path)
+
+    def _schedule_initial_thumbnail_prepare(self, path: str, sec: float = 0.0, *, width: int = 640, delay_ms: int = 160) -> None:
+        if not self._is_video_file(path):
+            return
+        request_key = self._thumbnail_request_key(path, sec, width=width)
+        self._initial_thumbnail_request_key = request_key
+        if self._show_precomputed_thumbnail_at(path, sec, width=width):
+            return
+
+        def _start_worker() -> None:
+            if self._initial_thumbnail_request_key != request_key:
+                return
+            if os.path.normpath(str(getattr(self, "_current_source_path", "") or "")) != os.path.normpath(str(path or "")):
+                return
+
+            def _worker() -> None:
+                result = ensure_thumbnail(
+                    path,
+                    max(0.0, float(sec or 0.0)),
+                    cache_dir=self._thumbnail_cache_dir(),
+                    width=max(160, int(width or 640)),
+                )
+                if result.status not in ("cached", "created") or not result.path:
+                    return
+                try:
+                    self.initial_thumbnail_ready.emit(request_key, str(result.path))
+                except RuntimeError:
+                    return
+
+            try:
+                threading.Thread(
+                    target=_worker,
+                    daemon=True,
+                    name="video-open-thumbnail",
+                ).start()
+            except Exception:
+                pass
+
+        QTimer.singleShot(max(0, int(delay_ms)), _start_worker)
+
+    def _on_initial_thumbnail_ready(self, request_key: str, thumb_path: str) -> None:
+        if str(request_key or "") != str(getattr(self, "_initial_thumbnail_request_key", "") or ""):
+            return
+        try:
+            if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                return
+        except Exception:
+            pass
+        self._show_thumbnail_from_cache_path(str(thumb_path or ""))
 
     def show_cached_thumbnail_at(self, path: str, sec: float = 0.0, *, width: int = 640) -> bool:
         if not self._is_video_file(path):
@@ -1350,7 +1457,13 @@ class VideoPlayerWidget(QWidget):
     def position_ms_for_sec(self, sec: float) -> int:
         return getattr(self, "frame_time_map", build_frame_time_map(self.total_time, self.frame_rate)).position_ms_for_sec(sec)
 
-    def _normalize_seek_sec(self, sec: float, *, clamp_total: bool = False) -> float:
+    def _normalize_seek_sec(
+        self,
+        sec: float,
+        *,
+        clamp_total: bool = False,
+        frame_hint: int | None = None,
+    ) -> float:
         try:
             sec = max(0.0, float(sec or 0.0))
         except Exception:
@@ -1361,7 +1474,13 @@ class VideoPlayerWidget(QWidget):
         if frame_map is None:
             frame_map = build_frame_time_map(self.total_time, self.frame_rate)
             self.frame_time_map = frame_map
-        frame = sec_to_floor_frame(sec, getattr(frame_map, "fps", self.frame_rate))
+        if frame_hint is None:
+            frame = sec_to_floor_frame(sec, getattr(frame_map, "fps", self.frame_rate))
+        else:
+            try:
+                frame = int(frame_hint)
+            except Exception:
+                frame = sec_to_floor_frame(sec, getattr(frame_map, "fps", self.frame_rate))
         if getattr(frame_map, "total_frames", 0) > 0:
             frame = max(0, min(frame, max(0, int(frame_map.total_frames) - 1)))
         return self.sec_for_frame(frame)
@@ -1384,10 +1503,18 @@ class VideoPlayerWidget(QWidget):
         refresh_provider: bool = False,
         refresh_subtitle: bool = True,
         tick_ui: bool = False,
+        frame_hint: int | None = None,
     ) -> float:
-        snapped_sec = self._normalize_seek_sec(sec, clamp_total=clamp_total)
+        snapped_sec = self._normalize_seek_sec(sec, clamp_total=clamp_total, frame_hint=frame_hint)
         self.current_time = snapped_sec
-        self.current_frame = self.frame_for_sec(snapped_sec)
+        if frame_hint is None:
+            self.current_frame = self.frame_for_sec(snapped_sec)
+        else:
+            try:
+                self.current_frame = max(0, int(frame_hint))
+            except Exception:
+                self.current_frame = self.frame_for_sec(snapped_sec)
+        self._update_frame_count_label()
         self.set_subtitle_display_time(snapped_sec, refresh=False)
         self._pending_seek_sec = float(snapped_sec) if remember_pending else None
         if hide_thumbnail_threshold is not None and snapped_sec > float(hide_thumbnail_threshold):
@@ -1411,6 +1538,27 @@ class VideoPlayerWidget(QWidget):
         self.current_frame = frame
         self.current_time = sec
         return frame, sec
+
+    def _frame_count_text(self) -> str:
+        frame_map = getattr(self, "frame_time_map", None)
+        if frame_map is None:
+            frame_map = build_frame_time_map(self.total_time, self.frame_rate)
+            self.frame_time_map = frame_map
+        total_frames = max(0, int(getattr(frame_map, "total_frames", 0) or 0))
+        current_frame = max(0, int(getattr(self, "current_frame", 0) or 0))
+        if total_frames > 0:
+            current_frame = min(current_frame, total_frames - 1)
+        return f"F {current_frame} / {total_frames}"
+
+    def _update_frame_count_label(self, *, force: bool = False) -> None:
+        label = getattr(self, "frame_count_label", None)
+        if label is None:
+            return
+        text = self._frame_count_text()
+        if force or text != getattr(self, "_last_frame_count_text", ""):
+            self._last_frame_count_text = text
+            label.setText(text)
+        label.show()
 
     def _last_playable_frame(self) -> int:
         frame_map = getattr(self, "frame_time_map", None)
@@ -1692,6 +1840,7 @@ class VideoPlayerWidget(QWidget):
 
     def frame_step_seek(self, sec: float):
         """Frame-exact manual seek used by < / > and scan buttons."""
+        frame_hint = self.frame_for_sec(sec)
         snapped = self._apply_seek_state(
             sec,
             clamp_total=True,
@@ -1699,6 +1848,7 @@ class VideoPlayerWidget(QWidget):
             hide_thumbnail_threshold=self._seek_hide_thumbnail_threshold(-1.0),
             refresh_provider=False,
             tick_ui=True,
+            frame_hint=frame_hint,
         )
         self._show_unprimed_seek_thumbnail(snapped, force=True)
 
@@ -1836,6 +1986,7 @@ class VideoPlayerWidget(QWidget):
         if abs(pos_ms - self._last_time_label_ms) >= 250:
             self._last_time_label_ms = pos_ms
             self.time_label.setText(f"{format_time(self.current_time)} / {format_time(self.total_time)}")
+        self._update_frame_count_label()
         
         cur_sub = self._find_subtitle_at(self._subtitle_lookup_time())
 
@@ -1859,12 +2010,14 @@ class VideoPlayerWidget(QWidget):
         self._subtitle_provider_signature = ""
         self._context_segments_ref = None
         self._context_segments_signature = ""
+        self._initial_thumbnail_request_key = ""
         self._pending_segments = None
         self._pending_seek_sec = None
         self._pending_thumb_path = None
         self._pending_thumb_sec = 0.0
         self._last_sub = ""
         self._last_time_label_ms = -250
+        self._last_frame_count_text = ""
         try:
             self.set_subtitle_display_time(None, refresh=False)
         except Exception:
@@ -1879,6 +2032,8 @@ class VideoPlayerWidget(QWidget):
             pass
         try:
             self.info_label.setText("")
+            self.frame_count_label.setText("F 0 / 0")
+            self.frame_count_label.show()
             self.source_name_label.setText("")
         except Exception:
             pass

@@ -27,6 +27,7 @@ from core.audio.preset_auto_classifier import auto_classify_media_presets, apply
 from core.personalization.runtime_personalization import personalization_settings_override_for_media
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
+    VAD_MODE_AUTOMATION_NOTE,
     load_stt_quality_presets,
     normalize_stt_quality_key,
     save_stt_quality_user_preset,
@@ -448,28 +449,16 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 self.combo_audio.setCurrentText(k)
                 break
         self._fit_model_combo(self.combo_audio)
-
-        # 6. VAD
-        self.combo_vad = QComboBox()
-        self.vad_map = {"Silero (검수용)": "silero", "TEN VAD (저지연/실험)": "ten_vad", "사용 안 함": "none"}
-        for k in self.vad_map:
-            self.combo_vad.addItem(k)
-        curr_vad = settings.get("selected_vad", "silero")
-        for k, v in self.vad_map.items():
-            if v == curr_vad:
-                self.combo_vad.setCurrentText(k)
-                break
-        self._fit_model_combo(self.combo_vad)
-        self.chk_vad_post_align = QCheckBox("VAD로 STT/앙상블 자막 위치 재계산")
-        self.chk_vad_post_align.setChecked(bool(settings.get("vad_post_stt_align_enabled", True)))
         audio_card, audio_card_layout = self._make_section_card(
-            "음성/VAD",
-            "노이즈 제거, 음성 향상, VAD 위치 보정 경로를 여기서 묶어 관리합니다.",
+            "음성 처리",
+            VAD_MODE_AUTOMATION_NOTE,
         )
         audio_form = self._make_card_form()
         audio_form.addRow("음성 처리 모델:", self.combo_audio)
-        audio_form.addRow("VAD 모델:", self.combo_vad)
-        audio_form.addRow("VAD 보정:", self.chk_vad_post_align)
+        vad_note = QLabel("VAD는 Fast/Auto/High 모드에 맞춰 자동 적용됩니다.")
+        vad_note.setWordWrap(True)
+        vad_note.setStyleSheet(label_style("muted", 11))
+        audio_form.addRow("VAD:", vad_note)
         audio_card_layout.addLayout(audio_form)
         form.addRow(audio_card)
 
@@ -984,7 +973,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             self.result_settings = apply_auto_classified_presets(self.result_settings, decision)
             self._sync_audio_preset_combo(self.result_settings.get("audio_preset", ""))
             self._set_combo_by_data_value(self.combo_audio, self.result_settings.get("selected_audio_ai"), self.audio_map)
-            self._set_combo_by_data_value(self.combo_vad, self.result_settings.get("selected_vad"), self.vad_map)
             self._update_model_info()
             self._sync_auto_preset_button_state()
             QMessageBox.information(
@@ -1181,8 +1169,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             ),
             "stt_ensemble_llm_judge_enabled": bool(self.chk_stt_ensemble_llm.isChecked()),
             "selected_audio_ai": self.audio_map[self.combo_audio.currentText()],
-            "selected_vad": self.vad_map[self.combo_vad.currentText()],
-            "vad_post_stt_align_enabled": bool(self.chk_vad_post_align.isChecked()),
             "google_api_key_saved": bool(google_key_saved),
             "openai_api_key_saved": bool(openai_key_saved),
             "huggingface_token_saved": bool(huggingface_token_saved),

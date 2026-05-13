@@ -4,6 +4,7 @@ Rectangle {
     id: root
     property string timeText: "00:00 / 00:00"
     property string infoText: ""
+    property string frameText: ""
     property string sourceNameText: ""
     property string playText: "\u25b6"
     property bool playing: false
@@ -47,6 +48,12 @@ Rectangle {
         id: sourceTextMetrics
         font: sourceText.font
         text: root.sourceNameText
+    }
+
+    TextMetrics {
+        id: frameTextMetrics
+        font: frameTextItem.font
+        text: root.frameText
     }
 
     Row {
@@ -170,6 +177,26 @@ Rectangle {
                 text: root.timeText
                 color: "#EAF2F8"
                 font.pixelSize: 11
+                font.bold: true
+            }
+        }
+
+        Rectangle {
+            id: frameBadge
+            visible: root.frameText.length > 0
+            width: visible ? Math.ceil(frameTextMetrics.boundingRect.width) + 24 : 0
+            height: 32
+            radius: 9
+            color: "#132831"
+            border.width: 1
+            border.color: "#245A6A"
+            clip: true
+            Text {
+                id: frameTextItem
+                anchors.centerIn: parent
+                text: root.frameText
+                color: "#8FE7FF"
+                font.pixelSize: 10
                 font.bold: true
             }
         }

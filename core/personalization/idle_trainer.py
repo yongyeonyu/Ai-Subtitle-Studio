@@ -455,6 +455,17 @@ def _job_from_payload(payload: dict[str, Any], job_id: str) -> dict[str, Any]:
     return {}
 
 
+def _job_ready_for_idle_run(job: dict[str, Any]) -> bool:
+    payload = dict((job or {}).get("payload") or {})
+    try:
+        not_before_epoch_ms = int(payload.get("not_before_epoch_ms", 0) or 0)
+    except Exception:
+        not_before_epoch_ms = 0
+    if not_before_epoch_ms <= 0:
+        return True
+    return int(time.time() * 1000) >= not_before_epoch_ms
+
+
 def _save_queue_payload(
     payload: dict[str, Any],
     store_dir: str | Path | None = None,
@@ -853,8 +864,11 @@ def run_training_queue_once(
         list(payload.get("items") or []),
         key=lambda item: (str(item.get("status") or "") != "waiting", int(item.get("priority", 9999) or 9999)),
     )
-    target = next((item for item in jobs if str(item.get("status") or "") == "waiting"), None)
+    waiting_jobs = [item for item in jobs if str(item.get("status") or "") == "waiting"]
+    target = next((item for item in waiting_jobs if _job_ready_for_idle_run(item)), None)
     if target is None:
+        if waiting_jobs:
+            return {"processed": False, "reason": "no_ready_pending_job"}
         return {"processed": False, "reason": "no_pending_job"}
     if low_resource:
         target = _low_resource_job_copy(target)
@@ -1110,7 +1124,13 @@ def run_training_queue_once(
 class PersonalizationIdleTrainer(QObject):
     _learning_status_signal = pyqtSignal()
 
-    def __init__(self, owner, *, store_dir: str | Path | None = None):
+    def __init__(
+        self,
+        owner,
+        *,
+        store_dir: str | Path | None = None,
+        recover_on_init: bool = True,
+    ):
         super().__init__(owner)
         self.owner = owner
         self.store_dir = str(store_dir) if store_dir else None
@@ -1132,13 +1152,68 @@ class PersonalizationIdleTrainer(QObject):
         self._last_native_input_interrupt_at = 0.0
         self._native_input_watchdog_stop = threading.Event()
         self._native_input_watchdog_thread: threading.Thread | None = None
+        self._startup_recovery_lock = threading.Lock()
+        self._startup_recovery_pending = not bool(recover_on_init)
+        self._startup_recovery_running = False
+        self._startup_recovery_complete = False
+        self._startup_recovery_timer_scheduled = False
         self._learning_status_signal.connect(self._notify_learning_status_changed_on_main)
-        recover_interrupted_training_jobs(self.store_dir, reason="trainer_startup")
+        if recover_on_init:
+            self.recover_startup_jobs(reason="trainer_startup")
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(LOW_RESOURCE_POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll)
         self._poll_timer.start()
         self._start_native_input_watchdog()
+
+    def recover_startup_jobs(self, *, reason: str = "trainer_startup") -> dict[str, Any]:
+        with self._startup_recovery_lock:
+            if self._startup_recovery_running:
+                return {"recovered": 0, "items": [], "running": True}
+            if self._startup_recovery_complete:
+                return {"recovered": 0, "items": [], "already_complete": True}
+            self._startup_recovery_running = True
+            self._startup_recovery_pending = False
+        try:
+            return recover_interrupted_training_jobs(self.store_dir, reason=reason)
+        finally:
+            with self._startup_recovery_lock:
+                self._startup_recovery_running = False
+                self._startup_recovery_complete = True
+
+    def recover_startup_jobs_async(
+        self,
+        *,
+        reason: str = "trainer_startup",
+        delay_ms: int = 0,
+    ) -> bool:
+        with self._startup_recovery_lock:
+            if (
+                self._startup_recovery_running
+                or self._startup_recovery_complete
+                or self._startup_recovery_timer_scheduled
+            ):
+                return False
+            self._startup_recovery_pending = True
+            self._startup_recovery_timer_scheduled = True
+
+        def _start_recovery_thread():
+            with self._startup_recovery_lock:
+                self._startup_recovery_timer_scheduled = False
+            try:
+                threading.Thread(
+                    target=lambda: self.recover_startup_jobs(reason=reason),
+                    daemon=True,
+                    name="personalization-startup-recovery",
+                ).start()
+            except Exception:
+                self.recover_startup_jobs(reason=reason)
+
+        try:
+            QTimer.singleShot(max(0, int(delay_ms)), _start_recovery_thread)
+        except Exception:
+            _start_recovery_thread()
+        return True
 
     def note_user_activity(self) -> None:
         self.last_user_activity_ms = QDateTime.currentMSecsSinceEpoch()

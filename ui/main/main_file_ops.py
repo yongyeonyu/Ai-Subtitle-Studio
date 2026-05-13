@@ -348,6 +348,13 @@ class FileOpsMixin:
         if callable(confirm_exit) and not confirm_exit():
             return
         self._quick_exit_requested = True
+        exit_delay_ms = 30 if getattr(config, "IS_MAC", False) else 60
+        schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
+        if callable(schedule_exit):
+            try:
+                schedule_exit(delay_ms=exit_delay_ms)
+            except Exception:
+                pass
         busy_before_exit = False
         try:
             busy_before_exit = bool(self._has_active_runtime_work_for_exit())
@@ -355,25 +362,44 @@ class FileOpsMixin:
             pass
 
         pause_runtime = getattr(self, "_pause_all_runtime_work_for_exit", None)
-        if callable(pause_runtime):
-            pause_runtime(context="앱 종료")
-        elif self.backend:
+        try:
+            if callable(pause_runtime):
+                pause_runtime(context="앱 종료")
+            elif self.backend:
+                try:
+                    self.backend.stop(log_context="앱 종료", unload_llm=False)
+                except TypeError:
+                    self.backend.stop()
+        except Exception as exc:
             try:
-                self.backend.stop(log_context="앱 종료", unload_llm=False)
-            except TypeError:
-                self.backend.stop()
+                from core.runtime.logger import get_logger
+
+                get_logger().log(f"⚠️ 종료 중 작업 일시정지 실패: {exc}")
+            except Exception:
+                pass
 
         cleanup_runtime_async = getattr(self, "_start_runtime_cleanup_for_app_exit_async", None)
         exit_cleanup_timeout = 0.08 if getattr(config, "IS_MAC", False) else 0.15
-        if callable(cleanup_runtime_async):
-            cleanup_runtime_async(timeout_sec=exit_cleanup_timeout)
-        else:
-            cleanup_runtime_sync = getattr(self, "_cleanup_runtime_for_app_exit", None)
-            if callable(cleanup_runtime_sync):
-                cleanup_runtime_sync(timeout_sec=exit_cleanup_timeout)
+        try:
+            if callable(cleanup_runtime_async):
+                cleanup_runtime_async(timeout_sec=exit_cleanup_timeout)
+            else:
+                cleanup_runtime_sync = getattr(self, "_cleanup_runtime_for_app_exit", None)
+                if callable(cleanup_runtime_sync):
+                    cleanup_runtime_sync(timeout_sec=exit_cleanup_timeout)
+        except Exception as exc:
+            try:
+                from core.runtime.logger import get_logger
+
+                get_logger().log(f"⚠️ 종료 중 런타임 정리 시작 실패: {exc}")
+            except Exception:
+                pass
 
         if not busy_before_exit:
-            self._backup_before_quick_exit(include_project_backup=False)
+            try:
+                self._backup_before_quick_exit(include_project_backup=False)
+            except Exception:
+                pass
         else:
             try:
                 from core.runtime.logger import get_logger
@@ -381,9 +407,10 @@ class FileOpsMixin:
                 get_logger().log("⏸️ 종료 전 백업은 생략하고, 진행 중 작업 일시 정지를 우선했습니다.")
             except Exception:
                 pass
-        schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
-        if callable(schedule_exit):
-            schedule_exit(delay_ms=30 if getattr(config, "IS_MAC", False) else 60)
+        try:
+            self.close()
+        except Exception:
+            pass
         QApplication.quit()
 
     def _restore_current_work_mode(self):

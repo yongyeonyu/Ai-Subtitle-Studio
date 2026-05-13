@@ -12,6 +12,7 @@ from copy import deepcopy
 from typing import Any
 
 from core.native_macos_acceleration import mac_native_runtime_overrides
+from core.audio.stt_quality_presets import mode_locked_vad_settings
 
 
 MODE_POLICY_SCHEMA = "ai_subtitle_studio.mode_policy.v1"
@@ -719,6 +720,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
     out["simple_operation_mode"] = mode
     out["stt_quality_preset"] = quality_key
     out["auto_start_mode"] = quality_key
+    out.update(mode_locked_vad_settings(quality_key))
     if mode == "high" and explicit_subtitle_llm and base_has_subtitle_llm:
         out["selected_model"] = base_model
         out["selected_llm_provider"] = base_provider or "ollama"

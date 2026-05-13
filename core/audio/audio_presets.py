@@ -67,6 +67,8 @@ def audio_preset_settings_only(settings: dict | None) -> dict:
 def auto_audio_settings_only(settings: dict | None) -> dict:
     allowed_stage_audio_keys = {
         "selected_audio_ai",
+    }
+    blocked_vad_keys = {
         "selected_vad",
         "vad_threshold",
         "vad_min_speech",
@@ -78,7 +80,11 @@ def auto_audio_settings_only(settings: dict | None) -> dict:
         "vad_post_stt_align_enabled",
     }
     data = dict(settings or {})
-    out = audio_preset_settings_only(data)
+    out = {
+        key: value
+        for key, value in audio_preset_settings_only(data).items()
+        if key not in blocked_vad_keys
+    }
     for key in allowed_stage_audio_keys:
         if key in data:
             out[key] = deepcopy(data[key])

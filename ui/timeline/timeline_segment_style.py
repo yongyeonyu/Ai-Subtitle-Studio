@@ -153,6 +153,11 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
 
 def official_boundary_marker_visual(marker) -> dict:
     if isinstance(marker, dict):
+        source = str(marker.get("source", "") or "").strip().lower()
+        reason = str(marker.get("reason", "") or "").strip().lower()
+        if source == "manual_verified" or reason.startswith("relative_") or reason.startswith("manual_"):
+            raw_color = str(marker.get("line_color", "") or "").strip() or "#7FDBFF"
+            return {"color": raw_color, "width": 2, "style": "solid"}
         raw_color = str(marker.get("line_color", "") or "").strip()
         if raw_color:
             color_aliases = {

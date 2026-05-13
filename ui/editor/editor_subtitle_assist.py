@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from typing import Any
 
@@ -236,13 +237,29 @@ class EditorSubtitleAssistMixin:
         self._repeat_segment_last_space_at = 0.0
         self._repeat_segment_double_space_window_sec = 0.45
         self._repeat_segment_loop_guard_sec = 0.14
+        self._subtitle_runtime_override_cache: dict[str, Any] = {}
+        self._subtitle_runtime_override_loaded = False
+        self._subtitle_runtime_override_loading = False
+        self._subtitle_runtime_override_request_key = ""
+        self._subtitle_runtime_override_generation = 0
 
-    def _current_runtime_subtitle_override(self) -> dict[str, Any]:
-        media_path = str(getattr(self, "media_path", "") or "")
+    def _subtitle_runtime_request_key(self) -> str:
+        return str(getattr(self, "media_path", "") or "").strip()
+
+    def _current_runtime_subtitle_override(self, *, allow_sync: bool = True) -> dict[str, Any]:
+        media_path = self._subtitle_runtime_request_key()
         if not media_path:
             return {}
+        request_key = media_path
+        if (
+            bool(getattr(self, "_subtitle_runtime_override_loaded", False))
+            and str(getattr(self, "_subtitle_runtime_override_request_key", "") or "") == request_key
+        ):
+            return dict(getattr(self, "_subtitle_runtime_override_cache", {}) or {})
+        if not allow_sync:
+            return dict(getattr(self, "_subtitle_runtime_override_cache", {}) or {})
         try:
-            return dict(
+            override = dict(
                 personalization_settings_override_for_media(
                     media_path,
                     base_settings=dict(getattr(self, "settings", {}) or {}),
@@ -250,19 +267,108 @@ class EditorSubtitleAssistMixin:
                 or {}
             )
         except Exception:
-            return {}
+            override = {}
+        self._subtitle_runtime_override_cache = dict(override)
+        self._subtitle_runtime_override_request_key = request_key
+        self._subtitle_runtime_override_loaded = True
+        self._subtitle_runtime_override_loading = False
+        return dict(override)
 
-    def _subtitle_magnet_policy(self) -> dict[str, float]:
+    def _schedule_subtitle_assist_runtime_refresh(self, delay_ms: int = 120) -> None:
+        media_path = self._subtitle_runtime_request_key()
+        if not media_path:
+            self._subtitle_runtime_override_cache = {}
+            self._subtitle_runtime_override_loaded = True
+            self._subtitle_runtime_override_loading = False
+            self._subtitle_runtime_override_request_key = ""
+            return
+        request_key = media_path
+        if (
+            bool(getattr(self, "_subtitle_runtime_override_loaded", False))
+            and str(getattr(self, "_subtitle_runtime_override_request_key", "") or "") == request_key
+        ):
+            return
+        if (
+            bool(getattr(self, "_subtitle_runtime_override_loading", False))
+            and str(getattr(self, "_subtitle_runtime_override_request_key", "") or "") == request_key
+        ):
+            return
+
+        generation = int(getattr(self, "_subtitle_runtime_override_generation", 0) or 0) + 1
+        self._subtitle_runtime_override_generation = generation
+        self._subtitle_runtime_override_loading = True
+        self._subtitle_runtime_override_request_key = request_key
+
+        def _start_worker() -> None:
+            if int(getattr(self, "_subtitle_runtime_override_generation", 0) or 0) != generation:
+                return
+
+            def _worker() -> None:
+                try:
+                    override = dict(
+                        personalization_settings_override_for_media(
+                            media_path,
+                            base_settings=dict(getattr(self, "settings", {}) or {}),
+                        )
+                        or {}
+                    )
+                except Exception:
+                    override = {}
+                payload = {
+                    "generation": generation,
+                    "request_key": request_key,
+                    "override": override,
+                }
+                signal = getattr(self, "sig_subtitle_assist_runtime_override_ready", None)
+                if signal is not None and hasattr(signal, "emit"):
+                    try:
+                        signal.emit(payload)
+                        return
+                    except Exception:
+                        pass
+                self._apply_subtitle_assist_runtime_override(payload)
+
+            try:
+                threading.Thread(
+                    target=_worker,
+                    daemon=True,
+                    name="subtitle-assist-runtime-override",
+                ).start()
+            except Exception:
+                self._subtitle_runtime_override_loading = False
+
+        try:
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(max(0, int(delay_ms)), _start_worker)
+        except Exception:
+            _start_worker()
+
+    def _apply_subtitle_assist_runtime_override(self, payload: dict[str, Any] | None) -> None:
+        data = dict(payload or {})
+        generation = int(data.get("generation", 0) or 0)
+        request_key = str(data.get("request_key", "") or "")
+        if generation and generation != int(getattr(self, "_subtitle_runtime_override_generation", 0) or 0):
+            return
+        if request_key and request_key != self._subtitle_runtime_request_key():
+            return
+        self._subtitle_runtime_override_cache = dict(data.get("override") or {})
+        self._subtitle_runtime_override_loaded = True
+        self._subtitle_runtime_override_loading = False
+        self._subtitle_runtime_override_request_key = request_key
+        self._refresh_subtitle_assist_ui(allow_sync_override=False)
+
+    def _subtitle_magnet_policy(self, *, allow_sync_override: bool = True) -> dict[str, float]:
         return compute_subtitle_magnet_policy(
             getattr(self, "settings", {}) or {},
-            runtime_override=self._current_runtime_subtitle_override(),
+            runtime_override=self._current_runtime_subtitle_override(allow_sync=allow_sync_override),
         )
 
-    def _refresh_subtitle_assist_ui(self) -> None:
+    def _refresh_subtitle_assist_ui(self, *, allow_sync_override: bool = False) -> None:
         timeline = getattr(self, "timeline", None)
         if timeline is None:
             return
-        policy = self._subtitle_magnet_policy()
+        policy = self._subtitle_magnet_policy(allow_sync_override=allow_sync_override)
         magnet_tip = (
             "LoRA/Deep 기준으로 짧은 무음 gap만 없애고 자막 경계를 붙입니다.\n"
             f"현재 기준: 기본 무음 {policy['sub_gap_break_sec']:.2f}s, "

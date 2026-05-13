@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtGui import QColor, QWheelEvent, QTextCursor
 from PyQt6.QtCore import QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
+from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
 
@@ -25,6 +26,8 @@ from ui.timeline.timeline_global import (
     GlobalCanvasBase,
     MINIMAP_PRELIMINARY_LANE_BG,
     MINIMAP_REFERENCE_LANE_BG,
+    MINIMAP_SILENCE_LANE_BG,
+    MINIMAP_SUBTITLE_LANE_BG,
     MINIMAP_TOP_LANE_BG,
 )
 
@@ -1813,6 +1816,28 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor.timeline.set_playback_center_lock.assert_called_once_with(False)
         editor._reset_playhead_smoothing.assert_called_once_with(4.8)
 
+    def test_sync_playhead_accepts_external_backend_without_playbackstate_enum_attr(self):
+        editor = _DummyTimelineVideoEditor()
+        player = SimpleNamespace(
+            playbackState=Mock(return_value=QMediaPlayer.PlaybackState.PausedState),
+        )
+        editor.video_player = SimpleNamespace(media_player=player)
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=3.2),
+            set_playback_center_lock=Mock(),
+        )
+        editor._playhead_timer = SimpleNamespace(
+            interval=Mock(return_value=16),
+            setInterval=Mock(),
+        )
+        editor._reset_playhead_smoothing = Mock()
+
+        editor._sync_playhead()
+
+        editor._playhead_timer.setInterval.assert_called_once_with(80)
+        editor.timeline.set_playback_center_lock.assert_called_once_with(False)
+        editor._reset_playhead_smoothing.assert_called_once_with(3.2)
+
     def test_playing_segment_boundary_moves_editor_immediately(self):
         editor = _PlaybackEditor()
         playing_state = object()
@@ -2209,6 +2234,62 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_global_canvas_splits_subtitles_and_silence_into_complementary_bottom_lanes(self):
+        timeline = TimelineWidget()
+        try:
+            canvas = timeline.global_canvas
+            canvas.resize(420, canvas.height())
+            canvas.total_duration = 10.0
+            canvas.update_segments(
+                [
+                    {"start": 1.0, "end": 4.0, "text": "첫 자막"},
+                ],
+                10.0,
+            )
+            canvas.set_vad_segments([])
+
+            pixmap = canvas._build_static_cache()
+            image = pixmap.toImage()
+            subtitle_y = (canvas.height() // 2) + 4
+            silence_y = canvas.height() - 5
+            subtitle_x = canvas._sec_to_px(2.0)
+            silence_x = canvas._sec_to_px(0.3)
+            subtitle_px = image.pixelColor(subtitle_x, subtitle_y)
+            silence_px = image.pixelColor(silence_x, silence_y)
+
+            self.assertNotEqual(subtitle_px.name(), QColor(MINIMAP_SUBTITLE_LANE_BG).name())
+            self.assertNotEqual(silence_px.name(), QColor(MINIMAP_SILENCE_LANE_BG).name())
+            self.assertGreater(subtitle_px.blue(), subtitle_px.red())
+            self.assertGreater(silence_px.red(), silence_px.blue())
+        finally:
+            timeline.close()
+
+    def test_global_canvas_merges_nearby_subtitles_for_minimap_readability(self):
+        timeline = TimelineWidget()
+        try:
+            canvas = timeline.global_canvas
+            canvas.resize(420, canvas.height())
+            canvas.total_duration = 10.0
+            canvas.update_segments(
+                [
+                    {"start": 1.0, "end": 1.20, "text": "오늘은"},
+                    {"start": 1.24, "end": 1.40, "text": "여기"},
+                ],
+                10.0,
+            )
+            canvas.set_vad_segments([])
+
+            pixmap = canvas._build_static_cache()
+            image = pixmap.toImage()
+            subtitle_y = (canvas.height() // 2) + 4
+            bridge_x = canvas._sec_to_px(1.22)
+            bridge_px = image.pixelColor(bridge_x, subtitle_y)
+
+            self.assertNotEqual(bridge_px.name(), QColor(MINIMAP_SUBTITLE_LANE_BG).name())
+            self.assertGreater(bridge_px.blue(), bridge_px.red())
+        finally:
+            timeline.close()
+
     def test_timeline_close_stops_waveform_threads(self):
         timeline = TimelineWidget()
         worker = SimpleNamespace(
@@ -2297,6 +2378,31 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor.video_player.frame_step_seek.assert_not_called()
         editor.video_player.seek_direct.assert_not_called()
         editor._scan_source_and_local_sec.assert_not_called()
+
+    def test_cancel_scan_cut_unlocks_timeline_input_immediately(self):
+        editor = _DummyTimelineVideoEditor()
+        canvas = SimpleNamespace()
+        editor.timeline = SimpleNamespace(
+            canvas=canvas,
+            set_playhead_busy=Mock(),
+            set_playback_center_lock=Mock(),
+        )
+        editor.video_player = SimpleNamespace(
+            set_scan_cut_active=Mock(),
+            info_label=SimpleNamespace(setText=Mock()),
+        )
+        editor._scan_cut_timer = SimpleNamespace(stop=Mock())
+        editor._auto_cut_boundary_scan_active = False
+        editor._scan_cut_state = {"cancel_requested": False}
+        editor._scan_set_timeline_input_locked(True)
+
+        editor._cancel_scan_cut("same-button-toggle")
+
+        self.assertTrue(editor._scan_cut_cancel_requested)
+        self.assertIsNone(editor._scan_cut_state)
+        self.assertFalse(getattr(canvas, "_scan_cut_input_locked", True))
+        editor.timeline.set_playhead_busy.assert_called_with(False)
+        editor.video_player.set_scan_cut_active.assert_called_with(0)
 
     def test_zoom_buttons_anchor_to_visible_playhead(self):
         timeline = TimelineWidget()

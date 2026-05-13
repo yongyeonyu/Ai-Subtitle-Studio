@@ -93,6 +93,35 @@ class CodexProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "시간이 초과"):
                 codex_provider.split_text(DEFAULT_CODEX_LABEL, "prompt", timeout=1)
 
+    def test_run_json_invokes_codex_without_output_schema(self):
+        captured = {}
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+            output_path.write_text(
+                json.dumps({"major_segments": [{"major_id": "A", "title": "도입"}]}),
+                encoding="utf-8",
+            )
+            return _Result()
+
+        with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
+                patch("core.llm.codex_provider.subprocess.run", side_effect=fake_run):
+            result = codex_provider.run_json(DEFAULT_CODEX_LABEL, "roughcut this", timeout=9)
+
+        self.assertEqual(result["major_segments"][0]["major_id"], "A")
+        cmd = captured["cmd"]
+        self.assertEqual(cmd[0], "/usr/local/bin/codex")
+        self.assertIn("--output-last-message", cmd)
+        self.assertNotIn("--output-schema", cmd)
+        self.assertIn("AI Subtitle Studio's roughcut planning engine", captured["kwargs"]["input"])
+
     def test_openai_provider_treats_codex_as_openai_like_without_api_key(self):
         self.assertTrue(openai_provider.is_openai_model(DEFAULT_CODEX_LABEL))
         with patch("core.llm.codex_provider.split_text", return_value=["a", "b"]) as split:

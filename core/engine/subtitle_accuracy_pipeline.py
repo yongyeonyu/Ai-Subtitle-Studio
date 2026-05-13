@@ -126,6 +126,88 @@ def _token_is_supported_by_source(token: str, source_norm: str, source_tokens: s
     return False
 
 
+def _token_diff_preview(
+    source_text: str,
+    candidate_text: str,
+    profile: dict[str, Any] | None = None,
+    *,
+    limit: int = 6,
+) -> tuple[list[str], list[str]]:
+    source_norm = normalized_text(source_text)
+    source_tokens = _content_tokens(source_text)
+    candidate_tokens = _content_tokens(candidate_text)
+    missing = sorted(token for token in source_tokens if token not in candidate_tokens)[:limit]
+    added = sorted(
+        token
+        for token in candidate_tokens
+        if token not in _INTERJECTION_TOKENS
+        and token not in _profile_brand_tokens(profile)
+        and not _token_is_supported_by_source(token, source_norm, source_tokens)
+    )[:limit]
+    return missing, added
+
+
+def _llm_verifier_length_delta_policy(
+    source_text: str,
+    settings: dict[str, Any] | None = None,
+    *,
+    duration_sec: float | None = None,
+) -> dict[str, Any]:
+    settings = dict(settings or {})
+    base = _safe_float(settings.get("llm_verifier_max_length_delta_ratio"), 0.16)
+    source_compact_len = len(normalized_text(source_text))
+    short_len = max(4, _safe_int(settings.get("llm_verifier_short_text_compact_len"), 10))
+    long_len = max(short_len + 4, _safe_int(settings.get("llm_verifier_long_text_compact_len"), 28))
+    short_ratio = min(
+        base,
+        _safe_float(settings.get("llm_verifier_short_text_max_length_delta_ratio"), max(0.08, base - 0.04)),
+    )
+    long_ratio = max(
+        base,
+        _safe_float(settings.get("llm_verifier_long_text_max_length_delta_ratio"), min(0.28, base + 0.06)),
+    )
+    if source_compact_len <= short_len:
+        interpolated = short_ratio
+        bucket = "short"
+    elif source_compact_len >= long_len:
+        interpolated = long_ratio
+        bucket = "long"
+    else:
+        progress = (source_compact_len - short_len) / max(1, long_len - short_len)
+        interpolated = short_ratio + ((long_ratio - short_ratio) * progress)
+        bucket = "medium"
+
+    duration_adjust = 0.0
+    if duration_sec is not None:
+        short_duration_sec = _safe_float(settings.get("llm_verifier_short_duration_sec"), 1.2)
+        long_duration_sec = max(
+            short_duration_sec + 0.2,
+            _safe_float(settings.get("llm_verifier_long_duration_sec"), 3.6),
+        )
+        short_duration_adjust = _safe_float(settings.get("llm_verifier_short_duration_delta_adjust"), -0.01)
+        long_duration_adjust = _safe_float(settings.get("llm_verifier_long_duration_delta_adjust"), 0.02)
+        if duration_sec <= short_duration_sec:
+            duration_adjust = short_duration_adjust
+            bucket = "short"
+        elif duration_sec >= long_duration_sec:
+            duration_adjust = long_duration_adjust
+            bucket = "long" if bucket != "short" else bucket
+
+    effective = min(0.28, max(0.08, interpolated + duration_adjust))
+    return {
+        "base": round(base, 4),
+        "effective": round(effective, 4),
+        "bucket": bucket,
+        "short_text_compact_len": short_len,
+        "long_text_compact_len": long_len,
+        "source_compact_len": source_compact_len,
+        "short_ratio": round(short_ratio, 4),
+        "long_ratio": round(long_ratio, 4),
+        "duration_adjust": round(duration_adjust, 4),
+        "duration_sec": None if duration_sec is None else round(max(0.0, float(duration_sec)), 4),
+    }
+
+
 def llm_source_preservation_violations(
     source_text: str,
     candidate_text: str,
@@ -696,14 +778,20 @@ def verify_llm_chunks_for_subtitle(
     chunks: Iterable[str] | None,
     settings: dict[str, Any] | None = None,
     profile: dict[str, Any] | None = None,
+    *,
+    duration_sec: float | None = None,
 ) -> tuple[list[str] | None, dict[str, Any]]:
     """Validate LLM output and return None when the engine should roll back to safe splitting."""
     settings = dict(settings or {})
     cleaned = _clean_chunks(chunks)
-    source_norm = normalized_text(source_text)
+    source_text_str = str(source_text or "")
+    source_norm = normalized_text(source_text_str)
+    candidate_text = " ".join(cleaned).strip()
     candidate_norm = normalized_text("".join(cleaned))
     similarity = similarity_ratio(source_norm, candidate_norm) if source_norm and candidate_norm else 0.0
     length_delta = abs(len(candidate_norm) - len(source_norm)) / max(1, len(source_norm)) if source_norm else 1.0
+    length_policy = _llm_verifier_length_delta_policy(source_text_str, settings, duration_sec=duration_sec)
+    missing_tokens_preview, added_tokens_preview = _token_diff_preview(source_text_str, candidate_text, profile)
     base_meta = {
         "chunk_count": len(cleaned),
         "source_compact_len": len(source_norm),
@@ -711,6 +799,13 @@ def verify_llm_chunks_for_subtitle(
         "similarity": round(similarity, 4),
         "length_delta_ratio": round(length_delta, 4),
         "lora_score": round(_profile_score(profile), 4),
+        "missing_tokens_preview": missing_tokens_preview,
+        "added_tokens_preview": added_tokens_preview,
+        "length_delta_bucket": length_policy.get("bucket"),
+        "max_length_delta_ratio_base": length_policy.get("base"),
+        "max_length_delta_ratio_effective": length_policy.get("effective"),
+        "length_delta_duration_adjust": length_policy.get("duration_adjust"),
+        "source_duration_sec": length_policy.get("duration_sec"),
     }
     if not _safe_bool(settings.get("llm_verifier_enabled"), True):
         return cleaned or None, _decision("llm_verifier", accepted=bool(cleaned), reason="disabled", **base_meta)
@@ -723,7 +818,6 @@ def verify_llm_chunks_for_subtitle(
     if any(contains_timecode(chunk) for chunk in cleaned):
         return None, _decision("llm_verifier", accepted=False, reason="timecode_in_output", **base_meta)
 
-    source_text_str = str(source_text or "")
     for phrase in _HALLUCINATION_PHRASES:
         if any(phrase in chunk for chunk in cleaned) and phrase not in source_text_str:
             return None, _decision("llm_verifier", accepted=False, reason=f"hallucination_phrase:{phrase}", **base_meta)
@@ -745,7 +839,7 @@ def verify_llm_chunks_for_subtitle(
         )
 
     min_similarity = _safe_float(settings.get("llm_verifier_min_similarity"), 0.86)
-    max_delta = _safe_float(settings.get("llm_verifier_max_length_delta_ratio"), 0.16)
+    max_delta = float(length_policy.get("effective") or _safe_float(settings.get("llm_verifier_max_length_delta_ratio"), 0.16))
     ok, reason = validate_llm_chunks(
         source_text,
         cleaned,
@@ -769,6 +863,48 @@ def verify_llm_chunks_for_subtitle(
         max_length_delta_ratio=round(max_delta, 4),
         **base_meta,
     )
+
+
+def describe_llm_verifier_decision(decision: dict[str, Any] | None) -> str:
+    if not isinstance(decision, dict) or not decision:
+        return "unknown"
+    parts: list[str] = [str(decision.get("reason") or "unknown")]
+    reason = str(decision.get("reason") or "")
+    if reason.startswith("length_delta:"):
+        if decision.get("length_delta_ratio") is not None:
+            parts.append(f"delta={float(decision.get('length_delta_ratio') or 0.0):.2f}")
+        effective = decision.get("max_length_delta_ratio_effective", decision.get("max_length_delta_ratio"))
+        if effective is not None:
+            parts.append(f"허용={float(effective or 0.0):.2f}")
+        bucket = str(decision.get("length_delta_bucket") or "").strip()
+        if bucket:
+            parts.append(f"구간={bucket}")
+    elif reason.startswith("similarity:") and decision.get("similarity") is not None:
+        parts.append(f"similarity={float(decision.get('similarity') or 0.0):.2f}")
+
+    violations = list(decision.get("preservation_violations") or [])
+    if violations:
+        first = dict(violations[0] or {})
+        violation_type = str(first.get("type") or "")
+        if violation_type == "number_changed":
+            source_numbers = ",".join(str(item) for item in list(first.get("source_numbers") or [])[:4])
+            candidate_numbers = ",".join(str(item) for item in list(first.get("candidate_numbers") or [])[:4])
+            if source_numbers or candidate_numbers:
+                parts.append(f"숫자={source_numbers}->{candidate_numbers}")
+        missing = [str(item) for item in list(first.get("missing") or [])[:4] if str(item or "").strip()]
+        added = [str(item) for item in list(first.get("added") or [])[:4] if str(item or "").strip()]
+        if missing:
+            parts.append("누락=" + ",".join(missing))
+        if added:
+            parts.append("추가=" + ",".join(added))
+    else:
+        missing_preview = [str(item) for item in list(decision.get("missing_tokens_preview") or [])[:4] if str(item or "").strip()]
+        added_preview = [str(item) for item in list(decision.get("added_tokens_preview") or [])[:4] if str(item or "").strip()]
+        if missing_preview:
+            parts.append("누락=" + ",".join(missing_preview))
+        if added_preview:
+            parts.append("추가=" + ",".join(added_preview))
+    return ", ".join(parts)
 
 
 def append_accuracy_decision(payload: dict[str, Any] | None, decision: dict[str, Any] | None) -> dict[str, Any]:
@@ -2002,6 +2138,7 @@ __all__ = [
     "annotate_subtitle_lora_style_consistency",
     "annotate_subtitle_stage_confidence",
     "compact_len",
+    "describe_llm_verifier_decision",
     "llm_gate_decision",
     "llm_minimize_decision",
     "llm_source_preservation_violations",

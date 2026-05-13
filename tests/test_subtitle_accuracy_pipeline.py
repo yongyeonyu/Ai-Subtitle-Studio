@@ -7,6 +7,7 @@ from core.engine.subtitle_accuracy_pipeline import (
     annotate_subtitle_context_consistency,
     annotate_subtitle_lora_style_consistency,
     annotate_subtitle_stage_confidence,
+    describe_llm_verifier_decision,
     llm_gate_decision,
     llm_minimize_decision,
     repair_subtitle_context_consistency,
@@ -235,6 +236,49 @@ class SubtitleAccuracyPipelineTests(unittest.TestCase):
 
         self.assertIsNone(chunks)
         self.assertEqual(meta["reason"], "source_preservation:added_content_token")
+
+    def test_llm_verifier_tunes_length_delta_by_duration_bucket(self):
+        source = "오늘은 여기에서 수소를 만들고 보관해서 자동으로 충전하는 전체 과정을 자세히 보여드립니다"
+        candidate = ["오늘은 여기에서 수소를 만들고 자동으로 충전하는 과정을 보여드립니다"]
+
+        short_chunks, short_meta = verify_llm_chunks_for_subtitle(
+            source,
+            candidate,
+            {},
+            {"top_score": 93.0},
+            duration_sec=1.0,
+        )
+        long_chunks, long_meta = verify_llm_chunks_for_subtitle(
+            source,
+            candidate,
+            {},
+            {"top_score": 93.0},
+            duration_sec=4.5,
+        )
+
+        self.assertIsNone(short_chunks)
+        self.assertEqual(short_meta["reason"], "length_delta:0.23")
+        self.assertEqual(short_meta["length_delta_bucket"], "short")
+        self.assertEqual(short_meta["max_length_delta_ratio_effective"], 0.21)
+        self.assertEqual(long_chunks, candidate)
+        self.assertTrue(long_meta["accepted"])
+        self.assertEqual(long_meta["length_delta_bucket"], "long")
+        self.assertEqual(long_meta["max_length_delta_ratio_effective"], 0.24)
+
+    def test_llm_verifier_description_includes_missing_tokens_preview(self):
+        chunks, meta = verify_llm_chunks_for_subtitle(
+            "짧은 문장인데 조금 줄여 봅니다",
+            ["짧은 문장 조금 줄여 봅니다"],
+            {},
+            {"top_score": 93.0},
+            duration_sec=1.0,
+        )
+
+        self.assertIsNone(chunks)
+        description = describe_llm_verifier_decision(meta)
+        self.assertIn("length_delta:0.15", description)
+        self.assertIn("허용=0.13", description)
+        self.assertIn("누락=문장인데", description)
 
     def test_accuracy_metrics_count_gate_skips_and_rollbacks(self):
         gate = {"schema": "ai_subtitle_studio.subtitle_accuracy_pipeline.v1", "task": "llm_gate", "call_llm": False}

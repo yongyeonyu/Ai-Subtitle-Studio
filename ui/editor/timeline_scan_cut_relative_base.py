@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 
+from core.visual_cut_jump import build_visual_cut_sample, score_visual_cut_pair, visual_cut_mode_width
 
 # === SCAN CUT RELATIVE CHANGE MONKEY PATCH START ===
 
@@ -198,7 +199,7 @@ def _rel_scan_final_min_delta(self) -> float:
 
 
 def _rel_scan_backend_label(self) -> str:
-    return "opencv-gray-relative"
+    return "opencv-gray-pixel-edge-flow"
 
 
 def _rel_region_mode_for_stage(stage: int) -> str:
@@ -214,38 +215,14 @@ def _rel_region_mode_for_stage(stage: int) -> str:
 
 
 def _rel_make_region_thumbnails(self, frame, cv2_mod, scale_w: int, scale_h: int, mode: str = "fast4"):
-    try:
-        h, w = frame.shape[:2]
-    except Exception:
-        return None
-
-    if w <= 0 or h <= 0:
-        return None
-
-    xs = [0, int(w / 3), int(w * 2 / 3), w]
-    ys = [0, int(h / 3), int(h * 2 / 3), h]
-    mode = str(mode or "fast4").lower()
-
-    if mode == "full9":
-        cells = [
-            (0, 0), (1, 0), (2, 0),
-            (0, 1), (1, 1), (2, 1),
-            (0, 2), (1, 2), (2, 2),
-        ]
-    elif mode == "cross5":
-        cells = [(1, 0), (0, 1), (1, 1), (2, 1), (1, 2)]
-    else:
-        cells = [(1, 0), (0, 1), (2, 1), (1, 2)]
-
-    result = []
-    for cx, cy in cells:
-        roi = frame[ys[cy]:ys[cy + 1], xs[cx]:xs[cx + 1]]
-        if roi is None or roi.size == 0:
-            return None
-        gray = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2GRAY)
-        small = cv2_mod.resize(gray, (int(scale_w), int(scale_h)), interpolation=cv2_mod.INTER_AREA)
-        result.append(small.tobytes())
-    return tuple(result)
+    _ = (scale_w, scale_h)
+    return build_visual_cut_sample(
+        frame,
+        cv2_mod,
+        mode=str(mode or "fast4"),
+        width=visual_cut_mode_width(mode, getattr(self, "settings", {}) or {}),
+        settings=getattr(self, "settings", {}) or {},
+    )
 
 
 def _rel_capture_image_at_global(self, global_sec: float, region_mode: str = "fast4", **_legacy_kwargs):
@@ -262,15 +239,6 @@ def _rel_capture_image_at_global(self, global_sec: float, region_mode: str = "fa
         return None
 
     settings = getattr(self, "settings", {}) or {}
-
-    try:
-        scale_w = int(settings.get("scan_cut_sample_width", 18))
-        scale_h = int(settings.get("scan_cut_sample_height", 10))
-    except Exception:
-        scale_w, scale_h = 18, 10
-
-    scale_w = max(8, min(scale_w, 64))
-    scale_h = max(6, min(scale_h, 36))
 
     try:
         source_fps = float(cap.get(cv2_mod.CAP_PROP_FPS) or 0.0)
@@ -302,11 +270,20 @@ def _rel_capture_image_at_global(self, global_sec: float, region_mode: str = "fa
                 f"stride={_rel_scan_coarse_stride_frames(self)} "
                 f"rollback={_rel_scan_rollback_frames(self)} "
                 f"stages={_rel_scan_refine_stages(self)} "
-                f"sample_each={scale_w}x{scale_h} mode=relative-change",
+                f"fast={visual_cut_mode_width('fast4', settings)} "
+                f"cross={visual_cut_mode_width('cross5', settings)} "
+                f"full={visual_cut_mode_width('full9', settings)} "
+                f"mode=cut-jump",
                 flush=True,
             )
 
-        return _rel_make_region_thumbnails(self, frame, cv2_mod, scale_w, scale_h, mode=region_mode)
+        return build_visual_cut_sample(
+            frame,
+            cv2_mod,
+            mode=str(region_mode or "fast4"),
+            width=visual_cut_mode_width(region_mode, settings),
+            settings=settings,
+        )
     except Exception:
         return None
 
@@ -349,27 +326,31 @@ def _rel_region_deltas(self, prev_image, next_image):
 
 
 def _rel_image_delta(self, prev_image, next_image) -> float:
-    deltas = _rel_region_deltas(self, prev_image, next_image)
+    cv2_mod = _rel_scan_get_cv2_module(self)
+    if not cv2_mod:
+        self._scan_last_region_deltas = []
+        self._scan_last_region_hits = 0
+        self._scan_last_visual_cut_metrics = {}
+        return 0.0
+
+    metrics = score_visual_cut_pair(
+        prev_image,
+        next_image,
+        cv2_mod,
+        settings=getattr(self, "settings", {}) or {},
+        region_threshold=_rel_scan_region_threshold(self),
+    )
+    deltas = list(metrics.get("region_scores", []) or [])
     if not deltas:
         self._scan_last_region_deltas = []
         self._scan_last_region_hits = 0
+        self._scan_last_visual_cut_metrics = dict(metrics or {})
         return 0.0
 
-    threshold = _rel_scan_region_threshold(self)
-    hits = sum(1 for d in deltas if d >= threshold)
     self._scan_last_region_deltas = list(deltas)
-    self._scan_last_region_hits = int(hits)
-
-    ranked = sorted(deltas, reverse=True)
-
-    if len(ranked) >= 9:
-        top_n = ranked[:5]
-    elif len(ranked) >= 5:
-        top_n = ranked[:3]
-    else:
-        top_n = ranked[:2]
-
-    return sum(top_n) / float(len(top_n) or 1)
+    self._scan_last_region_hits = int(metrics.get("region_hits", 0) or 0)
+    self._scan_last_visual_cut_metrics = dict(metrics or {})
+    return float(metrics.get("score", 0.0) or 0.0)
 
 
 def _rel_is_candidate(self, score: float, baseline: float, previous_score: float) -> tuple[bool, str]:

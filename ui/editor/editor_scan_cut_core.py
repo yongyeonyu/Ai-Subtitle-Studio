@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 
 from PyQt6.QtCore import QTimer
 
-from core.cut_boundary import sync_project_cut_boundaries
+from core.cut_boundary import sanitize_cut_boundary_rows, sync_project_cut_boundaries
 from core.cut_boundary_jump import nearest_boundary_second, normalize_boundary_seconds
+from core.runtime.logger import get_logger
 
 
 class EditorScanCutCoreMixin:
@@ -108,12 +110,25 @@ class EditorScanCutCoreMixin:
             2,
         )
         data["scan_cut_auto_verify_rollback_frames"] = max(
-            int(data.get("scan_cut_auto_verify_rollback_frames", round(fps * 1.0)) or round(fps * 1.0)),
-            max(2, int(round(fps * 1.0))),
+            2,
+            min(
+                int(data.get("scan_cut_auto_verify_rollback_frames", round(fps * 0.55)) or round(fps * 0.55)),
+                max(2, int(round(fps * 0.60))),
+            ),
         )
         data["scan_cut_auto_verify_forward_frames"] = max(
-            int(data.get("scan_cut_auto_verify_forward_frames", round(fps * 1.0)) or round(fps * 1.0)),
-            max(2, int(round(fps * 1.0))),
+            2,
+            min(
+                int(data.get("scan_cut_auto_verify_forward_frames", round(fps * 0.40)) or round(fps * 0.40)),
+                max(2, int(round(fps * 0.45))),
+            ),
+        )
+        data["scan_cut_color_avg_window_frames"] = max(
+            6,
+            min(
+                int(data.get("scan_cut_color_avg_window_frames", 12) or 12),
+                12,
+            ),
         )
         return data
 
@@ -251,6 +266,57 @@ class EditorScanCutCoreMixin:
                 f"global={global_sec:.3f}s frame={global_frame} "
                 f"local={verified_local_sec:.3f}s local_frame={verified_local_frame} "
                 f"mode={result['mode']} score={result['score']:.2f} regions={result['regions']}",
+                flush=True,
+            )
+            return result
+
+        provisional_reason = str(verified.get("reason", "") or "")
+        provisional_local_frame = None
+        provisional_local_sec = None
+        provisional_score = 0.0
+        provisional_regions = 0
+        provisional_mode = str(verified.get("provisional_mode", "") or "")
+        if verified.get("provisional_frame") is not None:
+            try:
+                provisional_local_frame = int(verified.get("provisional_frame") or 0)
+                provisional_local_sec = float(
+                    verified.get("provisional_sec", provisional_local_frame / max(source_fps, 1e-6)) or 0.0
+                )
+                provisional_score = float(verified.get("provisional_score", 0.0) or 0.0)
+                provisional_regions = int(verified.get("provisional_regions", 0) or 0)
+            except Exception:
+                provisional_local_frame = None
+
+        if (
+            provisional_reason == "color_avg_failed"
+            and provisional_local_frame is not None
+            and str(reason or "").startswith("strong_window")
+            and abs(int(provisional_local_frame) - int(local_frame)) <= max(2, int(round(source_fps * 0.03)))
+            and provisional_score >= 50.0
+            and provisional_regions >= 4
+            and provisional_mode in {"1f", "2f", "gray_window_rollback", "gray_window_rollback_mps"}
+        ):
+            provisional_global_sec = self._snap_to_frame(max(0.0, clip_global_offset + float(provisional_local_sec or 0.0)))
+            provisional_global_frame = max(0, int(round(provisional_global_sec * fps)))
+            result = {
+                "available": True,
+                "passed": True,
+                "frame": provisional_global_frame,
+                "sec": provisional_global_sec,
+                "local_frame": provisional_local_frame,
+                "local_sec": float(provisional_local_sec or 0.0),
+                "score": provisional_score,
+                "regions": provisional_regions,
+                "mode": f"manual_provisional_{provisional_mode}",
+                "reason": "manual_provisional_color_override",
+                "color_score": 0.0,
+            }
+            print(
+                f"🎯 [scan-cut] STRICT VERIFY PROVISIONAL PASS reason={reason or '-'} "
+                f"global={provisional_global_sec:.3f}s frame={provisional_global_frame} "
+                f"local={float(provisional_local_sec or 0.0):.3f}s local_frame={provisional_local_frame} "
+                f"mode={result['mode']} score={result['score']:.2f} regions={result['regions']} "
+                f"override={provisional_reason}",
                 flush=True,
             )
             return result
@@ -454,6 +520,93 @@ class EditorScanCutCoreMixin:
                 canvas.setProperty("scan_cut_input_locked", bool(locked))
         except Exception:
             pass
+
+    def _scan_terminal_log(self, message: str, *, key: str = "", min_interval_sec: float = 0.0, force: bool = False) -> None:
+        text = str(message or "").strip()
+        if not text:
+            return
+        try:
+            settings = getattr(self, "settings", {}) or {}
+            enabled = settings.get("scan_cut_terminal_log_enabled", True)
+            if isinstance(enabled, str):
+                enabled = enabled.strip().lower() not in {"0", "false", "no", "off", "미사용"}
+            if not bool(enabled):
+                return
+        except Exception:
+            pass
+
+        if key:
+            now = time.monotonic()
+            cache = getattr(self, "_scan_terminal_log_times", None)
+            if not isinstance(cache, dict):
+                cache = {}
+                self._scan_terminal_log_times = cache
+            if not force and min_interval_sec > 0.0:
+                last = float(cache.get(key, 0.0) or 0.0)
+                if now - last < float(min_interval_sec):
+                    return
+            cache[key] = now
+
+        try:
+            get_logger().log(text)
+        except Exception:
+            print(text, flush=True)
+
+    def _scan_preview_thumbnail_interval_sec(self) -> float:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            return max(0.10, min(0.75, float(settings.get("scan_cut_preview_thumbnail_interval_sec", 0.22))))
+        except Exception:
+            return 0.22
+
+    def _scan_preview_progress(self, global_sec: float, *, force_thumbnail: bool = False) -> None:
+        try:
+            global_sec = self._snap_to_frame(float(global_sec or 0.0))
+        except Exception:
+            return
+
+        now = time.monotonic()
+        show_thumbnail = bool(force_thumbnail)
+        if not show_thumbnail:
+            last_thumb = float(getattr(self, "_scan_last_preview_thumbnail_at", 0.0) or 0.0)
+            if now - last_thumb >= self._scan_preview_thumbnail_interval_sec():
+                show_thumbnail = True
+        if show_thumbnail:
+            self._scan_last_preview_thumbnail_at = now
+
+        self._scan_last_preview_sec = global_sec
+        self._scan_preview_global_sec(global_sec, show_thumbnail=show_thumbnail)
+
+    def _scan_seek_to_found_boundary(self, global_sec: float, *, show_thumbnail: bool = True) -> None:
+        try:
+            global_sec = self._snap_to_frame(float(global_sec or 0.0))
+        except Exception:
+            return
+
+        seeked = False
+        try:
+            if hasattr(self, "_seek_global_exact"):
+                seeked = bool(self._seek_global_exact(global_sec))
+        except Exception:
+            seeked = False
+
+        if not seeked:
+            try:
+                self._scan_preview_global_sec(global_sec, show_thumbnail=False)
+            except Exception:
+                pass
+
+        try:
+            if hasattr(self, "_sync_after_manual_seek"):
+                self._sync_after_manual_seek(global_sec)
+        except Exception:
+            pass
+
+        if show_thumbnail:
+            try:
+                self._scan_show_cut_thumbnail(global_sec)
+            except Exception:
+                pass
 
     def _set_auto_cut_boundary_scan_active(self, active: bool) -> None:
         self._auto_cut_boundary_scan_active = bool(active)
@@ -849,7 +1002,12 @@ class EditorScanCutCoreMixin:
                 vp.current_time = float(local_sec)
                 clip_total = float((ctx or {}).get("duration", 0.0) or 0.0)
                 if clip_total > 0.0:
-                    vp.total_time = clip_total
+                    if hasattr(vp, "_rebuild_frame_time_map"):
+                        vp._rebuild_frame_time_map(duration=clip_total)
+                    else:
+                        vp.total_time = clip_total
+                if hasattr(vp, "frame_for_sec"):
+                    vp.current_frame = max(0, int(vp.frame_for_sec(float(local_sec))))
                 if hasattr(vp, "_last_time_label_ms"):
                     vp._last_time_label_ms = -250
                 if hasattr(vp, "_ui_tick"):
@@ -905,21 +1063,23 @@ class EditorScanCutCoreMixin:
         if not show_thumbnail:
             return
 
-        # 2) 캐시 썸네일 우선: 같은 시점을 반복 방문해도 ffmpeg/OpenCV 비용이 덜 든다.
+        # 2) 이미 캐시된 썸네일만 즉시 사용한다. 탐색 중 동기 ffmpeg 생성은 건너뛴다.
         try:
             source_path, local_sec, _ctx = self._scan_source_and_local_sec(global_sec)
             vp = getattr(self, "video_player", None)
-            if vp is not None and source_path and hasattr(vp, "show_cached_thumbnail_at"):
-                if vp.show_cached_thumbnail_at(source_path, local_sec, width=self._scan_preview_thumbnail_size()[0]):
+            if vp is not None and source_path and hasattr(vp, "_show_precomputed_thumbnail_at"):
+                if vp._show_precomputed_thumbnail_at(source_path, local_sec, width=self._scan_preview_thumbnail_size()[0]):
                     if hasattr(vp, "info_label"):
                         vp.info_label.setText(f"컷 경계 탐색 중 · {float(global_sec):.3f}s")
                     try:
+                        clip_total = float((_ctx or {}).get("duration", 0.0) or 0.0)
+                        if clip_total > 0.0 and hasattr(vp, "_rebuild_frame_time_map"):
+                            vp._rebuild_frame_time_map(duration=clip_total)
                         if hasattr(vp, "_last_time_label_ms"):
                             vp._last_time_label_ms = -250
                         vp.current_time = float(local_sec)
-                        clip_total = float((_ctx or {}).get("duration", 0.0) or 0.0)
-                        if clip_total > 0.0:
-                            vp.total_time = clip_total
+                        if hasattr(vp, "frame_for_sec"):
+                            vp.current_frame = max(0, int(vp.frame_for_sec(float(local_sec))))
                         vp._ui_tick()
                     except Exception:
                         pass
@@ -1162,6 +1322,10 @@ class EditorScanCutCoreMixin:
             pass
 
     def _cancel_scan_cut(self, reason: str = "cancelled", *, update_label: bool = True):
+        current_state = getattr(self, "_scan_cut_state", None)
+        if isinstance(current_state, dict):
+            current_state["cancel_requested"] = True
+        self._scan_cut_cancel_requested = True
         try:
             if hasattr(self, "_scan_cut_timer"):
                 self._scan_cut_timer.stop()
@@ -1170,6 +1334,8 @@ class EditorScanCutCoreMixin:
 
         self._scan_cut_state = None
         self._set_scan_cut_button_active(0)
+        if hasattr(self, "_scan_set_timeline_input_locked"):
+            self._scan_set_timeline_input_locked(False)
 
         if update_label:
             try:
@@ -1178,6 +1344,7 @@ class EditorScanCutCoreMixin:
                 pass
 
         print(f"🟢 [scan-cut] CANCEL reason={reason}", flush=True)
+        self._scan_terminal_log("🟢 컷 경계 탐색 취소", key="scan-cut-cancel", force=True)
 
 
     def _scan_cached_cut_jump_enabled(self) -> bool:
@@ -1347,6 +1514,7 @@ class EditorScanCutCoreMixin:
             self.video_player.pause_video()
 
         self._set_scan_cut_button_active(direction)
+        self._scan_cut_cancel_requested = False
         fps = self._current_frame_fps()
         start_sec = self._manual_global_sec_from_player()
         start_frame = max(0, int(round(start_sec * fps)))
@@ -1361,6 +1529,11 @@ class EditorScanCutCoreMixin:
             f"interval={interval}ms max_frames={max_frames} "
             f"image={self._scan_image_backend_label() if start_image is not None else 'NONE'}",
             flush=True,
+        )
+        self._scan_terminal_log(
+            f"🔎 컷 경계 탐색 시작 · {start_frame}f · {start_frame / max(fps, 1e-6):.3f}s",
+            key="scan-cut-start",
+            force=True,
         )
 
         if start_image is None:
@@ -1384,6 +1557,7 @@ class EditorScanCutCoreMixin:
             "first_hit_sec": None,
             "max_frames": max_frames,
             "busy": False,
+            "cancel_requested": False,
         }
 
         if not hasattr(self, "_scan_cut_timer"):
@@ -1399,6 +1573,10 @@ class EditorScanCutCoreMixin:
         self._scan_cut_timer.stop()
         self._scan_cut_timer.setInterval(interval)
         self._scan_cut_timer.start()
+        try:
+            self._scan_preview_progress(start_sec, force_thumbnail=True)
+        except Exception:
+            pass
 
 
 
@@ -1480,21 +1658,15 @@ class EditorScanCutCoreMixin:
             pass
         return {}
 
-    def _save_cut_boundary_to_project(self, global_sec: float, frame: int | None = None, score: float | None = None, regions: int | None = None, reason: str = "manual_scan") -> None:
-        """
-        scan-cut으로 찾은 컷 경계를 프로젝트 JSON의 analysis.cut_boundaries에 누적 저장한다.
-
-        저장 위치:
-        project["analysis"]["cut_boundaries"]
-        """
-        project_path = self._project_file_for_cut_boundary_save()
-        if not project_path:
-            try:
-                print("⚠️ [scan-cut] 프로젝트 파일 경로를 찾지 못해 컷 경계를 JSON에 저장하지 못했습니다.", flush=True)
-            except Exception:
-                pass
-            return
-
+    def _build_confirmed_cut_boundary_record(
+        self,
+        global_sec: float,
+        *,
+        frame: int | None = None,
+        score: float | None = None,
+        regions: int | None = None,
+        reason: str = "manual_scan",
+    ) -> dict:
         try:
             global_sec = self._snap_to_frame(float(global_sec))
         except Exception:
@@ -1512,7 +1684,6 @@ class EditorScanCutCoreMixin:
                 frame = 0
 
         ctx = self._scan_cut_source_context(global_sec)
-
         try:
             source_path = str(ctx.get("clip_file", "") or ctx.get("source_path", "") or "")
             local_sec = float(ctx.get("local_sec", global_sec) or global_sec)
@@ -1522,7 +1693,7 @@ class EditorScanCutCoreMixin:
             local_sec = global_sec
             clip_idx = 0
 
-        record = {
+        return {
             "schema": "cut_boundary.v1",
             "id": f"cut_{int(frame):08d}",
             "time": global_sec,
@@ -1534,11 +1705,168 @@ class EditorScanCutCoreMixin:
             "clip_local_sec": local_sec,
             "source_path": source_path,
             "score": None if score is None else float(score),
+            "confidence": None if score is None else float(score),
             "regions": None if regions is None else int(regions),
             "reason": str(reason or "manual_scan"),
+            "status": "confirmed",
+            "verified": True,
+            "confirmed": True,
+            "source": "manual_verified",
+            "verified_by": "manual_scan",
+            "verified_count": 1,
             "detector": "opencv-gray-pyramid60",
+            "line_color": "#7FDBFF",
+            "line_style": "solid",
             "created_at": datetime.now().isoformat(timespec="seconds"),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
+
+    def _merge_confirmed_cut_boundary_rows(self, rows, row: dict) -> list[dict]:
+        merged: list[dict] = []
+        try:
+            fps = float(row.get("fps", self._current_frame_fps()) or self._current_frame_fps())
+        except Exception:
+            fps = 30.0
+        tolerance_sec = max(0.020, min(0.080, 2.0 / max(1.0, fps)))
+        target_sec = float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0)
+        target_frame = int(row.get("timeline_frame", row.get("frame", 0)) or 0)
+        replaced = False
+        for item in list(rows or []):
+            if not isinstance(item, dict):
+                try:
+                    item = {"timeline_sec": float(item or 0.0), "time": float(item or 0.0)}
+                except Exception:
+                    continue
+            existing = dict(item)
+            try:
+                sec = float(existing.get("timeline_sec", existing.get("time", 0.0)) or 0.0)
+            except Exception:
+                sec = 0.0
+            try:
+                frame = int(existing.get("timeline_frame", existing.get("frame", 0)) or 0)
+            except Exception:
+                frame = 0
+            if abs(sec - target_sec) <= tolerance_sec or abs(frame - target_frame) <= 2:
+                verified_count = max(
+                    1,
+                    int(existing.get("verified_count", 1) or 1),
+                    int(row.get("verified_count", 1) or 1),
+                ) + 1
+                merged.append(
+                    {
+                        **existing,
+                        **row,
+                        "verified_count": verified_count,
+                        "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    }
+                )
+                replaced = True
+                continue
+            merged.append(existing)
+        if not replaced:
+            merged.append(dict(row))
+        merged.sort(
+            key=lambda item: (
+                float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0),
+                int(item.get("timeline_frame", item.get("frame", 0)) or 0),
+            )
+        )
+        for idx, item in enumerate(merged, start=1):
+            item["index"] = idx
+        return merged
+
+    def _apply_confirmed_cut_boundary_to_ui(self, row: dict, *, remove_nearby_provisionals: bool = True) -> list[dict]:
+        if not isinstance(row, dict):
+            return list(getattr(self, "_project_boundary_times", []) or [])
+
+        timeline = getattr(self, "timeline", None)
+        current_rows = []
+        try:
+            current_rows = list(getattr(self, "_project_boundary_times", []) or [])
+        except Exception:
+            current_rows = []
+        if not current_rows:
+            try:
+                canvas = getattr(timeline, "canvas", None)
+                current_rows = list(getattr(canvas, "boundary_times", []) or [])
+            except Exception:
+                current_rows = []
+        merged = self._merge_confirmed_cut_boundary_rows(current_rows, row)
+        merged = sanitize_cut_boundary_rows(
+            list(merged),
+            primary_fps=float(row.get("fps", self._current_frame_fps()) or self._current_frame_fps()),
+        )
+        self._project_boundary_times = list(merged)
+
+        try:
+            owner = self.window() if hasattr(self, "window") else None
+        except Exception:
+            owner = None
+        if owner is not None:
+            try:
+                owner._project_boundary_times = list(merged)
+            except Exception:
+                pass
+            try:
+                signal = getattr(owner, "_sig_update_project_boundary_times", None)
+                if signal is not None and hasattr(signal, "emit"):
+                    signal.emit(list(merged))
+            except Exception:
+                pass
+
+        try:
+            if timeline is not None and hasattr(timeline, "set_boundary_times"):
+                timeline.set_boundary_times(list(merged))
+        except Exception:
+            pass
+
+        if remove_nearby_provisionals and hasattr(self, "_set_auto_cut_boundary_scan_lines"):
+            try:
+                sec = float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0)
+                fps = float(row.get("fps", self._current_frame_fps()) or self._current_frame_fps())
+                tolerance_sec = max(0.020, min(0.080, 2.0 / max(1.0, fps)))
+                provisional_rows = []
+                for item in list(getattr(self, "_auto_cut_boundary_scan_lines", []) or []):
+                    if not isinstance(item, dict):
+                        provisional_rows.append(item)
+                        continue
+                    item_sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
+                    if abs(item_sec - sec) <= tolerance_sec:
+                        continue
+                    provisional_rows.append(item)
+                self._set_auto_cut_boundary_scan_lines(provisional_rows)
+            except Exception:
+                pass
+
+        return list(merged)
+
+    def _save_cut_boundary_to_project(self, global_sec: float, frame: int | None = None, score: float | None = None, regions: int | None = None, reason: str = "manual_scan") -> None:
+        """
+        scan-cut으로 찾은 컷 경계를 프로젝트 JSON의 analysis.cut_boundaries에 누적 저장한다.
+
+        저장 위치:
+        project["analysis"]["cut_boundaries"]
+        """
+        record = self._build_confirmed_cut_boundary_record(
+            global_sec,
+            frame=frame,
+            score=score,
+            regions=regions,
+            reason=reason,
+        )
+        project_path = self._project_file_for_cut_boundary_save()
+        if not project_path:
+            try:
+                print("⚠️ [scan-cut] 프로젝트 파일 경로를 찾지 못해 컷 경계를 JSON에 저장하지 못했습니다.", flush=True)
+            except Exception:
+                pass
+            self._apply_confirmed_cut_boundary_to_ui(record)
+            self._scan_terminal_log("⚠️ 컷 경계 저장 생략 · 프로젝트 경로 없음", key="scan-cut-save-missing", min_interval_sec=1.0)
+            return
+
+        global_sec = float(record.get("timeline_sec", record.get("time", 0.0)) or 0.0)
+        frame = int(record.get("timeline_frame", record.get("frame", 0)) or 0)
+        fps = float(record.get("fps", 30.0) or 30.0)
 
         try:
             from core.project.project_io import read_project_file, write_project_file
@@ -1560,7 +1888,13 @@ class EditorScanCutCoreMixin:
             except Exception:
                 old_frame = -999999
             if abs(old_frame - int(frame)) <= 1:
-                boundaries[idx] = record
+                old = dict(item) if isinstance(item, dict) else {}
+                record["verified_count"] = max(
+                    1,
+                    int(old.get("verified_count", 1) or 1),
+                    int(record.get("verified_count", 1) or 1),
+                ) + 1
+                boundaries[idx] = {**old, **record}
                 replaced = True
                 break
 
@@ -1590,9 +1924,26 @@ class EditorScanCutCoreMixin:
 
         try:
             write_project_file(project_path, project)
+            saved_rows = list((analysis.get("cut_boundaries", []) if isinstance(analysis, dict) else []) or [])
+            target_row = None
+            for item in saved_rows:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    if abs(int(item.get("timeline_frame", item.get("frame", -999999)) or -999999) - int(frame)) <= 1:
+                        target_row = dict(item)
+                        break
+                except Exception:
+                    continue
+            self._apply_confirmed_cut_boundary_to_ui(target_row or record)
             print(
                 f"💾 [scan-cut] project cut boundary saved frame={frame} time={global_sec:.3f}s count={len(boundaries)}",
                 flush=True,
+            )
+            self._scan_terminal_log(
+                f"📌 컷 경계 추가 · {frame}f · {global_sec:.3f}s",
+                key="scan-cut-confirmed",
+                force=True,
             )
         except Exception as exc:
             print(f"⚠️ [scan-cut] 프로젝트 컷 경계 저장 실패: {exc}", flush=True)

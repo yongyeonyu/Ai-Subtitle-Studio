@@ -15,6 +15,40 @@ from core.engine.llm_candidate_policy import build_llm_candidate_options
 
 
 class SubtitleEngineSettingsTests(unittest.TestCase):
+    def test_llm_gate_skip_log_shows_signal_breakdown_not_ambiguous_score(self):
+        logger = unittest.mock.Mock()
+        decision = {
+            "call_llm": False,
+            "lora_score": 100.0,
+            "combined_signal_score": 100.0,
+            "deep_score": 91.0,
+            "stt_score": 87.0,
+            "confidence": 0.93,
+            "compact_ratio": 1.1071,
+        }
+
+        with unittest.mock.patch("core.engine.subtitle_engine.get_logger", return_value=logger), \
+                unittest.mock.patch("core.engine.subtitle_engine.llm_gate_decision", return_value=decision), \
+                unittest.mock.patch("core.engine.subtitle_engine.llm_minimize_decision", return_value={"skip_llm": True, "reason": "skip"}):
+            should_call, meta = subtitle_engine._apply_llm_confidence_gate(
+                {"start": 0.0, "end": 2.0, "text": "테스트"},
+                "올해도 유스 어드벤처 2026",
+                16,
+                2.0,
+                {},
+                {},
+            )
+
+        self.assertFalse(should_call)
+        self.assertIn("_llm_gate_policy", meta)
+        message = logger.log.call_args[0][0]
+        self.assertIn("lora=100.0", message)
+        self.assertIn("signal=100.0", message)
+        self.assertIn("deep=91.0", message)
+        self.assertIn("stt=87.0", message)
+        self.assertIn("confidence=0.93", message)
+        self.assertNotIn("(score=", message)
+
     def test_final_gap_settings_apply_as_last_timing_pass(self):
         segments = [
             {"start": 0.0, "end": 1.0, "text": "A"},
@@ -367,6 +401,46 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertIsNone(rejected)
         self.assertFalse(rejected_meta["_llm_candidate_policy"]["accepted"])
         self.assertEqual(rejected_meta["_llm_rollback_policy"]["fallback"], "safe_split")
+
+    def test_verify_llm_chunks_logs_actual_empty_output_distinctly(self):
+        logger = unittest.mock.Mock()
+
+        with unittest.mock.patch("core.engine.subtitle_engine.get_logger", return_value=logger):
+            accepted, meta = subtitle_engine._verify_llm_chunks(
+                "테스트 문장입니다",
+                None,
+                {},
+                {},
+                fallback="safe_split",
+                duration_sec=1.0,
+            )
+
+        self.assertIsNone(accepted)
+        self.assertEqual(meta["_llm_verifier_policy"]["reason"], "empty_chunks")
+        message = logger.log.call_args[0][0]
+        self.assertIn("실제 빈 출력/파싱 실패", message)
+        self.assertIn("empty_chunks", message)
+
+    def test_verify_llm_chunks_logs_verifier_rejection_with_missing_tokens(self):
+        logger = unittest.mock.Mock()
+
+        with unittest.mock.patch("core.engine.subtitle_engine.get_logger", return_value=logger):
+            accepted, meta = subtitle_engine._verify_llm_chunks(
+                "짧은 문장인데 조금 줄여 봅니다",
+                ["짧은 문장 조금 줄여 봅니다"],
+                {},
+                {},
+                fallback="safe_split",
+                duration_sec=1.0,
+            )
+
+        self.assertIsNone(accepted)
+        self.assertEqual(meta["_llm_verifier_policy"]["reason"], "length_delta:0.15")
+        messages = [call.args[0] for call in logger.log.call_args_list]
+        self.assertTrue(any("원문 무결성 검사 실패" in message for message in messages))
+        self.assertTrue(any("검증 실패 후 복구" in message for message in messages))
+        self.assertTrue(any("누락=문장인데" in message for message in messages))
+        self.assertTrue(any("허용=0.13" in message for message in messages))
 
     def test_setting_int_uses_fallback_and_default_for_invalid_values(self):
         self.assertEqual(

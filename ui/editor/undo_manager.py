@@ -81,6 +81,8 @@ class UndoManager:
         self._redo_stack.clear()
 
     def _capture(self) -> SnapshotState:
+        from core.cut_boundary import sanitize_cut_boundary_rows
+
         editor = self._editor
         doc = editor.text_edit.document()
         blocks = []
@@ -115,7 +117,13 @@ class UndoManager:
         owner = editor.window() if hasattr(editor, 'window') else None
         multiclip_files = list(getattr(owner, '_multiclip_files', []) or []) if owner else []
         multiclip_boundaries = [dict(x) for x in list(getattr(owner, '_multiclip_boundaries', []) or [])] if owner else []
-        project_boundary_times = list(getattr(owner, '_project_boundary_times', []) or []) if owner else []
+        project_boundary_times = (
+            sanitize_cut_boundary_rows(
+                list(getattr(owner, '_project_boundary_times', []) or []),
+                primary_fps=float(getattr(editor, "video_fps", 30.0) or 30.0),
+            )
+            if owner else []
+        )
         canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
         user_alignment_guides = list(getattr(canvas, "user_alignment_guides", []) or []) if canvas is not None else []
         active_clip_idx = int(getattr(canvas, '_active_clip_idx', getattr(owner, '_active_clip_idx', 0)) or 0)

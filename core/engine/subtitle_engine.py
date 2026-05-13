@@ -15,15 +15,9 @@ import time
 
 from core.llm.secure_keys import get_api_key
 from core.llm.gemini_provider import split_text as gemini_split_text
-from core.llm.ollama_provider import (
-    ensure_ollama_server,
-    restart_ollama_server,
-    split_text as ollama_split_text,
-    warmup_model as warmup_ollama_model,
-)
 from core.llm.openai_provider import is_codex_model, is_openai_model, split_text as openai_split_text
 from core.audio.stt_lattice import select_stt_lattice_text
-from core.engine.llm_correction_guard import assess_llm_rewrite_policy, safe_llm_chunks, validate_llm_chunks
+from core.engine.llm_correction_guard import assess_llm_rewrite_policy
 from core.engine.llm_candidate_policy import (
     build_llm_candidate_options,
     validate_candidate_locked_chunks,
@@ -55,6 +49,7 @@ from core.engine.subtitle_accuracy_pipeline import (
     annotate_subtitle_context_consistency,
     annotate_subtitle_lora_style_consistency,
     annotate_subtitle_stage_confidence,
+    describe_llm_verifier_decision,
     llm_gate_decision,
     llm_minimize_decision,
     repair_subtitle_context_consistency,
@@ -112,6 +107,45 @@ _MIN_DURATION    = _setting_float(_S, "sub_min_duration", 0.3)  # (간격 -> 최
 _MAX_DURATION    = _setting_float(_S, "sub_max_duration", 6.0)  # (간격 -> 최대 자막 유지 시간)
 _MAX_CPS         = _setting_int(_S, "sub_max_cps", 12)          # (간격 -> 최대 발음 속도 CPS)
 _DEDUP_WINDOW    = _setting_float(_S, "sub_dedup_window", 0.5)  # (간격 -> 중복 자막 방어 범위)
+
+
+def ensure_ollama_server(*args, **kwargs):
+    from core.llm.ollama_provider import ensure_ollama_server as _ensure_ollama_server
+
+    return _ensure_ollama_server(*args, **kwargs)
+
+
+def restart_ollama_server(*args, **kwargs):
+    from core.llm.ollama_provider import restart_ollama_server as _restart_ollama_server
+
+    return _restart_ollama_server(*args, **kwargs)
+
+
+def _clean_llm_output_chunks(chunks) -> list[str]:
+    final_chunks: list[str] = []
+    for chunk in chunks or []:
+        if not isinstance(chunk, str):
+            continue
+        cleaned = _clean(chunk)
+        if cleaned and len(cleaned.replace(" ", "").replace("\n", "")) >= 2:
+            final_chunks.append(cleaned)
+    return final_chunks
+
+
+def _short_log_text_preview(text: str, limit: int = 15) -> str:
+    return str(text or "")[:limit]
+
+
+def ollama_split_text(*args, **kwargs):
+    from core.llm.ollama_provider import split_text as _ollama_split_text
+
+    return _ollama_split_text(*args, **kwargs)
+
+
+def warmup_ollama_model(*args, **kwargs):
+    from core.llm.ollama_provider import warmup_model as _warmup_ollama_model
+
+    return _warmup_ollama_model(*args, **kwargs)
 
 
 def _effective_llm_workers(model: str, configured_workers: int, settings: dict, segment_count: int) -> tuple[int, str]:
@@ -210,19 +244,8 @@ def ask_exaone_to_split(
 
     try:
         chunks = ollama_split_text(model, prompt) or []
-        final_chunks = []
-        for c in chunks:
-            if not isinstance(c, str):
-                continue
-            c = _clean(c)
-            if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
-                final_chunks.append(c)
-
-        guarded = safe_llm_chunks(text, final_chunks)
-        if guarded is None and final_chunks:
-            ok, reason = validate_llm_chunks(text, final_chunks)
-            get_logger().log(f"[LLM-보정차단] 원문 무결성 검사 실패({reason}): '{text[:15]}...'")
-        return guarded if guarded else None
+        final_chunks = _clean_llm_output_chunks(chunks)
+        return final_chunks or None
 
     except Exception as e:
         if _is_local_llm_connection_error(e):
@@ -264,18 +287,8 @@ def ask_openai_to_split(
     except Exception as e:
         get_logger().log(f"[OpenAI 연결/파싱 실패] {e}")
         return None
-    final_chunks = []
-    for c in chunks or []:
-        if not isinstance(c, str):
-            continue
-        c = _clean(c)
-        if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
-            final_chunks.append(c)
-    guarded = safe_llm_chunks(text, final_chunks)
-    if guarded is None and final_chunks:
-        ok, reason = validate_llm_chunks(text, final_chunks)
-        get_logger().log(f"[OpenAI-보정차단] 원문 무결성 검사 실패({reason}): '{text[:15]}...'")
-    return guarded if guarded else None
+    final_chunks = _clean_llm_output_chunks(chunks)
+    return final_chunks or None
 
 
 def _profile_from_settings(settings: dict | None) -> dict:
@@ -336,9 +349,16 @@ def _apply_llm_confidence_gate(
     out_meta = _append_accuracy_decision_for_settings(out_meta, minimize, settings)
     out_meta["_llm_minimize_policy"] = minimize
     if not decision.get("call_llm", True):
+        lora_score = float(decision.get("lora_score", 0.0) or 0.0)
+        combined_signal = float(decision.get("combined_signal_score", lora_score) or 0.0)
+        deep_score = float(decision.get("deep_score", 0.0) or 0.0)
+        stt_score = float(decision.get("stt_score", 0.0) or 0.0)
+        confidence = float(decision.get("confidence", 0.0) or 0.0)
+        compact_ratio = float(decision.get("compact_ratio", 0.0) or 0.0)
         get_logger().log(
             f"[LLM-게이트] LoRA/딥러닝 신뢰로 LLM 생략 "
-            f"(score={decision.get('lora_score', 0)}, ratio={decision.get('compact_ratio', 0)}): "
+            f"(lora={lora_score:.1f}, signal={combined_signal:.1f}, deep={deep_score:.1f}, "
+            f"stt={stt_score:.1f}, confidence={confidence:.2f}, ratio={compact_ratio:.4f}): "
             f"'{str(text or '')[:15]}...'"
         )
     return bool(decision.get("call_llm", True)), out_meta
@@ -352,6 +372,7 @@ def _verify_llm_chunks(
     *,
     fallback: str,
     candidate_options: list[dict] | None = None,
+    duration_sec: float | None = None,
 ) -> tuple[list[str] | None, dict]:
     out_meta = dict(lora_meta or {})
     if not chunks:
@@ -360,13 +381,17 @@ def _verify_llm_chunks(
             [],
             settings or {},
             _profile_from_settings(settings),
+            duration_sec=duration_sec,
         )
         out_meta = _append_accuracy_decision_for_settings(out_meta, decision, settings)
         out_meta["_llm_verifier_policy"] = decision
         rollback = rollback_decision(str(decision.get("reason") or "empty_chunks"), fallback=fallback)
         out_meta = _append_accuracy_decision_for_settings(out_meta, rollback, settings)
         out_meta["_llm_rollback_policy"] = rollback
-        get_logger().log(f"[LLM-롤백] 출력 없음/파싱 실패({decision.get('reason')}), 안전 분할로 복구: '{str(text or '')[:15]}...'")
+        get_logger().log(
+            f"[LLM-롤백] 실제 빈 출력/파싱 실패({decision.get('reason')}), "
+            f"안전 분할로 복구: '{_short_log_text_preview(text)}...'"
+        )
         return None, out_meta
     candidate_checked, candidate_decision = validate_candidate_locked_chunks(
         text,
@@ -391,6 +416,7 @@ def _verify_llm_chunks(
         candidate_checked,
         settings or {},
         _profile_from_settings(settings),
+        duration_sec=duration_sec,
     )
     out_meta = _append_accuracy_decision_for_settings(out_meta, decision, settings)
     out_meta["_llm_verifier_policy"] = decision
@@ -398,7 +424,9 @@ def _verify_llm_chunks(
         rollback = rollback_decision(str(decision.get("reason") or "unknown"), fallback=fallback)
         out_meta = _append_accuracy_decision_for_settings(out_meta, rollback, settings)
         out_meta["_llm_rollback_policy"] = rollback
-        get_logger().log(f"[LLM-롤백] 검증 실패({decision.get('reason')}), 안전 분할로 복구: '{str(text or '')[:15]}...'")
+        detail = describe_llm_verifier_decision(decision)
+        get_logger().log(f"[LLM-보정차단] 원문 무결성 검사 실패({detail}): '{_short_log_text_preview(text)}...'")
+        get_logger().log(f"[LLM-롤백] 검증 실패 후 복구({detail}), 안전 분할로 복구: '{_short_log_text_preview(text)}...'")
     return verified, out_meta
 
 
@@ -1235,6 +1263,7 @@ def _process_one(args: tuple) -> list[dict]:
                 segment_lora,
                 fallback="word_timing_split",
                 candidate_options=candidate_options,
+                duration_sec=max(0.0, float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)),
             )
 
 
@@ -1472,6 +1501,7 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
             segment_lora,
             fallback="original_subtitle",
             candidate_options=candidate_options,
+            duration_sec=max(0.0, float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)),
         )
 
     if not chunks:
@@ -1636,15 +1666,7 @@ def _optimizer_context() -> tuple[dict, list[dict], str, dict, int, str, str, di
         api_key = ""
 
     raw_corr = get_local_dataset_corrections()
-    corrections: dict = {}
-    if raw_corr:
-        corrections = dict(
-            sorted(
-                {k: v for k, v in raw_corr.items() if k}.items(),
-                key=lambda x: len(x[0]),
-                reverse=True,
-            )
-        )
+    corrections: dict = raw_corr if isinstance(raw_corr, dict) else {}
     return loaded_settings, rules, model, corrections, threshold, user_prompt, api_key, raw_corr, loaded_settings
 
 
@@ -2169,15 +2191,5 @@ def ask_gemini_to_split(
     except Exception:
         return [text]
 
-    final_chunks = []
-    for c in chunks or []:
-        if not isinstance(c, str):
-            continue
-        c = _clean(c)
-        if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
-            final_chunks.append(c)
-    guarded = safe_llm_chunks(text, final_chunks)
-    if guarded is None and final_chunks:
-        ok, reason = validate_llm_chunks(text, final_chunks)
-        get_logger().log(f"[Gemini-보정차단] 원문 무결성 검사 실패({reason}): '{text[:15]}...'")
-    return guarded if guarded else [text]
+    final_chunks = _clean_llm_output_chunks(chunks)
+    return final_chunks or None

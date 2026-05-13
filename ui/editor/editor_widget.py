@@ -75,6 +75,7 @@ class EditorWidget(
     sig_live_stt_result = pyqtSignal(str)
     sig_stt_vad_segments = pyqtSignal(list)
     sig_roughcut_draft_ready = pyqtSignal(object, list, dict)
+    sig_subtitle_assist_runtime_override_ready = pyqtSignal(object)
 
     _JUNK_TS_RE               = re.compile(r'[\[{(<\[【（《]\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s*[\]})>\]】）》]\s*')
     _JUNK_NO_BRACKET_3PART    = re.compile(r'(?<!\S)\d{1,3}[:\.]\d{2}[:\.]\d{2,3}(?!\S)')
@@ -185,7 +186,9 @@ class EditorWidget(
         
         self._build_ui()
         self._init_subtitle_assist_state()
-        self._refresh_subtitle_assist_ui()
+        self.sig_subtitle_assist_runtime_override_ready.connect(self._apply_subtitle_assist_runtime_override)
+        self._refresh_subtitle_assist_ui(allow_sync_override=False)
+        QTimer.singleShot(120, self._schedule_subtitle_assist_runtime_refresh)
         if hasattr(self, "video_player"):
             self.video_player._repeat_play_prepare_callback = self._prepare_repeat_playback_start
         app = QApplication.instance()
@@ -454,7 +457,7 @@ class EditorWidget(
         except Exception:
             pass
 
-    def _schedule_initial_open_layout(self, delays: tuple[int, ...] = (0, 160, 360)):
+    def _schedule_initial_open_layout(self, delays: tuple[int, ...] = (80, 220, 420)):
         timeline = getattr(self, "timeline", None)
         try:
             if timeline is not None and hasattr(timeline, "schedule_time_window_seconds"):

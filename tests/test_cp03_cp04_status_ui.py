@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QWidget
 
 from core.runtime import config
 from core.state_manager import SubtitleStateManager
@@ -104,6 +104,78 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         text = home.saved_status_label.text()
         self.assertIn("AI Subtitle Studio", text)
         self.assertIn("#FFD60A", text)
+
+    def test_generation_progress_snapshot_tracks_elapsed_against_expected(self):
+        state_manager = SimpleNamespace(state="ST_PROC", is_locked=True, is_dirty=False)
+        status_lbl = QLabel("⏳ [STT] Whisper 중")
+        editor = SimpleNamespace(sm=state_manager, _is_ai_processing=True, status_lbl=status_lbl, settings={"stt_ensemble_enabled": True})
+        home = _DummyHome(editor)
+        home._current_file_idx = 1
+        home._total_files = 1
+        home._real_pct = 0
+        home._expected_seconds = {0: 600.0}
+        home._file_start_times = {0: 1000.0}
+        home._file_complete_times = {}
+        home.queue_table = QTableWidget(1, 5)
+        home.queue_table.setItem(0, 0, QTableWidgetItem("자막 생성 중"))
+        home.queue_table.setItem(0, 4, QTableWidgetItem("00:00 / 10:00"))
+
+        with patch("ui.home_sidebar.time.time", return_value=1120.0):
+            snapshot = home._generation_progress_snapshot()
+
+        self.assertTrue(snapshot["running"])
+        self.assertEqual(snapshot["percent"], 20)
+        self.assertEqual(snapshot["progressText"], "20%")
+        self.assertEqual(snapshot["subtitle"], "02:00 / 10:00")
+        self.assertIn("STT 1/2", snapshot["title"])
+
+    def test_generation_progress_snapshot_caps_running_progress_below_100_until_done(self):
+        state_manager = SimpleNamespace(state="ST_PROC", is_locked=True, is_dirty=False)
+        status_lbl = QLabel("⏳ [자막 LLM] 최적화 중")
+        editor = SimpleNamespace(sm=state_manager, _is_ai_processing=True, status_lbl=status_lbl, settings={})
+        home = _DummyHome(editor)
+        home._current_file_idx = 1
+        home._total_files = 1
+        home._real_pct = 100
+        home._expected_seconds = {0: 300.0}
+        home._file_start_times = {0: 1000.0}
+        home._file_complete_times = {}
+        home.queue_table = QTableWidget(1, 5)
+        home.queue_table.setItem(0, 0, QTableWidgetItem("자막 생성 중"))
+        home.queue_table.setItem(0, 4, QTableWidgetItem("00:00 / 05:00"))
+
+        with patch("ui.home_sidebar.time.time", return_value=1400.0):
+            snapshot = home._generation_progress_snapshot()
+
+        self.assertTrue(snapshot["running"])
+        self.assertEqual(snapshot["percent"], 99)
+        self.assertEqual(snapshot["progressText"], "99%")
+
+    def test_generation_progress_snapshot_reaches_100_only_after_completion(self):
+        state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
+        status_lbl = QLabel("✨ 자막 생성 완료")
+        editor = SimpleNamespace(sm=state_manager, _is_ai_processing=False, status_lbl=status_lbl, settings={})
+        home = _DummyHome(editor)
+        home._current_file_idx = 1
+        home._total_files = 1
+        home._real_pct = 100
+        home._expected_seconds = {0: 300.0}
+        home._file_start_times = {0: 1000.0}
+        home._file_complete_times = {0: 1280.0}
+        home.queue_table = QTableWidget(1, 5)
+        home.queue_table.setItem(0, 0, QTableWidgetItem("✅ 완료"))
+        home.queue_table.setItem(0, 4, QTableWidgetItem("04:40 / 05:00"))
+
+        with patch("ui.home_sidebar.time.time", return_value=1400.0):
+            snapshot = home._generation_progress_snapshot()
+            nav_item = home._sidebar_generation_nav_item()
+
+        self.assertFalse(snapshot["running"])
+        self.assertEqual(snapshot["percent"], 100)
+        self.assertEqual(snapshot["subtitle"], "04:40 / 05:00")
+        self.assertTrue(nav_item["progressVisible"])
+        self.assertEqual(nav_item["progressPercent"], 100)
+        self.assertEqual(nav_item["id"], "generation_status")
 
     def test_status_rail_uses_green_flash_and_short_korean_stages(self):
         rail = StatusRail()

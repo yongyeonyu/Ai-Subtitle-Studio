@@ -25,13 +25,17 @@ Rectangle {
                 required property var modelData
 
                 width: root.width
-                height: 26
+                height: modelData.height || (modelData.progressVisible ? 38 : 26)
                 radius: 7
-                color: modelData.active ? "#26313A" : (hitArea.containsMouse ? "#1B2429" : "#141C20")
+                color: modelData.progressVisible
+                       ? (hitArea.containsMouse ? "#10181D" : "transparent")
+                       : (modelData.active ? "#26313A" : (hitArea.containsMouse ? "#1B2429" : "#141C20"))
                 border.width: 1
-                border.color: modelData.active
-                              ? (modelData.accent || "#3F8CFF")
-                              : (hitArea.containsMouse ? "#34424B" : "#223038")
+                border.color: modelData.progressVisible
+                              ? (modelData.accent || "#00D46A")
+                              : (modelData.active
+                                 ? (modelData.accent || "#3F8CFF")
+                                 : (hitArea.containsMouse ? "#34424B" : "#223038"))
                 opacity: modelData.enabled === false ? 0.55 : 1.0
                 antialiasing: true
 
@@ -43,10 +47,23 @@ Rectangle {
                     height: parent.height - 10
                     radius: 2
                     color: modelData.accent || "#3F8CFF"
-                    visible: !!modelData.active
+                    visible: !!modelData.active && !modelData.progressVisible
+                }
+
+                Rectangle {
+                    visible: !!modelData.progressVisible && (modelData.progressPercent || 0) > 0
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 1
+                    width: Math.max(0, (parent.width - 2) * Math.max(0, Math.min(100, modelData.progressPercent || 0)) / 100.0)
+                    radius: 6
+                    color: modelData.fillColor || "#153A25"
+                    antialiasing: true
                 }
 
                 Row {
+                    visible: !modelData.progressVisible
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
@@ -80,6 +97,77 @@ Rectangle {
                         font.bold: true
                         elide: Text.ElideRight
                         verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Row {
+                    visible: !!modelData.progressVisible
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    anchors.topMargin: 4
+                    anchors.bottomMargin: 4
+                    spacing: 7
+
+                    Rectangle {
+                        width: 16
+                        height: 16
+                        radius: 4
+                        color: "#182126"
+                        border.width: 1
+                        border.color: modelData.accent || "#00D46A"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.badge || ""
+                            color: modelData.accent || "#00D46A"
+                            font.pixelSize: 8
+                            font.bold: true
+                        }
+                    }
+
+                    Column {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - 23
+                        spacing: 1
+
+                        Row {
+                            width: parent.width
+                            spacing: 6
+
+                            Text {
+                                width: parent.width - percentText.implicitWidth - 6
+                                text: modelData.title || ""
+                                color: "#F5F7FA"
+                                font.pixelSize: 10
+                                font.bold: true
+                                elide: Text.ElideRight
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            Text {
+                                id: percentText
+                                text: modelData.progressText || ""
+                                color: modelData.accent || "#00D46A"
+                                font.pixelSize: 10
+                                font.bold: true
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+
+                        Text {
+                            visible: !!(modelData.subtitle || "")
+                            width: parent.width
+                            text: modelData.subtitle || ""
+                            color: "#B9C7D3"
+                            font.pixelSize: 8
+                            font.bold: true
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                        }
                     }
                 }
 

@@ -2,8 +2,7 @@
 # Phase: PHASE2
 """Runtime settings helpers for subtitle optimization."""
 
-import json
-import os
+from core.correction_dictionary_db import load_corrections as load_correction_dictionary
 from core.llm.ollama_provider import ollama_probe_timeout, resolve_ollama_model_for_request
 from core.llm.openai_provider import is_openai_model
 from core.runtime import config
@@ -17,13 +16,7 @@ def _get_user_settings():
 
 
 def get_local_dataset_corrections() -> dict:
-    correction_path = getattr(config, "CORRECTIONS_FILE", os.path.join(config.DATASET_DIR, "dataset_correction.json"))
-    try:
-        with open(correction_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    return load_correction_dictionary(getattr(config, "CORRECTIONS_FILE", None))
 
 
 def get_selected_llm() -> str:

@@ -67,7 +67,21 @@ def _scan_boundary_signature(times) -> tuple:
 def _boundary_signature(times) -> tuple:
     values = []
     for item in list(times or []):
-        values.append(round(_scan_boundary_sec_value(item), 3))
+        sec = round(_scan_boundary_sec_value(item), 3)
+        if isinstance(item, dict):
+            values.append(
+                (
+                    sec,
+                    str(item.get("status", "") or ""),
+                    str(item.get("source", "") or ""),
+                    str(item.get("reason", "") or ""),
+                    str(item.get("line_color", "") or ""),
+                    bool(item.get("verified", False)),
+                    int(item.get("verified_count", 0) or 0),
+                )
+            )
+        else:
+            values.append((sec,))
     return tuple(values)
 
 

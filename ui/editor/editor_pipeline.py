@@ -476,6 +476,19 @@ class EditorPipelineMixin:
         try:
             from core.personalization.deferred_editor_learning import enqueue_deferred_editor_learning
 
+            hold_ms = 600_000
+            hold_getter = getattr(self, "_deferred_editor_learning_hold_ms", None)
+            if callable(hold_getter):
+                try:
+                    hold_ms = int(hold_getter(trigger="generation_complete") or hold_ms)
+                except Exception:
+                    hold_ms = 600_000
+            pause_lora = getattr(main_w, "_pause_personalization_for_foreground_activity", None)
+            if callable(pause_lora):
+                try:
+                    pause_lora("subtitle_generation_complete", hold_ms=hold_ms)
+                except Exception:
+                    pause_lora("subtitle_generation_complete")
             queued = enqueue_deferred_editor_learning(
                 [dict(seg) for seg in list(self._get_current_segments() or []) if not seg.get("is_gap")],
                 media_path=str(getattr(self, "media_path", "") or ""),
@@ -483,6 +496,7 @@ class EditorPipelineMixin:
                 project_path=str(getattr(main_w, "_current_project_path", "") or ""),
                 trigger="generation_complete",
                 settings=dict(getattr(self, "settings", {}) or {}),
+                defer_for_ms=hold_ms,
             )
             if queued.get("queued"):
                 get_logger().log("🧠 [LoRA] 생성 완료 학습은 Home-idle 큐로 넘겼습니다.")

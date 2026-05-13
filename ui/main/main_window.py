@@ -90,6 +90,7 @@ class MainWindow(
     _sig_editor_processing_stage = pyqtSignal(str)
     _sig_finalize_generation_complete = pyqtSignal(str)
     _sig_runtime_audio_tune = pyqtSignal(str, object)
+    _sig_home_auto_sources_ready = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -142,6 +143,8 @@ class MainWindow(
         self._auto_start_on = settings.get("auto_start_enabled", True)
         self._is_icloud_auto_mode = get_icloud_auto_detect()
         self._is_nas_auto_mode = get_nas_auto_detect()
+        self._offscreen_test = str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen"
+        self._initial_home_built = False
 
         self._live_timer = QTimer()
         self._live_timer.timeout.connect(self._update_live_queue_header)
@@ -159,15 +162,20 @@ class MainWindow(
         self._runtime_resource_timer.timeout.connect(self._poll_runtime_resource_coordinator)
         self._runtime_resource_coordinator = None
         self._runtime_resource_snapshot = {}
+        self._post_show_startup_started = False
+        self._initial_home_build_requested = False
+        self._initial_home_scan_deferred = not self._offscreen_test
+        self._home_auto_source_cache = {}
+        self._home_auto_source_refresh_token = 0
+        self._home_auto_source_refresh_inflight = False
 
         self._build_ui()
         self._connect_signals()
-        self._personalization_idle_trainer = PersonalizationIdleTrainer(self)
+        self._personalization_idle_trainer = PersonalizationIdleTrainer(self, recover_on_init=False)
         self._attach_app_event_filter()
         self._initialize_runtime_memory_manager(settings)
         self._initialize_runtime_resource_coordinator(settings)
-        _offscreen_test = str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen"
-        if not _offscreen_test:
+        if not self._offscreen_test:
             QTimer.singleShot(450 if getattr(config, "IS_MAC", False) else 0, self._warmup_local_llm_models)
             QTimer.singleShot(1400 if getattr(config, "IS_MAC", False) else 900, self._check_required_models_on_startup)
             QTimer.singleShot(1800 if getattr(config, "IS_MAC", False) else 1200, self._preflight_selected_local_llm_models)
@@ -180,10 +188,49 @@ class MainWindow(
             mode="nas", scan_interval=60, stable_seconds=300, exclude_callback=get_nas_excluded_folders
         )
         if self._auto_start_on and (getattr(self, "_is_icloud_auto_mode", False) or getattr(self, "_is_nas_auto_mode", False)):
-            if _offscreen_test:
+            if self._offscreen_test:
                 self._start_auto_watchers_after_launch()
             else:
                 QTimer.singleShot(1600 if getattr(config, "IS_MAC", False) else 0, self._start_auto_watchers_after_launch)
+
+    def showEvent(self, event):  # noqa: N802 - Qt override
+        super().showEvent(event)
+        if self._offscreen_test:
+            self._ensure_initial_home_ready()
+        else:
+            self._schedule_initial_home_ready()
+        self._start_post_show_startup_tasks()
+
+    def _schedule_initial_home_ready(self):
+        if bool(getattr(self, "_initial_home_built", False)) or bool(getattr(self, "_initial_home_build_requested", False)):
+            return
+        self._initial_home_build_requested = True
+        QTimer.singleShot(0, self._ensure_initial_home_ready)
+
+    def _ensure_initial_home_ready(self):
+        if bool(getattr(self, "_initial_home_built", False)):
+            return
+        self._initial_home_build_requested = False
+        self._initial_home_built = True
+        self.show_home()
+        self._start_initial_home_auto_source_refresh(
+            delay_ms=120 if getattr(config, "IS_MAC", False) else 0,
+        )
+
+    def _start_post_show_startup_tasks(self):
+        if bool(getattr(self, "_post_show_startup_started", False)):
+            return
+        self._post_show_startup_started = True
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        recover_async = getattr(trainer, "recover_startup_jobs_async", None) if trainer is not None else None
+        if callable(recover_async):
+            try:
+                recover_async(
+                    reason="trainer_startup",
+                    delay_ms=500 if getattr(config, "IS_MAC", False) else 0,
+                )
+            except Exception:
+                pass
 
     def _start_auto_watchers_after_launch(self):
         if self._auto_start_on and getattr(self, "_is_icloud_auto_mode", False):
@@ -214,7 +261,10 @@ class MainWindow(
         self.home_page = ProjectSidebarWidget()
         workspace_splitter.addWidget(self.home_page)
         self._create_sidebar_terminal_panel()
-        self.status_rail = StatusRail(self.home_page)
+        if bool(getattr(self, "_unified_dashboard", False)):
+            self.status_rail = None
+        else:
+            self.status_rail = StatusRail(self.home_page)
         self.saved_status_label = QLabel("", self.home_page)
         self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
         self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 11px; background: transparent;")
@@ -282,7 +332,66 @@ class MainWindow(
         self.right_workspace = right_workspace
         self._apply_log_visible(self._log_visible, persist=False)
         self._apply_responsive_workspace_layout()
-        self.show_home()
+        if self._offscreen_test:
+            self._ensure_initial_home_ready()
+        else:
+            self.stack.setCurrentIndex(0)
+
+    def _start_initial_home_auto_source_refresh(self, *, delay_ms: int = 0) -> None:
+        if not bool(getattr(self, "_initial_home_scan_deferred", False)):
+            return
+        if bool(getattr(self, "_home_auto_source_refresh_inflight", False)):
+            return
+        self._home_auto_source_refresh_inflight = True
+        token = int(getattr(self, "_home_auto_source_refresh_token", 0) or 0) + 1
+        self._home_auto_source_refresh_token = token
+
+        def launch() -> None:
+            def worker() -> None:
+                payload = {"token": token}
+                try:
+                    payload["icloud"] = self._get_icloud_files()
+                except Exception:
+                    payload["icloud"] = ([], "오류", "")
+                try:
+                    payload["nas"] = self._get_nas_folders()
+                except Exception:
+                    payload["nas"] = ([], "오류", "")
+                try:
+                    self._sig_home_auto_sources_ready.emit(payload)
+                except Exception:
+                    pass
+
+            threading.Thread(
+                target=worker,
+                name="home-auto-source-refresh",
+                daemon=True,
+            ).start()
+
+        QTimer.singleShot(max(0, int(delay_ms or 0)), launch)
+
+    def _on_home_auto_sources_ready(self, payload) -> None:
+        current_token = int(getattr(self, "_home_auto_source_refresh_token", 0) or 0)
+        payload_token = 0
+        if isinstance(payload, dict):
+            try:
+                payload_token = int(payload.get("token", 0) or 0)
+            except Exception:
+                payload_token = 0
+        if payload_token and payload_token != current_token:
+            return
+        cache = {}
+        if isinstance(payload, dict):
+            cache["icloud"] = payload.get("icloud", ([], "오류", ""))
+            cache["nas"] = payload.get("nas", ([], "오류", ""))
+        self._home_auto_source_cache = cache
+        self._initial_home_scan_deferred = False
+        self._home_auto_source_refresh_inflight = False
+        if int(getattr(self, "stack", None).currentIndex() if getattr(self, "stack", None) is not None else -1) == 0:
+            try:
+                self._build_home_content()
+            except Exception:
+                pass
 
     def _initialize_runtime_memory_manager(self, settings=None):
         if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
@@ -1044,6 +1153,7 @@ class MainWindow(
         self._sig_editor_processing_stage.connect(self._do_editor_processing_stage)
         self._sig_finalize_generation_complete.connect(self._do_finalize_generation_complete)
         self._sig_runtime_audio_tune.connect(self._set_runtime_audio_tune_display)
+        self._sig_home_auto_sources_ready.connect(self._on_home_auto_sources_ready)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self, allow_home_idle_learning: bool = False):
@@ -1295,7 +1405,7 @@ class MainWindow(
                     pass
         target_editor = editor if editor is not None else getattr(self, "_editor_widget", None)
         if target_editor is not None:
-            for method_name in ("_clear_processing_indicators", "_safe_enable_start_btn"):
+            for method_name in ("_abort_pending_editor_processing_ui_work", "_clear_processing_indicators", "_safe_enable_start_btn"):
                 method = getattr(target_editor, method_name, None)
                 if callable(method):
                     try:
@@ -1324,6 +1434,38 @@ class MainWindow(
                     state_manager.complete_ai()
             except Exception:
                 pass
+            for attr_name, empty_value in (
+                ("_live_editor_preview_queue", []),
+                ("_live_editor_preview_segments", []),
+                ("_subtitle_context_window_index_cache", {}),
+            ):
+                try:
+                    current = getattr(target_editor, attr_name, None)
+                    if isinstance(current, list):
+                        current.clear()
+                    elif isinstance(current, dict):
+                        current.clear()
+                    else:
+                        setattr(target_editor, attr_name, empty_value.copy() if hasattr(empty_value, "copy") else empty_value)
+                except Exception:
+                    pass
+            try:
+                target_editor._segment_cache_valid = False
+            except Exception:
+                pass
+        for backend_name in ("backend", "backend_fast"):
+            backend = getattr(self, backend_name, None)
+            if backend is None:
+                continue
+            for thread_name in ("_pipeline_thread", "_eta_thread", "_cut_boundary_prescan_thread", "_cut_boundary_follower_thread"):
+                thread = getattr(backend, thread_name, None)
+                try:
+                    if thread is not None and getattr(thread, "is_alive", lambda: False)():
+                        thread.join(timeout=0.05)
+                    if thread is not None and not getattr(thread, "is_alive", lambda: False)():
+                        setattr(backend, thread_name, None)
+                except Exception:
+                    pass
         try:
             self._auto_processing_active = False
         except Exception:
@@ -1341,7 +1483,7 @@ class MainWindow(
             )
         except Exception as exc:
             get_logger().log(f"⚠️ 생성 완료 직후 모델 즉시 종료 실패: {exc}")
-        self._schedule_post_generation_gc(editor=target_editor)
+        self._schedule_post_generation_gc(editor=target_editor, delay_ms=450)
         get_logger().log(f"🧹 후처리 정리 완료: {reason}")
         if hasattr(self, "_refresh_saved_status_label"):
             self._refresh_saved_status_label()
@@ -1550,18 +1692,32 @@ class MainWindow(
                 self.blockSignals(True)
             except Exception:
                 pass
+            try:
+                QApplication.quit()
+            except Exception:
+                pass
             event.accept()
             return
         confirm_exit = getattr(self, "_confirm_save_dirty_editor_before_exit", None)
         if callable(confirm_exit) and not confirm_exit():
             event.ignore()
             return
+        try:
+            self._schedule_forced_process_exit(delay_ms=30 if getattr(config, "IS_MAC", False) else 60)
+        except Exception:
+            pass
         busy_before_exit = False
         try:
             busy_before_exit = bool(self._has_active_runtime_work_for_exit())
         except Exception:
             pass
-        self._pause_all_runtime_work_for_exit(context="앱 종료")
+        try:
+            self._pause_all_runtime_work_for_exit(context="앱 종료")
+        except Exception as exc:
+            try:
+                get_logger().log(f"⚠️ 종료 중 작업 일시정지 실패: {exc}")
+            except Exception:
+                pass
         if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() != "offscreen":
             try:
                 async_cleanup = getattr(self, "_start_runtime_cleanup_for_app_exit_async", None)
@@ -1585,4 +1741,3 @@ class MainWindow(
         except Exception:
             pass
         event.accept()
-        self._schedule_forced_process_exit(delay_ms=30 if getattr(config, "IS_MAC", False) else 60)

@@ -32,6 +32,7 @@ dataset/runtime_optimization_profile.json
 dataset/subtitle_rule.json
 dataset/correction_memory.json
 dataset/wrong_answer_memory.json
+dataset/dataset_correction.sqlite3
 dataset/personalization/
 dataset/lora_personalization/
 

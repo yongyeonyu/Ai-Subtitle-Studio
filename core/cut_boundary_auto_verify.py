@@ -257,6 +257,11 @@ def build_strict_verify_helpers(deps: dict):
         except Exception:
             return {"passed": True, "reason": "numpy_unavailable"}
         try:
+            from core.visual_cut_jump import build_visual_cut_sample, score_visual_cut_pair
+        except Exception:
+            build_visual_cut_sample = None
+            score_visual_cut_pair = None
+        try:
             from core.native_cut_boundary import (
                 dense_flow_pair_metrics as _native_dense_flow_pair_metrics,
                 native_cut_boundary_enabled as _native_cut_boundary_enabled,
@@ -404,68 +409,41 @@ def build_strict_verify_helpers(deps: dict):
                     return None
             except Exception:
                 return None
-
-            flow, backend = _calc_flow(prev_gray, next_gray)
-            if flow is None:
+            if build_visual_cut_sample is None or score_visual_cut_pair is None:
                 return None
 
-            metrics_backend = "python_numpy"
-            native_metrics = None
-            if _native_dense_flow_pair_metrics is not None:
-                native_metrics = _native_dense_flow_pair_metrics(
-                    prev_gray,
-                    next_gray,
-                    flow,
-                    diff_threshold=diff_threshold,
-                )
-            if isinstance(native_metrics, dict):
-                diff_before = float(native_metrics.get("diff", 0.0) or 0.0)
-                coverage = float(native_metrics.get("coverage", 0.0) or 0.0)
-                residual = float(native_metrics.get("residual", diff_before) or 0.0)
-                residual_ratio = float(native_metrics.get("residual_ratio", residual / max(diff_before, 1e-6)) or 0.0)
-                mean_mag = float(native_metrics.get("mean_motion_px", 0.0) or 0.0)
-                mean_fx = float(native_metrics.get("mean_fx", 0.0) or 0.0)
-                mean_fy = float(native_metrics.get("mean_fy", 0.0) or 0.0)
-                coherence = float(native_metrics.get("coherence", 0.0) or 0.0)
-                metrics_backend = "cpp_native"
-            else:
-                diff = np.abs(prev_gray.astype(np.float32) - next_gray.astype(np.float32))
-                diff_before = float(diff.mean())
-                coverage = float((diff >= diff_threshold).mean())
-                h, w = prev_gray.shape[:2]
-                grid_x, grid_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
-                map_x = grid_x - flow[:, :, 0].astype(np.float32)
-                map_y = grid_y - flow[:, :, 1].astype(np.float32)
-                try:
-                    warped = cv2_mod.remap(
-                        prev_gray,
-                        map_x,
-                        map_y,
-                        interpolation=cv2_mod.INTER_LINEAR,
-                        borderMode=cv2_mod.BORDER_REPLICATE,
-                    )
-                    residual = float(np.abs(warped.astype(np.float32) - next_gray.astype(np.float32)).mean())
-                except Exception:
-                    residual = diff_before
-
-                fx = flow[:, :, 0].astype(np.float32)
-                fy = flow[:, :, 1].astype(np.float32)
-                mag = np.sqrt(fx ** 2 + fy ** 2)
-                mean_mag = float(mag.mean())
-                mean_fx = float(fx.mean())
-                mean_fy = float(fy.mean())
-                coherence = float((mean_fx * mean_fx + mean_fy * mean_fy) ** 0.5 / max(mean_mag, 1e-6))
-                residual_ratio = residual / max(diff_before, 1e-6)
+            prev_sample = build_visual_cut_sample(prev_gray, cv2_mod, mode="full9", width=max_width, settings=settings)
+            next_sample = build_visual_cut_sample(next_gray, cv2_mod, mode="full9", width=max_width, settings=settings)
+            visual = score_visual_cut_pair(
+                prev_sample,
+                next_sample,
+                cv2_mod,
+                settings=settings,
+                region_threshold=max(8.0, diff_threshold * 0.75),
+            )
+            diff_before = float(visual.get("gray_mean", 0.0) or 0.0)
+            coverage = float(visual.get("pixel_ratio", 0.0) or 0.0)
+            residual = float(visual.get("flow_residual", diff_before) or diff_before)
+            residual_ratio = float(
+                visual.get("flow_residual_ratio", residual / max(diff_before, 1e-6)) or (residual / max(diff_before, 1e-6))
+            )
+            mean_mag = float(visual.get("flow_mean", 0.0) or 0.0)
+            coherence = float(visual.get("flow_coherence", 0.0) or 0.0)
+            motion_jump = float(visual.get("motion_jump", 0.0) or 0.0)
+            backend = str(visual.get("backend", "flow_unavailable") or "flow_unavailable")
+            metrics_backend = str(visual.get("metrics_backend", "python_fallback") or "python_fallback")
             residual_conf = _clamp01((max_motion_residual_ratio - residual_ratio) / max(max_motion_residual_ratio, 1e-6))
             diff_conf = _clamp01(diff_before / max(strong_diff, 1e-6))
             coverage_conf = _clamp01(coverage / max(min_coverage, 1e-6)) if min_coverage > 0 else _clamp01(coverage)
             motion_conf = _clamp01(mean_mag / max(min_motion * 4.0, 1e-6))
+            jump_conf = _clamp01(motion_jump / max(strong_diff, 1e-6))
             motion_score = (
-                diff_conf * 0.24
-                + residual_conf * 0.30
-                + _clamp01(coherence) * 0.24
+                diff_conf * 0.22
+                + residual_conf * 0.28
+                + _clamp01(coherence) * 0.20
                 + coverage_conf * 0.12
                 + motion_conf * 0.10
+                + jump_conf * 0.08
             )
             motion_like = (
                 diff_before >= min_diff
@@ -486,6 +464,7 @@ def build_strict_verify_helpers(deps: dict):
                 "coverage": coverage,
                 "mean_motion_px": mean_mag,
                 "coherence": coherence,
+                "motion_jump": motion_jump,
                 "motion_score": motion_score,
                 "motion_like": bool(motion_like),
                 "backend": backend,
@@ -556,6 +535,7 @@ def build_strict_verify_helpers(deps: dict):
                 "coverage": _round(item["coverage"]),
                 "mean_motion_px": _round(item["mean_motion_px"]),
                 "coherence": _round(item["coherence"]),
+                "motion_jump": _round(item.get("motion_jump", 0.0)),
                 "motion_score": _round(item["motion_score"]),
                 "motion_like": bool(item["motion_like"]),
                 "backend": item["backend"],

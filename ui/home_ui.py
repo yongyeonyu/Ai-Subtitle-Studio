@@ -50,11 +50,26 @@ ROUGHCUT_CAPABLE_LOCAL_LATEST = (
 
 
 class HomeUIMixin(HomeSidebarMixin):
+    def _home_auto_source_payload(self, scope: str):
+        cache = dict(getattr(self, "_home_auto_source_cache", {}) or {})
+        cached = cache.get(str(scope or ""))
+        if cached is not None:
+            return cached
+        if bool(getattr(self, "_initial_home_scan_deferred", False)):
+            return [], "불러오는 중", ""
+        getter = self._get_nas_folders if str(scope or "") == "nas" else self._get_icloud_files
+        result = getter()
+        cache[str(scope or "")] = result
+        self._home_auto_source_cache = cache
+        return result
 
     def _build_home_content(self):
         self._preview_containers = []
         self._watchdog_labels = []
         self._subtitle_quality_combos = []
+        refresh_sources = getattr(self, "_start_initial_home_auto_source_refresh", None)
+        if callable(refresh_sources) and bool(getattr(self, "_initial_home_scan_deferred", False)):
+            refresh_sources(delay_ms=0)
         overlay = getattr(self, "_project_info_overlay", None)
         if overlay is not None:
             try:
@@ -79,7 +94,7 @@ class HomeUIMixin(HomeSidebarMixin):
                 try:
                     widget.setParent(None)
                 except RuntimeError:
-                    if attr == "status_rail":
+                    if attr == "status_rail" and not bool(getattr(self, "_unified_dashboard", False)):
                         from ui.menu_bar import StatusRail
                         self.status_rail = StatusRail(self.home_page)
                         if hasattr(self, "global_menu_bar"):
@@ -108,6 +123,8 @@ class HomeUIMixin(HomeSidebarMixin):
         layout.setSpacing(5)
         if not is_unified:
             layout.addSpacing(40)
+        icloud_files, count_str, comp_str = self._home_auto_source_payload("icloud")
+        nas_folders, nas_count, nas_comp = self._home_auto_source_payload("nas")
         if is_unified:
             if not hasattr(self, "saved_status_label"):
                 self.saved_status_label = QLabel("", self.home_page)
@@ -116,9 +133,29 @@ class HomeUIMixin(HomeSidebarMixin):
             self.saved_status_label.setStyleSheet("color: #FFFFFF; font-size: 14px; font-weight: bold; background: transparent; border: none;")
             self._refresh_saved_status_label()
             layout.addWidget(self.saved_status_label)
-            if hasattr(self, "status_rail"):
-                layout.addWidget(self.status_rail)
+            rail = getattr(self, "status_rail", None)
+            if rail is not None:
+                try:
+                    rail.hide()
+                    rail.setParent(None)
+                except RuntimeError:
+                    pass
+            self.status_rail = None
+            if hasattr(self, "global_menu_bar"):
+                try:
+                    self.global_menu_bar.set_status_rail(None)
+                except Exception:
+                    pass
         else:
+            if getattr(self, "status_rail", None) is None:
+                from ui.menu_bar import StatusRail
+
+                self.status_rail = StatusRail(self.home_page)
+                if hasattr(self, "global_menu_bar"):
+                    try:
+                        self.global_menu_bar.set_status_rail(self.status_rail)
+                    except Exception:
+                        pass
             title = QLabel("AI Subtitle Studio")
             title.setAlignment(Qt.AlignmentFlag.AlignCenter)
             title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold;")
@@ -130,8 +167,6 @@ class HomeUIMixin(HomeSidebarMixin):
         if is_unified:
             left_col.addWidget(self._ensure_sidebar_nav_menu())
             left_col.addSpacing(2)
-            icloud_files, count_str, comp_str = self._get_icloud_files()
-            nas_folders, nas_count, nas_comp = self._get_nas_folders()
             left_col.addWidget(self._icloud_btn("☁ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
             left_col.addWidget(self._icloud_btn("▣ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
             left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=7)
@@ -145,10 +180,8 @@ class HomeUIMixin(HomeSidebarMixin):
         if not is_unified:
             left_col.addStretch()
         right_widget = QWidget(); right_col = QVBoxLayout(right_widget); right_col.setContentsMargins(0, 0, 0, 0); right_col.setSpacing(8)
-        icloud_files, count_str, comp_str = self._get_icloud_files()
         if not is_unified:
             right_col.addWidget(self._icloud_btn("☁️ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
-        nas_folders, nas_count, nas_comp = self._get_nas_folders()
         if not is_unified:
             right_col.addWidget(self._icloud_btn("🗄️ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
         if not is_unified:
@@ -344,6 +377,7 @@ class HomeUIMixin(HomeSidebarMixin):
     def _sidebar_nav_items(self) -> list[dict]:
         sidebar_mode = self._sidebar_active_mode()
         return [
+            self._sidebar_generation_nav_item(),
             {
                 "id": "home",
                 "title": "홈",
@@ -387,8 +421,18 @@ class HomeUIMixin(HomeSidebarMixin):
         panel.set_items(self._sidebar_nav_items())
         return panel
 
+    def _refresh_sidebar_nav_menu(self):
+        panel = getattr(self, "sidebar_nav_menu", None)
+        if not isinstance(panel, HomeSidebarNavWidget):
+            return
+        try:
+            panel.set_items(self._sidebar_nav_items())
+        except RuntimeError:
+            self.sidebar_nav_menu = None
+
     def _handle_sidebar_nav_action(self, action_id: str):
         actions = {
+            "generation_status": self._open_editor_screen,
             "home": self.show_home,
             "editor": self._open_editor_screen,
             "roughcut": self._open_roughcut_helper,

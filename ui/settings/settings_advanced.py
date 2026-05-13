@@ -19,6 +19,7 @@ from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 from core.audio import audio_presets as _audio_presets
 from core.audio.audio_presets import apply_audio_preset
+from core.audio.stt_quality_presets import VAD_MODE_AUTOMATION_NOTE
 
 
 def _resolve_audio_preset_combo_data(settings: dict | None) -> str:
@@ -60,7 +61,7 @@ class AdvancedSettingsDialog(QDialog):
         self._qml_header = create_settings_header(
             self,
             title="오디오 & Whisper 상세 튜닝",
-            subtitle="VAD, 노이즈 처리, Whisper, ffmpeg 파라미터를 QML 패널 헤더로 정리합니다.",
+            subtitle="노이즈 처리, Whisper, ffmpeg 파라미터를 QML 패널 헤더로 정리합니다.",
             badge="QML",
         )
         if self._qml_header is not None:
@@ -84,32 +85,13 @@ class AdvancedSettingsDialog(QDialog):
         self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
         self.tabs = QTabWidget()
         auto_note = QLabel(
-            "음성/VAD/Whisper/ffmpeg 세부값은 dataset/user_settings.json에 저장되고 "
-            "영상별 LoRA 추천값이 있으면 자동 적용됩니다. 이 화면에는 사용자가 직접 조절해야 하는 값만 남깁니다."
+            "음성/Whisper/ffmpeg 세부값은 dataset/user_settings.json에 저장되고 "
+            "영상별 LoRA 추천값이 있으면 자동 적용됩니다. "
+            f"{VAD_MODE_AUTOMATION_NOTE} 이 화면에는 사용자가 직접 조절해야 하는 값만 남깁니다."
         )
         auto_note.setWordWrap(True)
         auto_note.setStyleSheet(label_style("muted", 12) + "padding: 6px 4px 10px 4px;")
         layout.addWidget(auto_note)
-        
-        # 탭 1: Silero
-        tab_silero = QWidget(); form_silero = QFormLayout(tab_silero)
-        self._add_slider(form_silero, "vad_threshold", "VAD 민감도 (Threshold):", 
-                         "<nobr>💡 소리를 목소리로 판단하는 확신도입니다.<br>➕ : 깐깐하게 목소리만 잡음 (기본값: {default})<br>➖ : 작은 소음도 목소리로 인식</nobr>", 
-                         10, 90, DEFAULT_ADV_SETTINGS['vad_threshold'], 100, "{:.2f}")
-        self._add_slider(form_silero, "vad_min_speech", "최소 음성 길이 (초):", 
-                         "<nobr>💡 이 시간보다 짧은 소리는 잡음으로 보고 무시합니다.<br>➕ : 기침이나 짧은 잡음 제거 (기본값: {default})<br>➖ : 짧은 단어도 살림</nobr>", 
-                         5, 100, DEFAULT_ADV_SETTINGS['vad_min_speech'], 100, "{:.2f} 초")
-        self._add_slider(form_silero, "vad_min_silence", "무음 판단 간격 (초):", 
-                         "<nobr>💡 말 사이 공백이 이보다 짧으면 한 문장으로 합칩니다.<br>➕ : 문장이 길게 유지됨 (기본값: {default})<br>➖ : 단어 단위로 쪼개짐</nobr>", 
-                         5, 100, DEFAULT_ADV_SETTINGS['vad_min_silence'], 10, "{:.1f} 초")
-        self._add_slider(form_silero, "vad_speech_pad", "음성 앞뒤 여유 (초):", 
-                         "<nobr>💡 감지된 목소리 앞뒤에 붙일 여유 시간입니다.<br>➕ : 말이 잘리는 현상 방지 (기본값: {default})<br>➖ : 칼같이 자름</nobr>", 
-                         0, 50, DEFAULT_ADV_SETTINGS['vad_speech_pad'], 100, "{:.2f} 초")
-        self._add_slider(form_silero, "vad_window_size", "VAD 분석 단위 (Window Size):", 
-                         "<nobr>💡 오디오를 분석하는 샘플 크기입니다.<br>➕ : 더 넓은 문맥 파악, 정확도 약간 상승(속도 저하)<br>➖ : 빠른 처리 (기본값: {default})</nobr>", 
-                         256, 2048, DEFAULT_ADV_SETTINGS['vad_window_size'], 1, "{} 샘플")
-        if form_silero.rowCount():
-            self.tabs.addTab(tab_silero, "Silero")
 
         # 탭 2: DeepFilter
         tab_df = QWidget(); form_df = QFormLayout(tab_df)

@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.02-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
-Last-Updated: 2026-05-12
+Document-Version: 04.00.04-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_4_RELEASED
+Last-Updated: 2026-05-13
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.02"
-document_version: "04.00.02-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_2_RELEASED"
+app_version: "04.00.04"
+document_version: "04.00.04-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_4_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -51,23 +51,19 @@ release_handoff_files:
 
 - Actual App Store Connect upload requires the user's Apple Developer account, signing identities, App Store Connect API key or app-specific password, and team configuration.
 - Future iPadOS app reuse is expected. Keep Swift-native subtitle, LoRA, deep policy, project I/O, timeline, and waveform logic as Apple-platform reusable core modules, with macOS-only UI, process, file-watcher, and packaging code kept at the edges.
+- If VAD mode locking remains a product direction, automate the benchmark-refresh path that mines dense dialogue windows from `test video/` and re-scores the locked Fast/Auto/High VAD profiles before future releases.
 
 ## Completion Snapshot
 
-The v04.00.02 Mac-native release completed the prior queue:
+The v04.00.04 Mac-native release completed the prior queue:
 
-- The repository now targets macOS Apple Silicon only on this branch; Windows launcher and Windows-only dependency files were removed from the active release path.
-- Apple Silicon scheduling now includes chip-aware worker budgeting, FFmpeg thread caps, pioneer/follower cut-boundary planning, and accelerator slot distribution for the detected Mac.
-- STT candidate scoring and STT1/STT2 merge work now reuse indexed or native overlap calculations instead of rescanning every peer segment.
-- Native Swift bridges now cover subtitle/project/timeline/waveform/policy quality helpers intended for later reuse in a future iPad app, with Python kept as a fallback only where quality or compatibility still requires it.
-- Production macOS runtime now enables only benchmark-safe native routes by default and keeps Swift LoRA/Deep/LLM policy helpers behind an explicit experimental gate until speed and LoRA ranking parity are proven.
-- Native macOS memory helpers, packaging scripts, and benchmark tools are part of the active release set so the app can be profiled, packaged, and iterated as a Mac-first product.
-- Generation completion now waits for real saveable subtitle segments before marking the editor complete, then retries the completion autosave until segments are available.
-- Exit confirmation now asks to save unsaved editor changes before quick exit or window close cleanup runs.
-- Project JSON backups now live under `프로젝트백업/` instead of filling the project root with numbered backup files.
-- Canonical project JSON saves now keep the `video` header first, use frame/FPS metadata as the reload contract, and reload external subtitle/STT assets through project-path-aware readers.
-- Background LoRA and app-exit cleanup now tolerate old and new trainer shutdown signatures so input or quit requests can pause runtime work without blocking the UI.
-- Correction-dictionary cleanup, STT worker I/O, subtitle segment filtering, subtitle accuracy helpers, cut-boundary cache handling, and editor segment bulk loading have smaller native-ready modules.
+- Fast/Auto/High now own benchmark-locked VAD defaults on this branch, and direct VAD controls were removed from the simplified AI settings and advanced tuning dialog.
+- Automatic audio preset detection now tunes only the audio frontend stack and no longer overwrites mode-owned VAD policy.
+- Correction-dictionary runtime lookup now has a SQLite-backed indexed path while keeping `dataset_correction.json` as the editable source of truth.
+- Editor startup, file-open, save, and post-generation cleanup now defer heavy idle-learning and analysis work so foreground UI becomes interactive sooner.
+- Manual `<<` / `>>` cut hits are promoted into persistent confirmed cut boundaries for later subtitle magnet alignment work.
+- Quick-exit and close-event cleanup now schedule forced exit before runtime pause work so cleanup exceptions cannot trap the app open.
+- Project schema/version helpers now share one source of truth again instead of carrying stale `03.00.26` literals in older save helpers.
 - Release verification should be re-read from the latest `RELEASE_v*.md` only.
 
 Future work should start from a new user request rather than this completed backlog.

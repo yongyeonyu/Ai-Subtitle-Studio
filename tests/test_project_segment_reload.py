@@ -455,6 +455,8 @@ class _LifecycleOwner(EditorLifecycleMixin):
         self.scheduled_media = []
         self.fit_calls = 0
         self.idle_mode_reason = None
+        self.scheduled_post_open_tasks = []
+        self.restore_workspace_calls = []
 
     def _remove_old_editor(self):
         return None
@@ -467,6 +469,12 @@ class _LifecycleOwner(EditorLifecycleMixin):
 
     def _activate_editor_idle_mode(self, reason=""):
         self.idle_mode_reason = str(reason or "")
+
+    def _schedule_native_editor_post_open_tasks(self, editor, **kwargs):
+        self.scheduled_post_open_tasks.append((editor, dict(kwargs)))
+
+    def _restore_workspace(self, editor, project_path):
+        self.restore_workspace_calls.append((editor, str(project_path or "")))
 
 
 class _BootstrapTimeline:
@@ -749,6 +757,20 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(owner.fit_calls, 1)
         self.assertEqual(owner.idle_mode_reason, "editor_open")
 
+    def test_init_editor_restores_workspace_when_project_is_opened(self):
+        owner = _LifecycleOwner()
+        owner._current_project_path = "/tmp/sample-project.json"
+        target_file = "/tmp/native-fast-open.mp4"
+
+        with patch("ui.editor.editor_widget.EditorWidget", _LifecycleEditor):
+            owner._init_editor(target_file, is_batch=False)
+
+        self.assertEqual(len(owner.scheduled_post_open_tasks), 1)
+        _editor, kwargs = owner.scheduled_post_open_tasks[0]
+        self.assertTrue(callable(kwargs.get("restore_workspace_callback")))
+        kwargs["restore_workspace_callback"]()
+        self.assertEqual(owner.restore_workspace_calls, [(owner._editor_widget, owner._current_project_path)])
+
     def test_native_open_media_bootstrap_stages_video_then_waveform(self):
         owner = type("Owner", (), {"_editor_widget": None, "_multiclip_boundaries": []})()
         editor = _BootstrapEditor()
@@ -762,7 +784,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=_run_now):
             project_open_native_module.schedule_native_open_editor_media(owner, editor, "/tmp/clip.mp4")
 
-        self.assertEqual(delays, [32, 180])
+        self.assertEqual(delays, [72, 260])
         self.assertEqual(editor.load_calls, [("/tmp/clip.mp4", False, True)])
         self.assertEqual(editor.timeline.waveform_paths, ["/tmp/clip.mp4"])
 
@@ -1018,6 +1040,38 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         stt_previews = [seg for seg in editor.timeline.updated[0] if seg.get("_live_stt_preview")]
         self.assertEqual(subtitle_drafts, [])
         self.assertEqual([seg["text"] for seg in stt_previews], ["드래프트"])
+
+    def test_native_live_subtitle_preview_is_removed_when_final_segment_overlaps(self):
+        editor = _LivePreviewEditor()
+        editor._cached_segs = [{"start": 1.0, "end": 2.0, "text": "최종", "speaker": "00"}]
+        editor._live_stt_preview_segments = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "네이티브 후보",
+                "stt_preview_source": "STT1",
+                "stt_pending": True,
+                "_live_stt_preview": True,
+            }
+        ]
+
+        with patch(
+            "ui.editor.editor_segments.build_live_subtitle_preview_via_swift",
+            return_value=[
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "네이티브 후보",
+                    "sttPreviewSource": "STT1",
+                }
+            ],
+        ):
+            editor._redraw_timeline_with_live_preview()
+
+        subtitle_drafts = [seg for seg in editor.timeline.updated[0] if seg.get("_live_subtitle_preview")]
+        stt_previews = [seg for seg in editor.timeline.updated[0] if seg.get("_live_stt_preview")]
+        self.assertEqual(subtitle_drafts, [])
+        self.assertEqual([seg["text"] for seg in stt_previews], ["네이티브 후보"])
 
     def test_live_stt_preview_is_visible_in_editor_without_saved_commit(self):
         editor = _ActualSelectionEditor()

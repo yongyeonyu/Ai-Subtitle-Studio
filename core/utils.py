@@ -5,6 +5,13 @@ import json
 import re
 from typing import Dict, Tuple, List, Any
 
+from core.correction_dictionary_db import (
+    corrections_may_apply,
+    INDEXED_QUERY_MIN_ENTRIES,
+    load_corrections as load_correction_dictionary,
+    save_corrections as save_correction_dictionary,
+    apply_corrections_indexed,
+)
 from core.runtime.logger import get_logger
 from core.runtime.config import (
     DATASET_DIR,
@@ -184,13 +191,10 @@ def netflix_style(text: str) -> str:
 def load_corrections() -> Dict[str, str]:
     """교정사전 로드"""
     try:
-        if os.path.exists(CORRECTIONS_FILE):
-            with open(CORRECTIONS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, dict) else {}
+        return load_correction_dictionary(CORRECTIONS_FILE)
     except Exception as e:
         get_logger().log(f"⚠️ 교정사전 로드 실패: {e}")
-    return {}
+        return {}
 
 def save_corrections(corrections: Dict[str, str]) -> None:
     """
@@ -202,13 +206,17 @@ def save_corrections(corrections: Dict[str, str]) -> None:
     try:
         existing = load_corrections()
         existing.update(corrections or {})
-        with open(CORRECTIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump(existing, f, ensure_ascii=False, indent=2, sort_keys=True)
+        save_correction_dictionary(existing, CORRECTIONS_FILE)
     except Exception as e:
         get_logger().log(f"❌ 교정사전 저장 실패: {e}")
 
 def apply_corrections(text: str, corrections: Dict[str, str]) -> str:
     """단순 치환 기반 교정 적용"""
+    if len(corrections or {}) >= INDEXED_QUERY_MIN_ENTRIES and not corrections_may_apply(text, corrections):
+        return text
+    indexed = apply_corrections_indexed(text, corrections)
+    if indexed is not None:
+        return indexed[0]
     for wrong, right in (corrections or {}).items():
         text = text.replace(wrong, right)
     return text

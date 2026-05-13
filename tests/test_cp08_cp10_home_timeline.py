@@ -10,7 +10,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLabel
 
 from core.project.project_phase1b import apply_project_ui_state
 import ui.main.main_window as main_window_module
@@ -48,6 +48,41 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
             self.assertIn("AI Subtitle Studio", text)
             self.assertIn("v", text)
             self.assertGreater(window._post_completion_idle_remaining_ms(), 0)
+        finally:
+            self._cleanup_window(window)
+
+    def test_home_build_uses_loading_placeholder_when_initial_auto_scan_is_deferred(self):
+        window = MainWindow()
+        try:
+            window._initial_home_scan_deferred = True
+            window._home_auto_source_cache = {}
+            with patch.object(window, "_start_initial_home_auto_source_refresh") as start_refresh, \
+                 patch.object(window, "_get_icloud_files", side_effect=AssertionError("icloud sync scan should stay deferred")), \
+                 patch.object(window, "_get_nas_folders", side_effect=AssertionError("nas sync scan should stay deferred")):
+                window._build_home_content()
+            texts = [label.text() for label in window.home_page.findChildren(QLabel)]
+            self.assertGreaterEqual(texts.count("불러오는 중"), 2)
+            start_refresh.assert_called()
+        finally:
+            self._cleanup_window(window)
+
+    def test_home_auto_scan_ready_rebuilds_home_with_cached_results(self):
+        window = MainWindow()
+        try:
+            window._initial_home_scan_deferred = True
+            window._home_auto_source_refresh_token = 7
+            with patch.object(window, "_build_home_content") as rebuild:
+                window._on_home_auto_sources_ready(
+                    {
+                        "token": 7,
+                        "icloud": ([("sample.mp4", "/tmp/sample.mp4")], "대기: 영상 1개", "완료: 영상 0개"),
+                        "nas": ([("folder", "/tmp/folder")], "경로 없음", ""),
+                    }
+                )
+            self.assertFalse(window._initial_home_scan_deferred)
+            self.assertEqual(window._home_auto_source_cache["icloud"][1], "대기: 영상 1개")
+            self.assertEqual(window._home_auto_source_cache["nas"][0][0][0], "folder")
+            rebuild.assert_called_once()
         finally:
             self._cleanup_window(window)
 
@@ -264,7 +299,8 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
             timeline = DummyTimeline()
             editor = SimpleNamespace(timeline=timeline)
             owner = SimpleNamespace()
-            apply_project_ui_state(owner, editor, project_path)
+            with patch("core.project.project_phase1b.QTimer.singleShot", side_effect=lambda _delay, cb: cb()):
+                apply_project_ui_state(owner, editor, project_path)
             self.assertEqual(timeline.fit_called, 1)
             self.assertEqual(timeline.canvas.pps, 123.0)
             self.assertEqual(timeline.scroll.bar.set_calls, [])

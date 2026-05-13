@@ -117,6 +117,18 @@ class _MagnetAssistEditor(EditorSubtitleAssistMixin):
         self.dirty_marked = True
 
 
+class _TooltipAssistEditor(EditorSubtitleAssistMixin):
+    def __init__(self):
+        self.settings = {
+            "sub_gap_break_sec": 1.5,
+            "subtitle_lora_micro_merge_gap_sec": 1.8,
+            "deep_sequence_bridge_gap_sec": 0.3,
+        }
+        self.media_path = "/tmp/sample.mp4"
+        self.timeline = SimpleNamespace(set_toolbar_tooltips=Mock())
+        self._init_subtitle_assist_state()
+
+
 class SubtitleAssistTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -286,3 +298,26 @@ class SubtitleAssistTests(unittest.TestCase):
             timeline.close()
             timeline.deleteLater()
             self.app.processEvents()
+
+    def test_refresh_subtitle_assist_ui_skips_runtime_override_by_default(self):
+        editor = _TooltipAssistEditor()
+
+        with patch(
+            "ui.editor.editor_subtitle_assist.personalization_settings_override_for_media",
+            side_effect=AssertionError("runtime override should stay deferred"),
+        ):
+            editor._refresh_subtitle_assist_ui(allow_sync_override=False)
+
+        editor.timeline.set_toolbar_tooltips.assert_called_once()
+
+    def test_subtitle_magnet_policy_can_sync_runtime_override_on_demand(self):
+        editor = _TooltipAssistEditor()
+
+        with patch(
+            "ui.editor.editor_subtitle_assist.personalization_settings_override_for_media",
+            return_value={"subtitle_lora_micro_merge_gap_sec": 2.4},
+        ) as override_loader:
+            policy = editor._subtitle_magnet_policy(allow_sync_override=True)
+
+        self.assertEqual(override_loader.call_count, 1)
+        self.assertEqual(policy["lora_micro_merge_gap_sec"], 2.4)

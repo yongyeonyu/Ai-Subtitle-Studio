@@ -13,13 +13,14 @@ from typing import Any
 from core.runtime import config
 from core.frame_time import normalize_fps, sec_to_frame
 from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, project_stt_preview_segments
+from core.cut_boundary import sanitize_cut_boundary_rows
 from core.project.project_assets import externalize_project_text_assets, hydrate_project_text_asset_cache
+from core.project.project_format import PROJECT_SCHEMA_VERSION
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 
 PROJECTS_DIR = getattr(config, "PROJECTS_DIR", os.path.join(config.BASE_DIR, 'projects'))
 os.makedirs(PROJECTS_DIR, exist_ok=True)
-PROJECT_SCHEMA_VERSION = '03.00.26'
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.vector.v1"
 
 
@@ -197,11 +198,14 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         if not provisional_cut_boundaries:
             provisional_cut_boundaries = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
 
-    cut_boundaries = [
-        row if isinstance(row, dict) else {"timeline_sec": row, "time": row, "status": "verified"}
-        for row in list(getattr(owner, '_project_boundary_times', []) or [])
-    ]
     primary_fps = _editor_primary_fps(editor) if editor is not None else 30.0
+    cut_boundaries = sanitize_cut_boundary_rows(
+        [
+            row if isinstance(row, dict) else {"timeline_sec": row, "time": row, "status": "verified"}
+            for row in list(getattr(owner, '_project_boundary_times', []) or [])
+        ],
+        primary_fps=primary_fps,
+    )
     editor_state = build_editor_state(
         mode=mode,
         media_files=media_files,
@@ -231,7 +235,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         'ui_state': editor_state.get('workspace', {}),
         'editor_state': editor_state,
         'project_meta': {
-            'project_boundary_times': list(getattr(owner, '_project_boundary_times', []) or []),
+            'project_boundary_times': list(cut_boundaries),
             'multiclip_boundaries': list(getattr(owner, '_multiclip_boundaries', []) or []),
             'sorted_files': list(getattr(owner, '_multiclip_files', []) or []),
         },

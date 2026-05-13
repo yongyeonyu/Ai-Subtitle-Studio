@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.02-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
-Last-Updated: 2026-05-12
+Document-Version: 04.00.04-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_4_RELEASED
+Last-Updated: 2026-05-13
 Updated-By: Codex
 Scope: Actual project filesystem map generated from tracked source files plus untracked non-ignored release files. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
@@ -9,9 +9,9 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 ================================================================================
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-12
-Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
-App Version: 04.00.02
+Last Updated: 2026-05-13
+Phase: MAC_NATIVE_APPSTORE_V4_0_4_RELEASED
+App Version: 04.00.04
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -289,6 +289,7 @@ ai_subtitle_studio/
 │   ├── autopilot_policy.py
 │   ├── backend_fast.py
 │   ├── cloud_sync.py
+│   ├── correction_dictionary_db.py
 │   ├── cut_boundary.py
 │   ├── cut_boundary_api.py
 │   ├── cut_boundary_audio.py
@@ -342,6 +343,7 @@ ai_subtitle_studio/
 │   ├── utils.py
 │   ├── video_codec.py
 │   ├── video_preview_proxy.py
+│   ├── visual_cut_jump.py
 │   └── work_mode.py
 ├── dataset
 │   ├── audio_presets.json
@@ -417,6 +419,7 @@ ai_subtitle_studio/
 │   ├── test_button_click_feedback.py
 │   ├── test_codex_provider.py
 │   ├── test_context_menu_bounds.py
+│   ├── test_correction_dictionary_db.py
 │   ├── test_correction_memory.py
 │   ├── test_cp03_cp04_status_ui.py
 │   ├── test_cp08_cp10_home_timeline.py
@@ -565,6 +568,7 @@ ai_subtitle_studio/
 │   ├── test_torch_acceleration.py
 │   ├── test_video_player_widget.py
 │   ├── test_video_preview_proxy.py
+│   ├── test_visual_cut_jump.py
 │   ├── test_whisper_coreml.py
 │   ├── test_whisper_model_catalog.py
 │   └── test_word_resegmenter.py
@@ -736,4 +740,6 @@ ai_subtitle_studio/
 ├── RELEASE_v04.00.00.md
 ├── RELEASE_v04.00.01.md
 ├── RELEASE_v04.00.02.md
+├── RELEASE_v04.00.03.md
+├── RELEASE_v04.00.04.md
 └── requirements-mac.txt

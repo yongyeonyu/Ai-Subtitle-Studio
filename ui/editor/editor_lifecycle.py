@@ -406,8 +406,8 @@ class EditorLifecycleMixin:
         restore_workspace_callback = None
         apply_project_ui_callback = None
         if self._current_project_path:
-            restore_workspace_callback = lambda e=editor, p=self._current_project_path: self._restore_workspace(e, p)
-            apply_project_ui_callback = None
+            if hasattr(self, "_restore_workspace"):
+                restore_workspace_callback = lambda e=editor, p=self._current_project_path: self._restore_workspace(e, p)
             try:
                 from core.project.project_phase1b import apply_project_ui_state
 
@@ -432,9 +432,9 @@ class EditorLifecycleMixin:
                 preload_segments_callback=_deferred_preload_existing_multiclip_segments,
             )
         if hasattr(self, "_refresh_work_mode_ui"):
-            QTimer.singleShot(0, self._refresh_work_mode_ui)
+            QTimer.singleShot(120, self._refresh_work_mode_ui)
         if hasattr(self, "_release_ai_models_for_editor_mode"):
-            QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
+            QTimer.singleShot(260, self._release_ai_models_for_editor_mode)
         if is_batch and hasattr(editor, "_load_queue_clip_media_staged"):
             QTimer.singleShot(
                 0,

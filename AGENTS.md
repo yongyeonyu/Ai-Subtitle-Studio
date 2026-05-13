@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.02-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
-Last-Updated: 2026-05-12
+Document-Version: 04.00.04-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_4_RELEASED
+Last-Updated: 2026-05-13
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
 -->
@@ -62,10 +62,10 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
 - Real benchmark fixtures: `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video` contains the canonical local video/SRT pair for 3-minute subtitle pipeline benchmarks. Use this folder before larger ad-hoc media when comparing STT order, LoRA/Deep/LLM gating, timing, and cut-boundary variants.
-- Current app version in code: `04.00.02`
-- Current handoff document version: `04.00.02-mac-native`
-- Latest release checkpoint: `v04.00.02`
-- Current phase: `MAC_NATIVE_APPSTORE_V4_0_2_RELEASED`
+- Current app version in code: `04.00.04`
+- Current handoff document version: `04.00.04-mac-native`
+- Latest release checkpoint: `v04.00.04`
+- Current phase: `MAC_NATIVE_APPSTORE_V4_0_4_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
@@ -87,6 +87,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Editor performance state: subtitle line edits update cached line maps and the affected timeline dirty rectangle instead of rebuilding the full segment lookup; playback/editor sync respects recent manual scrolling and avoids recentering already visible active segments.
 - Runtime scheduling state: cut-boundary pioneer/follower workers use topology-aware CPU planning, OpenCV thread caps, progress throttling, optional FFmpeg scene prepass, optional C++ native helper kernels, and optical-flow follower verification for candidate-only rollback checks.
+- VAD state: the settings UI no longer exposes direct VAD tuning on this branch; Fast/Auto/High lock benchmarked VAD model/threshold profiles derived from the canonical `test video/X5_시승기_후반` dialogue-dense spans, while automatic audio preset detection can still adjust only the audio frontend stack.
 - Cut-boundary contract state: generation start must immediately create one full-range middle segment `A - 주제없음`; audio provisional boundaries render as neon-green 1px solid lines, visual provisional boundaries render as neon-blue 1px solid lines, follower-checked provisional boundaries render as gray dotted lines, and follower-reviewed rows create the first colored A-Z middle-segment draft before the roughcut LLM refines it from subtitles.
 - Backend routing state: STT, VAD, cut-boundary, audio extraction, LLM, and editor rendering paths now default to native policies on this branch, with optional benchmark profile materialization stored outside Git.
 - Mac-native acceleration state: production runtime uses benchmark-safe native routes by default: WhisperKit/Core ML/MLX STT, C++ VAD overlap/alignment math, C++ LLM macro grouping, C++ indexed correction-dictionary cleanup, adaptive Swift batch quality scoring, adaptive Swift common split planning, and native macOS input-activity snapshots for fast LoRA stop behavior. Swift LoRA scoring, Swift Deep rerank, and Swift LLM candidate policy remain benchmark-only behind `native_swift_policy_experimental_enabled` or the explicit experimental environment gate because they were slower or changed LoRA ranking parity.
@@ -102,8 +103,8 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Refactor state: the longest subtitle/project/editor/runtime modules were split by responsibility into `core.audio.transcribe_worker_io`, `core.engine.subtitle_segment_filter`, `core.engine.subtitle_accuracy_utils`, `core.pipeline.cut_boundary_cache`, and `ui.editor.editor_segments_bulk_load` so future native migration work has smaller seams.
-- Verification state: `v04.00.02` release verification passed with the full Python suite, Swift package tests, `compileall`, `git diff --check`, and release handoff refresh. Full release verification details are in `RELEASE_v04.00.02.md`.
-- Latest regression checkpoint: on 2026-05-12, `QT_QPA_PLATFORM=offscreen venv/bin/python -m pytest -q`, `venv/bin/python -m compileall -q main.py core ui tests`, `git diff --check -- .`, and `swift test` in `native/macos/AIStudioNative` all passed.
+- Verification state: `v04.00.04` release verification passed with the full Python suite, Swift package tests, `compileall`, `git diff --check`, and release handoff refresh. Full release verification details are in `RELEASE_v04.00.04.md`.
+- Latest regression checkpoint: on 2026-05-13, `QT_QPA_PLATFORM=offscreen venv/bin/python -m pytest -q`, `venv/bin/python -m compileall -q main.py core ui tests`, `git diff --check -- .`, and `swift test` in `native/macos/AIStudioNative` all passed.
 
 ## Collaboration Rules
 
@@ -130,7 +131,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Audio preset, VAD, preprocessing, Mode, and LLM selection must flow through shared services where possible.
 - Keep cut-boundary planning centralized. Prefer `core/cut_boundary_native_plan.py` for placeholder/provisional/middle-segment row rules and `core/native/_native_cut_boundary.cpp` for native rollback/search kernels instead of re-spreading the same logic across UI helpers.
 - Mode is user-facing as `Fast`, `Auto`, and `High`; old STT quality keys remain compatibility storage where needed.
-- Direct user controls for STT1, STT2, subtitle LLM, roughcut LLM, audio model list, and VAD model list must remain available.
+- Direct user controls for STT1, STT2, subtitle LLM, roughcut LLM, and the audio model list must remain available. VAD policy is mode-owned on this branch unless a future user request explicitly restores manual VAD controls.
 - LoRA or personalization learning must not start on the Editor screen. It should start only after the Home screen has been idle long enough, and user mouse or keyboard input should stop it quickly.
 - Project save/load logic must use shared project I/O helpers so STT1/STT2, subtitle segments, timeline metadata, and model settings persist consistently.
 - Folder queue processing must enqueue individual files for sequential processing. Folder selection must not silently become multiclip editing.

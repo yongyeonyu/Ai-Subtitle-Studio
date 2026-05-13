@@ -28,11 +28,15 @@ MINIMAP_DIVIDER = QColor("#2D3942")
 MINIMAP_MAJOR_BORDER = QColor("#FFFFFF")
 MINIMAP_PRELIMINARY_LANE_BG = "#122229"
 MINIMAP_REFERENCE_LANE_BG = "#101A1E"
-MINIMAP_SUBTITLE_FILL = QColor(132, 98, 22, 170)
-MINIMAP_SUBTITLE_BORDER = QColor("#FFD400")
-MINIMAP_PENDING_FILL = QColor(255, 69, 58, 185)
-MINIMAP_SILENCE_FILL = QColor(255, 149, 0, 138)
-MINIMAP_SILENCE_BORDER = QColor("#FF9500")
+MINIMAP_SUBTITLE_LANE_BG = "#11202B"
+MINIMAP_SILENCE_LANE_BG = "#22160F"
+MINIMAP_SUBTITLE_FILL = QColor(24, 110, 214, 176)
+MINIMAP_SUBTITLE_BORDER = QColor("#64D2FF")
+MINIMAP_PENDING_FILL = QColor(118, 92, 255, 190)
+MINIMAP_PENDING_BORDER = QColor("#C3B6FF")
+MINIMAP_SILENCE_FILL = QColor(255, 159, 10, 152)
+MINIMAP_SILENCE_BORDER = QColor("#FFD27A")
+MINIMAP_SUBTITLE_MERGE_GAP_PX = 4
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -277,6 +281,40 @@ class GlobalCanvas(GlobalCanvasBase):
         self._waveform_columns = columns
         return columns
 
+    def _merged_minimap_subtitle_segments(self, width: int, total: float) -> list[dict]:
+        rows: list[dict] = []
+        if width <= 0 or total <= 0:
+            return rows
+        max_gap_sec = float(MINIMAP_SUBTITLE_MERGE_GAP_PX) * float(total) / float(max(1, width))
+        for seg in sorted(list(self.segments or []), key=lambda item: float(item.get("start", 0.0) or 0.0)):
+            try:
+                start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+                end = max(start, float(seg.get("end", start) or start))
+            except Exception:
+                continue
+            pending = bool(seg.get("stt_pending"))
+            text = str(seg.get("text", "") or "").strip()
+            if rows:
+                prev = rows[-1]
+                if pending == bool(prev.get("stt_pending")) and start <= float(prev.get("end", 0.0) or 0.0) + max_gap_sec:
+                    prev["end"] = max(float(prev.get("end", 0.0) or 0.0), end)
+                    if text:
+                        prev_text = str(prev.get("text", "") or "").strip()
+                        if text not in prev_text:
+                            prev["text"] = f"{prev_text} {text}".strip() if prev_text else text
+                    prev["count"] = int(prev.get("count", 1) or 1) + 1
+                    continue
+            rows.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "stt_pending": pending,
+                    "text": text,
+                    "count": 1,
+                }
+            )
+        return rows
+
     def _build_static_cache(self) -> QPixmap:
         key = self._static_key()
         if self._static_cache is not None and self._static_cache_key == key:
@@ -396,30 +434,46 @@ class GlobalCanvas(GlobalCanvasBase):
         )
 
         if total > 0:
+            subtitle_lane = QRect(
+                bottom_lane.x(),
+                bottom_lane.y(),
+                bottom_lane.width(),
+                max(1, bottom_lane.height() // 2),
+            )
+            silence_lane = QRect(
+                bottom_lane.x(),
+                subtitle_lane.bottom() + 1,
+                bottom_lane.width(),
+                max(1, bottom_lane.height() - subtitle_lane.height() - 1),
+            )
+            p.fillRect(subtitle_lane, QColor(MINIMAP_SUBTITLE_LANE_BG))
+            p.fillRect(silence_lane, QColor(MINIMAP_SILENCE_LANE_BG))
+            p.setPen(QPen(MINIMAP_DIVIDER, 1))
+            p.drawLine(0, silence_lane.y() - 1, w, silence_lane.y() - 1)
             p.setPen(Qt.PenStyle.NoPen)
             pending_rects: list[QRect] = []
             confirmed_rects: list[QRect] = []
             silence_rects: list[QRect] = []
-            for s in self.segments:
-                try:
-                    start = float(s["start"])
-                    end = float(s["end"])
-                except Exception:
-                    continue
-                rect = _rect_for_lane(start, end, bottom_lane, min_h_pad=4)
+            for s in self._merged_minimap_subtitle_segments(w, total):
+                rect = _rect_for_lane(
+                    float(s.get("start", 0.0) or 0.0),
+                    float(s.get("end", 0.0) or 0.0),
+                    subtitle_lane,
+                    min_h_pad=2,
+                )
                 if s.get("stt_pending"):
                     pending_rects.append(rect)
                 else:
                     confirmed_rects.append(rect)
             for marker in sorted(markers, key=lambda item: int(item.get("priority", 0) or 0)):
-                if str(marker.get("kind", "") or "").strip().lower() != "silence":
+                if str(marker.get("kind", "") or "").strip().lower() not in {"silence", "generation_silence", "linked_silence"}:
                     continue
                 try:
                     start = max(0.0, float(marker.get("start", 0.0) or 0.0))
                     end = max(start, float(marker.get("end", start) or start))
                 except Exception:
                     continue
-                silence_rects.append(_rect_for_lane(start, end, bottom_lane, min_h_pad=2))
+                silence_rects.append(_rect_for_lane(start, end, silence_lane, min_h_pad=2))
             if confirmed_rects:
                 p.setBrush(MINIMAP_SUBTITLE_FILL)
                 p.drawRects(confirmed_rects)
@@ -427,8 +481,10 @@ class GlobalCanvas(GlobalCanvasBase):
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRects(confirmed_rects)
             if pending_rects:
-                p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(MINIMAP_PENDING_FILL)
+                p.drawRects(pending_rects)
+                p.setPen(QPen(MINIMAP_PENDING_BORDER, 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRects(pending_rects)
             if silence_rects:
                 p.setPen(Qt.PenStyle.NoPen)

@@ -81,6 +81,103 @@ def normalize_cut_boundaries(
     return out
 
 
+def sanitize_cut_boundary_rows(
+    boundaries: list[dict[str, Any]] | None,
+    *,
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    rows = normalize_cut_boundaries(boundaries, primary_fps=primary_fps)
+    bool_keys = {
+        "absolute",
+        "locked",
+        "verified",
+        "confirmed",
+        "follower_active",
+        "follower_relocated",
+    }
+    int_keys = {
+        "frame",
+        "timeline_frame",
+        "index",
+        "verified_count",
+        "regions",
+        "clip_idx",
+    }
+    float_keys = {
+        "time",
+        "timeline_sec",
+        "fps",
+        "frame_rate",
+        "timeline_frame_rate",
+        "confidence",
+        "score",
+        "clip_local_sec",
+    }
+    str_keys = {
+        "schema",
+        "id",
+        "source",
+        "reason",
+        "detector",
+        "status",
+        "line_color",
+        "line_style",
+        "verified_by",
+        "source_path",
+        "created_at",
+        "updated_at",
+        "ui_label",
+        "candidate_key",
+        "kind",
+        "detector_stage",
+        "cut_boundary_api_version",
+        "cut_boundary_algorithm_version",
+        "cut_boundary_algorithm_id",
+    }
+    sanitized: list[dict[str, Any]] = []
+    for idx, item in enumerate(rows, start=1):
+        row: dict[str, Any] = {}
+        for key in str_keys:
+            value = item.get(key)
+            if value not in (None, ""):
+                row[key] = str(value)
+        for key in int_keys:
+            value = item.get(key)
+            if value is not None:
+                try:
+                    row[key] = int(value)
+                except Exception:
+                    pass
+        for key in float_keys:
+            value = item.get(key)
+            if value is not None:
+                try:
+                    row[key] = float(value)
+                except Exception:
+                    pass
+        for key in bool_keys:
+            if key in item:
+                row[key] = bool(item.get(key))
+        row.setdefault("schema", "cut_boundary.v1")
+        row.setdefault("id", f"cut_{int(item.get('timeline_frame', item.get('frame', idx)) or idx):08d}")
+        row["time"] = float(item.get("time", item.get("timeline_sec", 0.0)) or 0.0)
+        row["timeline_sec"] = float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0)
+        row["frame"] = int(item.get("frame", item.get("timeline_frame", 0)) or 0)
+        row["timeline_frame"] = int(item.get("timeline_frame", item.get("frame", 0)) or 0)
+        fps = float(item.get("fps", item.get("timeline_frame_rate", item.get("frame_rate", primary_fps))) or primary_fps)
+        row["fps"] = fps
+        row["frame_rate"] = float(item.get("frame_rate", fps) or fps)
+        row["timeline_frame_rate"] = float(item.get("timeline_frame_rate", fps) or fps)
+        row["absolute"] = bool(item.get("absolute", True))
+        row["locked"] = bool(item.get("locked", True))
+        row["source"] = str(item.get("source", "visual") or "visual")
+        row.setdefault("detector", str(item.get("detector", "opencv-gray-pyramid60") or "opencv-gray-pyramid60"))
+        row.setdefault("reason", str(item.get("reason", "visual_cut_boundary") or "visual_cut_boundary"))
+        row["index"] = idx
+        sanitized.append(row)
+    return sanitized
+
+
 def project_cut_boundaries(project: dict[str, Any] | None, *, primary_fps: float | None = None) -> list[dict[str, Any]]:
     if not isinstance(project, dict):
         return []

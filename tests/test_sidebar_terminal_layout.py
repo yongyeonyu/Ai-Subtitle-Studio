@@ -210,6 +210,27 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_unified_dashboard_hides_legacy_status_rail_when_progress_nav_exists(self):
+        window = MainWindow()
+        try:
+            window._unified_dashboard = True
+            window._build_home_content()
+            self.app.processEvents()
+
+            rail = getattr(window, "status_rail", None)
+            nav = getattr(window, "sidebar_nav_menu", None)
+            self.assertIsNotNone(nav)
+            self.assertIsNone(rail)
+            from ui.menu_bar import StatusRail
+            self.assertEqual(window.home_page.findChildren(StatusRail), [])
+            items = list(getattr(nav, "_items", []) or [])
+            self.assertTrue(items)
+            self.assertEqual(items[0].get("id"), "generation_status")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_pipeline_model_column_uses_terminal_style_font(self):
         window = MainWindow()
         try:
@@ -1468,6 +1489,10 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
         editor = QWidget(window)
         editor.sm = SimpleNamespace(is_locked=False, state="ST_COMP")
         editor._is_ai_processing = False
+        editor._abort_pending_editor_processing_ui_work = mock.Mock()
+        editor._live_editor_preview_queue = [{"text": "temp"}]
+        editor._live_editor_preview_segments = [{"text": "temp"}]
+        editor._subtitle_context_window_index_cache = {"0": 0}
         release_calls = []
         try:
             window._editor_widget = editor
@@ -1489,9 +1514,13 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 release_calls,
                 [{"force": True, "preserve_roughcut_status": True, "ollama_timeout_sec": 1.2}],
             )
+            editor._abort_pending_editor_processing_ui_work.assert_called_once()
+            self.assertEqual(editor._live_editor_preview_queue, [])
+            self.assertEqual(editor._live_editor_preview_segments, [])
+            self.assertEqual(editor._subtitle_context_window_index_cache, {})
             self.assertTrue(editor._post_generation_models_release_requested)
             self.assertFalse(editor._post_generation_models_released)
-            schedule_gc.assert_called_once()
+            schedule_gc.assert_called_once_with(editor=editor, delay_ms=450)
         finally:
             window._editor_widget = None
             editor.close()
@@ -1893,7 +1922,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             expected_timeout = 0.08 if sys.platform == "darwin" else 0.15
             expected_delay = 30 if sys.platform == "darwin" else 60
-            self.assertEqual(events, [("pause", "앱 종료"), ("cleanup_async", expected_timeout), ("schedule", expected_delay)])
+            self.assertEqual(events, [("schedule", expected_delay), ("pause", "앱 종료"), ("cleanup_async", expected_timeout)])
             quit_app.assert_called_once()
         finally:
             window.close()
@@ -1990,6 +2019,29 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             quit_app.assert_not_called()
         finally:
             window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_quick_exit_still_closes_when_runtime_pause_raises(self):
+        window = MainWindow()
+        original_close = window.close
+        try:
+            window._pause_all_runtime_work_for_exit = mock.Mock(side_effect=RuntimeError("boom"))
+            window._start_runtime_cleanup_for_app_exit_async = mock.Mock()
+            window._schedule_forced_process_exit = mock.Mock()
+            window.close = mock.Mock()
+
+            with mock.patch("ui.main.main_file_ops.QApplication.quit") as quit_app:
+                window._quick_exit()
+
+            self.assertTrue(getattr(window, "_quick_exit_requested", False))
+            window._schedule_forced_process_exit.assert_called_once()
+            window._start_runtime_cleanup_for_app_exit_async.assert_called_once()
+            window.close.assert_called_once()
+            quit_app.assert_called_once()
+        finally:
+            window.close = original_close
             window.close()
             window.deleteLater()
             self.app.processEvents()
@@ -2118,6 +2170,30 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             event.ignore.assert_called_once()
             event.accept.assert_not_called()
             window._pause_all_runtime_work_for_exit.assert_not_called()
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_window_close_accepts_even_when_runtime_pause_raises(self):
+        window = MainWindow()
+        event = SimpleNamespace(accept=mock.Mock(), ignore=mock.Mock())
+        try:
+            window._confirm_save_dirty_editor_before_exit = mock.Mock(return_value=True)
+            window._has_active_runtime_work_for_exit = mock.Mock(return_value=False)
+            window._pause_all_runtime_work_for_exit = mock.Mock(side_effect=RuntimeError("boom"))
+            window._start_runtime_cleanup_for_app_exit_async = mock.Mock()
+            window._schedule_forced_process_exit = mock.Mock()
+            window._backup_before_quick_exit = mock.Mock()
+
+            with mock.patch.dict(os.environ, {"QT_QPA_PLATFORM": "cocoa"}):
+                MainWindow.closeEvent(window, event)
+
+            event.accept.assert_called_once()
+            event.ignore.assert_not_called()
+            window._schedule_forced_process_exit.assert_called_once()
+            window._start_runtime_cleanup_for_app_exit_async.assert_called_once()
+            window._backup_before_quick_exit.assert_called_once_with(include_project_backup=False)
         finally:
             window.close()
             window.deleteLater()

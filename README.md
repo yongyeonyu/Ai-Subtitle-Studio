@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.02-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.02-30D158?style=for-the-badge)](RELEASE_v04.00.02.md)
+[![App Version](https://img.shields.io/badge/app-04.00.04-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.04-30D158?style=for-the-badge)](RELEASE_v04.00.04.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -49,6 +49,9 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Compact QML popup/menu surfaces use outside-click dismissal, hover/press feedback, and Korean-only bottom/global menu labels.
 - Ten-step engine dashboard: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Runtime sidebar display of the current file's automatic audio-filter and VAD choices.
+- Fast/Auto/High now lock benchmarked VAD defaults instead of exposing a separate VAD settings menu; automatic audio preset detection can still retune only the audio frontend stack.
+- Correction-dictionary cleanup now has a SQLite-backed indexed runtime path while keeping the JSON dictionary as the editable source of truth.
+- Manual `<<` / `>>` cut-boundary hits are persisted as confirmed project cut boundaries for later subtitle magnet alignment.
 - Process-level project JSON caching plus safe atomic project and settings writes.
 - Project save/load uses frame-quantized subtitle/STT timing, external SRT assets, and project-path-aware hydration so STT1/STT2 and final subtitle lanes reload without tail segments beyond the real video duration.
 - STT1/STT2 candidate comparison with persistent project metadata.
@@ -142,10 +145,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.02` |
-| Latest release checkpoint | `v04.00.02` |
-| Handoff document version | `04.00.02-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_2_RELEASED` |
+| App version in code | `04.00.04` |
+| Latest release checkpoint | `v04.00.04` |
+| Handoff document version | `04.00.04-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_4_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -176,7 +179,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.02.md`](RELEASE_v04.00.02.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.04.md`](RELEASE_v04.00.04.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

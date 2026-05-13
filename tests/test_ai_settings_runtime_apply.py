@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 from core.llm.codex_provider import DEFAULT_CODEX_LABEL
+from core.audio.stt_quality_presets import VAD_MODE_AUTOMATION_NOTE
 from ui.main.main_window import MainWindow
 from ui.settings.settings_ai import SettingsDialog
 
@@ -111,7 +112,9 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             self.assertIn("resemble_enhance", audio_values)
             self.assertIn("clearvoice", audio_values)
             self.assertNotIn("demucs", audio_values)
-            self.assertIn("ten_vad", set(dialog.vad_map.values()))
+            self.assertFalse(hasattr(dialog, "combo_vad"))
+            self.assertFalse(hasattr(dialog, "vad_map"))
+            self.assertIn(VAD_MODE_AUTOMATION_NOTE, "\n".join(label_texts))
 
         finally:
             if "dialog" in locals():
@@ -238,7 +241,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             default_mock.assert_called_once()
             saved = save_mock.call_args.args[0]
             self.assertEqual(saved["selected_audio_ai"], "clearvoice")
-            self.assertEqual(saved["selected_vad"], "ten_vad")
+            self.assertEqual(saved["selected_vad"], "silero")
             self.assertEqual(saved["selected_whisper_model"], "user-stt1")
             self.assertEqual(saved["selected_whisper_model_secondary"], "user-stt2")
             self.assertEqual(saved["selected_model"], "custom-llm")

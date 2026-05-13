@@ -34,12 +34,6 @@ _OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
-_JSON_OBJECT_SCHEMA = {
-    "type": "object",
-    "additionalProperties": True,
-}
-
-
 def is_codex_model(model_name: str) -> bool:
     text = str(model_name or "").strip()
     if not text:
@@ -163,7 +157,7 @@ def _parse_json_object(output: str) -> dict | None:
     return None
 
 
-def _command(codex_bin: str, schema_path: Path, output_path: Path) -> list[str]:
+def _command(codex_bin: str, schema_path: Path | None, output_path: Path) -> list[str]:
     cmd = [
         codex_bin,
         "exec",
@@ -173,11 +167,11 @@ def _command(codex_bin: str, schema_path: Path, output_path: Path) -> list[str]:
         "--sandbox",
         _sandbox(),
         "--skip-git-repo-check",
-        "--output-schema",
-        str(schema_path),
         "--output-last-message",
         str(output_path),
     ]
+    if schema_path is not None:
+        cmd.extend(["--output-schema", str(schema_path)])
     model = str(os.environ.get("AI_SUBTITLE_CODEX_MODEL", "") or "").strip()
     if model:
         cmd.extend(["--model", model])
@@ -191,7 +185,7 @@ def _run_codex_json_task(
     model_name: str,
     prompt: str,
     *,
-    schema: dict,
+    schema: dict | None,
     timeout: int,
     task_prompt: str,
 ) -> str:
@@ -200,9 +194,11 @@ def _run_codex_json_task(
     codex_bin = _codex_binary()
     with tempfile.TemporaryDirectory(prefix="ai_subtitle_codex_") as tmp:
         tmpdir = Path(tmp)
-        schema_path = tmpdir / "schema.json"
         output_path = tmpdir / "last_message.json"
-        schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
+        schema_path: Path | None = None
+        if isinstance(schema, dict):
+            schema_path = tmpdir / "schema.json"
+            schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
         cmd = _command(codex_bin, schema_path, output_path)
         env = os.environ.copy()
         env.setdefault("NO_COLOR", "1")
@@ -272,7 +268,7 @@ def run_json(model_name: str, prompt: str, timeout: int = 180) -> dict | None:
     output_text = _run_codex_json_task(
         model_name,
         prompt,
-        schema=_JSON_OBJECT_SCHEMA,
+        schema=None,
         timeout=timeout,
         task_prompt=task_prompt,
     )

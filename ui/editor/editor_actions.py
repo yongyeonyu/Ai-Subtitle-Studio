@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import threading
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
 
 from core.runtime import config
@@ -19,6 +20,9 @@ from core.engine.subtitle_engine import save_srt
 from core.path_manager import get_srt_path
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 from ui.dialogs.message_box import confirm_save_changes
+
+DEFAULT_PROJECT_ANALYSIS_REFRESH_DELAY_MS = 12_000
+DEFAULT_DEFERRED_EDITOR_LEARNING_HOLD_MS = 600_000
 
 
 class EditorActionsMixin:
@@ -47,6 +51,20 @@ class EditorActionsMixin:
 
     def _show_confirm_dialog(self, title, text):
         return confirm_save_changes(self, title=title)
+
+    def _deferred_editor_learning_hold_ms(self, *, trigger: str = "manual_save") -> int:
+        try:
+            main_w = self.window()
+        except Exception:
+            main_w = None
+        default_hold = max(60_000, int(DEFAULT_DEFERRED_EDITOR_LEARNING_HOLD_MS))
+        if main_w is None:
+            return default_hold
+        try:
+            hold_ms = int(getattr(main_w, "_post_completion_idle_ms", default_hold) or default_hold)
+        except Exception:
+            hold_ms = default_hold
+        return max(60_000, hold_ms)
 
     # ---------------------------------------------------------
     # 저장
@@ -109,6 +127,11 @@ class EditorActionsMixin:
             return False
         if os.path.abspath(project_path) != os.path.abspath(saved_path):
             return True
+        pending_path = str(getattr(self, "_project_analysis_refresh_pending_path", "") or "")
+        if bool(getattr(self, "_project_analysis_refresh_pending", False)) and (
+            not pending_path or os.path.abspath(project_path) == os.path.abspath(pending_path)
+        ):
+            return False
         try:
             current_sig = self._project_file_dirty_signature(project_path)
         except Exception:
@@ -135,12 +158,6 @@ class EditorActionsMixin:
             pass
 
     def _has_unsaved_changes(self) -> bool:
-        try:
-            if self._project_file_has_unsaved_changes():
-                self._mark_unsaved_project_change_detected()
-                return True
-        except Exception:
-            pass
         saved_sig = getattr(self, "_saved_segments_signature", None)
         if saved_sig:
             try:
@@ -149,9 +166,18 @@ class EditorActionsMixin:
             except Exception:
                 pass
         try:
-            return bool(getattr(self.sm, "is_dirty", False))
+            if bool(getattr(self.sm, "is_dirty", False)):
+                return True
         except Exception:
-            return bool(getattr(self, "_is_dirty", False))
+            if bool(getattr(self, "_is_dirty", False)):
+                return True
+        try:
+            if self._project_file_has_unsaved_changes():
+                self._mark_unsaved_project_change_detected()
+                return True
+        except Exception:
+            pass
+        return bool(getattr(self, "_is_dirty", False))
 
     def _mark_save_completed(self, touch_saved_time: bool = True) -> bool:
         try:
@@ -363,6 +389,9 @@ class EditorActionsMixin:
         settings_snapshot = dict(settings or getattr(self, "settings", {}) or {})
         generation = int(getattr(self, "_project_analysis_refresh_generation", 0) or 0) + 1
         self._project_analysis_refresh_generation = generation
+        self._project_analysis_refresh_pending = True
+        self._project_analysis_refresh_pending_path = project_path
+        self._project_analysis_refresh_pending_generation = generation
 
         def worker() -> None:
             graph_result = None
@@ -422,14 +451,23 @@ class EditorActionsMixin:
                     self._saved_project_signature = self._project_file_dirty_signature(project_path)
             except Exception as exc:
                 get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 비동기 저장 실패: {exc}")
+            finally:
+                if int(getattr(self, "_project_analysis_refresh_pending_generation", 0) or 0) == generation:
+                    self._project_analysis_refresh_pending = False
+                    self._project_analysis_refresh_pending_path = ""
 
-        thread = threading.Thread(
-            target=worker,
-            name="editor-project-analysis-artifacts",
-            daemon=True,
-        )
-        self._project_analysis_refresh_thread = thread
-        thread.start()
+        def launch_worker() -> None:
+            if int(getattr(self, "_project_analysis_refresh_generation", 0) or 0) != generation:
+                return
+            thread = threading.Thread(
+                target=worker,
+                name="editor-project-analysis-artifacts",
+                daemon=True,
+            )
+            self._project_analysis_refresh_thread = thread
+            thread.start()
+
+        QTimer.singleShot(DEFAULT_PROJECT_ANALYSIS_REFRESH_DELAY_MS, launch_worker)
 
     def _on_save(
         self,
@@ -441,6 +479,19 @@ class EditorActionsMixin:
         allow_project_create: bool = True,
         auto_export: bool | None = None,
     ):
+        has_saved_reference = bool(
+            str(getattr(self, "_saved_segments_signature", "") or "").strip()
+            or str(self._current_project_path_for_dirty_check() or "").strip()
+        )
+        if has_saved_reference:
+            try:
+                if not self._has_unsaved_changes():
+                    self._mark_save_completed(touch_saved_time=False)
+                    self._autosave_requires_manual_save = False
+                    get_logger().log("💾 저장 생략: 변경사항이 없습니다.")
+                    return True
+            except Exception:
+                pass
         self._flush_pending_segment_queue_now()
         segs = self._get_current_segments()
         if not segs:
@@ -503,6 +554,13 @@ class EditorActionsMixin:
             try:
                 from core.personalization.deferred_editor_learning import enqueue_deferred_editor_learning
 
+                hold_ms = self._deferred_editor_learning_hold_ms(trigger="manual_save")
+                pause_lora = getattr(main_w, "_pause_personalization_for_foreground_activity", None)
+                if callable(pause_lora):
+                    try:
+                        pause_lora("manual_save", hold_ms=hold_ms)
+                    except Exception:
+                        pause_lora("manual_save")
                 settings = dict(getattr(self, "settings", {}) or {})
                 saved_outputs = list(getattr(self, "_last_saved_srt_outputs", []) or [])
                 first_subtitle_path = str(saved_outputs[0][0]) if saved_outputs else ""
@@ -513,6 +571,7 @@ class EditorActionsMixin:
                     project_path=str(getattr(main_w, "_current_project_path", "") or ""),
                     trigger="manual_save",
                     settings=settings,
+                    defer_for_ms=hold_ms,
                 )
                 if queued.get("queued"):
                     get_logger().log("🧠 [LoRA] 저장 자막 학습은 Home-idle 큐로 넘겼습니다.")

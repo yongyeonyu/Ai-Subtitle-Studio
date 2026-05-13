@@ -8,6 +8,7 @@ the idle trainer later performs truth capture, text corpus accumulation, index
 refresh, and maintenance while the Home screen is idle.
 """
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -113,12 +114,15 @@ def build_deferred_editor_learning_job(
     trigger: str = "manual_save",
     settings: dict[str, Any] | None = None,
     priority: int = 6,
+    defer_for_ms: int = 0,
 ) -> dict[str, Any]:
     rows = [
         _safe_segment(dict(seg))
         for seg in list(segments or [])
         if isinstance(seg, dict) and str(seg.get("text", "") or "").strip() and not seg.get("is_gap")
     ]
+    defer_ms = max(0, int(defer_for_ms or 0))
+    not_before_epoch_ms = int(time.time() * 1000) + defer_ms if defer_ms > 0 else 0
     payload = {
         "schema": DEFERRED_EDITOR_LEARNING_SCHEMA,
         "trigger": str(trigger or "manual_save"),
@@ -128,6 +132,7 @@ def build_deferred_editor_learning_job(
         "segments": rows,
         "settings": _safe_settings(settings),
         "foreground_deferred": True,
+        "not_before_epoch_ms": int(not_before_epoch_ms),
     }
     digest = stable_hash(
         {
@@ -160,6 +165,7 @@ def enqueue_deferred_editor_learning(
     settings: dict[str, Any] | None = None,
     store_dir: str | Path | None = None,
     priority: int = 6,
+    defer_for_ms: int = 0,
 ) -> dict[str, Any]:
     job = build_deferred_editor_learning_job(
         segments,
@@ -169,6 +175,7 @@ def enqueue_deferred_editor_learning(
         trigger=trigger,
         settings=settings,
         priority=priority,
+        defer_for_ms=defer_for_ms,
     )
     payload = dict(job.get("payload") or {})
     if not payload.get("segments"):

@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -39,6 +40,41 @@ class _SaveBoundaryEditor(EditorSaveManagerMixin):
 
     def window(self):
         return self._window
+
+
+class _ManualSaveNoOpEditor(EditorSaveManagerMixin):
+    def __init__(self):
+        self._saved_segments_signature = "saved-signature"
+        self._autosave_requires_manual_save = True
+        self._mark_save_completed = Mock(return_value=True)
+        self._has_unsaved_changes = Mock(return_value=False)
+        self._flush_pending_segment_queue_now = Mock(side_effect=AssertionError("no-op save must not flush"))
+        self._get_current_segments = Mock(side_effect=AssertionError("no-op save must not load segments"))
+        self._window = SimpleNamespace(_refresh_saved_status_label=Mock())
+
+    def window(self):
+        return self._window
+
+    def _current_project_path_for_dirty_check(self):
+        return ""
+
+
+class _PendingProjectRefreshEditor(EditorSaveManagerMixin):
+    def __init__(self, project_path):
+        self._current_project_path = project_path
+        self._saved_project_path = project_path
+        self._saved_project_signature = ""
+        self._saved_segments_signature = self._segments_dirty_signature([])
+        self._project_analysis_refresh_pending = True
+        self._project_analysis_refresh_pending_path = project_path
+        self.sm = SimpleNamespace(is_dirty=False)
+        self._is_dirty = False
+
+    def _get_current_segments(self):
+        return []
+
+    def window(self):
+        return SimpleNamespace(_current_project_path=self._current_project_path)
 
 
 class _CompletionEditor(EditorPipelineMixin):
@@ -142,6 +178,32 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
         editor.sm.start_autosave.assert_not_called()
         editor._has_unsaved_changes.assert_not_called()
+
+    def test_manual_save_returns_immediately_when_nothing_changed(self):
+        editor = _ManualSaveNoOpEditor()
+
+        result = EditorSaveManagerMixin._on_save(editor, skip_auto_next=True)
+
+        self.assertTrue(result)
+        editor._has_unsaved_changes.assert_called_once()
+        editor._mark_save_completed.assert_called_once_with(touch_saved_time=False)
+        self.assertFalse(editor._autosave_requires_manual_save)
+        editor._flush_pending_segment_queue_now.assert_not_called()
+        editor._get_current_segments.assert_not_called()
+
+    def test_pending_internal_project_refresh_does_not_mark_clean_editor_dirty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "project.json")
+            with open(project_path, "w", encoding="utf-8") as handle:
+                handle.write("{\"version\":1}")
+            editor = _PendingProjectRefreshEditor(project_path)
+            editor._remember_saved_project_file(project_path)
+
+            with open(project_path, "w", encoding="utf-8") as handle:
+                handle.write("{\"version\":2}")
+
+            self.assertFalse(editor._project_file_has_unsaved_changes())
+            self.assertFalse(editor._has_unsaved_changes())
 
     def test_generation_idle_cleanup_clears_busy_surfaces_and_prefetch_cache(self):
         state_manager = SimpleNamespace(is_locked=True, state="ST_PROC", complete_ai=Mock())

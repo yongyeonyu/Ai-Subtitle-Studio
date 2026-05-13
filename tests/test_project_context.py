@@ -28,7 +28,7 @@ from core.project.project_context import (
     segment_signature,
 )
 from core.project.project_assets import PROJECT_EXTERNAL_STORAGE, externalize_project_text_assets
-from core.project.project_format import PROJECT_STORAGE_SCHEMA, PROJECT_VIDEO_SCHEMA
+from core.project.project_format import PROJECT_SCHEMA_VERSION, PROJECT_STORAGE_SCHEMA, PROJECT_VIDEO_SCHEMA
 from core.project.project_srt import parse_srt_to_segments
 from core.cut_boundary import split_segments_by_cut_boundaries
 from core.roughcut.models import RoughCutDraftState, RoughCutResult, RoughCutSegment
@@ -695,7 +695,7 @@ class ProjectContextTests(unittest.TestCase):
             )
             loaded = load_project(str(path))
 
-        self.assertEqual(loaded["version"], "04.00.01")
+        self.assertEqual(loaded["version"], PROJECT_SCHEMA_VERSION)
         self.assertEqual(project_active_work_mode(loaded), "roughcut")
         self.assertEqual(project_roughcut_state(loaded)["source_signature"], "sig")
         self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")

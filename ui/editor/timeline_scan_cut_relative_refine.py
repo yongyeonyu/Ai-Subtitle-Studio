@@ -22,6 +22,13 @@ from ui.editor.timeline_scan_cut_relative_base import (
 )
 
 
+def _rel_scan_cancel_requested(self, state=None) -> bool:
+    if bool(getattr(self, "_scan_cut_cancel_requested", False)):
+        return True
+    if isinstance(state, dict) and bool(state.get("cancel_requested")):
+        return True
+    return False
+
 
 
 
@@ -174,7 +181,8 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
 def _rel_ignore_initial_seconds(self) -> float:
     settings = getattr(self, "settings", {}) or {}
     try:
-        return float(settings.get("scan_cut_ignore_initial_seconds", 3.0))
+        # 수동 << / >> 탐색은 초반 컷도 잡아야 하므로, 오래된 10초 무시값을 그대로 쓰지 않는다.
+        return max(0.0, min(5.0, float(settings.get("scan_cut_ignore_initial_seconds", 3.0))))
     except Exception:
         return 3.0
 
@@ -242,11 +250,16 @@ def _rel_is_candidate(self, score: float, baseline: float, previous_score: float
         return False, ""
 
     region_hits = int(getattr(self, "_scan_last_region_hits", 0) or 0)
+    visual = dict(getattr(self, "_scan_last_visual_cut_metrics", {}) or {})
+    pixel_ratio = float(visual.get("pixel_ratio", 0.0) or 0.0)
+    motion_jump = float(visual.get("motion_jump", 0.0) or 0.0)
+    coherence_break = float(visual.get("coherence_break", 0.0) or 0.0)
+    visual_gate = pixel_ratio >= 0.10 or motion_jump >= 4.0 or coherence_break >= 18.0
 
     # hard/absolute 후보는 많이 보수적으로.
     abs_threshold = _rel_absolute_coarse_threshold(self)
     abs_regions = _rel_absolute_coarse_regions_required(self)
-    if score >= abs_threshold and region_hits >= abs_regions:
+    if score >= abs_threshold and region_hits >= abs_regions and (pixel_ratio >= 0.18 or motion_jump >= 6.0):
         return True, "absolute"
 
     # relative 후보는 baseline 대비 충분히 튀어야 함.
@@ -258,14 +271,19 @@ def _rel_is_candidate(self, score: float, baseline: float, previous_score: float
     baseline_floor = 4.0
     effective_baseline = max(baseline, baseline_floor)
 
-    if score >= min_delta and score >= max(effective_baseline * ratio, effective_baseline + prominence):
+    if (
+        visual_gate
+        and score >= min_delta
+        and score >= max(effective_baseline * ratio, effective_baseline + prominence)
+    ):
         return True, "relative"
 
     # 변화가 확 튄 다음 떨어지는 지점도 후보로 볼 수 있지만,
     # previous_score 자체가 충분히 커야 한다.
     drop_ratio = _rel_scan_drop_ratio(self)
     if (
-        previous_score >= max(min_delta * 2.0, effective_baseline * ratio)
+        visual_gate
+        and previous_score >= max(min_delta * 2.0, effective_baseline * ratio)
         and score <= previous_score * drop_ratio
     ):
         return True, "relative_drop"
@@ -286,6 +304,20 @@ def _rel_scan_cut_tick(self):
     if bool(state.get("busy")):
         return
 
+    if _rel_scan_cancel_requested(self, state):
+        try:
+            self._scan_cut_timer.stop()
+        except Exception:
+            pass
+        self._scan_cut_state = None
+        try:
+            self._set_scan_cut_button_active(0)
+        except Exception:
+            pass
+        if hasattr(self, "_scan_set_timeline_input_locked"):
+            self._scan_set_timeline_input_locked(False)
+        return
+
     state["busy"] = True
 
     try:
@@ -297,7 +329,22 @@ def _rel_scan_cut_tick(self):
         preview_every = _rel_scan_preview_every_frames(self)
         stride = _rel_scan_coarse_stride_frames(self)
 
+        tick_preview_sec = None
+
         for _ in range(frames_per_tick):
+            if _rel_scan_cancel_requested(self, state):
+                try:
+                    self._scan_cut_timer.stop()
+                except Exception:
+                    pass
+                self._scan_cut_state = None
+                try:
+                    self._set_scan_cut_button_active(0)
+                except Exception:
+                    pass
+                if hasattr(self, "_scan_set_timeline_input_locked"):
+                    self._scan_set_timeline_input_locked(False)
+                return
             last_frame = max(0, int(state.get("last_frame", 0) or 0))
             next_frame = max(0, last_frame + direction * stride)
             last_sec = last_frame / fps
@@ -310,7 +357,8 @@ def _rel_scan_cut_tick(self):
                 self._set_scan_cut_button_active(0)
                 if hasattr(self, "_scan_set_timeline_input_locked"):
                     self._scan_set_timeline_input_locked(False)
-                self._scan_preview_global_sec(last_sec)
+                if hasattr(self, "_scan_preview_progress"):
+                    self._scan_preview_progress(last_sec, force_thumbnail=True)
                 return
 
             if hasattr(self, "_scan_same_source") and not self._scan_same_source(last_sec, next_sec):
@@ -319,11 +367,20 @@ def _rel_scan_cut_tick(self):
                 self._set_scan_cut_button_active(0)
                 if hasattr(self, "_scan_set_timeline_input_locked"):
                     self._scan_set_timeline_input_locked(False)
-                self._scan_preview_global_sec(last_sec)
+                if hasattr(self, "_scan_preview_progress"):
+                    self._scan_preview_progress(last_sec, force_thumbnail=True)
                 print(f"🛑 [scan-cut-relative] CLIP BOUNDARY stop_frame={last_frame} stop={last_sec:.3f}s", flush=True)
+                if hasattr(self, "_scan_terminal_log"):
+                    self._scan_terminal_log(
+                        f"🛑 컷 경계 탐색 종료 · 클립 경계 {last_frame}f",
+                        key="scan-cut-clip-boundary",
+                        force=True,
+                    )
                 return
 
-            img_a = _rel_capture_image_at_global(self, last_sec, region_mode="fast4")
+            img_a = state.get("last_relative_image")
+            if img_a is None:
+                img_a = _rel_capture_image_at_global(self, last_sec, region_mode="fast4")
             img_b = _rel_capture_image_at_global(self, next_sec, region_mode="fast4")
             score = _rel_image_delta(self, img_a, img_b)
 
@@ -335,9 +392,15 @@ def _rel_scan_cut_tick(self):
             state["previous_score"] = score
 
             new_count = frame_count + stride
-
-            if new_count == stride or (new_count // preview_every) != (frame_count // preview_every):
-                self._scan_preview_global_sec(next_sec)
+            tick_preview_sec = next_sec
+            if hasattr(self, "_scan_terminal_log") and (
+                new_count == stride or (new_count // preview_every) != (frame_count // preview_every)
+            ):
+                self._scan_terminal_log(
+                    f"🔎 컷 경계 탐색 중 · {next_frame}f · {next_sec:.3f}s",
+                    key="scan-cut-progress",
+                    min_interval_sec=0.35,
+                )
 
             is_candidate = False
             reason = ""
@@ -353,13 +416,18 @@ def _rel_scan_cut_tick(self):
 
             deltas = list(getattr(self, "_scan_last_region_deltas", []) or [])
             region_hits = int(getattr(self, "_scan_last_region_hits", 0) or 0)
+            visual = dict(getattr(self, "_scan_last_visual_cut_metrics", {}) or {})
             delta_text = ",".join(f"{d:.1f}" for d in deltas[:4])
+            pixel_ratio = float(visual.get("pixel_ratio", 0.0) or 0.0) * 100.0
+            motion_jump = float(visual.get("motion_jump", 0.0) or 0.0)
+            edge_ratio = float(visual.get("edge_ratio", 0.0) or 0.0) * 100.0
 
             if new_count == stride or new_count % max(stride * 2, 1) == 0 or is_candidate or reason == "recent_reject_skip":
                 print(
                     f"📊 [scan-cut-relative] frame={new_count} "
                     f"delta={score:.2f} baseline={baseline_for_decision:.2f} "
                     f"prev={previous_score:.2f} regions={region_hits} stride={stride} "
+                    f"pixel={pixel_ratio:.1f}% motion={motion_jump:.1f} edge={edge_ratio:.1f}% "
                     f"reason={reason or '-'} "
                     f"frame {last_frame}->{next_frame} "
                     f"{last_sec:.3f}s->{next_sec:.3f}s "
@@ -373,7 +441,8 @@ def _rel_scan_cut_tick(self):
                 self._set_scan_cut_button_active(0)
                 if hasattr(self, "_scan_set_timeline_input_locked"):
                     self._scan_set_timeline_input_locked(False)
-                self._scan_preview_global_sec(last_sec)
+                if hasattr(self, "_scan_preview_progress"):
+                    self._scan_preview_progress(last_sec, force_thumbnail=True)
                 return
 
             if is_candidate:
@@ -383,6 +452,12 @@ def _rel_scan_cut_tick(self):
                     f"{last_sec:.3f}s->{next_sec:.3f}s score={score:.2f}",
                     flush=True,
                 )
+                if hasattr(self, "_scan_terminal_log"):
+                    self._scan_terminal_log(
+                        f"↩️ 컷 후보 확인 · {last_frame}->{next_frame}f · {score:.1f}",
+                        key="scan-cut-candidate",
+                        force=True,
+                    )
 
                 refine_start = last_frame - stride if reason == "relative_drop" else last_frame
                 refine_end = next_frame
@@ -399,13 +474,10 @@ def _rel_scan_cut_tick(self):
                     if hasattr(self, "_scan_set_timeline_input_locked"):
                         self._scan_set_timeline_input_locked(False)
 
-                    self._scan_preview_global_sec(stop_sec)
-
-                    try:
-                        if hasattr(self, "_scan_show_cut_thumbnail"):
-                            self._scan_show_cut_thumbnail(stop_sec)
-                    except Exception:
-                        pass
+                    if hasattr(self, "_scan_seek_to_found_boundary"):
+                        self._scan_seek_to_found_boundary(stop_sec, show_thumbnail=True)
+                    elif hasattr(self, "_scan_preview_progress"):
+                        self._scan_preview_progress(stop_sec, force_thumbnail=True)
 
                     try:
                         if hasattr(self, "_save_cut_boundary_to_project"):
@@ -425,6 +497,12 @@ def _rel_scan_cut_tick(self):
                         f"delta={final_score:.2f} regions={final_regions}",
                         flush=True,
                     )
+                    if hasattr(self, "_scan_terminal_log"):
+                        self._scan_terminal_log(
+                            f"✅ 컷 경계 찾음 · {stop_frame}f · {stop_sec:.3f}s",
+                            key="scan-cut-found",
+                            force=True,
+                        )
 
                     try:
                         self.video_player.info_label.setText(f"컷 경계 정지 · 상대변화 {final_score:.1f}")
@@ -439,8 +517,12 @@ def _rel_scan_cut_tick(self):
 
             state["last_frame"] = next_frame
             state["last_image"] = img_b
+            state["last_relative_image"] = img_b
             state["frames"] = new_count
             state["busy"] = False
+
+        if tick_preview_sec is not None and hasattr(self, "_scan_preview_progress"):
+            self._scan_preview_progress(tick_preview_sec)
 
     except Exception as exc:
         try:
@@ -688,9 +770,11 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
 def _rel_strong_window_threshold(self) -> float:
     settings = getattr(self, "settings", {}) or {}
     try:
-        return float(settings.get("scan_cut_strong_window_threshold", 75.0))
+        # 예전 설정의 75.0은 312 스타일 강한 컷(약 58.9)을 놓친다.
+        # 수동 컷 경계 탐색에서는 stale threshold를 58 이하로 제한한다.
+        return max(40.0, min(58.0, float(settings.get("scan_cut_strong_window_threshold", 52.0))))
     except Exception:
-        return 75.0
+        return 52.0
 
 
 def _rel_strong_window_regions_required(self) -> int:
@@ -701,22 +785,81 @@ def _rel_strong_window_regions_required(self) -> int:
         return 4
 
 
+def _rel_strong_window_baseline_ratio(self) -> float:
+    settings = getattr(self, "settings", {}) or {}
+    try:
+        return max(1.0, float(settings.get("scan_cut_strong_window_baseline_ratio", 1.22)))
+    except Exception:
+        return 1.22
+
+
+def _rel_strong_window_baseline_margin(self) -> float:
+    settings = getattr(self, "settings", {}) or {}
+    try:
+        return max(0.0, float(settings.get("scan_cut_strong_window_baseline_margin", 8.0)))
+    except Exception:
+        return 8.0
+
+
+def _rel_strong_window_pixel_ratio_required(self) -> float:
+    settings = getattr(self, "settings", {}) or {}
+    try:
+        return max(0.0, min(1.0, float(settings.get("scan_cut_strong_window_pixel_ratio_required", 0.70))))
+    except Exception:
+        return 0.70
+
+
+def _rel_strong_window_motion_jump_required(self) -> float:
+    settings = getattr(self, "settings", {}) or {}
+    try:
+        return max(0.0, float(settings.get("scan_cut_strong_window_motion_jump_required", 35.0)))
+    except Exception:
+        return 35.0
+
+
+def _rel_strong_window_edge_ratio_required(self) -> float:
+    settings = getattr(self, "settings", {}) or {}
+    try:
+        return max(0.0, min(1.0, float(settings.get("scan_cut_strong_window_edge_ratio_required", 0.18))))
+    except Exception:
+        return 0.18
+
+
 def _rel_is_candidate(self, score: float, baseline: float, previous_score: float) -> tuple[bool, str]:
     """
     후보 판정 v4.
 
-    더 이상 relative_drop으로 멈추지 않는다.
-    30프레임 window 변화량이 충분히 크고,
-    fast4 영역 대부분이 같이 바뀔 때만 후보로 본다.
+    30프레임 창에서 강한 화면 전환만 coarse 후보로 승격한다.
+    단순 카메라 이동/팬은 주변 baseline 대비 충분히 크지 않으면 통과시키지 않는다.
     """
     try:
         score = float(score)
+        baseline = float(baseline)
     except Exception:
         return False, ""
 
     region_hits = int(getattr(self, "_scan_last_region_hits", 0) or 0)
+    visual = dict(getattr(self, "_scan_last_visual_cut_metrics", {}) or {})
+    pixel_ratio = float(visual.get("pixel_ratio", 0.0) or 0.0)
+    motion_jump = float(visual.get("motion_jump", 0.0) or 0.0)
+    edge_ratio = float(visual.get("edge_ratio", 0.0) or 0.0)
 
-    if score >= _rel_strong_window_threshold(self) and region_hits >= _rel_strong_window_regions_required(self):
+    threshold = max(
+        _rel_strong_window_threshold(self),
+        max(baseline, 4.0) * _rel_strong_window_baseline_ratio(self),
+        max(baseline, 4.0) + _rel_strong_window_baseline_margin(self),
+    )
+    strong_visual = (
+        pixel_ratio >= _rel_strong_window_pixel_ratio_required(self)
+        or motion_jump >= _rel_strong_window_motion_jump_required(self)
+        or (
+            pixel_ratio >= 0.55
+            and edge_ratio >= _rel_strong_window_edge_ratio_required(self)
+            and motion_jump >= 18.0
+        )
+    )
+
+    if strong_visual and score >= threshold and region_hits >= _rel_strong_window_regions_required(self):
         return True, "strong_window"
 
     return False, ""
@@ -754,6 +897,9 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
     strongest_window_regions = 0
 
     for stage in stages:
+        if _rel_scan_cancel_requested(self):
+            print("🛑 [scan-cut-relative] REFINE cancelled before stage", flush=True)
+            return None
         stage = max(1, int(stage))
         mode = _rel_region_mode_for_stage(stage)
 
@@ -767,6 +913,9 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
         end = max(f + 1, int(hi))
 
         while f < end:
+            if _rel_scan_cancel_requested(self):
+                print(f"🛑 [scan-cut-relative] REFINE cancelled stage={stage} frame={f}", flush=True)
+                return None
             sec_a = f / fps
             sec_b = (f + stage) / fps
 
@@ -850,7 +999,8 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
             )
             return None
 
-        stop_frame = int(strict_verified.get("frame", best_frame) or best_frame)
+        boundary_frame = int(best_frame)
+        stop_frame = int(strict_verified.get("frame", boundary_frame) or boundary_frame)
         stop_sec = float(strict_verified.get("sec", stop_frame / max(fps, 1e-6)) or 0.0)
         strict_score = float(strict_verified.get("score", strongest_window_score) or strongest_window_score)
         strict_regions = int(strict_verified.get("regions", strongest_window_regions) or strongest_window_regions)

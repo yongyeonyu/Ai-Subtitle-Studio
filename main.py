@@ -372,9 +372,7 @@ def main():
     win.recent_folders = get_recent_folders()
     win.add_recent_folder_callback = add_recent_folder
 
-    # 화면 그리기 (마지막)
-    win.show_home()
-
+    # 화면을 먼저 띄우고, 무거운 시작 작업은 MainWindow.showEvent 이후로 넘긴다.
     win.showMaximized()
     QTimer.singleShot(700 if getattr(config, "IS_MAC", False) else 0, _start_ollama_runtime_for_app_launch)
 
