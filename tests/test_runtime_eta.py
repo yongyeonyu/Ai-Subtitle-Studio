@@ -84,6 +84,29 @@ class RuntimeETAPayloadTests(unittest.TestCase):
             self.assertIn("\"variants\"", saved)
             self.assertIn("\"runs\"", saved)
 
+    def test_get_expected_time_reuses_cached_history_store_parse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = str(Path(tmp) / "time_history.json")
+            Path(store_path).write_text('{"schema":"ai_subtitle_studio.runtime_eta_store.v2","weights":{"fixed_overhead_sec":10.0},"variants":{},"runs":[]}', encoding="utf-8")
+            with mock.patch("core.runtime_eta.request_native_core_task", return_value=None), \
+                 mock.patch("core.runtime_eta.read_json_file", wraps=__import__("core.runtime_eta", fromlist=["read_json_file"]).read_json_file) as read_mock:
+                get_expected_time(
+                    "QUALITY:STT:test|LLM:none|DIA:X",
+                    120.0,
+                    settings={"stt_quality_preset": "balanced"},
+                    media_info={"duration": 120.0, "fps": 30.0, "width": 1920, "height": 1080},
+                    store_path=store_path,
+                )
+                get_expected_time(
+                    "QUALITY:STT:test|LLM:none|DIA:X",
+                    120.0,
+                    settings={"stt_quality_preset": "balanced"},
+                    media_info={"duration": 120.0, "fps": 30.0, "width": 1920, "height": 1080},
+                    store_path=store_path,
+                )
+
+            self.assertEqual(read_mock.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

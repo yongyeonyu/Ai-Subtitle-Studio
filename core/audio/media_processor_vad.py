@@ -687,7 +687,8 @@ class VideoProcessorVadMixin:
             try:
                 with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as f:
                     json.dump(timestamps, f)
-            except: pass
+            except (OSError, TypeError, ValueError) as exc:
+                _runtime_get_logger().log(f"⚠️ [VAD 선분할] vad_strict.json 저장 실패: {exc}")
 
             return True, timestamps
 

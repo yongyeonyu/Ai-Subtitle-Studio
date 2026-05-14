@@ -13,13 +13,34 @@ from PyQt6.QtWidgets import QApplication, QScrollArea
 
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
 from ui.timeline.timeline_canvas import TimelineCanvas
-from ui.timeline.timeline_constants import DIAMOND_Y
+from ui.timeline.timeline_constants import DIAMOND_Y, STT2_TOP, SUBTITLE_TOP
 from ui.timeline.timeline_widget import TimelineWidget
 
 
 class _NoEqualitySegment(dict):
     def __eq__(self, other):
         raise AssertionError("adjacent segment lookup should use identity cache, not list.index equality scans")
+
+
+class _FakeScenegraphLayer:
+    def __init__(self):
+        self.last_kwargs = None
+        self.last_rect = None
+        self.visible = False
+        self.raise_calls = 0
+
+    def set_geometry(self, rect):
+        self.last_rect = rect
+
+    def set_visible(self, visible: bool):
+        self.visible = bool(visible)
+
+    def set_state(self, **kwargs):
+        self.last_kwargs = dict(kwargs)
+        return len(kwargs.get("segments") or [])
+
+    def raise_(self):
+        self.raise_calls += 1
 
 
 class TimelineRenderCacheTests(unittest.TestCase):
@@ -61,6 +82,37 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertIs(first, second)
             self.assertTrue(first)
             self.assertIs(canvas._segment_store.rows, canvas.segments)
+        finally:
+            canvas.close()
+
+    def test_visible_segment_lane_cache_reuses_cached_lane_partition(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.segments = [
+                {"start": 1.0, "end": 2.0, "text": "final", "line": 0},
+                {"start": 2.0, "end": 3.0, "text": "stt1", "line": 1, "stt_pending": True, "_live_stt_preview": True},
+                {
+                    "start": 3.0,
+                    "end": 4.0,
+                    "text": "stt2",
+                    "line": 2,
+                    "stt_pending": True,
+                    "_live_stt_preview": True,
+                    "stt_preview_source": "STT2",
+                },
+                {"start": 4.0, "end": 5.0, "text": "final 2", "line": 3, "stt_selected_source": "STT1"},
+            ]
+            visible = canvas.visible_segments_for_time_window(0.0, 6.0, pad_sec=0.0)
+
+            first = canvas.visible_segment_lanes_cached(visible)
+            second = canvas.visible_segment_lanes_cached(visible)
+
+            self.assertIs(first, second)
+            self.assertEqual([seg["text"] for seg in first["final_segments"]], ["final", "final 2"])
+            self.assertEqual([seg["text"] for seg in first["selected_final_segments"]], ["final 2"])
+            self.assertEqual([seg["text"] for seg in first["stt1_preview_segments"]], ["stt1"])
+            self.assertEqual([seg["text"] for seg in first["stt2_preview_segments"]], ["stt2"])
+            self.assertEqual(len(first["selected_final_index"].get("rows") or []), 1)
         finally:
             canvas.close()
 
@@ -368,6 +420,34 @@ class TimelineRenderCacheTests(unittest.TestCase):
         self.assertEqual(rows[0]["renderProfile"], "full")
         self.assertTrue(rows[0]["showText"])
 
+    def test_scenegraph_sync_uses_visible_canvas_subset(self):
+        timeline = TimelineWidget()
+        try:
+            timeline._scenegraph_layer = _FakeScenegraphLayer()
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+            segments = [
+                {"start": float(i * 2), "end": float(i * 2 + 1), "text": f"seg {i}", "line": i, "speaker": "00"}
+                for i in range(2000)
+            ]
+            timeline.update_segments(segments, active_sec=0.0, total_dur=5000.0)
+            timeline.scroll.horizontalScrollBar().setValue(int(200.0 * float(timeline.canvas.pps)))
+            self.app.processEvents()
+
+            timeline._sync_scenegraph_layer()
+
+            passed = timeline._scenegraph_layer.last_kwargs["segments"]
+            visible_start = float(timeline._scenegraph_layer.last_kwargs["visible_start_sec"])
+            visible_end = float(timeline._scenegraph_layer.last_kwargs["visible_end_sec"])
+            self.assertLess(len(passed), 12)
+            self.assertIs(
+                passed,
+                timeline.canvas.visible_segments_for_time_window(visible_start, visible_end, pad_sec=0.35),
+            )
+        finally:
+            timeline.close()
+
     def test_scenegraph_dense_vector_profile_disables_expensive_segment_decorations(self):
         segments = [
             {"start": float(i * 0.6), "end": float(i * 0.6 + 0.45), "text": f"dense {i}", "line": i, "speaker": "00"}
@@ -391,6 +471,36 @@ class TimelineRenderCacheTests(unittest.TestCase):
         self.assertFalse(first["showHandles"])
         self.assertEqual(first["text"], "")
         self.assertEqual(first["confidenceChips"], [])
+
+    def test_scenegraph_live_subtitle_preview_stays_in_subtitle_lane(self):
+        segments = [
+            {"start": 1.0, "end": 2.0, "text": "draft", "line": 0, "speaker": "00", "_live_subtitle_preview": True},
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "candidate",
+                "line": 1,
+                "speaker": "00",
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT2",
+            },
+        ]
+
+        rows = build_scenegraph_subtitle_segments(
+            segments,
+            pps=240.0,
+            fps=30.0,
+            visible_start_sec=0.0,
+            visible_end_sec=3.0,
+        )
+        by_text = {row["text"] or segments[idx]["text"]: row for idx, row in enumerate(rows)}
+
+        self.assertEqual(by_text["draft"]["y"], SUBTITLE_TOP)
+        self.assertFalse(by_text["draft"]["preview"])
+        self.assertTrue(by_text["draft"]["showText"])
+        self.assertEqual(by_text["candidate"]["y"], STT2_TOP)
+        self.assertTrue(by_text["candidate"]["preview"])
 
     def test_visible_item_index_keeps_dragged_segment_when_cached_position_is_offscreen(self):
         canvas = TimelineCanvas()

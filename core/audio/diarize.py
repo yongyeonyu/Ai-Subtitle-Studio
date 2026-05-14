@@ -65,7 +65,8 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
             if speaker_map:
                 get_logger().log("⚡ [캐시 적중] 이전에 분석한 화자 분리 데이터를 불러왔습니다!")
                 return speaker_map
-        except Exception: pass
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            get_logger().log(f"⚠️ [화자 분리] 캐시 로드 실패: {exc}")
 
     missing = missing_diarization_packages()
     if missing:
@@ -327,7 +328,8 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(speaker_map, f, ensure_ascii=False, indent=2)
-        except Exception: pass
+        except (OSError, TypeError, ValueError) as exc:
+            get_logger().log(f"⚠️ [화자 분리] 캐시 저장 실패: {exc}")
         
     return speaker_map
 

@@ -159,6 +159,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._visible_analysis_markers_cache: list[dict] = []
         self._visible_voice_activity_cache_key = None
         self._visible_voice_activity_cache: list[dict] = []
+        self._visible_segment_lanes_cache_key = None
+        self._visible_segment_lanes_cache: dict[str, object] = {}
         self._roughcut_major_cache_key = None
         self._roughcut_major_cache: list[dict] = []
         self._render_epoch = 0
@@ -383,6 +385,68 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._visible_analysis_markers_cache = []
         self._visible_voice_activity_cache_key = None
         self._visible_voice_activity_cache = []
+        self._visible_segment_lanes_cache_key = None
+        self._visible_segment_lanes_cache = {}
+
+    def visible_segments_for_time_window(
+        self,
+        start_sec: float,
+        end_sec: float,
+        *,
+        pad_sec: float = 0.35,
+    ) -> list[dict]:
+        return self._visible_items_for_paint(
+            getattr(self, "segments", []),
+            "segments",
+            start_sec,
+            end_sec,
+            pad_sec=pad_sec,
+        )
+
+    def visible_segment_lanes_cached(self, visible_segments) -> dict[str, object]:
+        from ui.timeline.timeline_segment_style import build_stt_selection_index, final_stt_selection_source, stt_preview_source
+
+        rows = visible_segments if isinstance(visible_segments, list) else list(visible_segments or [])
+        key = (
+            int(getattr(self, "_render_epoch", 0) or 0),
+            id(rows),
+            len(rows),
+        )
+        if key == getattr(self, "_visible_segment_lanes_cache_key", None):
+            cached = getattr(self, "_visible_segment_lanes_cache", None)
+            if isinstance(cached, dict) and cached:
+                return cached
+
+        stt_preview_segments: list[dict] = []
+        final_segments: list[dict] = []
+        selected_final_segments: list[dict] = []
+        stt1_preview_segments: list[dict] = []
+        stt2_preview_segments: list[dict] = []
+        for seg in rows:
+            if not isinstance(seg, dict):
+                continue
+            if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
+                stt_preview_segments.append(seg)
+                if stt_preview_source(seg) == "STT2":
+                    stt2_preview_segments.append(seg)
+                else:
+                    stt1_preview_segments.append(seg)
+                continue
+            final_segments.append(seg)
+            if final_stt_selection_source(seg):
+                selected_final_segments.append(seg)
+        data = {
+            "visible_segments": rows,
+            "stt_preview_segments": stt_preview_segments,
+            "final_segments": final_segments,
+            "selected_final_segments": selected_final_segments,
+            "selected_final_index": build_stt_selection_index(selected_final_segments),
+            "stt1_preview_segments": stt1_preview_segments,
+            "stt2_preview_segments": stt2_preview_segments,
+        }
+        self._visible_segment_lanes_cache_key = key
+        self._visible_segment_lanes_cache = data
+        return data
 
     def begin_mic_visualization(self, line_num: int | None = None):
         self._is_listening = True
@@ -1034,6 +1098,16 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self.active_seg_line = None
 
     def _is_active_segment(self, seg) -> bool:
+        if hasattr(self, "_timeline_playback_active") and self._timeline_playback_active():
+            try:
+                start = float(seg.get("start", 0.0) or 0.0)
+                end = float(seg.get("end", start) or start)
+                playhead = float(getattr(self, "playhead_sec", 0.0) or 0.0)
+                fps = max(1.0, float(self._get_fps() or 30.0))
+                edge_tol = max(0.001, min(0.05, 2.0 / fps))
+                return start - edge_tol <= playhead < end + edge_tol
+            except Exception:
+                return False
         active_line = getattr(self, "active_seg_line", None)
         if active_line is not None:
             try:

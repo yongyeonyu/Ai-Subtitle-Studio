@@ -33,6 +33,7 @@ from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnois
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.runtime.multi_process import runtime_parallel_worker_plan
+from core.runtime.subprocess_utils import run_subprocess_capture
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
 
 _VAD_CACHE_VERSION = 3
@@ -82,17 +83,10 @@ class VideoProcessorAudioHelpersMixin:
             return self._run_ffmpeg_with_progress(cmd, label=label, timeout=timeout, env=env)
 
         try:
-            subprocess_kwargs = hidden_subprocess_kwargs()
-            if env is not None:
-                subprocess_kwargs["env"] = env
-            result = subprocess.run(
-                [str(x) for x in cmd],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+            result = run_subprocess_capture(
+                cmd,
                 timeout=timeout,
-                **subprocess_kwargs,
+                env=env,
             )
         except FileNotFoundError as e:
             _runtime_get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")
@@ -307,17 +301,10 @@ class VideoProcessorAudioHelpersMixin:
 
     def _run_media_command_no_progress(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
         try:
-            subprocess_kwargs = hidden_subprocess_kwargs()
-            if env is not None:
-                subprocess_kwargs["env"] = env
-            result = subprocess.run(
-                [str(x) for x in cmd],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+            result = run_subprocess_capture(
+                cmd,
                 timeout=timeout,
-                **subprocess_kwargs,
+                env=env,
             )
         except FileNotFoundError as e:
             _runtime_get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")

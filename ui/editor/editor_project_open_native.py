@@ -15,8 +15,12 @@ from typing import Callable
 
 from PyQt6.QtCore import QTimer
 
-from core.project.project_manager import PROJECTS_DIR, get_boundary_times, load_project
+from core.project.project_manager import PROJECTS_DIR, load_project
 from core.runtime.logger import get_logger
+from ui.project.project_session_runtime import (
+    apply_project_multiclip_runtime,
+    attach_project_session,
+)
 
 
 def schedule_native_open_editor_media(
@@ -523,8 +527,15 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
     )
     from core.project.project_format import project_primary_fps
 
-    confirmed_boundaries = get_boundary_times(project)
-    boundaries = project_clip_boundaries(project)
+    attach_project_session(
+        owner,
+        filepath,
+        project,
+        auto_pipeline=False,
+        clear_multiclip=False,
+        emit_boundary_signal=False,
+    )
+    boundaries = apply_project_multiclip_runtime(owner, media, project)
     analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
     preliminary_middle_segments = [
         dict(row)
@@ -535,16 +546,6 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         )
         if isinstance(row, dict)
     ]
-    if len(media) > 1:
-        owner._multiclip_files = list(media)
-        owner._multiclip_boundaries = boundaries
-    else:
-        owner._multiclip_files = []
-        owner._multiclip_boundaries = []
-    owner._project_boundary_times = list(confirmed_boundaries or [])
-
-    owner._current_project_path = filepath
-    owner._is_auto_pipeline = False
     owner._on_save_cb = None
     owner._on_start_cb = None
     owner._on_prev_cb = None

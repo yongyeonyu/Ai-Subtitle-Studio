@@ -29,10 +29,11 @@ from core.performance import (
     bounded_worker_count,
 )
 from core.media_fingerprint import media_fingerprint_digest
-from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
+from core.platform_compat import ffmpeg_binary
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.runtime.multi_process import apply_apple_m_subtitle_pipeline_plan, runtime_parallel_worker_plan
+from core.runtime.subprocess_utils import run_subprocess_capture
 from core.subtitle_quality.vad_alignment_checker import (
     review_vad_config,
     review_vad_enabled,
@@ -547,8 +548,10 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         return chunk_dir, vad_segments
 
     def __del__(self):
-        try: self._executor.shutdown(wait=False)
-        except: pass
+        try:
+            self._executor.shutdown(wait=False)
+        except (AttributeError, RuntimeError, TypeError):
+            pass
 
     def _load_all_settings(self):
         """user_settings.json 로드 (오류 시 로그 남김). Legacy override hook 지원."""
@@ -938,7 +941,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _ffmpeg_trim_to_wav(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float) -> bool:
-        result = subprocess.run(
+        result = run_subprocess_capture(
             [
                 ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
                 "-ss", str(start_sec),
@@ -947,8 +950,6 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 "-acodec", "pcm_s16le",
                 out_wav,
             ],
-            capture_output=True,
-            **hidden_subprocess_kwargs(),
         )
         return result.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
 

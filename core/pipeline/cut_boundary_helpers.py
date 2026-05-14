@@ -34,6 +34,7 @@ from core.pipeline.cut_boundary_prescan_policy import (
 from core.project.project_io import read_project_file, write_project_file
 from core.runtime.logger import get_logger
 from core.settings import load_settings
+from ui.queue.queue_dispatch import queue_active_row_index
 
 
 _truthy_setting = truthy_setting
@@ -670,9 +671,9 @@ class PipelineCutBoundaryMixin:
 
         candidates = []
         try:
-            cur = getattr(self.ui, "_current_file_idx", None)
-            if cur is not None:
-                candidates.append(max(0, int(cur) - 1))
+            cur = int(queue_active_row_index(self.ui))
+            if cur >= 0:
+                candidates.append(cur)
         except Exception:
             pass
 

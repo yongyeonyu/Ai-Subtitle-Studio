@@ -57,7 +57,8 @@ def load_settings() -> dict:
         try:
             shutil.move(old_file, CUSTOM_DEFAULTS_FILE)
             logger.log("🚚 custom_defaults.json을 dataset 폴더로 이동 완료!")
-        except: pass
+        except OSError as exc:
+            logger.log(f"⚠️ custom_defaults.json 이동 실패: {exc}")
 
     # 1. 기본값(config + custom_defaults.json) 불러오기
     defaults = hardcoded_default_settings(dataset_dir=DATASET_DIR, include_custom_defaults=False)

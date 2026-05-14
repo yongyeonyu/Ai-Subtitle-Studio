@@ -123,9 +123,12 @@ def get_video_files(folder, recursive=False):
                     if entry.is_dir(follow_symlinks=False) and recursive: 
                         scan(entry.path)
                     elif entry.is_file(follow_symlinks=False) and os.path.splitext(entry.name)[1] in exts:
-                        try: files.append((entry.stat().st_mtime, entry.path))
-                        except: pass
-        except PermissionError: pass
+                        try:
+                            files.append((entry.stat().st_mtime, entry.path))
+                        except (FileNotFoundError, PermissionError, OSError):
+                            pass
+        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+            pass
     scan(folder)
     files.sort()
     return [f for _, f in files]

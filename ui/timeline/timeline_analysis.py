@@ -421,30 +421,9 @@ def subtitle_generation_silence_segments_for_editor(
     gap_segments: list[dict],
     total_duration: float,
 ) -> list[dict]:
-    markers: list[dict] = []
-    total_duration = max(0.0, float(total_duration or 0.0))
-    for gap in gap_segments or []:
-        start = _as_float(gap.get("start"))
-        end = _as_float(gap.get("end"))
-        if start is None or end is None or end <= start:
-            continue
-        if total_duration > 0:
-            start = max(0.0, min(total_duration, start))
-            end = max(start, min(total_duration, end))
-        if end <= start:
-            continue
-        markers.append(
-            {
-                "start": round(start, 3),
-                "end": round(end, 3),
-                "kind": "generation_silence",
-                "label": "무음구간",
-                "color": "#FF6B6B",
-                "priority": 78,
-                "alpha": 138,
-            }
-        )
-    return markers
+    # Gap rows remain editable in the subtitle lane, but we no longer create
+    # a second "generation_silence" helper lane between speaker/subtitle rows.
+    return []
 
 
 def subtitle_detection_segments_for_editor(
@@ -594,34 +573,6 @@ def subtitle_detection_segments_for_editor(
                 score=score,
                 selection_state="quality",
             )
-
-    for gap in gap_segments or []:
-        add(
-            gap.get("start"),
-            gap.get("end"),
-            "generation_silence",
-            source="generation_silence",
-            label="무음구간",
-            color="#FF6B6B",
-            priority=22,
-            alpha=130,
-            selection_state="generation_silence",
-        )
-        quality = dict(gap.get("quality") or {})
-        flags = {str(flag) for flag in (quality.get("flags") or [])}
-        if not (bool(quality.get("linked_silence")) or "linked_silence" in flags):
-            continue
-        add(
-            gap.get("start"),
-            gap.get("end"),
-            "linked_silence",
-            source="silence",
-            label="무음",
-            color="#34C759",
-            priority=82,
-            alpha=142,
-            selection_state="linked_silence",
-        )
 
     if not candidates and total_duration > 0:
         add(0.0, total_duration, "idle", source="subtitle_detection", label="음성", color="#34C759", priority=0, alpha=92)

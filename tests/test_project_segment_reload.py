@@ -1075,7 +1075,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         ]
 
         with patch(
-            "ui.editor.editor_segments.build_live_subtitle_preview_via_swift",
+            "ui.editor.editor_segments_live_preview.build_live_subtitle_preview_via_swift",
             return_value=[
                 {
                     "start": 1.0,
@@ -1143,6 +1143,142 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             self.assertEqual(len(editor._live_stt_preview_segments), 1)
             self.assertEqual(editor._live_stt_preview_segments[0]["text"], "갱신된 실시간 드래프트")
             self.assertEqual([seg for seg in editor._get_current_segments() if not seg.get("is_gap")], [])
+        finally:
+            editor.text_edit.close()
+
+    def test_live_stt_preview_renders_editor_draft_while_processing_locked(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "실시간 자막", "stt_preview_source": "STT1"}
+            ])
+
+            self.assertIn("실시간 자막", editor.text_edit.toPlainText())
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+            self.assertEqual(editor._live_editor_preview_segments[0]["text"], "실시간 자막")
+            block_data = editor.text_edit.document().begin().userData()
+            self.assertIsInstance(block_data, SubtitleBlockData)
+            self.assertTrue(block_data.live_preview)
+        finally:
+            editor.text_edit.close()
+
+    def test_processing_preview_renders_editor_draft_while_processing_locked(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        try:
+            editor.preview_processing_segments(
+                {
+                    "stage": "context_review",
+                    "stage_label": "문맥 보정",
+                    "segments": [
+                        {"start": 1.0, "end": 2.0, "text": "문맥 보정 초안", "speaker": "00"}
+                    ],
+                }
+            )
+            editor._flush_live_editor_preview_queue()
+
+            self.assertIn("문맥 보정 초안", editor.text_edit.toPlainText())
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+            self.assertEqual(editor._live_editor_preview_segments[0]["stt_preview_source"], "PROC")
+            self.assertEqual(editor._live_editor_preview_segments[0]["live_preview_stage"], "문맥 보정")
+            subtitle_drafts = [seg for seg in editor.timeline.updated[0] if seg.get("_live_subtitle_preview")]
+            self.assertEqual([seg["text"] for seg in subtitle_drafts], ["문맥 보정 초안"])
+            self.assertFalse(any(seg.get("_live_stt_preview") for seg in editor.timeline.updated[0]))
+        finally:
+            editor.text_edit.close()
+
+    def test_processing_preview_uses_temporary_italic_and_highlights_changed_words(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        try:
+            editor.preview_processing_segments(
+                {
+                    "stage": "context_review",
+                    "stage_label": "문맥 보정",
+                    "segments": [{"start": 1.0, "end": 2.0, "text": "문맥 보정 초안"}],
+                }
+            )
+            editor._flush_live_editor_preview_queue()
+            first_block = editor.text_edit.document().begin()
+            self.assertTrue(first_block.begin().fragment().charFormat().fontItalic())
+
+            editor.preview_processing_segments(
+                {
+                    "stage": "context_review",
+                    "stage_label": "문맥 보정",
+                    "segments": [{"start": 1.0, "end": 2.0, "text": "문맥 보정 최종"}],
+                }
+            )
+            editor._flush_live_editor_preview_queue()
+
+            block = editor.text_edit.document().begin()
+            yellow_fragments = []
+            it = block.begin()
+            while not it.atEnd():
+                fragment = it.fragment()
+                if fragment.isValid() and "최종" in fragment.text():
+                    yellow_fragments.append(fragment)
+                it += 1
+            self.assertTrue(yellow_fragments)
+            for fragment in yellow_fragments:
+                fmt = fragment.charFormat()
+                self.assertTrue(fmt.fontItalic())
+                self.assertEqual(fmt.foreground().color().name().lower(), "#ffd84d")
+        finally:
+            editor.text_edit.close()
+
+    def test_final_segment_replaces_temporary_preview_with_plain_style(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        try:
+            editor.preview_processing_segments(
+                {
+                    "stage": "context_review",
+                    "stage_label": "문맥 보정",
+                    "segments": [{"start": 1.0, "end": 2.0, "text": "임시 자막"}],
+                }
+            )
+            editor._flush_live_editor_preview_queue()
+            self.assertTrue(editor.text_edit.document().begin().begin().fragment().charFormat().fontItalic())
+
+            editor.append_segments([
+                {"start": 1.0, "end": 2.0, "text": "확정 자막", "speaker": "00"}
+            ])
+            editor._flush_queue()
+
+            block = editor.text_edit.document().begin()
+            fragment = block.begin().fragment()
+            self.assertEqual(block.text(), "확정 자막")
+            self.assertFalse(fragment.charFormat().fontItalic())
+            self.assertNotEqual(fragment.charFormat().foreground().color().name().lower(), "#ffd84d")
+        finally:
+            editor.text_edit.close()
+
+    def test_live_stt_preview_keeps_existing_editor_draft_when_processing_batch_is_temporarily_empty(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "실시간 자막", "stt_preview_source": "STT1"}
+            ])
+            self.assertIn("실시간 자막", editor.text_edit.toPlainText())
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+
+            editor._live_editor_preview_queue = []
+            editor._flush_live_editor_preview_queue()
+
+            self.assertIn("실시간 자막", editor.text_edit.toPlainText())
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+            self.assertEqual(editor._live_editor_preview_segments[0]["text"], "실시간 자막")
+        finally:
+            editor.text_edit.close()
+
+    def test_processing_live_editor_preview_enabled_accepts_processing_state_even_if_lock_flag_is_late(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": False, "state": "ST_PROC"})()
+        try:
+            self.assertTrue(editor._processing_live_editor_preview_enabled())
         finally:
             editor.text_edit.close()
 
@@ -1309,6 +1445,40 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor._segment_queue[0]["text"], "최종")
         self.assertTrue(editor._queue_timer.started)
 
+    def test_preview_segments_are_clamped_to_video_duration_during_generation(self):
+        editor = _ActualSelectionEditor()
+        editor.video_player.total_time = 5.0
+        try:
+            editor.preview_stt_segments([
+                {"start": 4.9, "end": 5.4, "text": "꼬리 미리보기", "stt_preview_source": "STT1"},
+                {"start": 5.1, "end": 5.6, "text": "완전 초과", "stt_preview_source": "STT1"},
+            ])
+
+            self.assertEqual(len(editor._live_stt_preview_segments), 1)
+            self.assertEqual(editor._live_stt_preview_segments[0]["text"], "꼬리 미리보기")
+            self.assertLessEqual(editor._live_stt_preview_segments[0]["end"], 5.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_flush_queue_clamps_tail_segment_to_video_duration_before_document_write(self):
+        editor = _ActualSelectionEditor()
+        editor.video_player.total_time = 5.0
+        try:
+            editor.append_segments([
+                {"start": 4.8, "end": 4.95, "text": "마지막 자막", "speaker": "00"},
+            ])
+            editor._flush_queue()
+
+            block = editor.text_edit.document().findBlockByNumber(0)
+            data = block.userData()
+            self.assertIsNotNone(data)
+            self.assertLessEqual(float(getattr(data, "end_sec", 0.0) or 0.0), 5.0)
+            current = [seg for seg in editor._get_current_segments(force_rebuild=True) if not seg.get("is_gap")]
+            self.assertEqual(len(current), 1)
+            self.assertLessEqual(float(current[0]["end"]), 5.0)
+        finally:
+            editor.text_edit.close()
+
     def test_select_stt_candidate_replaces_overlapping_final_segment(self):
         editor = _LivePreviewEditor()
         editor._cached_segs = [{"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"}]
@@ -1343,6 +1513,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
     def test_select_stt_candidate_anchors_playhead_to_candidate_start(self):
         editor = _LivePreviewEditor()
+        editor.video_player.total_time = 120.0
         editor.timeline.canvas.playhead_sec = 99.0
         editor.timeline.scroll.horizontalScrollBar().setValue(37)
         editor._cached_segs = [{"start": 90.0, "end": 100.0, "text": "끝 자막", "speaker": "00"}]
@@ -1372,7 +1543,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["STT2 후보"])
         self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(1.0, 2.0)])
         self.assertEqual(editor.reload_called_with[0]["stt_selected_source"], "STT2")
-        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["_stt_placement_mode"], "manual_final_slot_replace")
+        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["_stt_placement_mode"], "replace_original_slot")
         self.assertTrue(editor.reload_called_with[0]["manual_stt_candidate_locked"])
         self.assertEqual(editor.timeline.playhead_calls[-1], (1.0, True))
 
@@ -1391,10 +1562,11 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["앞 자막", "STT1 후보"])
         self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.0, 1.0), (1.0, 2.0)])
-        self.assertEqual(editor.reload_called_with[1]["stt_candidates"][0]["_stt_placement_mode"], "manual_final_slot_replace")
+        self.assertEqual(editor.reload_called_with[1]["stt_candidates"][0]["_stt_placement_mode"], "replace_original_slot")
 
     def test_select_one_stt_candidate_replaces_two_split_subtitles_with_one_segment(self):
         editor = _LivePreviewEditor()
+        editor.video_player.total_time = 30.0
         editor.video_fps = 30.0
         editor._cached_segs = [
             {"start": 17.8, "end": 18.9, "text": "요거 작년에도", "speaker": "00"},
@@ -1508,12 +1680,13 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
 
-        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["STT2 선택"])
-        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.0, 4.0)])
-        self.assertEqual(editor.reload_called_with[0]["stt_selected_source"], "STT2")
+        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["긴 기존 자막", "STT2 선택", "긴 기존 자막"])
+        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.0, 1.0), (1.0, 3.0), (3.0, 4.0)])
+        self.assertEqual(editor.reload_called_with[1]["stt_selected_source"], "STT2")
 
     def test_select_stt_candidate_splits_same_source_fragments_for_slot(self):
         editor = _LivePreviewEditor()
+        editor.video_player.total_time = 20.0
         editor._cached_segs = [
             {"start": 10.0, "end": 14.0, "text": "STT1 긴 자막", "speaker": "00"},
         ]
@@ -1524,17 +1697,18 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
 
-        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["STT2 앞", "STT2 뒤"])
+        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["STT2 앞", "STT1 긴 자막"])
         self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(10.0, 12.0), (12.0, 14.0)])
+        self.assertEqual(editor.reload_called_with[0]["stt_selected_source"], "STT2")
+        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["text"], "STT2 앞")
         self.assertEqual(
-            [part["text"] for part in editor.reload_called_with[0]["stt_candidates"][0]["_stt_slot_candidate_parts"]],
+            [seg["text"] for seg in editor._live_stt_preview_segments],
             ["STT2 앞", "STT2 뒤"],
         )
-        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["_stt_slot_split_total"], 2)
-        self.assertEqual(editor.reload_called_with[1]["stt_candidates"][0]["_stt_slot_split_total"], 2)
 
     def test_select_red_stt1_candidate_replaces_long_subtitle_with_three_stt1_segments(self):
         editor = _LivePreviewEditor()
+        editor.video_player.total_time = 20.0
         editor._cached_segs = [
             {
                 "start": 2.0,
@@ -1554,14 +1728,15 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         self.assertEqual(
             [seg["text"] for seg in editor.reload_called_with],
-            ["어 유스 어드벤처", "2026 2026", "네 안녕하세요 소셜기유모씨입니다"],
+            ["긴 메인 자막", "네 안녕하세요 소셜기유모씨입니다"],
         )
         self.assertEqual(
             [(seg["start"], seg["end"]) for seg in editor.reload_called_with],
-            [(2.0, 3.3), (3.3, 5.9), (5.9, 8.0)],
+            [(2.0, 5.9), (5.9, 8.0)],
         )
-        self.assertEqual([seg["stt_selected_source"] for seg in editor.reload_called_with], ["STT1", "STT1", "STT1"])
-        self.assertTrue(all(seg["manual_stt_candidate_locked"] for seg in editor.reload_called_with))
+        self.assertNotIn("stt_selected_source", editor.reload_called_with[0])
+        self.assertEqual(editor.reload_called_with[1]["stt_selected_source"], "STT1")
+        self.assertTrue(editor.reload_called_with[1]["manual_stt_candidate_locked"])
 
     def test_select_stt_candidate_is_undo_redo_snapshot(self):
         editor = _UndoableLivePreviewEditor()
@@ -1600,7 +1775,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor._cached_segs[0]["text"], "STT1 후보")
         self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT1")
 
-        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[1])
         self.assertEqual(editor._cached_segs[0]["text"], "STT2 후보")
         self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT2")
 
@@ -1619,6 +1794,23 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         editor._undo_mgr.redo()
         self.assertEqual(editor._cached_segs[0]["text"], "STT2 후보")
         self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT2")
+
+    def test_select_stt_candidate_retimes_only_local_selected_window(self):
+        editor = _LivePreviewEditor()
+        editor._cached_segs = [
+            {"start": 0.0, "end": 1.0, "text": "앞 자막", "speaker": "00"},
+            {"start": 1.6, "end": 2.4, "text": "뒤 자막", "speaker": "00"},
+        ]
+        editor.preview_stt_segments([
+            {"start": 1.0, "end": 1.4, "text": "선택 후보", "stt_preview_source": "STT1", "speaker": "00"},
+        ])
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+
+        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["앞 자막", "선택 후보", "뒤 자막"])
+        self.assertEqual(editor.reload_called_with[1]["start"], 1.0)
+        self.assertEqual(editor.reload_called_with[1]["end"], 1.6)
+        self.assertEqual(editor.reload_called_with[2]["start"], 1.6)
 
     def test_save_flushes_pending_segment_queue_before_empty_check(self):
         editor = _SaveFlushEditor()

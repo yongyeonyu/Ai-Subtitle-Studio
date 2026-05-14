@@ -15,6 +15,7 @@ from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QPolygon
 from PyQt6.QtWidgets import QApplication
 
+from core.coerce import safe_float as _as_float
 from core.native_swift_timeline import (
     build_subtitle_drag_snap_base_via_swift,
     compute_subtitle_merge_preview_via_swift,
@@ -28,7 +29,6 @@ from ui.timeline.timeline_canvas_editing import (
     apply_timing_drag as _legacy_apply_timing_drag,
 )
 from ui.timeline.timeline_constants import (
-    ANALYSIS_BOT,
     ANALYSIS_TOP,
     DIAMOND_Y,
     HANDLE_R,
@@ -41,14 +41,6 @@ from ui.timeline.timeline_constants import (
     VOICE_ACTIVITY_TOP,
     _build_gaps,
 )
-
-
-def _as_float(value, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
 
 class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
     def _clear_pending_center_drag(self) -> None:

@@ -30,9 +30,12 @@ from ui.responsive_profile import responsive_profile_for_size, responsive_sideba
 from ui.style import button_style, label_style, line_icon
 
 from ui.project.project_panel import ProjectUIMixin
+from ui.project.project_session_runtime import detach_project_session, set_project_boundary_rows
 from ui.project.workspace_restore import WorkspaceMixin
+from ui.queue.queue_formatting import build_queue_header_payload
 
 from ui.main.main_file_ops import FileOpsMixin
+from ui.main.main_nonfatal import call_nonfatal_ui_step, run_nonfatal_ui_step
 from ui.main.main_runtime_cleanup import MainRuntimeCleanupMixin
 from ui.main.main_signals import SignalHandlersMixin
 
@@ -70,14 +73,15 @@ class MainWindow(
     _sig_open_editor         = pyqtSignal(str, object, object, object, object, bool)
     _sig_open_editor_ready   = pyqtSignal(str, object, object, object, object, bool, object)
     _sig_set_vad_segments    = pyqtSignal(list)
-    _sig_update_queue        = pyqtSignal(int, str, str, str, str)
-    _sig_update_queue_header = pyqtSignal(int, int, int, str)
+    _sig_update_queue_payload = pyqtSignal(object)
+    _sig_update_queue_header_payload = pyqtSignal(object)
     _sig_auto_start_pipeline = pyqtSignal(list)
     _sig_prepare_processing_editor = pyqtSignal(str, object)
     _sig_load_multiclip_waveform = pyqtSignal(list)
     _sig_set_recog_zone      = pyqtSignal(float, float)
     _sig_set_recog_progress  = pyqtSignal(float)
     _sig_preview_stt_segments = pyqtSignal(list)
+    _sig_preview_processing_segments = pyqtSignal(object)
     _sig_clear_editor        = pyqtSignal()
     _sig_restart_multiclip   = pyqtSignal(list, object)
     _sig_refresh_cut_boundary_placeholder = pyqtSignal()
@@ -110,10 +114,13 @@ class MainWindow(
         self._file_start_times = {}
         self._current_file_idx = 1
         self._total_files = 1
-        self._is_auto_pipeline = False
         self._auto_processing_active = False
-        self._current_project_path = None
-        self._project_boundary_times = []
+        detach_project_session(
+            self,
+            auto_pipeline=False,
+            clear_multiclip=True,
+            emit_boundary_signal=False,
+        )
         self._dashboard_mode = "dashboard"
         self._current_work_mode = "editor"
         self._project_panel_visible = True
@@ -222,24 +229,60 @@ class MainWindow(
             return
         self._post_show_startup_started = True
         trainer = getattr(self, "_personalization_idle_trainer", None)
-        recover_async = getattr(trainer, "recover_startup_jobs_async", None) if trainer is not None else None
-        if callable(recover_async):
-            try:
-                recover_async(
-                    reason="trainer_startup",
-                    delay_ms=500 if getattr(config, "IS_MAC", False) else 0,
-                )
-            except Exception:
-                pass
+        call_nonfatal_ui_step(
+            "메인윈도우 시작",
+            trainer,
+            "recover_startup_jobs_async",
+            reason="trainer_startup",
+            delay_ms=500 if getattr(config, "IS_MAC", False) else 0,
+            step="recover_startup_jobs_async",
+        )
 
     def _start_auto_watchers_after_launch(self):
         if self._auto_start_on and getattr(self, "_is_icloud_auto_mode", False):
-            self._cloud_sync_manager.start()
+            call_nonfatal_ui_step(
+                "자동 감시 시작",
+                getattr(self, "_cloud_sync_manager", None),
+                "start",
+                step="icloud watcher start",
+            )
         elif self._auto_start_on and getattr(self, "_is_nas_auto_mode", False):
-            nas_path = get_nas_path()
-            if ensure_nas_mounted(nas_path):
-                self._nas_sync_manager.dropzone_path = get_local_path(nas_path)
-                self._nas_sync_manager.start()
+            nas_path = run_nonfatal_ui_step(
+                "자동 감시 시작",
+                "get_nas_path",
+                get_nas_path,
+                default="",
+            )
+            if not nas_path:
+                return
+            mounted = run_nonfatal_ui_step(
+                "자동 감시 시작",
+                "ensure_nas_mounted",
+                lambda: ensure_nas_mounted(nas_path),
+                default=False,
+            )
+            if not mounted:
+                return
+            local_path = run_nonfatal_ui_step(
+                "자동 감시 시작",
+                "get_local_path",
+                lambda: get_local_path(nas_path),
+                default="",
+            )
+            if not local_path:
+                return
+            manager = getattr(self, "_nas_sync_manager", None)
+            run_nonfatal_ui_step(
+                "자동 감시 시작",
+                "nas dropzone_path",
+                lambda: setattr(manager, "dropzone_path", local_path),
+            )
+            call_nonfatal_ui_step(
+                "자동 감시 시작",
+                manager,
+                "start",
+                step="nas watcher start",
+            )
 
     # ── UI 빌드 ──────────────────────────────────────────
     def _build_ui(self):
@@ -349,18 +392,23 @@ class MainWindow(
         def launch() -> None:
             def worker() -> None:
                 payload = {"token": token}
-                try:
-                    payload["icloud"] = self._get_icloud_files()
-                except Exception:
-                    payload["icloud"] = ([], "오류", "")
-                try:
-                    payload["nas"] = self._get_nas_folders()
-                except Exception:
-                    payload["nas"] = ([], "오류", "")
-                try:
-                    self._sig_home_auto_sources_ready.emit(payload)
-                except Exception:
-                    pass
+                payload["icloud"] = run_nonfatal_ui_step(
+                    "홈 자동 소스 갱신",
+                    "get_icloud_files",
+                    self._get_icloud_files,
+                    default=([], "오류", ""),
+                )
+                payload["nas"] = run_nonfatal_ui_step(
+                    "홈 자동 소스 갱신",
+                    "get_nas_folders",
+                    self._get_nas_folders,
+                    default=([], "오류", ""),
+                )
+                run_nonfatal_ui_step(
+                    "홈 자동 소스 갱신",
+                    "emit home_auto_sources_ready",
+                    lambda: self._sig_home_auto_sources_ready.emit(payload),
+                )
 
             threading.Thread(
                 target=worker,
@@ -376,7 +424,7 @@ class MainWindow(
         if isinstance(payload, dict):
             try:
                 payload_token = int(payload.get("token", 0) or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 payload_token = 0
         if payload_token and payload_token != current_token:
             return
@@ -388,68 +436,112 @@ class MainWindow(
         self._initial_home_scan_deferred = False
         self._home_auto_source_refresh_inflight = False
         if int(getattr(self, "stack", None).currentIndex() if getattr(self, "stack", None) is not None else -1) == 0:
-            try:
-                self._build_home_content()
-            except Exception:
-                pass
+            run_nonfatal_ui_step(
+                "홈 자동 소스 갱신",
+                "rebuild_home_content",
+                self._build_home_content,
+            )
 
     def _initialize_runtime_memory_manager(self, settings=None):
         if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
             return
-        try:
-            manager = RuntimeMemoryManager(settings=dict(settings or {}), logger=get_logger())
-            manager.register_trim_callback("mainwindow", self._handle_runtime_memory_pressure)
-            self._runtime_memory_manager = manager
-            self._runtime_memory_timer.setInterval(int(manager.interval_ms))
-            self._runtime_memory_timer.start()
-        except Exception as exc:
-            try:
-                get_logger().log(f"⚠️ 메모리 관리자 시작 실패: {exc}")
-            except Exception:
-                pass
+        manager = run_nonfatal_ui_step(
+            "메모리 관리자 시작",
+            "create runtime memory manager",
+            lambda: RuntimeMemoryManager(settings=dict(settings or {}), logger=get_logger()),
+            default=None,
+        )
+        if manager is None:
+            return
+        self._runtime_memory_manager = manager
+        run_nonfatal_ui_step(
+            "메모리 관리자 시작",
+            "register trim callback",
+            lambda: manager.register_trim_callback("mainwindow", self._handle_runtime_memory_pressure),
+        )
+        run_nonfatal_ui_step(
+            "메모리 관리자 시작",
+            "configure memory timer",
+            lambda: self._runtime_memory_timer.setInterval(int(manager.interval_ms)),
+        )
+        run_nonfatal_ui_step(
+            "메모리 관리자 시작",
+            "start memory timer",
+            self._runtime_memory_timer.start,
+        )
 
     def _initialize_runtime_resource_coordinator(self, settings=None):
         if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
             return
-        try:
-            coordinator = RuntimeResourceCoordinator(settings=dict(settings or {}), logger=get_logger())
-            self._runtime_resource_coordinator = coordinator
-            self._runtime_resource_timer.setInterval(2500)
-            self._runtime_resource_timer.start()
-            self._poll_runtime_resource_coordinator()
-        except Exception as exc:
-            try:
-                get_logger().log(f"⚠️ 런타임 코디네이터 시작 실패: {exc}")
-            except Exception:
-                pass
+        coordinator = run_nonfatal_ui_step(
+            "런타임 코디네이터 시작",
+            "create runtime resource coordinator",
+            lambda: RuntimeResourceCoordinator(settings=dict(settings or {}), logger=get_logger()),
+            default=None,
+        )
+        if coordinator is None:
+            return
+        self._runtime_resource_coordinator = coordinator
+        run_nonfatal_ui_step(
+            "런타임 코디네이터 시작",
+            "configure resource timer",
+            lambda: self._runtime_resource_timer.setInterval(2500),
+        )
+        run_nonfatal_ui_step(
+            "런타임 코디네이터 시작",
+            "start resource timer",
+            self._runtime_resource_timer.start,
+        )
+        run_nonfatal_ui_step(
+            "런타임 코디네이터 시작",
+            "initial resource poll",
+            self._poll_runtime_resource_coordinator,
+        )
 
     def _poll_runtime_memory_manager(self):
         manager = getattr(self, "_runtime_memory_manager", None)
         if manager is None:
             return
-        try:
-            manager.poll()
-        except Exception:
-            pass
+        run_nonfatal_ui_step(
+            "메모리 관리자 폴링",
+            "manager.poll",
+            manager.poll,
+        )
 
     def _poll_runtime_resource_coordinator(self):
         coordinator = getattr(self, "_runtime_resource_coordinator", None)
         if coordinator is None:
             return
-        try:
-            self._runtime_resource_snapshot = coordinator.poll(window=self)
-            if hasattr(self, "_refresh_sidebar_runtime_monitor"):
-                self._refresh_sidebar_runtime_monitor()
-            if hasattr(self, "_refresh_saved_status_label"):
-                self._refresh_saved_status_label(is_dirty=getattr(self, "_last_saved_status_dirty", None))
-        except Exception:
-            pass
+        _missing = object()
+        snapshot = run_nonfatal_ui_step(
+            "런타임 코디네이터 폴링",
+            "coordinator.poll",
+            lambda: coordinator.poll(window=self),
+            default=_missing,
+        )
+        if snapshot is _missing:
+            return
+        self._runtime_resource_snapshot = snapshot
+        if hasattr(self, "_refresh_sidebar_runtime_monitor"):
+            run_nonfatal_ui_step(
+                "런타임 코디네이터 폴링",
+                "refresh_sidebar_runtime_monitor",
+                self._refresh_sidebar_runtime_monitor,
+            )
+        if hasattr(self, "_refresh_saved_status_label"):
+            run_nonfatal_ui_step(
+                "런타임 코디네이터 폴링",
+                "refresh_saved_status_label",
+                lambda: self._refresh_saved_status_label(is_dirty=getattr(self, "_last_saved_status_dirty", None)),
+            )
 
     def _current_responsive_profile(self):
-        try:
-            override = str(self.property("responsive_profile_override") or "")
-        except Exception:
-            override = ""
+        override = run_nonfatal_ui_step(
+            "반응형 레이아웃",
+            "responsive_profile_override",
+            lambda: str(self.property("responsive_profile_override") or ""),
+            default="",
+        )
         return responsive_profile_for_size(self.width(), self.height(), override=override)
 
     def _apply_responsive_workspace_layout(self):
@@ -460,36 +552,60 @@ class MainWindow(
         profile = self._current_responsive_profile()
         total = max(1, int(self.width() or 0) - (MAIN_PANEL_GAP * 2))
         if not bool(getattr(self, "_log_visible", True)):
-            splitter.setSizes([0, total])
+            run_nonfatal_ui_step(
+                "반응형 레이아웃",
+                "hide sidebar sizes",
+                lambda: splitter.setSizes([0, total]),
+            )
             return
-        try:
-            sidebar.setMinimumWidth(profile.sidebar_min_width)
-            sidebar.setMaximumWidth(profile.sidebar_max_width)
-        except Exception:
-            pass
+        run_nonfatal_ui_step(
+            "반응형 레이아웃",
+            "set sidebar width bounds",
+            lambda: (
+                sidebar.setMinimumWidth(profile.sidebar_min_width),
+                sidebar.setMaximumWidth(profile.sidebar_max_width),
+            ),
+        )
         locked_w = int(getattr(self, "_workspace_sidebar_locked_width", 0) or 0)
         if locked_w > 0:
             sidebar_w = max(profile.sidebar_min_width, min(profile.sidebar_max_width, locked_w))
-            try:
-                sidebar.setMinimumWidth(sidebar_w)
-                sidebar.setMaximumWidth(sidebar_w)
-            except Exception:
-                pass
-            splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
+            run_nonfatal_ui_step(
+                "반응형 레이아웃",
+                "lock sidebar width bounds",
+                lambda: (
+                    sidebar.setMinimumWidth(sidebar_w),
+                    sidebar.setMaximumWidth(sidebar_w),
+                ),
+            )
+            run_nonfatal_ui_step(
+                "반응형 레이아웃",
+                "apply locked splitter sizes",
+                lambda: splitter.setSizes([sidebar_w, max(1, total - sidebar_w)]),
+            )
             return
         if profile.name == "desktop":
-            try:
-                sizes = list(splitter.sizes())
-            except Exception:
-                sizes = []
+            sizes = run_nonfatal_ui_step(
+                "반응형 레이아웃",
+                "read splitter sizes",
+                lambda: list(splitter.sizes()),
+                default=[],
+            )
             current_w = int(sizes[0]) if len(sizes) >= 2 and int(sizes[0]) > 0 else 0
             sidebar_w = current_w or responsive_sidebar_width(total, profile)
             sidebar_w = max(profile.sidebar_min_width, min(profile.sidebar_max_width, sidebar_w))
             if current_w != sidebar_w:
-                splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
+                run_nonfatal_ui_step(
+                    "반응형 레이아웃",
+                    "apply desktop splitter sizes",
+                    lambda: splitter.setSizes([sidebar_w, max(1, total - sidebar_w)]),
+                )
             return
         sidebar_w = responsive_sidebar_width(total, profile)
-        splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
+        run_nonfatal_ui_step(
+            "반응형 레이아웃",
+            "apply tablet splitter sizes",
+            lambda: splitter.setSizes([sidebar_w, max(1, total - sidebar_w)]),
+        )
 
     def _lock_workspace_sidebar_width(self, width: int | None = None) -> int:
         splitter = getattr(self, "workspace_splitter", None)
@@ -498,24 +614,30 @@ class MainWindow(
             self._workspace_sidebar_locked_width = 0
             return 0
         profile = self._current_responsive_profile()
-        try:
-            sizes = list(splitter.sizes())
-        except Exception:
-            sizes = []
+        sizes = run_nonfatal_ui_step(
+            "반응형 레이아웃",
+            "read splitter sizes",
+            lambda: list(splitter.sizes()),
+            default=[],
+        )
         current_w = int(sizes[0]) if len(sizes) >= 2 and int(sizes[0]) > 0 else 0
         total = max(1, sum(sizes) if sizes else int(self.width() or 0) - (MAIN_PANEL_GAP * 2))
         target = int(width or current_w or responsive_sidebar_width(total, profile))
         target = max(profile.sidebar_min_width, min(profile.sidebar_max_width, target))
         self._workspace_sidebar_locked_width = target
-        try:
-            sidebar.setMinimumWidth(target)
-            sidebar.setMaximumWidth(target)
-        except Exception:
-            pass
-        try:
-            splitter.setSizes([target, max(1, total - target)])
-        except Exception:
-            pass
+        run_nonfatal_ui_step(
+            "반응형 레이아웃",
+            "lock sidebar width",
+            lambda: (
+                sidebar.setMinimumWidth(target),
+                sidebar.setMaximumWidth(target),
+            ),
+        )
+        run_nonfatal_ui_step(
+            "반응형 레이아웃",
+            "lock splitter sizes",
+            lambda: splitter.setSizes([target, max(1, total - target)]),
+        )
         return target
 
     def _unlock_workspace_sidebar_width(self) -> None:
@@ -523,11 +645,14 @@ class MainWindow(
         sidebar = getattr(self, "home_page", None)
         if sidebar is not None:
             profile = self._current_responsive_profile()
-            try:
-                sidebar.setMinimumWidth(profile.sidebar_min_width)
-                sidebar.setMaximumWidth(profile.sidebar_max_width)
-            except Exception:
-                pass
+            run_nonfatal_ui_step(
+                "반응형 레이아웃",
+                "unlock sidebar width bounds",
+                lambda: (
+                    sidebar.setMinimumWidth(profile.sidebar_min_width),
+                    sidebar.setMaximumWidth(profile.sidebar_max_width),
+                ),
+            )
         self._apply_responsive_workspace_layout()
 
     def resizeEvent(self, event):
@@ -551,13 +676,26 @@ class MainWindow(
     def _ensure_sidebar_terminal_panel(self):
         panel = getattr(self, "sidebar_terminal_panel", None)
         if panel is not None:
-            try:
-                panel.log_text
-                if panel.parent() is None:
-                    panel.setParent(self.home_page)
+            log_text = run_nonfatal_ui_step(
+                "사이드바 터미널 패널",
+                "panel.log_text",
+                lambda: panel.log_text,
+                default=None,
+            )
+            if log_text is not None:
+                parent = run_nonfatal_ui_step(
+                    "사이드바 터미널 패널",
+                    "panel.parent",
+                    panel.parent,
+                    default=self.home_page,
+                )
+                if parent is None:
+                    run_nonfatal_ui_step(
+                        "사이드바 터미널 패널",
+                        "panel.setParent",
+                        lambda: panel.setParent(self.home_page),
+                    )
                 return panel
-            except RuntimeError:
-                pass
         return self._create_sidebar_terminal_panel()
 
     def _build_log_panel(self):
@@ -881,15 +1019,7 @@ class MainWindow(
 
     def _clear_cut_boundary_state_for_full_restart(self, editor=None):
         editor = editor or getattr(self, "_editor_widget", None)
-        try:
-            self._project_boundary_times = []
-        except Exception:
-            pass
-        try:
-            if hasattr(self, "_sig_update_project_boundary_times"):
-                self._sig_update_project_boundary_times.emit([])
-        except Exception:
-            pass
+        set_project_boundary_rows(self, [], emit_boundary_signal=True)
 
         if editor is None:
             return
@@ -1014,8 +1144,10 @@ class MainWindow(
                 self._live_timer.start(1000)
         except Exception:
             pass
-        if hasattr(self, "_sig_update_queue_header"):
-            self._sig_update_queue_header.emit(1, len(files), 0, "")
+        if hasattr(self, "_sig_update_queue_header_payload"):
+            self._sig_update_queue_header_payload.emit(
+                build_queue_header_payload(1, len(files), 0, "")
+            )
         if hasattr(self, "_refresh_saved_status_label"):
             self._refresh_saved_status_label(is_dirty=False, touch_saved_time=False)
         if hasattr(self, "sync_menu_from_editor"):
@@ -1133,14 +1265,15 @@ class MainWindow(
         self._sig_open_editor.connect(self._do_open_editor)
         self._sig_open_editor_ready.connect(self._do_open_editor_ready)
         self._sig_set_vad_segments.connect(self._on_vad_segments)
-        self._sig_update_queue.connect(self.update_queue_status)
-        self._sig_update_queue_header.connect(self.update_queue_header)
+        self._sig_update_queue_payload.connect(self.update_queue_status)
+        self._sig_update_queue_header_payload.connect(self.update_queue_header)
         self._sig_auto_start_pipeline.connect(self._do_auto_start_pipeline)
         self._sig_prepare_processing_editor.connect(self._do_prepare_processing_editor)
         self._sig_load_multiclip_waveform.connect(self._do_load_multiclip_waveform)
         self._sig_set_recog_zone.connect(self._on_recog_zone)
         self._sig_set_recog_progress.connect(self._on_recog_progress)
         self._sig_preview_stt_segments.connect(self._do_preview_stt_segments)
+        self._sig_preview_processing_segments.connect(self._do_preview_processing_segments)
         self._sig_clear_editor.connect(self._do_clear_editor)
         self._sig_restart_multiclip.connect(self._do_restart_multiclip)
         self._sig_refresh_cut_boundary_placeholder.connect(self._do_refresh_cut_boundary_placeholder)

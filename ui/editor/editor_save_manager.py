@@ -26,6 +26,8 @@ from core.runtime import config
 from core.runtime.logger import get_logger
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 from ui.dialogs.message_box import confirm_save_changes
+from ui.queue.queue_dispatch import find_queue_row_for_media, sync_saved_queue_state
+from ui.project.project_session_runtime import attach_project_session
 
 
 DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC = 300
@@ -340,63 +342,23 @@ class EditorSaveManagerMixin:
     def _queue_row_for_current_media(self):
         try:
             main_w = self.window()
-            table = getattr(main_w, "queue_table", None)
         except Exception:
             return None
-        if table is None:
-            return None
-        try:
-            row_count = int(table.rowCount())
-        except Exception:
-            return None
-        if row_count <= 0:
-            return None
-        candidates: list[int] = []
-        try:
-            current_row = int(getattr(main_w, "_current_file_idx", 1) or 1) - 1
-            if 0 <= current_row < row_count:
-                candidates.append(current_row)
-        except Exception:
-            pass
-        media_path = str(getattr(self, "media_path", "") or "")
-        media_name = os.path.basename(media_path).strip().lower()
-        if media_name:
-            for row in range(row_count):
-                item = table.item(row, 1)
-                item_name = os.path.basename(str(item.text() if item else "")).strip().lower()
-                if item_name == media_name and row not in candidates:
-                    candidates.append(row)
-        if not candidates and row_count == 1:
-            return 0
-        for row in candidates:
-            try:
-                status_item = table.item(row, 0)
-                status_text = str(status_item.text() if status_item else "")
-                if "완료" not in status_text and "기존자막" not in status_text:
-                    return row
-            except Exception:
-                continue
-        return candidates[0] if candidates else None
+        return find_queue_row_for_media(
+            main_w,
+            media_path=getattr(self, "media_path", ""),
+        )
 
     def _sync_queue_saved_state(self):
         try:
             main_w = self.window()
         except Exception:
             return
-        row = self._queue_row_for_current_media()
-        if row is None:
-            return
         try:
-            if hasattr(main_w, "update_queue_status"):
-                main_w.update_queue_status(int(row), "✅ 완료", "", "", "")
-            table = getattr(main_w, "queue_table", None)
-            row_count = int(table.rowCount()) if table is not None else 0
-            if row_count == 1 and hasattr(main_w, "update_queue_header"):
-                main_w.update_queue_header(1, 1, 100, "")
-            elif hasattr(main_w, "_refresh_sidebar_queue_cache"):
-                main_w._refresh_sidebar_queue_cache()
-                if hasattr(main_w, "_sync_sidebar_queue_panel"):
-                    main_w._sync_sidebar_queue_panel()
+            sync_saved_queue_state(
+                main_w,
+                media_path=getattr(self, "media_path", ""),
+            )
         except Exception:
             pass
 
@@ -946,7 +908,14 @@ class EditorSaveManagerMixin:
                 srt_path=get_srt_path(media_path),
                 user_settings=dict(getattr(self, "settings", {}) or {}),
             )
-            main_w._current_project_path = project_path
+            attach_project_session(
+                main_w,
+                project_path,
+                None,
+                auto_pipeline=False,
+                clear_multiclip=False,
+                emit_boundary_signal=False,
+            )
             get_logger().log(f"📝 프로젝트 자동 생성: {os.path.basename(project_path)}")
 
         workspace = {}

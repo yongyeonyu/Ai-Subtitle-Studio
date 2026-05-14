@@ -48,6 +48,21 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
             self.assertGreaterEqual(result["removed_files"], 1)
             self.assertLessEqual(result["remaining_bytes"], 450)
 
+    def test_runtime_disk_cache_usage_reuses_recent_scan_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_a = root / "cache_a"
+            cache_a.mkdir()
+            (cache_a / "sample.bin").write_bytes(b"x" * 128)
+
+            first = runtime_disk_cache_usage([cache_a])
+
+            with patch("pathlib.Path.rglob", side_effect=AssertionError("recent disk usage should be served from cache")):
+                second = runtime_disk_cache_usage([cache_a])
+
+            self.assertEqual(first["total_bytes"], second["total_bytes"])
+            self.assertEqual(first["file_count"], second["file_count"])
+
     def test_manager_poll_triggers_trim_callback_on_critical_pressure(self):
         snapshot = {
             "memory_bytes": 16 * 1024 ** 3,

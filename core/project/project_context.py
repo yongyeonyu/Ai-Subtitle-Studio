@@ -12,6 +12,7 @@ import json
 import os
 from typing import Any
 
+from core.coerce import safe_float as _safe_float, safe_int as _safe_int
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame, sec_to_nearest_frame
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 from core.project.subtitle_status import recheck_threshold, subtitle_status_payload
@@ -140,21 +141,6 @@ def sanitize_workspace_state(workspace: dict[str, Any] | None) -> dict[str, Any]
         for key, value in workspace.items()
         if str(key) not in NON_PERSISTED_WORKSPACE_KEYS
     }
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
 
 def _project_segment_status_payload(seg: dict[str, Any], *, threshold: float | None = None) -> dict[str, Any]:
     if isinstance(seg, dict) and all(key in seg for key in SUBTITLE_STATUS_PAYLOAD_KEYS):

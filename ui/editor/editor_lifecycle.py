@@ -10,7 +10,7 @@ from PyQt6.QtCore import QTimer
 
 from core.runtime.logger import get_logger
 from core.path_manager import get_srt_path
-from core.project.project_manager import get_boundary_times, load_project
+from core.project.project_manager import load_project
 from ui.editor.editor_save_manager import backup_subtitle_file_copy
 from ui.editor.editor_project_open_native import (
     find_project_for_srt_open as native_find_project_for_srt_open,
@@ -28,6 +28,8 @@ from ui.editor.editor_project_open_native import (
     segment_metadata_match_score as native_segment_metadata_match_score,
 )
 from ui.dialogs.message_box import confirm_save_changes
+from ui.queue.queue_formatting import build_queue_header_payload, build_queue_status_payload
+from ui.project.project_session_runtime import attach_project_session, detach_project_session
 
 
 def _save_srt_impl(srt_path, segments):
@@ -137,19 +139,24 @@ class EditorLifecycleMixin:
         )
         from ui.editor.editor_widget import EditorWidget
         self._current_work_mode = "editor"
-        self._current_project_path = None
-        self._project_boundary_times = []
-        if hasattr(self, "_clear_multiclip_runtime_state"):
-            self._clear_multiclip_runtime_state()
+        detach_project_session(
+            self,
+            auto_pipeline=False,
+            clear_multiclip=True,
+            emit_boundary_signal=False,
+        )
         self._remove_old_editor()
         media_path = find_media_for_srt(srt_path) or ""
         linked_project_path, linked_project = self._find_project_for_srt_open(srt_path, media_path)
         if linked_project:
-            self._current_project_path = linked_project_path
-            try:
-                self._project_boundary_times = get_boundary_times(linked_project)
-            except Exception:
-                self._project_boundary_times = []
+            attach_project_session(
+                self,
+                linked_project_path,
+                linked_project,
+                auto_pipeline=False,
+                clear_multiclip=True,
+                emit_boundary_signal=False,
+            )
             if not media_path or media_path == srt_path or not os.path.exists(media_path):
                 try:
                     from core.project.project_context import project_media_files
@@ -365,15 +372,20 @@ class EditorLifecycleMixin:
                                 except Exception:
                                     pass
                                 get_logger().log(f'  [PRE] 기존 자막 사전 로드: {os.path.basename(_rf)} ({len(_rsegs)}개)')
-                                if hasattr(self, '_sig_update_queue'):
-                                    self._sig_update_queue.emit(_ri, '✅기존자막', ' - ', '', '')
+                                if hasattr(self, '_sig_update_queue_payload'):
+                                    self._sig_update_queue_payload.emit(
+                                        build_queue_status_payload(_ri, '✅기존자막', ' - ', '', '')
+                                    )
                         except Exception as _re:
                             get_logger().log(f'  [PRE] 기존 자막 사전 로드 실패: {os.path.basename(_rf)} / {_re}')
                 try:
                     _reuse_count = len(getattr(self, '_reuse_clip_indices', set()) or set())
                     _total_count = len(self._multiclip_boundaries)
-                    if _total_count > 0 and _reuse_count >= _total_count and hasattr(self, '_sig_update_queue_header'):
-                        self._sig_update_queue_header.emit(_total_count, _total_count, 100, '')
+                    if _total_count > 0 and _reuse_count >= _total_count:
+                        if hasattr(self, '_sig_update_queue_header_payload'):
+                            self._sig_update_queue_header_payload.emit(
+                                build_queue_header_payload(_total_count, _total_count, 100, '')
+                            )
                 except Exception:
                     pass
                 QTimer.singleShot(500, lambda: self._finalize_reuse_completion(editor))
@@ -466,15 +478,22 @@ class EditorLifecycleMixin:
             self._editor_widget = None
             return
         if hasattr(old, '_cleanup'):
-            try: old._cleanup()
-            except: pass
+            try:
+                old._cleanup()
+            except (AttributeError, RuntimeError, TypeError) as exc:
+                get_logger().log(f"⚠️ 에디터 정리 중 _cleanup 실패: {exc}")
         if hasattr(old, 'video_player'):
             try:
                 vp = old.video_player
-                if hasattr(vp, '_ui_timer'): vp._ui_timer.stop()
-                if hasattr(vp, 'audio_player'): vp.audio_player.stop()
-                if hasattr(vp, '_worker') and getattr(vp, '_worker', None): vp._worker.stop(); vp._worker.wait(200)
-            except: pass
+                if hasattr(vp, '_ui_timer'):
+                    vp._ui_timer.stop()
+                if hasattr(vp, 'audio_player'):
+                    vp.audio_player.stop()
+                if hasattr(vp, '_worker') and getattr(vp, '_worker', None):
+                    vp._worker.stop()
+                    vp._worker.wait(200)
+            except (AttributeError, RuntimeError, TypeError) as exc:
+                get_logger().log(f"⚠️ 에디터 정리 중 비디오 플레이어 종료 실패: {exc}")
         if hasattr(old, 'timeline'):
             try:
                 stop_waveform = getattr(old.timeline, "stop_waveform_workers", None)

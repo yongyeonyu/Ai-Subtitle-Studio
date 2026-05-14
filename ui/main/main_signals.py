@@ -12,6 +12,9 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core.runtime import config
 from core.runtime.logger import get_logger
+from ui.main.main_nonfatal import call_nonfatal_ui_step, run_nonfatal_ui_step
+from ui.project.project_session_runtime import set_project_boundary_rows
+from ui.queue.queue_dispatch import queue_active_row_index
 
 
 def _is_preflight_local_ollama_model(model: str) -> bool:
@@ -55,6 +58,16 @@ class SignalHandlersMixin:
     def preview_stt_segments_in_editor(self, segments):
         self._sig_preview_stt_segments.emit(segments)
 
+    def preview_processing_segments_in_editor(self, stage_label: str, segments, *, stage: str = ""):
+        self._sig_preview_processing_segments.emit(
+            {
+                "stage": str(stage or ""),
+                "stage_label": str(stage_label or stage or ""),
+                "segments": list(segments or []),
+                "active": True,
+            }
+        )
+
     def refresh_cut_boundary_placeholder(self):
         self._sig_refresh_cut_boundary_placeholder.emit()
 
@@ -96,32 +109,37 @@ class SignalHandlersMixin:
             QTimer.singleShot(80, _refresh)
 
     def _do_append_segments(self, segments, *, flush: bool = False):
-        if self._editor_widget:
-            self._editor_widget.append_segments(segments)
-            if flush:
-                flusher = getattr(self._editor_widget, "_flush_pending_segment_queue_now", None)
-                if callable(flusher):
-                    flusher()
-                elif hasattr(self._editor_widget, "_flush_queue"):
-                    try:
-                        self._editor_widget._flush_queue()
-                    except Exception:
-                        pass
-                QApplication.processEvents()
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return
+        call_nonfatal_ui_step("메인 시그널", editor, "append_segments", segments, step="에디터 세그먼트 append")
+        if flush:
+            flusher = getattr(editor, "_flush_pending_segment_queue_now", None)
+            if callable(flusher):
+                run_nonfatal_ui_step("메인 시그널", "에디터 세그먼트 flush", flusher)
+            else:
+                call_nonfatal_ui_step("메인 시그널", editor, "_flush_queue", step="에디터 세그먼트 fallback flush")
+            run_nonfatal_ui_step("메인 시그널", "Qt 이벤트 flush", QApplication.processEvents, default=None)
 
     def _do_append_segments_ready(self, segments, ready_event):
         try:
             self._do_append_segments(segments, flush=True)
         finally:
             if hasattr(ready_event, "set"):
-                try:
-                    ready_event.set()
-                except Exception:
-                    pass
+                run_nonfatal_ui_step("메인 시그널", "append ready event set", ready_event.set, default=None)
 
     def _do_preview_stt_segments(self, segments):
         if self._editor_widget and hasattr(self._editor_widget, "preview_stt_segments"):
             self._editor_widget.preview_stt_segments(segments)
+
+    def _do_preview_processing_segments(self, payload):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None or not hasattr(editor, "preview_processing_segments"):
+            return
+        try:
+            editor.preview_processing_segments(dict(payload or {}))
+        except RuntimeError:
+            return
 
     def _do_set_llm_review_segment(self, payload):
         editor = getattr(self, "_editor_widget", None)
@@ -158,18 +176,17 @@ class SignalHandlersMixin:
 
     def _do_clear_editor(self):
         if hasattr(self, "_clear_editor_for_full_restart"):
-            self._clear_editor_for_full_restart()
+            call_nonfatal_ui_step("메인 시그널", self, "_clear_editor_for_full_restart", step="풀 리스타트용 에디터 clear")
             return
         ed = getattr(self, '_editor_widget', None)
         if not ed:
             return
-        try:
-            if hasattr(ed, '_queue_timer') and ed._queue_timer.isActive():
-                ed._queue_timer.stop()
-        except Exception:
-            pass
-        try:
-            if hasattr(ed, '_segment_queue'):
+        queue_timer = getattr(ed, "_queue_timer", None)
+        if queue_timer is not None and getattr(queue_timer, "isActive", lambda: False)():
+            call_nonfatal_ui_step("메인 시그널", queue_timer, "stop", step="에디터 queue timer stop")
+
+        def _reset_editor_queues():
+            if hasattr(ed, "_segment_queue"):
                 ed._segment_queue.clear()
             for attr, value in (
                 ("_live_editor_preview_queue", []),
@@ -178,31 +195,36 @@ class SignalHandlersMixin:
             ):
                 if hasattr(ed, attr):
                     setattr(ed, attr, value.copy() if hasattr(value, "copy") else value)
-        except Exception:
-            pass
-        try:
-            if hasattr(ed, 'text_edit'):
-                ed.text_edit.clear()
-        except Exception:
-            pass
-        try:
-            if hasattr(ed, 'timeline'):
-                ed.timeline.update_segments([], 0.0, getattr(ed.timeline.canvas, 'total_duration', 0.0))
-                ed.timeline.set_playhead(0.0)
-        except Exception:
-            pass
-        try:
-            vp = getattr(ed, 'video_player', None)
-            if vp is not None:
-                vp.set_context_segments([])
-                vp.seek(0.0)
-        except Exception:
-            pass
-        try:
-            ed._cached_segs = []
-            ed._active_seg_start = 0.0
-        except Exception:
-            pass
+
+        run_nonfatal_ui_step("메인 시그널", "에디터 preview/queue reset", _reset_editor_queues, default=None)
+        if hasattr(ed, "text_edit"):
+            call_nonfatal_ui_step("메인 시그널", ed.text_edit, "clear", step="에디터 텍스트 clear")
+
+        timeline = getattr(ed, "timeline", None)
+        if timeline is not None:
+            total_duration = getattr(getattr(timeline, "canvas", None), "total_duration", 0.0)
+            call_nonfatal_ui_step(
+                "메인 시그널",
+                timeline,
+                "update_segments",
+                [],
+                0.0,
+                total_duration,
+                step="타임라인 세그먼트 clear",
+            )
+            call_nonfatal_ui_step("메인 시그널", timeline, "set_playhead", 0.0, step="타임라인 플레이헤드 초기화")
+
+        vp = getattr(ed, "video_player", None)
+        if vp is not None:
+            call_nonfatal_ui_step("메인 시그널", vp, "set_context_segments", [], step="비디오 컨텍스트 clear")
+            call_nonfatal_ui_step("메인 시그널", vp, "seek", 0.0, step="비디오 seek reset")
+
+        run_nonfatal_ui_step(
+            "메인 시그널",
+            "에디터 세그먼트 캐시 reset",
+            lambda: (setattr(ed, "_cached_segs", []), setattr(ed, "_active_seg_start", 0.0)),
+            default=None,
+        )
 
     def _do_update_status(self, c_idx, t_total):
         if self._editor_widget:
@@ -224,12 +246,23 @@ class SignalHandlersMixin:
     def _do_restart_multiclip(self, files, folder=None):
         if not self.backend:
             return
-        try:
-            self.backend._force_no_reuse_once = True
-            self.backend._force_cut_boundary_rescan_once = True
-        except Exception:
-            pass
-        self.backend.start_multiclip_pipeline(list(files or []), folder=folder)
+        run_nonfatal_ui_step(
+            "메인 시그널",
+            "멀티클립 재시작 플래그 설정",
+            lambda: (
+                setattr(self.backend, "_force_no_reuse_once", True),
+                setattr(self.backend, "_force_cut_boundary_rescan_once", True),
+            ),
+            default=None,
+        )
+        call_nonfatal_ui_step(
+            "메인 시그널",
+            self.backend,
+            "start_multiclip_pipeline",
+            list(files or []),
+            folder=folder,
+            step="멀티클립 파이프라인 재시작",
+        )
 
     def _do_refresh_cut_boundary_placeholder(self):
         editor = getattr(self, "_editor_widget", None)
@@ -238,10 +271,7 @@ class SignalHandlersMixin:
         previous_result = getattr(self, "_editor_roughcut_result", None)
         refresh_placeholder = getattr(editor, "_refresh_cut_boundary_placeholder_from_project", None)
         if callable(refresh_placeholder):
-            try:
-                refresh_placeholder()
-            except Exception as exc:
-                get_logger().log(f"⚠️ 컷 경계 placeholder 프로젝트 반영 실패: {exc}")
+            run_nonfatal_ui_step("메인 시그널", "컷 경계 placeholder 프로젝트 반영", refresh_placeholder, default=None)
         roughcut = getattr(self, "_roughcut_widget", None)
         if roughcut is None:
             try:
@@ -255,10 +285,13 @@ class SignalHandlersMixin:
                 return
         refresh_from_editor = getattr(roughcut, "refresh_from_editor", None)
         if callable(refresh_from_editor):
-            try:
-                refresh_from_editor(analyze_if_missing=False)
-            except Exception as exc:
-                get_logger().log(f"⚠️ 컷 경계 placeholder 갱신 실패: {exc}")
+            refreshed = run_nonfatal_ui_step(
+                "메인 시그널",
+                "컷 경계 placeholder roughcut 갱신",
+                lambda: refresh_from_editor(analyze_if_missing=False),
+                default=False,
+            )
+            if refreshed is False:
                 return
         fallback_result = (
             getattr(roughcut, "_result", None)
@@ -267,11 +300,7 @@ class SignalHandlersMixin:
             or previous_result
         )
         self._editor_roughcut_result = fallback_result
-        try:
-            if hasattr(editor, "_redraw_timeline"):
-                editor._redraw_timeline()
-        except Exception:
-            pass
+        call_nonfatal_ui_step("메인 시그널", editor, "_redraw_timeline", step="에디터 타임라인 redraw")
 
     def open_editor_for_file(
         self, target_file, on_save, on_start, on_prev, on_exit, is_batch=False
@@ -395,7 +424,7 @@ class SignalHandlersMixin:
             return
         # 멀티클립: VAD 시간을 현재 클립 offset만큼 보정 + 누적
         if hasattr(self, "_multiclip_boundaries") and self._multiclip_boundaries:
-            ci = max(0, getattr(self, "_current_file_idx", 1) - 1)
+            ci = max(0, int(queue_active_row_index(self)))
             if ci < len(self._multiclip_boundaries):
                 offset = self._multiclip_boundaries[ci]["start"]
                 vad_segs = [
@@ -481,6 +510,7 @@ class SignalHandlersMixin:
                 get_logger().log(f"⚠️ 컷 경계 split 실시간 반영 실패: {exc}")
 
     def _on_project_boundary_times_updated(self, times):
+        rows = []
         try:
             from core.cut_boundary import sanitize_cut_boundary_rows
 
@@ -490,16 +520,17 @@ class SignalHandlersMixin:
                 fps = float(getattr(editor, "video_fps", 30.0) or 30.0) if editor is not None else 30.0
             except Exception:
                 fps = 30.0
-            self._project_boundary_times = sanitize_cut_boundary_rows(list(times or []), primary_fps=fps)
+            rows = sanitize_cut_boundary_rows(list(times or []), primary_fps=fps)
         except Exception:
-            self._project_boundary_times = []
+            rows = []
+        set_project_boundary_rows(self, rows, emit_boundary_signal=False)
         editor = getattr(self, "_editor_widget", None)
         if editor is None:
             return
         try:
             timeline = getattr(editor, "timeline", None)
             if timeline is not None and hasattr(timeline, "set_boundary_times"):
-                timeline.set_boundary_times(list(self._project_boundary_times or []))
+                timeline.set_boundary_times(list(getattr(self, "_project_boundary_times", []) or []))
         except Exception as exc:
             get_logger().log(f"⚠️ 컷 경계 확정선 반영 실패: {exc}")
 

@@ -27,6 +27,7 @@ from ui.timeline.timeline_analysis import (
     subtitle_detection_color,
     voice_activity_segments_for_editor,
 )
+from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
 
 
 class TimelineSegmentColorTests(unittest.TestCase):
@@ -65,6 +66,58 @@ class TimelineSegmentColorTests(unittest.TestCase):
 
         self.assertEqual(style["fill"], SEGMENT_TEXT_KIND_STYLES["speech"]["fill"])
         self.assertEqual(style["border"], SEGMENT_TEXT_KIND_STYLES["speech"]["border"])
+
+    def test_subtitle_segment_visual_style_keeps_idle_fill_during_playback(self):
+        seg = {"start": 0.0, "end": 1.0, "text": "일반 자막"}
+
+        idle_style = subtitle_segment_visual_style(seg, active=False, hover=False, quality_filter="all")
+        playback_style = subtitle_segment_visual_style(
+            seg,
+            active=True,
+            hover=False,
+            playback_active=True,
+            quality_filter="all",
+        )
+
+        self.assertEqual(playback_style["fill"], idle_style["fill"])
+        self.assertEqual(playback_style["border"], idle_style["border"])
+
+    def test_scenegraph_keeps_idle_segment_style_during_playback(self):
+        objects = build_scenegraph_subtitle_segments(
+            [
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "앞",
+                    "line": 0,
+                    "stt_ensemble_needs_llm_review": True,
+                },
+                {
+                    "start": 2.0,
+                    "end": 3.0,
+                    "text": "뒤",
+                    "line": 1,
+                    "stt_ensemble_needs_llm_review": True,
+                },
+            ],
+            pps=100.0,
+            fps=30.0,
+            visible_start_sec=0.0,
+            visible_end_sec=4.0,
+            active_start=1.0,
+            active_line=0,
+            playback_active=True,
+            playhead_sec=2.4,
+            quality_filter="all",
+        )
+
+        by_line = {obj["line"]: obj for obj in objects}
+        idle_first = subtitle_segment_visual_style(objects[0] | {"stt_ensemble_needs_llm_review": True}, active=False, hover=False, quality_filter="all")
+        idle_second = subtitle_segment_visual_style(objects[1] | {"stt_ensemble_needs_llm_review": True}, active=False, hover=False, quality_filter="all")
+        self.assertEqual(by_line[0]["fill"], idle_first["fill"])
+        self.assertEqual(by_line[1]["fill"], idle_second["fill"])
+        self.assertEqual(by_line[0]["borderWidth"], 1)
+        self.assertEqual(by_line[1]["borderWidth"], 1)
 
     def test_manual_confirmed_subtitle_keeps_green_border_under_filters(self):
         seg = {
@@ -307,35 +360,22 @@ class TimelineSegmentColorTests(unittest.TestCase):
         generation = subtitle_generation_silence_segments_for_editor(gap_segments, 4.0)
         detection = voice_activity_segments_for_editor([], [], gap_segments, 4.0)
 
-        self.assertEqual(
-            generation,
-            [{
-                "start": 1.0,
-                "end": 3.0,
-                "kind": "generation_silence",
-                "label": "무음구간",
-                "color": "#FF6B6B",
-                "priority": 78,
-                "alpha": 138,
-            }],
-        )
-        self.assertTrue(any(item["kind"] == "linked_silence" for item in detection))
+        self.assertEqual(generation, [])
         self.assertEqual(
             detection,
             [{
-                "start": 1.0,
-                "end": 3.0,
-                "kind": "linked_silence",
-                "label": "무음",
+                "start": 0.0,
+                "end": 4.0,
+                "kind": "idle",
+                "label": "음성",
                 "color": "#34C759",
-                "priority": 82,
-                "alpha": 142,
-                "source": "silence",
+                "priority": 0,
+                "alpha": 92,
+                "source": "subtitle_detection",
                 "score": None,
-                "selection_state": "linked_silence",
+                "selection_state": "",
             }],
         )
-        self.assertNotEqual(generation[0]["label"], detection[0]["label"])
 
     def test_analysis_lane_keeps_short_silence_ranges_visible(self):
         markers = editor_analysis_markers(

@@ -387,6 +387,28 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_timeline_click_nearest_start_lookup_avoids_full_segment_iteration(self):
+        class GuardedSegments(list):
+            def __iter__(self):
+                raise AssertionError("nearest-start lookup should use cached indices, not full iteration")
+
+        editor = _ClickEditor()
+        first = {"line": 0, "start": 0.0, "end": 1.0, "text": "첫 자막"}
+        second = {"line": 10, "start": 8.0, "end": 9.0, "text": "클릭한 자막"}
+        guarded = GuardedSegments([first, second])
+        cache = {
+            "segments": guarded,
+            "starts": [0.0, 8.0],
+            "visible_segments": guarded,
+            "visible_starts": [0.0, 8.0],
+            "line_map": {0: first, 10: second},
+            "line_numbers": [0, 10],
+        }
+
+        seg = editor._segment_for_timeline_click(0, 8.4, cache)
+
+        self.assertIs(seg, second)
+
     def test_timeline_click_with_lock_edit_does_not_focus_or_move_editor_cursor(self):
         editor = _ClickEditor()
         editor._segments = [
@@ -801,6 +823,75 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_seg_time_changed_with_gap_keeps_resized_subtitle_when_attaching_to_previous_end(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._snapshot_timeline_view_for_resize = Mock(return_value={})
+        editor._redraw_timeline_preserve_resize_view = Mock()
+        editor.timeline = SimpleNamespace(
+            _begin_subtitle_resize_keep_view=Mock(),
+            _finish_subtitle_resize_keep_view=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n\n메인 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            gap = editor.text_edit.document().findBlockByNumber(1)
+            second = editor.text_edit.document().findBlockByNumber(2)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            gap.setUserData(SubtitleBlockData("00", 1.0, True, end_sec=2.0))
+            second.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=3.0))
+
+            editor._on_seg_time_changed(2, 1.0, 3.0, "square_left")
+            self.app.processEvents()
+
+            resized = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막", "메인 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in resized], [
+                (0.0, 1.0, "앞 자막"),
+                (1.0, 3.0, "메인 자막"),
+            ])
+        finally:
+            editor.text_edit.close()
+
+    def test_seg_time_changed_with_gap_does_not_delete_resized_anchor_when_overwriting_previous(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._snapshot_timeline_view_for_resize = Mock(return_value={})
+        editor._redraw_timeline_preserve_resize_view = Mock()
+        editor.timeline = SimpleNamespace(
+            _begin_subtitle_resize_keep_view=Mock(),
+            _finish_subtitle_resize_keep_view=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n\n메인 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            gap = editor.text_edit.document().findBlockByNumber(1)
+            second = editor.text_edit.document().findBlockByNumber(2)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            gap.setUserData(SubtitleBlockData("00", 1.0, True, end_sec=2.0))
+            second.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=3.0))
+
+            editor._on_seg_time_changed(2, 0.0, 3.0, "square_left")
+            self.app.processEvents()
+
+            resized = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["메인 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in resized], [
+                (0.0, 3.0, "메인 자막"),
+            ])
+        finally:
+            editor.text_edit.close()
+
     def test_center_drag_right_preserves_duration_and_trims_overwritten_next_subtitle(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0
@@ -965,6 +1056,28 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_get_current_segments_drops_overflow_gap_and_clamps_to_clip_duration(self):
+        editor = _DummyEditor()
+        editor.video_fps = 30.0
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("마지막 자막\n")
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            trailing_gap = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 8.0, False, end_sec=12.0))
+            trailing_gap.setUserData(SubtitleBlockData("00", 12.0, True, end_sec=15.0))
+
+            rows = editor._get_current_segments(force_rebuild=True)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["text"], "마지막 자막")
+            self.assertAlmostEqual(float(rows[0]["start"]), 8.0)
+            self.assertAlmostEqual(float(rows[0]["end"]), 10.0)
+        finally:
+            editor.text_edit.close()
+
     def test_canvas_speaker_split_preserves_start_and_switches_speaker(self):
         editor = _DummyEditor()
         editor.settings = {"spk1_id": "00", "spk2_id": "01"}
@@ -1046,7 +1159,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
         try:
             with patch(
-                "ui.editor.editor_segments.build_segment_lookup",
+                "ui.editor.editor_segments_text_ops.build_segment_lookup",
                 side_effect=AssertionError("plain text edits should not rebuild every segment lookup"),
             ):
                 changed = editor._update_subtitle_memory_line_text(0, "수정")
@@ -2111,6 +2224,49 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             editor.timeline.follow_playhead.assert_not_called()
             editor.video_player.set_subtitle_display_time.assert_called_once_with(27.0)
             self.assertEqual(editor._playhead_display_sec, 27.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_playhead_sync_uses_smoothed_display_for_timeline_follow(self):
+        editor = _PlaybackEditor()
+        playing_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=playing_state),
+            position=Mock(return_value=10_200),
+            duration=Mock(return_value=60_000),
+        )
+        editor.video_player = SimpleNamespace(
+            media_player=player,
+            current_playback_frame_time=Mock(return_value=(306, 10.2)),
+            set_subtitle_display_time=Mock(),
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=10.0, _edit_active=False, set_active=Mock()),
+            follow_playhead_centered=Mock(),
+            follow_playhead=Mock(),
+            set_active=Mock(),
+        )
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("자막")
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._active_seg_start = None
+        editor._segments = [{"start": 10.0, "end": 11.0, "line": 0, "text": "자막"}]
+        editor._playhead_display_sec = 10.0
+        editor._playhead_anchor_global_sec = 10.0
+        editor._playhead_anchor_mono = 100.0
+        editor._last_playhead_smooth_tick = 100.0
+
+        try:
+            with patch("ui.editor.editor_timeline_video.time.monotonic", return_value=100.016):
+                editor._sync_playhead()
+
+            follow_sec = editor.timeline.follow_playhead_centered.call_args.args[0]
+            editor.timeline.follow_playhead.assert_not_called()
+            self.assertGreater(follow_sec, 10.0)
+            self.assertLess(follow_sec, 10.2)
+            editor.video_player.set_subtitle_display_time.assert_called_once_with(10.2)
+            self.assertEqual(editor._playhead_display_sec, follow_sec)
         finally:
             editor.text_edit.close()
 

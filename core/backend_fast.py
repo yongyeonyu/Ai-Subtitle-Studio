@@ -140,8 +140,7 @@ class CoreBackendFast(CoreBackend):
         self.video_processor.clear_fast_mode_overrides()
         get_logger().log("  🎯 정확도 우선: 오토 오디오 + STT 앙상블 + LLM 검수 적용")
 
-        if hasattr(self.ui, '_sig_update_queue'):
-            self.ui._sig_update_queue.emit(queue_index, "⏳ 오디오 추출 중", "", "", "")
+        self._emit_queue_status(queue_index, "⏳ 오디오 추출 중", "", "", "")
         self._ui_emit("_sig_editor_processing_stage", "⏳ 오디오 추출 중")
 
         res = self._validate_audio_extract_result(
@@ -150,8 +149,7 @@ class CoreBackendFast(CoreBackend):
         )
         if not res:
             get_logger().log(f"❌ 오디오 추출 실패: {vname}")
-            if hasattr(self.ui, '_sig_update_queue'):
-                self.ui._sig_update_queue.emit(queue_index, "❌ 추출 실패", "", "", "")
+            self._emit_queue_status(queue_index, "❌ 추출 실패", "", "", "")
             return False
 
         self.video_processor.clear_fast_mode_overrides()
@@ -197,9 +195,8 @@ class CoreBackendFast(CoreBackend):
             self._expected_map = getattr(self, "_expected_map", {})
             self._expected_map[target_file] = float(expected_time) if expected_time and expected_time > 0 else -1.0
 
-            if hasattr(self.ui, '_sig_update_queue'):
-                eta_str = str(expected_time) if expected_time > 0 else "예상불가"
-                self.ui._sig_update_queue.emit(queue_index, "🎯 자막 생성 중", eta_str, "", "")
+            eta_str = str(expected_time) if expected_time > 0 else "예상불가"
+            self._emit_queue_status(queue_index, "🎯 자막 생성 중", eta_str, "", "")
             self._ui_emit("_sig_editor_processing_stage", "🎯 자막 생성 중")
             process_start_time = time.time()
 
@@ -292,8 +289,21 @@ class CoreBackendFast(CoreBackend):
                     def _llm_progress(payload):
                         self._ui_emit("_sig_set_llm_review_segment", dict(payload or {}))
 
+                    def _processing_preview(payload):
+                        data = dict(payload or {})
+                        self._emit_processing_preview_segments(
+                            str(data.get("stage", "") or ""),
+                            str(data.get("stage_label", data.get("stage", "")) or ""),
+                            list(data.get("segments") or []),
+                        )
+
                     self._emit_processing_stage(queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
-                    opt = optimize_segments(chunk_segs, vad_segments=vad_segs, llm_progress_callback=_llm_progress)
+                    opt = optimize_segments(
+                        chunk_segs,
+                        vad_segments=vad_segs,
+                        llm_progress_callback=_llm_progress,
+                        stage_segments_callback=_processing_preview,
+                    )
                 except Exception as exc:
                     get_logger().log(f"  ⚠️ LLM 최적화 실패, STT 결과 유지: {exc}")
                     opt = chunk_segs
@@ -312,9 +322,24 @@ class CoreBackendFast(CoreBackend):
                         context="정확도 우선 정식 컷",
                         include_provisional=False,
                     )
+                    self._emit_processing_preview_segments(
+                        "cut_boundary_magnetize",
+                        "컷 경계 자석 보정",
+                        opt,
+                    )
                 if hasattr(self, "_split_by_saved_cut_boundaries"):
                     opt = self._split_by_saved_cut_boundaries(opt, context="정확도 우선 최종 자막")
+                    self._emit_processing_preview_segments(
+                        "cut_boundary_split",
+                        "컷 경계 분할",
+                        opt,
+                    )
                 opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="정확도 우선 배치")
+                self._emit_processing_preview_segments(
+                    "vad_align",
+                    "VAD 경계 정렬",
+                    opt,
+                )
                 opt = apply_final_gap_settings(opt, force=True)
                 if hasattr(self, "_magnetize_by_saved_cut_boundaries"):
                     opt = self._magnetize_by_saved_cut_boundaries(
@@ -362,8 +387,7 @@ class CoreBackendFast(CoreBackend):
                     pct = int(((queue_index + (c_idx / t_total if t_total > 0 else 0)) / total_files) * 100)
 
 
-                if hasattr(self.ui, '_sig_update_queue_header'):
-                    self.ui._sig_update_queue_header.emit(queue_index + 1, total_files, pct, "")
+                self._emit_queue_header(queue_index + 1, total_files, pct, "")
 
                 if not chunk_segs:
                     if hasattr(self.ui, '_sig_update_status'):
@@ -391,43 +415,37 @@ class CoreBackendFast(CoreBackend):
         t2.join()
 
         # ── 큐 즉시 업데이트 ──
-        if hasattr(self.ui, '_sig_update_queue'):
+        try:
+            elapsed = time.time() - process_start_time
+            exp = -1.0
             try:
-                elapsed = time.time() - process_start_time
+                exp = getattr(self, "_expected_map", {}).get(target_file, -1.0)
+            except Exception:
                 exp = -1.0
-                try:
-                    exp = getattr(self, "_expected_map", {}).get(target_file, -1.0)
-                except Exception:
-                    exp = -1.0
 
-                def _fmt(sec):
-                    m, s = divmod(int(sec), 60)
-                    return f"{m:02d}:{s:02d}"
+            def _fmt(sec):
+                m, s = divmod(int(sec), 60)
+                return f"{m:02d}:{s:02d}"
 
-                if exp and exp > 0:
-                    eta_done = f"{_fmt(elapsed)} / {_fmt(exp)}"
-                else:
-                    eta_done = f"{_fmt(elapsed)} / -"
+            if exp and exp > 0:
+                eta_done = f"{_fmt(elapsed)} / {_fmt(exp)}"
+            else:
+                eta_done = f"{_fmt(elapsed)} / -"
 
-                if hasattr(self.ui, '_sig_update_queue'):
-                    try:
-                        self.ui._sig_update_queue.emit(queue_index, "저장 준비 중", eta_done, "", "")
-                    except RuntimeError:
-                        pass
-
-            except RuntimeError:
-                pass
+            self._emit_queue_status(queue_index, "저장 준비 중", eta_done, "", "")
+        except RuntimeError:
+            pass
 
         # ── 큐 헤더 진행률 갱신 ──
         total_exp = getattr(self, 'total_expected_time', 0.0)
-        if total_exp > 0 and hasattr(self.ui, '_sig_update_queue_header'):
+        if total_exp > 0:
             done_exp = 0.0
             exp_map = getattr(self, '_expected_map', {})
             for j in range(queue_index + 1):
                 f = self.files_to_process[j]
                 done_exp += exp_map.get(f, 0.0) if exp_map.get(f, 0.0) > 0 else 0.0
             pct = min(100, int((done_exp / total_exp) * 100))
-            self.ui._sig_update_queue_header.emit(queue_index + 1, len(self.files_to_process), pct, "")             
+            self._emit_queue_header(queue_index + 1, len(self.files_to_process), pct, "")
 
         # ── 히스토리 기록 ──
         try:
@@ -465,26 +483,18 @@ class CoreBackendFast(CoreBackend):
                 if not self._active:
                     return
 
-                if hasattr(self.ui, '_sig_update_queue_header'):
-                    self.ui._sig_update_queue_header.emit(i + 1, total_files, 0, "")
+                self._emit_queue_header(i + 1, total_files, 0, "")
 
                 ok = self._process_one_fast(target_file, i)
                 # B7 fix: explicit queue status after each file
-                if ok and hasattr(self.ui, '_sig_update_queue'):
-                    try:
-                        self.ui._sig_update_queue.emit(i, "✅ 완료", "", "", "")
-                    except RuntimeError:
-                        pass
-                elif not ok and hasattr(self.ui, '_sig_update_queue'):
-                    try:
-                        self.ui._sig_update_queue.emit(i, "❌ 오류", "", "", "")
-                    except RuntimeError:
-                        pass
+                if ok:
+                    self._emit_queue_status(i, "✅ 완료", "", "", "")
+                else:
+                    self._emit_queue_status(i, "❌ 오류", "", "", "")
                 if ok:
                     success_count += 1
 
-            if hasattr(self.ui, '_sig_update_queue_header'):
-                self.ui._sig_update_queue_header.emit(total_files, total_files, 100, "")
+            self._emit_queue_header(total_files, total_files, 100, "")
 
             if getattr(self.ui, '_is_auto_pipeline', False):
                 self._send_ntfy_notification(

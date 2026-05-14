@@ -123,16 +123,27 @@ def find_segment_for_line_lookup(lookup: dict | None, line_num: int):
 
 def get_sub_block_indices(doc, line_num, start_sec, tol=0.05):
     """같은 start_sec를 공유하는 연속 블록 인덱스 리스트 반환"""
+    anchor = doc.findBlockByNumber(int(line_num))
+    anchor_ud = anchor.userData() if anchor.isValid() else None
+    if not isinstance(anchor_ud, SubtitleBlockData):
+        return [line_num]
+    if bool(anchor_ud.is_gap):
+        return [line_num]
+
+    anchor_start = float(getattr(anchor_ud, "start_sec", start_sec))
+    anchor_end = getattr(anchor_ud, "end_sec", None)
     indices = [line_num]
     for i in range(line_num + 1, doc.blockCount()):
         b = doc.findBlockByNumber(i)
         ud = b.userData()
-        if (isinstance(ud, SubtitleBlockData)
-                and not ud.is_gap
-                and abs(ud.start_sec - start_sec) < tol):
-            indices.append(i)
-        else:
+        if not (isinstance(ud, SubtitleBlockData) and not ud.is_gap):
             break
+        if abs(float(ud.start_sec) - anchor_start) >= tol:
+            break
+        next_end = getattr(ud, "end_sec", None)
+        if anchor_end is not None and next_end is not None and abs(float(next_end) - float(anchor_end)) >= tol:
+            break
+        indices.append(i)
     return indices
 
 

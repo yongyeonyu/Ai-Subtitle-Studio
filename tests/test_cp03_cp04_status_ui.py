@@ -24,15 +24,33 @@ from ui.menu_bar import StatusRail
 from ui.queue_widget import QueueMixin
 
 
-class _DummyHome(QObject, HomeUIMixin):
+class _DummyHome(QObject, QueueMixin, HomeUIMixin):
     def __init__(self, editor):
         super().__init__()
         self._editor = editor
         self.saved_status_label = QLabel("")
         self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
+        self.queue_header_lbl = QLabel("")
+        self.queue_table = QTableWidget(0, 5)
+        self._current_file_idx = 0
+        self._total_files = 0
+        self._real_pct = 0
+        self._expected_seconds = {}
+        self._file_start_times = {}
+        self._file_complete_times = {}
+        self._queue_row_cache = []
+        self._sidebar_queue_cache_items = []
+        self._sidebar_queue_cache_header = ""
+        self._live_timer = type("_Timer", (), {"start": lambda _self, _interval: None, "stop": lambda _self: None})()
 
     def _active_editor(self):
         return self._editor
+
+    def _show_bottom_queue_table(self):
+        pass
+
+    def _sync_sidebar_queue_panel(self):
+        pass
 
 
 class Cp03Cp04StatusUiTests(unittest.TestCase):
@@ -176,6 +194,42 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertTrue(nav_item["progressVisible"])
         self.assertEqual(nav_item["progressPercent"], 100)
         self.assertEqual(nav_item["id"], "generation_status")
+
+    def test_generation_progress_snapshot_appends_completion_quality_score(self):
+        state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
+        status_lbl = QLabel("✨ 자막 생성 완료")
+        editor = SimpleNamespace(
+            sm=state_manager,
+            _is_ai_processing=False,
+            status_lbl=status_lbl,
+            settings={},
+            _quality_summary=None,
+            _get_current_segments=lambda: [
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "자막",
+                    "subtitle_quality_self_review_summary": {
+                        "overall_score": 65.604955,
+                    },
+                }
+            ],
+        )
+        home = _DummyHome(editor)
+        home._current_file_idx = 1
+        home._total_files = 1
+        home._real_pct = 100
+        home._expected_seconds = {0: 300.0}
+        home._file_start_times = {0: 1000.0}
+        home._file_complete_times = {0: 1280.0}
+        home.queue_table = QTableWidget(1, 5)
+        home.queue_table.setItem(0, 0, QTableWidgetItem("✅ 완료"))
+        home.queue_table.setItem(0, 4, QTableWidgetItem("04:40 / 05:00"))
+
+        with patch("ui.home_sidebar.time.time", return_value=1400.0):
+            snapshot = home._generation_progress_snapshot()
+
+        self.assertEqual(snapshot["subtitle"], "04:40 / 05:00 · 65.60")
 
     def test_status_rail_uses_green_flash_and_short_korean_stages(self):
         rail = StatusRail()
@@ -574,7 +628,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             )
             editor = DummyEditor(main, media_path)
 
-            with patch("ui.editor.editor_pipeline.create_project", return_value=project_path):
+            with patch("ui.editor.editor_pipeline_startup.create_project", return_value=project_path):
                 editor._prepare_cut_boundaries_before_start()
 
         self.assertEqual(backend.calls, [(project_path, [media_path])])
@@ -703,6 +757,9 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             def _apply_text_editor_lock_state(self):
                 self.apply_lock_calls += 1
 
+            def _apply_processing_canvas_lock_state(self):
+                pass
+
         editor = _Editor()
 
         editor._on_state_machine_update("MODE_AI_ALL", "ST_PROC", True, True, "처리중 (1/10)", "■ 정지", True)
@@ -739,6 +796,35 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         editor._apply_text_editor_lock_state()
 
         self.assertEqual(editor.text_edit.selection_locked_calls, [True])
+
+    def test_processing_lock_updates_canvas_input_lock(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        class _Canvas:
+            def __init__(self):
+                self.properties = {}
+                self._editor_processing_input_locked = False
+
+            def setProperty(self, key, value):
+                self.properties[key] = value
+
+        class _Timeline:
+            def __init__(self):
+                self.canvas = _Canvas()
+
+        class _Editor:
+            _apply_processing_canvas_lock_state = EditorWidget._apply_processing_canvas_lock_state
+
+            def __init__(self):
+                self.timeline = _Timeline()
+                self.sm = SimpleNamespace(is_locked=True)
+
+        editor = _Editor()
+
+        editor._apply_processing_canvas_lock_state()
+
+        self.assertTrue(editor.timeline.canvas._editor_processing_input_locked)
+        self.assertTrue(editor.timeline.canvas.properties["editor_processing_input_locked"])
 
     def test_queue_completion_status_completes_editor_state(self):
         class DummyQueue(QueueMixin):
@@ -1192,6 +1278,44 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
 
         self.assertEqual(queue.queue_table.item(0, 0).text(), "대기 중")
         self.assertEqual(queue.queue_table.item(1, 0).text(), "대기 중")
+
+    def test_queue_update_methods_accept_structured_payload_dicts(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"])
+        queue.update_queue_status(
+            {
+                "row": 1,
+                "status": "대기 중",
+                "eta": "20",
+                "info": "1920x1080",
+                "duration": "00:10",
+            }
+        )
+        queue.update_queue_header({"idx": 2, "total": 2, "pct": 50, "eta": "2분 10초"})
+
+        self.assertEqual(queue.queue_table.item(1, 2).text(), "1920x1080")
+        self.assertEqual(queue.queue_table.item(1, 3).text(), "00:10")
+        self.assertEqual(queue.queue_table.item(1, 4).text(), "00:20")
+        self.assertIn("(2/2) - 50%", queue.queue_header_lbl.text())
 
     def test_late_eta_header_does_not_rewind_current_queue_index(self):
         class DummyTimer:

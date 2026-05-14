@@ -23,6 +23,8 @@ from core.audio.npu_acceleration import prefer_npu_whisper_model  # noqa: E402
 from core.audio.stt_backend_router import select_stt_backend  # noqa: E402
 from core.audio.stt_candidate_scorer import annotate_stt_candidates, average_stt_score  # noqa: E402
 from core.engine import subtitle_engine  # noqa: E402
+from core.engine.subtitle_text_policy import normalize_subtitle_text_lines, split_visible_len  # noqa: E402
+from core.mode_policy import apply_mode_runtime_settings  # noqa: E402
 from core.native_text_similarity import character_error_rate, similarity_ratio  # noqa: E402
 from core.performance import hardware_profile  # noqa: E402
 from core.runtime import config  # noqa: E402
@@ -605,6 +607,259 @@ def benchmark_variants(base_settings: dict[str, Any]) -> list[Variant]:
     ]
 
 
+def _infer_benchmark_llm_provider(model: str, fallback: str = "ollama") -> str:
+    label = str(model or "").strip().lower()
+    if not label:
+        return str(fallback or "ollama").strip() or "ollama"
+    if "codex" in label or "openai" in label or label.startswith("gpt-"):
+        return "openai"
+    return str(fallback or "ollama").strip() or "ollama"
+
+
+def _mode_profile_settings(
+    base_settings: dict[str, Any],
+    mode: str,
+    *,
+    llm_model: str = "",
+) -> dict[str, Any]:
+    settings = dict(base_settings)
+    settings["_ignore_saved_quality_preset_once"] = True
+    settings["subtitle_mode"] = mode
+    settings["mode"] = mode
+    settings["user_facing_mode"] = mode
+    if mode == "high" and str(llm_model or "").strip():
+        settings["selected_model"] = str(llm_model).strip()
+        settings["selected_llm_provider"] = _infer_benchmark_llm_provider(
+            settings["selected_model"],
+            str(settings.get("selected_llm_provider") or "ollama"),
+        )
+        settings["subtitle_llm_user_selected"] = True
+    return apply_mode_runtime_settings(settings)
+
+
+def _mode_profile_method(settings: dict[str, Any]) -> str:
+    if bool(settings.get("stt_ensemble_enabled")):
+        if bool(settings.get("stt_ensemble_parallel_enabled")):
+            return "parallel_ensemble"
+        if bool(settings.get("stt_ensemble_selective_enabled")) or bool(settings.get("stt_selective_secondary_recheck_enabled")):
+            return "selective_ensemble"
+    if bool(settings.get("stt_word_timestamps_precision_enabled")) or bool(settings.get("stt_word_timestamp_precision_pass")):
+        return "stt1_word_precision"
+    return "stt1_only"
+
+
+def benchmark_mode_profiles(base_settings: dict[str, Any], *, llm_model: str = "") -> list[Variant]:
+    labels = {
+        "fast": "Fast 모드 실제 설정(STT1 + LoRA 중심)으로 실행합니다.",
+        "auto": "Auto 모드 실제 설정(selective word precision + Deep)으로 실행합니다.",
+        "high": "High 모드 실제 설정(selective word precision + Deep + mode LLM)으로 실행합니다.",
+    }
+    variants: list[Variant] = []
+    for mode in ("fast", "auto", "high"):
+        mode_settings = _mode_profile_settings(base_settings, mode, llm_model=llm_model)
+        model_label = str(mode_settings.get("selected_model") or "").strip()
+        run_llm = mode == "high" and bool(model_label and "사용 안함" not in model_label)
+        variants.append(
+            Variant(
+                name=f"mode_{mode}",
+                phase="mode_profile",
+                description=labels[mode],
+                method=_mode_profile_method(mode_settings),
+                overrides=mode_settings,
+                run_llm=run_llm,
+            )
+        )
+    return variants
+
+
+def _deep_ablation_overrides(*, enabled: bool) -> dict[str, Any]:
+    value = bool(enabled)
+    return {
+        "deep_subtitle_policy_enabled": value,
+        "deep_segment_setting_policy_enabled": value,
+        "deep_stt_candidate_selector_enabled": value,
+        "deep_timing_adjustment_enabled": value,
+        "subtitle_output_selector_enabled": value,
+    }
+
+
+def benchmark_mode_lora_deep_profiles(base_settings: dict[str, Any], *, llm_model: str = "") -> list[Variant]:
+    labels = {
+        "fast": "Fast 모드에서 LoRA/Deep 위치를 비교합니다.",
+        "auto": "Auto 모드에서 LoRA/Deep 위치를 비교합니다.",
+        "high": "High 모드에서 LoRA/Deep 위치를 비교합니다.",
+    }
+    variants: list[Variant] = []
+    for mode in ("fast", "auto", "high"):
+        base_mode_settings = _mode_profile_settings(base_settings, mode, llm_model=llm_model)
+        model_label = str(base_mode_settings.get("selected_model") or "").strip()
+        run_llm = mode == "high" and bool(model_label and "사용 안함" not in model_label)
+        definitions: list[tuple[str, str, dict[str, Any]]] = [
+            (
+                f"mode_{mode}_baseline",
+                "현재 모드 기본 LoRA/Deep 배치를 그대로 사용합니다.",
+                {},
+            ),
+            (
+                f"mode_{mode}_lora_off",
+                "LoRA micro-merge를 꺼서 STT 원형과 Deep만 남깁니다.",
+                {"subtitle_lora_micro_merge_enabled": False},
+            ),
+        ]
+        if mode == "fast":
+            definitions.extend(
+                [
+                    (
+                        "mode_fast_deep_on",
+                        "Fast 모드에 Deep/출력선택만 추가해서 STT1 + LoRA + Deep을 비교합니다.",
+                        _deep_ablation_overrides(enabled=True),
+                    ),
+                    (
+                        "mode_fast_lora_off_deep_on",
+                        "Fast 모드에서 LoRA를 끄고 Deep만 추가한 대조군입니다.",
+                        {
+                            "subtitle_lora_micro_merge_enabled": False,
+                            **_deep_ablation_overrides(enabled=True),
+                        },
+                    ),
+                ]
+            )
+        else:
+            definitions.extend(
+                [
+                    (
+                        f"mode_{mode}_deep_off",
+                        "Deep/출력선택을 꺼서 LoRA만 남긴 대조군입니다.",
+                        _deep_ablation_overrides(enabled=False),
+                    ),
+                    (
+                        f"mode_{mode}_lora_deep_off",
+                        "LoRA와 Deep/출력선택을 모두 꺼서 STT timing 원형을 봅니다.",
+                        {
+                            "subtitle_lora_micro_merge_enabled": False,
+                            **_deep_ablation_overrides(enabled=False),
+                        },
+                    ),
+                ]
+            )
+        for name, description, extra_overrides in definitions:
+            mode_settings = dict(base_mode_settings)
+            mode_settings.update(extra_overrides)
+            variants.append(
+                Variant(
+                    name=name,
+                    phase="mode_lora_deep",
+                    description=f"{labels[mode]} {description}",
+                    method=_mode_profile_method(mode_settings),
+                    overrides=mode_settings,
+                    run_llm=run_llm,
+                )
+            )
+    return variants
+
+
+def benchmark_mode_lora_selective_profiles(base_settings: dict[str, Any], *, llm_model: str = "") -> list[Variant]:
+    labels = {
+        "fast": "Fast 모드에서 LoRA full/selective를 현재 기본값과 비교합니다.",
+        "auto": "Auto 모드에서 LoRA full/selective를 현재 기본값과 비교합니다.",
+        "high": "High 모드에서 LoRA full/selective를 현재 기본값과 비교합니다.",
+    }
+    variants: list[Variant] = []
+    for mode in ("fast", "auto", "high"):
+        base_mode_settings = _mode_profile_settings(base_settings, mode, llm_model=llm_model)
+        model_label = str(base_mode_settings.get("selected_model") or "").strip()
+        run_llm = mode == "high" and bool(model_label and "사용 안함" not in model_label)
+        definitions: list[tuple[str, str, dict[str, Any]]] = [
+            (
+                f"mode_{mode}_baseline",
+                "현재 모드 기본 설정을 그대로 사용합니다.",
+                {},
+            ),
+            (
+                f"mode_{mode}_lora_full",
+                "LoRA micro-merge를 전체 세그먼트에 다시 켭니다.",
+                {
+                    "subtitle_lora_micro_merge_enabled": True,
+                    "subtitle_lora_micro_merge_mode": "full",
+                },
+            ),
+            (
+                f"mode_{mode}_lora_selective",
+                "LoRA micro-merge를 low readability 구간에만 선택 적용합니다.",
+                {
+                    "subtitle_lora_micro_merge_enabled": True,
+                    "subtitle_lora_micro_merge_mode": "readability_selective",
+                },
+            ),
+        ]
+        for name, description, extra_overrides in definitions:
+            mode_settings = dict(base_mode_settings)
+            mode_settings.update(extra_overrides)
+            variants.append(
+                Variant(
+                    name=name,
+                    phase="mode_lora_selective",
+                    description=f"{labels[mode]} {description}",
+                    method=_mode_profile_method(mode_settings),
+                    overrides=mode_settings,
+                    run_llm=run_llm,
+                )
+            )
+    return variants
+
+
+def benchmark_mode_lora_packaging_profiles(base_settings: dict[str, Any], *, llm_model: str = "") -> list[Variant]:
+    labels = {
+        "fast": "Fast 모드에서 timing-0 LoRA packaging만 현재 기본값과 비교합니다.",
+        "auto": "Auto 모드에서 timing-0 LoRA packaging만 현재 기본값과 비교합니다.",
+        "high": "High 모드에서 timing-0 LoRA packaging만 현재 기본값과 비교합니다.",
+    }
+    variants: list[Variant] = []
+    for mode in ("fast", "auto", "high"):
+        base_mode_settings = _mode_profile_settings(base_settings, mode, llm_model=llm_model)
+        model_label = str(base_mode_settings.get("selected_model") or "").strip()
+        run_llm = mode == "high" and bool(model_label and "사용 안함" not in model_label)
+        definitions: list[tuple[str, str, dict[str, Any]]] = [
+            (
+                f"mode_{mode}_baseline",
+                "현재 모드 기본 설정을 그대로 사용합니다.",
+                {},
+            ),
+            (
+                f"mode_{mode}_packaging_full",
+                "LoRA micro-merge는 끄고, 후단 줄바꿈/카드 포장만 전체 세그먼트에 적용합니다.",
+                {
+                    "subtitle_lora_micro_merge_enabled": False,
+                    "subtitle_lora_packaging_enabled": True,
+                    "subtitle_lora_packaging_mode": "full",
+                },
+            ),
+            (
+                f"mode_{mode}_packaging_selective",
+                "LoRA micro-merge는 끄고, 후단 줄바꿈/카드 포장만 low readability 구간에 선택 적용합니다.",
+                {
+                    "subtitle_lora_micro_merge_enabled": False,
+                    "subtitle_lora_packaging_enabled": True,
+                    "subtitle_lora_packaging_mode": "readability_selective",
+                },
+            ),
+        ]
+        for name, description, extra_overrides in definitions:
+            mode_settings = dict(base_mode_settings)
+            mode_settings.update(extra_overrides)
+            variants.append(
+                Variant(
+                    name=name,
+                    phase="mode_lora_packaging",
+                    description=f"{labels[mode]} {description}",
+                    method=_mode_profile_method(mode_settings),
+                    overrides=mode_settings,
+                    run_llm=run_llm,
+                )
+            )
+    return variants
+
+
 def benchmark_audio_profiles(base_settings: dict[str, Any]) -> list[AudioProfile]:
     """Audio/VAD rescue profiles for low-confidence STT benchmarking.
 
@@ -872,7 +1127,195 @@ def score_against_reference(hypothesis: list[dict[str, Any]], reference: list[di
     }
 
 
+def _segment_duration(row: dict[str, Any]) -> float:
+    start = float(row.get("start", 0.0) or 0.0)
+    end = float(row.get("end", start) or start)
+    return max(0.001, end - start)
+
+
+def _readability_line_lengths(text: Any) -> list[int]:
+    normalized = normalize_subtitle_text_lines(str(text or ""))
+    lengths = [split_visible_len(line) for line in normalized.split("\n") if str(line or "").strip()]
+    return [int(length) for length in lengths if int(length) > 0]
+
+
+def _readability_target_line_count(total_chars: int, settings: dict[str, Any]) -> int:
+    target_chars = max(8, int(settings.get("subtitle_common_split_target_chars", 16) or 16))
+    target_lines = settings.get("subtitle_target_line_count")
+    try:
+        explicit = int(target_lines)
+    except (TypeError, ValueError):
+        explicit = 0
+    if explicit in (1, 2):
+        if total_chars <= max(10, target_chars - 2):
+            return 1
+        return explicit
+    if total_chars <= max(10, target_chars + 2):
+        return 1
+    return 2
+
+
+def _readability_line_count_score(line_count: int, target_lines: int, max_line_chars: int, hard_max: int) -> float:
+    if line_count <= 0:
+        return 0.0
+    if line_count > 2:
+        return max(0.0, 20.0 - (line_count - 3) * 5.0)
+    if target_lines == 1:
+        if line_count == 1:
+            return 100.0
+        return 82.0 if max_line_chars <= hard_max else 56.0
+    if line_count == 2:
+        return 100.0
+    return 84.0 if max_line_chars <= hard_max else 62.0
+
+
+def _readability_line_length_score(lengths: list[int], *, target_chars: int, hard_max: int) -> float:
+    if not lengths:
+        return 0.0
+    penalty = 0.0
+    for length in lengths:
+        penalty += max(0, length - hard_max) * 8.0
+        penalty += max(0, length - target_chars) * 2.5
+    return max(0.0, min(100.0, 100.0 - penalty))
+
+
+def _readability_balance_score(lengths: list[int], target_lines: int) -> float:
+    if not lengths:
+        return 0.0
+    if len(lengths) == 1:
+        return 100.0 if target_lines == 1 else 72.0
+    if len(lengths) != 2:
+        return 25.0
+    longest = max(lengths)
+    shortest = min(lengths)
+    if longest <= 0:
+        return 0.0
+    ratio = shortest / longest
+    return max(0.0, min(100.0, 35.0 + ratio * 65.0))
+
+
+def _readability_orphan_score(lengths: list[int], total_chars: int) -> float:
+    if len(lengths) < 2 or total_chars < 10:
+        return 100.0
+    shortest = min(lengths)
+    if shortest <= 2:
+        return 15.0
+    if shortest == 3:
+        return 35.0
+    if shortest == 4:
+        return 60.0
+    if shortest <= 5:
+        return 82.0
+    return 100.0
+
+
+def _readability_cps_score(cps: float, max_cps: float) -> float:
+    if max_cps <= 0.0:
+        return 100.0
+    if cps <= max_cps:
+        return 100.0
+    return max(0.0, min(100.0, 100.0 - (cps - max_cps) * 14.0))
+
+
+def score_readability(rows: list[dict[str, Any]], settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = dict(settings or {})
+    usable_rows = [dict(row) for row in rows if str(row.get("text", "") or "").strip()]
+    if not usable_rows:
+        return {
+            "readability_score": 0.0,
+            "avg_segment_readability": 0.0,
+            "avg_lines_per_segment": 0.0,
+            "avg_max_line_chars": 0.0,
+            "avg_cps": 0.0,
+            "two_line_segments": 0,
+            "over_two_line_segments": 0,
+            "hard_overflow_segments": 0,
+            "orphan_line_segments": 0,
+            "balanced_two_line_segments": 0,
+            "packaging_changed_segments": 0,
+        }
+
+    target_chars = max(8, int(settings.get("subtitle_common_split_target_chars", 16) or 16))
+    hard_max = max(target_chars, int(settings.get("subtitle_common_split_hard_max_chars", 24) or 24))
+    max_cps = max(0.0, float(settings.get("sub_max_cps", 12.0) or 12.0))
+    duration_weighted_score = 0.0
+    duration_total = 0.0
+    line_total = 0
+    max_line_char_total = 0
+    cps_total = 0.0
+    two_line_segments = 0
+    over_two_line_segments = 0
+    hard_overflow_segments = 0
+    orphan_line_segments = 0
+    balanced_two_line_segments = 0
+    packaging_changed_segments = 0
+
+    for row in usable_rows:
+        line_lengths = _readability_line_lengths(row.get("text"))
+        if not line_lengths:
+            continue
+        line_count = len(line_lengths)
+        total_chars = sum(line_lengths)
+        max_line_chars = max(line_lengths)
+        cps = total_chars / _segment_duration(row)
+        target_lines = _readability_target_line_count(total_chars, settings)
+
+        line_count_score = _readability_line_count_score(line_count, target_lines, max_line_chars, hard_max)
+        line_length_score = _readability_line_length_score(line_lengths, target_chars=target_chars, hard_max=hard_max)
+        balance_score = _readability_balance_score(line_lengths, target_lines)
+        orphan_score = _readability_orphan_score(line_lengths, total_chars)
+        cps_score = _readability_cps_score(cps, max_cps)
+
+        segment_score = (
+            line_count_score * 0.24
+            + line_length_score * 0.28
+            + balance_score * 0.18
+            + orphan_score * 0.18
+            + cps_score * 0.12
+        )
+        duration = _segment_duration(row)
+        duration_weighted_score += segment_score * duration
+        duration_total += duration
+        line_total += line_count
+        max_line_char_total += max_line_chars
+        cps_total += cps
+        if line_count == 2:
+            two_line_segments += 1
+            longest = max(line_lengths)
+            shortest = min(line_lengths)
+            if longest > 0 and shortest / longest >= 0.72:
+                balanced_two_line_segments += 1
+        elif line_count > 2:
+            over_two_line_segments += 1
+        if max_line_chars > hard_max:
+            hard_overflow_segments += 1
+        if line_count >= 2 and total_chars >= 10 and min(line_lengths) <= 4:
+            orphan_line_segments += 1
+        if row.get("_lora_packaging_policy"):
+            packaging_changed_segments += 1
+
+    avg_segment_readability = duration_weighted_score / max(0.001, duration_total)
+    segment_count = max(1, len(usable_rows))
+    return {
+        "readability_score": round(avg_segment_readability, 3),
+        "avg_segment_readability": round(avg_segment_readability, 3),
+        "avg_lines_per_segment": round(line_total / segment_count, 3),
+        "avg_max_line_chars": round(max_line_char_total / segment_count, 3),
+        "avg_cps": round(cps_total / segment_count, 3),
+        "two_line_segments": two_line_segments,
+        "over_two_line_segments": over_two_line_segments,
+        "hard_overflow_segments": hard_overflow_segments,
+        "orphan_line_segments": orphan_line_segments,
+        "balanced_two_line_segments": balanced_two_line_segments,
+        "packaging_changed_segments": packaging_changed_segments,
+    }
+
+
 def _copy_chunk_dir(source: Path, target: Path) -> Path:
+    if not source.exists():
+        if target.exists():
+            return target
+        raise FileNotFoundError(source)
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)
     shutil.copytree(source, target)
@@ -1080,6 +1523,7 @@ def _run_variant(
         processor.release_runtime_models()
     elapsed = time.perf_counter() - started
     score = score_against_reference(final_rows, reference) if final_rows else {}
+    readability = score_readability(final_rows, settings) if final_rows else {}
     if score:
         score["avg_cps"] = round(_avg_cps(final_rows), 3)
         score["segment_count_delta"] = int(len(final_rows) - len(reference))
@@ -1096,12 +1540,17 @@ def _run_variant(
         "avg_stt_score": round(float(avg_stt_score), 3),
         "error": error,
         "quality": score,
+        "readability": readability,
         "settings": {
             key: settings.get(key)
             for key in (
+                "subtitle_mode",
+                "simple_operation_mode",
+                "stt_quality_preset",
                 "selected_whisper_model",
                 "selected_whisper_model_secondary",
                 "selected_model",
+                "selected_llm_provider",
                 "stt_ensemble_enabled",
                 "stt_ensemble_parallel_enabled",
                 "stt_ensemble_selective_enabled",
@@ -1110,16 +1559,32 @@ def _run_variant(
                 "stt_word_timestamps_mode",
                 "stt_word_timestamps_default_enabled",
                 "stt_word_timestamps_precision_enabled",
+                "stt_word_timestamps_precision_min_similarity",
+                "stt_word_timestamps_precision_max_timing_shift_sec",
                 "subtitle_lora_micro_merge_enabled",
+                "subtitle_lora_packaging_enabled",
+                "subtitle_lora_packaging_mode",
                 "sub_gap_break_sec",
                 "word_timing_gap_break_sec",
                 "continuous_threshold",
+                "gap_push_rate",
+                "gap_pull_rate",
+                "single_subtitle_end",
                 "vad_post_stt_align_enabled",
                 "vad_post_stt_edge_pad_sec",
                 "subtitle_cut_boundary_guard_enabled",
                 "subtitle_bundle_use_confirmed_cuts",
                 "subtitle_bundle_use_provisional_cuts",
                 "subtitle_llm_macro_chunk_enabled",
+                "subtitle_llm_context_boundary_refine_enabled",
+                "subtitle_llm_context_word_correction_enabled",
+                "subtitle_llm_context_max_pairs",
+                "subtitle_llm_context_require_risk_signal",
+                "deep_subtitle_policy_enabled",
+                "deep_timing_adjustment_enabled",
+                "subtitle_timing_anchor_max_start_lag_sec",
+                "subtitle_timing_anchor_max_end_lead_sec",
+                "subtitle_timing_anchor_max_end_lag_sec",
             )
         },
     }
@@ -1135,18 +1600,51 @@ def _run_variant(
     return row
 
 
-def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _rank_rows(
+    rows: list[dict[str, Any]],
+    *,
+    objective: str = "reference",
+    ranking_policy: str = "speed_weighted",
+) -> list[dict[str, Any]]:
     fastest = min((float(row.get("elapsed_sec", 0.0) or 0.0) for row in rows if not row.get("error")), default=0.0)
+    objective_key = "readability" if str(objective or "").strip().lower() == "readability" else "quality"
+    ranking_key = str(ranking_policy or "speed_weighted").strip().lower()
     ranked = []
     for row in rows:
         item = dict(row)
         quality = float(dict(row.get("quality") or {}).get("quality_score", 0.0) or 0.0)
+        readability = float(dict(row.get("readability") or {}).get("readability_score", 0.0) or 0.0)
         elapsed = float(row.get("elapsed_sec", 0.0) or 0.0)
         speed_score = 0.0 if elapsed <= 0.0 or fastest <= 0.0 else min(100.0, fastest / elapsed * 100.0)
         item["speed_score"] = round(speed_score, 3)
         item["quality_speed_score"] = round(quality * 0.82 + speed_score * 0.18, 3)
+        item["readability_speed_score"] = round(readability * 0.82 + speed_score * 0.18, 3)
+        if objective_key == "readability":
+            item["primary_score_name"] = "readability"
+            item["primary_score"] = round(readability, 3)
+            item["primary_speed_score"] = item["readability_speed_score"]
+        else:
+            item["primary_score_name"] = "quality"
+            item["primary_score"] = round(quality, 3)
+            item["primary_speed_score"] = item["quality_speed_score"]
+        item["ranking_policy"] = ranking_key
         ranked.append(item)
-    ranked.sort(key=lambda row: (float(row.get("quality_speed_score", 0.0) or 0.0), float(dict(row.get("quality") or {}).get("quality_score", 0.0) or 0.0)), reverse=True)
+    if ranking_key == "primary_first":
+        ranked.sort(
+            key=lambda row: (
+                float(row.get("primary_score", 0.0) or 0.0),
+                float(row.get("speed_score", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+    else:
+        ranked.sort(
+            key=lambda row: (
+                float(row.get("primary_speed_score", 0.0) or 0.0),
+                float(row.get("primary_score", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
     for rank, row in enumerate(ranked, start=1):
         row["rank"] = rank
     return ranked
@@ -1154,31 +1652,39 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _write_markdown(payload: dict[str, Any], output_path: Path) -> None:
     rows = payload.get("ranked_results") or []
+    objective = str(payload.get("objective") or "reference")
+    ranking_policy = str(payload.get("ranking_policy") or "speed_weighted")
     lines = [
         "# Subtitle Pipeline Variant Benchmark",
         "",
         f"- Media: `{payload.get('media')}`",
         f"- Reference: `{payload.get('reference_srt')}`",
         f"- Span: {payload.get('start_sec')}s ~ {payload.get('end_sec')}s",
+        f"- Objective: `{objective}`",
+        f"- Ranking policy: `{ranking_policy}`",
         f"- Created: {payload.get('created_at')}",
         "",
-        "| Rank | Variant | Phase | Time(s) | Quality | Speed | Q+Speed | Segs | ΔSegs | Avg CPS | CER | Timing MAE | Error |",
-        "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| Rank | Variant | Phase | Time(s) | Quality | Readability | Speed | Primary+Speed | Segs | ΔSegs | Avg CPS | Max Line | Orphans | CER | Timing MAE | Error |",
+        "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
         q = dict(row.get("quality") or {})
+        readability = dict(row.get("readability") or {})
         lines.append(
-            "| {rank} | `{name}` | {phase} | {elapsed:.3f} | {quality:.3f} | {speed:.3f} | {combo:.3f} | {segs} | {delta} | {cps:.3f} | {cer:.4f} | {timing:.3f} | {error} |".format(
+            "| {rank} | `{name}` | {phase} | {elapsed:.3f} | {quality:.3f} | {readability_score:.3f} | {speed:.3f} | {combo:.3f} | {segs} | {delta} | {cps:.3f} | {max_line:.3f} | {orphans} | {cer:.4f} | {timing:.3f} | {error} |".format(
                 rank=row.get("rank", ""),
                 name=row.get("name", ""),
                 phase=row.get("phase", ""),
                 elapsed=float(row.get("elapsed_sec", 0.0) or 0.0),
                 quality=float(q.get("quality_score", 0.0) or 0.0),
+                readability_score=float(readability.get("readability_score", 0.0) or 0.0),
                 speed=float(row.get("speed_score", 0.0) or 0.0),
-                combo=float(row.get("quality_speed_score", 0.0) or 0.0),
+                combo=float(row.get("primary_speed_score", 0.0) or 0.0),
                 segs=row.get("final_segments", 0),
                 delta=int(q.get("segment_count_delta", 0) or 0),
                 cps=float(q.get("avg_cps", 0.0) or 0.0),
+                max_line=float(readability.get("avg_max_line_chars", 0.0) or 0.0),
+                orphans=int(readability.get("orphan_line_segments", 0) or 0),
                 cer=float(q.get("cer", 0.0) or 0.0),
                 timing=float(q.get("timing_mae_sec", 0.0) or 0.0),
                 error=str(row.get("error") or "").replace("|", "/")[:90],
@@ -1188,13 +1694,31 @@ def _write_markdown(payload: dict[str, Any], output_path: Path) -> None:
     if rows:
         best = rows[0]
         lines.append(
-            f"Recommended current winner: `{best.get('name')}` with quality-speed score {best.get('quality_speed_score')}."
+            f"Recommended current winner: `{best.get('name')}` with {best.get('primary_score_name')} score {best.get('primary_score')} (ranking policy `{ranking_policy}`)."
         )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark subtitle pipeline order/gating variants on a real 3-minute fixture.")
+    parser.add_argument(
+        "--suite",
+        choices=["variants", "modes", "mode-lora-deep", "mode-lora-selective", "mode-lora-packaging"],
+        default="variants",
+        help="Run historical tuning variants, exact Fast/Auto/High mode profiles, or mode-specific LoRA ablations.",
+    )
+    parser.add_argument(
+        "--objective",
+        choices=["reference", "readability"],
+        default="reference",
+        help="Rank variants by reference quality or by display readability heuristics.",
+    )
+    parser.add_argument(
+        "--ranking-policy",
+        choices=["auto", "speed_weighted", "primary_first"],
+        default="auto",
+        help="Ranking rule. Auto uses quality/readability-first for mode suites and speed-weighted ranking elsewhere.",
+    )
     parser.add_argument("--media", default=str(DEFAULT_MEDIA), help="Benchmark media path.")
     parser.add_argument("--reference-srt", default=str(DEFAULT_REFERENCE), help="Reference SRT path.")
     parser.add_argument("--start-sec", type=float, default=0.0)
@@ -1240,7 +1764,16 @@ def main() -> int:
         base_settings["selected_model"] = str(args.llm_model).strip()
     if str(args.cached_raw_segments or "").strip():
         base_settings["_benchmark_cached_raw_segments_path"] = str(Path(args.cached_raw_segments).expanduser())
-    variants = benchmark_variants(base_settings)
+    if args.suite == "modes":
+        variants = benchmark_mode_profiles(base_settings, llm_model=str(args.llm_model or "").strip())
+    elif args.suite == "mode-lora-deep":
+        variants = benchmark_mode_lora_deep_profiles(base_settings, llm_model=str(args.llm_model or "").strip())
+    elif args.suite == "mode-lora-selective":
+        variants = benchmark_mode_lora_selective_profiles(base_settings, llm_model=str(args.llm_model or "").strip())
+    elif args.suite == "mode-lora-packaging":
+        variants = benchmark_mode_lora_packaging_profiles(base_settings, llm_model=str(args.llm_model or "").strip())
+    else:
+        variants = benchmark_variants(base_settings)
     if args.variants:
         wanted = set(args.variants)
         variants = [variant for variant in variants if variant.name in wanted]
@@ -1283,14 +1816,15 @@ def main() -> int:
             chunk_source = Path(chunk_dir_text)
             if not chunk_source.exists():
                 raise RuntimeError(f"audio chunk extraction failed for {profile.name}: {chunk_source}")
+            seed_chunk_source = _copy_chunk_dir(chunk_source, work_dir / "_seed_chunks" / profile.name)
             vad_count = len(_load_vad(chunk_source))
             audio_extracts.append(
                 {
                     "profile": profile.name,
                     "description": profile.description,
                     "elapsed_sec": round(extract_elapsed, 3),
-                    "audio_chunk_dir": str(chunk_source),
-                    "chunk_wavs": _chunk_wav_count(chunk_source),
+                    "audio_chunk_dir": str(seed_chunk_source),
+                    "chunk_wavs": _chunk_wav_count(seed_chunk_source),
                     "vad_segments": vad_count,
                     "settings": {
                         key: profile_settings.get(key)
@@ -1321,7 +1855,7 @@ def main() -> int:
                 )
                 row = _run_variant(
                     profiled_variant,
-                    chunk_source=chunk_source,
+                    chunk_source=seed_chunk_source,
                     work_dir=profile_work_dir,
                     base_settings=profile_settings,
                     reference=reference_rows,
@@ -1329,7 +1863,7 @@ def main() -> int:
                 row["audio_profile"] = profile.name
                 row["audio_profile_description"] = profile.description
                 row["audio_extract_elapsed_sec"] = round(extract_elapsed, 3)
-                row["audio_chunk_wavs"] = _chunk_wav_count(chunk_source)
+                row["audio_chunk_wavs"] = _chunk_wav_count(seed_chunk_source)
                 row["audio_vad_segments"] = vad_count
                 results.append(row)
     else:
@@ -1347,13 +1881,14 @@ def main() -> int:
         chunk_source = Path(chunk_dir_text)
         if not chunk_source.exists():
             raise RuntimeError(f"audio chunk extraction failed: {chunk_source}")
+        seed_chunk_source = _copy_chunk_dir(chunk_source, work_dir / "_seed_chunks" / "default")
         audio_extracts.append(
             {
                 "profile": "default",
                 "elapsed_sec": round(extract_elapsed, 3),
-                "audio_chunk_dir": str(chunk_source),
-                "chunk_wavs": _chunk_wav_count(chunk_source),
-                "vad_segments": len(_load_vad(chunk_source)),
+                "audio_chunk_dir": str(seed_chunk_source),
+                "chunk_wavs": _chunk_wav_count(seed_chunk_source),
+                "vad_segments": len(_load_vad(seed_chunk_source)),
             }
         )
 
@@ -1361,16 +1896,22 @@ def main() -> int:
             results.append(
                 _run_variant(
                     variant,
-                    chunk_source=chunk_source,
+                    chunk_source=seed_chunk_source,
                     work_dir=work_dir,
                     base_settings=base_settings,
                     reference=reference_rows,
                 )
             )
-    ranked = _rank_rows(results)
+    ranking_policy = str(args.ranking_policy or "auto").strip().lower()
+    if ranking_policy == "auto":
+        ranking_policy = "primary_first" if str(args.suite or "").startswith("mode") or str(args.suite or "") == "modes" else "speed_weighted"
+    ranked = _rank_rows(results, objective=str(args.objective or "reference"), ranking_policy=ranking_policy)
     payload = {
         "schema": "ai_subtitle_studio.subtitle_pipeline_variant_benchmark.v1",
         "created_at": datetime.now().isoformat(timespec="seconds"),
+        "suite": args.suite,
+        "objective": str(args.objective or "reference"),
+        "ranking_policy": ranking_policy,
         "media": str(media),
         "reference_srt": str(reference_srt),
         "fixture_dir": str(DEFAULT_FIXTURE_DIR),

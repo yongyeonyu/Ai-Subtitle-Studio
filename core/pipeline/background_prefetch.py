@@ -3,9 +3,37 @@ from __future__ import annotations
 import os
 import threading
 import time
+from heapq import nsmallest
 from typing import Any
 
 BACKGROUND_PREFETCH_SCHEMA = "ai_subtitle_studio.background_prefetch.v1"
+_PREFETCH_SEGMENT_KEYS = (
+    "start",
+    "end",
+    "timeline_start",
+    "timeline_end",
+    "text",
+    "source",
+    "stt_source",
+    "stt_ensemble_source",
+    "stt_selected_source",
+    "label",
+    "speaker",
+    "spk",
+)
+_PREFETCH_CANDIDATE_KEYS = (
+    "stt_candidates",
+    "stt_lattice_candidates",
+    "vad_candidates",
+    "stt_retry_candidates",
+    "stt_recheck_candidates",
+    "stt_rescue_candidates",
+    "manual_stt_candidates",
+    "manual_recheck_candidates",
+    "manual_rerecognition_candidates",
+    "manual_re_recognition_candidates",
+    "stt_manual_candidates",
+)
 
 
 def _safe_bool(value: Any, default: bool = False) -> bool:
@@ -36,26 +64,49 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
-def _segment_window(segments: list[dict[str, Any]], current_sec: float, before_sec: float, after_sec: float, limit: int) -> list[dict[str, Any]]:
+def _prefetch_segment_bounds(row: dict[str, Any]) -> tuple[float, float]:
+    seg_start = _safe_float(row.get("start", row.get("timeline_start")), 0.0)
+    seg_end = _safe_float(row.get("end", row.get("timeline_end")), seg_start)
+    return seg_start, max(seg_start, seg_end)
+
+
+def _project_prefetch_segment(row: dict[str, Any], seg_start: float, seg_end: float) -> dict[str, Any]:
+    projected = {
+        "start": seg_start,
+        "end": seg_end,
+        "timeline_start": _safe_float(row.get("timeline_start"), seg_start),
+        "timeline_end": _safe_float(row.get("timeline_end"), seg_end),
+        "text": str(row.get("text") or ""),
+    }
+    for key in _PREFETCH_SEGMENT_KEYS[5:]:
+        if key in row:
+            projected[key] = row.get(key)
+    for key in _PREFETCH_CANDIDATE_KEYS:
+        if key in row:
+            projected[key] = row.get(key)
+    return projected
+
+
+def _segment_window(segments, current_sec: float, before_sec: float, after_sec: float, limit: int) -> list[dict[str, Any]]:
     start = max(0.0, float(current_sec or 0.0) - max(0.0, before_sec))
     end = float(current_sec or 0.0) + max(0.0, after_sec)
     rows = []
-    for row in list(segments or []):
+    for row in segments or ():
         if not isinstance(row, dict) or row.get("is_gap"):
             continue
-        seg_start = _safe_float(row.get("start", row.get("timeline_start")), 0.0)
-        seg_end = _safe_float(row.get("end", row.get("timeline_end")), seg_start)
+        seg_start, seg_end = _prefetch_segment_bounds(row)
         if seg_end >= start and seg_start <= end:
-            rows.append(dict(row))
-    rows.sort(key=lambda item: (abs((_safe_float(item.get("start"), 0.0) + _safe_float(item.get("end"), 0.0)) / 2.0 - current_sec), _safe_float(item.get("start"), 0.0)))
-    return rows[: max(1, int(limit or 1))]
+            projected = _project_prefetch_segment(row, seg_start, seg_end)
+            rows.append((abs((seg_start + seg_end) / 2.0 - current_sec), seg_start, projected))
+    limited = nsmallest(max(1, int(limit or 1)), rows)
+    return [row for _dist, _start, row in limited]
 
 
 def build_background_prefetch_plan(
     *,
     media_path: str = "",
     current_sec: float = 0.0,
-    segments: list[dict[str, Any]] | None = None,
+    segments=None,
     settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = dict(settings or {})
@@ -65,7 +116,7 @@ def build_background_prefetch_plan(
     segment_limit = _safe_int(settings.get("background_prefetch_segment_limit"), 10)
     lora_limit = _safe_int(settings.get("background_prefetch_lora_limit"), 4)
     candidate_limit = _safe_int(settings.get("background_prefetch_candidate_limit"), 8)
-    nearby = _segment_window(list(segments or []), float(current_sec or 0.0), before_sec, after_sec, segment_limit)
+    nearby = _segment_window(segments, float(current_sec or 0.0), before_sec, after_sec, segment_limit)
     return {
         "schema": BACKGROUND_PREFETCH_SCHEMA,
         "enabled": enabled,
@@ -99,7 +150,7 @@ class BackgroundPrefetchManager:
         *,
         media_path: str = "",
         current_sec: float = 0.0,
-        segments: list[dict[str, Any]] | None = None,
+        segments=None,
         settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         settings = dict(settings or {})
@@ -165,7 +216,7 @@ class BackgroundPrefetchManager:
                 except Exception:
                     result["waveform"] = {"requested": True, "cache_checked": False, "cache_hit": False, "path": ""}
 
-            segments = list(plan.get("segments") or [])
+            segments = plan.get("segments") or ()
             if plan.get("lora_limit", 0) > 0 and _safe_bool(settings.get("background_prefetch_lora_enabled"), True):
                 from core.personalization.lora_vector_retriever import retrieve_lora_context
 

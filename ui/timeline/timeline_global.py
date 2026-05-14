@@ -466,7 +466,7 @@ class GlobalCanvas(GlobalCanvasBase):
                 else:
                     confirmed_rects.append(rect)
             for marker in sorted(markers, key=lambda item: int(item.get("priority", 0) or 0)):
-                if str(marker.get("kind", "") or "").strip().lower() not in {"silence", "generation_silence", "linked_silence"}:
+                if str(marker.get("kind", "") or "").strip().lower() not in {"silence"}:
                     continue
                 try:
                     start = max(0.0, float(marker.get("start", 0.0) or 0.0))

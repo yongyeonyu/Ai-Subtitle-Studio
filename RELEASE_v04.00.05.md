@@ -19,15 +19,18 @@ The release goal is to make long-running generation and review feel more trustwo
 - Added Swift-native `RuntimeETAEstimator`, `StartupDiagnostics`, and `CutBoundaryCachePlanner` helpers, together with Python bridges and CLI coverage, while keeping Python fallbacks for parity and packaged-app safety.
 - Emitted lightweight raw STT preview rows immediately for STT1/STT2 timeline lanes, but kept transient STT previews out of the editor text pane so only committed subtitle segments render as editable text.
 - Hardened generation-complete and manual save recovery to rebuild from backend subtitle backups when a temporary empty-segment state appears just before autosave or project save finishes.
+- Added completion-card subtitle self-review score surfacing so finished queue items show the final rounded quality score beside elapsed/expected time in the Home sidebar.
 - Restored playback subtitle visibility by forcing full segment-text detail during playback, reapplying hidden subtitle overlays when provider context still covers the current time, and keeping final subtitle text visible in the timeline lanes while the video is playing.
 - Sanitized verified visual cut rows so stale audio-provisional styling is stripped, then hid follower-checked helper rows plus terminal end-frame markers from the normal official-boundary UI while still preserving the stored project metadata.
 - Hardened Codex roughcut draft execution with wider chunk/context defaults, longer timeout settings, proper roughcut override-model inheritance, and clean fallback to local-rule drafts after Codex CLI timeout.
+- Replaced several remaining silent cleanup/error-swallow paths in editor teardown, export-dialog settings/SRT scratch cleanup, diarization cache I/O, VAD strict metadata persistence, and folder/project helper code with typed handling plus logging.
 - Added a documented first native-library bundle plan in `NATIVE_LIB_PLAN.md` so future migrations prefer deterministic JSON-in/JSON-out planners instead of pushing orchestration-heavy Python files directly into a compiled library.
 
 ## Code Review Notes
 
 - Reviewed the boundary-marker cleanup to ensure only helper/provisional auto-cut rows are hidden after verification; manual or non-cut verified visual markers still keep their visible official style.
 - Reviewed the editor/timeline split so live STT preview rows improve realtime feedback without repopulating the editor text pane or overwriting committed subtitle rows.
+- Reviewed remaining `except: pass` hotspots in editor/export/audio/cache cleanup paths and converted the release-critical ones to typed/logged handling so teardown/save/export failures no longer disappear silently.
 - Reviewed the Swift migration scope and kept ETA/diagnostic/cache logic as narrow planner-style helpers with Python fallbacks instead of attempting to native-port the larger editor or pipeline orchestrators.
 
 ## Compatibility Notes

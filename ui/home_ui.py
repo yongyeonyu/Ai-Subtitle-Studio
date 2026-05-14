@@ -27,28 +27,6 @@ from ui.sidebar.home_sidebar_nav_widget import HomeSidebarNavWidget
 from ui.style import button_style, label_style, line_icon, tool_button_style
 
 
-ROUGHCUT_LLM_MIN_PARAMETERS_B = 7.0
-ROUGHCUT_LLM_MIN_SIZE_BYTES = 3_500_000_000
-ROUGHCUT_CAPABLE_CLOUD_TOKENS = (
-    "gemini 2.5 pro",
-    "gpt-5.2",
-    "gpt-5.5",
-)
-ROUGHCUT_BLOCKED_CLOUD_TOKENS = (
-    "flash",
-    "nano",
-    "mini",
-)
-ROUGHCUT_CAPABLE_LOCAL_LATEST = (
-    "exaone3.5:latest",
-    "gemma2:latest",
-    "llama3:latest",
-    "llama3.1:latest",
-    "mistral:latest",
-    "qwen2.5:latest",
-)
-
-
 class HomeUIMixin(HomeSidebarMixin):
     def _home_auto_source_payload(self, scope: str):
         cache = dict(getattr(self, "_home_auto_source_cache", {}) or {})

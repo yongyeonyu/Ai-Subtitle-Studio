@@ -16,7 +16,6 @@ from core.project.project_manager import (
     add_media_to_project,
     create_project,
     extract_model_settings,
-    get_boundary_times,
     load_project,
     merge_project_model_settings,
     save_project,
@@ -24,7 +23,6 @@ from core.project.project_manager import (
 from core.project.project_context import (
     project_cut_boundary_provisional_segments,
     project_active_work_mode,
-    project_media_files,
     project_roughcut_state,
     project_segments_to_editor,
 )
@@ -33,6 +31,13 @@ from ui.editor.editor_project_open_native import (
     open_project_segments_in_editor as native_open_project_segments_in_editor,
 )
 from ui.project.clip_order_dialog import OrderDialog
+from ui.project.project_session_runtime import (
+    attach_project_session,
+    load_local_project_settings,
+    save_local_project_settings,
+    set_runtime_multiclip_state,
+    sorted_project_media_paths,
+)
 
 
 PROJECT_MEDIA_FILTER = (
@@ -184,40 +189,13 @@ class ProjectUIMixin:
             return False
 
     def _load_local_settings(self) -> dict:
-        try:
-            from core.project.data_manager import load_settings
-            return dict(load_settings() or {})
-        except Exception:
-            try:
-                from core.settings import load_settings
-                return dict(load_settings() or {})
-            except Exception:
-                return {}
+        return load_local_project_settings()
 
     def _save_local_settings(self, settings: dict) -> None:
-        if not isinstance(settings, dict):
-            return
-        try:
-            from core.project.data_manager import save_settings
-            save_settings(settings)
-            return
-        except Exception:
-            pass
-        try:
-            from core.settings import save_settings
-            save_settings(settings)
-        except Exception:
-            pass
+        save_local_project_settings(settings)
 
     def _sorted_project_media(self, project: dict) -> list:
-        media_files = project_media_files(project)
-        if media_files:
-            return [path for path in media_files if os.path.exists(path)]
-        return [
-            item["path"]
-            for item in sorted(project.get("media", []), key=lambda x: x.get("order", 0))
-            if os.path.exists(item["path"])
-        ]
+        return sorted_project_media_paths(project)
 
     def _open_project_segments_in_editor(self, filepath: str, project: dict, media: list[str], segments: list[dict]):
         return native_open_project_segments_in_editor(self, filepath, project, media, segments)
@@ -254,12 +232,9 @@ class ProjectUIMixin:
             user_settings=self._load_local_settings(),
         )
 
-        self._current_project_path = filepath
-        self._is_auto_pipeline = False
-
         project_data = load_project(filepath, hydrate_text_assets=False)
         if project_data:
-            self._project_boundary_times = get_boundary_times(project_data)
+            attach_project_session(self, filepath, project_data, auto_pipeline=False, clear_multiclip=True)
 
         get_logger().log(f"📁 프로젝트 생성: {name.strip()} ({len(paths)}개 미디어)")
 
@@ -284,9 +259,7 @@ class ProjectUIMixin:
             QMessageBox.warning(self, "오류", "프로젝트 파일을 열 수 없습니다.")
             return
 
-        self._current_project_path = filepath
-        self._is_auto_pipeline = False
-        self._project_boundary_times = get_boundary_times(project)
+        attach_project_session(self, filepath, project, auto_pipeline=False, clear_multiclip=True)
 
         model_settings = extract_model_settings(project)
         saved_settings = merge_project_model_settings(
@@ -408,9 +381,13 @@ class ProjectUIMixin:
         if editor is not None and hasattr(editor, "_remap_segments_for_multiclip_files"):
             ordered = list(dlg.ordered_files)
             remapped, new_bounds = editor._remap_segments_for_multiclip_files(ordered)
-            self._multiclip_files = ordered
-            self._multiclip_boundaries = new_bounds
-            self._project_boundary_times = [b["end"] for b in new_bounds[:-1]] if len(new_bounds) > 1 else []
+            set_runtime_multiclip_state(
+                self,
+                ordered,
+                new_bounds,
+                project_boundary_rows=[b["end"] for b in new_bounds[:-1]] if len(new_bounds) > 1 else [],
+                emit_boundary_signal=True,
+            )
             editor._reload_segments_from_list(remapped)
             editor._apply_multiclip_state_from_owner()
             try:

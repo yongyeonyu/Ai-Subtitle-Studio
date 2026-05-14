@@ -13,6 +13,11 @@ from core.runtime.logger import get_logger
 from core.audio.media_processor import VideoProcessor
 from core.settings import load_settings
 from core.pipeline.cut_boundary_helpers import PipelineCutBoundaryMixin
+from ui.queue.queue_formatting import (
+    build_queue_header_payload,
+    build_queue_status_payload,
+)
+from ui.project.project_session_runtime import attach_project_session
 
 
 class PipelineHelpersMixin(PipelineCutBoundaryMixin):
@@ -168,9 +173,24 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
 
     # ─── 저장 + 내보내기 ─────────────────────────────────
     def _emit_queue_status(self, queue_index, status, time_txt="", info_txt="", len_txt=""):
-        if hasattr(self.ui, "_sig_update_queue"):
+        ui = getattr(self, "ui", None)
+        if ui is not None and hasattr(ui, "_sig_update_queue_payload"):
             try:
-                self.ui._sig_update_queue.emit(queue_index, status, time_txt, info_txt, len_txt)
+                ui._sig_update_queue_payload.emit(
+                    build_queue_status_payload(queue_index, status, time_txt, info_txt, len_txt)
+                )
+                return
+            except RuntimeError:
+                pass
+
+    def _emit_queue_header(self, current, total, pct, eta_str=""):
+        ui = getattr(self, "ui", None)
+        if ui is not None and hasattr(ui, "_sig_update_queue_header_payload"):
+            try:
+                ui._sig_update_queue_header_payload.emit(
+                    build_queue_header_payload(current, total, pct, eta_str)
+                )
+                return
             except RuntimeError:
                 pass
 
@@ -191,7 +211,14 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                 user_settings=settings,
             )
             if ui is not None:
-                ui._current_project_path = project_path
+                attach_project_session(
+                    ui,
+                    project_path,
+                    None,
+                    auto_pipeline=False,
+                    clear_multiclip=False,
+                    emit_boundary_signal=False,
+                )
 
         workspace = {
             "last_playhead": 0.0,

@@ -3,7 +3,13 @@
 """Final subtitle timing and frame-field adjustment helpers."""
 
 from core.engine.subtitle_settings import _get_user_settings, _setting_float
-from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
+from core.frame_time import (
+    frame_to_sec,
+    normalize_fps,
+    sec_to_ceil_frame,
+    sec_to_frame,
+    sec_to_nearest_frame,
+)
 from core.runtime.logger import get_logger
 
 try:
@@ -229,8 +235,25 @@ def _update_frame_fields(seg: dict, start: float, end: float) -> None:
     if fps_value in (None, ""):
         return
     fps = normalize_fps(fps_value)
-    start_frame = sec_to_frame(start, fps)
-    end_frame = max(start_frame + 1, sec_to_frame(end, fps))
+    start_anchor, _ = _subtitle_start_anchor(seg)
+    end_anchor, _ = _subtitle_end_anchor(seg)
+    anchor_safe = bool(
+        seg.get("_timing_anchor_policy")
+        or seg.get("_timing_anchor_window_policy")
+        or start_anchor is not None
+        or end_anchor is not None
+    )
+    if anchor_safe:
+        start_frame = sec_to_nearest_frame(start, fps)
+        if frame_to_sec(start_frame, fps) + 1e-9 < float(start):
+            start_frame = sec_to_ceil_frame(start, fps)
+        end_frame = sec_to_nearest_frame(end, fps)
+        if frame_to_sec(end_frame, fps) + 1e-9 < float(end):
+            end_frame = sec_to_ceil_frame(end, fps)
+    else:
+        start_frame = sec_to_frame(start, fps)
+        end_frame = sec_to_frame(end, fps)
+    end_frame = max(start_frame + 1, end_frame)
     seg["timeline_start_frame"] = start_frame
     seg["timeline_end_frame"] = end_frame
     seg["start_frame"] = start_frame
@@ -310,6 +333,211 @@ def _word_span(seg: dict) -> tuple[float, float] | None:
     start = min(starts)
     end = max(ends)
     return (start, end) if end > start else None
+
+
+def _compact_text(value: object) -> str:
+    return "".join(str(value or "").split()).lower()
+
+
+def _selected_stt_candidate_span(seg: dict) -> tuple[float, float] | None:
+    candidates = [dict(candidate) for candidate in list(seg.get("stt_candidates") or []) if isinstance(candidate, dict)]
+    if not candidates:
+        return None
+
+    selected_sources: list[str] = []
+    for key in (
+        "stt_selected_source",
+        "stt_ensemble_llm_selected_source",
+        "stt_ensemble_source",
+        "stt_ensemble_fast_selected_source",
+        "stt_ensemble_deep_selected_source",
+    ):
+        value = str(seg.get(key, "") or "").strip().upper()
+        if value and value not in selected_sources:
+            selected_sources.append(value)
+
+    def _candidate_bounds(candidate: dict) -> tuple[float, float] | None:
+        start = _as_float(candidate.get("start"), 0.0)
+        end = _as_float(candidate.get("end"), start)
+        if end <= start:
+            return None
+        return start, end
+
+    for source in selected_sources:
+        for candidate in candidates:
+            candidate_source = str(
+                candidate.get("source")
+                or candidate.get("stt_source")
+                or candidate.get("stt_preview_source")
+                or candidate.get("stt_ensemble_source")
+                or ""
+            ).strip().upper()
+            if candidate_source != source:
+                continue
+            bounds = _candidate_bounds(candidate)
+            if bounds is not None:
+                return bounds
+
+    seg_text = _compact_text(seg.get("text", ""))
+    if seg_text:
+        for candidate in candidates:
+            candidate_text = _compact_text(candidate.get("text", ""))
+            if candidate_text != seg_text:
+                continue
+            bounds = _candidate_bounds(candidate)
+            if bounds is not None:
+                return bounds
+
+    start, end = _time_bounds(seg)
+    best: tuple[float, tuple[float, float]] | None = None
+    for candidate in candidates:
+        bounds = _candidate_bounds(candidate)
+        if bounds is None:
+            continue
+        overlap = max(0.0, min(end, bounds[1]) - max(start, bounds[0]))
+        candidate_duration = max(0.001, bounds[1] - bounds[0])
+        segment_duration = max(0.001, end - start)
+        score = (overlap / candidate_duration) * 0.65 + (overlap / segment_duration) * 0.35
+        if best is None or score > best[0]:
+            best = (score, bounds)
+    return best[1] if best is not None and best[0] > 0.0 else None
+
+
+def _subtitle_start_anchor(seg: dict) -> tuple[float | None, str | None]:
+    anchors: list[tuple[float, str]] = []
+    word = _word_span(seg)
+    if word is not None:
+        anchors.append((float(word[0]), "word_timestamp"))
+    candidate = _selected_stt_candidate_span(seg)
+    if candidate is not None:
+        anchors.append((float(candidate[0]), "selected_stt_candidate"))
+    if not anchors:
+        return None, None
+    start, source = max(anchors, key=lambda item: item[0])
+    return start, source
+
+
+def _subtitle_end_anchor(seg: dict) -> tuple[float | None, str | None]:
+    word = _word_span(seg)
+    if word is not None:
+        return float(word[1]), "word_timestamp"
+    candidate = _selected_stt_candidate_span(seg)
+    if candidate is not None:
+        return float(candidate[1]), "selected_stt_candidate"
+    return None, None
+
+
+def _clamp_segment_start_to_anchor(seg: dict, start: float, end: float, min_duration: float) -> tuple[float, float]:
+    anchor_start, anchor_source = _subtitle_start_anchor(seg)
+    if anchor_start is None or start >= anchor_start:
+        return start, end
+    end = max(end, anchor_start + max(0.05, min_duration))
+    start = anchor_start
+    policy = dict(seg.get("_timing_anchor_policy") or {})
+    policy.update(
+        {
+            "task": "subtitle_timing_anchor",
+            "anchor_source": anchor_source,
+            "anchor_start": round(anchor_start, 3),
+            "applied_start": round(start, 3),
+        }
+    )
+    seg["_timing_anchor_policy"] = policy
+    return start, end
+
+
+def _clamp_segment_to_anchor_window(
+    seg: dict,
+    start: float,
+    end: float,
+    min_duration: float,
+    settings: dict | None = None,
+) -> tuple[float, float]:
+    s = dict(settings or {})
+    start_anchor, start_source = _subtitle_start_anchor(seg)
+    end_anchor, end_source = _subtitle_end_anchor(seg)
+    if start_anchor is None and end_anchor is None:
+        return start, end
+
+    max_start_lag = max(0.0, _setting_float(s, "subtitle_timing_anchor_max_start_lag_sec", 0.12))
+    max_end_lead = max(0.0, _setting_float(s, "subtitle_timing_anchor_max_end_lead_sec", 0.12))
+    max_end_lag = max(0.0, _setting_float(s, "subtitle_timing_anchor_max_end_lag_sec", 0.18))
+
+    old_start = start
+    old_end = end
+    policy = dict(seg.get("_timing_anchor_window_policy") or {})
+    adjustments: list[dict] = []
+
+    if start_anchor is not None:
+        minimum_start = float(start_anchor)
+        maximum_start = minimum_start + max_start_lag
+        if start < minimum_start:
+            start = minimum_start
+            adjustments.append(
+                {
+                    "edge": "start",
+                    "direction": "earlier_than_anchor",
+                    "anchor_source": start_source,
+                    "anchor_time": round(minimum_start, 3),
+                    "applied": round(start, 3),
+                }
+            )
+        elif start > maximum_start:
+            start = maximum_start
+            adjustments.append(
+                {
+                    "edge": "start",
+                    "direction": "too_late_from_anchor",
+                    "anchor_source": start_source,
+                    "anchor_time": round(minimum_start, 3),
+                    "max_lag_sec": round(max_start_lag, 3),
+                    "applied": round(start, 3),
+                }
+            )
+
+    if end_anchor is not None:
+        minimum_end = float(end_anchor) - max_end_lead
+        maximum_end = float(end_anchor) + max_end_lag
+        if end < minimum_end:
+            end = minimum_end
+            adjustments.append(
+                {
+                    "edge": "end",
+                    "direction": "too_early_from_anchor",
+                    "anchor_source": end_source,
+                    "anchor_time": round(float(end_anchor), 3),
+                    "max_lead_sec": round(max_end_lead, 3),
+                    "applied": round(end, 3),
+                }
+            )
+        elif end > maximum_end:
+            end = maximum_end
+            adjustments.append(
+                {
+                    "edge": "end",
+                    "direction": "too_late_from_anchor",
+                    "anchor_source": end_source,
+                    "anchor_time": round(float(end_anchor), 3),
+                    "max_lag_sec": round(max_end_lag, 3),
+                    "applied": round(end, 3),
+                }
+            )
+
+    end = max(end, start + max(0.05, min_duration))
+    if not adjustments and abs(start - old_start) < 0.001 and abs(end - old_end) < 0.001:
+        return start, end
+    policy.update(
+        {
+            "task": "subtitle_timing_anchor_window",
+            "old_start": round(old_start, 3),
+            "old_end": round(old_end, 3),
+            "new_start": round(start, 3),
+            "new_end": round(end, 3),
+            "adjustments": adjustments,
+        }
+    )
+    seg["_timing_anchor_window_policy"] = policy
+    return start, end
 
 
 def _candidate_vad_rows(seg: dict) -> list[dict]:
@@ -461,6 +689,16 @@ def apply_timing_fusion_policy(segment: dict, settings: dict | None = None) -> d
         if scene_end is not None and end > scene_end:
             end = scene_end
             evidence.append({"source": "cut_scene_end", "time": round(scene_end, 3)})
+
+    anchored_start, anchored_end = _clamp_segment_start_to_anchor(seg, start, end, min_duration)
+    if abs(anchored_start - start) > 0.001:
+        evidence.append(
+            {
+                "source": "selected_stt_anchor_start",
+                "time": round(anchored_start, 3),
+            }
+        )
+    start, end = anchored_start, anchored_end
 
     start = max(0.0, round(start, 3))
     end = round(max(start + min_duration, end), 3)
@@ -1181,6 +1419,7 @@ def apply_final_gap_settings(
             end = min_duration
         if end <= start:
             end = start + min_duration
+        start, end = _clamp_segment_start_to_anchor(seg, start, end, min_duration)
         seg["start"] = start
         seg["end"] = end
         fused = apply_timing_fusion_policy(seg, seg_settings)
@@ -1226,6 +1465,15 @@ def apply_final_gap_settings(
                     cur["end"] = float(cur["end"]) + extension
                     nxt["start"] = max(0.0, float(nxt["start"]) - extension)
 
+                nxt_start, nxt_end = _clamp_segment_start_to_anchor(
+                    nxt,
+                    float(nxt["start"]),
+                    float(nxt.get("end", float(nxt["start"]) + min_duration) or float(nxt["start"]) + min_duration),
+                    min_duration,
+                )
+                nxt["start"] = nxt_start
+                nxt["end"] = nxt_end
+
                 if float(cur["end"]) > float(nxt["start"]):
                     boundary = (float(cur["end"]) + float(nxt["start"])) / 2.0
                     cur["end"] = max(float(cur["start"]) + min_duration, boundary)
@@ -1241,8 +1489,23 @@ def apply_final_gap_settings(
 
         if float(cur["end"]) <= float(cur["start"]):
             cur["end"] = float(cur["start"]) + min_duration
+        cur["start"], cur["end"] = _clamp_segment_start_to_anchor(cur, float(cur["start"]), float(cur["end"]), min_duration)
+        cur["start"], cur["end"] = _clamp_segment_to_anchor_window(
+            cur,
+            float(cur["start"]),
+            float(cur["end"]),
+            min_duration,
+            cur_settings,
+        )
         _clamp_common_split_duration_after_gap(cur, s)
         _clamp_to_cut_scene(cur, s, min_duration=min_duration)
+        cur["start"], cur["end"] = _clamp_segment_to_anchor_window(
+            cur,
+            float(cur["start"]),
+            float(cur["end"]),
+            min_duration,
+            cur_settings,
+        )
         _update_frame_fields(cur, float(cur["start"]), float(cur["end"]))
         cur["_final_gap_settings_applied"] = True
 

@@ -154,6 +154,17 @@ class _CompletionEditor(EditorPipelineMixin):
         return self._window
 
 
+class _PipelineSignal:
+    def __init__(self):
+        self.connected = []
+
+    def connect(self, slot):
+        self.connected.append(slot)
+
+    def disconnect(self, slot):
+        self.connected = [item for item in self.connected if item != slot]
+
+
 class EditorAutosaveCleanupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -246,6 +257,80 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual([seg["text"] for seg in saved_segments], ["복구 자막"])
         editor._auto_save_project.assert_called_once()
         editor._mark_save_completed.assert_called_once_with(touch_saved_time=True)
+
+    def test_hook_backend_signals_reconnects_backend_and_batch_slots(self):
+        backend = SimpleNamespace(
+            sig_chunk_done=_PipelineSignal(),
+            sig_progress=_PipelineSignal(),
+            sig_batch_finished=_PipelineSignal(),
+        )
+
+        class _SignalEditor(EditorPipelineMixin):
+            def __init__(self):
+                self._window = SimpleNamespace(backend=backend)
+                self.append_segments = Mock()
+                self.update_progress = Mock()
+                self._connect_cut_boundary_placeholder_signal = Mock()
+                self._on_batch_finished = Mock()
+                self.is_batch_mode = True
+
+            def window(self):
+                return self._window
+
+        editor = _SignalEditor()
+
+        editor._hook_backend_signals()
+
+        editor._connect_cut_boundary_placeholder_signal.assert_called_once()
+        self.assertEqual(backend.sig_chunk_done.connected, [editor.append_segments])
+        self.assertEqual(backend.sig_progress.connected, [editor.update_progress])
+        self.assertEqual(backend.sig_batch_finished.connected, [editor._on_batch_finished])
+
+    def test_prepare_partial_rerun_state_trims_preview_and_prefix_vad(self):
+        recorded_vad = {}
+        removed_ranges = []
+        cleared_ranges = []
+
+        class _PartialEditor(EditorPipelineMixin):
+            def __init__(self):
+                self.timeline = SimpleNamespace(
+                    canvas=SimpleNamespace(
+                        vad_segments=[
+                            {"start": 0.0, "end": 2.0},
+                            {"start": 2.0, "end": 5.0},
+                            {"start": 6.0, "end": 8.0},
+                        ]
+                    )
+                )
+                self._live_stt_preview_segments = [
+                    {"start": 0.0, "end": 1.0, "text": "앞"},
+                    {"start": 4.0, "end": 6.0, "text": "겹침"},
+                ]
+
+            def clear_segments_in_range(self, start, end):
+                cleared_ranges.append((start, end))
+
+            def set_vad_segments(self, segs):
+                recorded_vad["segments"] = list(segs)
+
+            def _remove_live_editor_preview_overlapping(self, ranges):
+                removed_ranges.extend(list(ranges or []))
+
+        editor = _PartialEditor()
+
+        prefix_vad = editor._prepare_partial_rerun_state(4.0, 10.0, rerun_cut_boundaries=False)
+
+        self.assertEqual(cleared_ranges, [(4.0, 10.0)])
+        self.assertEqual(editor._live_stt_preview_segments, [{"start": 0.0, "end": 1.0, "text": "앞"}])
+        self.assertEqual(removed_ranges, [{"start": 4.0, "end": 10.0}])
+        self.assertEqual(
+            prefix_vad,
+            [
+                {"start": 0.0, "end": 2.0},
+                {"start": 2.0, "end": 4.0},
+            ],
+        )
+        self.assertEqual(recorded_vad["segments"], prefix_vad)
 
     def test_pending_internal_project_refresh_does_not_mark_clean_editor_dirty(self):
         with tempfile.TemporaryDirectory() as tmpdir:

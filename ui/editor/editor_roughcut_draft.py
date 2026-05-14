@@ -11,6 +11,7 @@ import time
 from PyQt6.QtCore import QTimer
 
 from core.runtime.logger import get_logger
+from ui.project.project_session_runtime import attach_project_session
 
 
 class EditorRoughcutDraftMixin:
@@ -605,7 +606,14 @@ class EditorRoughcutDraftMixin:
                         srt_path=get_srt_path(media_path),
                         user_settings=dict(getattr(self, "settings", {}) or {}),
                     )
-                    main_w._current_project_path = project_path
+                    attach_project_session(
+                        main_w,
+                        project_path,
+                        None,
+                        auto_pipeline=False,
+                        clear_multiclip=False,
+                        emit_boundary_signal=False,
+                    )
             except Exception as exc:
                 get_logger().log(f"⚠️ 러프컷 초안 프로젝트 생성 실패: {exc}")
         if not project_path:

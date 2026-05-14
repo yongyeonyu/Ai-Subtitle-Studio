@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 
@@ -102,6 +103,24 @@ class EditorCanvasStateTests(unittest.TestCase):
         self.assertEqual(editor.timeline.boundary_times, [0.5])
         self.assertEqual(editor._live_stt_preview_segments, [{"line": 1}])
         self.assertEqual(editor.schedule_count, 0)
+
+    def test_apply_loaded_canvas_state_clamps_segments_to_video_duration(self):
+        editor = _DummyEditor()
+        editor.video_player = SimpleNamespace(total_time=10.0)
+
+        ordered = editor.apply_loaded_canvas_state(
+            [
+                {"start": 9.8, "end": 10.6, "text": "tail"},
+                {"start": 10.8, "end": 12.0, "text": "drop"},
+            ],
+            preserve_view=False,
+            mark_dirty=False,
+        )
+
+        self.assertEqual(len(ordered), 1)
+        self.assertEqual(ordered[0]["text"], "tail")
+        self.assertLessEqual(float(ordered[0]["end"]), 10.0)
+        self.assertEqual([seg["text"] for seg in editor.reloaded["segments"]], ["tail"])
 
 
 if __name__ == "__main__":

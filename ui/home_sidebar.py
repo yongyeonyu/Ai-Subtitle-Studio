@@ -29,33 +29,17 @@ from core.audio.stt_quality_presets import (
     stt_quality_label,
 )
 from core.mode_policy import stt_quality_to_mode
+from core.roughcut.model_capability import roughcut_llm_is_capable, roughcut_llm_parameter_b
 from core.settings_simplifier import apply_simple_operation_mode
 from ui.home_sidebar_presets import sync_sidebar_preset_panel
 from ui.dialogs.qml_popup import show_context_menu
+from ui.queue.queue_formatting import (
+    normalize_queue_header_text,
+    plain_queue_status,
+)
+from ui.queue.queue_dispatch import queue_active_row_index, queue_progress_state
 from ui.settings.settings_common import filter_available_whisper_models, whisper_model_display_name
 from ui.style import line_icon
-
-
-ROUGHCUT_LLM_MIN_PARAMETERS_B = 7.0
-ROUGHCUT_LLM_MIN_SIZE_BYTES = 3_500_000_000
-ROUGHCUT_CAPABLE_CLOUD_TOKENS = (
-    "gemini 2.5 pro",
-    "gpt-5.2",
-    "gpt-5.5",
-)
-ROUGHCUT_BLOCKED_CLOUD_TOKENS = (
-    "flash",
-    "nano",
-    "mini",
-)
-ROUGHCUT_CAPABLE_LOCAL_LATEST = (
-    "exaone3.5:latest",
-    "gemma2:latest",
-    "llama3:latest",
-    "llama3.1:latest",
-    "mistral:latest",
-    "qwen2.5:latest",
-)
 
 
 def _runtime_load_settings():
@@ -106,6 +90,12 @@ class HomeSidebarMixin:
         return panel
 
     def _queue_sidebar_header_text(self) -> str:
+        helper = getattr(self, "queue_sidebar_header_text", None)
+        if callable(helper):
+            try:
+                return str(helper() or "")
+            except Exception:
+                pass
         label = getattr(self, "queue_header_lbl", None)
         raw = ""
         if label is not None:
@@ -115,126 +105,26 @@ class HomeSidebarMixin:
                 raw = ""
         if not raw:
             raw = str(getattr(self, "_sidebar_queue_cache_header", "") or "")
-        if raw:
-            raw = raw.replace("📋 처리할 파일 리스트", "큐 리스트").replace("진행 중", "").strip()
-            raw = raw.replace("  ", " ")
-            return raw
-        total = int(getattr(self, "_total_files", 0) or 0)
-        current = int(getattr(self, "_current_file_idx", 0) or 0)
-        pct = int(getattr(self, "_real_pct", 0) or 0)
-        return f"큐 리스트 : ({current}/{total}) - {pct}% 완료"
+        progress = queue_progress_state(self)
+        total = int(progress["total"] or 0)
+        current = int(progress["current"] or 0)
+        pct = int(progress["pct"] or 0)
+        return normalize_queue_header_text(raw, current=current, total=total, pct=pct)
 
     def _sidebar_queue_items(self) -> list[dict]:
-        table = getattr(self, "queue_table", None)
-        if table is None:
-            return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
-        try:
-            if table.rowCount() == 0:
-                return []
-        except RuntimeError:
-            return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
-        items = []
-        active_row = self._active_queue_row_index()
-        try:
-            for row in range(table.rowCount()):
-                status_item = table.item(row, 0)
-                file_item = table.item(row, 1)
-                duration_item = table.item(row, 3)
-                eta_item = table.item(row, 4)
-                items.append(
-                    self._queue_sidebar_item_payload(
-                        row=row,
-                        active_row=active_row,
-                        raw_status=str(status_item.text() if status_item else "-"),
-                        file_text=str(file_item.text() if file_item else "-"),
-                        eta_text=str(eta_item.text() if eta_item else "-"),
-                        duration_text=str(duration_item.text() if duration_item else "-"),
-                    )
-                )
-        except RuntimeError:
-            return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
-        return items
+        helper = getattr(self, "queue_sidebar_items", None)
+        if callable(helper):
+            try:
+                return list(helper() or [])
+            except Exception:
+                pass
+        return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
 
     def _active_queue_row_index(self) -> int:
-        try:
-            return int(getattr(self, "_current_file_idx", 1) or 1) - 1
-        except Exception:
-            return 0
-
-    def _queue_sidebar_item_payload(
-        self,
-        *,
-        row: int,
-        active_row: int,
-        raw_status: str,
-        file_text: str,
-        eta_text: str,
-        duration_text: str,
-    ) -> dict:
-        status = self._plain_queue_status(raw_status)
-        flagger = getattr(self, "_queue_status_flags", None)
-        if callable(flagger):
-            done, error, status_active = flagger(raw_status)
-        else:
-            stripped = raw_status.strip()
-            stage_done_only = "컷 경계" in stripped and "완료" in stripped
-            done = (
-                not stage_done_only
-                and "미완료" not in stripped
-                and (
-                    stripped in {"완료", "✅기존자막", "기존자막"}
-                    or stripped.startswith("✅")
-                    and "완료" in stripped
-                    or "기존자막" in stripped
-                )
-            )
-            error = any(token in status for token in ("오류", "실패", "중단"))
-            status_active = not done and not error and not any(token in status for token in ("대기", "-"))
-        active = status_active and row == active_row
-        return {
-            "order": str(row + 1),
-            "status": status,
-            "statusDisplay": "완료" if done else status,
-            "done": done,
-            "active": active,
-            "error": error,
-            "file": str(file_text or "-"),
-            "eta": self._queue_sidebar_time_text(eta_text, duration_text),
-        }
-
-    def _queue_sidebar_time_text(self, eta_text: str, duration_text: str) -> str:
-        formatter = getattr(self, "_queue_card_time_text", None)
-        if callable(formatter):
-            return formatter(eta_text, duration_text)
-
-        def is_unknown(value) -> bool:
-            text = str(value or "").strip()
-            if text in {"", "-", "?", "0", "0.0", "00:00", "00:00:00", "계산 중", "분석 중..", "예상불가", "학습 중"}:
-                return True
-            parts = [part.strip() for part in text.split(":")]
-            if len(parts) in {2, 3} and all(part.isdigit() for part in parts):
-                seconds = 0
-                for part in parts:
-                    seconds = seconds * 60 + int(part)
-                return seconds <= 0
-            return False
-
-        eta = str(eta_text or "-").strip() or "-"
-        if "/" in eta:
-            left, right = [part.strip() for part in eta.split("/", 1)]
-            left = left or "00:00"
-            right = "예상불가" if is_unknown(right) else right
-            return f"{left} / {right}"
-        if is_unknown(eta):
-            return "예상불가"
-        return f"00:00 / {eta}"
+        return queue_active_row_index(self)
 
     def _plain_queue_status(self, status: str) -> str:
-        text = str(status or "").strip()
-        text = re.sub(r"^[^\w가-힣\[]+\s*", "", text)
-        text = re.sub(r"[\u2600-\u27BF\U0001F300-\U0001FAFF]", "", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text or "-"
+        return plain_queue_status(status)
 
     def _sync_sidebar_queue_panel(self):
         panel = getattr(self, "sidebar_queue_panel", None)
@@ -653,47 +543,61 @@ class HomeSidebarMixin:
                 return int(getter())
             except Exception:
                 pass
-        table = getattr(self, "queue_table", None)
-        try:
-            row = int(getattr(self, "_current_file_idx", 1) or 1) - 1
-        except Exception:
-            row = 0
-        if table is None:
-            return max(-1, row)
-        try:
-            return row if 0 <= row < int(table.rowCount()) else -1
-        except Exception:
-            return -1
+        queue_getter = getattr(self, "queue_active_row_index", None)
+        if callable(queue_getter):
+            try:
+                return int(queue_getter())
+            except Exception:
+                pass
+        row_counter = getattr(self, "queue_row_count", None)
+        if callable(row_counter):
+            try:
+                row_count = max(0, int(row_counter() or 0))
+            except Exception:
+                row_count = 0
+        else:
+            row_count = len(list(getattr(self, "_sidebar_queue_cache_items", []) or []))
+        row = queue_active_row_index(self)
+        if row_count > 0:
+            return row if 0 <= row < row_count else -1
+        return max(-1, row)
 
     def _sidebar_generation_row_status(self, row: int) -> str:
-        table = getattr(self, "queue_table", None)
-        if table is None or row < 0:
+        getter = getattr(self, "queue_row_status_text", None)
+        if callable(getter):
+            try:
+                return str(getter(int(row)) or "")
+            except Exception:
+                pass
+        if row < 0:
             return ""
-        try:
-            item = table.item(row, 0)
-        except Exception:
-            item = None
-        try:
-            return str(item.text() if item is not None else "")
-        except Exception:
-            return ""
+        cache = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+        if 0 <= int(row) < len(cache):
+            item = dict(cache[int(row)] or {})
+            return str(item.get("statusRaw", item.get("statusDisplay", item.get("status", ""))) or "")
+        return ""
 
     def _sidebar_generation_row_expected_seconds(self, row: int) -> float:
+        getter = getattr(self, "queue_row_expected_seconds", None)
+        if callable(getter):
+            try:
+                return max(0.0, float(getter(int(row)) or 0.0))
+            except Exception:
+                pass
         try:
             expected = float((getattr(self, "_expected_seconds", {}) or {}).get(int(row), 0.0) or 0.0)
         except Exception:
             expected = 0.0
         if expected > 0:
             return expected
-        table = getattr(self, "queue_table", None)
-        if table is None or row < 0:
+        if row < 0:
             return 0.0
-        try:
-            eta_item = table.item(row, 4)
-            duration_item = table.item(row, 3)
-            eta_text = str(eta_item.text() if eta_item else "")
-            duration_text = str(duration_item.text() if duration_item else "")
-        except Exception:
+        cache = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+        if 0 <= int(row) < len(cache):
+            item = dict(cache[int(row)] or {})
+            eta_text = str(item.get("etaRaw", "") or "")
+            duration_text = str(item.get("duration", "") or "")
+        else:
             eta_text = ""
             duration_text = ""
         labeler = getattr(self, "_queue_expected_time_label", None)
@@ -708,6 +612,12 @@ class HomeSidebarMixin:
         return max(0.0, float(parsed or 0.0))
 
     def _sidebar_generation_row_elapsed_seconds(self, row: int, now_ts: float) -> float:
+        getter = getattr(self, "queue_row_elapsed_seconds", None)
+        if callable(getter):
+            try:
+                return max(0.0, float(getter(int(row), now_ts=now_ts) or 0.0))
+            except Exception:
+                pass
         start_times = dict(getattr(self, "_file_start_times", {}) or {})
         complete_times = dict(getattr(self, "_file_complete_times", {}) or {})
         started_at = float(start_times.get(int(row), 0.0) or 0.0)
@@ -759,57 +669,114 @@ class HomeSidebarMixin:
                 return plain
         if self._is_subtitle_generation_running():
             return "진행 중"
-        return "완료" if int(getattr(self, "_real_pct", 0) or 0) >= 100 else "대기"
+        progress = queue_progress_state(self)
+        return "완료" if int(progress["pct"] or 0) >= 100 else "대기"
+
+    def _sidebar_generation_completion_quality_score(self) -> float | None:
+        editor = self._active_editor()
+        if editor is None:
+            return None
+        summary = getattr(editor, "_quality_summary", None)
+        score = None
+        if isinstance(summary, dict):
+            score = summary.get("overall_score", summary.get("score"))
+        else:
+            score = getattr(summary, "overall_score", None)
+        if isinstance(score, (int, float)):
+            return float(score)
+
+        getter = getattr(editor, "_get_current_segments", None)
+        if not callable(getter):
+            return None
+        try:
+            segments = list(getter() or [])
+        except Exception:
+            return None
+        for seg in segments:
+            if not isinstance(seg, dict) or bool(seg.get("is_gap")):
+                continue
+            payload = dict(seg.get("subtitle_quality_self_review_summary") or {})
+            score = payload.get("overall_score", payload.get("score"))
+            if isinstance(score, (int, float)):
+                return float(score)
+        return None
 
     def _generation_progress_snapshot(self) -> dict:
         running = self._is_subtitle_generation_running()
         now_ts = time.time()
-        active_row = self._sidebar_generation_active_row()
-        table = getattr(self, "queue_table", None)
-        try:
-            row_count = int(table.rowCount()) if table is not None else 0
-        except Exception:
-            row_count = 0
-        total_files = max(row_count, int(getattr(self, "_total_files", 0) or 0))
-        total_expected = 0.0
-        total_elapsed = 0.0
-        progress_elapsed = 0.0
-        known_expected_rows = 0
-        all_done = total_files > 0
-
-        flagger = getattr(self, "_queue_status_flags", None)
-        for row in range(total_files):
-            status_text = self._sidebar_generation_row_status(row)
-            if callable(flagger):
+        metrics_getter = getattr(self, "queue_progress_metrics", None)
+        if callable(metrics_getter):
+            try:
+                metrics = dict(metrics_getter(now_ts=now_ts, running=running) or {})
+            except Exception:
+                metrics = {}
+        else:
+            metrics = {}
+        if not metrics:
+            active_row = self._sidebar_generation_active_row()
+            row_counter = getattr(self, "queue_row_count", None)
+            if callable(row_counter):
                 try:
-                    row_done, row_error, _row_active = flagger(status_text)
+                    row_count = max(0, int(row_counter() or 0))
                 except Exception:
-                    row_done = row_error = False
+                    row_count = 0
             else:
-                row_done = "완료" in status_text
-                row_error = any(token in status_text for token in ("오류", "실패", "중단"))
-            expected = self._sidebar_generation_row_expected_seconds(row)
-            elapsed = self._sidebar_generation_row_elapsed_seconds(row, now_ts)
-            if elapsed > 0.0:
-                total_elapsed += elapsed
-            if expected > 0.0:
-                total_expected += expected
-                known_expected_rows += 1
-                if row_done:
-                    progress_elapsed += expected
-                elif row == active_row and running:
-                    progress_elapsed += min(elapsed, expected)
-            if not row_done and not row_error:
-                all_done = False
+                row_count = len(list(getattr(self, "_sidebar_queue_cache_items", []) or []))
+            progress = queue_progress_state(self)
+            total_files = max(row_count, int(progress["total"] or 0))
+            total_expected = 0.0
+            total_elapsed = 0.0
+            progress_elapsed = 0.0
+            known_expected_rows = 0
+            all_done = total_files > 0
 
-        percent = float(getattr(self, "_real_pct", 0) or 0.0)
-        if total_expected > 0.0 and known_expected_rows >= total_files and total_files > 0:
-            percent = (progress_elapsed / total_expected) * 100.0
-        if all_done and total_files > 0:
-            percent = 100.0
-        elif running:
-            percent = min(percent, 99.0)
-        percent = max(0.0, min(100.0, percent))
+            flagger = getattr(self, "_queue_status_flags", None)
+            for row in range(total_files):
+                status_text = self._sidebar_generation_row_status(row)
+                if callable(flagger):
+                    try:
+                        row_done, row_error, _row_active = flagger(status_text)
+                    except Exception:
+                        row_done = row_error = False
+                else:
+                    row_done = "완료" in status_text
+                    row_error = any(token in status_text for token in ("오류", "실패", "중단"))
+                expected = self._sidebar_generation_row_expected_seconds(row)
+                elapsed = self._sidebar_generation_row_elapsed_seconds(row, now_ts)
+                if elapsed > 0.0:
+                    total_elapsed += elapsed
+                if expected > 0.0:
+                    total_expected += expected
+                    known_expected_rows += 1
+                    if row_done:
+                        progress_elapsed += expected
+                    elif row == active_row and running:
+                        progress_elapsed += min(elapsed, expected)
+                if not row_done and not row_error:
+                    all_done = False
+
+            percent = float(progress["pct"] or 0.0)
+            if total_expected > 0.0 and known_expected_rows >= total_files and total_files > 0:
+                percent = (progress_elapsed / total_expected) * 100.0
+            if all_done and total_files > 0:
+                percent = 100.0
+            elif running:
+                percent = min(percent, 99.0)
+            percent = max(0.0, min(100.0, percent))
+            metrics = {
+                "active_row": active_row,
+                "row_count": row_count,
+                "total_files": total_files,
+                "total_expected": total_expected,
+                "total_elapsed": total_elapsed,
+                "progress_elapsed": progress_elapsed,
+                "known_expected_rows": known_expected_rows,
+                "all_done": all_done,
+                "percent": percent,
+            }
+        total_expected = float(metrics.get("total_expected", 0.0) or 0.0)
+        total_elapsed = float(metrics.get("total_elapsed", 0.0) or 0.0)
+        percent = float(metrics.get("percent", 0.0) or 0.0)
 
         stage_text = self._sidebar_generation_stage_text()
         title = f"자막 생성 | {stage_text}"
@@ -819,6 +786,10 @@ class HomeSidebarMixin:
             elapsed_text = self._sidebar_format_clock(total_elapsed)
             expected_text = self._sidebar_format_clock(total_expected) if total_expected > 0.0 else "--:--"
             subtitle = f"{elapsed_text} / {expected_text}"
+            if not running and int(round(percent)) >= 100:
+                quality_score = self._sidebar_generation_completion_quality_score()
+                if isinstance(quality_score, (int, float)):
+                    subtitle = f"{subtitle} · {float(quality_score):.2f}"
         tooltip_lines = [title, progress_text]
         if subtitle:
             tooltip_lines.append(subtitle)
@@ -1209,16 +1180,20 @@ class HomeSidebarMixin:
                         parts.append(str(label.text() or ""))
                 except RuntimeError:
                     pass
-        table = getattr(self, "queue_table", None)
-        if table is not None:
+        queue_probe = getattr(self, "queue_status_probe_parts", None)
+        if callable(queue_probe):
             try:
-                if table.rowCount() > 0:
-                    for col in (0, 2, 4):
-                        item = table.item(0, col)
-                        if item is not None:
-                            parts.append(str(item.text() or ""))
-            except RuntimeError:
+                parts.extend(str(part or "") for part in list(queue_probe(0, (0, 2, 4)) or []) if str(part or ""))
+            except Exception:
                 pass
+        else:
+            cache = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+            if cache:
+                item = dict(cache[0] or {})
+                for key in ("statusRaw", "infoRaw", "etaRaw"):
+                    value = str(item.get(key, "") or "")
+                    if value:
+                        parts.append(value)
         return "\n".join(parts)
 
     def _pipeline_cached_stage_keys(self, blob: str) -> set[str]:
@@ -1373,34 +1348,16 @@ class HomeSidebarMixin:
         editor = self._active_editor()
         state_value = str(getattr(getattr(editor, "sm", None), "state", "") or "") if editor is not None else ""
         queue_done = False
-        try:
-            table = getattr(self, "queue_table", None)
-            if table is not None and table.rowCount() > 0:
-                done_rows = 0
-                for row in range(table.rowCount()):
-                    item = table.item(row, 0)
-                    raw_text = str(item.text() if item is not None else "")
-                    flagger = getattr(self, "_queue_status_flags", None)
-                    if callable(flagger):
-                        row_done = bool(flagger(raw_text)[0])
-                    else:
-                        stripped = raw_text.strip()
-                        stage_done_only = "컷 경계" in stripped and "완료" in stripped
-                        row_done = (
-                            not stage_done_only
-                            and "미완료" not in stripped
-                            and (
-                                stripped in {"완료", "✅기존자막", "기존자막"}
-                                or stripped.startswith("✅")
-                                and "완료" in stripped
-                                or "기존자막" in stripped
-                            )
-                        )
-                    if row_done:
-                        done_rows += 1
-                queue_done = queue_done or done_rows >= table.rowCount()
-        except RuntimeError:
-            pass
+        completion_getter = getattr(self, "queue_completion_state", None)
+        if callable(completion_getter):
+            try:
+                queue_done = bool(dict(completion_getter() or {}).get("all_done"))
+            except Exception:
+                queue_done = False
+        else:
+            cached_items = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+            if cached_items:
+                queue_done = all(bool(dict(item or {}).get("done")) for item in cached_items)
         stage_now = set(current_keys or set())
         live_stage_active = bool(stage_now & {
             "cut_boundary",
@@ -1905,48 +1862,10 @@ class HomeSidebarMixin:
         return items
 
     def _roughcut_llm_parameter_b(self, item: dict) -> float | None:
-        details = item.get("details", {}) or {}
-        parts = [
-            str(item.get("name") or ""),
-            str(item.get("display_name") or ""),
-            str(details.get("parameter_size") or ""),
-            str(details.get("family") or ""),
-        ]
-        for text in parts:
-            for match in re.finditer(r"(?<!\d)(\d+(?:\.\d+)?)\s*b\b", text.lower()):
-                try:
-                    return float(match.group(1))
-                except ValueError:
-                    continue
-        return None
+        return roughcut_llm_parameter_b(item)
 
     def _roughcut_llm_is_capable(self, item: dict) -> bool:
-        details = item.get("details", {}) or {}
-        provider = str(details.get("provider") or "ollama").lower()
-        name = str(item.get("name") or "")
-        display_name = str(item.get("display_name") or name)
-        label_l = f"{name} {display_name}".lower()
-        if provider == "none" or "사용 안함" in label_l:
-            return False
-
-        if provider in {"google", "openai"}:
-            if any(re.search(rf"\b{re.escape(token)}\b", label_l) for token in ROUGHCUT_BLOCKED_CLOUD_TOKENS):
-                return False
-            if "codex" in label_l and ("chatgpt" in label_l or "구독" in label_l or "cli" in label_l):
-                return True
-            return any(token in label_l for token in ROUGHCUT_CAPABLE_CLOUD_TOKENS) or "gpt-5" in label_l
-
-        params_b = self._roughcut_llm_parameter_b(item)
-        if params_b is not None:
-            return params_b >= ROUGHCUT_LLM_MIN_PARAMETERS_B
-
-        if any(token in label_l for token in ROUGHCUT_CAPABLE_LOCAL_LATEST):
-            return True
-
-        try:
-            return int(item.get("size") or 0) >= ROUGHCUT_LLM_MIN_SIZE_BYTES
-        except (TypeError, ValueError):
-            return False
+        return roughcut_llm_is_capable(item)
 
     def _roughcut_llm_items(self) -> list[dict]:
         return [item for item in self._llm_model_items() if self._roughcut_llm_is_capable(item)]

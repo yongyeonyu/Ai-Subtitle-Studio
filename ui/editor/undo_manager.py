@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 from ui.editor.subtitle_text_edit import SubtitleBlockData
+from ui.project.project_session_runtime import set_runtime_multiclip_state
 
 
 @dataclass
@@ -181,9 +182,13 @@ class UndoManager:
         cur.endEditBlock()
 
         if owner is not None:
-            owner._multiclip_files = list(state.multiclip_files)
-            owner._multiclip_boundaries = [dict(x) for x in state.multiclip_boundaries]
-            owner._project_boundary_times = list(state.project_boundary_times)
+            set_runtime_multiclip_state(
+                owner,
+                list(state.multiclip_files),
+                [dict(x) for x in state.multiclip_boundaries],
+                project_boundary_rows=list(state.project_boundary_times),
+                emit_boundary_signal=True,
+            )
             owner._active_clip_idx = int(state.active_clip_idx)
             if hasattr(editor, '_apply_multiclip_state_from_owner'):
                 try:

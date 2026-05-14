@@ -6,6 +6,10 @@ from PyQt6 import sip
 from PyQt6.QtCore import QObject
 
 from core.pipeline.single_pipeline import SinglePipelineMixin, _is_deleted_qt_error
+from ui.queue.queue_formatting import (
+    normalize_queue_header_payload,
+    normalize_queue_status_payload,
+)
 
 
 class _DummyBackend(SinglePipelineMixin):
@@ -17,15 +21,22 @@ class _DummyBackend(SinglePipelineMixin):
 class _Signal:
     def __init__(self):
         self.args = None
+        self.emissions = []
 
     def emit(self, *args):
         self.args = args
+        self.emissions.append(args)
 
 
 class _LiveUi(QObject):
     def __init__(self):
         super().__init__()
         self.sig = _Signal()
+        self._sig_preview_processing_segments = _Signal()
+        self._sig_update_queue = _Signal()
+        self._sig_update_queue_payload = _Signal()
+        self._sig_update_queue_header = _Signal()
+        self._sig_update_queue_header_payload = _Signal()
         self.called = False
 
     def open_editor_for_file(self):
@@ -53,6 +64,37 @@ class SinglePipelineUiGuardTests(unittest.TestCase):
         exc = RuntimeError("wrapped C/C++ object of type MainWindow has been deleted")
 
         self.assertTrue(_is_deleted_qt_error(exc))
+
+    def test_ui_emit_routes_queue_status_to_payload_signal_when_available(self):
+        ui = _LiveUi()
+        backend = _DummyBackend(ui)
+
+        self.assertTrue(backend._ui_emit("_sig_update_queue", 2, "대기 중", "15:54", "1920x1080", "24:10"))
+        self.assertEqual(ui._sig_update_queue.args, None)
+        payload = normalize_queue_status_payload(ui._sig_update_queue_payload.emissions[-1][0])
+        self.assertEqual(payload["idx"], 2)
+        self.assertEqual(payload["status"], "대기 중")
+        self.assertEqual(payload["time_txt"], "15:54")
+
+    def test_ui_emit_routes_queue_header_to_payload_signal_when_available(self):
+        ui = _LiveUi()
+        backend = _DummyBackend(ui)
+
+        self.assertTrue(backend._ui_emit("_sig_update_queue_header", 1, 3, 20, "2분 10초"))
+        self.assertEqual(ui._sig_update_queue_header.args, None)
+        payload = normalize_queue_header_payload(ui._sig_update_queue_header_payload.emissions[-1][0])
+        self.assertEqual(payload["current"], 1)
+        self.assertEqual(payload["total"], 3)
+        self.assertEqual(payload["pct"], 20)
+
+    def test_ui_emit_routes_processing_preview_payload_to_object_signal(self):
+        ui = _LiveUi()
+        backend = _DummyBackend(ui)
+
+        payload = {"stage": "context_review", "stage_label": "문맥 보정", "segments": [{"start": 1.0, "end": 2.0, "text": "초안"}]}
+        self.assertTrue(backend._ui_emit("_sig_preview_processing_segments", payload))
+        self.assertEqual(ui._sig_preview_processing_segments.args[0]["stage"], "context_review")
+        self.assertEqual(ui._sig_preview_processing_segments.args[0]["segments"][0]["text"], "초안")
 
 
 if __name__ == "__main__":

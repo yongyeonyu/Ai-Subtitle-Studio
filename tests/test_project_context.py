@@ -39,6 +39,39 @@ def _state_segments(state: dict) -> list[dict]:
 
 
 class ProjectContextTests(unittest.TestCase):
+    def test_create_project_reuses_probe_batch_for_duplicate_media_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "video.mp4"
+            media_path.write_bytes(b"video")
+            captured = {}
+
+            def _fake_probe_many(paths):
+                captured["paths"] = list(paths)
+                return [
+                    {"duration": 10.0, "fps": 30.0, "width": 1920, "height": 1080}
+                    for _ in paths
+                ]
+
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager.probe_media_many",
+                side_effect=_fake_probe_many,
+            ), patch("core.project.project_manager._get_media_probe") as single_probe:
+                project_path = Path(
+                    create_project(
+                        "duplicate_media_probe_cache",
+                        media_paths=[str(media_path), str(media_path)],
+                        user_settings={},
+                    )
+                )
+                payload = read_project_file(str(project_path))
+
+        self.assertEqual(captured["paths"], [str(media_path)])
+        single_probe.assert_not_called()
+        clips = payload["timeline"]["tracks"][0]["clips"]
+        self.assertEqual(len(clips), 2)
+        self.assertEqual(clips[0]["source_duration"], 10.0)
+        self.assertEqual(clips[1]["source_duration"], 10.0)
+
     def test_create_project_archives_existing_base_json_inside_backup_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
             media_path = str(Path(tmp) / "video.mp4")

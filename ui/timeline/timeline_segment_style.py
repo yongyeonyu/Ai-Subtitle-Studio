@@ -356,6 +356,7 @@ def subtitle_segment_visual_style(
     *,
     active: bool = False,
     hover: bool = False,
+    playback_active: bool = False,
     quality_filter: str = "all",
 ) -> dict:
     """Return zoom-stable subtitle segment colors."""
@@ -385,7 +386,8 @@ def subtitle_segment_visual_style(
         fill, border = QUALITY_SEGMENT_COLORS[q_label]
         text = ""
     else:
-        fill = "#4A1F24" if is_stt_pending else ("#1D3D76" if active else ("#222A31" if hover else "#242A30"))
+        base_fill = "#222A31" if hover else "#242A30"
+        fill = "#4A1F24" if is_stt_pending else ("#1D3D76" if active and not playback_active else base_fill)
         border = "#FF453A" if is_stt_pending else ("#8AB8FF" if active else "#3A4650")
         text = ""
 

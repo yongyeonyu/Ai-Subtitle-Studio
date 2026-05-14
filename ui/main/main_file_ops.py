@@ -22,6 +22,13 @@ from ui.editor.editor_save_manager import (
     reusable_cache_paths as _editor_reusable_cache_paths,
 )
 from ui.dialogs.message_box import ask_yes_no, confirm_save_changes, show_message
+from ui.main.main_nonfatal import call_nonfatal_ui_step, run_nonfatal_ui_step
+from ui.queue.queue_formatting import build_queue_header_payload
+from ui.project.project_session_runtime import (
+    clear_multiclip_runtime_state,
+    detach_project_session,
+    set_runtime_multiclip_state,
+)
 
 
 def _reusable_cache_paths() -> list[str]:
@@ -30,6 +37,14 @@ def _reusable_cache_paths() -> list[str]:
 
 class FileOpsMixin:
     """파일/폴더 선택 및 배치·멀티클립 모드 진입 관련 메서드."""
+
+    def _file_ops_log_failure(self, step: str, exc: BaseException) -> None:
+        try:
+            from core.runtime.logger import get_logger
+
+            get_logger().log(f"⚠️ 파일 작업 실패 [{step}]: {exc}")
+        except Exception:
+            pass
 
     def _confirm_save_dirty_editor_before_exit(self) -> bool:
         self._editor_exit_save_completed = False
@@ -104,19 +119,13 @@ class FileOpsMixin:
     def _prepare_dialog_state(self):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("file_dialog")
-        try:
-            fw = QApplication.focusWidget()
-            if fw is not None:
-                fw.clearFocus()
-        except Exception:
-            pass
-        try:
-            self.unsetCursor()
-            self.update()
-        except Exception:
-            pass
-        QApplication.processEvents()
+            run_nonfatal_ui_step("파일 작업", "file dialog foreground pause", lambda: pause_lora("file_dialog"), default=None)
+        fw = run_nonfatal_ui_step("파일 작업", "focus widget lookup", QApplication.focusWidget, default=None)
+        if fw is not None:
+            call_nonfatal_ui_step("파일 작업", fw, "clearFocus", step="focus clear", default=None)
+        call_nonfatal_ui_step("파일 작업", self, "unsetCursor", step="dialog state cursor unset", default=None)
+        call_nonfatal_ui_step("파일 작업", self, "update", step="dialog state update", default=None)
+        run_nonfatal_ui_step("파일 작업", "dialog state processEvents", QApplication.processEvents, default=None)
 
     def _safe_open_file_names(self, title, folder, flt):
         self._prepare_dialog_state()
@@ -152,14 +161,13 @@ class FileOpsMixin:
             return
         if hasattr(self, "init_queue_list"):
             self.init_queue_list(files)
-        if hasattr(self, "_sig_update_queue_header"):
-            self._sig_update_queue_header.emit(1, len(files), 0, "")
+        if hasattr(self, "_sig_update_queue_header_payload"):
+            self._sig_update_queue_header_payload.emit(
+                build_queue_header_payload(1, len(files), 0, "")
+            )
 
     def _clear_multiclip_runtime_state(self):
-        self._multiclip_files = []
-        self._multiclip_boundaries = []
-        self._accumulated_vad = []
-        self._reuse_existing_multiclip_subtitles = False
+        clear_multiclip_runtime_state(self)
 
     def select_files(self):
         paths, _ = self._safe_open_file_names(
@@ -171,14 +179,11 @@ class FileOpsMixin:
             return
         set_last_folder(os.path.dirname(paths[0]))
         self._add_recent_folder(os.path.dirname(paths[0]))
-        self._is_auto_pipeline = False
         self._auto_export_subtitle_video = True
         self._auto_audio_tune_per_file = True
         if hasattr(self, "_clear_runtime_quality_override"):
             self._clear_runtime_quality_override()
-        self._current_project_path = None
-        self._project_boundary_times = []
-        self._clear_multiclip_runtime_state()
+        detach_project_session(self, auto_pipeline=False)
         srt = [p for p in paths if p.lower().endswith(".srt")]
         vid = [p for p in paths if not p.lower().endswith(".srt")]
         if vid and len(vid) > 1:
@@ -206,13 +211,10 @@ class FileOpsMixin:
         self._queue_mode_starting = True
 
         try:
-            self._is_auto_pipeline = True
             self._is_queue_mode = True
             self._auto_export_subtitle_video = True
             self._auto_audio_tune_per_file = True
-            self._current_project_path = None
-            self._project_boundary_times = []
-            self._clear_multiclip_runtime_state()
+            detach_project_session(self, auto_pipeline=True)
             if not self.backend:
                 return
             if getattr(self.backend, "_active", False):
@@ -235,14 +237,11 @@ class FileOpsMixin:
             return
         set_last_folder(folder)
         self._add_recent_folder(folder)
-        self._is_auto_pipeline = False
         self._auto_export_subtitle_video = True
         self._auto_audio_tune_per_file = True
         if hasattr(self, "_clear_runtime_quality_override"):
             self._clear_runtime_quality_override()
-        self._current_project_path = None
-        self._project_boundary_times = []
-        self._clear_multiclip_runtime_state()
+        detach_project_session(self, auto_pipeline=False)
         from ui.dialogs.folder_dialog import FolderDialog
 
         dlg = FolderDialog(folder, self)
@@ -261,14 +260,11 @@ class FileOpsMixin:
                 return
         set_last_folder(folder)
         self._add_recent_folder(folder)
-        self._is_auto_pipeline = False
         self._auto_export_subtitle_video = True
         self._auto_audio_tune_per_file = True
         if hasattr(self, "_clear_runtime_quality_override"):
             self._clear_runtime_quality_override()
-        self._current_project_path = None
-        self._project_boundary_times = []
-        self._clear_multiclip_runtime_state()
+        detach_project_session(self, auto_pipeline=False)
         paths, _ = self._safe_open_file_names(
             "파일 선택",
             folder,
@@ -305,11 +301,17 @@ class FileOpsMixin:
 
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("multiclip_open")
+            run_nonfatal_ui_step("파일 작업", "multiclip foreground pause", lambda: pause_lora("multiclip_open"), default=None)
 
         dlg = MultiClipEditor(files, self, show_multiclip=show_multiclip)
         if dlg.exec():
-            self._multiclip_files = list(dlg.sorted_files)
+            set_runtime_multiclip_state(
+                self,
+                list(dlg.sorted_files),
+                [],
+                project_boundary_rows=None,
+                emit_boundary_signal=False,
+            )
             if self.backend:
                 self.backend.start_multiclip_pipeline(
                     dlg.sorted_files, folder=folder
@@ -351,15 +353,20 @@ class FileOpsMixin:
         exit_delay_ms = 30 if getattr(config, "IS_MAC", False) else 60
         schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
         if callable(schedule_exit):
-            try:
-                schedule_exit(delay_ms=exit_delay_ms)
-            except Exception:
-                pass
-        busy_before_exit = False
-        try:
-            busy_before_exit = bool(self._has_active_runtime_work_for_exit())
-        except Exception:
-            pass
+            run_nonfatal_ui_step(
+                "파일 작업",
+                "강제 종료 예약",
+                lambda: schedule_exit(delay_ms=exit_delay_ms),
+                default=None,
+            )
+        busy_before_exit = bool(
+            run_nonfatal_ui_step(
+                "파일 작업",
+                "종료 전 활성 런타임 확인",
+                self._has_active_runtime_work_for_exit,
+                default=False,
+            )
+        )
 
         pause_runtime = getattr(self, "_pause_all_runtime_work_for_exit", None)
         try:
@@ -371,12 +378,7 @@ class FileOpsMixin:
                 except TypeError:
                     self.backend.stop()
         except Exception as exc:
-            try:
-                from core.runtime.logger import get_logger
-
-                get_logger().log(f"⚠️ 종료 중 작업 일시정지 실패: {exc}")
-            except Exception:
-                pass
+            self._file_ops_log_failure("종료 중 작업 일시정지", exc)
 
         cleanup_runtime_async = getattr(self, "_start_runtime_cleanup_for_app_exit_async", None)
         exit_cleanup_timeout = 0.08 if getattr(config, "IS_MAC", False) else 0.15
@@ -388,29 +390,25 @@ class FileOpsMixin:
                 if callable(cleanup_runtime_sync):
                     cleanup_runtime_sync(timeout_sec=exit_cleanup_timeout)
         except Exception as exc:
-            try:
-                from core.runtime.logger import get_logger
-
-                get_logger().log(f"⚠️ 종료 중 런타임 정리 시작 실패: {exc}")
-            except Exception:
-                pass
+            self._file_ops_log_failure("종료 중 런타임 정리 시작", exc)
 
         if not busy_before_exit:
-            try:
-                self._backup_before_quick_exit(include_project_backup=False)
-            except Exception:
-                pass
+            run_nonfatal_ui_step(
+                "파일 작업",
+                "종료 전 백업",
+                lambda: self._backup_before_quick_exit(include_project_backup=False),
+                default=None,
+            )
         else:
-            try:
-                from core.runtime.logger import get_logger
-
-                get_logger().log("⏸️ 종료 전 백업은 생략하고, 진행 중 작업 일시 정지를 우선했습니다.")
-            except Exception:
-                pass
-        try:
-            self.close()
-        except Exception:
-            pass
+            run_nonfatal_ui_step(
+                "파일 작업",
+                "종료 전 백업 생략 로그",
+                lambda: __import__("core.runtime.logger", fromlist=["get_logger"]).get_logger().log(
+                    "⏸️ 종료 전 백업은 생략하고, 진행 중 작업 일시 정지를 우선했습니다."
+                ),
+                default=None,
+            )
+        call_nonfatal_ui_step("파일 작업", self, "close", step="빠른 종료 close", default=None)
         QApplication.quit()
 
     def _restore_current_work_mode(self):
@@ -429,8 +427,4 @@ class FileOpsMixin:
             try:
                 backup_project_file_copy(project_path)
             except Exception as exc:
-                try:
-                    from core.runtime.logger import get_logger
-                    get_logger().log(f"⚠️ 종료 전 프로젝트 백업 실패: {exc}")
-                except Exception:
-                    pass
+                self._file_ops_log_failure("종료 전 프로젝트 백업", exc)

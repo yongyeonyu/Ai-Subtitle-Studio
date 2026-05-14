@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from core.runtime.subprocess_utils import run_subprocess_capture
+
 
 CODEX_MODEL_ALIASES = {
     "Codex ChatGPT [구독/CLI]",
@@ -33,6 +35,9 @@ _OUTPUT_SCHEMA = {
     "required": ["result"],
     "additionalProperties": False,
 }
+
+_DEFAULT_CODEX_SPLIT_EFFORT = "minimal"
+_DEFAULT_CODEX_JSON_EFFORT = "low"
 
 def is_codex_model(model_name: str) -> bool:
     text = str(model_name or "").strip()
@@ -70,6 +75,22 @@ def _timeout(default: int) -> int:
     except Exception:
         configured = 0
     return max(1, configured or int(default or 120))
+
+
+def _retry_count() -> int:
+    try:
+        configured = int(float(os.environ.get("AI_SUBTITLE_CODEX_RETRIES", "") or 0))
+    except Exception:
+        configured = 0
+    return max(0, configured)
+
+
+def _retry_backoff_sec() -> float:
+    try:
+        configured = float(os.environ.get("AI_SUBTITLE_CODEX_RETRY_BACKOFF_SEC", "") or 0.0)
+    except Exception:
+        configured = 0.0
+    return max(0.0, configured)
 
 
 def _sandbox() -> str:
@@ -157,7 +178,20 @@ def _parse_json_object(output: str) -> dict | None:
     return None
 
 
-def _command(codex_bin: str, schema_path: Path | None, output_path: Path) -> list[str]:
+def _effort(task_kind: str) -> str:
+    suffix = str(task_kind or "").strip().upper()
+    task_specific = str(os.environ.get(f"AI_SUBTITLE_CODEX_{suffix}_EFFORT", "") or "").strip()
+    if task_specific:
+        return task_specific
+    general = str(os.environ.get("AI_SUBTITLE_CODEX_EFFORT", "") or "").strip()
+    if general:
+        return general
+    if suffix == "SPLIT":
+        return _DEFAULT_CODEX_SPLIT_EFFORT
+    return _DEFAULT_CODEX_JSON_EFFORT
+
+
+def _command(codex_bin: str, schema_path: Path | None, output_path: Path, *, effort: str) -> list[str]:
     cmd = [
         codex_bin,
         "exec",
@@ -175,7 +209,6 @@ def _command(codex_bin: str, schema_path: Path | None, output_path: Path) -> lis
     model = str(os.environ.get("AI_SUBTITLE_CODEX_MODEL", "") or "").strip()
     if model:
         cmd.extend(["--model", model])
-    effort = str(os.environ.get("AI_SUBTITLE_CODEX_EFFORT", "") or "").strip()
     if effort:
         cmd.extend(["--config", f'model_reasoning_effort="{effort}"'])
     return cmd
@@ -188,6 +221,7 @@ def _run_codex_json_task(
     schema: dict | None,
     timeout: int,
     task_prompt: str,
+    task_kind: str,
 ) -> str:
     if not is_codex_model(model_name):
         return ""
@@ -199,26 +233,18 @@ def _run_codex_json_task(
         if isinstance(schema, dict):
             schema_path = tmpdir / "schema.json"
             schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
-        cmd = _command(codex_bin, schema_path, output_path)
+        cmd = _command(codex_bin, schema_path, output_path, effort=_effort(task_kind))
         env = os.environ.copy()
         env.setdefault("NO_COLOR", "1")
-        kwargs = {}
-        if os.name == "nt":
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            proc = subprocess.run(
+            proc = run_subprocess_capture(
                 cmd,
-                input=task_prompt,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                input_text=task_prompt,
                 cwd=str(tmpdir),
                 env=env,
                 timeout=_timeout(timeout),
-                shell=False,
-                **kwargs,
+                retries=_retry_count(),
+                retry_backoff_sec=_retry_backoff_sec(),
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError("Codex CLI 실행 시간이 초과되었습니다.") from exc
@@ -249,6 +275,7 @@ def split_text(model_name: str, prompt: str, timeout: int = 120) -> list[str] | 
         schema=_OUTPUT_SCHEMA,
         timeout=timeout,
         task_prompt=_task_prompt(prompt),
+        task_kind="split",
     )
     if not output_text:
         return None
@@ -271,6 +298,7 @@ def run_json(model_name: str, prompt: str, timeout: int = 180) -> dict | None:
         schema=None,
         timeout=timeout,
         task_prompt=task_prompt,
+        task_kind="json",
     )
     if not output_text:
         return None

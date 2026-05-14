@@ -39,6 +39,7 @@ COLORS = {
 
 _LINE_ICON_CACHE_MAX = 256
 _LINE_ICON_CACHE = OrderedDict()
+_SVG_ICON_TEXT_CACHE: dict[str, str] = {}
 _ICON_ASSET_DIR = Path(__file__).resolve().parents[1] / "assets" / "icons" / "ui"
 _ICON_ALIASES = {
     "briefcase": "project",
@@ -67,7 +68,12 @@ def _svg_icon_from_asset(name, color, size):
     if not svg_path.exists():
         return None
     try:
-        svg_text = svg_path.read_text(encoding="utf-8").replace("currentColor", str(color))
+        cache_key = str(svg_path)
+        svg_template = _SVG_ICON_TEXT_CACHE.get(cache_key)
+        if svg_template is None:
+            svg_template = svg_path.read_text(encoding="utf-8")
+            _SVG_ICON_TEXT_CACHE[cache_key] = svg_template
+        svg_text = svg_template.replace("currentColor", str(color))
         renderer = QSvgRenderer(svg_text.encode("utf-8"))
     except Exception:
         return None
@@ -81,6 +87,14 @@ def _svg_icon_from_asset(name, color, size):
     renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
     return QIcon(pix)
+
+
+def _store_line_icon(cache_key, icon):
+    _LINE_ICON_CACHE[cache_key] = icon
+    _LINE_ICON_CACHE.move_to_end(cache_key)
+    while len(_LINE_ICON_CACHE) > _LINE_ICON_CACHE_MAX:
+        _LINE_ICON_CACHE.popitem(last=False)
+    return icon
 
 
 def _px(value):
@@ -274,11 +288,7 @@ def line_icon(name, color=None, size=28):
 
     svg_icon = _svg_icon_from_asset(name, color, size)
     if svg_icon is not None:
-        _LINE_ICON_CACHE[cache_key] = svg_icon
-        _LINE_ICON_CACHE.move_to_end(cache_key)
-        while len(_LINE_ICON_CACHE) > _LINE_ICON_CACHE_MAX:
-            _LINE_ICON_CACHE.popitem(last=False)
-        return svg_icon
+        return _store_line_icon(cache_key, svg_icon)
 
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
@@ -503,15 +513,12 @@ def line_icon(name, color=None, size=28):
 
     painter.end()
     icon = QIcon(pix)
-    _LINE_ICON_CACHE[cache_key] = icon
-    _LINE_ICON_CACHE.move_to_end(cache_key)
-    while len(_LINE_ICON_CACHE) > _LINE_ICON_CACHE_MAX:
-        _LINE_ICON_CACHE.popitem(last=False)
-    return icon
+    return _store_line_icon(cache_key, icon)
 
 
 def clear_line_icon_cache():
     _LINE_ICON_CACHE.clear()
+    _SVG_ICON_TEXT_CACHE.clear()
 
 
 def app_stylesheet():

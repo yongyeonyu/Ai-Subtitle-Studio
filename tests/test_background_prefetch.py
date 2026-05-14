@@ -33,6 +33,40 @@ class BackgroundPrefetchTests(unittest.TestCase):
         self.assertEqual([row["text"] for row in plan["segments"]], ["근처1", "근처2"])
         self.assertTrue(plan["waveform"]["requested"])
 
+    def test_plan_projects_lightweight_prefetch_rows(self):
+        plan = build_background_prefetch_plan(
+            media_path="",
+            current_sec=1.0,
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 2.0,
+                    "text": "현재",
+                    "speaker": "SPEAKER_00",
+                    "quality": {"label": "green", "history": ["x" * 1024]},
+                    "stt_candidates": [{"source": "STT1", "text": "현재"}],
+                    "unused_blob": "y" * 2048,
+                }
+            ],
+            settings={},
+        )
+
+        self.assertEqual(plan["segment_count"], 1)
+        self.assertEqual(
+            plan["segments"][0],
+            {
+                "start": 0.0,
+                "end": 2.0,
+                "timeline_start": 0.0,
+                "timeline_end": 2.0,
+                "text": "현재",
+                "speaker": "SPEAKER_00",
+                "stt_candidates": [{"source": "STT1", "text": "현재"}],
+            },
+        )
+        self.assertNotIn("quality", plan["segments"][0])
+        self.assertNotIn("unused_blob", plan["segments"][0])
+
     def test_manager_prefetches_candidate_lattice_without_lora(self):
         manager = BackgroundPrefetchManager()
         result = manager.request(
@@ -95,6 +129,26 @@ class BackgroundPrefetchTests(unittest.TestCase):
 
         editor._get_current_segments.assert_not_called()
         self.assertEqual(editor._last_background_prefetch_request["segment_count"], 1)
+
+    def test_editor_background_prefetch_reuses_cached_segment_list_reference(self):
+        editor = _PrefetchEditor()
+        editor.settings = {
+            "background_prefetch_enabled": True,
+            "background_prefetch_lora_enabled": False,
+            "background_prefetch_candidates_enabled": False,
+            "background_prefetch_min_interval_sec": 0.0,
+        }
+        editor.media_path = "/tmp/video.mp4"
+        editor.video_player = SimpleNamespace(path="")
+        cached = [{"start": 9.0, "end": 11.0, "text": "캐시"}]
+        manager = Mock()
+        manager.request.return_value = {"queued": True, "segment_count": 1}
+        editor._background_prefetch_manager = manager
+        editor._cached_segs = cached
+
+        editor._schedule_background_prefetch(10.0)
+
+        self.assertIs(manager.request.call_args.kwargs["segments"], cached)
 
     def test_editor_background_prefetch_throttles_before_copying_segments(self):
         class ExplodingSegments:

@@ -342,6 +342,152 @@ class WordResegmenterTests(unittest.TestCase):
         self.assertEqual([item["text"] for item in result], ["이번에 마크마가 WEC 데뷔전에서"])
         self.assertEqual(result[0]["_lora_segment_settings"]["split_length_threshold"], 20)
 
+    def test_lora_style_micro_merge_selective_merges_low_readability_micro_fragment_without_resnapping(self):
+        result = subtitle_engine._apply_lora_style_micro_merge(
+            [
+                {
+                    "start": 0.0,
+                    "end": 0.35,
+                    "text": "어",
+                    "words": [{"word": "어", "start": 0.02, "end": 0.18}],
+                    "subtitle_confidence_label": "yellow",
+                },
+                {
+                    "start": 0.46,
+                    "end": 1.48,
+                    "text": "이건 수소차예요",
+                    "words": [
+                        {"word": "이건", "start": 0.5, "end": 0.72},
+                        {"word": "수소차예요", "start": 0.78, "end": 1.34},
+                    ],
+                },
+            ],
+            [],
+            {
+                "subtitle_lora_micro_merge_enabled": True,
+                "subtitle_lora_micro_merge_mode": "readability_selective",
+                "split_length_threshold": 16,
+                "sub_min_duration": 0.8,
+                "sub_gap_break_sec": 1.5,
+                "continuous_threshold": 2.0,
+                "subtitle_lora_micro_merge_continuous_sec": 3.0,
+                "word_timing_gap_break_sec": 0.65,
+                "sub_max_duration": 6.0,
+                "sub_max_cps": 20,
+            },
+            stage="unit",
+        )
+
+        self.assertEqual([item["text"] for item in result], ["어 이건 수소차예요"])
+        self.assertEqual(result[0]["start"], 0.0)
+        self.assertEqual(result[0]["end"], 1.48)
+        self.assertEqual(result[0]["_lora_style_merge_policy"]["mode"], "readability_selective")
+
+    def test_lora_style_micro_merge_selective_skips_clean_rows(self):
+        result = subtitle_engine._apply_lora_style_micro_merge(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.25,
+                    "text": "여기는 티니핑 자동차 전시",
+                    "words": [
+                        {"word": "여기는", "start": 0.0, "end": 0.3},
+                        {"word": "티니핑", "start": 0.34, "end": 0.64},
+                        {"word": "자동차", "start": 0.68, "end": 0.94},
+                        {"word": "전시", "start": 0.98, "end": 1.18},
+                    ],
+                    "subtitle_confidence_label": "green",
+                    "_uncertainty_policy": {"bucket": "easy", "reasons": []},
+                },
+                {
+                    "start": 1.18,
+                    "end": 2.42,
+                    "text": "수소 에너지로 자동차가 달려요",
+                    "words": [
+                        {"word": "수소", "start": 1.18, "end": 1.42},
+                        {"word": "에너지로", "start": 1.46, "end": 1.82},
+                        {"word": "자동차가", "start": 1.86, "end": 2.12},
+                        {"word": "달려요", "start": 2.16, "end": 2.36},
+                    ],
+                    "subtitle_confidence_label": "green",
+                    "_uncertainty_policy": {"bucket": "easy", "reasons": []},
+                },
+            ],
+            [],
+            {
+                "subtitle_lora_micro_merge_enabled": True,
+                "subtitle_lora_micro_merge_mode": "readability_selective",
+                "split_length_threshold": 16,
+                "sub_min_duration": 0.8,
+                "sub_gap_break_sec": 1.5,
+                "continuous_threshold": 2.0,
+                "subtitle_lora_micro_merge_continuous_sec": 3.0,
+                "word_timing_gap_break_sec": 0.65,
+                "sub_max_duration": 6.0,
+                "sub_max_cps": 20,
+            },
+            stage="unit",
+        )
+
+        self.assertEqual([item["text"] for item in result], ["여기는 티니핑 자동차 전시", "수소 에너지로 자동차가 달려요"])
+
+    def test_lora_card_packaging_reflows_lines_without_changing_timing(self):
+        result = subtitle_engine._apply_lora_card_packaging(
+            [
+                {
+                    "start": 10.0,
+                    "end": 12.4,
+                    "text": "수소를 만들고 보관해서 자동차를 달리게 하자",
+                    "_lora_segment_settings": {
+                        "split_length_threshold": 12,
+                        "subtitle_target_line_count": 2,
+                    },
+                }
+            ],
+            {
+                "subtitle_lora_packaging_enabled": True,
+                "subtitle_lora_packaging_mode": "full",
+                "split_length_threshold": 12,
+            },
+            {},
+            stage="unit",
+        )
+
+        self.assertEqual(result[0]["start"], 10.0)
+        self.assertEqual(result[0]["end"], 12.4)
+        self.assertIn("\n", result[0]["text"])
+        self.assertEqual(
+            result[0]["text"].replace("\n", " ").replace("  ", " ").strip(),
+            "수소를 만들고 보관해서 자동차를 달리게 하자",
+        )
+        self.assertEqual(result[0]["_lora_packaging_policy"]["task"], "lora_card_packaging")
+
+    def test_lora_card_packaging_selective_skips_short_clean_rows(self):
+        result = subtitle_engine._apply_lora_card_packaging(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.2,
+                    "text": "티니핑 전시예요",
+                    "subtitle_confidence_label": "green",
+                    "_lora_segment_settings": {
+                        "split_length_threshold": 14,
+                        "subtitle_target_line_count": 1,
+                    },
+                }
+            ],
+            {
+                "subtitle_lora_packaging_enabled": True,
+                "subtitle_lora_packaging_mode": "readability_selective",
+                "split_length_threshold": 14,
+            },
+            {},
+            stage="unit",
+        )
+
+        self.assertEqual(result[0]["text"], "티니핑 전시예요")
+        self.assertNotIn("_lora_packaging_policy", result[0])
+
     def test_common_split_guard_does_not_recut_lora_twenty_char_style(self):
         text = "이번에 마크마가 WEC 데뷔전에서 완주를 두 대 다 했잖아요"
         words = [

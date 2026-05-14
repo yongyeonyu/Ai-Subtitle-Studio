@@ -798,7 +798,7 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         prepare.assert_not_called()
         call_openai.assert_not_called()
 
-    def test_editor_draft_codex_uses_wide_chunks_and_longer_timeout(self):
+    def test_editor_draft_codex_uses_tuned_chunks_and_longer_timeout(self):
         from core.llm.codex_provider import DEFAULT_CODEX_LABEL
         from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
 
@@ -814,8 +814,10 @@ class EditorRoughcutDraftTests(unittest.TestCase):
 
         scope = describe_editor_roughcut_llm_scope(_segments(492), settings)
         self.assertEqual(scope["mode"], "chunked")
-        self.assertLessEqual(scope["chunk_count"], 8)
-        self.assertGreaterEqual(scope["chunk_rows"], 72)
+        self.assertGreaterEqual(scope["chunk_count"], 9)
+        self.assertLessEqual(scope["chunk_count"], 12)
+        self.assertGreaterEqual(scope["chunk_rows"], 48)
+        self.assertLess(scope["chunk_rows"], 72)
         self.assertTrue(scope["policy"].get("codex_wide_context"))
 
         with mock.patch(

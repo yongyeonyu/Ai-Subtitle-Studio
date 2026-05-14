@@ -25,6 +25,12 @@ from core.media_info import probe_media_many
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin
 from core.pipeline.single_pipeline import SinglePipelineMixin
 from core.pipeline.multiclip_pipeline import MulticlipPipelineMixin
+from ui.project.project_session_runtime import (
+    clear_multiclip_runtime_state,
+    detach_project_session,
+    set_project_boundary_rows,
+)
+from ui.queue.queue_dispatch import queue_progress_state
 
 
 class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMixin):
@@ -100,22 +106,20 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
             except Exception:
                 pass
         else:
-            for attr, value in (
-                ("_multiclip_files", []),
-                ("_multiclip_boundaries", []),
-                ("_accumulated_vad", []),
-                ("_project_boundary_times", []),
-                ("_reuse_clip_indices", set()),
-            ):
-                try:
-                    setattr(ui, attr, value.copy() if hasattr(value, "copy") else value)
-                except Exception:
-                    pass
-        if clear_project:
+            clear_multiclip_runtime_state(ui)
             try:
-                ui._current_project_path = None
+                ui._reuse_clip_indices = set()
             except Exception:
                 pass
+        if clear_project:
+            detach_project_session(
+                ui,
+                auto_pipeline=bool(getattr(ui, "_is_auto_pipeline", False)),
+                clear_multiclip=False,
+                emit_boundary_signal=False,
+            )
+        else:
+            set_project_boundary_rows(ui, [], emit_boundary_signal=False)
         for attr, value in (
             ("_editor_roughcut_result", None),
             ("_stored_roughcut_result", None),
@@ -126,11 +130,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                 setattr(ui, attr, value.copy() if hasattr(value, "copy") else value)
             except Exception:
                 pass
-        try:
-            if hasattr(ui, "_sig_update_project_boundary_times"):
-                ui._sig_update_project_boundary_times.emit([])
-        except Exception:
-            pass
+        set_project_boundary_rows(ui, [], emit_boundary_signal=True)
 
     def _reset_backend_individual_clip_context(self, *, invalidate_prefetch: bool = True):
         self._speaker_map = []
@@ -343,26 +343,24 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                 if expected_time > 0:
                     total_expected_time += expected_time
 
-                if self._show_queue_for_current_run and hasattr(self.ui, "_sig_update_queue"):
-                    self.ui._sig_update_queue.emit(
-                        i, "대기 중", str(expected_time), info_txt, len_txt
+                if self._show_queue_for_current_run:
+                    self._emit_queue_status(
+                        i,
+                        "대기 중",
+                        str(expected_time),
+                        info_txt,
+                        len_txt,
                     )
             except Exception as e:
                 get_logger().log(
                     f"⚠️ ETA 계산 실패: {os.path.basename(target_file)} / {e}"
                 )
-                if self._show_queue_for_current_run and hasattr(self.ui, "_sig_update_queue"):
-                    self.ui._sig_update_queue.emit(
-                        i, "대기 중", "예상불가", "오류", "-"
-                    )
+                if self._show_queue_for_current_run:
+                    self._emit_queue_status(i, "대기 중", "예상불가", "오류", "-")
 
         self.total_expected_time = total_expected_time
 
-        if (
-            self._show_queue_for_current_run
-            and total_expected_time > 0
-            and hasattr(self.ui, "_sig_update_queue_header")
-        ):
+        if self._show_queue_for_current_run and total_expected_time > 0:
             t_mins, t_secs = int(total_expected_time // 60), int(
                 total_expected_time % 60
             )
@@ -372,8 +370,12 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                 total_str = f"{t_hours}시간 {t_mins}분 {t_secs}초"
             else:
                 total_str = f"{t_mins}분 {t_secs}초"
-            current = max(1, int(getattr(self.ui, "_current_file_idx", 1) or 1))
-            pct = max(0, int(getattr(self.ui, "_real_pct", 0) or 0))
-            self.ui._sig_update_queue_header.emit(
-                current, len(self.files_to_process), pct, total_str
+            progress = queue_progress_state(
+                self.ui,
+                current_default=1,
+                total_default=len(self.files_to_process),
+                pct_default=0,
             )
+            current = max(1, int(progress["current"] or 1))
+            pct = max(0, int(progress["pct"] or 0))
+            self._emit_queue_header(current, len(self.files_to_process), pct, total_str)

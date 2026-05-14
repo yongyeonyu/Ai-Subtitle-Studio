@@ -71,6 +71,40 @@ def _scenegraph_vector_profile(visible_segment_count: int, pps: float) -> str:
     return "full"
 
 
+def _scenegraph_playback_focus_signature(
+    segments: list[dict[str, Any]] | None,
+    *,
+    playhead_sec: float | None,
+    fps: float,
+) -> tuple[Any, ...] | None:
+    if playhead_sec is None:
+        return None
+    rows = segments if isinstance(segments, list) else list(segments or [])
+    if not rows:
+        return ("frame", int(sec_to_frame(float(playhead_sec or 0.0), fps)))
+    playhead = float(playhead_sec or 0.0)
+    edge_tol = max(0.001, min(0.05, 2.0 / max(1.0, float(fps or 30.0))))
+    for seg in rows:
+        if not isinstance(seg, dict) or seg.get("is_gap"):
+            continue
+        if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
+            continue
+        start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
+        end = max(start, _safe_float(seg.get("end", seg.get("timeline_end", start)), start))
+        if start - edge_tol <= playhead < end + edge_tol:
+            return (
+                "segment",
+                int(seg.get("line", -1) or -1),
+                int(sec_to_frame(start, fps)),
+                int(max(sec_to_frame(end, fps), sec_to_frame(start, fps) + 1)),
+            )
+    return ("frame", int(sec_to_frame(playhead, fps)))
+
+
+def _speaker_settings_signature(speaker_settings: dict[str, Any] | None) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((str(key), str(value)) for key, value in dict(speaker_settings or {}).items()))
+
+
 def build_scenegraph_subtitle_segments(
     segments: list[dict[str, Any]] | None,
     *,
@@ -81,6 +115,8 @@ def build_scenegraph_subtitle_segments(
     active_start: float | None = None,
     active_line: int | None = None,
     hover_line: int | None = None,
+    playback_active: bool = False,
+    playhead_sec: float | None = None,
     quality_filter: str = "all",
     speaker_settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -88,7 +124,7 @@ def build_scenegraph_subtitle_segments(
     rows = [seg for seg in list(segments or []) if isinstance(seg, dict) and not seg.get("is_gap")]
     final_rows = [
         seg for seg in rows
-        if not bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview"))
+        if not bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
     ]
     final_selection_index = build_stt_selection_index(final_rows)
     fps = normalize_fps(fps or 30.0)
@@ -107,7 +143,7 @@ def build_scenegraph_subtitle_segments(
         if end_frame < visible_start_frame or start_frame > visible_end_frame:
             continue
 
-        is_preview = bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview"))
+        is_preview = bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
         source = stt_preview_source(seg)
         if is_preview:
             if source == "STT2":
@@ -141,25 +177,32 @@ def build_scenegraph_subtitle_segments(
             is_hover = False
         else:
             line = seg.get("line")
-            is_active = (
-                (active_line is not None and line == active_line)
-                or (
-                    active_start is not None
-                    and abs(start - float(active_start)) < 0.001
+            if playback_active and playhead_sec is not None:
+                edge_tol = max(0.001, min(0.05, 2.0 / fps))
+                is_active = start - edge_tol <= float(playhead_sec) < end + edge_tol
+            else:
+                is_active = (
+                    (active_line is not None and line == active_line)
+                    or (
+                        active_start is not None
+                        and abs(start - float(active_start)) < 0.001
+                    )
                 )
-            )
             is_hover = hover_line is not None and line == hover_line
+            render_active = bool(is_active and not playback_active)
+            render_hover = bool(is_hover and not playback_active)
             visual = subtitle_segment_visual_style(
                 seg,
-                active=is_active,
-                hover=is_hover,
+                active=render_active,
+                hover=render_hover,
+                playback_active=playback_active,
                 quality_filter=quality_filter,
             )
             fill = str(visual["fill"])
             border = str(visual["border"])
             text_color = str(visual.get("text") or "#DCE3EA")
             alpha = 255
-            border_width = 2 if is_active or is_hover else 1
+            border_width = 2 if render_active or render_hover else 1
             speaker_color = _speaker_color(seg, speaker_settings)
             speaker_fill = _darker_hex(speaker_color, 135)
             speaker_names = " / ".join(speaker_labels_for_segment(speaker_settings, seg))
@@ -173,14 +216,22 @@ def build_scenegraph_subtitle_segments(
         show_text = bool(width >= 44.0 and allow_text)
         show_confidence_chips = bool(
             not is_preview
+            and not playback_active
             and render_profile == "full"
             and width >= 72.0
             and float(h) >= 30.0
         )
         show_speaker_bar = bool(not is_preview and render_profile != "minimal" and width >= 24.0)
-        show_speaker_text = bool(show_speaker_bar and render_profile == "full" and width >= 64.0 and speaker_names)
+        show_speaker_text = bool(
+            not playback_active
+            and show_speaker_bar
+            and render_profile == "full"
+            and width >= 64.0
+            and speaker_names
+        )
         show_handles = bool(
             not is_preview
+            and not playback_active
             and render_profile == "full"
             and width >= SEGMENT_HANDLE_MIN_WIDTH
         )
@@ -236,6 +287,7 @@ class TimelineSceneGraphLayer:
         self.widget.setSource(QUrl.fromLocalFile(str(QML_PATH)))
         self.widget.setVisible(False)
         self._last_segment_count = 0
+        self._last_state_key = None
 
     @staticmethod
     def enabled() -> bool:
@@ -265,14 +317,37 @@ class TimelineSceneGraphLayer:
         active_start: float | None,
         active_line: int | None,
         hover_line: int | None,
+        playback_active: bool,
+        playhead_sec: float | None,
         quality_filter: str,
         speaker_settings: dict[str, Any] | None,
+        render_epoch: int = 0,
     ) -> int:
         root = self.widget.rootObject()
         if root is None:
             self._last_segment_count = 0
+            self._last_state_key = None
             self.widget.setVisible(False)
             return 0
+        fps = normalize_fps(fps or 30.0)
+        state_key = (
+            int(render_epoch or 0),
+            id(segments),
+            len(segments or []),
+            round(float(pps or 1.0), 4),
+            round(float(fps or 30.0), 4),
+            int(scroll_x or 0),
+            round(float(visible_start_sec or 0.0), 3),
+            round(float(visible_end_sec or 0.0), 3),
+            None if playback_active else (None if active_start is None else int(sec_to_frame(float(active_start), fps))),
+            None if playback_active else (None if active_line is None else int(active_line)),
+            None if hover_line is None else int(hover_line),
+            bool(playback_active),
+            str(quality_filter or "all"),
+            _speaker_settings_signature(speaker_settings),
+        )
+        if state_key == getattr(self, "_last_state_key", None):
+            return int(getattr(self, "_last_segment_count", 0) or 0)
         data = build_scenegraph_subtitle_segments(
             segments,
             pps=pps,
@@ -282,13 +357,16 @@ class TimelineSceneGraphLayer:
             active_start=active_start,
             active_line=active_line,
             hover_line=hover_line,
+            playback_active=playback_active,
+            playhead_sec=playhead_sec,
             quality_filter=quality_filter,
             speaker_settings=speaker_settings,
         )
         self._last_segment_count = len(data)
+        self._last_state_key = state_key
         root.setProperty("segments", data)
         root.setProperty("pps", float(pps or 1.0))
-        root.setProperty("fps", float(normalize_fps(fps)))
+        root.setProperty("fps", float(fps))
         root.setProperty("viewportX", float(scroll_x or 0))
         root.setProperty("fontFamily", str(config.FONT))
         return self._last_segment_count

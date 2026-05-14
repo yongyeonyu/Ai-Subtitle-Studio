@@ -9,6 +9,8 @@ core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장
 [추가] 일반/화자 자막 분리 생성 및 "자막백업" 폴더 내 날짜+순번 자동 채번 백업 기능 완비
 [복구] 불필요한 초강력 시간태그 삭제 알고리즘 제거 (에디터 네비게이션 태그 오해 해소)
 """
+import difflib
+import json
 import re
 import threading
 import time
@@ -19,6 +21,7 @@ from core.llm.openai_provider import is_codex_model, is_openai_model, split_text
 from core.audio.stt_lattice import select_stt_lattice_text
 from core.engine.llm_correction_guard import assess_llm_rewrite_policy
 from core.engine.llm_candidate_policy import (
+    _lora_line_break_patterns as _llm_lora_line_break_patterns,
     build_llm_candidate_options,
     validate_candidate_locked_chunks,
 )
@@ -31,16 +34,12 @@ from core.engine.subtitle_native_word_split import native_builtin_word_groups as
 from core.engine.subtitle_text_policy import (
     clean_subtitle_text as _clean,
     enforce_final_subtitle_text_policy as _enforce_final_subtitle_text_policy,
+    normalize_subtitle_text_lines as _normalize_subtitle_text_lines,
     split_visible_len as _split_visible_len,
     strip_stt_control_tokens as _strip_stt_control_tokens,
 )
 from core.engine.subtitle_segment_filter import (
-    absorb_tiny_segments as _absorb_tiny,
     configure_segment_filter as _configure_segment_filter,
-    dedup_close_segments as _dedup_close,
-    global_dedup_segments as _global_dedup,
-    pre_merge_segments as _pre_merge,
-    sanitize_segments as _sanitize,
 )
 from core.engine.subtitle_accuracy_pipeline import (
     append_accuracy_decision,
@@ -59,7 +58,7 @@ from core.engine.subtitle_accuracy_pipeline import (
     verify_llm_chunks_for_subtitle,
 )
 from core.engine.subtitle_uncertainty import annotate_uncertainty_first_segments
-from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps
+from core.subtitle_quality.timestamp_regrouper import merge_short_segments_by_gap, regroup_by_word_timestamps
 from core.personalization.deep_subtitle_policy import (
     adjust_subtitle_timing as deep_adjust_subtitle_timing,
     rerank_subtitle_candidates,
@@ -69,6 +68,7 @@ from core.personalization.deep_subtitle_policy import (
 from core.personalization.deep_policy_learning import record_deep_policy_events_for_segments
 from core.personalization.deep_runtime_adaptation import adapt_runtime_settings_from_deep_events
 from core.personalization.editor_truth_memory import apply_recent_editor_truth_patterns
+from core.personalization.lora_models import line_break_pattern_for_text
 from core.personalization.runtime_lora_context import build_runtime_lora_prompt, runtime_lora_enabled
 from core.personalization.subtitle_lora_runtime import (
     attach_segment_lora_settings,
@@ -90,6 +90,7 @@ from core.engine.subtitle_timing import (
     adjust_timing,
     apply_final_gap_settings,
 )
+from core.engine.subtitle_context_refiner import refine_high_contextual_boundaries
 from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -631,6 +632,146 @@ def _lora_style_merge_settings(settings: dict | None) -> dict:
     }
 
 
+def _lora_style_merge_mode(settings: dict | None) -> str:
+    raw = str(dict(settings or {}).get("subtitle_lora_micro_merge_mode") or "full").strip().lower()
+    if raw in {"readability", "readability_selective", "selective"}:
+        return "readability_selective"
+    return "full"
+
+
+def _segment_quality_label(segment: dict) -> str:
+    quality = dict(segment.get("quality") or {})
+    return str(quality.get("confidence_label") or segment.get("subtitle_confidence_label") or "").strip().lower()
+
+
+def _segment_quality_score(segment: dict) -> float:
+    quality = dict(segment.get("quality") or {})
+    score = quality.get("confidence_score", segment.get("subtitle_confidence_score"))
+    try:
+        value = float(score)
+    except Exception:
+        return 0.0
+    if 0.0 <= value <= 1.0:
+        value *= 100.0
+    return max(0.0, min(100.0, value))
+
+
+def _segment_compact_len(segment: dict) -> int:
+    return len(re.sub(r"\s+", "", str(segment.get("text", "") or "")))
+
+
+def _segment_duration(segment: dict) -> float:
+    start = _setting_float(segment, "start", 0.0)
+    end = _setting_float(segment, "end", start)
+    return max(0.0, end - start)
+
+
+def _lora_readability_merge_reasons(segment: dict, settings: dict | None, merge_settings: dict) -> list[str]:
+    threshold = max(8, int(merge_settings.get("split_length_threshold", 20) or 20))
+    chars = _segment_compact_len(segment)
+    duration = max(0.1, _segment_duration(segment))
+    cps = chars / duration
+    max_cps = max(1, _setting_int(settings or {}, "sub_max_cps", _MAX_CPS))
+    min_duration = max(0.05, float(merge_settings.get("sub_min_duration", _MIN_DURATION) or _MIN_DURATION))
+    floor_chars = max(2, int(threshold * 0.45))
+    quality_label = _segment_quality_label(segment)
+    quality_score = _segment_quality_score(segment)
+    uncertainty = dict(segment.get("_uncertainty_policy") or {})
+    uncertainty_bucket = str(uncertainty.get("bucket") or "").strip().lower()
+    uncertainty_reasons = {
+        str(item.get("reason") or "").strip().lower()
+        for item in list(uncertainty.get("reasons") or [])
+        if isinstance(item, dict)
+    }
+
+    reasons: list[str] = []
+    if duration < min_duration or chars <= floor_chars:
+        reasons.append("micro_fragment")
+    if cps > max_cps * 1.04:
+        reasons.append("high_cps")
+    if chars > int(threshold * 1.12):
+        reasons.append("long_text")
+    if quality_label in {"yellow", "red"}:
+        reasons.append(f"quality_{quality_label}")
+    elif 0.0 < quality_score < float((settings or {}).get("subtitle_lora_selective_quality_max_score", 82.0) or 82.0):
+        reasons.append("low_quality_score")
+    if uncertainty_bucket == "precision":
+        reasons.append("precision_bucket")
+    for key in ("high_cps", "long_text", "quality_red", "quality_yellow"):
+        if key in uncertainty_reasons and key not in reasons:
+            reasons.append(key)
+    return reasons
+
+
+def _selective_lora_merge_indexes(rows: list[dict], settings: dict | None, merge_settings: dict) -> tuple[set[int], dict[int, list[str]]]:
+    selected: set[int] = set()
+    reasons_map: dict[int, list[str]] = {}
+    for idx, row in enumerate(rows):
+        reasons = _lora_readability_merge_reasons(row, settings, merge_settings)
+        if not reasons:
+            continue
+        reasons_map[idx] = reasons
+        selected.add(idx)
+        if idx > 0:
+            selected.add(idx - 1)
+        if idx + 1 < len(rows):
+            selected.add(idx + 1)
+    return selected, reasons_map
+
+
+def _apply_lora_style_micro_merge_selective(
+    rows: list[dict],
+    vad_segments: list[dict] | None,
+    settings: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    merge_settings = _lora_style_merge_settings(settings)
+    selected_indexes, reasons_map = _selective_lora_merge_indexes(rows, settings, merge_settings)
+    if not selected_indexes:
+        return rows
+
+    for idx, row in enumerate(rows):
+        policy = dict(row.get("_lora_style_merge_policy") or {})
+        policy["mode"] = "readability_selective"
+        if idx in reasons_map:
+            policy["selective_reasons"] = list(reasons_map[idx])
+        row["_lora_style_merge_policy"] = policy
+
+    merged_rows: list[dict] = []
+    merge_saved = 0
+    index = 0
+    while index < len(rows):
+        if index not in selected_indexes:
+            merged_rows.append(rows[index])
+            index += 1
+            continue
+        tail = index + 1
+        while tail < len(rows) and tail in selected_indexes:
+            tail += 1
+        chunk = [dict(item) for item in rows[index:tail]]
+        if len(chunk) >= 2:
+            out_chunk = merge_short_segments_by_gap(
+                chunk,
+                min_duration=float(merge_settings["sub_min_duration"]),
+                max_chars=int(merge_settings["split_length_threshold"]),
+                gap_break_sec=min(float(merge_settings["sub_gap_break_sec"]), 0.8),
+                vad_segments=vad_segments or [],
+                word_gap_break_sec=float(merge_settings["word_timing_gap_break_sec"]),
+            )
+            merge_saved += max(0, len(chunk) - len(out_chunk))
+            merged_rows.extend(out_chunk)
+        else:
+            merged_rows.extend(chunk)
+        index = tail
+
+    if merge_saved > 0:
+        get_logger().log(
+            f"[LoRA자막묶음] {stage}: readability selective로 {merge_saved}개 미세 자막 병합"
+        )
+    return merged_rows
+
+
 def _seed_lora_style_merge_context(segments: list[dict], settings: dict | None, *, stage: str) -> list[dict]:
     merge_settings = _lora_style_merge_settings(settings)
     rows: list[dict] = []
@@ -667,6 +808,9 @@ def _apply_lora_style_micro_merge(
     if not segments or not _bool_setting(settings, "subtitle_lora_micro_merge_enabled", True):
         return segments
     rows = _seed_lora_style_merge_context(segments, settings, stage=stage)
+    merge_mode = _lora_style_merge_mode(settings)
+    if merge_mode == "readability_selective":
+        return _apply_lora_style_micro_merge_selective(rows, vad_segments, settings, stage=stage)
     merge_settings = _lora_style_merge_settings(settings)
     before_count = len(rows)
     try:
@@ -688,6 +832,176 @@ def _apply_lora_style_micro_merge(
     if len(merged) < before_count:
         get_logger().log(f"[LoRA자막묶음] {stage}: 짧은 자막 {before_count}개 → {len(merged)}개로 병합")
     return merged
+
+
+def _lora_packaging_mode(settings: dict | None) -> str:
+    raw = str(dict(settings or {}).get("subtitle_lora_packaging_mode") or "full").strip().lower()
+    if raw in {"readability", "readability_selective", "selective"}:
+        return "readability_selective"
+    return "full"
+
+
+def _subtitle_text_lines(text: str) -> list[str]:
+    normalized = _normalize_subtitle_text_lines(text)
+    return [line.strip() for line in str(normalized or "").splitlines() if line.strip()]
+
+
+def _packaging_target_patterns(settings: dict | None) -> list[str]:
+    return list(_llm_lora_line_break_patterns(dict(settings or {}), limit=4) or [])
+
+
+def _lora_packaging_reasons(segment: dict, settings: dict | None) -> list[str]:
+    text = str(segment.get("text", "") or "")
+    if not text.strip():
+        return []
+    threshold = max(8, _setting_int(settings or {}, "split_length_threshold", 20))
+    chars = _split_visible_len(text)
+    lines = _subtitle_text_lines(text)
+    current_pattern = line_break_pattern_for_text(text)
+    target_patterns = _packaging_target_patterns(settings)
+    target_line_count = max(0, _setting_int(settings or {}, "subtitle_target_line_count", 0))
+    quality_label = _segment_quality_label(segment)
+    quality_score = _segment_quality_score(segment)
+    reasons: list[str] = []
+    if len(lines) <= 1 and chars >= max(10, int(threshold * 0.88)):
+        reasons.append("single_line_overflow")
+    if target_patterns and current_pattern not in target_patterns:
+        reasons.append("pattern_mismatch")
+    if target_line_count >= 2 and len(lines) < target_line_count:
+        reasons.append("line_count_target")
+    if quality_label in {"yellow", "red"}:
+        reasons.append(f"quality_{quality_label}")
+    elif 0.0 < quality_score < float((settings or {}).get("subtitle_lora_packaging_quality_max_score", 84.0) or 84.0):
+        reasons.append("low_quality_score")
+    return reasons
+
+
+def _packaging_candidate_score(
+    chunks: list[str],
+    *,
+    strategy: str,
+    current_pattern: str,
+    target_patterns: list[str],
+    target_line_count: int,
+    threshold: int,
+) -> float:
+    if not chunks:
+        return float("-inf")
+    pattern = line_break_pattern_for_text("\n".join(chunks))
+    line_lengths = [max(1, _split_visible_len(chunk)) for chunk in chunks if str(chunk).strip()]
+    if not line_lengths:
+        return float("-inf")
+    max_line = max(line_lengths)
+    min_line = min(line_lengths)
+    score = 0.0
+    if target_patterns:
+        if pattern == target_patterns[0]:
+            score += 240.0
+        elif pattern in target_patterns:
+            score += 180.0
+    if target_line_count > 0:
+        score += max(0.0, 48.0 - abs(len(chunks) - target_line_count) * 20.0)
+    if strategy == "lora_ground_truth_line_break":
+        score += 30.0
+    elif strategy == "lora_line_count":
+        score += 18.0
+    elif strategy == "balanced":
+        score += 8.0
+    elif strategy == "rule_greedy":
+        score += 4.0
+    overflow = max(0, max_line - max(1, threshold))
+    score -= float(overflow) * 10.0
+    if len(chunks) > 2:
+        score -= float(len(chunks) - 2) * 24.0
+    score -= float(max_line - min_line) * 0.6
+    if len(chunks) >= 2:
+        score += 6.0
+    if pattern == current_pattern:
+        score -= 6.0
+    return score
+
+
+def _apply_lora_card_packaging(
+    segments: list[dict],
+    settings: dict | None,
+    rules: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    if not segments or not _bool_setting(settings or {}, "subtitle_lora_packaging_enabled", False):
+        return segments
+    mode = _lora_packaging_mode(settings)
+    rows: list[dict] = []
+    changed = 0
+    for seg in list(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        row = dict(seg)
+        text = _normalize_subtitle_text_lines(str(row.get("text", "") or ""))
+        if not text:
+            rows.append(row)
+            continue
+        row_settings = {**dict(settings or {}), **dict(row.get("_lora_segment_settings") or {})}
+        if row.get("_lora_generation_profile"):
+            row_settings["_lora_generation_profile"] = row.get("_lora_generation_profile")
+        reasons = _lora_packaging_reasons(row, row_settings)
+        if mode == "readability_selective" and not reasons:
+            rows.append(row)
+            continue
+        threshold = max(8, _setting_int(row_settings, "split_length_threshold", 20))
+        candidates = build_llm_candidate_options(text, threshold, rules or {}, row_settings)
+        current_chunks = _subtitle_text_lines(text)
+        current_pattern = line_break_pattern_for_text(text)
+        target_patterns = _packaging_target_patterns(row_settings)
+        target_line_count = max(0, _setting_int(row_settings, "subtitle_target_line_count", 0))
+        best_chunks = list(current_chunks)
+        best_strategy = "current"
+        best_score = _packaging_candidate_score(
+            best_chunks,
+            strategy=best_strategy,
+            current_pattern=current_pattern,
+            target_patterns=target_patterns,
+            target_line_count=target_line_count,
+            threshold=threshold,
+        )
+        for candidate in list(candidates or []):
+            chunks = [str(chunk).strip() for chunk in list(candidate.get("chunks") or []) if str(chunk).strip()]
+            if not chunks:
+                continue
+            candidate_text = "\n".join(chunks)
+            if re.sub(r"\s+", "", candidate_text) != re.sub(r"\s+", "", text):
+                continue
+            score = _packaging_candidate_score(
+                chunks,
+                strategy=str(candidate.get("strategy") or ""),
+                current_pattern=current_pattern,
+                target_patterns=target_patterns,
+                target_line_count=target_line_count,
+                threshold=threshold,
+            )
+            if score > best_score + 1e-6:
+                best_chunks = list(chunks)
+                best_strategy = str(candidate.get("strategy") or "")
+                best_score = score
+        packaged_text = "\n".join(best_chunks)
+        if packaged_text != text:
+            row["text"] = packaged_text
+            row["_lora_packaging_policy"] = {
+                "task": "lora_card_packaging",
+                "stage": stage,
+                "mode": mode,
+                "strategy": best_strategy,
+                "reasons": list(reasons),
+                "target_line_count": target_line_count,
+                "target_patterns": list(target_patterns[:3]),
+                "before_pattern": current_pattern,
+                "after_pattern": line_break_pattern_for_text(packaged_text),
+            }
+            changed += 1
+        rows.append(row)
+    if changed > 0:
+        get_logger().log(f"[LoRA자막포장] {stage}: timing 유지 + 줄바꿈/카드 포장 {changed}개 조정")
+    return rows
 
 
 def _context_repair_output_variant(segments: list[dict], vad_segments: list[dict] | None, settings: dict | None) -> list[dict]:
@@ -796,7 +1110,22 @@ def _self_review_subtitle_quality(
         f"green/yellow/red/gray={summary.green_count}/{summary.yellow_count}/{summary.red_count}/{summary.gray_count}, "
         f"review={summary.needs_review_count}"
     )
-    return [dict(seg) for seg in result.segments]
+    rows = [dict(seg) for seg in result.segments]
+    if rows:
+        rows[0]["subtitle_quality_self_review_summary"] = {
+            "schema": "ai_subtitle_studio.subtitle_quality_summary.v1",
+            "task": "subtitle_quality_self_review_summary",
+            "overall_score": summary.overall_score,
+            "green_count": int(summary.green_count or 0),
+            "yellow_count": int(summary.yellow_count or 0),
+            "red_count": int(summary.red_count or 0),
+            "gray_count": int(summary.gray_count or 0),
+            "needs_review_count": int(summary.needs_review_count or 0),
+            "auto_corrected_count": int(summary.auto_corrected_count or 0),
+            "before_score": summary.before_score,
+            "after_score": summary.after_score,
+        }
+    return rows
 
 
 def _attach_lora_and_deep_timing(row: dict, lora_meta: dict | None, settings: dict | None) -> dict:
@@ -869,6 +1198,148 @@ def _select_stt_candidate_fast(seg: dict, settings: dict | None = None) -> dict 
     return None
 
 
+def _stt_candidate_compact_text(text: str) -> str:
+    return re.sub(r"[\s\W_]+", "", str(text or ""), flags=re.UNICODE).lower()
+
+
+def _stt_candidate_similarity(left: str, right: str) -> float:
+    ltxt = _stt_candidate_compact_text(left)
+    rtxt = _stt_candidate_compact_text(right)
+    if not ltxt and not rtxt:
+        return 1.0
+    if not ltxt or not rtxt:
+        return 0.0
+    return difflib.SequenceMatcher(None, ltxt, rtxt).ratio()
+
+
+def _stt_candidate_score100(candidate: dict | None) -> float:
+    candidate = candidate or {}
+    for key in ("stt_score", "score", "confidence", "probability", "avg_confidence"):
+        if candidate.get(key) is None:
+            continue
+        try:
+            value = float(candidate.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value <= 1.0:
+            value *= 100.0
+        return max(0.0, min(100.0, value))
+    return 0.0
+
+
+def _stt_candidate_risk_flags(seg: dict, candidates: list[dict]) -> set[str]:
+    flags: set[str] = set()
+    for row in [seg, *candidates]:
+        for flag in row.get("stt_score_flags") or []:
+            flags.add(str(flag))
+        quality = dict(row.get("quality") or {})
+        for flag in quality.get("flags") or []:
+            flags.add(str(flag))
+    return flags
+
+
+def _should_run_stt_candidate_llm_judge(seg: dict, candidates: list[dict], settings: dict | None) -> bool:
+    settings = settings or {}
+    if not _setting_bool(settings, "stt_ensemble_llm_judge_require_risk", True):
+        return True
+    if len(candidates) < 2:
+        return False
+
+    texts = [str(c.get("text", "") or "").strip() for c in candidates]
+    if len({_stt_candidate_compact_text(text) for text in texts if text}) < 2:
+        return False
+
+    if seg.get("stt_ensemble_primary_locked") or seg.get("stt_ensemble_needs_llm_review"):
+        return True
+    if seg.get("stt_ensemble_inserted_from_stt2") or str(seg.get("_uncertainty_bucket") or "") == "precision":
+        return True
+
+    scores = [_stt_candidate_score100(c) for c in candidates]
+    current_score = _stt_candidate_score100(seg)
+    low_threshold = _setting_float(settings, "stt_ensemble_llm_judge_low_score_threshold", 78.0)
+    if current_score and current_score < low_threshold:
+        return True
+    if any(score and score < low_threshold for score in scores):
+        return True
+
+    score_span = max(scores or [0.0]) - min(scores or [0.0])
+    min_delta = _setting_float(settings, "stt_ensemble_llm_judge_min_score_delta", 10.0)
+    if score_span >= min_delta:
+        return True
+
+    max_similarity = _setting_float(settings, "stt_ensemble_llm_judge_max_similarity", 0.94)
+    pair_similarity = min(
+        _stt_candidate_similarity(texts[i], texts[j])
+        for i in range(len(texts))
+        for j in range(i + 1, len(texts))
+    )
+    if pair_similarity <= max_similarity:
+        return True
+
+    risky_flags = {
+        "low_avg_logprob",
+        "high_no_speech_prob",
+        "high_compression_ratio",
+        "low_word_confidence",
+        "peer_text_disagreement",
+        "repetition_hallucination_risk",
+        "known_hallucination_phrase",
+        "outside_vad_speech",
+    }
+    return bool(_stt_candidate_risk_flags(seg, candidates).intersection(risky_flags))
+
+
+def _parse_stt_candidate_llm_label(raw_decision: str, labels: list[str]) -> str | None:
+    text = str(raw_decision or "").strip()
+    if not text:
+        return None
+    valid = {label.upper(): label for label in labels}
+
+    def _from_value(value) -> str | None:
+        if isinstance(value, str):
+            compact = value.strip().upper()
+            if compact in valid:
+                return valid[compact]
+            match = re.search(r"\b([A-Z])\b", compact)
+            if match and match.group(1) in valid:
+                return valid[match.group(1)]
+        if isinstance(value, list):
+            for item in value:
+                found = _from_value(item)
+                if found:
+                    return found
+        if isinstance(value, dict):
+            for key in ("selected", "selection", "label", "choice", "answer", "winner"):
+                found = _from_value(value.get(key))
+                if found:
+                    return found
+            for item in value.values():
+                found = _from_value(item)
+                if found:
+                    return found
+        return None
+
+    try:
+        parsed = json.loads(text)
+        found = _from_value(parsed)
+        if found:
+            return found
+    except Exception:
+        pass
+
+    match = re.search(r"(?:선택|selected|selection|choice|answer|winner)\s*[:=]?\s*[\"']?([A-Z])", text, re.IGNORECASE)
+    if match and match.group(1).upper() in valid:
+        return valid[match.group(1).upper()]
+    leading = re.match(r"^\s*(?:\[)?\s*[\"']?([A-Z])\b", text)
+    if leading and leading.group(1).upper() in valid:
+        return valid[leading.group(1).upper()]
+    matches = [m.group(1).upper() for m in re.finditer(r"\b([A-Z])\b", text)]
+    usable = [valid[label] for label in matches if label in valid]
+    if len(usable) == 1:
+        return usable[0]
+    return None
+
+
 def _apply_stt_candidate_decision(seg: dict, selected_decision: dict | None) -> tuple[dict, bool]:
     if not selected_decision:
         return dict(seg or {}), False
@@ -876,7 +1347,8 @@ def _apply_stt_candidate_decision(seg: dict, selected_decision: dict | None) -> 
     if not selected_text:
         return dict(seg or {}), False
     selected_source = str(selected_decision.get("source", "") or "").strip().upper()
-    is_deep_selector = bool(selected_decision.get("selector")) and str(selected_decision.get("selector")) != "stt_lattice"
+    selector_name = str(selected_decision.get("selector") or "")
+    is_deep_selector = bool(selector_name) and selector_name not in {"stt_lattice", "stt_candidate_llm_judge"}
     out = {
         **dict(seg or {}),
         "text": selected_text,
@@ -894,6 +1366,14 @@ def _apply_stt_candidate_decision(seg: dict, selected_decision: dict | None) -> 
     }
     if selected_decision.get("words"):
         out["words"] = list(selected_decision.get("words") or [])
+    try:
+        selected_start = float(selected_decision.get("start"))
+        selected_end = float(selected_decision.get("end"))
+    except (TypeError, ValueError):
+        selected_start = selected_end = None
+    if selected_start is not None and selected_end is not None and selected_end > selected_start:
+        out["start"] = selected_start
+        out["end"] = selected_end
     return out, True
 
 
@@ -924,7 +1404,14 @@ def _select_stt_candidate_text(
     fast_decision = _select_stt_candidate_fast({**seg, "stt_candidates": unique}, settings)
     if fast_decision:
         return fast_decision
+    if not _should_run_stt_candidate_llm_judge(seg, unique, settings):
+        return None
     if not model or "사용 안함" in model:
+        return None
+    if _setting_bool(settings, "stt_ensemble_llm_judge_local_only", True) and (
+        "Gemini" in model or is_openai_model(model) or is_codex_model(model)
+    ):
+        get_logger().log(f"[STT앙상블-LLM판정] 로컬 LLM 전용 정책으로 외부/CLI 모델 생략: {model}")
         return None
 
     unique = unique[:2]
@@ -996,8 +1483,9 @@ def _select_stt_candidate_text(
         get_logger().log(f"[STT앙상블-LLM판정 실패] {exc}")
         return None
 
-    decision = " ".join(str(x) for x in (chunks or [])).upper()
-    selected_index = 1 if "B" in decision and "A" not in decision else 0
+    decision = " ".join(str(x) for x in (chunks or []))
+    selected_label = _parse_stt_candidate_llm_label(decision, labels)
+    selected_index = labels.index(selected_label) if selected_label in labels else 0
     selected_candidate = unique[selected_index]
     selected = str(selected_candidate.get("text", "") or "").strip()
     selected_source = str(selected_candidate.get("source", "") or "").strip().upper()
@@ -1009,6 +1497,11 @@ def _select_stt_candidate_text(
         "text": selected,
         "source": selected_source,
         "label": labels[selected_index],
+        "start": selected_candidate.get("start"),
+        "end": selected_candidate.get("end"),
+        "words": list(selected_candidate.get("words") or []),
+        "score": selected_candidate.get("score", selected_candidate.get("stt_score")),
+        "selector": "stt_candidate_llm_judge",
         "_llm_gate_policy": stt_llm_gate,
     }
 
@@ -1046,6 +1539,11 @@ def _stt_selection_metadata(seg: dict) -> dict:
         "_codex_native_fast_path_policy",
     )
     return {key: seg[key] for key in keys if key in seg}
+
+
+def _sanitize(segments: list[dict] | None) -> list[dict]:
+    """Backward-compatible test hook for legacy subtitle filter overrides."""
+    return [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
 
 
 def _has_explicit_lora_runtime_context(seg: dict | None) -> bool:
@@ -1707,6 +2205,7 @@ def optimize_stt_candidate_segments(segments: list[dict], vad_segments: list[dic
     optimized = _annotate_context_consistency(optimized, loaded_settings)
     optimized = _apply_output_variant_selector(optimized, [dict(seg) for seg in segments if isinstance(seg, dict)], vad_segments or [], loaded_settings, stage="stt_candidate")
     optimized = _annotate_auto_review(optimized, loaded_settings)
+    optimized = _apply_lora_card_packaging(optimized, loaded_settings, rules, stage="stt_candidate")
     optimized = _annotate_stage_confidence(optimized, loaded_settings)
     optimized = _annotate_completion_report(optimized, loaded_settings)
     _log_accuracy_metrics(optimized, loaded_settings)
@@ -1733,6 +2232,58 @@ def _emit_llm_progress(progress_callback, *, active: bool, idx: int = -1, total:
         )
     try:
         progress_callback(payload)
+    except Exception:
+        pass
+
+
+def _emit_processing_preview(
+    preview_callback,
+    *,
+    stage: str,
+    stage_label: str,
+    segments: list[dict] | None,
+) -> None:
+    if not callable(preview_callback):
+        return
+    snapshot: list[dict] = []
+    for idx, seg in enumerate(list(segments or [])):
+        if not isinstance(seg, dict):
+            continue
+        text = str(seg.get("text", "") or "").strip()
+        if not text:
+            continue
+        try:
+            start = float(seg.get("start", 0.0) or 0.0)
+            end = float(seg.get("end", start) or start)
+        except Exception:
+            continue
+        if end <= start:
+            continue
+        row = {
+            "start": start,
+            "end": end,
+            "text": text,
+            "line": int(seg.get("line", idx) or idx),
+        }
+        speaker = str(seg.get("speaker", seg.get("spk_id", "")) or "").strip()
+        if speaker:
+            row["speaker"] = speaker
+        if isinstance(seg.get("quality"), dict):
+            row["quality"] = dict(seg.get("quality") or {})
+        if isinstance(seg.get("stt_candidates"), list):
+            row["stt_candidates"] = [dict(item) for item in seg.get("stt_candidates") if isinstance(item, dict)]
+        snapshot.append(row)
+    if not snapshot:
+        return
+    try:
+        preview_callback(
+            {
+                "active": True,
+                "stage": str(stage or ""),
+                "stage_label": str(stage_label or stage or ""),
+                "segments": snapshot,
+            }
+        )
     except Exception:
         pass
 
@@ -1951,6 +2502,7 @@ def optimize_segments(
     segments: list[dict],
     vad_segments: list[dict] | None = None,
     llm_progress_callback=None,
+    stage_segments_callback=None,
 ) -> list[dict]:
     if not segments:
         return segments
@@ -1994,6 +2546,12 @@ def optimize_segments(
                 result_map[idx] = [segments[idx]]
         for i in range(len(args)):
             optimized.extend(result_map.get(i, []))
+        _emit_processing_preview(
+            stage_segments_callback,
+            stage="proofread_dictionary",
+            stage_label="검사/교정/단어사전 반영",
+            segments=optimized,
+        )
 
     else:
         max_workers, worker_mode = _effective_llm_workers(model, _EXAONE_WORKERS, loaded_settings, len(args))
@@ -2074,6 +2632,12 @@ def optimize_segments(
                 callbacks=_llm_macro_callbacks(),
                 llm_progress_callback=llm_progress_callback,
             )
+            _emit_processing_preview(
+                stage_segments_callback,
+                stage="proofread_dictionary_llm",
+                stage_label="검사/교정/단어사전/LLM 반영",
+                segments=optimized,
+            )
         elif max_workers == 1:
             result_map: dict[int, list] = {}
             for idx in process_order:
@@ -2086,6 +2650,12 @@ def optimize_segments(
                     result_map[idx] = [segments[idx]]
             for i in range(len(args)):
                 optimized.extend(result_map.get(i, []))
+            _emit_processing_preview(
+                stage_segments_callback,
+                stage="proofread_dictionary_llm",
+                stage_label="검사/교정/단어사전/LLM 반영",
+                segments=optimized,
+            )
         else:
             try:
                 def _process_with_progress(index: int, arg):
@@ -2106,12 +2676,24 @@ def optimize_segments(
 
                 for i in range(len(args)):
                     optimized.extend(result_map.get(i, []))
+                _emit_processing_preview(
+                    stage_segments_callback,
+                    stage="proofread_dictionary_llm",
+                    stage_label="검사/교정/단어사전/LLM 반영",
+                    segments=optimized,
+                )
 
             except Exception as e:
                 get_logger().log(f"LLM 처리 오류: {e}")
                 optimized = segments
 
     optimized = adjust_timing(optimized)
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="timing_adjust",
+        stage_label="자막 시작/끝 시간 보정",
+        segments=optimized,
+    )
     if not optimized and any(seg.get("stt_candidates") for seg in original_segments):
         get_logger().log("[STT앙상블-보호] 후보 병합 결과가 모두 제거되어 원본 앙상블 세그먼트로 최종 자막을 복구합니다.")
         fallback = []
@@ -2124,14 +2706,60 @@ def optimize_segments(
                 if str(item.get("text", "") or "").strip():
                     fallback.append(item)
         optimized = adjust_timing(fallback)
+        _emit_processing_preview(
+            stage_segments_callback,
+            stage="timing_adjust_fallback",
+            stage_label="자막 시작/끝 시간 복구",
+            segments=optimized,
+        )
+
+    optimized = refine_high_contextual_boundaries(
+        optimized,
+        vad_segments=vad_segments or [],
+        settings=loaded_settings,
+        rules=rules,
+        model=model,
+        logger=get_logger(),
+    )
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="high_context_boundary",
+        stage_label="High 문맥 경계/단어 보정",
+        segments=optimized,
+    )
 
     optimized = _smooth_deep_sequence(optimized, loaded_settings)
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="deep_split",
+        stage_label="분할/묶음 정리",
+        segments=optimized,
+    )
     optimized = apply_final_gap_settings(optimized, loaded_settings, force=False)
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="final_gap",
+        stage_label="자막 간격 정리",
+        segments=optimized,
+    )
     optimized = align_stt_candidates_to_subtitle_segments(optimized)
     optimized = _self_review_subtitle_quality(optimized, vad_segments or [], loaded_settings)
     optimized = _annotate_context_consistency(optimized, loaded_settings)
     optimized = _apply_output_variant_selector(optimized, original_segments, vad_segments or [], loaded_settings, stage="llm")
     optimized = _enforce_final_subtitle_text_policy(optimized, corrections)
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="context_review",
+        stage_label="문맥/출력 보정",
+        segments=optimized,
+    )
+    optimized = _apply_lora_card_packaging(optimized, loaded_settings, rules, stage="llm")
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="packaging",
+        stage_label="줄바꿈/카드 포장",
+        segments=optimized,
+    )
     optimized = _annotate_auto_review(optimized, loaded_settings)
     optimized = _annotate_stage_confidence(optimized, loaded_settings)
     optimized = _annotate_completion_report(optimized, loaded_settings)

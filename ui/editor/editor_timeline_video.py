@@ -9,6 +9,7 @@ ui/editor_timeline_video.py
 - _mark_dirty / _finalize_edit 공용 메서드 활용
 """
 
+from bisect import bisect_left
 import os
 import time
 from PyQt6.QtCore import QTimer
@@ -44,9 +45,9 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
     def _playhead_active_interval_ms(self) -> int:
         try:
             settings = getattr(self, "settings", {}) or {}
-            return max(24, min(80, int(settings.get("playhead_active_interval_ms", 45) or 45)))
+            return max(16, min(80, int(settings.get("playhead_active_interval_ms", 24) or 24)))
         except Exception:
-            return 45
+            return 24
 
     def _snap_to_frame(self, sec: float) -> float:
         return snap_sec_to_frame(sec, self._current_frame_fps())
@@ -87,11 +88,16 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             smoothed = predicted + drift * 0.08
 
         previous = float(display)
-        max_step = max(0.018, min(0.08, now_mono - float(getattr(self, "_last_playhead_smooth_tick", now_mono) or now_mono) + 0.018))
-        if smoothed < previous and previous - smoothed < 0.18:
-            smoothed = previous
-        elif smoothed > previous + max_step:
-            smoothed = previous + max_step
+        reset_jump = abs(drift) >= 0.35 or abs(raw_global_sec - previous) >= 0.35
+        if not reset_jump:
+            max_step = max(
+                0.018,
+                min(0.08, now_mono - float(getattr(self, "_last_playhead_smooth_tick", now_mono) or now_mono) + 0.018),
+            )
+            if smoothed < previous and previous - smoothed < 0.18:
+                smoothed = previous
+            elif smoothed > previous + max_step:
+                smoothed = previous + max_step
 
         self._last_playhead_smooth_tick = now_mono
         self._playhead_display_sec = self._snap_to_frame(max(0.0, smoothed))
@@ -292,7 +298,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             result = manager.request(
                 media_path=media_path,
                 current_sec=float(current_sec or 0.0),
-                segments=[dict(seg) for seg in list(segments or []) if isinstance(seg, dict)],
+                segments=segments or (),
                 settings=settings,
             )
             self._last_background_prefetch_request = result
@@ -326,17 +332,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
         time_seg = find_segment_at_lookup(cache, click_sec, skip_gap=False)
         if time_seg is None:
-            best = None
-            for seg in list(cache.get("segments") or []):
-                try:
-                    start = self._snap_to_frame(float(seg.get("start", 0.0) or 0.0))
-                except Exception:
-                    continue
-                dist = abs(start - click_sec)
-                if dist <= 0.15 and (best is None or dist < best[0]):
-                    best = (dist, seg)
-            if best is not None:
-                time_seg = best[1]
+            time_seg = self._nearest_segment_start_match(cache, click_sec, tolerance=0.15)
 
         if isinstance(line_seg, dict):
             try:
@@ -348,6 +344,35 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         if isinstance(time_seg, dict):
             return time_seg
         return line_seg
+
+    def _nearest_segment_start_match(self, cache: dict | None, click_sec: float, tolerance: float = 0.15):
+        if not isinstance(cache, dict):
+            return None
+        segments = cache.get("segments") or ()
+        starts = cache.get("starts") or ()
+        if not segments or not starts:
+            return None
+        try:
+            now = float(click_sec or 0.0)
+        except Exception:
+            now = 0.0
+        limit = max(0.0, float(tolerance or 0.0))
+        idx = bisect_left(starts, now)
+        best = None
+        for candidate_idx in (idx - 1, idx, idx + 1):
+            if candidate_idx < 0 or candidate_idx >= len(segments):
+                continue
+            seg = segments[candidate_idx]
+            if not isinstance(seg, dict):
+                continue
+            try:
+                start = self._snap_to_frame(float(seg.get("start", 0.0) or 0.0))
+            except Exception:
+                continue
+            dist = abs(start - now)
+            if dist <= limit and (best is None or dist < best[0]):
+                best = (dist, seg)
+        return best[1] if best is not None else None
 
     def _on_timeline_seg_clicked(self, line_num, start_sec):
         click_sec = self._snap_to_frame(float(start_sec or 0.0))
@@ -429,22 +454,20 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
         now_mono = time.monotonic()
         local_sec = self._current_video_local_frame_sec(player)
-        current_sec = self._snap_to_frame(self._local_to_global_sec(local_sec))
+        raw_current_sec = self._snap_to_frame(self._local_to_global_sec(local_sec))
         maybe_repeat = getattr(self, "_maybe_loop_selected_segment", None)
         if callable(maybe_repeat):
-            looped_sec = maybe_repeat(current_sec)
+            looped_sec = maybe_repeat(raw_current_sec)
             if looped_sec is not None:
-                current_sec = self._snap_to_frame(looped_sec)
-        self._playhead_display_sec = current_sec
-        self._playhead_anchor_global_sec = current_sec
-        self._playhead_anchor_mono = now_mono
-        self._schedule_background_prefetch(current_sec)
+                raw_current_sec = self._snap_to_frame(looped_sec)
+        display_sec = self._smooth_playhead_sec(raw_current_sec, now_mono, dur_ms / 1000.0)
+        self._schedule_background_prefetch(raw_current_sec)
         if hasattr(self.timeline, "follow_playhead_centered"):
-            self.timeline.follow_playhead_centered(current_sec, smooth=True)
+            self.timeline.follow_playhead_centered(display_sec, smooth=True)
         elif hasattr(self.timeline, "follow_playhead"):
-            self.timeline.follow_playhead(current_sec, smooth=True, threshold_px=24.0)
+            self.timeline.follow_playhead(display_sec, smooth=True, threshold_px=24.0)
         else:
-            self.timeline.set_playhead(current_sec)
+            self.timeline.set_playhead(display_sec)
 
         # Context sync: skip resolve if within cached clip bounds (C fix v2)
         if hasattr(self, '_resolve_active_context') and hasattr(self, 'video_player'):
@@ -452,9 +475,9 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             if _mc_boxes:
                 _cb = getattr(self, '_cached_clip_bounds', None)
                 last_ctx_at = float(getattr(self, '_last_play_context_sync_at', 0.0) or 0.0)
-                if not (_cb and _cb[0] <= current_sec < _cb[1]) and (now_mono - last_ctx_at) >= 0.25:
+                if not (_cb and _cb[0] <= raw_current_sec < _cb[1]) and (now_mono - last_ctx_at) >= 0.25:
                     self._last_play_context_sync_at = now_mono
-                    ctx = self._resolve_active_context(global_sec=current_sec)
+                    ctx = self._resolve_active_context(global_sec=raw_current_sec)
                     _cidx = int(ctx.get('clip_idx', 0))
                     self._cached_clip_bounds = (float(ctx.get('clip_start', 0.0)), float(ctx.get('clip_end', 0.0)))
                     if _cidx != getattr(self, '_last_sync_clip_idx', -1):
@@ -467,7 +490,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                             )
                         self.video_player.set_context_segments(local_segments)
 
-        seg = self._segment_at_playback_sec(current_sec, skip_gap=True)
+        seg = self._segment_at_playback_sec(raw_current_sec, skip_gap=True)
         if seg and self._active_seg_start != seg["start"]:
             can_move_editor = self._playback_can_move_editor_cursor()
             if can_move_editor and not self._editor_manual_scroll_recent(now_mono):
@@ -488,7 +511,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             ):
                 self._last_editor_autoscroll_at = now_mono
                 self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
-        local_display_sec = self._global_to_local_sec(current_sec)
+        local_display_sec = self._global_to_local_sec(raw_current_sec)
         if hasattr(self.video_player, 'set_subtitle_display_time'):
             self.video_player.set_subtitle_display_time(local_display_sec)
         elif hasattr(self.video_player, 'refresh_subtitle_context'):

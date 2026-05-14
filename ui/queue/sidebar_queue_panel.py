@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ui.queue.queue_formatting import DEFAULT_QUEUE_HEADER
+
 
 class SidebarQueuePanel(QWidget):
     def __init__(self, parent=None):
@@ -25,7 +27,7 @@ class SidebarQueuePanel(QWidget):
         self.setMinimumHeight(134)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._quick = None
-        self._header = "큐 리스트 : (0/0) - 0% 완료"
+        self._header = DEFAULT_QUEUE_HEADER
         self._items = []
 
         layout = QVBoxLayout(self)
@@ -100,7 +102,7 @@ class SidebarQueuePanel(QWidget):
             return None
 
     def set_queue(self, header: str, items: list[dict]):
-        self._header = str(header or "큐 리스트 : (0/0) - 0% 완료")
+        self._header = str(header or DEFAULT_QUEUE_HEADER)
         self._items = list(items or [])
         if self._quick is not None:
             root = self._quick.rootObject()
@@ -156,6 +158,13 @@ class SidebarQueuePanel(QWidget):
                     active_item,
                     QAbstractItemView.ScrollHint.PositionAtCenter,
                 )
+
+    def set_queue_payload(self, payload: dict | None):
+        data = dict(payload or {})
+        self.set_queue(
+            str(data.get("header", DEFAULT_QUEUE_HEADER) or DEFAULT_QUEUE_HEADER),
+            list(data.get("items", []) or []),
+        )
 
     def _keycap_order(self, order) -> str:
         keycaps = {str(i): f"{i}\ufe0f\u20e3" for i in range(10)}

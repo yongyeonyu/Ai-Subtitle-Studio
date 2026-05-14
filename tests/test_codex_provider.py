@@ -70,7 +70,7 @@ class CodexProviderTests(unittest.TestCase):
             return _Result()
 
         with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
-                patch("core.llm.codex_provider.subprocess.run", side_effect=fake_run):
+                patch("core.runtime.subprocess_utils.subprocess.run", side_effect=fake_run):
             result = codex_provider.split_text(DEFAULT_CODEX_LABEL, "split this", timeout=7)
 
         self.assertEqual(result, ["a", "b"])
@@ -83,15 +83,44 @@ class CodexProviderTests(unittest.TestCase):
         self.assertIn("--skip-git-repo-check", cmd)
         self.assertIn("--output-schema", cmd)
         self.assertIn("--output-last-message", cmd)
+        self.assertIn("--config", cmd)
+        self.assertEqual(cmd[cmd.index("--config") + 1], 'model_reasoning_effort="minimal"')
         self.assertFalse(captured["kwargs"].get("shell"))
         self.assertEqual(captured["kwargs"]["timeout"], 7)
         self.assertIn("AI Subtitle Studio's subtitle segmentation engine", captured["kwargs"]["input"])
 
     def test_split_text_raises_on_timeout(self):
         with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
-                patch("core.llm.codex_provider.subprocess.run", side_effect=subprocess.TimeoutExpired("codex", 1)):
+                patch("core.runtime.subprocess_utils.subprocess.run", side_effect=subprocess.TimeoutExpired("codex", 1)):
             with self.assertRaisesRegex(RuntimeError, "시간이 초과"):
                 codex_provider.split_text(DEFAULT_CODEX_LABEL, "prompt", timeout=1)
+
+    def test_split_text_retries_timeout_when_retry_configured(self):
+        calls = {"count": 0}
+        original_run = subprocess.run
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            if not cmd or "codex" not in str(cmd[0]):
+                return original_run(cmd, **kwargs)
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise subprocess.TimeoutExpired("codex", 1)
+            output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps({"result": ["a", "b"]}), encoding="utf-8")
+            return _Result()
+
+        with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
+                patch.dict(os.environ, {"AI_SUBTITLE_CODEX_RETRIES": "1", "AI_SUBTITLE_CODEX_RETRY_BACKOFF_SEC": "0"}, clear=False), \
+                patch("core.runtime.subprocess_utils.subprocess.run", side_effect=fake_run):
+            result = codex_provider.split_text(DEFAULT_CODEX_LABEL, "split this", timeout=7)
+
+        self.assertEqual(result, ["a", "b"])
+        self.assertEqual(calls["count"], 2)
 
     def test_run_json_invokes_codex_without_output_schema(self):
         captured = {}
@@ -112,7 +141,7 @@ class CodexProviderTests(unittest.TestCase):
             return _Result()
 
         with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
-                patch("core.llm.codex_provider.subprocess.run", side_effect=fake_run):
+                patch("core.runtime.subprocess_utils.subprocess.run", side_effect=fake_run):
             result = codex_provider.run_json(DEFAULT_CODEX_LABEL, "roughcut this", timeout=9)
 
         self.assertEqual(result["major_segments"][0]["major_id"], "A")
@@ -120,7 +149,35 @@ class CodexProviderTests(unittest.TestCase):
         self.assertEqual(cmd[0], "/usr/local/bin/codex")
         self.assertIn("--output-last-message", cmd)
         self.assertNotIn("--output-schema", cmd)
+        self.assertIn("--config", cmd)
+        self.assertEqual(cmd[cmd.index("--config") + 1], 'model_reasoning_effort="low"')
         self.assertIn("AI Subtitle Studio's roughcut planning engine", captured["kwargs"]["input"])
+
+    def test_run_json_prefers_task_specific_effort_override(self):
+        captured = {}
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+            output_path.write_text(
+                json.dumps({"major_segments": [{"major_id": "A", "title": "도입"}]}),
+                encoding="utf-8",
+            )
+            return _Result()
+
+        with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
+                patch.dict(os.environ, {"AI_SUBTITLE_CODEX_JSON_EFFORT": "medium"}, clear=False), \
+                patch("core.runtime.subprocess_utils.subprocess.run", side_effect=fake_run):
+            codex_provider.run_json(DEFAULT_CODEX_LABEL, "roughcut this", timeout=9)
+
+        cmd = captured["cmd"]
+        self.assertIn("--config", cmd)
+        self.assertEqual(cmd[cmd.index("--config") + 1], 'model_reasoning_effort="medium"')
 
     def test_openai_provider_treats_codex_as_openai_like_without_api_key(self):
         self.assertTrue(openai_provider.is_openai_model(DEFAULT_CODEX_LABEL))

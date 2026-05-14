@@ -13,6 +13,7 @@ from core.settings import load_settings
 ETA_HISTORY_SCHEMA = "ai_subtitle_studio.runtime_eta_store.v2"
 _STORE_OVERRIDE_ENV = "AI_SUBTITLE_STUDIO_TIME_HISTORY_FILE"
 _UNKNOWN = "unknown"
+_ETA_STORE_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 
 
 def history_store_path(path: str | None = None) -> str:
@@ -20,6 +21,43 @@ def history_store_path(path: str | None = None) -> str:
     if override:
         return os.path.abspath(os.path.expanduser(override))
     return os.path.join(config.DATASET_DIR, "time_history.json")
+
+
+def _history_store_stat(path: str) -> tuple[int, int] | None:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return int(getattr(stat, "st_mtime_ns", 0) or 0), int(stat.st_size or 0)
+
+
+def _read_history_store(path: str) -> dict[str, Any]:
+    normalized = _safe_str(path)
+    if not normalized:
+        return {}
+    current = _history_store_stat(normalized)
+    cached = _ETA_STORE_CACHE.get(normalized)
+    if cached is not None and current is not None and cached[0] == current[0] and cached[1] == current[1]:
+        return cached[2]
+    data = read_json_file(normalized, default={}, expected_type=dict, context="runtime_eta", log_errors=False)
+    parsed = data if isinstance(data, dict) else {}
+    if current is None:
+        _ETA_STORE_CACHE.pop(normalized, None)
+    else:
+        _ETA_STORE_CACHE[normalized] = (current[0], current[1], parsed)
+    return parsed
+
+
+def _write_history_store(path: str, data: dict[str, Any]) -> None:
+    normalized = _safe_str(path)
+    if not normalized:
+        return
+    write_json_file_atomic(normalized, data, indent=2)
+    current = _history_store_stat(normalized)
+    if current is None:
+        _ETA_STORE_CACHE.pop(normalized, None)
+    else:
+        _ETA_STORE_CACHE[normalized] = (current[0], current[1], data)
 
 
 def _safe_str(value: Any, default: str = "") -> str:
@@ -327,7 +365,7 @@ def build_runtime_eta_payload(
 
 def _fallback_predict(payload: dict[str, Any]) -> float:
     path = _safe_str(payload.get("store_path"))
-    data = read_json_file(path, default={}, expected_type=dict, context="runtime_eta", log_errors=False)
+    data = _read_history_store(path)
     duration_sec = max(0.0, _safe_float((payload.get("media") or {}).get("duration_sec"), 0.0))
     if duration_sec <= 0:
         return -1.0
@@ -363,7 +401,7 @@ def _fallback_record(payload: dict[str, Any]) -> None:
     path = _safe_str(payload.get("store_path"))
     if not path:
         return
-    data = read_json_file(path, default={}, expected_type=dict, context="runtime_eta", log_errors=False)
+    data = _read_history_store(path)
     if not isinstance(data, dict) or data.get("schema") != ETA_HISTORY_SCHEMA:
         data = {
             "schema": ETA_HISTORY_SCHEMA,
@@ -408,7 +446,7 @@ def _fallback_record(payload: dict[str, Any]) -> None:
         "last_processing_sec": metrics["processing_sec"],
     }
     data["variants"] = variants
-    write_json_file_atomic(path, data, indent=2)
+    _write_history_store(path, data)
 
 
 def _native_predict(payload: dict[str, Any]) -> float:

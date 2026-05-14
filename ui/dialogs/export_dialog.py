@@ -39,7 +39,8 @@ def _load_es(key: str = _EXPORT_SETTINGS_KEY)->dict:
         if os.path.exists(_SETTINGS_PATH):
             with open(_SETTINGS_PATH,"r",encoding="utf-8") as f:
                 return _normalize_export_settings(json.load(f).get(key,{}))
-    except: pass
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        get_logger().log(f"⚠️ export dialog 설정 로드 실패: {exc}")
     return {}
 
 def _save_es(d:dict, key: str = _EXPORT_SETTINGS_KEY):
@@ -50,7 +51,8 @@ def _save_es(d:dict, key: str = _EXPORT_SETTINGS_KEY):
         all_s[key]=_normalize_export_settings(d)
         with open(_SETTINGS_PATH,"w",encoding="utf-8") as f:
             json.dump(all_s,f,ensure_ascii=False,indent=2)
-    except: pass
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        get_logger().log(f"⚠️ export dialog 설정 저장 실패: {exc}")
 
 # ── 한글 지원 글꼴 ──
 _KOREAN_FONTS = {
@@ -103,7 +105,9 @@ def _parse_srt(path:str)->list:
         return [{"start":ts(m.group(1)),"end":ts(m.group(2)), "text":m.group(3).replace('\u200B', '').strip()}
                 for m in pat.finditer(content) if m.group(3).replace('\u200B', '').strip()]
         # ----------------------------------
-    except: return []
+    except (OSError, UnicodeError, ValueError) as exc:
+        get_logger().log(f"⚠️ SRT 파싱 실패: {exc}")
+        return []
 
 # ── PNG 렌더링 (네이티브 Qt 렌더링) ──
 def _wrap_text_lines(text: str, fm: QFontMetrics, max_width: int) -> list[str]:
@@ -303,7 +307,8 @@ def _combo_pm(values:list, default, step:int=1):
         try:
             cur_val = int(combo.currentText())
             combo.setCurrentText(str(cur_val + (delta * step)))
-        except: pass
+        except ValueError:
+            pass
 
     btn_s=f"background:{config.BG3};color:{config.FG};padding:2px 8px;font-weight:bold;border-radius:2px;"
     m=QPushButton("−"); m.setFixedWidth(28); m.setStyleSheet(btn_s)
@@ -686,8 +691,12 @@ class ExportDialog(QDialog):
     def _render(self):
         tmp=tempfile.NamedTemporaryFile(suffix=".srt",delete=False,mode="w",encoding="utf-8"); tmp.close()
         save_srt(self.segments,tmp.name,apply_offset=False); segs=_parse_srt(tmp.name)
-        try: os.remove(tmp.name)
-        except: pass
+        try:
+            os.remove(tmp.name)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            get_logger().log(f"⚠️ 임시 SRT 삭제 실패: {exc}")
         if not segs: return
         _save_es(self._collect())
         

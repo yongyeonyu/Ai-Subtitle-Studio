@@ -13,6 +13,9 @@ from typing import Any, Callable
 from core.performance import atomic_write_json, current_resource_snapshot
 from core.runtime import config
 
+_DISK_USAGE_CACHE_MAX_AGE_SEC = 15.0
+_RUNTIME_DISK_USAGE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+
 
 def process_rss_bytes() -> int:
     try:
@@ -66,6 +69,11 @@ def default_runtime_disk_cache_paths() -> list[Path]:
 
 def runtime_disk_cache_usage(paths: list[str | Path] | None = None) -> dict[str, Any]:
     roots = [Path(p) for p in (paths or default_runtime_disk_cache_paths())]
+    cache_key = tuple(str(root) for root in roots)
+    cached = _RUNTIME_DISK_USAGE_CACHE.get(cache_key)
+    now = time.time()
+    if cached is not None and (now - cached[0]) < _DISK_USAGE_CACHE_MAX_AGE_SEC:
+        return dict(cached[1])
     total_bytes = 0
     file_count = 0
     directories: list[dict[str, Any]] = []
@@ -93,13 +101,15 @@ def runtime_disk_cache_usage(paths: list[str | Path] | None = None) -> dict[str,
         total_bytes += dir_bytes
         file_count += dir_files
         directories.append({"path": str(root), "exists": True, "bytes": dir_bytes, "files": dir_files})
-    return {
+    result = {
         "paths": [str(root) for root in roots],
         "total_bytes": total_bytes,
         "total_gb": round(total_bytes / float(1024 ** 3), 4),
         "file_count": file_count,
         "directories": directories,
     }
+    _RUNTIME_DISK_USAGE_CACHE[cache_key] = (now, result)
+    return dict(result)
 
 
 def prune_runtime_disk_caches(
@@ -139,6 +149,8 @@ def prune_runtime_disk_caches(
             total_bytes -= size
             removed_files += 1
             removed_bytes += size
+    for cache_key in {tuple(str(root) for root in roots), tuple(str(root.resolve()) if root.exists() else str(root) for root in roots)}:
+        _RUNTIME_DISK_USAGE_CACHE.pop(cache_key, None)
     return {
         "removed_files": removed_files,
         "removed_bytes": removed_bytes,

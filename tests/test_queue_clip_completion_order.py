@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin
+from ui.queue.queue_formatting import normalize_queue_status_payload
 
 
 class _Signal:
@@ -17,7 +18,7 @@ class _Signal:
 
 class _Ui:
     def __init__(self, *, export_video=False):
-        self._sig_update_queue = _Signal()
+        self._sig_update_queue_payload = _Signal()
         self._auto_export_subtitle_video = bool(export_video)
         self._is_auto_pipeline = False
         self._current_project_path = ""
@@ -29,6 +30,15 @@ class _Ui:
 
     def mark_cloud_file_done(self, filepath):
         self.done_files.append(filepath)
+
+
+def _queue_statuses(signal: _Signal) -> list[str]:
+    statuses = []
+    for emission in list(getattr(signal, "emissions", []) or []):
+        payload = emission[0] if emission else None
+        if isinstance(payload, dict):
+            statuses.append(str(normalize_queue_status_payload(payload).get("status") or ""))
+    return statuses
 
 
 class _Backend(PipelineHelpersMixin):
@@ -65,7 +75,7 @@ class QueueClipCompletionOrderTests(unittest.TestCase):
             ):
                 ok = backend._save_and_export(media_path, 0, [{"start": 0.0, "end": 1.0, "text": "hello"}], True)
 
-            statuses = [args[1] for args in ui._sig_update_queue.emissions]
+            statuses = _queue_statuses(ui._sig_update_queue_payload)
             self.assertTrue(ok)
             self.assertEqual(operations, ["srt", "create_project", "project", "render"])
             self.assertEqual(statuses[-1], "✅ 완료")
@@ -92,7 +102,7 @@ class QueueClipCompletionOrderTests(unittest.TestCase):
             ):
                 ok = backend._save_and_export(media_path, 0, [{"start": 0.0, "end": 1.0, "text": "hello"}], True)
 
-            statuses = [args[1] for args in ui._sig_update_queue.emissions]
+            statuses = _queue_statuses(ui._sig_update_queue_payload)
             self.assertTrue(ok)
             self.assertEqual(operations, ["srt", "create_project", "project", "render"])
             self.assertLess(statuses.index("🎥 자막영상출력(mov)"), statuses.index("✅ 완료"))
@@ -116,7 +126,7 @@ class QueueClipCompletionOrderTests(unittest.TestCase):
             ):
                 ok = backend._save_and_export(media_path, 0, [{"start": 0.0, "end": 1.0, "text": "hello"}], True)
 
-            statuses = [args[1] for args in ui._sig_update_queue.emissions]
+            statuses = _queue_statuses(ui._sig_update_queue_payload)
             self.assertFalse(ok)
             self.assertEqual(operations, ["srt", "create_project", "project", "render"])
             self.assertIn("❌ 자막영상출력 실패", statuses)

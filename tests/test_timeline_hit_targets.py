@@ -804,6 +804,25 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(deleted, [])
         self.assertEqual(clicked, [(0, 1.5)])
 
+    def test_processing_input_lock_blocks_canvas_edit_clicks(self):
+        canvas = self._canvas()
+        canvas.resize(420, canvas.height())
+        canvas._editor_processing_input_locked = True
+        clicked = []
+        scrubbed = []
+        canvas.seg_clicked.connect(lambda line, start: clicked.append((line, start)))
+        canvas.scrub_sec.connect(lambda sec: scrubbed.append(sec))
+
+        QTest.mouseClick(
+            canvas,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPoint(canvas._x(1.5), SEG_TOP + 32),
+        )
+
+        self.assertEqual(clicked, [])
+        self.assertEqual(scrubbed, [])
+
     def test_single_gesture_center_drag_starts_without_prior_selection(self):
         canvas = TimelineCanvas()
         try:
@@ -1786,6 +1805,20 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertTrue(canvas._is_active_segment(canvas.segments[0]))
         self.assertFalse(canvas._is_active_segment(canvas.segments[1]))
 
+    def test_playback_active_segment_follows_playhead_not_stale_active_line(self):
+        canvas = self._canvas()
+        canvas.segments = [
+            {"start": 1.00, "end": 2.00, "text": "앞", "line": 0},
+            {"start": 2.00, "end": 3.00, "text": "뒤", "line": 1},
+        ]
+        canvas.active_seg_line = 0
+        canvas.active_seg_start = 1.0
+        canvas.playhead_sec = 2.4
+        canvas._timeline_playback_active = lambda: True
+
+        self.assertFalse(canvas._is_active_segment(canvas.segments[0]))
+        self.assertTrue(canvas._is_active_segment(canvas.segments[1]))
+
     def test_hovered_arrow_stays_active_when_segment_objects_refresh(self):
         canvas = self._canvas()
         old_seg = canvas.segments[0]
@@ -2036,7 +2069,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(stt_candidate_selection_state(far_candidate, finals), "")
         self.assertEqual(stt_candidate_selection_state(far_candidate, finals, index), "")
 
-    def test_manual_stt_candidate_selection_removes_selected_preview_highlight(self):
+    def test_manual_stt_candidate_selection_keeps_preview_lanes_visible(self):
         class DummyScroll:
             def __init__(self):
                 self.value_ = 0
@@ -2088,9 +2121,9 @@ class TimelineHitTargetTests(unittest.TestCase):
 
             self.assertEqual(
                 [seg.get("stt_preview_source") for seg in editor._live_stt_preview_segments],
-                ["STT2"],
+                ["STT1", "STT2"],
             )
-            self.assertFalse(any(
+            self.assertTrue(any(
                 seg.get("stt_pending") and seg.get("stt_preview_source") == "STT1"
                 for seg in editor.timeline.updated_segments
             ))
@@ -2280,7 +2313,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_confirm_review_segment_confirms_adjacent_silence_gap(self):
+    def test_confirm_review_segment_does_not_link_adjacent_silence_gap(self):
         editor = _ReviewEditor()
         try:
             editor.text_edit.setPlainText("확인 필요\n")
@@ -2303,10 +2336,8 @@ class TimelineHitTargetTests(unittest.TestCase):
             editor._confirm_review_segment(0)
 
             gap_data = gap_block.userData()
-            self.assertTrue(gap_data.quality["manual_confirmed"])
-            self.assertTrue(gap_data.quality["linked_silence"])
-            self.assertIn("linked_silence", gap_data.quality["flags"])
-            self.assertEqual(getattr(gap_data, "linked_silence_for_line"), 0)
+            self.assertEqual(gap_data.quality, {})
+            self.assertFalse(hasattr(gap_data, "linked_silence_for_line"))
         finally:
             editor.text_edit.close()
 
@@ -2392,7 +2423,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_temporary_review_segment_unlinks_adjacent_silence_gap(self):
+    def test_temporary_review_segment_leaves_adjacent_gap_metadata_unchanged(self):
         editor = _ReviewEditor()
         try:
             editor.text_edit.setPlainText("확정 자막\n")
@@ -2422,9 +2453,9 @@ class TimelineHitTargetTests(unittest.TestCase):
             editor._mark_review_segment_temporary(0)
 
             gap_data = gap_block.userData()
-            self.assertFalse(gap_data.quality["manual_confirmed"])
-            self.assertFalse(gap_data.quality["linked_silence"])
-            self.assertNotIn("linked_silence", gap_data.quality["flags"])
+            self.assertTrue(gap_data.quality["manual_confirmed"])
+            self.assertTrue(gap_data.quality["linked_silence"])
+            self.assertIn("linked_silence", gap_data.quality["flags"])
         finally:
             editor.text_edit.close()
 
@@ -2525,7 +2556,21 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.gap_segments,
             3.0,
         )
-        self.assertTrue(any(item["kind"] == "linked_silence" for item in detections))
+        self.assertEqual(
+            detections,
+            [{
+                "start": 0.0,
+                "end": 3.0,
+                "kind": "idle",
+                "label": "음성",
+                "color": "#34C759",
+                "priority": 0,
+                "alpha": 92,
+                "source": "subtitle_detection",
+                "score": None,
+                "selection_state": "",
+            }],
+        )
 
     def test_canvas_keeps_explicit_adjacent_gaps_split(self):
         canvas = TimelineCanvas()

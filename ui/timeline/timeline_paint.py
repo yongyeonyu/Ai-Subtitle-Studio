@@ -14,7 +14,6 @@ from core.frame_time import frame_count, frame_to_sec, normalize_fps
 from core.runtime import config
 
 from ui.timeline.timeline_constants import (
-    ANALYSIS_BOT,
     ANALYSIS_TOP,
     CANVAS_H,
     DIAMOND_Y,
@@ -251,13 +250,20 @@ class TimelinePaintMixin:
         clip_right = min(total_w, paint_clip.right() + 1)
         if hasattr(self, "_paint_time_window") and hasattr(self, "_visible_items_for_paint"):
             visible_start_sec, visible_end_sec = self._paint_time_window(paint_clip)
-            visible_segments = self._visible_items_for_paint(
-                getattr(self, "segments", []),
-                "segments",
-                visible_start_sec,
-                visible_end_sec,
-                pad_sec=0.35,
-            )
+            if hasattr(self, "visible_segments_for_time_window"):
+                visible_segments = self.visible_segments_for_time_window(
+                    visible_start_sec,
+                    visible_end_sec,
+                    pad_sec=0.35,
+                )
+            else:
+                visible_segments = self._visible_items_for_paint(
+                    getattr(self, "segments", []),
+                    "segments",
+                    visible_start_sec,
+                    visible_end_sec,
+                    pad_sec=0.35,
+                )
             visible_gap_segments = self._visible_items_for_paint(
                 getattr(self, "gap_segments", []),
                 "gaps",
@@ -301,23 +307,33 @@ class TimelinePaintMixin:
         speaker_bot = SPEAKER_BOT
         voice_mid = (VOICE_ACTIVITY_TOP + VOICE_ACTIVITY_BOT) // 2
         track_bottom = SEG_BOT
-        stt_preview_segments = []
-        final_stt_segments = []
         selected_final_stt_segments = []
-        stt1_preview_segments = []
-        stt2_preview_segments = []
-        for seg in visible_segments:
-            if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
-                stt_preview_segments.append(seg)
-                if stt_preview_source(seg) == "STT2":
-                    stt2_preview_segments.append(seg)
-                else:
-                    stt1_preview_segments.append(seg)
-                continue
-            final_stt_segments.append(seg)
-            if final_stt_selection_source(seg):
-                selected_final_stt_segments.append(seg)
-        selected_final_stt_index = build_stt_selection_index(selected_final_stt_segments)
+        selected_final_stt_index = {}
+        if hasattr(self, "visible_segment_lanes_cached"):
+            lane_data = self.visible_segment_lanes_cached(visible_segments)
+            stt_preview_segments = lane_data.get("stt_preview_segments") or []
+            final_stt_segments = lane_data.get("final_segments") or []
+            selected_final_stt_segments = lane_data.get("selected_final_segments") or []
+            stt1_preview_segments = lane_data.get("stt1_preview_segments") or []
+            stt2_preview_segments = lane_data.get("stt2_preview_segments") or []
+            selected_final_stt_index = lane_data.get("selected_final_index") or {}
+        else:
+            stt_preview_segments = []
+            final_stt_segments = []
+            stt1_preview_segments = []
+            stt2_preview_segments = []
+            for seg in visible_segments:
+                if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
+                    stt_preview_segments.append(seg)
+                    if stt_preview_source(seg) == "STT2":
+                        stt2_preview_segments.append(seg)
+                    else:
+                        stt1_preview_segments.append(seg)
+                    continue
+                final_stt_segments.append(seg)
+                if final_stt_selection_source(seg):
+                    selected_final_stt_segments.append(seg)
+            selected_final_stt_index = build_stt_selection_index(selected_final_stt_segments)
         scenegraph_subtitles = bool(getattr(self, "_scenegraph_subtitle_rendering", False)) and not bool(getattr(self, "_edit_active", False))
         playback_active = bool(self._timeline_playback_active())
         subtitle_detail_mode = subtitle_render_detail_mode(
@@ -327,6 +343,7 @@ class TimelinePaintMixin:
             scenegraph=scenegraph_subtitles,
             playback_active=playback_active,
         )
+        playback_light_mode = bool(playback_active)
         dense_segment_mode = subtitle_detail_mode in {"dense", "ultra"}
         ultra_dense_segment_mode = subtitle_detail_mode == "ultra"
         self._paint_density_mode = subtitle_detail_mode
@@ -533,9 +550,33 @@ class TimelinePaintMixin:
             p.setPen(QPen(QColor("#2D3942"), 1))
             p.setBrush(QColor("#0B1418"))
             p.drawRect(QRect(x_start, lane_top, max(1, x_end - x_start), lane_h))
-            p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
             box_top = lane_top + 3
             box_h = max(12, lane_h - 6)
+            if playback_light_mode:
+                fill_batches: dict[tuple[str, int], list[QRect]] = {}
+                border_batches: dict[tuple[str, int, int], list[QRect]] = {}
+                for marker in markers:
+                    start = max(0.0, float(marker.get("start", 0.0) or 0.0))
+                    end = max(start, float(marker.get("end", start) or start))
+                    x1 = self._x(start)
+                    x2 = self._x(end)
+                    if x2 < clip.left() or x1 > clip.right():
+                        continue
+                    x_left = int(max(clip.left(), x1))
+                    x_right = int(min(clip.right(), x2))
+                    if x_right < x_left:
+                        continue
+                    color = QColor(str(marker.get("color", "#34C759")))
+                    rect = QRect(int(x_left), int(box_top), max(2, int(x_right - x_left) + 1), max(10, int(box_h)))
+                    _append_batch(fill_batches, (color.name(), 18 if dense_segment_mode else 28), rect)
+                    _append_batch(border_batches, (color.name(), 150, 1), rect)
+                _draw_color_batches(fill_batches, coalesce=True, max_gap_px=1)
+                for (color_name, alpha, border_width), rects in border_batches.items():
+                    color = QColor(color_name)
+                    color.setAlpha(int(alpha))
+                    _draw_rect_batch(rects, pen=QPen(color, int(border_width)), coalesce=True, max_gap_px=1)
+                return
+            p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
             radius = max(4.0, min(7.0, float(box_h) / 2.1))
             was_antialias = p.renderHints() & QPainter.RenderHint.Antialiasing
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -1091,7 +1132,7 @@ class TimelinePaintMixin:
                         continue
                     is_active = active_start_f is not None and abs(start - active_start_f) < 0.001
                     is_hover = hover_line == seg.get("line")
-                    if is_active or is_hover:
+                    if (is_active or is_hover) and not playback_light_mode:
                         detail_segments.append(seg)
                         continue
                     x2 = max(x1 + 1, x2)
@@ -1139,7 +1180,7 @@ class TimelinePaintMixin:
                     self.active_seg_start is not None and abs(float(seg.get("start", 0.0) or 0.0) - self.active_seg_start) < 0.001
                 )
                 is_hover = self._hover_line == seg.get("line")
-                if is_active or is_hover:
+                if (is_active or is_hover) and not playback_light_mode:
                     continue
                 style_key = subtitle_segment_style_cache_key(
                     seg,
@@ -1152,6 +1193,7 @@ class TimelinePaintMixin:
                         seg,
                         active=False,
                         hover=False,
+                        playback_active=playback_active,
                         quality_filter=quality_filter,
                     )
                     cached_style = (str(visual_style["fill"]), str(visual_style["border"]))
@@ -1218,14 +1260,17 @@ class TimelinePaintMixin:
                     and hasattr(self, "_native_inline_editor_active")
                     and self._native_inline_editor_active()
                 )
-                focus_detail = bool(is_active or is_hover or is_editing or is_merge_preview)
+                render_active = bool(is_active and not playback_light_mode)
+                render_hover = bool(is_hover and not playback_light_mode)
+                focus_detail = bool(render_active or render_hover or is_editing or is_merge_preview)
                 compact_seg = sw < 24 or (dense_segment_mode and not focus_detail)
                 is_stt_pending = bool(seg.get("stt_pending"))
                 spk_color = _speaker_color(seg)
                 visual_style = subtitle_segment_visual_style(
                     seg,
-                    active=is_active,
-                    hover=is_hover,
+                    active=render_active,
+                    hover=render_hover,
+                    playback_active=playback_active,
                     quality_filter=getattr(self, "quality_filter", "all"),
                 )
                 if is_editing:
@@ -1242,7 +1287,7 @@ class TimelinePaintMixin:
                     continue
                 fill = QColor(visual_style["fill"])
                 border = QColor(visual_style["border"])
-                bw = 2 if (is_active or is_hover) and not compact_seg else 1
+                bw = 2 if (render_active or render_hover) and not compact_seg else 1
 
                 p.fillRect(rect, fill)
                 p.setPen(QPen(border, bw))
@@ -1255,7 +1300,14 @@ class TimelinePaintMixin:
                     p.drawRect(rect.adjusted(0, 0, -1, -1))
                 chips = subtitle_confidence_chips(seg)
                 chips_drawn = False
-                if chips and rect.width() >= 72 and rect.height() >= 30 and not compact_seg and (not dense_segment_mode or focus_detail):
+                if (
+                    not playback_light_mode
+                    and chips
+                    and rect.width() >= 72
+                    and rect.height() >= 30
+                    and not compact_seg
+                    and (not dense_segment_mode or focus_detail)
+                ):
                     chip_w = max(6, min(18, (rect.width() - 10) // max(1, len(chips))))
                     chip_h = 4
                     chip_y = rect.y() + 3
@@ -1280,7 +1332,9 @@ class TimelinePaintMixin:
                 text_right = min(rect.right() - 6, text_right)
                 selected_source = final_stt_selection_source(seg)
                 show_badge = bool(
-                    selected_source
+                    not playback_light_mode
+                    and not is_editing
+                    and selected_source
                     and rect.width() >= 104
                     and (not dense_segment_mode or focus_detail)
                     and (text_right - text_left) >= 70
@@ -1362,7 +1416,12 @@ class TimelinePaintMixin:
                     p.setPen(QPen(QColor("#2D3942"), 1))
                     p.setBrush(QColor("#1B2429"))
                     p.drawRect(speaker_rect)
-                if not compact_seg and speaker_rect.width() >= 42 and (not dense_segment_mode or focus_detail):
+                if (
+                    not playback_light_mode
+                    and not compact_seg
+                    and speaker_rect.width() >= 42
+                    and (not dense_segment_mode or focus_detail)
+                ):
                     self._draw_speaker_names(p, speaker_rect, spk_color, _speaker_names(seg))
 
                 if (

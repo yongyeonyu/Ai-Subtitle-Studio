@@ -547,6 +547,14 @@ class EditorSubtitleAssistMixin:
         provisional_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
         vad_segments = list(getattr(canvas, "vad_segments", []) or [])
         fps = float(getattr(self, "video_fps", 30.0) or 30.0)
+        total_rows = len([seg for seg in list(current or []) if isinstance(seg, dict)])
+        real_rows = len([seg for seg in list(current or []) if isinstance(seg, dict) and not bool(seg.get("is_gap"))])
+        get_logger().log(
+            "[자막자석] request "
+            f"rows={total_rows} real={real_rows} threshold={threshold_sec:.3f}s "
+            f"boundaries={len(boundary_times)} provisional={len(provisional_boundaries)} "
+            f"vad={len(vad_segments)} fps={fps:.3f}"
+        )
         native_result = apply_subtitle_magnet_via_swift(
             segments=current,
             threshold_sec=threshold_sec,
@@ -558,14 +566,23 @@ class EditorSubtitleAssistMixin:
             policy=policy,
             strategy="extend_current",
         )
+        native_used = False
         if isinstance(native_result, dict) and isinstance(native_result.get("segments"), list):
+            native_used = True
             merged = [dict(seg) for seg in list(native_result.get("segments") or []) if isinstance(seg, dict)]
             report = dict(native_result.get("report") or {})
             if native_result.get("snapshotBefore") is not None:
                 report["snapshot_before"] = list(native_result.get("snapshotBefore") or [])
             if native_result.get("snapshotAfter") is not None:
                 report["snapshot_after"] = list(native_result.get("snapshotAfter") or [])
+            get_logger().log(
+                "[자막자석] native "
+                f"closed={int(report.get('closed_pairs', 0) or 0)} "
+                f"modes={dict(report.get('modes') or {})} "
+                f"blocked={dict(report.get('blocked') or {})}"
+            )
         else:
+            get_logger().log("[자막자석] native unavailable -> python fallback")
             merged, report = apply_netflix_subtitle_magnet(
                 current,
                 threshold_sec=threshold_sec,
@@ -576,7 +593,32 @@ class EditorSubtitleAssistMixin:
                 fps=fps,
                 policy=policy,
             )
+        if native_used:
+            fallback_merged, fallback_report = apply_netflix_subtitle_magnet(
+                current,
+                threshold_sec=threshold_sec,
+                boundary_times=boundary_times,
+                provisional_boundaries=provisional_boundaries,
+                vad_segments=vad_segments,
+                speaker_strict=True,
+                fps=fps,
+                policy=policy,
+            )
+            native_closed = int(report.get("closed_pairs", 0) or 0)
+            fallback_closed = int(fallback_report.get("closed_pairs", 0) or 0)
+            if fallback_closed > native_closed:
+                merged = fallback_merged
+                report = fallback_report
+                get_logger().log(
+                    "[자막자석] python fallback adopted "
+                    f"(native={native_closed}, python={fallback_closed})"
+                )
         if report.get("closed_pairs", 0) <= 0:
+            get_logger().log(
+                "[자막자석] no-op "
+                f"modes={dict(report.get('modes') or {})} "
+                f"blocked={dict(report.get('blocked') or {})}"
+            )
             if hasattr(self, "status_lbl"):
                 self.status_lbl.setText(
                     f"자막자석: 붙일 무음 gap이 없습니다 (Deep {policy['deep_bridge_gap_sec']:.1f}s / LoRA {policy['lora_micro_merge_gap_sec']:.1f}s)"

@@ -15,29 +15,61 @@ from PyQt6.QtWidgets import QApplication
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.settings import load_settings
+from ui.main.main_nonfatal import (
+    is_deleted_qt_runtime_error,
+)
+
+
+def _is_deleted_qt_runtime_error(exc: BaseException) -> bool:
+    return is_deleted_qt_runtime_error(exc)
+
+
+def _log_cleanup_step_failure(step: str, exc: BaseException) -> None:
+    if _is_deleted_qt_runtime_error(exc):
+        return
+    try:
+        get_logger().log(f"⚠️ 런타임 정리 단계 실패 [{step}]: {exc}")
+    except Exception:
+        pass
+
+
+def _run_cleanup_step(step: str, callback, *, default=None, ignore_deleted_qt: bool = True):
+    try:
+        return callback()
+    except RuntimeError as exc:
+        if ignore_deleted_qt and _is_deleted_qt_runtime_error(exc):
+            return default
+        _log_cleanup_step_failure(step, exc)
+        return default
+    except Exception as exc:
+        _log_cleanup_step_failure(step, exc)
+        return default
 
 
 def _main_window_threading_module():
-    try:
-        from ui.main import main_window as main_window_module
-
-        module = getattr(main_window_module, "threading", None)
-        if module is not None:
-            return module
-    except Exception:
-        pass
+    module = _run_cleanup_step(
+        "main_window.threading lookup",
+        lambda: __import__("ui.main.main_window", fromlist=["threading"]),
+        default=None,
+    )
+    if module is not None:
+        threading_module = getattr(module, "threading", None)
+        if threading_module is not None:
+            return threading_module
     return threading
 
 
 def _load_main_window_settings():
-    try:
-        from ui.main import main_window as main_window_module
-
-        loader = getattr(main_window_module, "load_settings", None)
-        if callable(loader):
-            return loader()
-    except Exception:
-        pass
+    module = _run_cleanup_step(
+        "main_window.load_settings lookup",
+        lambda: __import__("ui.main.main_window", fromlist=["load_settings"]),
+        default=None,
+    )
+    loader = getattr(module, "load_settings", None) if module is not None else None
+    if callable(loader):
+        loaded = _run_cleanup_step("main_window.load_settings call", loader, default=None)
+        if loaded is not None:
+            return loaded
     return load_settings()
 
 
@@ -74,13 +106,10 @@ class MainRuntimeCleanupMixin:
         context = str(context or "런타임 정리").strip() or "런타임 정리"
         stopped_any = False
         try:
-            try:
-                self._stop_post_completion_idle_timer()
-            except Exception:
-                pass
+            _run_cleanup_step(f"{context} post-completion idle timer stop", self._stop_post_completion_idle_timer)
 
             if editor is not None:
-                try:
+                def _reset_editor_roughcut_state():
                     timer = getattr(editor, "_roughcut_draft_timer", None)
                     if timer is not None:
                         timer.stop()
@@ -88,8 +117,7 @@ class MainRuntimeCleanupMixin:
                     editor._roughcut_draft_generation = int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1
                     if hasattr(editor, "_set_roughcut_draft_status"):
                         editor._set_roughcut_draft_status("idle")
-                except Exception:
-                    pass
+                _run_cleanup_step(f"{context} editor roughcut draft reset", _reset_editor_roughcut_state)
                 try:
                     state_manager = getattr(editor, "sm", None)
                     is_processing = bool(getattr(editor, "_is_ai_processing", False))
@@ -103,7 +131,7 @@ class MainRuntimeCleanupMixin:
                 except Exception as exc:
                     get_logger().log(f"⚠️ {context} 중 에디터 작업 중단 실패: {exc}")
 
-                try:
+                def _shutdown_editor_video_player():
                     video_player = getattr(editor, "video_player", None)
                     if video_player is not None:
                         shutdown_backend = getattr(video_player, "shutdown_backend", None)
@@ -118,23 +146,19 @@ class MainRuntimeCleanupMixin:
                             player = getattr(video_player, player_name, None)
                             if player is not None and hasattr(player, "stop"):
                                 player.stop()
-                except Exception:
-                    pass
+                _run_cleanup_step(f"{context} editor video player shutdown", _shutdown_editor_video_player)
 
-                try:
+                def _stop_editor_timeline_waveform():
+                    nonlocal stopped_any
                     timeline = getattr(editor, "timeline", None)
                     stop_waveform = getattr(timeline, "stop_waveform_workers", None) if timeline is not None else None
                     if callable(stop_waveform):
                         stop_waveform()
                         stopped_any = True
-                except Exception:
-                    pass
+                _run_cleanup_step(f"{context} editor timeline waveform stop", _stop_editor_timeline_waveform)
 
                 if force and hasattr(editor, "_cleanup"):
-                    try:
-                        editor._cleanup()
-                    except Exception:
-                        pass
+                    _run_cleanup_step(f"{context} editor cleanup", editor._cleanup)
 
             for backend_name in ("backend", "backend_fast"):
                 backend = getattr(self, backend_name, None)
@@ -182,13 +206,13 @@ class MainRuntimeCleanupMixin:
                     except Exception:
                         pass
 
-            try:
+            def _stop_live_stt():
+                nonlocal stopped_any
                 from core.audio.live_stt import stop_live_stt_worker
 
                 if stop_live_stt_worker():
                     stopped_any = True
-            except Exception:
-                pass
+            _run_cleanup_step(f"{context} live stt stop", _stop_live_stt)
 
             skip_external_cleanup = bool(getattr(self, "_skip_external_cleanup_in_navigation", False))
             if not skip_external_cleanup:
@@ -201,10 +225,7 @@ class MainRuntimeCleanupMixin:
                 except Exception as exc:
                     get_logger().log(f"⚠️ {context} 중 외부 런타임 정리 실패: {exc}")
 
-            try:
-                gc.collect()
-            except Exception:
-                pass
+            _run_cleanup_step(f"{context} gc.collect", gc.collect)
 
             if stopped_any:
                 get_logger().log(f"🧹 {context}: 스레드/AI 런타임/메모리 정리 완료")
@@ -237,7 +258,8 @@ class MainRuntimeCleanupMixin:
                 try:
                     if QApplication.overrideCursor() is None:
                         break
-                    QApplication.restoreOverrideCursor()
+                    if _run_cleanup_step("restore override cursor", QApplication.restoreOverrideCursor, default=False) is False:
+                        break
                 except Exception:
                     break
         for widget in widgets:
@@ -246,24 +268,18 @@ class MainRuntimeCleanupMixin:
             targets = [widget]
             viewport_getter = getattr(widget, "viewport", None)
             if callable(viewport_getter):
-                try:
-                    viewport = viewport_getter()
-                    if viewport is not None:
-                        targets.append(viewport)
-                except Exception:
-                    pass
+                viewport = _run_cleanup_step("widget viewport lookup", viewport_getter, default=None)
+                if viewport is not None:
+                    targets.append(viewport)
             for attr_name in ("timeline", "video_player", "text_edit", "canvas", "global_canvas"):
                 child = getattr(widget, attr_name, None)
                 if child is not None:
                     targets.append(child)
                     child_viewport_getter = getattr(child, "viewport", None)
                     if callable(child_viewport_getter):
-                        try:
-                            child_viewport = child_viewport_getter()
-                            if child_viewport is not None:
-                                targets.append(child_viewport)
-                        except Exception:
-                            pass
+                        child_viewport = _run_cleanup_step("child viewport lookup", child_viewport_getter, default=None)
+                        if child_viewport is not None:
+                            targets.append(child_viewport)
                     for nested_name in ("canvas", "global_canvas"):
                         nested_child = getattr(child, nested_name, None)
                         if nested_child is not None:
@@ -271,13 +287,10 @@ class MainRuntimeCleanupMixin:
             for target in targets:
                 if target is None:
                     continue
-                try:
-                    target.unsetCursor()
-                except Exception:
-                    pass
+                _run_cleanup_step("cursor unset", target.unsetCursor, default=None)
 
     def _clear_runtime_memory_caches(self, *, include_gpu: bool = True) -> None:
-        try:
+        def _clear_shared_runtime_caches():
             from core.media_info import clear_media_probe_cache_memory
             from core.personalization.lora_vector_retriever import clear_lora_retrieval_caches
             from core.project.project_io import clear_project_file_cache
@@ -289,17 +302,15 @@ class MainRuntimeCleanupMixin:
             clear_lora_retrieval_caches()
             clear_line_icon_cache()
             trim_runtime_memory_caches(stage="critical" if include_gpu else "warning", include_gpu=include_gpu)
-        except Exception:
-            pass
+        _run_cleanup_step("shared runtime cache trim", _clear_shared_runtime_caches)
         for owner in (self, getattr(self, "backend", None), getattr(self, "backend_fast", None)):
             if owner is None:
                 continue
-            try:
-                cache = getattr(owner, "_prefetch_cache", None)
+            def _clear_prefetch_cache(target=owner):
+                cache = getattr(target, "_prefetch_cache", None)
                 if isinstance(cache, dict):
                     cache.clear()
-            except Exception:
-                pass
+            _run_cleanup_step("prefetch cache clear", _clear_prefetch_cache)
             for attr_name in (
                 "_cut_boundary_pipeline_cache",
                 "_auto_audio_tune_cache",
@@ -307,50 +318,50 @@ class MainRuntimeCleanupMixin:
                 "_runtime_auto_audio_decision",
                 "_speaker_map",
             ):
-                try:
-                    payload = getattr(owner, attr_name, None)
+                def _clear_owner_payload(target=owner, name=attr_name):
+                    payload = getattr(target, name, None)
                     if isinstance(payload, dict):
                         payload.clear()
                     elif isinstance(payload, list):
                         payload.clear()
-                except Exception:
-                    pass
-        try:
-            gc.collect()
-        except Exception:
-            pass
+                _run_cleanup_step(f"{attr_name} clear", _clear_owner_payload)
+        _run_cleanup_step("runtime cache gc.collect", gc.collect)
         if not include_gpu:
             return
         # GPU and MLX cache trimming is already routed through
         # core.runtime.memory_manager.trim_runtime_memory_caches above.
 
     def _shutdown_runtime_memory_manager(self) -> None:
-        try:
-            timer = getattr(self, "_runtime_memory_timer", None)
-            if timer is not None and hasattr(timer, "stop"):
-                timer.stop()
-        except Exception:
-            pass
-        try:
-            manager = getattr(self, "_runtime_memory_manager", None)
-            if manager is not None and hasattr(manager, "stop"):
-                manager.stop()
-        except Exception:
-            pass
+        _run_cleanup_step(
+            "runtime memory timer stop",
+            lambda: getattr(self, "_runtime_memory_timer", None).stop()
+            if getattr(self, "_runtime_memory_timer", None) is not None
+            and hasattr(getattr(self, "_runtime_memory_timer", None), "stop")
+            else None,
+        )
+        _run_cleanup_step(
+            "runtime memory manager stop",
+            lambda: getattr(self, "_runtime_memory_manager", None).stop()
+            if getattr(self, "_runtime_memory_manager", None) is not None
+            and hasattr(getattr(self, "_runtime_memory_manager", None), "stop")
+            else None,
+        )
 
     def _shutdown_runtime_resource_coordinator(self) -> None:
-        try:
-            timer = getattr(self, "_runtime_resource_timer", None)
-            if timer is not None and hasattr(timer, "stop"):
-                timer.stop()
-        except Exception:
-            pass
-        try:
-            coordinator = getattr(self, "_runtime_resource_coordinator", None)
-            if coordinator is not None and hasattr(coordinator, "set_exit_mode"):
-                coordinator.set_exit_mode(True)
-        except Exception:
-            pass
+        _run_cleanup_step(
+            "runtime resource timer stop",
+            lambda: getattr(self, "_runtime_resource_timer", None).stop()
+            if getattr(self, "_runtime_resource_timer", None) is not None
+            and hasattr(getattr(self, "_runtime_resource_timer", None), "stop")
+            else None,
+        )
+        _run_cleanup_step(
+            "runtime resource coordinator exit mode",
+            lambda: getattr(self, "_runtime_resource_coordinator", None).set_exit_mode(True)
+            if getattr(self, "_runtime_resource_coordinator", None) is not None
+            and hasattr(getattr(self, "_runtime_resource_coordinator", None), "set_exit_mode")
+            else None,
+        )
 
     def _handle_runtime_memory_pressure(self, stage: str, snapshot: dict | None = None):
         stage_text = str(stage or "normal").strip().lower()
@@ -358,26 +369,28 @@ class MainRuntimeCleanupMixin:
             return {"stage": "normal", "actions": []}
         actions: list[str] = []
         include_gpu = stage_text == "critical"
-        try:
-            self._clear_runtime_memory_caches(include_gpu=include_gpu)
+        if _run_cleanup_step(
+            f"runtime memory pressure {stage_text} cache clear",
+            lambda: self._clear_runtime_memory_caches(include_gpu=include_gpu),
+            default=False,
+        ) is not False:
             actions.append("clear_runtime_memory_caches")
-        except Exception:
-            pass
         if stage_text == "critical":
             try:
                 busy = bool(self._is_editor_ai_busy(getattr(self, "_editor_widget", None)) or self._is_backend_ai_busy())
             except Exception:
                 busy = True
             if not busy:
-                try:
-                    self._release_ai_models_for_editor_mode(
+                if _run_cleanup_step(
+                    "runtime memory pressure release ai models",
+                    lambda: self._release_ai_models_for_editor_mode(
                         force=True,
                         preserve_roughcut_status=True,
                         ollama_timeout_sec=1.2,
-                    )
+                    ),
+                    default=False,
+                ) is not False:
                     actions.append("release_ai_models")
-                except Exception:
-                    pass
         return {"stage": stage_text, "actions": actions}
 
     def _force_editor_idle_after_generation(self, editor=None, *, reason: str = "generation_complete") -> dict:
@@ -447,16 +460,16 @@ class MainRuntimeCleanupMixin:
                 target_editor._last_background_prefetch_gate_at = 0.0
             except Exception:
                 pass
-        try:
-            self._auto_processing_active = False
-        except Exception:
-            pass
+        _run_cleanup_step("force editor idle auto processing reset", lambda: setattr(self, "_auto_processing_active", False))
         self._restore_normal_cursor(*widgets)
         for delay_ms in (0, 80, 240, 700):
-            try:
-                QTimer.singleShot(delay_ms, lambda saved_widgets=tuple(widgets): self._restore_normal_cursor(*saved_widgets))
-            except Exception:
-                pass
+            _run_cleanup_step(
+                f"force editor idle cursor restore timer {delay_ms}ms",
+                lambda saved_delay=delay_ms: QTimer.singleShot(
+                    saved_delay,
+                    lambda saved_widgets=tuple(widgets): self._restore_normal_cursor(*saved_widgets),
+                ),
+            )
         return {"idle": True, "reason": reason}
 
     def _restore_normal_cursor_for_exit(self):
@@ -480,10 +493,10 @@ class MainRuntimeCleanupMixin:
             if self._is_editor_video_playing(editor):
                 self._schedule_post_generation_gc(editor=editor, delay_ms=2200)
                 return
-            try:
-                self._clear_runtime_memory_caches(include_gpu=True)
-            except Exception:
-                pass
+            _run_cleanup_step(
+                "post generation runtime cache clear",
+                lambda: self._clear_runtime_memory_caches(include_gpu=True),
+            )
 
         QTimer.singleShot(max(0, int(delay_ms)), _run_gc)
 
@@ -495,45 +508,60 @@ class MainRuntimeCleanupMixin:
             timer = _main_window_threading_module().Timer(delay_sec, lambda: os._exit(0))
             timer.daemon = True
             timer.start()
-        except Exception:
-            pass
-        try:
-            QTimer.singleShot(max(20, int(delay_ms)), lambda: os._exit(0))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_cleanup_step_failure("forced process exit threading timer", exc)
+        _run_cleanup_step(
+            "forced process exit qt timer",
+            lambda: QTimer.singleShot(max(20, int(delay_ms)), lambda: os._exit(0)),
+        )
 
     def _pause_editor_runtime_for_exit(self, editor) -> bool:
         if editor is None:
             return False
         stopped_any = False
-        try:
-            abort_pending = getattr(editor, "_abort_pending_editor_processing_ui_work", None)
-            if callable(abort_pending):
-                abort_pending()
-                stopped_any = True
-        except Exception:
-            pass
-        try:
-            state_manager = getattr(editor, "sm", None)
-            if state_manager is not None and hasattr(state_manager, "stop_processing"):
-                state_manager.stop_processing("앱 종료로 작업을 일시 정지했습니다.")
-                stopped_any = True
-        except Exception:
-            pass
+        abort_result = _run_cleanup_step(
+            "pause editor abort pending ui work",
+            lambda: getattr(editor, "_abort_pending_editor_processing_ui_work", None)()
+            if callable(getattr(editor, "_abort_pending_editor_processing_ui_work", None))
+            else False,
+            default=False,
+        )
+        if abort_result is not False:
+            stopped_any = True
+        stop_result = _run_cleanup_step(
+            "pause editor state manager stop_processing",
+            lambda: getattr(getattr(editor, "sm", None), "stop_processing")("앱 종료로 작업을 일시 정지했습니다.")
+            if getattr(editor, "sm", None) is not None
+            and hasattr(getattr(editor, "sm", None), "stop_processing")
+            else False,
+            default=False,
+        )
+        if stop_result is not False:
+            stopped_any = True
         for timer_name in ("_spinner_timer", "_roughcut_draft_timer", "_cut_boundary_scan_timer"):
-            try:
-                timer = getattr(editor, timer_name, None)
-                if timer is not None and hasattr(timer, "stop"):
-                    timer.stop()
-                    stopped_any = True
-            except Exception:
-                pass
-        try:
-            editor._roughcut_draft_pending = False
-            editor._roughcut_draft_generation = int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1
-        except Exception:
-            pass
-        try:
+            timer_result = _run_cleanup_step(
+                f"pause editor timer stop {timer_name}",
+                lambda name=timer_name: getattr(editor, name, None).stop()
+                if getattr(editor, name, None) is not None
+                and hasattr(getattr(editor, name, None), "stop")
+                else False,
+                default=False,
+            )
+            if timer_result is not False:
+                stopped_any = True
+        _run_cleanup_step(
+            "pause editor roughcut pending reset",
+            lambda: (
+                setattr(editor, "_roughcut_draft_pending", False),
+                setattr(
+                    editor,
+                    "_roughcut_draft_generation",
+                    int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1,
+                ),
+            ),
+        )
+        def _pause_editor_video():
+            nonlocal stopped_any
             video_player = getattr(editor, "video_player", None)
             if video_player is not None:
                 shutdown_backend = getattr(video_player, "shutdown_backend", None)
@@ -549,16 +577,15 @@ class MainRuntimeCleanupMixin:
                     if player is not None and hasattr(player, "stop"):
                         player.stop()
                 stopped_any = True
-        except Exception:
-            pass
-        try:
+        _run_cleanup_step("pause editor video player", _pause_editor_video)
+        def _stop_timeline_waveform():
+            nonlocal stopped_any
             timeline = getattr(editor, "timeline", None)
             stop_waveform = getattr(timeline, "stop_waveform_workers", None) if timeline is not None else None
             if callable(stop_waveform):
                 stop_waveform()
                 stopped_any = True
-        except Exception:
-            pass
+        _run_cleanup_step("pause editor timeline waveform", _stop_timeline_waveform)
         return stopped_any
 
     def _pause_backend_runtime_for_exit(self, backend, *, context: str = "앱 종료") -> bool:
@@ -626,44 +653,28 @@ class MainRuntimeCleanupMixin:
             manager = getattr(self, manager_name, None)
             if manager is None:
                 continue
-            try:
-                if bool(getattr(manager, "_running", False)):
+            def _stop_manager(target=manager):
+                nonlocal stopped_any
+                if bool(getattr(target, "_running", False)):
                     stopped_any = True
-                if hasattr(manager, "stop"):
-                    manager.stop()
-            except Exception:
-                pass
+                if hasattr(target, "stop"):
+                    target.stop()
+            _run_cleanup_step(f"stop auto watchdog {manager_name}", _stop_manager)
         return stopped_any
 
     def _pause_all_runtime_work_for_exit(self, *, context: str = "앱 종료") -> bool:
         self._fast_exit_requested = True
         context = str(context or "앱 종료").strip() or "앱 종료"
         stopped_any = False
-        try:
-            self._shutdown_runtime_memory_manager()
-        except Exception:
-            pass
-        try:
-            self._shutdown_runtime_resource_coordinator()
-        except Exception:
-            pass
-        try:
-            self._restore_normal_cursor_for_exit()
-        except Exception:
-            pass
-        try:
-            self._detach_app_event_filter()
-        except Exception:
-            pass
-        try:
-            self._stop_post_completion_idle_timer()
-        except Exception:
-            pass
-        try:
-            stopped_any = self._stop_auto_watchdogs_for_exit() or stopped_any
-        except Exception:
-            pass
-        try:
+        _run_cleanup_step("app exit shutdown runtime memory manager", self._shutdown_runtime_memory_manager)
+        _run_cleanup_step("app exit shutdown runtime resource coordinator", self._shutdown_runtime_resource_coordinator)
+        _run_cleanup_step("app exit restore cursor", self._restore_normal_cursor_for_exit)
+        _run_cleanup_step("app exit detach app event filter", self._detach_app_event_filter)
+        _run_cleanup_step("app exit stop post completion idle timer", self._stop_post_completion_idle_timer)
+        watchdog_result = _run_cleanup_step("app exit stop auto watchdogs", self._stop_auto_watchdogs_for_exit, default=False)
+        stopped_any = bool(watchdog_result) or stopped_any
+        def _pause_personalization_trainer():
+            nonlocal stopped_any
             trainer = getattr(self, "_personalization_idle_trainer", None)
             self._lora_foreground_busy_until_ms = int(time.time() * 1000) + 3_600_000
             self._lora_foreground_busy_reason = "app_exit"
@@ -694,31 +705,34 @@ class MainRuntimeCleanupMixin:
                 recover=False,
             )
             stopped_any = True
-        except Exception:
-            pass
-        try:
-            stopped_any = self._pause_editor_runtime_for_exit(getattr(self, "_editor_widget", None)) or stopped_any
-        except Exception:
-            pass
+        _run_cleanup_step("app exit pause personalization trainer", _pause_personalization_trainer)
+        editor_pause_result = _run_cleanup_step(
+            "app exit pause editor runtime",
+            lambda: self._pause_editor_runtime_for_exit(getattr(self, "_editor_widget", None)),
+            default=False,
+        )
+        stopped_any = bool(editor_pause_result) or stopped_any
         backends = [
             getattr(self, backend_name, None)
             for backend_name in ("backend", "backend_fast")
             if getattr(self, backend_name, None) is not None
         ]
         for backend in backends:
-            try:
-                stopped_any = self._pause_backend_runtime_for_exit(
-                    backend,
+            backend_pause_result = _run_cleanup_step(
+                f"app exit pause backend runtime {type(backend).__name__}",
+                lambda current_backend=backend: self._pause_backend_runtime_for_exit(
+                    current_backend,
                     context=context,
-                ) or stopped_any
-            except Exception:
-                pass
-        try:
+                ),
+                default=False,
+            )
+            stopped_any = bool(backend_pause_result) or stopped_any
+        def _stop_live_stt_for_exit():
+            nonlocal stopped_any
             from core.audio.live_stt import stop_live_stt_worker
 
             stopped_any = bool(stop_live_stt_worker()) or stopped_any
-        except Exception:
-            pass
+        _run_cleanup_step("app exit stop live stt", _stop_live_stt_for_exit)
         if stopped_any and not getattr(self, "_fast_exit_pause_logged", False):
             try:
                 get_logger().log("⏸️ 앱 종료: 진행 중인 작업을 즉시 일시 정지했습니다.")
@@ -766,10 +780,7 @@ class MainRuntimeCleanupMixin:
             except Exception:
                 pass
 
-        try:
-            self._clear_runtime_memory_caches(include_gpu=True)
-        except Exception:
-            pass
+        _run_cleanup_step("app exit clear runtime memory caches", lambda: self._clear_runtime_memory_caches(include_gpu=True))
         if stopped_any:
             try:
                 get_logger().log("🧹 앱 종료: STT/LLM/Ollama/GPU 런타임 메모리 정리 완료")
@@ -883,17 +894,22 @@ class MainRuntimeCleanupMixin:
 
         self._editor_ai_release_in_progress = True
         try:
-            try:
-                if editor is not None and not preserve_roughcut_status:
-                    timer = getattr(editor, "_roughcut_draft_timer", None)
-                    if timer is not None:
-                        timer.stop()
-                    editor._roughcut_draft_pending = False
-                    editor._roughcut_draft_generation = int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1
-                    if hasattr(editor, "_set_roughcut_draft_status"):
-                        editor._set_roughcut_draft_status("idle")
-            except Exception:
-                pass
+            if editor is not None and not preserve_roughcut_status:
+                _run_cleanup_step(
+                    "editor ai release roughcut draft reset",
+                    lambda: (
+                        getattr(editor, "_roughcut_draft_timer", None).stop()
+                        if getattr(editor, "_roughcut_draft_timer", None) is not None
+                        else None,
+                        setattr(editor, "_roughcut_draft_pending", False),
+                        setattr(
+                            editor,
+                            "_roughcut_draft_generation",
+                            int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1,
+                        ),
+                        getattr(editor, "_set_roughcut_draft_status", lambda *_args, **_kwargs: None)("idle"),
+                    ),
+                )
 
             def _release():
                 try:
@@ -919,8 +935,8 @@ class MainRuntimeCleanupMixin:
 
                         if stop_live_stt_worker():
                             stopped_runtime = True
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _log_cleanup_step_failure("editor ai release live stt stop", exc)
                     try:
                         settings = _load_main_window_settings()
                         models = [
@@ -949,12 +965,15 @@ class MainRuntimeCleanupMixin:
                     except Exception as exc:
                         get_logger().log(f"⚠️ 에디터 모드 LLM 모델 종료 실패: {exc}")
                     self._clear_runtime_memory_caches(include_gpu=True)
-                    try:
-                        if bool(getattr(editor, "_post_generation_models_release_requested", False)):
-                            editor._post_generation_models_released = True
-                            self._editor_ai_runtime_released_for_editor_mode = True
-                    except Exception:
-                        pass
+                    _run_cleanup_step(
+                        "editor ai release post-generation flags",
+                        lambda: (
+                            setattr(editor, "_post_generation_models_released", True),
+                            setattr(self, "_editor_ai_runtime_released_for_editor_mode", True),
+                        )
+                        if bool(getattr(editor, "_post_generation_models_release_requested", False))
+                        else None,
+                    )
                     if stopped_runtime:
                         now = time.monotonic()
                         last_log_at = float(getattr(self, "_editor_ai_release_last_log_at", 0.0) or 0.0)

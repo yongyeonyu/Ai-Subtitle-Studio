@@ -396,6 +396,79 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertIn("앞 문맥", prompts[0])
         self.assertIn("다음 문맥", prompts[0])
 
+    def test_llm_candidate_judge_applies_selected_candidate_timing_and_words(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "STT1 문장",
+            "speaker": "00",
+            "stt_candidates": [
+                {
+                    "source": "STT1",
+                    "text": "STT1 문장",
+                    "score": 0.4,
+                    "start": 0.0,
+                    "end": 1.0,
+                    "words": [{"word": "STT1", "start": 0.0, "end": 0.4}],
+                },
+                {
+                    "source": "STT2",
+                    "text": "STT2 문장",
+                    "score": 0.8,
+                    "start": 0.2,
+                    "end": 1.4,
+                    "words": [{"word": "STT2", "start": 0.2, "end": 0.7}],
+                },
+            ],
+        }
+
+        settings = {
+            "stt_ensemble_llm_judge_enabled": True,
+            "stt_lattice_selector_enabled": False,
+            "stt_ensemble_llm_judge_require_risk": True,
+        }
+        with (
+            patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+            patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value=None),
+            patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
+            patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
+            patch("core.engine.subtitle_engine.ollama_split_text", return_value=["B - A보다 문맥상 자연"]),
+        ):
+            result = _process_one((seg, {}, 10, {}, "gemma4:e4b", "", "", True))
+
+        self.assertEqual(result[0]["text"], "STT2 문장")
+        self.assertAlmostEqual(result[0]["start"], 0.2)
+        self.assertAlmostEqual(result[0]["end"], 1.4)
+        self.assertEqual(result[0]["words"][0]["word"], "STT2")
+        self.assertEqual(result[0]["stt_ensemble_deep_selected_source"], "")
+
+    def test_llm_candidate_judge_skips_external_model_when_local_only(self):
+        seg = {
+            "start": 0.0,
+            "end": 0.9,
+            "text": "STT1 문장",
+            "speaker": "00",
+            "stt_candidates": [
+                {"source": "STT1", "text": "STT1 문장", "score": 0.4},
+                {"source": "STT2", "text": "STT2 문장", "score": 0.8},
+            ],
+        }
+
+        settings = {
+            "stt_ensemble_llm_judge_enabled": True,
+            "stt_lattice_selector_enabled": False,
+            "stt_ensemble_llm_judge_local_only": True,
+        }
+        with (
+            patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+            patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value=None),
+            patch("core.engine.subtitle_engine.openai_split_text") as openai_mock,
+        ):
+            result = _process_one((seg, {}, 10, {}, "OpenAI GPT-5 Mini [유료/API 균형]", "", "", True))
+
+        self.assertEqual(result[0]["text"], "STT1 문장")
+        openai_mock.assert_not_called()
+
     def test_optimize_recovers_ensemble_segments_if_filters_drop_all_candidates(self):
         segments = [
             {

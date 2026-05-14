@@ -13,6 +13,7 @@ from PyQt6.QtCore import QTimer
 from core.cut_boundary import sanitize_cut_boundary_rows, sync_project_cut_boundaries
 from core.cut_boundary_jump import nearest_boundary_second, normalize_boundary_seconds
 from core.runtime.logger import get_logger
+from ui.project.project_session_runtime import set_project_boundary_rows
 
 
 class EditorScanCutCoreMixin:
@@ -1795,23 +1796,14 @@ class EditorScanCutCoreMixin:
             list(merged),
             primary_fps=float(row.get("fps", self._current_frame_fps()) or self._current_frame_fps()),
         )
-        self._project_boundary_times = list(merged)
+        set_project_boundary_rows(self, list(merged), emit_boundary_signal=False)
 
         try:
             owner = self.window() if hasattr(self, "window") else None
         except Exception:
             owner = None
         if owner is not None:
-            try:
-                owner._project_boundary_times = list(merged)
-            except Exception:
-                pass
-            try:
-                signal = getattr(owner, "_sig_update_project_boundary_times", None)
-                if signal is not None and hasattr(signal, "emit"):
-                    signal.emit(list(merged))
-            except Exception:
-                pass
+            set_project_boundary_rows(owner, list(merged), emit_boundary_signal=True)
 
         try:
             if timeline is not None and hasattr(timeline, "set_boundary_times"):

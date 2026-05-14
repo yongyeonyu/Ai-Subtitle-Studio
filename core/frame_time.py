@@ -156,6 +156,91 @@ def normalize_segment_to_frame_grid(
     return item
 
 
+def clamp_segment_to_duration(
+    segment: dict | None,
+    total_duration_sec: float | int | str | None,
+    *,
+    fps: float | int | str | None = None,
+    drop_empty: bool = True,
+) -> dict | None:
+    item = dict(segment or {})
+    try:
+        total = max(0.0, float(total_duration_sec or 0.0))
+    except (TypeError, ValueError):
+        total = 0.0
+    if total <= 0.0:
+        return item
+
+    start = _coerce_nonnegative_sec(item.get("start", item.get("timeline_start", 0.0)))
+    end = _coerce_nonnegative_sec(item.get("end", item.get("timeline_end", start)))
+    end = max(start, end)
+
+    if start >= total - 1e-9:
+        return None if drop_empty else {**item, "start": total, "end": total}
+
+    clamped_start = min(start, total)
+    clamped_end = min(max(end, clamped_start), total)
+    if clamped_end <= clamped_start + 1e-9:
+        return None if drop_empty else {**item, "start": clamped_start, "end": clamped_start}
+
+    item["start"] = round(clamped_start, 6)
+    item["end"] = round(clamped_end, 6)
+
+    if not bool(item.get("is_gap", False)):
+        source_fps = fps
+        if source_fps in (None, ""):
+            source_fps = item.get("timeline_frame_rate", item.get("frame_rate", DEFAULT_FPS))
+        normalized_fps = normalize_fps(source_fps)
+        total_frames = frame_count(total, normalized_fps)
+        start_frame = min(sec_to_nearest_frame(clamped_start, normalized_fps), total_frames)
+        end_frame = min(max(start_frame + 1, sec_to_nearest_frame(clamped_end, normalized_fps)), total_frames)
+        if end_frame <= start_frame:
+            return None if drop_empty else {**item, "start": clamped_start, "end": clamped_start}
+        item["start_frame"] = start_frame
+        item["end_frame"] = end_frame
+        item["timeline_start_frame"] = start_frame
+        item["timeline_end_frame"] = end_frame
+        item["frame_rate"] = normalized_fps
+        item["timeline_frame_rate"] = normalized_fps
+        item["frame_range"] = {
+            "unit": "frame",
+            "start": start_frame,
+            "end": end_frame,
+            "timeline_frame_rate": normalized_fps,
+        }
+    return item
+
+
+def clamp_segments_to_duration(
+    segments: list[dict] | tuple[dict, ...] | None,
+    total_duration_sec: float | int | str | None,
+    *,
+    fps: float | int | str | None = None,
+    preserve_order: bool = True,
+    drop_empty: bool = True,
+) -> list[dict]:
+    rows: list[dict] = []
+    for seg in list(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        clamped = clamp_segment_to_duration(
+            seg,
+            total_duration_sec,
+            fps=fps,
+            drop_empty=drop_empty,
+        )
+        if isinstance(clamped, dict):
+            rows.append(clamped)
+    if not preserve_order:
+        rows.sort(
+            key=lambda seg: (
+                float(seg.get("start", 0.0) or 0.0),
+                float(seg.get("end", seg.get("start", 0.0)) or 0.0),
+            )
+        )
+    return rows
+
+
 def normalize_segments_to_frame_grid(
     segments: list[dict] | tuple[dict, ...] | None,
     fps: float | int | str | None,

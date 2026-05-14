@@ -525,7 +525,6 @@ class EditorVideoControlsMixin:
         quality["confidence_reason"] = "manual_confirmed"
         quality["manual_confirmed"] = True
         self._accumulate_confirmed_segment_lora(line, data, quality)
-        self._set_adjacent_silence_confirmed(line, True)
         self._set_review_segment_quality(line, quality, history)
 
     def _on_timeline_timing_confirm_requested(self, lines: list):
@@ -571,7 +570,6 @@ class EditorVideoControlsMixin:
         quality["confidence_reason"] = "manual_temporary"
         quality["manual_confirmed"] = False
         quality["manual_temporary"] = True
-        self._set_adjacent_silence_confirmed(line, False)
         self._set_review_segment_quality(line, quality, history)
 
     def _delete_review_segment(self, line: int):

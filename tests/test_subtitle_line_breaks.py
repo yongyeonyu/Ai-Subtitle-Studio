@@ -88,6 +88,71 @@ class SubtitleLineBreakTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_flush_queue_keeps_finalized_segment_start_and_end_without_gap_repull(self):
+        editor = self._editor()
+        try:
+            editor.text_edit.setPlainText("이전 자막\n")
+            doc = editor.text_edit.document()
+            first = doc.findBlockByNumber(0)
+            gap = doc.findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, end_sec=1.0))
+            gap.setUserData(SubtitleBlockData("00", 1.2, is_gap=True))
+            editor.video_player.total_time = 9.0
+            editor._segment_queue = [
+                {
+                    "start": 2.0,
+                    "end": 2.5,
+                    "text": "확정 자막",
+                    "speaker_list": ["00"],
+                    "_final_gap_settings_applied": True,
+                },
+            ]
+
+            with patch("core.engine.subtitle_accuracy_pipeline.repair_subtitle_context_consistency") as repair:
+                editor._flush_queue()
+
+            repair.assert_not_called()
+            segs = [seg for seg in editor._get_current_segments() if not seg.get("is_gap")]
+            self.assertEqual(segs[-1]["text"], "확정 자막")
+            self.assertAlmostEqual(segs[-1]["start"], 2.0)
+            self.assertAlmostEqual(segs[-1]["end"], 2.5)
+        finally:
+            editor.text_edit.close()
+
+    def test_flush_queue_drops_repeat_previous_duplicate_at_generation_seam(self):
+        editor = self._editor()
+        try:
+            editor.text_edit.setPlainText("호핑은 없네?\n")
+            doc = editor.text_edit.document()
+            first = doc.findBlockByNumber(0)
+            gap = doc.findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 1.0, end_sec=2.0))
+            gap.setUserData(SubtitleBlockData("00", 2.2, is_gap=True))
+            editor.video_player.total_time = 9.0
+            editor._segment_queue = [
+                {
+                    "start": 2.0,
+                    "end": 2.6,
+                    "text": "호핑은 없네?",
+                    "speaker_list": ["00"],
+                    "_final_gap_settings_applied": True,
+                },
+                {
+                    "start": 2.7,
+                    "end": 3.2,
+                    "text": "해핑",
+                    "speaker_list": ["00"],
+                    "_final_gap_settings_applied": True,
+                },
+            ]
+
+            editor._flush_queue()
+
+            segs = [seg for seg in editor._get_current_segments() if not seg.get("is_gap")]
+            self.assertEqual([seg["text"] for seg in segs], ["호핑은 없네?", "해핑"])
+        finally:
+            editor.text_edit.close()
+
 
 if __name__ == "__main__":
     unittest.main()

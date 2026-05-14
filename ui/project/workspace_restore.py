@@ -11,6 +11,7 @@ from PyQt6.QtGui import QTextCursor
 
 from core.runtime.logger import get_logger
 from core.project.project_manager import load_project
+from ui.project.project_session_runtime import attach_project_session
 
 
 class WorkspaceMixin:
@@ -63,8 +64,14 @@ class WorkspaceMixin:
                         srt_path=srt_path,
                         user_settings=dict(getattr(editor, "settings", {}) or {}),
                     )
-
-                self._current_project_path = project_path
+                attach_project_session(
+                    self,
+                    project_path,
+                    None,
+                    auto_pipeline=False,
+                    clear_multiclip=False,
+                    emit_boundary_signal=False,
+                )
 
             workspace = self._gather_workspace(editor)
 

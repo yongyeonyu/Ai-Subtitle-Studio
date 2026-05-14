@@ -184,27 +184,98 @@ def _get_media_duration(filepath: str) -> float:
         return 0.0
 
 
-def _get_media_probe(filepath: str) -> dict:
-    return _get_media_probe_impl(filepath, probe_func=probe_media)
+def _probe_cache_key(filepath: str) -> str:
+    return os.path.normcase(os.path.abspath(os.path.expanduser(str(filepath or ""))))
 
 
-def _probe_media_rows(filepaths: list[str] | None) -> list[dict]:
+def _get_media_probe(filepath: str, *, probe_cache: dict[str, dict] | None = None) -> dict:
+    path = str(filepath or "")
+    cache_key = _probe_cache_key(path)
+    if probe_cache is not None:
+        cached = probe_cache.get(cache_key)
+        if isinstance(cached, dict) and cached:
+            return dict(cached)
+    info = _get_media_probe_impl(path, probe_func=probe_media)
+    normalized = dict(info or {})
+    if probe_cache is not None:
+        probe_cache[cache_key] = dict(normalized)
+    return normalized
+
+
+def _probe_media_rows(filepaths: list[str] | None, *, probe_cache: dict[str, dict] | None = None) -> list[dict]:
     paths = [str(path) for path in list(filepaths or []) if path]
     if not paths:
         return []
-    batch_rows = list(probe_media_many(paths))
+    cached_rows: list[dict | None] = []
+    missing_paths: list[str] = []
+    for path in paths:
+        cache_key = _probe_cache_key(path)
+        cached = probe_cache.get(cache_key) if probe_cache is not None else None
+        if isinstance(cached, dict) and cached:
+            cached_rows.append(dict(cached))
+            continue
+        cached_rows.append(None)
+        if path not in missing_paths:
+            missing_paths.append(path)
+    batch_missing = list(probe_media_many(missing_paths)) if missing_paths else []
+    batch_lookup = {
+        path: dict(batch_missing[idx] or {})
+        for idx, path in enumerate(missing_paths)
+    }
     out: list[dict] = []
     for idx, path in enumerate(paths):
-        info = dict(batch_rows[idx] or {}) if idx < len(batch_rows) else {}
+        info = dict(cached_rows[idx] or batch_lookup.get(path) or {})
         if not (
             float(info.get("duration", 0.0) or 0.0) > 0.0
             or float(info.get("fps", 0.0) or 0.0) > 0.0
             or int(info.get("width", 0) or 0) > 0
             or int(info.get("height", 0) or 0) > 0
         ):
-            info = _get_media_probe(path)
-        out.append(dict(info or {}))
+            info = _get_media_probe(path, probe_cache=probe_cache)
+        normalized = dict(info or {})
+        if probe_cache is not None:
+            probe_cache[_probe_cache_key(path)] = dict(normalized)
+        out.append(normalized)
     return out
+
+
+def _build_clip_rows(
+    media_paths: list[str] | None,
+    *,
+    start_timeline_sec: float = 0.0,
+    start_order: int = 0,
+    probe_cache: dict[str, dict] | None = None,
+) -> tuple[list[dict], float]:
+    paths = [str(path) for path in list(media_paths or []) if path]
+    if not paths:
+        return [], float(start_timeline_sec or 0.0)
+    cumulative = float(start_timeline_sec or 0.0)
+    probe_rows = _probe_media_rows(paths, probe_cache=probe_cache)
+    clips: list[dict] = []
+    for idx, path in enumerate(paths):
+        ext = os.path.splitext(path)[1].lower()
+        m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
+        info = dict(probe_rows[idx] or {}) if idx < len(probe_rows) else _get_media_probe(path, probe_cache=probe_cache)
+        dur = float(info.get("duration", 0.0) or 0.0)
+        fps = normalize_fps(info.get("fps", 0.0) or 30.0)
+        width = int(info.get("width", 0) or 0)
+        height = int(info.get("height", 0) or 0)
+        clips.append({
+            "id": _make_clip_id(),
+            "source_path": path,
+            "type": m_type,
+            "source_duration": dur,
+            "width": width,
+            "height": height,
+            "in_point": 0.0,
+            "out_point": dur,
+            "timeline_start": cumulative,
+            "timeline_end": cumulative + dur,
+            "fps": fps,
+            "order": start_order + idx,
+        })
+        cumulative += dur
+    return clips, cumulative
 
 
 def _sanitize_project_workspace_fields(project: dict) -> dict:
@@ -219,8 +290,11 @@ def _clip_frame_fields(timeline_start: float, timeline_end: float, fps: float, t
     return _clip_frame_fields_impl(timeline_start, timeline_end, fps, timeline_fps)
 
 
-def _augment_project_frame_metadata(project: dict):
-    return _augment_project_frame_metadata_impl(project, probe_func=_get_media_probe)
+def _augment_project_frame_metadata(project: dict, *, probe_cache: dict[str, dict] | None = None):
+    return _augment_project_frame_metadata_impl(
+        project,
+        probe_func=lambda filepath: _get_media_probe(filepath, probe_cache=probe_cache),
+    )
 
 
 def _segment_lookup_key(seg: dict) -> tuple[float, float]:
@@ -722,36 +796,9 @@ def create_project(
     ensure_projects_dir()
     now = datetime.now().isoformat()
     persisted_user_settings = sanitize_persisted_settings(user_settings)
+    probe_cache: dict[str, dict] = {}
 
-    clips = []
-    cumulative = 0.0
-
-    if media_paths:
-        probe_rows = _probe_media_rows(list(media_paths or []))
-        for i, path in enumerate(media_paths):
-            ext = os.path.splitext(path)[1].lower()
-            m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-            info = dict(probe_rows[i] or {}) if i < len(probe_rows) else _get_media_probe(path)
-            dur = float(info.get("duration", 0.0) or 0.0)
-            fps = normalize_fps(info.get("fps", 0.0) or 30.0)
-            width = int(info.get("width", 0) or 0)
-            height = int(info.get("height", 0) or 0)
-
-            clips.append({
-                "id": _make_clip_id(),
-                "source_path": path,
-                "type": m_type,
-                "source_duration": dur,
-                "width": width,
-                "height": height,
-                "in_point": 0.0,
-                "out_point": dur,
-                "timeline_start": cumulative,
-                "timeline_end": cumulative + dur,
-                "fps": fps,
-                "order": i
-            })
-            cumulative += dur
+    clips, cumulative = _build_clip_rows(media_paths, probe_cache=probe_cache)
 
     segments = []
     if srt_path and os.path.exists(srt_path):
@@ -925,7 +972,7 @@ def create_project(
         settings=persisted_user_settings,
         primary_fps=primary_fps,
     )
-    _augment_project_frame_metadata(project)
+    _augment_project_frame_metadata(project, probe_cache=probe_cache)
     _externalize_project_payload(
         filepath,
         project,
@@ -976,6 +1023,7 @@ def save_project(
     project["version"] = PROJECT_SCHEMA_VERSION
     project["phase"] = "PHASE2"
     project["updated_at"] = datetime.now().isoformat()
+    probe_cache: dict[str, dict] = {}
 
     # ── 미디어 업데이트 ──
     current_media_paths = [str(path) for path in list(media_paths or []) if path] if media_paths is not None else None
@@ -992,32 +1040,7 @@ def save_project(
         media_changed = False
 
     if current_media_paths is not None and media_changed:
-        clips = []
-        cumulative = 0.0
-        probe_rows = _probe_media_rows(list(current_media_paths or []))
-        for i, path in enumerate(current_media_paths):
-            ext = os.path.splitext(path)[1].lower()
-            m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-            info = dict(probe_rows[i] or {}) if i < len(probe_rows) else _get_media_probe(path)
-            dur = float(info.get("duration", 0.0) or 0.0)
-            fps = normalize_fps(info.get("fps", 0.0) or 30.0)
-            width = int(info.get("width", 0) or 0)
-            height = int(info.get("height", 0) or 0)
-            clips.append({
-                "id": _make_clip_id(),
-                "source_path": path,
-                "type": m_type,
-                "source_duration": dur,
-                "width": width,
-                "height": height,
-                "in_point": 0.0,
-                "out_point": dur,
-                "timeline_start": cumulative,
-                "timeline_end": cumulative + dur,
-                "fps": fps,
-                "order": i
-            })
-            cumulative += dur
+        clips, cumulative = _build_clip_rows(current_media_paths, probe_cache=probe_cache)
 
         project.setdefault("timeline", {"tracks": []})
         project["timeline"]["total_duration"] = cumulative
@@ -1415,7 +1438,7 @@ def save_project(
         primary_fps=primary_fps,
         provisional_boundaries=existing_provisional_cut_boundaries,
     )
-    _augment_project_frame_metadata(project)
+    _augment_project_frame_metadata(project, probe_cache=probe_cache)
     _externalize_project_payload(
         filepath,
         project,
@@ -1556,36 +1579,14 @@ def add_media_to_project(filepath: str, new_paths: list):
     max_order = max((c.get("order", 0) for c in clips), default=-1)
     cumulative = max((c.get("timeline_end", 0.0) for c in clips), default=0.0)
     incoming_paths = [str(path) for path in list(new_paths or []) if path and path not in existing_paths]
-    probe_rows = _probe_media_rows(incoming_paths) if incoming_paths else []
-    probe_idx = 0
-
-    for path in new_paths:
-        if path in existing_paths:
-            continue
-        max_order += 1
-        ext = os.path.splitext(path)[1].lower()
-        m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-        info = dict(probe_rows[probe_idx] or {}) if probe_idx < len(probe_rows) else _get_media_probe(path)
-        probe_idx += 1
-        dur = float(info.get("duration", 0.0) or 0.0)
-        fps = normalize_fps(info.get("fps", 0.0) or 30.0)
-        width = int(info.get("width", 0) or 0)
-        height = int(info.get("height", 0) or 0)
-        clips.append({
-            "id": _make_clip_id(),
-            "source_path": path,
-            "type": m_type,
-            "source_duration": dur,
-            "width": width,
-            "height": height,
-            "in_point": 0.0,
-            "out_point": dur,
-            "timeline_start": cumulative,
-            "timeline_end": cumulative + dur,
-            "fps": fps,
-            "order": max_order
-        })
-        cumulative += dur
+    probe_cache: dict[str, dict] = {}
+    new_clips, cumulative = _build_clip_rows(
+        incoming_paths,
+        start_timeline_sec=cumulative,
+        start_order=max_order + 1,
+        probe_cache=probe_cache,
+    )
+    clips.extend(new_clips)
 
     project.setdefault("timeline", {"tracks": []})
     project["timeline"]["total_duration"] = cumulative
@@ -1633,7 +1634,7 @@ def add_media_to_project(filepath: str, new_paths: list):
     project["updated_at"] = datetime.now().isoformat()
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(project, settings=project_user_settings)
-    _augment_project_frame_metadata(project)
+    _augment_project_frame_metadata(project, probe_cache=probe_cache)
     _externalize_project_payload(
         filepath,
         project,

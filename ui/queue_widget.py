@@ -6,73 +6,171 @@ ui/queue_widget.py
 - main_window.py에서 분리
 """
 
+import os
 import time
 from PyQt6.QtWidgets import QTableWidgetItem
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
+from ui.queue.queue_formatting import (
+    build_queue_sidebar_item,
+    normalize_queue_header_payload,
+    normalize_queue_header_text,
+    normalize_queue_status_payload,
+    DEFAULT_QUEUE_HEADER,
+    format_queue_card_time,
+    format_queue_clock,
+    format_queue_header,
+    parse_queue_seconds_value,
+    queue_expected_display_text,
+    queue_expected_time_is_unknown,
+    queue_status_flags,
+)
+
 
 class QueueMixin:
     """큐 테이블 관리 (MainWindow에 Mixin으로 결합)"""
 
-    _QUEUE_UNKNOWN_EXPECTED_TEXTS = {
-        "",
-        "-",
-        "?",
-        "0",
-        "0.0",
-        "00:00",
-        "00:00:00",
-        "계산 중",
-        "분석 중..",
-        "예상불가",
-        "학습 중",
-    }
+    def _queue_table_ref(self):
+        return getattr(self, "queue_table", None)
+
+    def _queue_header_label_ref(self):
+        return getattr(self, "queue_header_lbl", None)
+
+    def _make_queue_table_item(self, text, *, center: bool = True) -> QTableWidgetItem:
+        item = QTableWidgetItem(str(text or ""))
+        if center:
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        return item
+
+    def _queue_table_item(self, row: int, col: int):
+        table = self._queue_table_ref()
+        if table is None:
+            return None
+        try:
+            return table.item(int(row), int(col))
+        except Exception:
+            return None
+
+    def _queue_row_items(self, row: int):
+        table = self._queue_table_ref()
+        if table is None:
+            return []
+        try:
+            row_idx = int(row)
+        except Exception:
+            return []
+        if row_idx < 0 or row_idx >= self._queue_row_count():
+            return []
+        items = []
+        for col in range(table.columnCount()):
+            item = self._queue_table_item(row_idx, col)
+            if item is not None:
+                items.append(item)
+        return items
+
+    def _queue_table_item_text(self, row: int, col: int) -> str:
+        item = self._queue_table_item(row, col)
+        try:
+            return str(item.text() if item is not None else "")
+        except Exception:
+            return ""
+
+    def _set_queue_table_item_text(self, row: int, col: int, text, *, center: bool = True):
+        table = self._queue_table_ref()
+        if table is None:
+            return None
+        item = self._queue_table_item(row, col)
+        if item is None:
+            item = self._make_queue_table_item(text, center=center)
+            try:
+                table.setItem(int(row), int(col), item)
+            except Exception:
+                return None
+            return item
+        try:
+            item.setText(str(text or ""))
+            if center:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        except Exception:
+            return None
+        return item
+
+    def _set_queue_header_text(self, text) -> None:
+        label = self._queue_header_label_ref()
+        if label is None:
+            return
+        try:
+            label.setText(str(text or DEFAULT_QUEUE_HEADER))
+        except Exception:
+            return
+
+    def _clear_queue_table_rows(self) -> None:
+        table = self._queue_table_ref()
+        if table is None:
+            return
+        try:
+            table.setRowCount(0)
+        except Exception:
+            return
+
+    def _insert_queue_table_row(self, row: int) -> bool:
+        table = self._queue_table_ref()
+        if table is None:
+            return False
+        try:
+            table.insertRow(int(row))
+        except Exception:
+            return False
+        return True
+
+    def _populate_queue_table_row(
+        self,
+        row: int,
+        *,
+        status_text,
+        file_text,
+        info_text,
+        duration_text,
+        eta_text,
+    ) -> dict[str, object]:
+        self._set_queue_table_item_text(row, 0, status_text)
+        self._set_queue_table_item_text(row, 1, file_text, center=False)
+        self._set_queue_table_item_text(row, 2, info_text)
+        self._set_queue_table_item_text(row, 3, duration_text)
+        self._set_queue_table_item_text(row, 4, eta_text)
+        self._apply_queue_row_visual_state(row)
+        return self.queue_row_snapshot(row)
+
+    def _refresh_queue_sidebar_views(self) -> None:
+        self.refresh_queue_views()
+
+    def refresh_queue_views(self) -> None:
+        if hasattr(self, "_refresh_sidebar_queue_cache"):
+            self._refresh_sidebar_queue_cache()
+        syncer = getattr(self, "sync_sidebar_queue_panel", None)
+        synced = False
+        if callable(syncer):
+            try:
+                synced = bool(syncer())
+            except Exception:
+                synced = False
+        if synced:
+            return
+        if hasattr(self, "_sync_sidebar_queue_panel"):
+            self._sync_sidebar_queue_panel()
 
     def _format_queue_clock(self, sec) -> str:
-        try:
-            total = max(0, int(float(sec)))
-        except Exception:
-            return "00:00"
-        m, s = divmod(total, 60)
-        h, m = divmod(m, 60)
-        return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+        return format_queue_clock(sec)
 
     def _parse_queue_seconds_value(self, value) -> float | None:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        try:
-            return float(text)
-        except (TypeError, ValueError):
-            pass
-        if ":" not in text:
-            return None
-        parts = [part.strip() for part in text.split(":")]
-        if not parts or any(not part.isdigit() for part in parts):
-            return None
-        try:
-            units = [int(part) for part in parts]
-        except ValueError:
-            return None
-        if len(units) == 2:
-            minutes, seconds = units
-            return float((minutes * 60) + seconds)
-        if len(units) == 3:
-            hours, minutes, seconds = units
-            return float((hours * 3600) + (minutes * 60) + seconds)
-        return None
+        return parse_queue_seconds_value(value)
 
     def _queue_expected_time_is_unknown(self, value) -> bool:
-        text = str(value or "").strip()
-        if text in self._QUEUE_UNKNOWN_EXPECTED_TEXTS:
-            return True
-        parsed = self._parse_queue_seconds_value(text)
-        return parsed is not None and parsed <= 0
+        return queue_expected_time_is_unknown(value)
 
     def _queue_expected_display_text(self, value) -> str:
-        text = str(value or "").strip()
-        return "예상불가" if self._queue_expected_time_is_unknown(text) else text
+        return queue_expected_display_text(value)
 
     def _queue_expected_time_label(self, idx: int, eta_text: str = "", duration_text: str = "") -> str:
         expected = self._expected_seconds.get(idx, 0)
@@ -89,43 +187,25 @@ class QueueMixin:
             return duration
         return "예상불가"
 
-    def clear_queue_list(self, header: str = "큐 리스트 : (0/0) - 0% 완료"):
-        table = getattr(self, "queue_table", None)
-        if table is not None:
-            table.setRowCount(0)
-        label = getattr(self, "queue_header_lbl", None)
-        if label is not None:
-            label.setText(str(header or "큐 리스트 : (0/0) - 0% 완료"))
+    def clear_queue_list(self, header: str = DEFAULT_QUEUE_HEADER):
+        self._clear_queue_table_rows()
+        header_text = str(header or DEFAULT_QUEUE_HEADER)
+        self._set_queue_header_text(header_text)
         self._current_file_idx = 0
         self._total_files = 0
         self._real_pct = 0
         self._expected_seconds = {}
         self._file_start_times = {}
         self._file_complete_times = {}
+        self._queue_row_cache = []
         self._sidebar_queue_cache_items = []
-        self._sidebar_queue_cache_header = str(header or "큐 리스트 : (0/0) - 0% 완료")
+        self._sidebar_queue_cache_header = header_text
         if hasattr(self, "_live_timer"):
             self._live_timer.stop()
-        if hasattr(self, "_sync_sidebar_queue_panel"):
-            self._sync_sidebar_queue_panel()
+        self._refresh_queue_sidebar_views()
 
     def _queue_status_flags(self, status: str) -> tuple[bool, bool, bool]:
-        text = str(status or "")
-        stripped = text.strip()
-        stage_done_only = "컷 경계" in stripped and "완료" in stripped
-        done = (
-            not stage_done_only
-            and "미완료" not in stripped
-            and (
-                stripped in {"완료", "✅기존자막", "기존자막"}
-                or stripped.startswith("✅")
-                and "완료" in stripped
-                or "기존자막" in stripped
-            )
-        )
-        error = any(token in text for token in ("오류", "실패", "중단"))
-        active = not done and not error and not any(token in text for token in ("대기", "-"))
-        return done, error, active
+        return queue_status_flags(status)
 
     def _queue_status_restarts_completed_row(self, idx: int, status: str) -> bool:
         text = str(status or "").strip()
@@ -165,15 +245,11 @@ class QueueMixin:
         self._real_pct = 0
         try:
             self._current_file_idx = idx + 1
-            total = int(getattr(self, "_total_files", 0) or self.queue_table.rowCount())
+            total = int(getattr(self, "_total_files", 0) or self._queue_row_count())
             if total <= 0:
-                total = self.queue_table.rowCount()
-            eta_item = self.queue_table.item(idx, 4)
-            if eta_item is not None:
-                eta_item.setText("계산 중")
-            label = getattr(self, "queue_header_lbl", None)
-            if label is not None:
-                label.setText(f"큐 리스트 : ({idx + 1}/{total}) - 0% 완료")
+                total = self._queue_row_count()
+            self._set_queue_table_item_text(idx, 4, "계산 중")
+            self._set_queue_header_text(format_queue_header(idx + 1, total, 0))
             timer = getattr(self, "_live_timer", None)
             if timer is not None:
                 timer.start(1000)
@@ -181,93 +257,588 @@ class QueueMixin:
             pass
 
     def _queue_card_time_text(self, eta_text: str, duration_text: str) -> str:
-        eta = str(eta_text or "-").strip() or "-"
-        if "/" in eta:
-            left, right = [part.strip() for part in eta.split("/", 1)]
-            left = left or "00:00"
-            right = self._queue_expected_display_text(right)
-            return f"{left} / {right}"
-        if self._queue_expected_time_is_unknown(eta):
-            return "예상불가"
-        return f"00:00 / {eta}"
+        return format_queue_card_time(eta_text, duration_text)
 
     def _current_queue_active_row(self) -> int:
-        table = getattr(self, "queue_table", None)
-        if table is None:
+        row_count = self._queue_row_count()
+        if row_count <= 0:
             return -1
         try:
             row = int(getattr(self, "_current_file_idx", 1) or 1) - 1
         except Exception:
             row = 0
-        return row if 0 <= row < table.rowCount() else -1
+        return row if 0 <= row < row_count else -1
+
+    def queue_active_row_index(self) -> int:
+        return self._current_queue_active_row()
+
+    def queue_row_count(self) -> int:
+        return self._queue_row_count()
+
+    def queue_progress_state(self) -> dict[str, int]:
+        return {
+            "current": max(0, int(getattr(self, "_current_file_idx", 0) or 0)),
+            "total": max(0, int(getattr(self, "_total_files", 0) or 0)),
+            "pct": max(0, int(getattr(self, "_real_pct", 0) or 0)),
+        }
+
+    def queue_sidebar_header_text(self) -> str:
+        raw = ""
+        label = self._queue_header_label_ref()
+        if label is not None:
+            try:
+                raw = str(label.text() or "")
+            except RuntimeError:
+                raw = ""
+        if not raw:
+            raw = str(getattr(self, "_sidebar_queue_cache_header", "") or "")
+        progress = self.queue_progress_state()
+        return normalize_queue_header_text(
+            raw,
+            current=progress["current"],
+            total=progress["total"],
+            pct=progress["pct"],
+        )
+
+    def _queue_row_count(self) -> int:
+        table = self._queue_table_ref()
+        if table is None:
+            return 0
+        try:
+            return max(0, int(table.rowCount()))
+        except Exception:
+            return 0
+
+    def _queue_row_indices(self):
+        return range(self._queue_row_count())
+
+    def queue_row_snapshot(self, row: int) -> dict[str, object]:
+        try:
+            row_idx = int(row)
+        except Exception:
+            row_idx = -1
+        if row_idx < 0:
+            return {}
+        table = self._queue_table_ref()
+        if table is None:
+            cache = list(getattr(self, "_queue_row_cache", []) or [])
+            if 0 <= row_idx < len(cache):
+                item = dict(cache[row_idx] or {})
+                return {
+                    "row": row_idx,
+                    "status": str(item.get("statusRaw", item.get("status", "")) or ""),
+                    "file": str(item.get("fileRaw", item.get("file", "")) or ""),
+                    "info": str(item.get("infoRaw", item.get("info", "")) or ""),
+                    "duration": str(item.get("duration", "") or ""),
+                    "eta": str(item.get("etaRaw", item.get("eta", "")) or ""),
+                }
+            return {}
+        if row_idx >= self._queue_row_count():
+            return {}
+        return {
+            "row": row_idx,
+            "status": self._queue_table_item_text(row_idx, 0),
+            "file": self._queue_table_item_text(row_idx, 1),
+            "info": self._queue_table_item_text(row_idx, 2),
+            "duration": self._queue_table_item_text(row_idx, 3),
+            "eta": self._queue_table_item_text(row_idx, 4),
+        }
+
+    def _queue_row_status_state(self, row: int) -> dict[str, object]:
+        snapshot = self.queue_row_snapshot(row)
+        status_text = str(snapshot.get("status", "") or "")
+        done, error, status_active = self._queue_status_flags(status_text)
+        return {
+            "row": int(snapshot.get("row", row) or row),
+            "status": status_text,
+            "done": bool(done),
+            "error": bool(error),
+            "status_active": bool(status_active),
+        }
+
+    def _set_queue_row_status_text(self, row: int, text) -> None:
+        self._set_queue_table_item_text(row, 0, text)
+
+    def _queue_row_visual_palette(self, row: int) -> tuple[QColor, QColor]:
+        state = self._queue_row_status_state(row)
+        active = bool(state["status_active"]) and int(state["row"]) == self._current_queue_active_row()
+        if state["done"]:
+            return QColor("#55D97A"), QColor("#13261D")
+        if state["error"]:
+            return QColor("#FF6B78"), QColor("#291719")
+        if active:
+            return QColor("#FFD84D"), QColor("#15212A")
+        return QColor("#9DB0BB"), QColor("#121A1E")
+
+    def _queue_sidebar_item_for_row(
+        self,
+        row: int,
+        *,
+        snapshot: dict[str, object] | None = None,
+        active_row: int | None = None,
+    ) -> dict[str, object]:
+        row_idx = int(row)
+        row_snapshot = dict(snapshot or self.queue_row_snapshot(row_idx) or {})
+        if active_row is None:
+            active_row = self._current_queue_active_row()
+        return build_queue_sidebar_item(
+            order=row_idx + 1,
+            raw_status=str(row_snapshot.get("status", "-") or "-"),
+            file_text=str(row_snapshot.get("file", "-") or "-"),
+            info_text=str(row_snapshot.get("info", "-") or "-"),
+            eta_text=str(row_snapshot.get("eta", "-") or "-"),
+            duration_text=str(row_snapshot.get("duration", "-") or "-"),
+            active=(row_idx == int(active_row)),
+        )
+
+    def _queue_sidebar_placeholder_item(self, order: int) -> dict[str, object]:
+        return build_queue_sidebar_item(
+            order=max(1, int(order)),
+            raw_status="-",
+            file_text="-",
+            info_text="-",
+            eta_text="-",
+            duration_text="-",
+            active=False,
+        )
+
+    def _set_queue_row_cache_entry(self, row: int, entry: dict[str, object]) -> None:
+        try:
+            row_idx = int(row)
+        except Exception:
+            return
+        if row_idx < 0:
+            return
+        cache = list(getattr(self, "_queue_row_cache", []) or [])
+        while len(cache) <= row_idx:
+            cache.append(self._queue_sidebar_placeholder_item(len(cache) + 1))
+        cache[row_idx] = dict(entry or self._queue_sidebar_placeholder_item(row_idx + 1))
+        self._queue_row_cache = cache
+
+    def _queue_row_cache_items_copy(self) -> list[dict]:
+        return [dict(item) for item in list(getattr(self, "_queue_row_cache", []) or [])]
+
+    def _sidebar_queue_cache_items_copy(self) -> list[dict]:
+        return [dict(item) for item in list(getattr(self, "_sidebar_queue_cache_items", []) or [])]
+
+    def _queue_sidebar_items_from_cache(self) -> list[dict]:
+        items = self._queue_row_cache_items_copy()
+        if items:
+            return items
+        return self._sidebar_queue_cache_items_copy()
+
+    def find_queue_row_for_media(self, media_path: str = "", current_row_hint=None) -> int | None:
+        table = self._queue_table_ref()
+        row_count = self._queue_row_count()
+        if table is None or row_count <= 0:
+            return None
+
+        candidates: list[int] = []
+        hint = current_row_hint
+        if hint is None:
+            try:
+                hint = int(getattr(self, "_current_file_idx", 1) or 1) - 1
+            except Exception:
+                hint = None
+        try:
+            if hint is not None:
+                hint_idx = int(hint)
+                if 0 <= hint_idx < row_count:
+                    candidates.append(hint_idx)
+        except Exception:
+            pass
+
+        media_name = os.path.basename(str(media_path or "")).strip().lower()
+        if media_name:
+            for row in self._queue_row_indices():
+                item_name = os.path.basename(self._queue_table_item_text(row, 1)).strip().lower()
+                if item_name == media_name and row not in candidates:
+                    candidates.append(row)
+
+        if not candidates and row_count == 1:
+            return 0
+
+        for row in candidates:
+            try:
+                status_text = self._queue_table_item_text(row, 0)
+                if "완료" not in status_text and "기존자막" not in status_text:
+                    return row
+            except Exception:
+                continue
+        return candidates[0] if candidates else None
+
+    def queue_row_status_text(self, row: int) -> str:
+        table = self._queue_table_ref()
+        if table is None or row < 0:
+            return ""
+        return self._queue_table_item_text(int(row), 0)
+
+    def queue_row_expected_seconds(self, row: int) -> float:
+        try:
+            expected = float((getattr(self, "_expected_seconds", {}) or {}).get(int(row), 0.0) or 0.0)
+        except Exception:
+            expected = 0.0
+        if expected > 0:
+            return expected
+        table = self._queue_table_ref()
+        if table is None or row < 0:
+            return 0.0
+        try:
+            eta_text = self._queue_table_item_text(int(row), 4)
+            duration_text = self._queue_table_item_text(int(row), 3)
+        except Exception:
+            eta_text = ""
+            duration_text = ""
+        try:
+            eta_text = str(self._queue_expected_time_label(int(row), eta_text, duration_text) or eta_text or duration_text)
+        except Exception:
+            eta_text = eta_text or duration_text
+        parsed = self._parse_queue_seconds_value(eta_text)
+        return max(0.0, float(parsed or 0.0))
+
+    def queue_row_elapsed_seconds(self, row: int, now_ts: float | None = None) -> float:
+        try:
+            start_times = dict(getattr(self, "_file_start_times", {}) or {})
+            complete_times = dict(getattr(self, "_file_complete_times", {}) or {})
+            started_at = float(start_times.get(int(row), 0.0) or 0.0)
+        except Exception:
+            started_at = 0.0
+            complete_times = {}
+        if started_at <= 0.0:
+            return 0.0
+        try:
+            ended_at = float(complete_times.get(int(row), 0.0) or 0.0)
+        except Exception:
+            ended_at = 0.0
+        if ended_at <= 0.0:
+            try:
+                ended_at = float(now_ts if now_ts is not None else time.time())
+            except Exception:
+                ended_at = 0.0
+        return max(0.0, ended_at - started_at)
+
+    def _queue_row_started(self, row: int) -> bool:
+        try:
+            started_at = float((getattr(self, "_file_start_times", {}) or {}).get(int(row), 0.0) or 0.0)
+        except Exception:
+            return False
+        return started_at > 0.0
+
+    def _queue_row_elapsed_label(
+        self,
+        row: int,
+        now_ts: float | None = None,
+        *,
+        allow_zero: bool = False,
+    ) -> str | None:
+        elapsed = self.queue_row_elapsed_seconds(row, now_ts=now_ts)
+        if elapsed <= 0.0:
+            if allow_zero and self._queue_row_started(row):
+                return self._format_queue_clock(0.0)
+            return None
+        return self._format_queue_clock(elapsed)
+
+    def _queue_eta_text_with_elapsed(
+        self,
+        row: int,
+        expected_label,
+        *,
+        now_ts: float | None = None,
+        include_elapsed: bool = False,
+        allow_zero_elapsed: bool = False,
+    ) -> str:
+        label = str(expected_label or "예상불가")
+        if include_elapsed:
+            elapsed_label = self._queue_row_elapsed_label(
+                row,
+                now_ts=now_ts,
+                allow_zero=allow_zero_elapsed,
+            )
+            if elapsed_label:
+                return f"{elapsed_label} / {label}"
+        return label
+
+    def queue_row_metrics(self, row: int, *, now_ts: float | None = None) -> dict[str, object]:
+        snapshot = self.queue_row_snapshot(row)
+        state = self._queue_row_status_state(row)
+        expected = self.queue_row_expected_seconds(row)
+        elapsed = self.queue_row_elapsed_seconds(row, now_ts=now_ts)
+        expected_label = self._queue_expected_time_label(
+            row,
+            str(snapshot.get("eta", "") or ""),
+            str(snapshot.get("duration", "") or ""),
+        ) or "예상불가"
+        return {
+            "row": int(snapshot.get("row", row) or row),
+            "snapshot": snapshot,
+            "status": str(state.get("status", "") or ""),
+            "done": bool(state.get("done", False)),
+            "error": bool(state.get("error", False)),
+            "status_active": bool(state.get("status_active", False)),
+            "started": bool(self._queue_row_started(row)),
+            "expected": float(expected),
+            "elapsed": float(elapsed),
+            "expected_label": str(expected_label or "예상불가"),
+        }
+
+    def _queue_row_metrics_list(self, total_rows: int, *, now_ts: float | None = None) -> list[dict[str, object]]:
+        return [self.queue_row_metrics(row, now_ts=now_ts) for row in range(max(0, int(total_rows)))]
+
+    def _queue_done_reuse_counts_from_metrics(self, row_metrics: list[dict[str, object]]) -> tuple[int, int]:
+        done_count = 0
+        reuse_count = 0
+        for metrics in list(row_metrics or []):
+            status_text = str(metrics.get("status", "") or "")
+            if not status_text:
+                continue
+            if "기존자막" in status_text:
+                reuse_count += 1
+            elif bool(metrics.get("done", False)):
+                done_count += 1
+        return done_count, reuse_count
+
+    def _queue_completion_percent(self, *, total: int, done_count: int, reuse_count: int) -> int:
+        if reuse_count >= total and total > 0:
+            pct = 100
+        else:
+            effective_total = max(1, int(total) - int(reuse_count))
+            pct = int((int(done_count) / effective_total) * 100)
+        return max(0, min(100, pct))
+
+    def queue_progress_metrics(self, *, now_ts: float | None = None, running: bool = False) -> dict[str, float | int | bool]:
+        try:
+            now_value = float(now_ts if now_ts is not None else time.time())
+        except Exception:
+            now_value = 0.0
+        active_row = int(self.queue_active_row_index())
+        row_count = int(self.queue_row_count())
+        progress = self.queue_progress_state()
+        total_files = max(row_count, int(progress["total"] or 0))
+        total_expected = 0.0
+        total_elapsed = 0.0
+        progress_elapsed = 0.0
+        known_expected_rows = 0
+        all_done = total_files > 0
+        row_metrics = self._queue_row_metrics_list(total_files, now_ts=now_value)
+        done_count, reuse_count = self._queue_done_reuse_counts_from_metrics(row_metrics)
+        completion_percent = self._queue_completion_percent(
+            total=total_files,
+            done_count=done_count,
+            reuse_count=reuse_count,
+        )
+
+        for row, metrics in enumerate(row_metrics):
+            row_done = bool(metrics["done"])
+            row_error = bool(metrics["error"])
+            expected = float(metrics["expected"])
+            elapsed = float(metrics["elapsed"])
+            if elapsed > 0.0:
+                total_elapsed += elapsed
+            if expected > 0.0:
+                total_expected += expected
+                known_expected_rows += 1
+                if row_done:
+                    progress_elapsed += expected
+                elif row == active_row and running:
+                    progress_elapsed += min(elapsed, expected)
+            if not row_done and not row_error:
+                all_done = False
+
+        percent = float(progress["pct"] or 0.0)
+        if total_expected > 0.0 and known_expected_rows >= total_files and total_files > 0:
+            percent = (progress_elapsed / total_expected) * 100.0
+        if all_done and total_files > 0:
+            percent = 100.0
+        elif running:
+            percent = min(percent, 99.0)
+        percent = max(0.0, min(100.0, percent))
+        return {
+            "active_row": active_row,
+            "row_count": row_count,
+            "total_files": total_files,
+            "total_expected": float(total_expected),
+            "total_elapsed": float(total_elapsed),
+            "progress_elapsed": float(progress_elapsed),
+            "known_expected_rows": int(known_expected_rows),
+            "all_done": bool(all_done),
+            "done_count": int(done_count),
+            "reuse_count": int(reuse_count),
+            "completion_percent": int(completion_percent),
+            "percent": float(percent),
+        }
+
+    def queue_sidebar_items(self) -> list[dict]:
+        table = self._queue_table_ref()
+        cached_items = self._sidebar_queue_cache_items_copy()
+        if table is None:
+            return cached_items
+        try:
+            if self._queue_row_count() == 0:
+                return []
+            self._sync_all_queue_row_cache_from_table()
+        except RuntimeError:
+            return cached_items
+        return self._queue_sidebar_items_from_cache()
+
+    def _queue_sidebar_panel_ref(self):
+        return getattr(self, "sidebar_queue_panel", None)
+
+    def _queue_sidebar_panel_header(self) -> str:
+        return self.queue_sidebar_header_text()
+
+    def _queue_sidebar_panel_items(self) -> list[dict]:
+        return self.queue_sidebar_items()
+
+    def queue_sidebar_panel_payload(self) -> dict[str, object]:
+        return {
+            "header": self._queue_sidebar_panel_header(),
+            "items": self._queue_sidebar_panel_items(),
+        }
+
+    def _apply_queue_sidebar_panel_payload(self, panel, payload: dict[str, object]) -> bool:
+        if panel is None:
+            return False
+        data = dict(payload or {})
+        setter = getattr(panel, "set_queue_payload", None)
+        if callable(setter):
+            setter(data)
+            return True
+        fallback = getattr(panel, "set_queue", None)
+        if not callable(fallback):
+            return False
+        fallback(
+            data.get("header", DEFAULT_QUEUE_HEADER),
+            data.get("items", []),
+        )
+        return True
+
+    def _clear_sidebar_queue_panel_ref(self) -> None:
+        try:
+            self.sidebar_queue_panel = None
+        except Exception:
+            return
+
+    def sync_sidebar_queue_panel(self) -> bool:
+        panel = self._queue_sidebar_panel_ref()
+        if panel is None:
+            return False
+        payload = self.queue_sidebar_panel_payload()
+        try:
+            return bool(self._apply_queue_sidebar_panel_payload(panel, payload))
+        except RuntimeError:
+            self._clear_sidebar_queue_panel_ref()
+            return False
+
+    def _queue_probe_value_from_snapshot(self, snapshot: dict[str, object], col: int) -> str:
+        col_idx = int(col)
+        if col_idx == 0:
+            value = snapshot.get("status", "")
+        elif col_idx == 2:
+            value = snapshot.get("info", "")
+        elif col_idx == 4:
+            value = snapshot.get("eta", "")
+        else:
+            value = ""
+        return str(value or "")
+
+    def _queue_probe_parts_from_snapshot(
+        self,
+        snapshot: dict[str, object],
+        columns: tuple[int, ...] = (0, 2, 4),
+    ) -> list[str]:
+        parts: list[str] = []
+        for col in tuple(columns or ()):
+            value = self._queue_probe_value_from_snapshot(snapshot, int(col))
+            if value:
+                parts.append(value)
+        return parts
+
+    def queue_status_probe_parts(self, row: int = 0, columns: tuple[int, ...] = (0, 2, 4)) -> list[str]:
+        try:
+            row_idx = int(row)
+        except Exception:
+            row_idx = 0
+        snapshot = self.queue_row_snapshot(row_idx)
+        if not snapshot:
+            return []
+        return self._queue_probe_parts_from_snapshot(snapshot, tuple(columns or ()))
+
+    def queue_completion_state(self) -> dict[str, int | bool]:
+        row_count = int(self._queue_row_count())
+        done_rows = 0
+        error_rows = 0
+        for row in self._queue_row_indices():
+            state = self._queue_row_status_state(row)
+            if state["done"]:
+                done_rows += 1
+            elif state["error"]:
+                error_rows += 1
+        return {
+            "row_count": row_count,
+            "done_rows": done_rows,
+            "error_rows": error_rows,
+            "all_done": bool(row_count > 0 and done_rows >= row_count),
+        }
+
+    def sync_saved_queue_state_for_media(self, media_path: str = "", current_row_hint=None) -> int | None:
+        row = self.find_queue_row_for_media(
+            media_path=media_path,
+            current_row_hint=current_row_hint,
+        )
+        if row is None:
+            return None
+        self.update_queue_status(row, "✅ 완료", "", "", "")
+        if self._queue_row_count() == 1:
+            self.update_queue_header(1, 1, 100, "")
+        else:
+            self._refresh_queue_sidebar_views()
+        return int(row)
 
     def _apply_queue_row_visual_state(self, row: int):
-        table = getattr(self, "queue_table", None)
-        if table is None or row < 0 or row >= table.rowCount():
+        try:
+            row_idx = int(row)
+        except Exception:
             return
-        status_item = table.item(row, 0)
-        status = str(status_item.text() if status_item else "")
-        done, error, status_active = self._queue_status_flags(status)
-        active = status_active and row == self._current_queue_active_row()
-        if done:
-            fg = QColor("#55D97A")
-            bg = QColor("#13261D")
-        elif error:
-            fg = QColor("#FF6B78")
-            bg = QColor("#291719")
-        elif active:
-            fg = QColor("#FFD84D")
-            bg = QColor("#15212A")
-        else:
-            fg = QColor("#9DB0BB")
-            bg = QColor("#121A1E")
-        for col in range(table.columnCount()):
-            item = table.item(row, col)
-            if item is None:
-                continue
+        if row_idx < 0 or row_idx >= self._queue_row_count():
+            return
+        fg, bg = self._queue_row_visual_palette(row_idx)
+        for item in self._queue_row_items(row_idx):
             item.setForeground(fg)
             item.setBackground(bg)
 
     def _mark_prior_queue_rows_done(self, current_one_based: int):
-        table = getattr(self, "queue_table", None)
-        if table is None:
+        row_count = self._queue_row_count()
+        if row_count <= 0:
             return
         try:
-            boundary = min(max(0, int(current_one_based) - 1), table.rowCount())
+            boundary = min(max(0, int(current_one_based) - 1), row_count)
         except Exception:
             return
         for row in range(boundary):
-            status_item = table.item(row, 0)
-            status_text = str(status_item.text() if status_item else "")
-            done, error, _active = self._queue_status_flags(status_text)
-            if error:
+            state = self._queue_row_status_state(row)
+            if state["error"]:
                 self._apply_queue_row_visual_state(row)
                 continue
-            if not done:
-                if status_item is None:
-                    status_item = QTableWidgetItem("✅ 완료")
-                    status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    table.setItem(row, 0, status_item)
-                else:
-                    status_item.setText("✅ 완료")
-                    status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if not state["done"]:
+                self._set_queue_row_status_text(row, "✅ 완료")
                 if hasattr(self, "_file_complete_times"):
                     self._file_complete_times.setdefault(row, time.time())
             self._apply_queue_row_visual_state(row)
 
     def _animate_queue_status(self):
         self._queue_anim_idx = (self._queue_anim_idx + 1) % len(self._queue_anim_frames)
-        for i in range(self.queue_table.rowCount()):
-            item = self.queue_table.item(i, 0)
-            if item:
-                txt = item.text()
-                if "자막 생성 중" in txt and "완료" not in txt:
-                    item.setText("자막 생성 중")
-                elif "자막영상출력" in txt or "영상출력" in txt:
-                    item.setText("자막영상출력(mov)")
+        for row in self._queue_row_indices():
+            txt = self.queue_row_status_text(row)
+            if "자막 생성 중" in txt and "완료" not in txt:
+                self._set_queue_row_status_text(row, "자막 생성 중")
+            elif "자막영상출력" in txt or "영상출력" in txt:
+                self._set_queue_row_status_text(row, "자막영상출력(mov)")
 
     def init_queue_list(self, files):
         import os
+        table = self._queue_table_ref()
+        if table is None:
+            return
         if hasattr(self, "_show_bottom_queue_table"):
             self._show_bottom_queue_table()
         self._current_file_idx = 1
@@ -275,46 +846,203 @@ class QueueMixin:
         self._expected_seconds = {}
         self._file_start_times = {}
         self._file_complete_times = {}
+        self._queue_row_cache = []
         self._real_pct = 0
         if files:
             self._sidebar_queue_cache_items = []
             self._sidebar_queue_cache_header = ""
         self._accumulated_vad = []   # ← 멀티클립 VAD 누적 초기화
 
-        self.queue_table.setUpdatesEnabled(False)
-        self.queue_table.setRowCount(0)
+        table.setUpdatesEnabled(False)
+        self._clear_queue_table_rows()
 
+        active_row = 0 if files else -1
+        self._queue_row_cache = []
         for i, f in enumerate(files):
-            self.queue_table.insertRow(i)
-            def mk(text):
-                it = QTableWidgetItem(text)
-                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                return it
-            self.queue_table.setItem(i, 0, mk("대기 중"))
-            self.queue_table.setItem(i, 1, QTableWidgetItem(os.path.basename(f)))
-            self.queue_table.setItem(i, 2, mk("분석 중.."))
-            self.queue_table.setItem(i, 3, mk("-"))
-            self.queue_table.setItem(i, 4, mk("계산 중"))
-            self._apply_queue_row_visual_state(i)
+            if not self._insert_queue_table_row(i):
+                continue
+            snapshot = self._populate_queue_table_row(
+                i,
+                status_text="대기 중",
+                file_text=os.path.basename(f),
+                info_text="분석 중..",
+                duration_text="-",
+                eta_text="계산 중",
+            )
+            self._set_queue_row_cache_entry(
+                i,
+                self._queue_sidebar_item_for_row(
+                    i,
+                    snapshot=snapshot,
+                    active_row=active_row,
+                )
+            )
 
-        self.queue_table.setUpdatesEnabled(True)
+        table.setUpdatesEnabled(True)
 
-        self.queue_header_lbl.setText(f"큐 리스트 : (1/{len(files)}) - 0% 완료")
-        if hasattr(self, "_refresh_sidebar_queue_cache"):
-            self._refresh_sidebar_queue_cache()
-        if hasattr(self, "_sync_sidebar_queue_panel"):
-            self._sync_sidebar_queue_panel()
+        self._set_queue_header_text(format_queue_header(1 if files else 0, len(files), 0))
+        self._refresh_queue_sidebar_views()
         self._live_timer.start(1000)
 
-    def update_queue_status(self, idx, status, time_txt="", info_txt="", len_txt=""):
+    def _queue_mark_row_started(self, idx: int, *, incoming_active: bool, now_ts: float | None = None) -> None:
+        if not incoming_active or idx in self._file_start_times:
+            return
+        try:
+            started_at = float(now_ts if now_ts is not None else time.time())
+        except Exception:
+            started_at = time.time()
+        self._file_start_times[idx] = started_at
+
+    def _queue_record_completed_row(self, idx: int, *, now_ts: float | None = None) -> None:
+        try:
+            completed_at = float(now_ts if now_ts is not None else time.time())
+        except Exception:
+            completed_at = time.time()
+        self._file_complete_times[idx] = completed_at
+        expected_label = self._queue_expected_time_label(
+            idx,
+            self._queue_table_item_text(idx, 4),
+            self._queue_table_item_text(idx, 3),
+        ) or "?"
+        eta_text = self._queue_eta_text_with_elapsed(
+            idx,
+            expected_label,
+            now_ts=completed_at,
+            include_elapsed=True,
+        )
+        if "/" in eta_text:
+            self._set_queue_table_item_text(idx, 4, eta_text)
+        self._finalize_queue_if_all_rows_done()
+
+    def _queue_apply_expected_time_text(
+        self,
+        idx: int,
+        time_txt,
+        *,
+        incoming_active: bool,
+        now_ts: float | None = None,
+    ) -> None:
+        if not time_txt or idx in self._file_complete_times:
+            return
+        sec_val = self._parse_queue_seconds_value(time_txt)
+        if sec_val is not None and sec_val > 0:
+            self._expected_seconds[idx] = sec_val
+            expected_label = self._format_queue_clock(sec_val)
+            self._set_queue_table_item_text(
+                idx,
+                4,
+                self._queue_eta_text_with_elapsed(
+                    idx,
+                    expected_label,
+                    now_ts=now_ts,
+                    include_elapsed=bool(incoming_active and idx in self._file_start_times),
+                    allow_zero_elapsed=True,
+                ),
+            )
+            return
+        expected_label = (
+            self._queue_expected_display_text(time_txt)
+            if self._queue_expected_time_is_unknown(time_txt)
+            else str(time_txt)
+        )
+        self._set_queue_table_item_text(
+            idx,
+            4,
+            self._queue_eta_text_with_elapsed(
+                idx,
+                expected_label,
+                now_ts=now_ts,
+                include_elapsed=bool(incoming_active and idx in self._file_start_times),
+                allow_zero_elapsed=True,
+            ),
+        )
+
+    def _queue_apply_row_status_text(
+        self,
+        idx: int,
+        status_text,
+        *,
+        incoming_active: bool,
+        now_ts: float | None = None,
+    ) -> bool:
+        apply_status = str(status_text or "")
+        if not apply_status:
+            return False
+        self._sync_editor_stage_from_queue_status(apply_status)
+        self._set_queue_table_item_text(idx, 0, apply_status)
+        self._queue_mark_row_started(idx, incoming_active=incoming_active, now_ts=now_ts)
+        if self._queue_status_flags(apply_status)[0]:
+            self._queue_record_completed_row(idx, now_ts=now_ts)
+        return True
+
+    def _queue_skip_row_update(self, idx: int, *, refresh_engine: bool = True) -> None:
+        self._apply_queue_row_visual_state(idx)
+        self._refresh_queue_sidebar_views()
+        if refresh_engine and hasattr(self, "_refresh_sidebar_engine_info"):
+            self._refresh_sidebar_engine_info()
+
+    def _queue_existing_row_update_policy(
+        self,
+        idx: int,
+        *,
+        current_status: str,
+        incoming_status: str,
+        incoming_done: bool,
+        incoming_error: bool,
+    ) -> dict[str, object]:
+        current_done, current_error, current_active = self._queue_status_flags(current_status)
+        if current_done and not incoming_done:
+            if self._queue_status_restarts_completed_row(idx, incoming_status):
+                self._reset_completed_queue_row_for_restart(idx)
+                current_done = False
+            else:
+                return {
+                    "skip": True,
+                    "current_done": True,
+                    "current_error": current_error,
+                    "current_active": current_active,
+                }
+        if current_error and not (incoming_error or incoming_done):
+            return {
+                "skip": True,
+                "current_done": current_done,
+                "current_error": True,
+                "current_active": current_active,
+            }
+        return {
+            "skip": False,
+            "current_done": current_done,
+            "current_error": current_error,
+            "current_active": current_active,
+        }
+
+    def _queue_status_text_for_row_update(
+        self,
+        status_text,
+        *,
+        current_active: bool,
+        incoming_done: bool,
+        incoming_error: bool,
+        incoming_active: bool,
+    ) -> str:
+        apply_status = str(status_text or "")
+        if current_active and not (incoming_done or incoming_error or incoming_active):
+            return ""
+        return apply_status
+
+    def update_queue_status(self, idx, status=None, time_txt="", info_txt="", len_txt=""):
+        payload = normalize_queue_status_payload(idx, status, time_txt, info_txt, len_txt)
+        idx = int(payload["idx"])
+        status = payload["status"]
+        time_txt = payload["time_txt"]
+        info_txt = payload["info_txt"]
+        len_txt = payload["len_txt"]
         if hasattr(self, "_show_bottom_queue_table") and status:
             self._show_bottom_queue_table()
         engine_dirty = False
-        if 0 <= idx < self.queue_table.rowCount():
-            def mk(text):
-                it = QTableWidgetItem(text)
-                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                return it
+        table = self._queue_table_ref()
+        if table is not None and 0 <= idx < self._queue_row_count():
+            now_ts = time.time()
             incoming_done, incoming_error, incoming_active = self._queue_status_flags(status)
             try:
                 current_idx = int(getattr(self, "_current_file_idx", 0) or 0)
@@ -324,94 +1052,45 @@ class QueueMixin:
                 self._current_file_idx = idx + 1
             if idx > 0 and (incoming_done or incoming_error or incoming_active):
                 self._mark_prior_queue_rows_done(idx + 1)
-            current_status_item = self.queue_table.item(idx, 0)
-            current_status = str(current_status_item.text() if current_status_item else "")
-            current_done, current_error, current_active = self._queue_status_flags(current_status)
-            if current_done and not incoming_done:
-                if self._queue_status_restarts_completed_row(idx, status):
-                    self._reset_completed_queue_row_for_restart(idx)
-                    current_done = False
-                else:
-                    self._apply_queue_row_visual_state(idx)
-                    if hasattr(self, "_sync_sidebar_queue_panel"):
-                        if hasattr(self, "_refresh_sidebar_queue_cache"):
-                            self._refresh_sidebar_queue_cache()
-                        self._sync_sidebar_queue_panel()
-                    if hasattr(self, "_refresh_sidebar_engine_info"):
-                        self._refresh_sidebar_engine_info()
-                    return
-            if current_error and not (incoming_error or incoming_done):
-                self._apply_queue_row_visual_state(idx)
-                if hasattr(self, "_sync_sidebar_queue_panel"):
-                    if hasattr(self, "_refresh_sidebar_queue_cache"):
-                        self._refresh_sidebar_queue_cache()
-                    self._sync_sidebar_queue_panel()
-                if hasattr(self, "_refresh_sidebar_engine_info"):
-                    self._refresh_sidebar_engine_info()
+            current_status = self._queue_table_item_text(idx, 0)
+            row_policy = self._queue_existing_row_update_policy(
+                idx,
+                current_status=current_status,
+                incoming_status=status,
+                incoming_done=incoming_done,
+                incoming_error=incoming_error,
+            )
+            current_active = bool(row_policy["current_active"])
+            if bool(row_policy["skip"]):
+                self._queue_skip_row_update(idx)
                 return
-            apply_status = status
-            if current_active and not (incoming_done or incoming_error or incoming_active):
-                apply_status = ""
-            if apply_status:
-                self._sync_editor_stage_from_queue_status(apply_status)
-                engine_dirty = True
-            if apply_status:
-                self.queue_table.setItem(idx, 0, mk(apply_status))
-                if incoming_active and idx not in self._file_start_times:
-                    self._file_start_times[idx] = time.time()
-                # ✅ 완료 시 소요시간/예상시간 즉시 기록
-                if self._queue_status_flags(apply_status)[0]:
-                    self._file_complete_times[idx] = time.time()
-                    st = self._file_start_times.get(idx, 0)
-                    if st > 0:
-                        elapsed = time.time() - st
-                        x_str = self._queue_expected_time_label(
-                            idx,
-                            str(self.queue_table.item(idx, 4).text() if self.queue_table.item(idx, 4) else ""),
-                            str(self.queue_table.item(idx, 3).text() if self.queue_table.item(idx, 3) else ""),
-                        ) or "?"
-                        e_str = self._format_queue_clock(elapsed)
-                        self.queue_table.setItem(idx, 4, mk(f"{e_str} / {x_str}"))
-                    self._finalize_queue_if_all_rows_done()
+            apply_status = self._queue_status_text_for_row_update(
+                status,
+                current_active=current_active,
+                incoming_done=incoming_done,
+                incoming_error=incoming_error,
+                incoming_active=incoming_active,
+            )
+            engine_dirty = self._queue_apply_row_status_text(
+                idx,
+                apply_status,
+                incoming_active=incoming_active,
+                now_ts=now_ts,
+            )
             if info_txt:
-                self.queue_table.setItem(idx, 2, mk(info_txt))
+                self._set_queue_table_item_text(idx, 2, info_txt)
             if len_txt:
-                self.queue_table.setItem(idx, 3, mk(len_txt))
-            if time_txt:
-                sec_val = self._parse_queue_seconds_value(time_txt)
-                if sec_val is not None and sec_val > 0:
-                    self._expected_seconds[idx] = sec_val
-                    if idx not in self._file_complete_times:
-                        if incoming_active and idx in self._file_start_times:
-                            elapsed = max(0.0, time.time() - float(self._file_start_times.get(idx, 0) or 0))
-                            self.queue_table.setItem(
-                                idx,
-                                4,
-                                mk(f"{self._format_queue_clock(elapsed)} / {self._format_queue_clock(sec_val)}"),
-                            )
-                        else:
-                            self.queue_table.setItem(idx, 4, mk(self._format_queue_clock(sec_val)))
-                else:
-                    if idx not in self._file_complete_times:
-                        expected_label = (
-                            self._queue_expected_display_text(time_txt)
-                            if self._queue_expected_time_is_unknown(time_txt)
-                            else str(time_txt)
-                        )
-                        if incoming_active and idx in self._file_start_times:
-                            elapsed = max(0.0, time.time() - float(self._file_start_times.get(idx, 0) or 0))
-                            self.queue_table.setItem(
-                                idx,
-                                4,
-                                mk(f"{self._format_queue_clock(elapsed)} / {expected_label}"),
-                            )
-                        else:
-                            self.queue_table.setItem(idx, 4, mk(expected_label))
+                self._set_queue_table_item_text(idx, 3, len_txt)
+            self._queue_apply_expected_time_text(
+                idx,
+                time_txt,
+                incoming_active=incoming_active,
+                now_ts=now_ts,
+            )
             self._apply_queue_row_visual_state(idx)
-        if hasattr(self, "_sync_sidebar_queue_panel"):
-            if hasattr(self, "_refresh_sidebar_queue_cache"):
-                self._refresh_sidebar_queue_cache()
-            self._sync_sidebar_queue_panel()
+            self._sync_queue_row_cache_from_table_row(idx)
+            self._sync_all_queue_row_cache_from_table()
+        self._refresh_queue_sidebar_views()
         if engine_dirty and hasattr(self, "_refresh_sidebar_engine_info"):
             self._refresh_sidebar_engine_info()
 
@@ -471,13 +1150,10 @@ class QueueMixin:
             self.sync_menu_from_editor(editor)
 
     def _finalize_queue_if_all_rows_done(self):
-        row_count = self.queue_table.rowCount()
+        row_count = self._queue_row_count()
         if row_count <= 0:
             return
-        row_statuses = []
-        for row in range(row_count):
-            item = self.queue_table.item(row, 0)
-            row_statuses.append(str(item.text() if item else ""))
+        row_statuses = self._queue_row_statuses()
         if not row_statuses or not all(self._queue_status_flags(st)[0] for st in row_statuses):
             return
         total = int(getattr(self, "_total_files", row_count) or row_count)
@@ -485,44 +1161,66 @@ class QueueMixin:
         self._real_pct = 100
         if hasattr(self, "_live_timer"):
             self._live_timer.stop()
-        self.queue_header_lbl.setText(f"큐 리스트 : ({total}/{total}) - 100% 완료")
+        self._set_queue_header_text(format_queue_header(total, total, 100))
+        self._sync_all_queue_row_cache_from_table()
 
     def _refresh_active_queue_elapsed(self, now: float | None = None) -> bool:
-        table = getattr(self, "queue_table", None)
+        table = self._queue_table_ref()
         if table is None:
             return False
         active_row = self._current_queue_active_row()
         if active_row < 0:
             return False
         try:
-            status_item = table.item(active_row, 0)
-            status_text = str(status_item.text() if status_item else "")
-            row_done, _row_error, status_active = self._queue_status_flags(status_text)
-            if row_done or not status_active:
-                return False
             now_value = float(now if now is not None else time.time())
+            metrics = self.queue_row_metrics(active_row, now_ts=now_value)
+            if bool(metrics["done"]) or not bool(metrics["status_active"]):
+                return False
             if active_row not in self._file_start_times:
                 self._file_start_times[active_row] = now_value
-            start_at = float(self._file_start_times.get(active_row, now_value) or now_value)
-            elapsed = max(0.0, now_value - start_at)
-            eta_item = table.item(active_row, 4)
-            duration_item = table.item(active_row, 3)
-            expected_label = self._queue_expected_time_label(
+            self._set_queue_table_item_text(
                 active_row,
-                str(eta_item.text() if eta_item else ""),
-                str(duration_item.text() if duration_item else ""),
-            ) or "예상불가"
-            if eta_item is None:
-                eta_item = QTableWidgetItem("")
-                eta_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                table.setItem(active_row, 4, eta_item)
-            eta_item.setText(f"{self._format_queue_clock(elapsed)} / {expected_label}")
+                4,
+                self._queue_eta_text_with_elapsed(
+                    active_row,
+                    metrics["expected_label"],
+                    now_ts=now_value,
+                    include_elapsed=True,
+                    allow_zero_elapsed=True,
+                ),
+            )
             self._apply_queue_row_visual_state(active_row)
+            self._sync_queue_row_cache_from_table_row(active_row)
             return True
         except Exception:
             return False
 
+    def _queue_live_header_percent(self, *, total: int, row_statuses: list[str] | None = None) -> int:
+        statuses = list(row_statuses if row_statuses is not None else self._queue_row_statuses())
+        row_metrics = [
+            {"status": status_text, "done": bool(self._queue_status_flags(status_text)[0])}
+            for status_text in statuses
+        ]
+        done_count, reuse_count = self._queue_done_reuse_counts_from_metrics(row_metrics)
+        return self._queue_completion_percent(
+            total=total,
+            done_count=done_count,
+            reuse_count=reuse_count,
+        )
+
+    def _queue_apply_done_row_visuals(self, row_statuses: list[str] | None = None) -> None:
+        statuses = list(row_statuses if row_statuses is not None else self._queue_row_statuses())
+        for row, status_text in enumerate(statuses):
+            if not status_text:
+                continue
+            row_done, _row_error, _status_active = self._queue_status_flags(status_text)
+            if row_done:
+                self._apply_queue_row_visual_state(row)
+
     def _update_live_queue_header(self):
+        table = self._queue_table_ref()
+        if table is None:
+            return
         active_backend = None
         if getattr(self, 'backend_fast', None) and getattr(self.backend_fast, '_active', False):
             active_backend = self.backend_fast
@@ -537,43 +1235,82 @@ class QueueMixin:
         c = getattr(self, '_current_file_idx', 1)
         t = getattr(self, '_total_files', 1)
         self._mark_prior_queue_rows_done(c)
-        # 완료 파일 수 기반 진행률
-        done_count = 0
-        reuse_count = 0
-        for i in range(self.queue_table.rowCount()):
-            si = self.queue_table.item(i, 0)
-            if si:
-                st = si.text()
-                row_done, _row_error, _row_active = self._queue_status_flags(st)
-                if '기존자막' in st:
-                    reuse_count += 1
-                elif row_done:
-                    done_count += 1
-        if reuse_count >= t and t > 0:
-            pct = 100
-        else:
-            effective_total = max(1, t - reuse_count)
-            pct = int((done_count / effective_total) * 100)
-        pct = max(0, min(100, pct))
-        
-        self.queue_header_lbl.setText(f"큐 리스트 : ({c}/{t}) - {pct}% 완료")
-
-        for i in range(self.queue_table.rowCount()):
-            si = self.queue_table.item(i, 0)
-            if not si:
-                continue
-            row_done, _row_error, _status_active = self._queue_status_flags(si.text())
-            if row_done:
-                self._apply_queue_row_visual_state(i)
+        row_statuses = self._queue_row_statuses()
+        pct = self._queue_live_header_percent(total=t, row_statuses=row_statuses)
+        self._set_queue_header_text(format_queue_header(c, t, pct))
+        self._queue_apply_done_row_visuals(row_statuses=row_statuses)
         self._refresh_active_queue_elapsed(now)
-        if hasattr(self, "_sync_sidebar_queue_panel"):
-            if hasattr(self, "_refresh_sidebar_queue_cache"):
-                self._refresh_sidebar_queue_cache()
-            self._sync_sidebar_queue_panel()
+        self._refresh_queue_sidebar_views()
         if hasattr(self, "_refresh_sidebar_engine_info"):
             self._refresh_sidebar_engine_info()
 
-    def update_queue_header(self, current, total, pct, eta_str=""):
+    def _queue_row_statuses(self) -> list[str]:
+        return [self.queue_row_status_text(row) for row in self._queue_row_indices()]
+
+    def _queue_header_restart_reset_allowed(
+        self,
+        *,
+        prev_pct: int,
+        pct: int,
+        current: int,
+        prev_current: int,
+    ) -> bool:
+        if prev_pct < 100 or pct > 0 or current > max(prev_current, 1):
+            return False
+        try:
+            row_count = self._queue_row_count()
+            active_row = max(0, min(row_count - 1, current - 1))
+            status_text = self._queue_table_item_text(active_row, 0)
+            row_done, row_error, row_active = self._queue_status_flags(status_text)
+            return not row_done and not row_error and (row_active or "대기" in status_text)
+        except Exception:
+            return False
+
+    def _queue_header_effective_pct(
+        self,
+        *,
+        pct: int,
+        prev_pct: int,
+        current: int,
+        prev_current: int,
+        total: int,
+        row_statuses: list[str],
+    ) -> int:
+        final_signal = pct >= 100 and total > 0 and current >= total
+        allow_restart_reset = self._queue_header_restart_reset_allowed(
+            prev_pct=prev_pct,
+            pct=pct,
+            current=current,
+            prev_current=prev_current,
+        )
+        if not final_signal and pct < prev_pct and current <= max(prev_current, 1) and not allow_restart_reset:
+            pct = prev_pct
+        all_rows_done = bool(row_statuses) and all(self._queue_status_flags(st)[0] for st in row_statuses)
+        if pct == 100 and row_statuses and not all_rows_done:
+            pct = 0 if all("대기" in st for st in row_statuses) else min(99, max(0, int(pct)))
+        return int(pct)
+
+    def _queue_finalize_header_completion(self, *, total: int) -> None:
+        for row in self._queue_row_indices():
+            status_text = self.queue_row_status_text(row)
+            if any(token in status_text for token in ("오류", "실패", "중단")):
+                continue
+            done_text = "✅기존자막" if "기존자막" in status_text else "✅ 완료"
+            self._set_queue_row_status_text(row, done_text)
+            self._apply_queue_row_visual_state(row)
+        if hasattr(self, '_live_timer'):
+            self._live_timer.stop()
+        self._set_queue_header_text(format_queue_header(total, total, 100))
+
+    def update_queue_header(self, current, total=None, pct=None, eta_str=""):
+        payload = normalize_queue_header_payload(current, total, pct, eta_str)
+        current = payload["current"]
+        total = payload["total"]
+        pct = payload["pct"]
+        eta_str = payload["eta_str"]
+        table = self._queue_table_ref()
+        if table is None:
+            return
         if hasattr(self, "_show_bottom_queue_table"):
             self._show_bottom_queue_table()
         try:
@@ -592,98 +1329,65 @@ class QueueMixin:
         prev_pct = int(getattr(self, "_real_pct", 0) or 0)
         if prev_current > 1 and 0 < current < prev_current:
             current = prev_current
-        final_signal = pct >= 100 and total > 0 and current >= total
-        allow_restart_reset = False
-        if prev_pct >= 100 and pct <= 0 and current <= max(prev_current, 1):
-            try:
-                active_row = max(0, min(self.queue_table.rowCount() - 1, current - 1))
-                status_item = self.queue_table.item(active_row, 0)
-                status_text = str(status_item.text() if status_item else "")
-                row_done, row_error, row_active = self._queue_status_flags(status_text)
-                allow_restart_reset = not row_done and not row_error and (
-                    row_active or "대기" in status_text
-                )
-            except Exception:
-                allow_restart_reset = False
-        if not final_signal and pct < prev_pct and current <= max(prev_current, 1) and not allow_restart_reset:
-            pct = prev_pct
         self._current_file_idx = current
         self._total_files = total
         self._mark_prior_queue_rows_done(current)
-        row_statuses = []
         try:
-            for i in range(self.queue_table.rowCount()):
-                item = self.queue_table.item(i, 0)
-                row_statuses.append(item.text() if item else "")
+            row_statuses = self._queue_row_statuses()
         except Exception:
             row_statuses = []
+        pct = self._queue_header_effective_pct(
+            pct=pct,
+            prev_pct=prev_pct,
+            current=current,
+            prev_current=prev_current,
+            total=total,
+            row_statuses=row_statuses,
+        )
         all_rows_done = bool(row_statuses) and all(self._queue_status_flags(st)[0] for st in row_statuses)
-        if pct == 100 and row_statuses and not all_rows_done:
-            pct = 0 if all("대기" in st for st in row_statuses) else min(99, max(0, int(pct)))
         self._real_pct = pct
         if pct == 100 and all_rows_done:
-            for row in range(self.queue_table.rowCount()):
-                status_item = self.queue_table.item(row, 0)
-                status_text = str(status_item.text() if status_item else "")
-                if any(token in status_text for token in ("오류", "실패", "중단")):
-                    continue
-                done_text = "✅기존자막" if "기존자막" in status_text else "✅ 완료"
-                if status_item is None:
-                    status_item = QTableWidgetItem(done_text)
-                    status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    self.queue_table.setItem(row, 0, status_item)
-                else:
-                    status_item.setText(done_text)
-                    status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self._apply_queue_row_visual_state(row)
-            if hasattr(self, '_live_timer'):
-                self._live_timer.stop()
-            self.queue_header_lbl.setText(f"큐 리스트 : ({total}/{total}) - 100% 완료")
+            self._queue_finalize_header_completion(total=total)
         else:
-            self.queue_header_lbl.setText(f"큐 리스트 : ({current}/{total}) - {pct}% 완료")
-        if hasattr(self, "_refresh_sidebar_queue_cache"):
-            self._refresh_sidebar_queue_cache()
-        if hasattr(self, "_sync_sidebar_queue_panel"):
-            self._sync_sidebar_queue_panel()
+            self._set_queue_header_text(format_queue_header(current, total, pct))
+        self._sync_all_queue_row_cache_from_table()
+        self._refresh_queue_sidebar_views()
         if hasattr(self, "_refresh_sidebar_engine_info"):
             self._refresh_sidebar_engine_info()
 
     def _refresh_sidebar_queue_cache(self):
-        table = getattr(self, "queue_table", None)
-        label = getattr(self, "queue_header_lbl", None)
-        items = []
-        active_row = self._current_queue_active_row()
-        if table is not None:
-            try:
-                for row in range(table.rowCount()):
-                    status_item = table.item(row, 0)
-                    file_item = table.item(row, 1)
-                    duration_item = table.item(row, 3)
-                    eta_item = table.item(row, 4)
-                    raw_status = str(status_item.text() if status_item else "-")
-                    done, error, status_active = self._queue_status_flags(raw_status)
-                    status = self._plain_queue_status(raw_status) if hasattr(self, "_plain_queue_status") else raw_status
-                    active = status_active and row == active_row
-                    display_status = "완료" if done else status
-                    items.append({
-                        "order": str(row + 1),
-                        "status": status,
-                        "statusDisplay": display_status,
-                        "done": done,
-                        "active": active,
-                        "error": error,
-                        "file": str(file_item.text() if file_item else "-"),
-                        "eta": self._queue_card_time_text(
-                            str(eta_item.text() if eta_item else "-"),
-                            str(duration_item.text() if duration_item else "-"),
-                        ),
-                    })
-            except RuntimeError:
-                items = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
-        if items or not list(getattr(self, "_sidebar_queue_cache_items", []) or []):
+        self._sync_all_queue_row_cache_from_table()
+        items = self._queue_sidebar_items_from_cache()
+        if items or not self._sidebar_queue_cache_items_copy():
             self._sidebar_queue_cache_items = items
         try:
-            header = str(label.text() if label is not None else "")
+            header = str(self.queue_sidebar_header_text() or "")
         except RuntimeError:
             header = ""
         self._sidebar_queue_cache_header = header
+
+    def _sync_queue_row_cache_from_table_row(self, row: int) -> None:
+        table = self._queue_table_ref()
+        if table is None or row < 0:
+            return
+        try:
+            if row >= self._queue_row_count():
+                return
+            active_row = self._current_queue_active_row()
+            entry = self._queue_sidebar_item_for_row(row, active_row=active_row)
+            self._set_queue_row_cache_entry(row, entry)
+        except RuntimeError:
+            return
+
+    def _sync_all_queue_row_cache_from_table(self) -> None:
+        table = self._queue_table_ref()
+        if table is None:
+            return
+        try:
+            active_row = self._current_queue_active_row()
+            self._queue_row_cache = [
+                self._queue_sidebar_item_for_row(row, active_row=active_row)
+                for row in self._queue_row_indices()
+            ]
+        except RuntimeError:
+            return

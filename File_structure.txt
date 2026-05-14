@@ -1,7 +1,7 @@
 <!--
 Document-Version: 04.00.05-mac-native
 Phase: MAC_NATIVE_APPSTORE_V4_0_5_RELEASED
-Last-Updated: 2026-05-14
+Last-Updated: 2026-05-15
 Updated-By: Codex
 Scope: Actual project filesystem map generated from tracked source files plus untracked non-ignored release files. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
@@ -9,7 +9,7 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 ================================================================================
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-14
+Last Updated: 2026-05-15
 Phase: MAC_NATIVE_APPSTORE_V4_0_5_RELEASED
 App Version: 04.00.05
 Structure Document: File_structure.txt
@@ -17,6 +17,44 @@ Note: This file is an actual tree map and excludes cache-only Python bytecode fo
 ================================================================================
 
 ai_subtitle_studio/
+├── .vscode
+│   └── launch.json
+├── _backup_mac_migration
+│   ├── release_notes_legacy
+│   │   ├── RELEASE_v02.02.00.md
+│   │   ├── RELEASE_v02.03.00.md
+│   │   ├── RELEASE_v02.04.00.md
+│   │   ├── RELEASE_v02.06.00.md
+│   │   ├── RELEASE_v02.07.00.md
+│   │   ├── RELEASE_v03.00.00.md
+│   │   ├── RELEASE_v03.03.00.md
+│   │   ├── RELEASE_v03.04.00.md
+│   │   ├── RELEASE_v03.05.00.md
+│   │   ├── RELEASE_v03.06.00.md
+│   │   ├── RELEASE_v03.07.00.md
+│   │   ├── RELEASE_v03.08.00.md
+│   │   ├── RELEASE_v03.09.00.md
+│   │   ├── RELEASE_v03.10.00.md
+│   │   ├── RELEASE_v03.11.00.md
+│   │   ├── RELEASE_v03.12.00.md
+│   │   ├── RELEASE_v03.13.00.md
+│   │   ├── RELEASE_v03.14.00.md
+│   │   ├── RELEASE_v03.15.00.md
+│   │   ├── RELEASE_v03.16.00.md
+│   │   ├── RELEASE_v03.17.00.md
+│   │   ├── RELEASE_v03.18.00.md
+│   │   ├── RELEASE_v03.19.00.md
+│   │   ├── RELEASE_v03.20.00.md
+│   │   ├── RELEASE_v03.21.00.md
+│   │   ├── RELEASE_v03.22.00.md
+│   │   ├── RELEASE_v03.23.00.md
+│   │   ├── RELEASE_v03.23.01.md
+│   │   └── RELEASE_v03.24.00.md
+│   ├── windows_legacy
+│   │   ├── main.bat
+│   │   ├── requirements-windows.txt
+│   │   └── test_windows_platform_compat.py
+│   └── .DS_Store
 ├── assets
 │   └── icons
 │       ├── ui
@@ -63,6 +101,43 @@ ai_subtitle_studio/
 │       │   └── video.svg
 │       ├── app_icon.svg
 │       └── README.md
+├── checkpoints
+│   ├── FRCRN_SE_16K
+│   │   ├── .cache
+│   │   │   └── huggingface
+│   │   │       ├── download
+│   │   │       │   ├── .gitattributes.metadata
+│   │   │       │   ├── last_best_checkpoint.metadata
+│   │   │       │   ├── last_best_checkpoint.pt.metadata
+│   │   │       │   └── README.md.metadata
+│   │   │       ├── .gitignore
+│   │   │       └── CACHEDIR.TAG
+│   │   ├── .gitattributes
+│   │   ├── last_best_checkpoint
+│   │   ├── last_best_checkpoint.pt
+│   │   └── README.md
+│   ├── MossFormer2_SE_48K
+│   │   ├── .gitattributes
+│   │   ├── last_best_checkpoint
+│   │   ├── last_best_checkpoint.pt
+│   │   └── README.md
+│   ├── MossFormerGAN_SE_16K
+│   │   ├── .cache
+│   │   │   └── huggingface
+│   │   │       ├── download
+│   │   │       │   ├── .gitattributes.metadata
+│   │   │       │   ├── last_best_checkpoint.disc.pt.metadata
+│   │   │       │   ├── last_best_checkpoint.metadata
+│   │   │       │   ├── last_best_checkpoint.pt.metadata
+│   │   │       │   └── README.md.metadata
+│   │   │       ├── .gitignore
+│   │   │       └── CACHEDIR.TAG
+│   │   ├── .gitattributes
+│   │   ├── last_best_checkpoint
+│   │   ├── last_best_checkpoint.disc.pt
+│   │   ├── last_best_checkpoint.pt
+│   │   └── README.md
+│   └── .DS_Store
 ├── core
 │   ├── audio
 │   │   ├── __init__.py
@@ -103,6 +178,7 @@ ai_subtitle_studio/
 │   │   ├── whisperkit_persistent.py
 │   │   └── worker_threads.py
 │   ├── engine
+│   │   ├── .DS_Store
 │   │   ├── __init__.py
 │   │   ├── llm_candidate_policy.py
 │   │   ├── llm_correction_guard.py
@@ -110,6 +186,7 @@ ai_subtitle_studio/
 │   │   ├── subtitle_accuracy_graph.py
 │   │   ├── subtitle_accuracy_pipeline.py
 │   │   ├── subtitle_accuracy_utils.py
+│   │   ├── subtitle_context_refiner.py
 │   │   ├── subtitle_engine.py
 │   │   ├── subtitle_macro_chunks.py
 │   │   ├── subtitle_native_word_split.py
@@ -201,8 +278,8 @@ ai_subtitle_studio/
 │   │   ├── ipad_exchange.py
 │   │   ├── project_assets.py
 │   │   ├── project_context.py
-│   │   ├── project_frames.py
 │   │   ├── project_format.py
+│   │   ├── project_frames.py
 │   │   ├── project_io.py
 │   │   ├── project_manager.py
 │   │   ├── project_model_settings.py
@@ -223,6 +300,7 @@ ai_subtitle_studio/
 │   │   ├── gap_detector.py
 │   │   ├── guide_writer.py
 │   │   ├── major_segmenter.py
+│   │   ├── model_capability.py
 │   │   ├── models.py
 │   │   ├── pipeline.py
 │   │   ├── render_executor.py
@@ -250,7 +328,8 @@ ai_subtitle_studio/
 │   │   ├── logger.py
 │   │   ├── memory_manager.py
 │   │   ├── multi_process.py
-│   │   └── qt_runtime.py
+│   │   ├── qt_runtime.py
+│   │   └── subprocess_utils.py
 │   ├── stt_mode
 │   │   ├── __init__.py
 │   │   ├── dictation_state.py
@@ -269,6 +348,7 @@ ai_subtitle_studio/
 │   │   ├── vad_ensemble.py
 │   │   └── vad_provider.py
 │   ├── subtitle_quality
+│   │   ├── .DS_Store
 │   │   ├── __init__.py
 │   │   ├── candidate_generator.py
 │   │   ├── candidate_ranker.py
@@ -282,13 +362,19 @@ ai_subtitle_studio/
 │   │   ├── timestamp_regrouper.py
 │   │   ├── vad_alignment_checker.py
 │   │   └── wrong_answer_memory.py
+│   ├── .DS_Store
 │   ├── __init__.py
+│   ├── _native_cut_boundary.cpython-311-darwin.so
+│   ├── _native_cut_boundary.cpython-314-darwin.so
+│   ├── _native_text_cleanup.cpython-311-darwin.so
+│   ├── _native_text_cleanup.cpython-314-darwin.so
 │   ├── accuracy_policy.py
 │   ├── auto_tracker.py
 │   ├── autopilot_cache.py
 │   ├── autopilot_policy.py
 │   ├── backend_fast.py
 │   ├── cloud_sync.py
+│   ├── coerce.py
 │   ├── correction_dictionary_db.py
 │   ├── cut_boundary.py
 │   ├── cut_boundary_api.py
@@ -305,6 +391,7 @@ ai_subtitle_studio/
 │   ├── cut_boundary_jump.py
 │   ├── cut_boundary_level_policy.py
 │   ├── cut_boundary_middle.py
+│   ├── cut_boundary_native_plan.py
 │   ├── cut_boundary_scan_runtime.py
 │   ├── frame_time.py
 │   ├── json_file.py
@@ -327,8 +414,8 @@ ai_subtitle_studio/
 │   ├── native_swift_subtitle.py
 │   ├── native_swift_timeline.py
 │   ├── native_swift_waveform.py
-│   ├── native_text_similarity.py
 │   ├── native_text_cleanup.py
+│   ├── native_text_similarity.py
 │   ├── notifier.py
 │   ├── path_manager.py
 │   ├── performance.py
@@ -349,56 +436,442 @@ ai_subtitle_studio/
 │   ├── visual_cut_jump.py
 │   └── work_mode.py
 ├── dataset
+│   ├── lora_personalization
+│   │   ├── .cache
+│   │   │   ├── legacy_root_conflicts
+│   │   │   │   ├── audio_preset_lora.063e26a1c92e46618c153d75091c4f5f.jsonl
+│   │   │   │   ├── audio_preset_lora.09798d3a991b40b381d40b68ca72c2ea.jsonl
+│   │   │   │   ├── audio_preset_lora.0ba2acd1ea5a4e1b8bc65aba32f9510b.jsonl
+│   │   │   │   ├── audio_preset_lora.1437e824405846f987f9d76c8c5543f4.jsonl
+│   │   │   │   ├── audio_preset_lora.168323e3ea2f423cbb941fcae06497d8.jsonl
+│   │   │   │   ├── audio_preset_lora.17516d73c49d4f6781ba7056c00235a2.jsonl
+│   │   │   │   ├── audio_preset_lora.1efaf6a48c614dee8cc1a729be2c48f7.jsonl
+│   │   │   │   ├── audio_preset_lora.25eb529d355340f9a276cffd51aa2f26.jsonl
+│   │   │   │   ├── audio_preset_lora.2755f60029bd4714a5e78a6c0bc4ea8f.jsonl
+│   │   │   │   ├── audio_preset_lora.2e728e00f7f9438d9c9b2d95e6f6c3b7.jsonl
+│   │   │   │   ├── audio_preset_lora.324aff5e4532498cb622d55c74f56df0.jsonl
+│   │   │   │   ├── audio_preset_lora.379ebeeaba7540fd8dda3b696207e1cf.jsonl
+│   │   │   │   ├── audio_preset_lora.38d8db3d53f5498c94c7d89e0c211d12.jsonl
+│   │   │   │   ├── audio_preset_lora.3abc8a47873a4eecb5e8ed57722b5074.jsonl
+│   │   │   │   ├── audio_preset_lora.3b7e3de0f77f4d8e975ca6f0500d7435.jsonl
+│   │   │   │   ├── audio_preset_lora.3c0e424c882e4a1487f4328b68cfca74.jsonl
+│   │   │   │   ├── audio_preset_lora.3ec38b6515b6418fa9e3fd53e1b8fd69.jsonl
+│   │   │   │   ├── audio_preset_lora.441b905a6f274f8185b94b6e7d096dac.jsonl
+│   │   │   │   ├── audio_preset_lora.4dcbdd1c13e9469887edd314765dcdf4.jsonl
+│   │   │   │   ├── audio_preset_lora.4f6b66f7493a499e8d5320d3053825e3.jsonl
+│   │   │   │   ├── audio_preset_lora.51542e0a33324e8cad7a62c2b077c3c1.jsonl
+│   │   │   │   ├── audio_preset_lora.5352d949b6434635925861ef06af3f95.jsonl
+│   │   │   │   ├── audio_preset_lora.53f39c2eb7544c5491fb06b006a88ef8.jsonl
+│   │   │   │   ├── audio_preset_lora.5541c215e47f41fead7fa912c1ab939a.jsonl
+│   │   │   │   ├── audio_preset_lora.555d044fd14a49d8844ad9967aa6cbbe.jsonl
+│   │   │   │   ├── audio_preset_lora.56623578722b4da7beb2f3c4bc569fa6.jsonl
+│   │   │   │   ├── audio_preset_lora.58bf13424bbd4f64b50012775159af78.jsonl
+│   │   │   │   ├── audio_preset_lora.59d8f24752d441bc8881557a6ca53425.jsonl
+│   │   │   │   ├── audio_preset_lora.602b30d3560d4d43ba926871eda796e5.jsonl
+│   │   │   │   ├── audio_preset_lora.61abbd9fb1f3447faa898f12b496de70.jsonl
+│   │   │   │   ├── audio_preset_lora.6375cae4eeab420c8049f48a957acfd9.jsonl
+│   │   │   │   ├── audio_preset_lora.6626c65b7dea4f43812ae5efccd53f99.jsonl
+│   │   │   │   ├── audio_preset_lora.67566b98e48443ebbed9ff31ae8c4afc.jsonl
+│   │   │   │   ├── audio_preset_lora.6b40ac64407a4f26b3d9708733d615f3.jsonl
+│   │   │   │   ├── audio_preset_lora.6e6401c437ca4976a64b191db34e18d1.jsonl
+│   │   │   │   ├── audio_preset_lora.737a25098d5f4025a1295bf01b9470d7.jsonl
+│   │   │   │   ├── audio_preset_lora.73fc5f4476124d23a6b882681233b652.jsonl
+│   │   │   │   ├── audio_preset_lora.74d62aecbbef4d528b6826b232dc188f.jsonl
+│   │   │   │   ├── audio_preset_lora.771b881da9a744ffa455b9d19610c4e7.jsonl
+│   │   │   │   ├── audio_preset_lora.7b837172b0f74e4e8deb9fa12897c668.jsonl
+│   │   │   │   ├── audio_preset_lora.7c1f7164f71e429b92ca70b17967a166.jsonl
+│   │   │   │   ├── audio_preset_lora.7c76b53922df48d8b5b13a8a40cd80be.jsonl
+│   │   │   │   ├── audio_preset_lora.7eb8fc2dfd024b0cb520c7e5e148339b.jsonl
+│   │   │   │   ├── audio_preset_lora.80b2ce19bd8f443cad947fbe618081ef.jsonl
+│   │   │   │   ├── audio_preset_lora.8897325adc7345fe89451a03a2b62d48.jsonl
+│   │   │   │   ├── audio_preset_lora.88c2b1fc08a54bc193bc3736eb6e4bf5.jsonl
+│   │   │   │   ├── audio_preset_lora.890aff55bbf4434e9c0163bd835265e0.jsonl
+│   │   │   │   ├── audio_preset_lora.892dbb413fd64728b7e9288158f98425.jsonl
+│   │   │   │   ├── audio_preset_lora.8bb8836fecd94edba32fea5cdec8aa7a.jsonl
+│   │   │   │   ├── audio_preset_lora.8d3596f5f1ed46b288d2e9c6cb2dfef5.jsonl
+│   │   │   │   ├── audio_preset_lora.910cda132845413ba773032fcc0b3bdf.jsonl
+│   │   │   │   ├── audio_preset_lora.91ac37fe946f433b9508a7ff455c8bac.jsonl
+│   │   │   │   ├── audio_preset_lora.96ccf2eb957347178062e0b7d83424e0.jsonl
+│   │   │   │   ├── audio_preset_lora.9abd3eb3dc9a4527b5be37f3c40b56d4.jsonl
+│   │   │   │   ├── audio_preset_lora.9c4dd0ae76094281b5fbd45974e1d939.jsonl
+│   │   │   │   ├── audio_preset_lora.9cf073ab298a44a1bc8d9b4c5865d767.jsonl
+│   │   │   │   ├── audio_preset_lora.9ea5b15cd26f45a3ad2baa5d34952359.jsonl
+│   │   │   │   ├── audio_preset_lora.a1180eb55bbf415aafac2e035b23dfc0.jsonl
+│   │   │   │   ├── audio_preset_lora.a11990c93fdf46c9ba43f9b1bb244bcf.jsonl
+│   │   │   │   ├── audio_preset_lora.a2c5ae11e5a8438ebeb917a9ac4343ad.jsonl
+│   │   │   │   ├── audio_preset_lora.a49b54f8a6754e32a82432ecab2bbdfe.jsonl
+│   │   │   │   ├── audio_preset_lora.a55d2cbc883d4c6090b5ce81df876e57.jsonl
+│   │   │   │   ├── audio_preset_lora.a5d4ac33ac884957ab746d19e8ce5d30.jsonl
+│   │   │   │   ├── audio_preset_lora.a6c0905c95c742c0ad0d820be80b5a12.jsonl
+│   │   │   │   ├── audio_preset_lora.a86ee2eb2d37432984ab64cf00e3dd31.jsonl
+│   │   │   │   ├── audio_preset_lora.aa31c8618dc443d98fc812eb3c28db65.jsonl
+│   │   │   │   ├── audio_preset_lora.aee9fa2e87764096ae578d3ff3ce2158.jsonl
+│   │   │   │   ├── audio_preset_lora.af2945eb6ba4466ca8446f102ae78df4.jsonl
+│   │   │   │   ├── audio_preset_lora.b03d74f9c06542a0a4c422eaf865e6a9.jsonl
+│   │   │   │   ├── audio_preset_lora.b1d7c72305be4c76bff50d206ca35453.jsonl
+│   │   │   │   ├── audio_preset_lora.b2034d64489c48d4b3d94d0997e265bf.jsonl
+│   │   │   │   ├── audio_preset_lora.b641b73f5dd64312a51143bb532142f4.jsonl
+│   │   │   │   ├── audio_preset_lora.b95228874f77428885e7719e32bcc1f3.jsonl
+│   │   │   │   ├── audio_preset_lora.b9dfaf6d49b24b79b29c08d68b3a1e05.jsonl
+│   │   │   │   ├── audio_preset_lora.ba9b965fb00d4664aa1b1d21b477ec04.jsonl
+│   │   │   │   ├── audio_preset_lora.bc0625be4df243ef8beb134a57656a95.jsonl
+│   │   │   │   ├── audio_preset_lora.bcf29b134afe4ba69c2adf6e013be1bc.jsonl
+│   │   │   │   ├── audio_preset_lora.bd80057935a8419da0bb934769e82c17.jsonl
+│   │   │   │   ├── audio_preset_lora.c0d357edcfce455abbf3dfe4f0d9d8fc.jsonl
+│   │   │   │   ├── audio_preset_lora.c7ca9b6ebeec4199b639f9e9258df8d4.jsonl
+│   │   │   │   ├── audio_preset_lora.c9309333454d4e84a0c8b89045dd0d7c.jsonl
+│   │   │   │   ├── audio_preset_lora.ca185d8b4d4e403595b46ec4bc381bf5.jsonl
+│   │   │   │   ├── audio_preset_lora.cb46073c3dc243eab901eda5cc5c9927.jsonl
+│   │   │   │   ├── audio_preset_lora.d035fcb3a8b9456b9cdd841412e94703.jsonl
+│   │   │   │   ├── audio_preset_lora.d0c2c432a31a444b978315e13cdcec7e.jsonl
+│   │   │   │   ├── audio_preset_lora.d4330a70dc79494fa830ad8fdfbb52e8.jsonl
+│   │   │   │   ├── audio_preset_lora.d4a05233d2c8420fac9feee0409083e6.jsonl
+│   │   │   │   ├── audio_preset_lora.d60583e1f70c4d85a2e5b260c8bb22e0.jsonl
+│   │   │   │   ├── audio_preset_lora.d837c97c2f3f443d91940d55d154eb07.jsonl
+│   │   │   │   ├── audio_preset_lora.d93b0d09520842bea7ec46ac10d0f6cc.jsonl
+│   │   │   │   ├── audio_preset_lora.db87bc83a98342f191948c8fe944bc41.jsonl
+│   │   │   │   ├── audio_preset_lora.dbcb6ded08414a2c932993a11d922ee1.jsonl
+│   │   │   │   ├── audio_preset_lora.e06a83c3fd8e496891d9a9a57d8d0f8b.jsonl
+│   │   │   │   ├── audio_preset_lora.e17dac4324ab41cf9fd8f238e848e8bb.jsonl
+│   │   │   │   ├── audio_preset_lora.e41dc32991374bb592c836056d5a8f07.jsonl
+│   │   │   │   ├── audio_preset_lora.e483cae2c21f412da7cac178412f4e07.jsonl
+│   │   │   │   ├── audio_preset_lora.e667cbb9ebb44140b97f40a03e1860d3.jsonl
+│   │   │   │   ├── audio_preset_lora.e6a5097b87cd4ff188730e9fd21d49e4.jsonl
+│   │   │   │   ├── audio_preset_lora.e8d7fdb373aa4365be3b2e88f1f5f76e.jsonl
+│   │   │   │   ├── audio_preset_lora.ead49eb67a4c43c986776c34064d0c2f.jsonl
+│   │   │   │   ├── audio_preset_lora.eb0d449f92064b2b96a5eaca6e076ef3.jsonl
+│   │   │   │   ├── audio_preset_lora.ec20e7ee8b5040e5b44cd1536d6bbb38.jsonl
+│   │   │   │   ├── audio_preset_lora.edac72247e51427d87ea95111a005d33.jsonl
+│   │   │   │   ├── audio_preset_lora.edd776d817624449ac20b022c7fd1108.jsonl
+│   │   │   │   ├── audio_preset_lora.ededa339d9cb4c048020ea581c696fd4.jsonl
+│   │   │   │   ├── audio_preset_lora.f028b2d1dd654ec2819240e07b6c16ec.jsonl
+│   │   │   │   ├── audio_preset_lora.f778b5058bb949d9952be9b27d367820.jsonl
+│   │   │   │   ├── audio_preset_lora.f9a0e7817f144fd1ad0189c3f7612e49.jsonl
+│   │   │   │   ├── audio_preset_lora.fcb6145669dc4f35827f7a259b5ff94b.jsonl
+│   │   │   │   ├── audio_preset_lora.fccf9d33b3b04237b44d650e0652fd74.jsonl
+│   │   │   │   ├── audio_preset_lora.fe100dc938cb49198ff4a32af616c564.jsonl
+│   │   │   │   ├── audio_preset_lora.ff1853657a5d403fae5f6eefd0182e85.jsonl
+│   │   │   │   └── audio_preset_lora.jsonl
+│   │   │   ├── trained_adapters
+│   │   │   │   ├── personal_stt1_whisper_adapter
+│   │   │   │   ├── personal_text_lora
+│   │   │   │   └── personal_voice_lora
+│   │   │   │       └── clips
+│   │   │   │           └── unknown
+│   │   │   │               ├── 02f77439729a49d2c0fe5e63.wav
+│   │   │   │               ├── 03980e77cfdd357d0fa648d3.wav
+│   │   │   │               ├── 039f667ae2cc81735477fb84.wav
+│   │   │   │               ├── 03eccb942fee89ee87fd540c.wav
+│   │   │   │               ├── 058886530938619752c91608.wav
+│   │   │   │               ├── 05c0ae1137e37a7bb6595fa4.wav
+│   │   │   │               ├── 05c90997f7b8b694cfa5259d.wav
+│   │   │   │               ├── 05d0ce4adaa4e48abcae779e.wav
+│   │   │   │               ├── 0631e98d6660be562e6b9fb6.wav
+│   │   │   │               ├── 06ecc869841cd61df5974bda.wav
+│   │   │   │               ├── 077a006c2dd12f91a2209f6e.wav
+│   │   │   │               ├── 09d0f43a47233b98b8992924.wav
+│   │   │   │               ├── 09e5e90eec6b24cb3dbee658.wav
+│   │   │   │               ├── 0a9dfb7e2784607898ea97f5.wav
+│   │   │   │               ├── 0ab257bb9516bb0ded717964.wav
+│   │   │   │               ├── 0ba6a9b028a525917924e2c8.wav
+│   │   │   │               ├── 0c4a23bbc047cbb7f68d6ed3.wav
+│   │   │   │               ├── 0df197eafc744c361d3b87b3.wav
+│   │   │   │               ├── 0e4ab9d55bbf71473e9acfab.wav
+│   │   │   │               ├── 0ec5198fba73c4fecdb9f3b7.wav
+│   │   │   │               ├── 1343e0bff104e69b47fd8105.wav
+│   │   │   │               ├── 1561f1665bf394a657ff7565.wav
+│   │   │   │               ├── 167a259e60a571ef72376d09.wav
+│   │   │   │               ├── 1690eee722b2fb7868b6b47f.wav
+│   │   │   │               ├── 1adad1faed7b812e8de63d89.wav
+│   │   │   │               ├── 1cd2081af75ee6d68499bad2.wav
+│   │   │   │               ├── 1e0cfce28938b18ec9cbfbb8.wav
+│   │   │   │               ├── 20686024d01b0176cfc82b0e.wav
+│   │   │   │               ├── 214e6d060e247a1550921fc2.wav
+│   │   │   │               ├── 21a5427d358e93d9a758a6cd.wav
+│   │   │   │               ├── 21d6c76f2f408a1812567f9d.wav
+│   │   │   │               ├── 21dc6aaa04e2d9b00d5e8e6a.wav
+│   │   │   │               ├── 2334edcf3797c05850d7a4f1.wav
+│   │   │   │               ├── 2370e97c76970116669aaaab.wav
+│   │   │   │               ├── 24d06f6fb55e9ced21eb3cbc.wav
+│   │   │   │               ├── 25d80d9fa299876e6d3e00a3.wav
+│   │   │   │               ├── 268edb60c43b7e87f4b5822c.wav
+│   │   │   │               ├── 274a39654538de134dc4f7c1.wav
+│   │   │   │               ├── 2771d263e40403897251d5ed.wav
+│   │   │   │               ├── 28bfc14577067080fc2c4602.wav
+│   │   │   │               ├── 2a7e0f977af47eda39e3cd33.wav
+│   │   │   │               ├── 2aa1b1d8180dda01f5ea6539.wav
+│   │   │   │               ├── 2fc6f974119410fe2bc16df9.wav
+│   │   │   │               ├── 302440f4e671d015602c25cd.wav
+│   │   │   │               ├── 32c1805d449516a819cc1f40.wav
+│   │   │   │               ├── 32fc8215d31a27f92ab81bef.wav
+│   │   │   │               ├── 334b6973aaea6d9226812cf8.wav
+│   │   │   │               ├── 3377f248534dec6f4517ea49.wav
+│   │   │   │               ├── 3394530b116da36e3c41d5e1.wav
+│   │   │   │               ├── 3416ece255626d76de415a47.wav
+│   │   │   │               ├── 345b64a56af2754c05c47ba3.wav
+│   │   │   │               ├── 347a9213c26d210ea115e1a5.wav
+│   │   │   │               ├── 34cd2911e81985c21f0e0a05.wav
+│   │   │   │               ├── 34e93790a75c58d92c638c7b.wav
+│   │   │   │               ├── 37cc75e05772d607ac20ec43.wav
+│   │   │   │               ├── 38163044801dc37f6228ecd5.wav
+│   │   │   │               ├── 394f93c899715f2f251ff22d.wav
+│   │   │   │               ├── 3ccdf39215117d6fd75a2a16.wav
+│   │   │   │               ├── 3d96db4361b8b1612db93865.wav
+│   │   │   │               ├── 3e09a97d6a2d99a65533ba47.wav
+│   │   │   │               ├── 3e86d5d4d0978f6e3371a775.wav
+│   │   │   │               ├── 3f7b16b016c3d91c8a9e99e8.wav
+│   │   │   │               ├── 40f0499b55b474b859c2f0c8.wav
+│   │   │   │               ├── 41ff4983264e7570f6c6e30e.wav
+│   │   │   │               ├── 43551a8edbcbae26a2fa9b15.wav
+│   │   │   │               ├── 44093f21a972e491bb83d008.wav
+│   │   │   │               ├── 445363a79ea3fa0e62a55356.wav
+│   │   │   │               ├── 44747cf798a6e787ac5276c2.wav
+│   │   │   │               ├── 44c5306771797c55cd7dd733.wav
+│   │   │   │               ├── 48ada3162d13d704b77a5113.wav
+│   │   │   │               ├── 4a1797625d354f9f63ca5ec0.wav
+│   │   │   │               ├── 4a5e1f75870c04fe6e28d8ec.wav
+│   │   │   │               ├── 500104c5aceed88271760ee3.wav
+│   │   │   │               ├── 519099c4b0c78db13991437a.wav
+│   │   │   │               ├── 554fd1fee038f70c34991da5.wav
+│   │   │   │               ├── 58017b800709f1aa2a82be4f.wav
+│   │   │   │               ├── 5a19c4a42d4cca5398966c3c.wav
+│   │   │   │               ├── 5d6aea3f43b2cddaf16127e6.wav
+│   │   │   │               ├── 5d715db7d00fcb008af4ed45.wav
+│   │   │   │               ├── 5e17b1aae1f2eb811ad9348e.wav
+│   │   │   │               ├── 64ba6c15d80222eeecde8e12.wav
+│   │   │   │               ├── 664c528222eced79d65ce3cd.wav
+│   │   │   │               ├── 668b009b5601a62b38ffb084.wav
+│   │   │   │               ├── 6809ee7fecf48fae5b3b9937.wav
+│   │   │   │               ├── 6813bd73a86d8a68a0e57aa1.wav
+│   │   │   │               ├── 6aaaaaf6fdcd7cb4db653de1.wav
+│   │   │   │               ├── 7033df01e0a2bee96de2119b.wav
+│   │   │   │               ├── 71ceee07bec2069fad585c93.wav
+│   │   │   │               ├── 7339a4085ac2e85389d3eae5.wav
+│   │   │   │               ├── 75d58412d23f03eff253a579.wav
+│   │   │   │               ├── 7738834fccebabc20d032020.wav
+│   │   │   │               ├── 7755d9341858161b1c67b23c.wav
+│   │   │   │               ├── 7769aee118f38af52e562c89.wav
+│   │   │   │               ├── 792869f4527ca743fccb1c41.wav
+│   │   │   │               ├── 798007541daccd2b0526c1b4.wav
+│   │   │   │               ├── 79a0ff599cf5782d0428a943.wav
+│   │   │   │               ├── 7acc013965cc7532d1ade9ea.wav
+│   │   │   │               ├── 7bb5d8484615181c8757d914.wav
+│   │   │   │               ├── 7c72c011bdaeeac102aa76ca.wav
+│   │   │   │               ├── 7cd76659094f456b31f5f126.wav
+│   │   │   │               ├── 7cfa63a228264d92975edcbe.wav
+│   │   │   │               ├── 8002a28f57528a10aedfb548.wav
+│   │   │   │               ├── 803d594646537c53a1b7a83f.wav
+│   │   │   │               ├── 8064bd26a11319fc23ad4b32.wav
+│   │   │   │               ├── 82fb93c2a0f560f13f6d33c2.wav
+│   │   │   │               ├── 82ffd2a0fb1d8b7114afd836.wav
+│   │   │   │               ├── 8366ee9813d87e80b18e3b55.wav
+│   │   │   │               ├── 841b0b850c9e1fdddc7a2834.wav
+│   │   │   │               ├── 874b357c62324fcc90546dc8.wav
+│   │   │   │               ├── 87fb471d048a87f9feb82972.wav
+│   │   │   │               ├── 88b0db5e12a200357a85003b.wav
+│   │   │   │               ├── 8a1ef720f5cb1a251935d556.wav
+│   │   │   │               ├── 8db6a0569864d6f901f0e6d7.wav
+│   │   │   │               ├── 8e21969ce1c055531867d067.wav
+│   │   │   │               ├── 8e364dc299e41a521098a8cd.wav
+│   │   │   │               ├── 8e55814040bb7a2b1635b0b2.wav
+│   │   │   │               ├── 8f7599ce14c75df3ceba628c.wav
+│   │   │   │               ├── 9248bc2c3fe6360944076604.wav
+│   │   │   │               ├── 935c5740bb09aab1c6264d56.wav
+│   │   │   │               ├── 969dadc8015e3245ae4c4109.wav
+│   │   │   │               ├── 99fccde9baf6fb95f9bd4295.wav
+│   │   │   │               ├── 9a56e957bd83dddbb43cec64.wav
+│   │   │   │               ├── 9bc71cb4bd86986dce105a85.wav
+│   │   │   │               ├── 9c8fa7fc2930ea771fb5a682.wav
+│   │   │   │               ├── 9e053ae5606cc89db40c312b.wav
+│   │   │   │               ├── 9e3cc1c907641f4ff9b31c74.wav
+│   │   │   │               ├── a186eb3fd2826fa5e66ef5aa.wav
+│   │   │   │               ├── a4cdf4352c759d653021e13a.wav
+│   │   │   │               ├── a4cfa4569e4f41f8aeb90d4d.wav
+│   │   │   │               ├── a744bdf20949d1bfa5ea6ae9.wav
+│   │   │   │               ├── a7fd60f514aabf451fa3cbaf.wav
+│   │   │   │               ├── a88d1d111208a932b0a0b0cf.wav
+│   │   │   │               ├── a91ed599ceb69be98f946434.wav
+│   │   │   │               ├── ad774cb2b4de12388cdfb03e.wav
+│   │   │   │               ├── ae02dc3b2a9eec20a46b0cbf.wav
+│   │   │   │               ├── ae94418f35adfdac5cab2a6e.wav
+│   │   │   │               ├── af82b36745b781b7e233d9b5.wav
+│   │   │   │               ├── b100decf8f8f5b755a834d27.wav
+│   │   │   │               ├── b4508e71da77398e9e0ccf45.wav
+│   │   │   │               ├── b45f76a7603cc996fd97fb44.wav
+│   │   │   │               ├── b511b7ed56e6c2f60425c9a4.wav
+│   │   │   │               ├── b5412d61ae6043be7c7109d0.wav
+│   │   │   │               ├── b67921848cb8b6d1633cdb8e.wav
+│   │   │   │               ├── b6b4bdfca681bb942a6316f4.wav
+│   │   │   │               ├── b8505d9e832f742db0cdd456.wav
+│   │   │   │               ├── b8b25a4393d5b2dfaa879ef6.wav
+│   │   │   │               ├── ba8f62c0b15d434535be81df.wav
+│   │   │   │               ├── bc169b00b425cff6cf0a0105.wav
+│   │   │   │               ├── bcebafd2cc15b4da0c83cefa.wav
+│   │   │   │               ├── be7cbc771a42c3d2a890f8b7.wav
+│   │   │   │               ├── c1465e02e13f5e8d75127f2e.wav
+│   │   │   │               ├── c1521223ea642c739a1d786b.wav
+│   │   │   │               ├── c3bffb7830a758278c709124.wav
+│   │   │   │               ├── c466fcd6a6f418e392aaa5f9.wav
+│   │   │   │               ├── c7f651479de3cde7b45d539d.wav
+│   │   │   │               ├── c870f3104a530655efad588f.wav
+│   │   │   │               ├── c8c87e61eec8e5d736d371c4.wav
+│   │   │   │               ├── cc78551927ed05371f7c8ef8.wav
+│   │   │   │               ├── ccf97c3bc48f0bfe83c9c33c.wav
+│   │   │   │               ├── cd701abb2c20d295c866536c.wav
+│   │   │   │               ├── cdfae8f9fc7ff76d303c7017.wav
+│   │   │   │               ├── ce1b8cf21d8ec2e02bbf4050.wav
+│   │   │   │               ├── cf8d11a6abec7cc1c94d2461.wav
+│   │   │   │               ├── d16d902bf2756c3703126f74.wav
+│   │   │   │               ├── d17c6aa54fcba86dc082d50e.wav
+│   │   │   │               ├── d203c538e562f2af55aede1d.wav
+│   │   │   │               ├── d2764b0650de5e28c1ae5806.wav
+│   │   │   │               ├── d2f704d1cbe1728f40c7f27d.wav
+│   │   │   │               ├── d357a5d22ffb62be4a58c8b1.wav
+│   │   │   │               ├── d384a1786d072caba58c4fac.wav
+│   │   │   │               ├── d4de80ae0ebd15d896d8116f.wav
+│   │   │   │               ├── d6593955298d9e9d0c92516b.wav
+│   │   │   │               ├── d8cf0683edbcef6d102702fd.wav
+│   │   │   │               ├── da521d7d1744184c0b1dcf7c.wav
+│   │   │   │               ├── db178a7de1557111b50f913e.wav
+│   │   │   │               ├── dd81ffa5178a605dd3901bd4.wav
+│   │   │   │               ├── de2b2ea0b02189ab41a897ce.wav
+│   │   │   │               ├── dfe444da064cf7ad8f7ae1df.wav
+│   │   │   │               ├── e0267b615813d51214233c58.wav
+│   │   │   │               ├── e1ca437cf7aa5af52c9e324a.wav
+│   │   │   │               ├── e3c1dd2463044e7a4efb6428.wav
+│   │   │   │               ├── e602a243f96883a5be913934.wav
+│   │   │   │               ├── e8ea11b2e1248b17534819f8.wav
+│   │   │   │               ├── eb8a56d32a328a230b6b6dad.wav
+│   │   │   │               ├── ebc47f7b4600b00cc356efbc.wav
+│   │   │   │               ├── ec088dfb7a1e5965f068621a.wav
+│   │   │   │               ├── edf96bde868c426a78c1ee61.wav
+│   │   │   │               ├── ee797f63f43cd270dffd05cc.wav
+│   │   │   │               ├── f269ebf0b44276047b3c4365.wav
+│   │   │   │               ├── f4fd770f0ffac2237730becd.wav
+│   │   │   │               ├── f66e9764006cc2a3f7aa1016.wav
+│   │   │   │               ├── f8dc47b50f3436e44abfbaa1.wav
+│   │   │   │               ├── f9b9ab40969a58bc60ddb0bb.wav
+│   │   │   │               ├── f9dcefce6333339673a055b7.wav
+│   │   │   │               ├── f9e6536de20a4206d62340ae.wav
+│   │   │   │               ├── fa18ed36c1d1516b1b360499.wav
+│   │   │   │               ├── fa9c4e383fc33cf14e5a0173.wav
+│   │   │   │               ├── fe472d747859fc0b60f49108.wav
+│   │   │   │               ├── ff24750933bbc4385251ad19.wav
+│   │   │   │               └── ff6cbf9acdc5aed448707123.wav
+│   │   │   ├── audio_preset_lora.jsonl
+│   │   │   ├── best_settings.json
+│   │   │   ├── dedupe_index.json
+│   │   │   ├── deep_policy_events.jsonl
+│   │   │   ├── editor_truth_patterns.jsonl
+│   │   │   ├── excluded_parentheticals.jsonl
+│   │   │   ├── learned_line_break_rules.json
+│   │   │   ├── learned_split_rules.json
+│   │   │   ├── lora_retrieval_index.json
+│   │   │   ├── manifest.json
+│   │   │   ├── multimodal_lora_context.jsonl
+│   │   │   ├── prompt_trials.jsonl
+│   │   │   ├── retention_history.jsonl
+│   │   │   ├── retention_policy.json
+│   │   │   ├── setting_trials.jsonl
+│   │   │   ├── stt1_whisper_adapter_dataset.jsonl
+│   │   │   ├── stt1_whisper_adapter_dataset_manifest.json
+│   │   │   ├── stt1_whisper_adapter_runtime_manifest.json
+│   │   │   ├── stt1_whisper_adapter_training_plan.json
+│   │   │   ├── subtitle_pattern_index.json
+│   │   │   ├── text_lora_corpus.jsonl
+│   │   │   ├── text_lora_corpus_manifest.json
+│   │   │   ├── text_lora_dataset.jsonl
+│   │   │   ├── text_lora_training_plan.json
+│   │   │   ├── training_queue.json
+│   │   │   ├── truth_table.jsonl
+│   │   │   ├── voice_lora_bridge.jsonl
+│   │   │   ├── voice_lora_dataset_manifest.json
+│   │   │   ├── voice_lora_profile_manifest.json
+│   │   │   └── voice_lora_training_plan.json
+│   │   ├── lora_data_high.zip
+│   │   ├── lora_data_low.zip
+│   │   ├── lora_data_medium.zip
+│   │   └── lora_data_pending_delete.zip
+│   ├── personalization
+│   │   ├── trained_adapters
+│   │   │   ├── personal_text_lora
+│   │   │   └── .DS_Store
+│   │   ├── .DS_Store
+│   │   ├── audio_preset_lora.jsonl
+│   │   ├── text_lora_corpus.jsonl
+│   │   ├── text_lora_corpus_manifest.json
+│   │   ├── text_lora_dataset.jsonl
+│   │   ├── text_lora_manifest.json
+│   │   ├── text_lora_training_plan.json
+│   │   ├── voice_lora_bridge.jsonl
+│   │   └── voice_lora_profile_manifest.json
+│   ├── .DS_Store
 │   ├── audio_presets.json
+│   ├── correction_memory.json
 │   ├── custom_defaults.json
+│   ├── custom_defaults.json.bak
 │   ├── dataset_correction.json
+│   ├── dataset_correction.json.bak
+│   ├── dataset_correction.sqlite3
+│   ├── folder_settings.json
+│   ├── folder_settings.json.bak
 │   ├── golden_subtitle_suite.json
-│   └── model_registry.json
+│   ├── model_registry.json
+│   ├── runtime_optimization_profile.json
+│   ├── subtitle_rule.json
+│   ├── time_history.json
+│   ├── user_settings.json
+│   └── user_settings.json.bak
 ├── experiments
-│   └── whisperkit_persistent_worker
-│       ├── Sources
-│       │   └── WhisperKitPersistentWorker
-│       │       └── main.swift
-│       ├── Package.resolved
-│       └── Package.swift
+│   ├── whisperkit_persistent_worker
+│   │   ├── Sources
+│   │   │   └── WhisperKitPersistentWorker
+│   │   │       └── main.swift
+│   │   ├── Package.resolved
+│   │   └── Package.swift
+│   └── .DS_Store
 ├── native
 │   ├── cut_boundary
 │   │   └── native_cut_boundary.cpp
-│   └── macos
-│       └── AIStudioNative
-│           ├── Sources
-│           │   ├── AIStudioCore
-│           │   │   ├── CommonSplitPlanner.swift
-│           │   │   ├── CutBoundaryCachePlanner.swift
-│           │   │   ├── InputActivity.swift
-│           │   │   ├── MemoryPressure.swift
-│           │   │   ├── NativePolicyEngine.swift
-│           │   │   ├── ProjectJSON.swift
-│           │   │   ├── RuntimeETAEstimator.swift
-│           │   │   ├── SRTCodec.swift
-│           │   │   ├── StartupDiagnostics.swift
-│           │   │   ├── SubtitleQualityScorer.swift
-│           │   │   ├── SubtitleSegment.swift
-│           │   │   ├── TimelineColumns.swift
-│           │   │   ├── TimelineEditing.swift
-│           │   │   └── WaveformPeaks.swift
-│           │   ├── AIStudioMacUI
-│           │   │   └── NativeTimelineView.swift
-│           │   └── AIStudioNativeCLI
-│           │       └── main.swift
-│           ├── Tests
-│           │   └── AIStudioCoreTests
-│           │       ├── CommonSplitPlannerTests.swift
-│           │       ├── CutBoundaryCachePlannerTests.swift
-│           │       ├── ProjectJSONTests.swift
-│           │       ├── RuntimeETAEstimatorTests.swift
-│           │       ├── SRTCodecTests.swift
-│           │       ├── StartupDiagnosticsNativeTests.swift
-│           │       ├── SubtitleQualityScorerTests.swift
-│           │       ├── TimelineColumnsTests.swift
-│           │       └── WaveformPeaksTests.swift
-│           ├── Package.swift
-│           └── README.md
+│   ├── macos
+│   │   ├── AIStudioNative
+│   │   │   ├── Sources
+│   │   │   │   ├── AIStudioCore
+│   │   │   │   │   ├── CommonSplitPlanner.swift
+│   │   │   │   │   ├── CutBoundaryCachePlanner.swift
+│   │   │   │   │   ├── InputActivity.swift
+│   │   │   │   │   ├── MemoryPressure.swift
+│   │   │   │   │   ├── NativePolicyEngine.swift
+│   │   │   │   │   ├── ProjectJSON.swift
+│   │   │   │   │   ├── RuntimeETAEstimator.swift
+│   │   │   │   │   ├── SRTCodec.swift
+│   │   │   │   │   ├── StartupDiagnostics.swift
+│   │   │   │   │   ├── SubtitleQualityScorer.swift
+│   │   │   │   │   ├── SubtitleSegment.swift
+│   │   │   │   │   ├── TimelineColumns.swift
+│   │   │   │   │   ├── TimelineEditing.swift
+│   │   │   │   │   └── WaveformPeaks.swift
+│   │   │   │   ├── AIStudioMacUI
+│   │   │   │   │   └── NativeTimelineView.swift
+│   │   │   │   ├── AIStudioNativeCLI
+│   │   │   │   │   └── main.swift
+│   │   │   │   └── .DS_Store
+│   │   │   ├── Tests
+│   │   │   │   └── AIStudioCoreTests
+│   │   │   │       ├── CommonSplitPlannerTests.swift
+│   │   │   │       ├── CutBoundaryCachePlannerTests.swift
+│   │   │   │       ├── ProjectJSONTests.swift
+│   │   │   │       ├── RuntimeETAEstimatorTests.swift
+│   │   │   │       ├── SRTCodecTests.swift
+│   │   │   │       ├── StartupDiagnosticsNativeTests.swift
+│   │   │   │       ├── SubtitleQualityScorerTests.swift
+│   │   │   │       ├── TimelineColumnsTests.swift
+│   │   │   │       └── WaveformPeaksTests.swift
+│   │   │   ├── .DS_Store
+│   │   │   ├── Package.swift
+│   │   │   └── README.md
+│   │   └── .DS_Store
+│   └── .DS_Store
 ├── packaging
 │   └── macos
 │       ├── AI Subtitle Studio.entitlements
@@ -417,7 +890,12 @@ ai_subtitle_studio/
 │       ├── upload_app_store_build.sh
 │       ├── validate_app_bundle.sh
 │       └── validate_dmg.sh
+├── test video
+│   ├── .DS_Store
+│   ├── X5_시승기_후반.MP4
+│   └── X5_시승기_후반.srt
 ├── tests
+│   ├── .DS_Store
 │   ├── conftest.py
 │   ├── test_accuracy_policy.py
 │   ├── test_ai_settings_runtime_apply.py
@@ -426,8 +904,10 @@ ai_subtitle_studio/
 │   ├── test_auto_status_labels.py
 │   ├── test_autopilot_policy_cache.py
 │   ├── test_background_prefetch.py
+│   ├── test_benchmark_mode_profiles.py
 │   ├── test_button_click_feedback.py
 │   ├── test_codex_provider.py
+│   ├── test_coerce.py
 │   ├── test_context_menu_bounds.py
 │   ├── test_correction_dictionary_db.py
 │   ├── test_correction_memory.py
@@ -443,16 +923,24 @@ ai_subtitle_studio/
 │   ├── test_cut_boundary_fusion.py
 │   ├── test_cut_boundary_jump.py
 │   ├── test_cut_boundary_middle.py
+│   ├── test_cut_boundary_native_plan.py
 │   ├── test_deep_policy_learning.py
 │   ├── test_deep_runtime_adaptation.py
 │   ├── test_deep_subtitle_policy.py
 │   ├── test_diarize_dependencies.py
 │   ├── test_editor_auto_export.py
 │   ├── test_editor_autosave_cleanup.py
+│   ├── test_editor_canvas_state.py
+│   ├── test_editor_open_layout.py
+│   ├── test_editor_pipeline_playhead_actions.py
+│   ├── test_editor_pipeline_safety.py
 │   ├── test_editor_roughcut_draft.py
+│   ├── test_editor_split_undo.py
 │   ├── test_editor_srt_open_refresh.py
 │   ├── test_editor_stable_frames.py
 │   ├── test_editor_stt_mode.py
+│   ├── test_editor_subtitle_assist.py
+│   ├── test_editor_timeline_drag_release.py
 │   ├── test_editor_truth_capture.py
 │   ├── test_editor_truth_memory.py
 │   ├── test_editor_video_context_window.py
@@ -478,6 +966,10 @@ ai_subtitle_studio/
 │   ├── test_lora_trial_scoring.py
 │   ├── test_lora_vector_retriever.py
 │   ├── test_macos_bundle_runtime_paths.py
+│   ├── test_main_file_ops_nonfatal.py
+│   ├── test_main_nonfatal_signals.py
+│   ├── test_main_runtime_cleanup_helpers.py
+│   ├── test_main_window_nonfatal.py
 │   ├── test_media_fingerprint.py
 │   ├── test_media_processor_overlap.py
 │   ├── test_media_queue_order.py
@@ -504,16 +996,22 @@ ai_subtitle_studio/
 │   ├── test_popup_dismiss.py
 │   ├── test_preset_auto_classifier.py
 │   ├── test_project_context.py
+│   ├── test_project_cut_boundary_resume.py
 │   ├── test_project_segment_reload.py
+│   ├── test_project_session_runtime.py
 │   ├── test_qt_runtime_font.py
 │   ├── test_quality_candidate_ranker.py
 │   ├── test_queue_clip_completion_order.py
+│   ├── test_queue_dispatch.py
+│   ├── test_queue_formatting.py
+│   ├── test_queue_signal_payloads.py
 │   ├── test_recovery_state.py
 │   ├── test_responsive_profile.py
 │   ├── test_roughcut_candidates.py
 │   ├── test_roughcut_contract.py
 │   ├── test_roughcut_engine1.py
 │   ├── test_roughcut_major_boundary.py
+│   ├── test_roughcut_model_capability.py
 │   ├── test_roughcut_models_v2.py
 │   ├── test_roughcut_thumbnail_cache.py
 │   ├── test_roughcut_title_suggester.py
@@ -555,6 +1053,7 @@ ai_subtitle_studio/
 │   ├── test_subtitle_accuracy_pipeline.py
 │   ├── test_subtitle_boundary_alignment.py
 │   ├── test_subtitle_bundle_policy.py
+│   ├── test_subtitle_context_refiner.py
 │   ├── test_subtitle_engine_settings.py
 │   ├── test_subtitle_line_breaks.py
 │   ├── test_subtitle_one_click_fix.py
@@ -584,6 +1083,7 @@ ai_subtitle_studio/
 │   ├── test_whisper_model_catalog.py
 │   └── test_word_resegmenter.py
 ├── tools
+│   ├── .DS_Store
 │   ├── apply_runtime_optimization_profile.py
 │   ├── benchmark_apple_silicon_scheduler.py
 │   ├── benchmark_dense_flow_cut_boundary.py
@@ -604,18 +1104,45 @@ ai_subtitle_studio/
 │   ├── editor
 │   │   ├── __init__.py
 │   │   ├── editor_actions.py
+│   │   ├── editor_canvas_state.py
 │   │   ├── editor_helpers.py
 │   │   ├── editor_lifecycle.py
 │   │   ├── editor_multiclip_context.py
 │   │   ├── editor_multiclip_ops.py
+│   │   ├── editor_multiclip_owner_bridge.py
+│   │   ├── editor_multiclip_runtime_state.py
+│   │   ├── editor_multiclip_transaction_flow.py
 │   │   ├── editor_pipeline.py
+│   │   ├── editor_pipeline_cleanup.py
+│   │   ├── editor_pipeline_completion.py
+│   │   ├── editor_pipeline_partial_rerun.py
+│   │   ├── editor_pipeline_playhead_actions.py
+│   │   ├── editor_pipeline_safety.py
+│   │   ├── editor_pipeline_signal_bridge.py
+│   │   ├── editor_pipeline_startup.py
+│   │   ├── editor_pipeline_status.py
 │   │   ├── editor_popup_qt.py
+│   │   ├── editor_project_open_native.py
 │   │   ├── editor_roughcut_draft.py
+│   │   ├── editor_save_manager.py
 │   │   ├── editor_scan_cut_core.py
 │   │   ├── editor_segments.py
+│   │   ├── editor_segments_block_surgery.py
 │   │   ├── editor_segments_bulk_load.py
+│   │   ├── editor_segments_bulk_prepare.py
+│   │   ├── editor_segments_current_state.py
+│   │   ├── editor_segments_live_preview.py
+│   │   ├── editor_segments_manual_edits.py
+│   │   ├── editor_segments_queue_flush.py
+│   │   ├── editor_segments_reload.py
+│   │   ├── editor_segments_runtime_cache.py
+│   │   ├── editor_segments_stt_candidates.py
+│   │   ├── editor_segments_stt_selection_flow.py
+│   │   ├── editor_segments_text_ops.py
+│   │   ├── editor_segments_timeline_context.py
 │   │   ├── editor_speaker_ops.py
 │   │   ├── editor_stt_mode.py
+│   │   ├── editor_subtitle_assist.py
 │   │   ├── editor_timeline_video.py
 │   │   ├── editor_video_controls.py
 │   │   ├── editor_widget.py
@@ -633,6 +1160,7 @@ ai_subtitle_studio/
 │   │   ├── undo_manager.py
 │   │   ├── video_overlay_widgets.py
 │   │   ├── video_playback_backend.py
+│   │   ├── video_player_overlay_mixin.py
 │   │   ├── video_player_widget.py
 │   │   └── video_subtitle_overlay.qml
 │   ├── help
@@ -646,6 +1174,7 @@ ai_subtitle_studio/
 │   │   ├── __init__.py
 │   │   ├── bottom_work_panel.py
 │   │   ├── main_file_ops.py
+│   │   ├── main_nonfatal.py
 │   │   ├── main_runtime_cleanup.py
 │   │   ├── main_signals.py
 │   │   ├── main_window.py
@@ -655,6 +1184,7 @@ ai_subtitle_studio/
 │   │   ├── multiclip_cards.py
 │   │   ├── multiclip_panel.py
 │   │   ├── project_panel.py
+│   │   ├── project_session_runtime.py
 │   │   └── workspace_restore.py
 │   ├── qml
 │   │   ├── app_action_bar.qml
@@ -672,6 +1202,8 @@ ai_subtitle_studio/
 │   │   └── video_control_bar.qml
 │   ├── queue
 │   │   ├── __init__.py
+│   │   ├── queue_dispatch.py
+│   │   ├── queue_formatting.py
 │   │   ├── queue_panel_widget.py
 │   │   └── sidebar_queue_panel.py
 │   ├── roughcut
@@ -716,6 +1248,7 @@ ai_subtitle_studio/
 │   │   ├── speaker_labels.py
 │   │   ├── timeline_analysis.py
 │   │   ├── timeline_canvas.py
+│   │   ├── timeline_canvas_editing.py
 │   │   ├── timeline_constants.py
 │   │   ├── timeline_global.py
 │   │   ├── timeline_inline_edit.py
@@ -724,8 +1257,10 @@ ai_subtitle_studio/
 │   │   ├── timeline_scenegraph.py
 │   │   ├── timeline_scenegraph.qml
 │   │   ├── timeline_segment_style.py
+│   │   ├── timeline_subtitle_segment_editing.py
 │   │   ├── timeline_waveform.py
 │   │   └── timeline_widget.py
+│   ├── .DS_Store
 │   ├── __init__.py
 │   ├── button_feedback.py
 │   ├── cloud_ui.py
@@ -737,6 +1272,12 @@ ai_subtitle_studio/
 │   ├── queue_widget.py
 │   ├── responsive_profile.py
 │   └── style.py
+├── voice_data
+│   ├── spk1_소설가유모씨.wav
+│   ├── spk2_goodrain.wav
+│   └── spk3_voice.wav
+├── .DS_Store
+├── .env
 ├── .gitignore
 ├── ACTION_ITEMS.md
 ├── AGENTS.md

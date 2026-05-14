@@ -30,6 +30,11 @@ from core.pipeline.subtitle_memory_guard import (
     create_subtitle_generation_memory_guard,
     subtitle_generation_memory_checkpoint,
 )
+from ui.queue.queue_formatting import (
+    build_queue_header_payload,
+    build_queue_status_payload,
+)
+from ui.project.project_session_runtime import attach_project_session
 
 _SENTINEL = object()
 
@@ -45,6 +50,56 @@ class SinglePipelineMixin:
         text = str(status or "")
         self._ui_emit("_sig_update_queue", queue_index, text, "", "", "")
         self._ui_emit("_sig_editor_processing_stage", text)
+
+    def _emit_processing_preview_segments(
+        self,
+        stage: str,
+        stage_label: str,
+        segments: list[dict],
+        *,
+        time_offset: float = 0.0,
+    ) -> bool:
+        if not self._active or not self._ui_is_alive():
+            return False
+        rows = []
+        try:
+            offset = float(time_offset or 0.0)
+        except Exception:
+            offset = 0.0
+        for idx, seg in enumerate(list(segments or [])):
+            if not isinstance(seg, dict):
+                continue
+            text = str(seg.get("text", "") or "").strip()
+            if not text:
+                continue
+            try:
+                start = float(seg.get("start", 0.0) or 0.0) + offset
+                end = float(seg.get("end", start) or start) + offset
+            except Exception:
+                continue
+            if end <= start:
+                continue
+            row = {
+                "start": start,
+                "end": end,
+                "text": text,
+                "line": int(seg.get("line", idx) or idx),
+            }
+            speaker = str(seg.get("speaker", seg.get("spk_id", "")) or "").strip()
+            if speaker:
+                row["speaker"] = speaker
+            rows.append(row)
+        if not rows:
+            return False
+        return self._ui_emit(
+            "_sig_preview_processing_segments",
+            {
+                "active": True,
+                "stage": str(stage or ""),
+                "stage_label": str(stage_label or stage or ""),
+                "segments": rows,
+            },
+        )
 
     def _create_subtitle_generation_memory_guard(self, target_file, queue_index: int):
         return create_subtitle_generation_memory_guard(self, target_file, queue_index)
@@ -117,7 +172,45 @@ class SinglePipelineMixin:
             self._active = False
             return None
 
+    def _emit_structured_queue_signal(self, signal_name: str, *args) -> bool | None:
+        ui = self._ui_object()
+        if ui is None:
+            return False
+        try:
+            if signal_name == "_sig_update_queue":
+                payload_signal = getattr(ui, "_sig_update_queue_payload", None)
+                if payload_signal is not None:
+                    payload_signal.emit(
+                        build_queue_status_payload(
+                            args[0] if len(args) > 0 else 0,
+                            args[1] if len(args) > 1 else "",
+                            args[2] if len(args) > 2 else "",
+                            args[3] if len(args) > 3 else "",
+                            args[4] if len(args) > 4 else "",
+                        )
+                    )
+                    return True
+            if signal_name == "_sig_update_queue_header":
+                payload_signal = getattr(ui, "_sig_update_queue_header_payload", None)
+                if payload_signal is not None:
+                    payload_signal.emit(
+                        build_queue_header_payload(
+                            args[0] if len(args) > 0 else 0,
+                            args[1] if len(args) > 1 else 0,
+                            args[2] if len(args) > 2 else 0,
+                            args[3] if len(args) > 3 else "",
+                        )
+                    )
+                    return True
+        except RuntimeError:
+            self._active = False
+            return False
+        return None
+
     def _ui_emit(self, signal_name: str, *args) -> bool:
+        queue_result = self._emit_structured_queue_signal(signal_name, *args)
+        if queue_result is not None:
+            return bool(queue_result)
         signal = self._ui_attr(signal_name)
         if signal is None:
             return False
@@ -290,7 +383,14 @@ class SinglePipelineMixin:
                         srt_path=get_srt_path(media_files[0]),
                         user_settings=editor_settings,
                     )
-                    ui._current_project_path = project_path
+                    attach_project_session(
+                        ui,
+                        project_path,
+                        None,
+                        auto_pipeline=False,
+                        clear_multiclip=False,
+                        emit_boundary_signal=False,
+                    )
                 get_logger().log("  🎬 [컷 경계] 시작 전 분석 단계 확인 중...")
                 self._subtitle_generation_memory_checkpoint(memory_guard, "cut_prescan_start", force=True)
                 self._auto_scan_cut_boundaries_for_start(project_path, media_files)
@@ -713,6 +813,14 @@ class SinglePipelineMixin:
                         def _llm_progress(payload):
                             self._ui_emit("_sig_set_llm_review_segment", dict(payload or {}))
 
+                        def _processing_preview(payload):
+                            data = dict(payload or {})
+                            self._emit_processing_preview_segments(
+                                str(data.get("stage", "") or ""),
+                                str(data.get("stage_label", data.get("stage", "")) or ""),
+                                list(data.get("segments") or []),
+                            )
+
                         self._emit_processing_stage(queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
                         self._subtitle_generation_memory_checkpoint(
                             memory_guard,
@@ -723,6 +831,7 @@ class SinglePipelineMixin:
                             chunk_segs,
                             vad_segments=_vad_segs,
                             llm_progress_callback=_llm_progress,
+                            stage_segments_callback=_processing_preview,
                         )
                     except Exception as e:
                         get_logger().log(f"  ❌ 최적화 오류: {e}")
@@ -749,8 +858,23 @@ class SinglePipelineMixin:
                         context="에디터 최종 자막 정식 컷",
                         include_provisional=False,
                     )
+                    self._emit_processing_preview_segments(
+                        "cut_boundary_magnetize",
+                        "컷 경계 자석 보정",
+                        opt,
+                    )
                     opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
+                    self._emit_processing_preview_segments(
+                        "cut_boundary_split",
+                        "컷 경계 분할",
+                        opt,
+                    )
                     opt = self._align_subtitle_segments_to_vad(opt, _vad_segs, context="에디터")
+                    self._emit_processing_preview_segments(
+                        "vad_align",
+                        "VAD 경계 정렬",
+                        opt,
+                    )
 
                     if self.max_speakers > 1 and self._speaker_map:
                         from core.audio.diarize import get_speaker_for_segment

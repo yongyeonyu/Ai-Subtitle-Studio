@@ -266,6 +266,35 @@ class SubtitleAssistTests(unittest.TestCase):
         self.assertTrue(bool(getattr(editor, "_last_subtitle_magnet_snapshot_before", [])))
         self.assertTrue(bool(getattr(editor, "_last_subtitle_magnet_snapshot_after", [])))
 
+    def test_subtitle_magnet_adopts_python_fallback_when_native_noops(self):
+        editor = _MagnetAssistEditor()
+        native_result = {
+            "segments": [dict(seg) for seg in editor._segments],
+            "report": {"closed_pairs": 0, "blocked": {}, "modes": {}},
+        }
+        fallback_segments = [
+            {"line": 0, "start": 0.0, "end": 1.6, "text": "안녕", "spk": "00"},
+            {"line": 1, "start": 1.6, "end": 2.4, "text": "하세요", "spk": "00"},
+        ]
+        fallback_report = {
+            "closed_pairs": 1,
+            "blocked": {},
+            "modes": {"lora_micro": 1},
+            "snapshot_before": [{"index": 0}],
+            "snapshot_after": [{"index": 0}],
+        }
+        logger = SimpleNamespace(log=Mock())
+
+        with patch("ui.editor.editor_subtitle_assist.apply_subtitle_magnet_via_swift", return_value=native_result), \
+             patch("ui.editor.editor_subtitle_assist.apply_netflix_subtitle_magnet", return_value=(fallback_segments, fallback_report)) as fallback, \
+             patch("ui.editor.editor_subtitle_assist.get_logger", return_value=logger):
+            changed = editor._on_subtitle_magnet_requested()
+
+        self.assertTrue(changed)
+        self.assertEqual(fallback.call_count, 1)
+        self.assertEqual(editor.loaded_segments[0]["end"], 1.6)
+        self.assertTrue(any("python fallback adopted" in str(call.args[0]) for call in logger.log.call_args_list))
+
     def test_timeline_toolbar_exposes_magnet_and_repeat_controls(self):
         timeline = TimelineWidget()
         try:

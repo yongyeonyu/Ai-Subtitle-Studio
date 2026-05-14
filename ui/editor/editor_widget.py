@@ -5,8 +5,11 @@ import re, os, sys, atexit, time
 from ui.editor.undo_manager import UndoManager
 
 def _mac_safe_exit():
-    try: sys.stdout.flush(); sys.stderr.flush()
-    except: pass
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except (AttributeError, BrokenPipeError, OSError, ValueError):
+        pass
     os._exit(0)
 atexit.register(_mac_safe_exit)
 
@@ -349,6 +352,7 @@ class EditorWidget(
             )
             self._last_saved_status_signature = saved_status_signature
         self._apply_text_editor_lock_state()
+        self._apply_processing_canvas_lock_state()
 
     def _animate_status(self):
         if self.sm.is_locked: return
@@ -788,6 +792,23 @@ class EditorWidget(
         if not timeline_locked and processing_locked and not hasattr(text_edit, "set_selection_locked"):
             text_edit.setReadOnly(True)
             text_edit.setStyleSheet("QTextEdit { background-color: #1a1a1a; color: #888888; }")
+
+    def _apply_processing_canvas_lock_state(self):
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if canvas is None:
+            return
+        try:
+            processing_locked = bool(getattr(getattr(self, "sm", None), "is_locked", False))
+        except RuntimeError:
+            return
+        except Exception:
+            processing_locked = False
+        try:
+            canvas._editor_processing_input_locked = processing_locked
+            canvas.setProperty("editor_processing_input_locked", processing_locked)
+        except Exception:
+            pass
 
     def _build_editor_header(self) -> QWidget:
         header = QWidget()
@@ -1584,8 +1605,10 @@ class EditorWidget(
                 t.stop()
                 
         if hasattr(self, 'video_player'): 
-            try: self.video_player.pause_video()
-            except Exception: pass
+            try:
+                self.video_player.pause_video()
+            except (AttributeError, RuntimeError, TypeError) as exc:
+                get_logger().log(f"⚠️ 에디터 cleanup 중 비디오 정지 실패: {exc}")
         if hasattr(self, 'timeline'):
             try:
                 stop_waveform = getattr(self.timeline, "stop_waveform_workers", None)

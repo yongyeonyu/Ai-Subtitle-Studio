@@ -594,8 +594,16 @@ class TimelineWidget(QWidget):
                 canvas._scenegraph_subtitle_rendering = False
                 layer.set_visible(False)
                 return
+            if hasattr(canvas, "visible_segments_for_time_window"):
+                visible_segments = canvas.visible_segments_for_time_window(
+                    visible_start,
+                    visible_end,
+                    pad_sec=0.35,
+                )
+            else:
+                visible_segments = getattr(canvas, "segments", []) or []
             rendered_count = layer.set_state(
-                segments=list(getattr(canvas, "segments", []) or []),
+                segments=visible_segments,
                 pps=pps,
                 fps=float(canvas._get_fps() if hasattr(canvas, "_get_fps") else getattr(self, "video_fps", 30.0)),
                 scroll_x=scroll_x,
@@ -604,8 +612,11 @@ class TimelineWidget(QWidget):
                 active_start=getattr(canvas, "active_seg_start", None),
                 active_line=getattr(canvas, "active_seg_line", None),
                 hover_line=getattr(canvas, "_hover_line", None),
+                playback_active=bool(canvas._timeline_playback_active()) if hasattr(canvas, "_timeline_playback_active") else False,
+                playhead_sec=float(getattr(canvas, "playhead_sec", 0.0) or 0.0),
                 quality_filter=str(getattr(canvas, "quality_filter", "all") or "all"),
                 speaker_settings=self._timeline_speaker_settings(),
+                render_epoch=int(getattr(canvas, "_render_epoch", 0) or 0),
             )
             if int(rendered_count or 0) <= 0:
                 canvas._scenegraph_subtitle_rendering = False

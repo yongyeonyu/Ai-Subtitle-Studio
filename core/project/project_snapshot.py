@@ -18,6 +18,7 @@ from core.project.project_assets import externalize_project_text_assets, hydrate
 from core.project.project_format import PROJECT_SCHEMA_VERSION
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
+from ui.project.project_session_runtime import attach_project_session
 
 PROJECTS_DIR = getattr(config, "PROJECTS_DIR", os.path.join(config.BASE_DIR, 'projects'))
 os.makedirs(PROJECTS_DIR, exist_ok=True)
@@ -272,7 +273,14 @@ def save_project_snapshot(owner, segments: list[dict[str, Any]] | None = None, s
     payload['save_reason'] = reason
     project_path = payload['project_path']
     write_project_file(project_path, payload)
-    setattr(owner, '_current_project_path', project_path)
+    attach_project_session(
+        owner,
+        project_path,
+        payload,
+        auto_pipeline=bool(getattr(owner, "_is_auto_pipeline", False)),
+        clear_multiclip=False,
+        emit_boundary_signal=False,
+    )
     return project_path
 
 

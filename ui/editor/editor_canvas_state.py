@@ -8,10 +8,17 @@ once the segments are in memory.
 
 from __future__ import annotations
 
-from core.frame_time import normalize_fps, normalize_segments_to_frame_grid
+from core.frame_time import clamp_segments_to_duration, normalize_fps, normalize_segments_to_frame_grid
 
 
 class EditorCanvasStateMixin:
+    def _loaded_canvas_total_duration(self) -> float:
+        player = getattr(self, "video_player", None)
+        try:
+            return max(0.0, float(getattr(player, "total_time", 0.0) or 0.0))
+        except Exception:
+            return 0.0
+
     def _loaded_canvas_state_fps(self, segments: list[dict] | None = None) -> float:
         for seg in list(segments or []):
             if not isinstance(seg, dict):
@@ -93,6 +100,14 @@ class EditorCanvasStateMixin:
             max_gap_frames=1,
             preserve_order=True,
         )
+        total_duration = self._loaded_canvas_total_duration()
+        if total_duration > 0.0:
+            ordered = clamp_segments_to_duration(
+                ordered,
+                total_duration,
+                fps=self._loaded_canvas_state_fps(ordered),
+                preserve_order=True,
+            )
         for idx, seg in enumerate(ordered):
             seg["line"] = idx
 

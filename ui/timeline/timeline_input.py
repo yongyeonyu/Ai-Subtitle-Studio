@@ -11,6 +11,7 @@ from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QPolygon
 from PyQt6.QtWidgets import QApplication
 
+from core.coerce import safe_float as _as_float
 from core.runtime import config
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.editor_helpers import find_segment_at
@@ -19,7 +20,6 @@ from ui.timeline.timeline_canvas_editing import apply_timing_drag
 
 from ui.timeline.speaker_labels import current_speaker_settings, speaker_labels_for_segment
 from ui.timeline.timeline_constants import (
-    ANALYSIS_BOT,
     ANALYSIS_TOP,
     DIAMOND_Y,
     HANDLE_R,
@@ -39,14 +39,6 @@ from ui.timeline.timeline_constants import (
     WAVE_H,
     _build_gaps,
 )
-
-
-def _as_float(value, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
 
 class TimelineInputMixin:
     _REVIEW_FLAGS = {
@@ -70,6 +62,12 @@ class TimelineInputMixin:
                 or bool(flags.intersection(self._REVIEW_FLAGS))
                 or bool(seg.get("quality_stale"))
             )
+        )
+
+    def _timeline_input_locked(self) -> bool:
+        return bool(
+            getattr(self, "_scan_cut_input_locked", False)
+            or getattr(self, "_editor_processing_input_locked", False)
         )
 
     def _emit_diamond_pair_time_changed(self, pair) -> None:
@@ -331,6 +329,9 @@ class TimelineInputMixin:
         self._dispatch_frame_step(direction * self._arrow_key_hold_speed_multiplier(elapsed))
 
     def keyPressEvent(self, ev):
+        if bool(getattr(self, "_editor_processing_input_locked", False)):
+            ev.accept()
+            return
         if self._edit_active:
             self._handle_edit_key(ev); ev.accept(); return
 
@@ -1065,7 +1066,7 @@ class TimelineInputMixin:
         return QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2).adjusted(-slop, -slop, slop, slop)
 
     def mousePressEvent(self, ev):
-        if bool(getattr(self, "_scan_cut_input_locked", False)):
+        if self._timeline_input_locked():
             ev.accept()
             return
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
@@ -1366,6 +1367,9 @@ class TimelineInputMixin:
         self._drag_last_paint_rect = after
 
     def mouseDoubleClickEvent(self, ev):
+        if bool(getattr(self, "_editor_processing_input_locked", False)):
+            ev.accept()
+            return
         if ev.button() != Qt.MouseButton.LeftButton: return
         if self._edit_active: self._commit_inline_edit(); return
         x, y = ev.pos().x(), ev.pos().y()
@@ -1391,6 +1395,11 @@ class TimelineInputMixin:
             if seg: self.seg_double_clicked.emit(seg.get("line", 0), seg["start"])
 
     def mouseMoveEvent(self, ev):
+        if bool(getattr(self, "_editor_processing_input_locked", False)):
+            self._is_panning = False
+            self._is_scrubbing = False
+            self.unsetCursor()
+            return
         x, y = ev.pos().x(), ev.pos().y()
 
         if self._edit_active:
@@ -1507,6 +1516,12 @@ class TimelineInputMixin:
         if new_h != self._hover_line: self._hover_line = new_h; self.update()
 
     def mouseReleaseEvent(self, ev):
+        if bool(getattr(self, "_editor_processing_input_locked", False)):
+            self._is_panning = False
+            self._is_scrubbing = False
+            self.unsetCursor()
+            self._clear_pending_center_drag()
+            return
         if getattr(self, '_is_panning', False): self._is_panning = False; self.unsetCursor(); self._clear_pending_center_drag(); return
         if getattr(self, '_is_scrubbing', False): self._is_scrubbing = False; self._clear_pending_center_drag(); return
 

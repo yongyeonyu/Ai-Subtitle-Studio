@@ -26,6 +26,7 @@ from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail, thumbna
 from core.video_preview_proxy import preview_proxy_path_for
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
 from ui.editor.video_playback_backend import create_video_backend
+from ui.editor.video_player_overlay_mixin import VideoPlayerOverlayMixin
 from ui.editor.video_overlay_widgets import (
     ThumbnailLabel,
     SubtitleLabel,
@@ -131,7 +132,7 @@ class _WorkerProxy:
             refresh_subtitle=False,
         )
 
-class VideoPlayerWidget(QWidget):
+class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
     frame_step_requested = pyqtSignal(int)
     scan_cut_requested = pyqtSignal(int)
     initial_thumbnail_ready = pyqtSignal(str, str)
@@ -728,55 +729,6 @@ class VideoPlayerWidget(QWidget):
             QPushButton:pressed {{ background: #1D2329; }}
         """
 
-    def _layout_video_overlay(self):
-        if not hasattr(self, "video_container"):
-            return
-        rect = self.video_container.rect()
-        self.video_stack.setGeometry(rect)
-        video_rect = self._displayed_video_rect(rect)
-        overlay_parent = self._subtitle_overlay_parent()
-        overlay_rect = self._map_overlay_rect_to_parent(video_rect, overlay_parent)
-        try:
-            self.sub_label.setParent(overlay_parent)
-            self.sub_label.setGeometry(overlay_rect)
-        except Exception:
-            self.sub_label.setParent(self.video_container)
-            self.sub_label.setGeometry(rect)
-        self.sub_label.raise_()
-        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
-        if quick_overlay is not None:
-            try:
-                quick_overlay.setParent(overlay_parent)
-                quick_overlay.setGeometry(overlay_rect)
-                quick_overlay.raise_()
-            except Exception:
-                pass
-        item = self._scene_subtitle_item()
-        if item is not None:
-            item.set_rect(QRectF(video_rect))
-        try:
-            self.video_widget.set_video_display_rect(QRectF(video_rect))
-        except Exception:
-            pass
-
-    def _subtitle_overlay_parent(self):
-        item = self._scene_subtitle_item()
-        if item is not None:
-            return self.video_container
-        return getattr(self, "video_widget", None) or self.video_container
-
-    def _map_overlay_rect_to_parent(self, rect, parent):
-        if parent is None or parent is self.video_container:
-            return rect
-        try:
-            top_left = parent.mapFrom(self.video_container, rect.topLeft())
-            return QRect(top_left, rect.size())
-        except Exception:
-            try:
-                return parent.rect()
-            except Exception:
-                return rect
-
     def _set_source_name_badge(self, path: str):
         name = os.path.basename(str(path or "").strip())
         self._source_display_name = name
@@ -799,78 +751,6 @@ class VideoPlayerWidget(QWidget):
             return
         label.setText(name)
         label.show()
-
-    def _scene_subtitle_item(self):
-        return getattr(getattr(self, "video_widget", None), "subtitle_item", None)
-
-    def _set_subtitle_overlay_text(self, text: str):
-        text = str(text or "")
-        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
-        try:
-            if self.sub_label.text() != text:
-                self.sub_label.setText(text)
-            self.sub_label.setVisible(False)
-        except Exception:
-            pass
-        item = self._scene_subtitle_item()
-        if item is not None and quick_overlay is None:
-            item.set_text(text)
-        elif item is not None:
-            item.set_text("")
-        if quick_overlay is not None:
-            quick_overlay.set_text(text)
-        elif item is None and hasattr(self, "sub_label"):
-            try:
-                self.sub_label.setVisible(bool(text))
-                self.sub_label.raise_()
-            except Exception:
-                pass
-
-    def _set_subtitle_overlay_style(self, style: dict | None):
-        try:
-            self.sub_label.set_export_style(style or {})
-        except Exception:
-            pass
-        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
-        item = self._scene_subtitle_item()
-        if item is not None and quick_overlay is None:
-            item.set_export_style(style or {})
-        if quick_overlay is not None:
-            quick_overlay.set_export_style(style or {})
-
-    def _displayed_video_rect(self, bounds):
-        aspect = max(0.01, float(getattr(self, "_display_aspect", 16 / 9) or (16 / 9)))
-        bw = max(1, int(bounds.width()))
-        bh = max(1, int(bounds.height()))
-        box_aspect = bw / max(1, bh)
-        if box_aspect > aspect:
-            target_h = bh
-            target_w = int(round(target_h * aspect))
-            x = int((bw - target_w) / 2)
-            y = 0
-        else:
-            target_w = bw
-            target_h = int(round(target_w / aspect))
-            x = 0
-            y = int((bh - target_h) / 2)
-        return QRectF(x, y, max(1, target_w), max(1, target_h)).toRect()
-
-    def _source_video_rect(self, bounds):
-        aspect = max(0.01, float(getattr(self, "_source_aspect", 16 / 9) or (16 / 9)))
-        bw = max(1, int(bounds.width()))
-        bh = max(1, int(bounds.height()))
-        box_aspect = bw / max(1, bh)
-        if box_aspect > aspect:
-            h = bh
-            w = int(h * aspect)
-            x = int((bw - w) / 2)
-            y = 0
-        else:
-            w = bw
-            h = int(w / aspect)
-            x = 0
-            y = int((bh - h) / 2)
-        return QRectF(x, y, max(1, w), max(1, h)).toRect()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1715,8 +1595,8 @@ class VideoPlayerWidget(QWidget):
             ends.append(end)
             texts.append(item["text"])
             count += 1
-            speaker = str(seg.get("speaker", seg.get("spk", "")) or "")
             if digest is not None:
+                speaker = str(seg.get("speaker", seg.get("spk", "")) or "")
                 self._update_subtitle_digest(digest, start, end, item["text"], speaker)
         signature = str(signature_override or "")
         if digest is not None:
@@ -1727,6 +1607,10 @@ class VideoPlayerWidget(QWidget):
     def _normalized_segments_and_signature(self, segments):
         cleaned, signature, sorted_ok, _starts, _ends, _texts = self._normalized_segments_context(segments)
         return cleaned, signature, sorted_ok
+
+    @staticmethod
+    def _adopt_list_buffer(values):
+        return values if isinstance(values, list) else list(values or [])
 
     def _set_segments(
         self,
@@ -1753,15 +1637,15 @@ class VideoPlayerWidget(QWidget):
             else:
                 cleaned, signature, sorted_ok, starts, ends, texts = self._normalized_segments_context(segments or [])
         else:
-            cleaned = list(normalized or [])
+            cleaned = self._adopt_list_buffer(normalized)
         if signature and signature == getattr(self, "_context_segments_signature", ""):
             self._context_segments_ref = segments
             return False
         self.segments = cleaned if sorted_ok else sorted(cleaned, key=lambda s: s["start"])
         if sorted_ok and starts is not None and ends is not None and texts is not None:
-            self._subtitle_starts = list(starts)
-            self._subtitle_ends = list(ends)
-            self._subtitle_texts = list(texts)
+            self._subtitle_starts = self._adopt_list_buffer(starts)
+            self._subtitle_ends = self._adopt_list_buffer(ends)
+            self._subtitle_texts = self._adopt_list_buffer(texts)
         else:
             self._subtitle_starts = [s["start"] for s in self.segments]
             self._subtitle_ends = [s["end"] for s in self.segments]

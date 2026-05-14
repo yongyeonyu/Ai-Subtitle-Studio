@@ -855,6 +855,36 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_set_segments_reuses_prebuilt_parallel_arrays(self):
+        widget = VideoPlayerWidget()
+        normalized = [
+            {"start": 0.0, "end": 1.0, "text": "첫 자막"},
+            {"start": 1.0, "end": 2.0, "text": "둘째 자막"},
+        ]
+        starts = [0.0, 1.0]
+        ends = [1.0, 2.0]
+        texts = ["첫 자막", "둘째 자막"]
+        try:
+            changed = widget._set_segments(
+                normalized,
+                normalized=normalized,
+                signature="prefetched-signature",
+                sorted_ok=True,
+                starts=starts,
+                ends=ends,
+                texts=texts,
+            )
+
+            self.assertTrue(changed)
+            self.assertIs(widget.segments, normalized)
+            self.assertIs(widget._subtitle_starts, starts)
+            self.assertIs(widget._subtitle_ends, ends)
+            self.assertIs(widget._subtitle_texts, texts)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_video_subtitle_context_keeps_lightweight_overlay_rows(self):
         widget = VideoPlayerWidget()
         heavy_payload = {"confidence_label": "green", "history": ["x" * 1024]}

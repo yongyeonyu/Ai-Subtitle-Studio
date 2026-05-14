@@ -299,6 +299,175 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertAlmostEqual(adjusted[0]["end"], 3.0, places=3)
         self.assertAlmostEqual(adjusted[1]["start"], 3.0, places=3)
 
+    def test_final_gap_settings_do_not_pull_start_earlier_than_word_anchor(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "앞 자막"},
+            {
+                "start": 2.2,
+                "end": 3.0,
+                "text": "뒤 자막",
+                "words": [
+                    {"word": "뒤", "start": 2.2, "end": 2.45},
+                    {"word": "자막", "start": 2.48, "end": 2.92},
+                ],
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 2.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.2,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[1]["start"], 2.2, places=3)
+        self.assertEqual(
+            adjusted[1].get("_timing_anchor_policy", {}).get("anchor_source"),
+            "word_timestamp",
+        )
+
+    def test_final_gap_settings_do_not_pull_start_earlier_than_selected_stt_candidate(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "앞 자막"},
+            {
+                "start": 2.2,
+                "end": 3.0,
+                "text": "뒤 자막",
+                "stt_selected_source": "STT2",
+                "stt_candidates": [
+                    {"source": "STT1", "text": "다른 후보", "start": 2.0, "end": 2.8},
+                    {"source": "STT2", "text": "뒤 자막", "start": 2.2, "end": 2.95},
+                ],
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 2.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.2,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[1]["start"], 2.2, places=3)
+        self.assertEqual(
+            adjusted[1].get("_timing_anchor_policy", {}).get("anchor_source"),
+            "selected_stt_candidate",
+        )
+
+    def test_final_gap_settings_limit_word_anchored_end_extension(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "앞 자막"},
+            {
+                "start": 2.2,
+                "end": 3.0,
+                "text": "뒤 자막",
+                "timeline_frame_rate": 30.0,
+                "words": [
+                    {"word": "뒤", "start": 2.2, "end": 2.45},
+                    {"word": "자막", "start": 2.48, "end": 2.92},
+                ],
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 2.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.4,
+                "sub_min_duration": 0.2,
+                "subtitle_timing_anchor_max_end_lag_sec": 0.08,
+                "subtitle_timing_anchor_max_end_lead_sec": 0.08,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[1]["end"], 3.0, places=3)
+        self.assertTrue(
+            any(
+                item.get("edge") == "end" and item.get("anchor_source") == "word_timestamp"
+                for item in adjusted[1].get("_timing_anchor_window_policy", {}).get("adjustments", [])
+            )
+        )
+
+    def test_final_gap_settings_limit_selected_candidate_end_extension_without_words(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "앞 자막"},
+            {
+                "start": 2.2,
+                "end": 3.0,
+                "text": "뒤 자막",
+                "timeline_frame_rate": 30.0,
+                "stt_selected_source": "STT2",
+                "stt_candidates": [
+                    {"source": "STT1", "text": "다른 후보", "start": 2.0, "end": 2.8},
+                    {"source": "STT2", "text": "뒤 자막", "start": 2.2, "end": 2.95},
+                ],
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 2.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.4,
+                "sub_min_duration": 0.2,
+                "subtitle_timing_anchor_max_end_lag_sec": 0.05,
+                "subtitle_timing_anchor_max_end_lead_sec": 0.08,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[1]["end"], 3.0, places=3)
+        self.assertTrue(
+            any(
+                item.get("edge") == "end" and item.get("anchor_source") == "selected_stt_candidate"
+                for item in adjusted[1].get("_timing_anchor_window_policy", {}).get("adjustments", [])
+            )
+        )
+
+    def test_final_gap_settings_anchor_safe_frame_rounding_keeps_start_not_earlier(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "앞 자막"},
+            {
+                "start": 2.217,
+                "end": 2.95,
+                "text": "뒤 자막",
+                "timeline_frame_rate": 30.0,
+                "words": [
+                    {"word": "뒤", "start": 2.217, "end": 2.45},
+                    {"word": "자막", "start": 2.48, "end": 2.92},
+                ],
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 0.0,
+                "gap_push_rate": 0.0,
+                "gap_pull_rate": 0.0,
+                "single_subtitle_end": 0.0,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertGreaterEqual(adjusted[1]["start"], 2.217)
+
     def test_final_gap_settings_apply_timing_fusion_evidence(self):
         segments = [
             {

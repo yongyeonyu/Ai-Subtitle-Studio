@@ -14,6 +14,8 @@ from core.runtime.logger import get_logger
 from core.settings import load_settings, get_model_key
 from core.time_history import get_expected_time
 from core.media_info import probe_media_many
+from ui.project.project_session_runtime import set_runtime_multiclip_state
+from ui.queue.queue_dispatch import queue_progress_state
 
 
 class MulticlipPipelineMixin:
@@ -107,8 +109,7 @@ class MulticlipPipelineMixin:
         self._pipeline_thread.start()
 
     def _emit_multiclip_queue_status(self, idx, status, expected="", info_txt="", len_txt=""):
-        if hasattr(self.ui, "_sig_update_queue"):
-            self.ui._sig_update_queue.emit(idx, status, expected, info_txt, len_txt)
+        self._emit_queue_status(idx, status, expected, info_txt, len_txt)
 
     def _offset_multiclip_segments(self, segments, offset, clip_idx, clip_file=None):
         for seg in segments:
@@ -369,8 +370,6 @@ class MulticlipPipelineMixin:
                         except Exception:
                             continue
 
-                    if hasattr(self.ui, "_current_file_idx"):
-                        self.ui._current_file_idx = i + 1
                     if hasattr(self.ui, "_sig_set_vad_segments"):
                         self.ui._sig_set_vad_segments.emit(vad_segs)
                     if hasattr(self.ui, "_sig_set_recog_zone"):
@@ -486,10 +485,20 @@ class MulticlipPipelineMixin:
                                 data["end"] = float(data.get("end", data.get("start", 0.0)) or data.get("start", 0.0) or 0.0) + _clip_offset
                             self._ui_emit("_sig_set_llm_review_segment", data)
 
+                        def _processing_preview(payload, _clip_offset=clip_offset):
+                            data = dict(payload or {})
+                            self._emit_processing_preview_segments(
+                                str(data.get("stage", "") or ""),
+                                str(data.get("stage_label", data.get("stage", "")) or ""),
+                                list(data.get("segments") or []),
+                                time_offset=_clip_offset,
+                            )
+
                         optimized = optimize_segments(
                             segments,
                             vad_segments=item.get("vad_segments") or [],
                             llm_progress_callback=_llm_progress,
+                            stage_segments_callback=_processing_preview,
                         )
                     except Exception as e:
                         get_logger().log(
@@ -504,14 +513,32 @@ class MulticlipPipelineMixin:
                         context=f"멀티클립 {idx + 1} 최종 자막 정식 컷",
                         include_provisional=False,
                     )
+                    self._emit_processing_preview_segments(
+                        "cut_boundary_magnetize",
+                        f"컷 경계 자석 보정 · 클립 {idx + 1}",
+                        optimized,
+                        time_offset=clip_offset,
+                    )
                     optimized = self._split_by_saved_cut_boundaries(
                         optimized,
                         context=f"멀티클립 {idx + 1} 최종 자막",
+                    )
+                    self._emit_processing_preview_segments(
+                        "cut_boundary_split",
+                        f"컷 경계 분할 · 클립 {idx + 1}",
+                        optimized,
+                        time_offset=clip_offset,
                     )
                     optimized = self._align_subtitle_segments_to_vad(
                         optimized,
                         item.get("vad_segments") or [],
                         context=f"멀티클립 {idx + 1}",
+                    )
+                    self._emit_processing_preview_segments(
+                        "vad_align",
+                        f"VAD 경계 정렬 · 클립 {idx + 1}",
+                        optimized,
+                        time_offset=clip_offset,
                     )
                     optimized = apply_final_gap_settings(optimized, force=True)
                     optimized = self._magnetize_by_saved_cut_boundaries(
@@ -637,10 +664,13 @@ class MulticlipPipelineMixin:
                     if expected > 0:
                         total_expected += expected
 
-                    if hasattr(self.ui, "_sig_update_queue"):
-                        self.ui._sig_update_queue.emit(
-                            i, "대기 중", str(expected), info_txt, len_txt
-                        )
+                    self._emit_multiclip_queue_status(
+                        i,
+                        "대기 중",
+                        str(expected),
+                        info_txt,
+                        len_txt,
+                    )
                 except Exception:
                     clip_dur = 30.0
                     info_txt = ""
@@ -660,7 +690,7 @@ class MulticlipPipelineMixin:
                 )
 
             self.total_expected_time = total_expected
-            if total_expected > 0 and hasattr(self.ui, "_sig_update_queue_header"):
+            if total_expected > 0:
                 t_mins, t_secs = int(total_expected // 60), int(total_expected % 60)
                 t_hours = t_mins // 60
                 if t_hours > 0:
@@ -669,12 +699,24 @@ class MulticlipPipelineMixin:
                 else:
                     total_str = f"{t_mins}분 {t_secs}초"
 
-                current = max(1, int(getattr(self.ui, "_current_file_idx", 1) or 1))
-                pct = max(0, int(getattr(self.ui, "_real_pct", 0) or 0))
-                self.ui._sig_update_queue_header.emit(current, total_files, pct, total_str)
+                progress = queue_progress_state(
+                    self.ui,
+                    current_default=1,
+                    total_default=total_files,
+                    pct_default=0,
+                )
+                current = max(1, int(progress["current"] or 1))
+                pct = max(0, int(progress["pct"] or 0))
+                self._emit_queue_header(current, total_files, pct, total_str)
 
             # 멀티클립 경계 정보를 UI에 전달 (에디터 열기 전)
-            self.ui._multiclip_boundaries = clip_boundaries
+            set_runtime_multiclip_state(
+                self.ui,
+                list(files or []),
+                list(clip_boundaries or []),
+                project_boundary_rows=None,
+                emit_boundary_signal=False,
+            )
 
             # ── STEP 1: 에디터 열기 (클립 박스만 표시, 파형 아직 없음) ──
             edit_event = threading.Event()
@@ -741,8 +783,7 @@ class MulticlipPipelineMixin:
 
             # 완료 상태 설정 → 버튼 "재시작"으로 전환 + 큐헤더 100%
             try:
-                if hasattr(self.ui, "_sig_update_queue_header"):
-                    self.ui._sig_update_queue_header.emit(total_files, total_files, 100, "")
+                self._emit_queue_header(total_files, total_files, 100, "")
             except Exception:
                 pass
             try:
@@ -802,8 +843,8 @@ class MulticlipPipelineMixin:
         except Exception as e:
             if str(e) not in ("USER_PREV", "USER_EXIT"):
                 try:
-                    if hasattr(self.ui, "_sig_update_queue") and "i" in locals():
-                        self.ui._sig_update_queue.emit(i, "오류", str(e), "", "")
+                    if "i" in locals():
+                        self._emit_queue_status(i, "오류", str(e), "", "")
                 except Exception:
                     pass
                 get_logger().log(f"\n❌ 치명적 에러: {e}")

@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from core.pipeline.multiclip_pipeline import MulticlipPipelineMixin
 from ui.editor.editor_actions import EditorActionsMixin
@@ -105,6 +105,84 @@ class Cp11MulticlipOffsetTests(unittest.TestCase):
         self.assertAlmostEqual(saved["/tmp/clip2.srt"][0]["end"], 26.5)
         self.assertAlmostEqual(saved["/tmp/clip1_통합.srt"][0]["start"], 102.54)
         self.assertAlmostEqual(saved["/tmp/clip1_통합.srt"][0]["end"], 104.54)
+
+    def test_delete_clip_transaction_updates_owner_and_persists(self):
+        owner = SimpleNamespace(
+            _multiclip_files=["/tmp/a.mp4", "/tmp/b.mp4", "/tmp/c.mp4"],
+            _active_clip_idx=0,
+        )
+
+        class _Editor(DummyMulticlipOps):
+            def __init__(self):
+                self._undo_mgr = SimpleNamespace(push_immediate=Mock())
+                self._apply_multiclip_runtime_state = Mock()
+                self._reload_apply_and_persist_multiclip = Mock()
+
+            def window(self):
+                return owner
+
+            def _remap_segments_for_multiclip_files(self, files):
+                return ([{"text": "kept"}], [{"file": path, "start": idx * 10.0, "end": (idx + 1) * 10.0} for idx, path in enumerate(files)])
+
+        editor = _Editor()
+
+        editor._on_clip_delete_requested(1)
+
+        editor._undo_mgr.push_immediate.assert_called_once()
+        editor._apply_multiclip_runtime_state.assert_called_once()
+        self.assertEqual(editor._apply_multiclip_runtime_state.call_args.args[1], ["/tmp/a.mp4", "/tmp/c.mp4"])
+        editor._reload_apply_and_persist_multiclip.assert_called_once_with([{"text": "kept"}])
+        self.assertEqual(owner._active_clip_idx, 1)
+
+    def test_add_clip_transaction_seeds_runtime_and_imports_existing_srt_when_confirmed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_clip = os.path.join(tmp, "base.mp4")
+            added_clip = os.path.join(tmp, "added.mp4")
+            added_srt = os.path.join(tmp, "added.srt")
+            open(base_clip, "w", encoding="utf-8").close()
+            open(added_clip, "w", encoding="utf-8").close()
+            open(added_srt, "w", encoding="utf-8").close()
+            owner = SimpleNamespace(
+                _multiclip_files=[],
+                _active_clip_idx=0,
+            )
+
+            class _Dialog:
+                def __init__(self, files, _owner, **_kwargs):
+                    self.received_files = list(files)
+                    self.sorted_files = [base_clip, added_clip]
+
+                def exec(self):
+                    return True
+
+            class _Editor(DummyMulticlipOps):
+                def __init__(self):
+                    self.media_path = base_clip
+                    self._undo_mgr = SimpleNamespace(push_immediate=Mock())
+                    self._apply_multiclip_runtime_state = Mock()
+                    self._reload_apply_and_persist_multiclip = Mock()
+                    self._append_existing_multiclip_segments = Mock(return_value=[{"text": "merged"}])
+
+                def window(self):
+                    return owner
+
+                def _recompute_multiclip_boundaries(self, files):
+                    return [{"file": path, "start": idx * 10.0, "end": (idx + 1) * 10.0} for idx, path in enumerate(files)]
+
+                def _remap_segments_for_multiclip_files(self, files):
+                    return ([{"text": "current"}], self._recompute_multiclip_boundaries(files))
+
+            editor = _Editor()
+
+            with patch("ui.project.multiclip_panel.MultiClipEditor", _Dialog), \
+                 patch("ui.dialogs.message_box.ask_yes_no", return_value=True):
+                editor._on_clip_add_requested()
+
+            self.assertGreaterEqual(editor._apply_multiclip_runtime_state.call_count, 2)
+            self.assertEqual(editor._undo_mgr.push_immediate.call_count, 1)
+            editor._append_existing_multiclip_segments.assert_called_once()
+            self.assertEqual(editor._append_existing_multiclip_segments.call_args.args[2], [added_clip])
+            editor._reload_apply_and_persist_multiclip.assert_called_once_with([{"text": "merged"}])
 
 
 if __name__ == "__main__":

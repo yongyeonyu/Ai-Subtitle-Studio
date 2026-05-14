@@ -31,6 +31,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - STT Mode iPad compatibility scope is intentionally limited to project state and STT LoRA/runtime policy bundles; this repository does not implement an iPad app.
 - Stable editor text, video, and timeline render frames with frame-based or whole-editor GPU rendering policy.
 - Subtitle generation completion is driven by backend-finalized, saveable subtitle segments rather than STT progress alone, so completion autosave waits and retries instead of saving an empty timeline.
+- When subtitle generation completes, the Home sidebar progress card appends the final subtitle self-review score next to elapsed versus expected time so queue review can see a quick quality signal without reopening the editor.
 - Editor exit flows ask to save unsaved changes before fast runtime/model cleanup starts.
 - Fast editor-mode subtitle movement using line-map caches, dirty-rectangle timeline updates, visible-window video context refreshes, and non-jittery active-segment scrolling.
 - Native/OpenCV cut-boundary verification, FFmpeg scene prepass, direct FFmpeg audio extraction, and benchmark-profile backend routing for long media.
@@ -57,6 +58,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Cut-boundary helper rows can still be saved into project metadata for verification and timing work, but follower-checked provisional lines and terminal helper boundaries are hidden from the normal editor UI after confirmation.
 - Roughcut Codex CLI calls now use wider context and longer timeouts, then fall back to local-rule draft generation if the Codex CLI times out.
 - Process-level project JSON caching plus safe atomic project and settings writes.
+- Export-dialog settings, diarization caches, VAD strict metadata, and editor teardown now use typed/logged cleanup paths instead of broad silent exception swallowing, so save/export/cleanup failures stay diagnosable.
 - Project save/load uses frame-quantized subtitle/STT timing, external SRT assets, and project-path-aware hydration so STT1/STT2 and final subtitle lanes reload without tail segments beyond the real video duration.
 - STT1/STT2 candidate comparison with persistent project metadata.
 - Cut-boundary assisted subtitle timing.
