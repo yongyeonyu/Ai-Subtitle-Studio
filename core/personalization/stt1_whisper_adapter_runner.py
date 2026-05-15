@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import threading
 from collections import Counter, defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -22,7 +21,8 @@ from core.personalization.lora_store_common import (
     write_jsonl,
 )
 from core.personalization.lora_rule_learning import load_truth_table_rows
-from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
+from core.platform_compat import ffmpeg_binary
+from core.runtime.subprocess_utils import run_subprocess_capture_cancelable
 from core.runtime.multi_process import runtime_parallel_worker_plan
 
 
@@ -733,17 +733,15 @@ def _extract_stt1_adapter_audio(
         if ffmpeg_single_thread and command and "-threads" not in command:
             command = [command[0], "-threads", "1", *command[1:]]
         try:
-            completed = subprocess.run(
+            completed, cancelled_run = run_subprocess_capture_cancelable(
                 command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 timeout=max(1.0, float(timeout_sec)),
-                **hidden_subprocess_kwargs(),
+                cancel_callback=cancel_callback,
             )
         except Exception as exc:
             return {"status": "error", "item": item, "audio_path": str(output_path), "error": str(exc)}
+        if cancelled_run:
+            return {"status": "cancelled", "item": item, "audio_path": str(output_path)}
         if completed.returncode == 0 and output_path.exists():
             return {"status": "extracted", "item": item, "audio_path": str(output_path)}
         return {

@@ -10,6 +10,7 @@ from typing import Any
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QColor
 
+from core.coerce import safe_float as _safe_float
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.runtime import config
 from ui.gpu_rendering import scenegraph_enabled
@@ -36,14 +37,6 @@ from ui.timeline.timeline_paint import (
 
 
 QML_PATH = Path(__file__).with_name("timeline_scenegraph.qml")
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
 
 def _speaker_color(seg: dict[str, Any], speaker_settings: dict[str, Any]) -> str:
     spk = normalize_speaker_id(seg.get("speaker", seg.get("spk_id", "")))
@@ -121,12 +114,18 @@ def build_scenegraph_subtitle_segments(
     speaker_settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build FPS-anchored vector primitives consumed by the QML SceneGraph."""
-    rows = [seg for seg in list(segments or []) if isinstance(seg, dict) and not seg.get("is_gap")]
-    final_rows = [
-        seg for seg in rows
-        if not bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
-    ]
-    final_selection_index = build_stt_selection_index(final_rows)
+    rows: list[dict[str, Any]] = []
+    final_rows: list[dict[str, Any]] = []
+    preview_present = False
+    for seg in segments or ():
+        if not isinstance(seg, dict) or seg.get("is_gap"):
+            continue
+        rows.append(seg)
+        is_preview = bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
+        preview_present = preview_present or is_preview
+        if not is_preview:
+            final_rows.append(seg)
+    final_selection_index = build_stt_selection_index(final_rows) if preview_present else {}
     fps = normalize_fps(fps or 30.0)
     px_per_frame = max(0.001, float(pps or 1.0) / fps)
     speaker_settings = current_speaker_settings(speaker_settings or {})
@@ -134,6 +133,8 @@ def build_scenegraph_subtitle_segments(
     visible_start_frame = sec_to_frame(max(0.0, visible_start_sec) - 0.35, fps)
     visible_end_frame = sec_to_frame(max(visible_start_sec, visible_end_sec) + 0.35, fps)
     objects: list[dict[str, Any]] = []
+    playhead_value = float(playhead_sec or 0.0) if playhead_sec is not None else 0.0
+    playback_edge_tol = max(0.001, min(0.05, 2.0 / fps)) if playback_active and playhead_sec is not None else 0.0
 
     for idx, seg in enumerate(rows):
         start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
@@ -178,8 +179,7 @@ def build_scenegraph_subtitle_segments(
         else:
             line = seg.get("line")
             if playback_active and playhead_sec is not None:
-                edge_tol = max(0.001, min(0.05, 2.0 / fps))
-                is_active = start - edge_tol <= float(playhead_sec) < end + edge_tol
+                is_active = start - playback_edge_tol <= playhead_value < end + playback_edge_tol
             else:
                 is_active = (
                     (active_line is not None and line == active_line)
@@ -203,9 +203,8 @@ def build_scenegraph_subtitle_segments(
             text_color = str(visual.get("text") or "#DCE3EA")
             alpha = 255
             border_width = 2 if render_active or render_hover else 1
-            speaker_color = _speaker_color(seg, speaker_settings)
-            speaker_fill = _darker_hex(speaker_color, 135)
-            speaker_names = " / ".join(speaker_labels_for_segment(speaker_settings, seg))
+            speaker_fill = ""
+            speaker_names = ""
             y = SUBTITLE_TOP
             h = SUBTITLE_BOT - SUBTITLE_TOP
 
@@ -227,7 +226,6 @@ def build_scenegraph_subtitle_segments(
             and show_speaker_bar
             and render_profile == "full"
             and width >= 64.0
-            and speaker_names
         )
         show_handles = bool(
             not is_preview
@@ -235,6 +233,11 @@ def build_scenegraph_subtitle_segments(
             and render_profile == "full"
             and width >= SEGMENT_HANDLE_MIN_WIDTH
         )
+        if not is_preview and show_speaker_bar:
+            speaker_color = _speaker_color(seg, speaker_settings)
+            speaker_fill = _darker_hex(speaker_color, 135)
+            speaker_names = " / ".join(speaker_labels_for_segment(speaker_settings, seg)) if show_speaker_text else ""
+            show_speaker_text = bool(show_speaker_text and speaker_names)
         display_text = str(seg.get("text", "") or "") if show_text else ""
         chip_rows = subtitle_confidence_chips(seg) if show_confidence_chips else []
         objects.append(

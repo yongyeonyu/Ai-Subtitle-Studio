@@ -8,7 +8,8 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QPointF, Qt
-from PyQt6.QtGui import QKeyEvent, QWheelEvent
+from PyQt6.QtCore import QEvent
+from PyQt6.QtGui import QFocusEvent, QKeyEvent, QWheelEvent
 from PyQt6.QtWidgets import QApplication
 
 from ui.editor.subtitle_text_edit import SubtitleHighlighter, SubtitleTextEdit
@@ -231,6 +232,38 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
         try:
             self.assertIsNone(edit._quick_layer)
             self.assertFalse(edit._quick_layer_overlay_text_active())
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_focus_out_event_ignores_deleted_space_shortcut(self):
+        edit = SubtitleTextEdit()
+        deleted_shortcut = SimpleNamespace(
+            setEnabled=Mock(side_effect=RuntimeError("wrapped C/C++ object of type QShortcut has been deleted"))
+        )
+        edit._parent_widget = SimpleNamespace(space_shortcut=deleted_shortcut)
+        try:
+            edit.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+            deleted_shortcut.setEnabled.assert_called_once_with(True)
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_overlay_refresh_ignores_deleted_highlighter(self):
+        edit = SubtitleTextEdit()
+        deleted_highlighter = SimpleNamespace(
+            set_gpu_overlay_active=Mock(
+                side_effect=RuntimeError("wrapped C/C++ object of type SubtitleHighlighter has been deleted")
+            )
+        )
+        edit._parent_widget = SimpleNamespace(_highlighter=deleted_highlighter)
+        edit._quick_layer = object()
+        try:
+            edit._refresh_gpu_document_overlay_mode()
+            self.assertTrue(edit._gpu_document_overlay_active)
+            deleted_highlighter.set_gpu_overlay_active.assert_called_once_with(True)
         finally:
             edit.close()
             edit.deleteLater()

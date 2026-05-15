@@ -1,41 +1,19 @@
 from __future__ import annotations
 
 import atexit
-import json
-import os
 import subprocess
 import threading
 from typing import Any
 
+from core.native_json import dumps_json_bytes, dumps_json_text, json_default, loads_json, loads_json_output, write_jsonl_line
 from core.native_swift_subtitle import find_native_cli_path
 from core.runtime.config import IS_MAC
 from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
+from core.runtime.setting_utils import KOREAN_FALSE_VALUES, env_bool as _env_bool, setting_bool as _setting_bool
 
 _WORKER: subprocess.Popen | None = None
 _WORKER_LOCK = threading.Lock()
 _CACHED_LORA_INDEX_IDS: set[str] = set()
-
-
-def _setting_bool(value: Any, default: bool = True) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().casefold() not in {"0", "false", "off", "no", "사용 안함", "끔"}
-    return bool(value)
-
-
-def _env_bool(name: str) -> bool | None:
-    value = os.environ.get(name)
-    if value is None:
-        return None
-    normalized = value.strip().casefold()
-    if normalized in {"1", "true", "on", "yes"}:
-        return True
-    if normalized in {"0", "false", "off", "no"}:
-        return False
-    return None
 
 
 def _experimental_policy_enabled(settings: dict[str, Any] | None) -> bool:
@@ -58,18 +36,13 @@ def _enabled(settings: dict[str, Any] | None, setting_key: str, env_key: str, de
         return local_env
     if global_env is not None:
         return global_env
-    return _setting_bool((settings or {}).get(setting_key), default)
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (set, tuple)):
-        return list(value)
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except Exception:
-            pass
-    return str(value)
+    return _setting_bool(
+        (settings or {}).get(setting_key),
+        default,
+        false_values=KOREAN_FALSE_VALUES,
+        false_only_strings=True,
+        empty_is_default=False,
+    )
 
 
 def _start_worker(cli: Any) -> subprocess.Popen | None:
@@ -98,7 +71,7 @@ def _request_worker(task: str, payload: dict[str, Any]) -> dict[str, Any] | None
     request = dict(payload)
     request["task"] = task
     try:
-        encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+        encoded = dumps_json_text(request, compact=True, default=json_default)
     except Exception:
         return None
     with _WORKER_LOCK:
@@ -106,13 +79,13 @@ def _request_worker(task: str, payload: dict[str, Any]) -> dict[str, Any] | None
         if worker is None or worker.stdin is None or worker.stdout is None:
             return None
         try:
-            worker.stdin.write(encoded.replace("\n", " ") + "\n")
+            write_jsonl_line(worker.stdin, encoded)
             worker.stdin.flush()
             line = worker.stdout.readline()
             if not line:
                 _stop_worker()
                 return None
-            decoded = json.loads(line)
+            decoded = loads_json(line)
             if not isinstance(decoded, dict) or decoded.get("error"):
                 return None
             return decoded
@@ -126,7 +99,7 @@ def _request_one_shot(command: str, payload: dict[str, Any], timeout: float = 20
     if cli is None:
         return None
     try:
-        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=_json_default).encode("utf-8")
+        encoded = dumps_json_bytes(payload, compact=True, default=json_default)
         proc = subprocess.run(
             [str(cli), command],
             input=encoded,
@@ -134,7 +107,7 @@ def _request_one_shot(command: str, payload: dict[str, Any], timeout: float = 20
             capture_output=True,
             timeout=timeout,
         )
-        decoded = json.loads(proc.stdout.decode("utf-8") or "{}")
+        decoded = loads_json_output(proc.stdout, default={})
         return decoded if isinstance(decoded, dict) and not decoded.get("error") else None
     except Exception:
         return None

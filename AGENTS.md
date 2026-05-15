@@ -1,13 +1,13 @@
 <!--
-Document-Version: 04.00.05-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_5_RELEASED
-Last-Updated: 2026-05-14
+Document-Version: 04.00.06-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_6_RELEASED
+Last-Updated: 2026-05-16
 Updated-By: Codex
-Purpose: Agent bootstrap and handoff rules only.
+Purpose: Agent bootstrap, token-efficient navigation, and handoff rules only.
 -->
 # AGENTS.md - Agent Bootstrap Guide
 
-This file is the first document an assistant should read when continuing work on AI Subtitle Studio. It should stay short, current, and operational. Historical release details belong in `RELEASE_v*.md`; task backlog belongs in `ACTION_ITEMS.md`; product overview belongs in `README.md`; the actual tree belongs in `File_structure.txt`.
+This file is the first document an assistant should read when continuing work on AI Subtitle Studio. It should stay short, current, and operational. Historical release details belong in `RELEASE_v*.md`; task backlog belongs in `ACTION_ITEMS.md`; product overview belongs in `README.md`; the shallow actual tree belongs in `File_structure.txt`; the responsibility and hot-path map belongs in `CODEMAP.md`.
 
 ## Bootstrap Contract
 
@@ -18,18 +18,20 @@ Required discovery order:
 1. Read `AGENTS.md`.
 2. Find and read `ACTION_ITEMS.md`.
 3. Find and read `File_structure.txt`.
-4. Find the latest `RELEASE_v*.md` by version number and read only that release note first.
-5. Read `README.md`.
+4. If `CODEMAP.md` exists, read it next.
+5. Find the latest `RELEASE_v*.md` by version number and read only that release note first.
+6. Read `README.md`.
 
 Filename matching must be tolerant of case and spacing hints from the user:
 
 - `agents.md` maps to `AGENTS.md`.
 - `action_items.md` maps to `ACTION_ITEMS.md`.
 - `File_Structure.txt` maps to `File_structure.txt`.
+- `codemap.md` maps to `CODEMAP.md`.
 - `Release_Vxx.xx.xx.md` maps to the latest actual `RELEASE_v*.md`.
 - `Read.me` maps to `README.md`.
 
-Do not ask the user to upload the other four documents if they exist in the repository.
+Do not ask the user to upload the other repository handoff documents if they exist in the repository.
 
 ## Handoff File Roles
 
@@ -37,13 +39,17 @@ Keep these five files non-overlapping:
 
 - `AGENTS.md`: assistant operating rules, bootstrap rules, release-handoff rules, and current continuation facts.
 - `ACTION_ITEMS.md`: remaining work queue only, ordered by execution priority.
-- `File_structure.txt`: actual filesystem tree only, with no review notes or speculative cleanup notes.
+- `File_structure.txt`: shallow actual filesystem map only, with no review notes or speculative cleanup notes.
 - `README.md`: product purpose, installation, usage direction, and concise current-state summary.
 - `RELEASE_v*.md`: versioned release note for one release, based only on the immediately previous release.
 
+Optional support file:
+
+- `CODEMAP.md`: concise responsibility map, hot paths, entry points, and targeted verification map. It is not a full tree and it must not duplicate release history or backlog text.
+
 ## Release Handoff Rules
 
-When the user asks to release, update the five handoff documents so a future chat can continue without old context.
+When the user asks to release, update the five handoff documents so a future chat can continue without old context. Refresh `CODEMAP.md` too when hot paths, module ownership, or verification entry points changed.
 
 Release workflow:
 
@@ -52,20 +58,45 @@ Release workflow:
 3. Use only the immediately previous release note as historical reference.
 4. Create or refresh the current release note without copying older cumulative history.
 5. Refresh `AGENTS.md`, `ACTION_ITEMS.md`, `File_structure.txt`, and `README.md`.
-6. Keep the five documents in English, except for unavoidable source data such as real filenames or Korean subtitle-rule tokens.
-7. Remove stale release history, obsolete review notes, and duplicated summaries from the handoff files.
-8. Do not update unrelated documents during release unless the user explicitly asks.
+6. Refresh `CODEMAP.md` when it exists or when the edited areas changed the current hot paths.
+7. Keep the handoff documents in English, except for unavoidable source data such as real filenames or Korean subtitle-rule tokens.
+8. Remove stale release history, obsolete review notes, and duplicated summaries from the handoff files.
+9. Do not update unrelated documents during release unless the user explicitly asks.
 
 If the release changes the app version, update `core/runtime/config.py` as the source of truth. The handoff set is still the five documents listed above.
+
+## New Chat Handoff Rule
+
+When the user says `새로운 채팅하자` or equivalent, treat it as a formal handoff request for a fresh chat.
+
+Required workflow:
+
+1. Refresh `AGENTS.md` first if the current chat materially changed durable continuation facts, test rules, fix status, or next steps.
+2. Do not rewrite `ACTION_ITEMS.md` unless the remaining priority queue itself changed.
+3. Reply to the user in Korean, but keep repository documents in English.
+4. Provide a ready-to-paste new-chat prompt plus a compact handoff summary.
+5. The handoff summary must be token-efficient but detailed:
+   - prefer short declarative lines over prose;
+   - include only current facts, verified fixes, active risks, exact test assets, and next actions;
+   - avoid praise, repetition, long narrative history, and already-obsolete branches;
+   - include concrete file paths, commands, and validation results when they matter.
+6. If a restart point or runtime issue was debugged in the current chat, explicitly state:
+   - exact root cause;
+   - exact files changed;
+   - exact tests or real-media checks already run;
+   - the next highest-value unresolved check.
 
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Real benchmark fixtures: `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video` contains the canonical local video/SRT pair for 3-minute subtitle pipeline benchmarks. Use this folder before larger ad-hoc media when comparing STT order, LoRA/Deep/LLM gating, timing, and cut-boundary variants.
-- Current app version in code: `04.00.05`
-- Current handoff document version: `04.00.05-mac-native`
-- Latest release checkpoint: `v04.00.05`
-- Current phase: `MAC_NATIVE_APPSTORE_V4_0_5_RELEASED`
+- Real benchmark fixtures: `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video` contains the canonical local video/SRT pair for 3-minute subtitle pipeline benchmarks. Use `test video/X5_시승기_후반.MP4` with its sibling `.srt` as the accuracy truth/reference pair when comparing STT order, LoRA/Deep/LLM gating, timing, VAD, and cut-boundary variants.
+- Short-video test rule: use `/Users/u_mo_c/Downloads/마카오테스트` for quick smoke tests, short subtitle-generation regressions, and fast UI/runtime verification runs.
+- Long-video test rule: use `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4` for long-running pipeline checks, cache-reset/fresh-run validation, ETA/progress observation, and memory/performance validation on extended media.
+- New-chat rule: when handing off to a fresh chat, keep the user-facing handoff in Korean but compress it for token efficiency; prefer exact paths, commands, verified results, and next actions over narrative explanation.
+- Current app version in code: `04.00.06`
+- Current handoff document version: `04.00.06-mac-native`
+- Latest release checkpoint: `v04.00.06`
+- Current phase: `MAC_NATIVE_APPSTORE_V4_0_6_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
@@ -104,6 +135,14 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Word timestamp state: default STT passes keep word timestamps off for speed; low-score, editor-selected, precision-review, and VAD-risk spans are re-run selectively with word timestamps to preserve timing quality.
 - LLM state: roughcut/subtitle LLM lists include an OpenAI Codex ChatGPT CLI option that uses the local Codex subscription flow without requiring an API key or Ollama preflight.
 - Roughcut Codex state: the Codex roughcut path now uses wider row context, a longer timeout, override-model inheritance fixes, and a clean fallback to local-rule drafts when the Codex CLI times out.
+- Automation state: `tools/appctl.py`, `ui/main/app_command_bridge.py`, and `ui/editor/editor_automation.py` now expose deterministic editor actions such as playhead moves, smart split staging/commit, segment-edge movement, diamond movement, shadow-playhead control, current roughcut start, and multiclip start; use these before relying on fragile UI-only interaction when real-app verification is needed.
+- Verification artifact state: compact real-app verification output should be written under `output/manual_verification/latest/` first, then optionally copied into a named sibling folder when a preserved archive is useful.
+- Restart reliability state: restarting subtitle generation from a completed single-file editor now detects a dead backend pipeline thread and falls back to a fresh `start_pipeline(..., is_auto_start=True)` instead of signaling a dead thread; this was verified with the short Macau fixture after cache reset and app relaunch.
+- Restart verification state: after relaunch, `open-media` + `start-current-pipeline` on `/Users/u_mo_c/Downloads/마카오테스트/DJI_20260217224203_0075_D.MP4` re-entered cut-boundary, VAD, STT prep, and STT1/STT2 stages; command/status snapshot calls can still time out under heavy main-thread load, so terminal logs remain the primary truth source during active generation.
+- Smart split state: normal double-click Enter remains plain inline edit, while smart split is now a right-click split mode that arms the playhead, visually marks the target segment, locks diamond/segment-length editing, and commits on Enter using the current text cursor plus the armed playhead time.
+- Timeline assist state: a single shadow playhead can be pinned and is used as a magnetic timing reference for segment handles and diamonds; high-zoom playback follow now uses frame-based centering math so the playhead no longer jitters while the background scrolls.
+- Sidebar layout state: runtime resource metrics live in the top progress card under elapsed/expected time, the lower dashboard card no longer duplicates that line, and the sidebar width now follows responsive window sizing instead of manual drag resizing.
+- Shutdown state: Home-idle LoRA/background learning uses a cancellable subprocess path and fast-detach shutdown guards, and subtitle-text focus-loss cleanup now tolerates deleted Qt wrappers instead of aborting during quit.
 - App Store packaging state: macOS packaging scripts can build the `.app` payload, copy Swift WhisperKit and native helpers, sign locally, validate bundle layout, create/validate a local beta DMG, run double-click `.command` build/update flows for this Mac, prepare Developer ID notarization, build a signed App Store `.pkg`, and validate/upload that package when the user supplies Apple credentials.
 - Packaging rule: do not rebuild DMG files during ordinary refactor or optimization work. Run DMG packaging only when the user explicitly asks for a release, beta package, installer, distribution build, or DMG validation.
 - Benchmark state: macOS native benchmark tools report STT backend readiness, optional real-audio STT WER comparisons, and adopt/fallback decisions for WhisperKit, direct ClearVoice audio, and native cut-boundary routing.
@@ -111,8 +150,8 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Refactor state: the longest subtitle/project/editor/runtime modules were split by responsibility into `core.audio.transcribe_worker_io`, `core.engine.subtitle_segment_filter`, `core.engine.subtitle_accuracy_utils`, `core.pipeline.cut_boundary_cache`, and `ui.editor.editor_segments_bulk_load` so future native migration work has smaller seams.
-- Verification state: `v04.00.05` release verification passed with the full Python suite, Swift package tests, `compileall`, `git diff --check`, local beta DMG build/validation, and refreshed release handoff files. Full release verification details are in `RELEASE_v04.00.05.md`.
-- Latest regression checkpoint: on 2026-05-14, `QT_QPA_PLATFORM=offscreen venv/bin/python -m pytest -q`, `venv/bin/python -m compileall -q main.py core ui tests`, `git diff --check -- .`, `swift test` in `native/macos/AIStudioNative`, and `packaging/macos/build_beta_dmg.sh` all passed for `v04.00.05`.
+- Verification state: `v04.00.06` release verification passed with the full Python suite, Swift package tests, `compileall`, `git diff --check`, local beta DMG build/validation, and refreshed release handoff files. Full release verification details are in `RELEASE_v04.00.06.md`.
+- Latest regression checkpoint: on 2026-05-16, `venv/bin/python -m pytest -q`, `venv/bin/python -m compileall -q main.py core ui tests`, `git diff --check -- .`, `swift test` in `native/macos/AIStudioNative`, and `packaging/macos/build_beta_dmg.sh` passed for `v04.00.06`.
 
 ## Collaboration Rules
 
@@ -125,6 +164,28 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Use `rg` for search whenever possible.
 - Use `apply_patch` for manual file edits.
 - Keep edits scoped to the request and follow existing project patterns.
+
+## Token Efficiency Rules
+
+- Prefer `CODEMAP.md` over `File_structure.txt` when deciding where to read or edit code.
+- After the initial bootstrap in a chat, do not re-read unchanged bootstrap documents (`AGENTS.md`, `ACTION_ITEMS.md`, `File_structure.txt`, `CODEMAP.md`, latest `RELEASE_v*.md`, `README.md`) unless:
+  - a new chat starts;
+  - the user explicitly asks for a re-read; or
+  - the file was edited during the current session and must be re-checked.
+- Keep `File_structure.txt` shallow: root entries plus selected first-level entries for high-signal directories such as `core/`, `ui/`, `tests/`, and `tools/`.
+- Do not maintain exhaustive recursive trees in handoff documents. Use runtime `rg`, `find`, and targeted file reads for detail instead.
+- Keep `CODEMAP.md` responsibility-driven: entry points, hot modules, verification targets, and real-media fixtures only.
+- For fresh-chat handoffs, prefer changed files, exact commands, validation results, and next actions over restating repository structure.
+- Do not paste large JSON payloads, full crash reports, or long terminal logs into the chat unless the user explicitly asks for the full body. Prefer:
+  - a short Korean summary in chat;
+  - the exact local file path for the full artifact; and
+  - only the minimum quoted lines needed to identify the root cause or current state.
+- Store real-app verification artifacts under `output/manual_verification/latest/` by default. This includes compact reports, status snapshots, screenshots, and short notes for the most recent verification pass. If a task needs a permanent named archive too, keep `latest/` as the quick pointer and create the named sibling folder separately.
+- Final completion reports should default to four compact items only unless the user asks for more detail:
+  - root cause or purpose;
+  - files changed;
+  - verification run;
+  - next risk or next action.
 
 ## Refactor Rules
 

@@ -3,7 +3,6 @@
 """Home sidebar status, preset, and model-selection helpers."""
 
 import os
-import re
 import sys
 import time
 from html import escape
@@ -19,7 +18,7 @@ from PyQt6.QtWidgets import (
 from core.runtime import config
 from core.settings import load_settings, save_settings
 from core.path_manager import load_settings as _path_load_settings, save_settings as _path_save_settings
-from core.pipeline_status import generation_stage_keys, generation_stage_keys_all, generation_stage_label
+from core.pipeline_status import generation_stage_label, generation_stage_summary
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
     apply_recommended_stt_quality_defaults,
@@ -461,6 +460,15 @@ class HomeSidebarMixin:
     def _is_subtitle_generation_running(self) -> bool:
         editor = self._active_editor()
         if editor is not None:
+            if bool(getattr(editor, "_roughcut_draft_pending", False)):
+                return True
+            roughcut_pending = getattr(editor, "_roughcut_draft_cleanup_pending", None)
+            if callable(roughcut_pending):
+                try:
+                    if bool(roughcut_pending()):
+                        return True
+                except Exception:
+                    pass
             state_manager = getattr(editor, "sm", None)
             if state_manager is not None:
                 if str(getattr(state_manager, "state", "") or "") == "ST_PROC":
@@ -782,6 +790,7 @@ class HomeSidebarMixin:
         title = f"자막 생성 | {stage_text}"
         progress_text = f"{int(round(percent))}%"
         subtitle = ""
+        resource_text = self._sidebar_runtime_monitor_summary_text()
         if running or percent > 0.0 or total_expected > 0.0:
             elapsed_text = self._sidebar_format_clock(total_elapsed)
             expected_text = self._sidebar_format_clock(total_expected) if total_expected > 0.0 else "--:--"
@@ -793,10 +802,13 @@ class HomeSidebarMixin:
         tooltip_lines = [title, progress_text]
         if subtitle:
             tooltip_lines.append(subtitle)
+        if resource_text:
+            tooltip_lines.append(resource_text)
         return {
             "running": running,
             "title": title,
             "subtitle": subtitle,
+            "meta": resource_text,
             "percent": int(round(percent)),
             "percentValue": float(percent),
             "progressText": progress_text,
@@ -816,8 +828,9 @@ class HomeSidebarMixin:
             "progressVisible": True,
             "progressPercent": snapshot["percent"],
             "progressText": snapshot["progressText"],
+            "meta": snapshot["meta"],
             "fillColor": "#153A25",
-            "height": 38,
+            "height": 50,
             "tooltip": snapshot["tooltip"],
         }
 
@@ -932,12 +945,6 @@ class HomeSidebarMixin:
             "</table>"
         )
         label.setToolTip(tooltip)
-        refresher = getattr(self, "_refresh_sidebar_nav_menu", None)
-        if callable(refresher):
-            try:
-                refresher()
-            except Exception:
-                pass
 
     def _runtime_title_status_color(self) -> str:
         snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
@@ -1330,15 +1337,13 @@ class HomeSidebarMixin:
             return set()
 
         blob = self._pipeline_status_blob()
-        keys = generation_stage_keys_all(
+        stage_summary = generation_stage_summary(
             blob,
             stt_ensemble_enabled=bool(settings.get("stt_ensemble_enabled", False)),
         )
+        keys = set(stage_summary["all_keys"])
         if not keys:
-            keys = generation_stage_keys(
-                blob,
-                stt_ensemble_enabled=bool(settings.get("stt_ensemble_enabled", False)),
-            )
+            keys = set(stage_summary["keys"])
         return keys
 
     def _pipeline_completed_stage_keys(self, settings: dict, current_keys: set[str]) -> set[str]:
@@ -1477,11 +1482,10 @@ class HomeSidebarMixin:
                     completed.add("subtitle_llm")
 
         editor_count = getattr(editor, "_last_roughcut_draft_major_count", None) if editor is not None else None
-        if roughcut_enabled and (roughcut_status == "done" or editor_count is not None):
+        roughcut_active = roughcut_status in {"queued", "running", "saving"}
+        if roughcut_enabled and (roughcut_status == "done" or (editor_count is not None and not roughcut_active)):
             completed.add("roughcut_llm")
-        if roughcut_enabled and self._roughcut_status_text().startswith("완료"):
-            completed.add("roughcut_llm")
-        if roughcut_enabled and generation_done:
+        if roughcut_enabled and not roughcut_active and self._roughcut_status_text().startswith("완료"):
             completed.add("roughcut_llm")
 
         if cut_boundary_enabled and cut_boundary_pending and not cut_boundary_done:
@@ -1594,39 +1598,60 @@ class HomeSidebarMixin:
                 pass
         return "런타임 모니터 활성"
 
-    def _refresh_sidebar_runtime_monitor(self):
-        label = getattr(self, "sidebar_runtime_label", None)
-        if label is None:
-            return
+    def _sidebar_runtime_monitor_summary_text(self) -> str:
         snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
         if not snapshot:
-            label.setTextFormat(Qt.TextFormat.RichText)
-            label.setText(
-                "<div style='margin-top:3px; padding-top:3px; border-top:1px solid #22313A;'>"
-                "<div style='color:#6E8594; font-size:8px;'>CPU -- · PROC -- · RAM --</div>"
-                "</div>"
-            )
-            label.setToolTip("런타임 모니터 대기 중")
-            return
-        coordinator = getattr(self, "_runtime_resource_coordinator", None)
-        if coordinator is not None and hasattr(coordinator, "status_html"):
+            return "CPU -- · PROC -- · RAM --"
+        try:
+            cpu = float(snapshot.get("system_cpu_percent", 0.0) or 0.0)
+        except Exception:
+            cpu = 0.0
+        try:
+            proc = float(snapshot.get("process_cpu_percent", 0.0) or 0.0)
+        except Exception:
+            proc = 0.0
+        try:
+            ram = float(snapshot.get("rss_gb", 0.0) or 0.0)
+        except Exception:
+            ram = 0.0
+        return f"CPU {cpu:.0f}% · PROC {proc:.0f}% · RAM {ram:.2f}GB"
+
+    def _refresh_sidebar_runtime_monitor(self):
+        label = getattr(self, "sidebar_runtime_label", None)
+        snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
+        if label is not None:
+            if not snapshot:
+                label.setTextFormat(Qt.TextFormat.RichText)
+                label.setText(
+                    "<div style='margin-top:3px; padding-top:3px; border-top:1px solid #22313A;'>"
+                    "<div style='color:#6E8594; font-size:8px;'>CPU -- · PROC -- · RAM --</div>"
+                    "</div>"
+                )
+                label.setToolTip("런타임 모니터 대기 중")
+            else:
+                coordinator = getattr(self, "_runtime_resource_coordinator", None)
+                if coordinator is not None and hasattr(coordinator, "status_html"):
+                    try:
+                        html = str(coordinator.status_html(snapshot))
+                    except Exception:
+                        html = ""
+                else:
+                    html = ""
+                if not html:
+                    html = (
+                        "<div style='margin-top:3px; padding-top:3px; border-top:1px solid #22313A;'>"
+                        f"<div style='color:#DCE7F3; font-size:8px;'>{self._sidebar_runtime_monitor_summary_text()}</div>"
+                        "</div>"
+                    )
+                label.setTextFormat(Qt.TextFormat.RichText)
+                label.setText(html)
+                label.setToolTip(self._runtime_monitor_tooltip())
+        refresher = getattr(self, "_refresh_sidebar_nav_menu", None)
+        if callable(refresher):
             try:
-                html = str(coordinator.status_html(snapshot))
+                refresher()
             except Exception:
-                html = ""
-        else:
-            html = ""
-        if not html:
-            html = (
-                "<div style='margin-top:3px; padding-top:3px; border-top:1px solid #22313A;'>"
-                f"<div style='color:#DCE7F3; font-size:8px;'>CPU {float(snapshot.get('system_cpu_percent', 0.0)):.0f}% · "
-                f"PROC {float(snapshot.get('process_cpu_percent', 0.0)):.0f}% · "
-                f"RAM {float(snapshot.get('rss_gb', 0.0)):.2f}GB</div>"
-                "</div>"
-            )
-        label.setTextFormat(Qt.TextFormat.RichText)
-        label.setText(html)
-        label.setToolTip(self._runtime_monitor_tooltip())
+                pass
 
     def _settings_with_runtime_audio_tune(self, settings: dict | None) -> dict:
         out = dict(settings or {})

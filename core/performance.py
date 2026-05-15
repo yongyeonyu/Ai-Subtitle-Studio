@@ -19,10 +19,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.coerce import positive_int as _positive_int
 from core.native_json import dumps_json_bytes
 from core.runtime.hardware_profile import darwin_sysctl_int as _sysctl_int
 from core.runtime.hardware_profile import hardware_profile
 from core.runtime import qt_runtime as _qt_runtime
+from core.runtime.setting_utils import setting_bool as _setting_bool
 
 
 configure_qt_application_font = _qt_runtime.configure_qt_application_font
@@ -51,15 +53,6 @@ _JSON_WRITE_LOCK = threading.Lock()
 _RAMP_LOCK = threading.Lock()
 _RUNTIME_RAMP_STARTED_AT = 0.0
 
-
-def _positive_int(value: Any, default: int = 0) -> int:
-    try:
-        parsed = int(float(value))
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default
-
-
 def apple_silicon_runtime_profile(
     settings: dict[str, Any] | None = None,
     *,
@@ -83,7 +76,6 @@ def apple_silicon_runtime_profile(
     memory_gb = float(profile.get("memory_bytes", 0) or 0) / float(1024 ** 3)
     generation = max(0, int(profile.get("chip_generation", 0) or 0))
     tier = str(profile.get("chip_tier") or "base").lower()
-    max_profile = _safe_bool(settings.get("runtime_hardware_acceleration_enabled"), True) and performance_profile(settings) == "max"
 
     if generation >= 5:
         balanced = performance + min(efficiency, 3)
@@ -464,13 +456,13 @@ def balanced_task_slices(
 
 
 def _safe_bool(value: Any, default: bool = True) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in {"0", "false", "off", "no", "끔", "아니오"}
-    return bool(value)
+    return _setting_bool(
+        value,
+        default,
+        false_values={"0", "false", "off", "no", "끔", "아니오"},
+        false_only_strings=True,
+        empty_is_default=False,
+    )
 
 
 def mark_runtime_scheduler_start(settings: dict[str, Any] | None = None) -> dict[str, Any]:

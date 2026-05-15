@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import atexit
-import json
 import os
 import subprocess
 import sys
 import threading
 from pathlib import Path
 from typing import Any
+
+from core.native_json import dumps_json_text, json_default, loads_json, write_jsonl_line
 
 _CORE_WORKER: subprocess.Popen | None = None
 _CORE_WORKER_LOCK = threading.Lock()
@@ -80,18 +81,6 @@ def native_swift_runtime_enabled(feature_env: str | None = None, *, default_on_m
         return True
     return bool(default_on_macos and sys.platform == "darwin")
 
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (set, tuple)):
-        return list(value)
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except Exception:
-            pass
-    return str(value)
-
-
 def _start_core_worker(cli: Path) -> subprocess.Popen | None:
     global _CORE_WORKER
     if _CORE_WORKER is not None and _CORE_WORKER.poll() is None:
@@ -135,7 +124,7 @@ def request_native_core_task(task: str, payload: dict[str, Any]) -> dict[str, An
     request = dict(payload)
     request["task"] = task
     try:
-        encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+        encoded = dumps_json_text(request, compact=True, default=json_default)
     except Exception:
         return None
     with _CORE_WORKER_LOCK:
@@ -143,13 +132,13 @@ def request_native_core_task(task: str, payload: dict[str, Any]) -> dict[str, An
         if worker is None or worker.stdin is None or worker.stdout is None:
             return None
         try:
-            worker.stdin.write(encoded.replace("\n", " ") + "\n")
+            write_jsonl_line(worker.stdin, encoded)
             worker.stdin.flush()
             line = worker.stdout.readline()
             if not line:
                 stop_native_core_worker()
                 return None
-            decoded = json.loads(line)
+            decoded = loads_json(line)
             if not isinstance(decoded, dict) or decoded.get("error"):
                 return None
             return decoded
@@ -174,7 +163,7 @@ def parse_srt_via_swift(srt_path: str) -> list[dict[str, Any]] | None:
                 encoding="utf-8",
                 timeout=15,
             )
-            rows = json.loads(proc.stdout or "[]")
+            rows = loads_json(proc.stdout or "[]")
         except Exception:
             return None
     if not isinstance(rows, list):

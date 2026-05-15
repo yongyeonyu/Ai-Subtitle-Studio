@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import urllib.error
@@ -66,6 +67,7 @@ DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT = """너는 자막 생성이 완료된 뒤 
 
 
 MAX_EDITOR_MAJOR_SEGMENTS = 26
+_ROUGHCUT_AUTORUN_FALSE_VALUES = frozenset({"0", "false", "off", "no", "사용 안함", "사용안함", "끔"})
 
 
 def _roughcut_llm_connection_unavailable(exc: Exception) -> bool:
@@ -181,6 +183,62 @@ def editor_roughcut_draft_enabled(settings: dict[str, Any] | None) -> bool:
         merged = merge_roughcut_settings(settings or {})
         enabled = bool(merged.get("cut_boundary_detection_enabled", merged.get("scan_cut_enabled", True)))
     return enabled and not is_fast_recognition_mode(settings)
+
+
+def editor_roughcut_draft_autorun_enabled(settings: dict[str, Any] | None) -> bool:
+    source = settings or {}
+    value = source.get("roughcut_run_after_subtitle_generation", None)
+    if isinstance(value, str):
+        enabled: bool | None = value.strip().lower() not in _ROUGHCUT_AUTORUN_FALSE_VALUES
+    elif value is None:
+        enabled = None
+    else:
+        enabled = bool(value)
+
+    merged = merge_roughcut_settings(source)
+    if not bool(merged.get("roughcut_llm_enabled", False)):
+        return False
+    if enabled is True:
+        return True
+    if editor_roughcut_draft_enabled(source):
+        return True
+    return bool(enabled)
+
+
+def estimate_editor_roughcut_llm_runtime_sec(
+    duration_sec: float,
+    settings: dict[str, Any] | None = None,
+) -> float:
+    source = settings or {}
+    if max(0.0, float(duration_sec or 0.0)) <= 0.0:
+        return 0.0
+    if not editor_roughcut_draft_autorun_enabled(source):
+        return 0.0
+
+    llm_config = resolve_roughcut_llm_config(source, subtitle_rows=[])
+    provider = str(getattr(llm_config, "provider", "") or "").strip().lower()
+    model = str(getattr(llm_config, "model", "") or "").strip().lower()
+    max_context_rows = max(1, int(getattr(llm_config, "max_context_rows", 80) or 80))
+    chunk_rows = max(1, min(max_context_rows, int(getattr(llm_config, "chunk_rows", 12) or 12)))
+    estimated_rows = max(1, int(round(float(duration_sec or 0.0) / 6.0)))
+    if estimated_rows <= max_context_rows:
+        chunk_count = 1
+    else:
+        chunk_count = max(1, math.ceil(estimated_rows / float(chunk_rows)))
+    chunk_count = max(1, min(18, int(chunk_count or 1)))
+
+    base_sec = 6.0
+    per_chunk_sec = 5.5
+    if provider in {"openai", "google", "gemini"}:
+        base_sec = 8.0
+        per_chunk_sec = 6.5
+    if "codex" in model:
+        base_sec = max(base_sec, 10.0)
+        per_chunk_sec = max(per_chunk_sec, 8.0)
+    if provider == "ollama":
+        thread_bonus = max(0, int(getattr(llm_config, "threads", 1) or 1) - 1)
+        per_chunk_sec = max(4.0, per_chunk_sec - min(1.5, 0.35 * thread_bonus))
+    return max(8.0, min(240.0, base_sec + (float(chunk_count) * per_chunk_sec)))
 
 
 def editor_roughcut_draft_llm_allowed(
@@ -439,14 +497,35 @@ def run_editor_roughcut_llm_draft(
             cut_boundaries=cut_boundaries,
             provisional_cut_boundaries=provisional_cut_boundaries,
         )
+        estimated_runtime_sec = estimate_editor_roughcut_llm_runtime_sec(
+            max((float(seg.get("end", 0.0) or 0.0) for seg in list(segments or [])), default=0.0),
+            settings=settings,
+        )
         if str(scope.get("mode") or "") == "single":
+            try:
+                from core.runtime.logger import get_logger
+
+                eta_label = f" · 예상 {estimated_runtime_sec:.0f}s" if estimated_runtime_sec > 0.0 else ""
+                get_logger().log(
+                    "🤖 [러프컷 LLM] 단일 패스 시작: "
+                    f"{provider}/{model} · row {len(rows)}개{eta_label}"
+                )
+            except Exception:
+                pass
             prompt = build_editor_roughcut_draft_prompt(
                 segments,
                 settings=settings,
                 reference_major_segments=reference_major_segments,
                 reviewed_cut_boundaries=reviewed_cut_boundaries,
             )
-            return _call_editor_roughcut_json(provider, model, prompt, timeout=call_timeout)
+            result = _call_editor_roughcut_json(provider, model, prompt, timeout=call_timeout)
+            try:
+                from core.runtime.logger import get_logger
+
+                get_logger().log("✅ [러프컷 LLM] 단일 패스 완료")
+            except Exception:
+                pass
+            return result
 
         subtitles = _normalize_subtitles(segments)
         if not subtitles:
@@ -454,6 +533,7 @@ def run_editor_roughcut_llm_draft(
         combined_groups: list[dict[str, Any]] = []
         llm_success_count = 0
         local_fallback_count = 0
+        chunk_total = max(1, int(scope.get("chunk_count", 1) or 1))
         for chunk in list(scope.get("chunks") or []):
             prompt_segments = segments[
                 int(chunk["prompt_start_index"]): int(chunk["prompt_end_index"]) + 1
@@ -462,6 +542,18 @@ def run_editor_roughcut_llm_draft(
                 int(chunk["core_start_index"]): int(chunk["core_end_index"]) + 1
             ]
             prompt_subtitles = _normalize_subtitles(prompt_segments)
+            chunk_no = int(chunk.get("index", 0) or 0) + 1
+            chunk_pct = int(round((float(chunk_no) / float(chunk_total or 1)) * 100.0))
+            try:
+                from core.runtime.logger import get_logger
+
+                get_logger().log(
+                    "🤖 [러프컷 LLM] chunk "
+                    f"{chunk_no}/{chunk_total} 시작 ({chunk_pct}%)"
+                    f" · core {chunk.get('core_start_subtitle_id')}~{chunk.get('core_end_subtitle_id')}"
+                )
+            except Exception:
+                pass
             prompt = build_editor_roughcut_draft_prompt(
                 prompt_segments,
                 settings=settings,
@@ -519,13 +611,39 @@ def run_editor_roughcut_llm_draft(
             )
             if groups:
                 llm_success_count += 1
+                try:
+                    from core.runtime.logger import get_logger
+
+                    get_logger().log(
+                        f"✅ [러프컷 LLM] chunk {chunk_no}/{chunk_total} 완료 ({chunk_pct}%)"
+                        f" · 중분류 {len(groups)}개"
+                    )
+                except Exception:
+                    pass
                 combined_groups.extend(groups)
                 continue
             local_fallback_count += 1
+            try:
+                from core.runtime.logger import get_logger
+
+                get_logger().log(
+                    f"↩️ [러프컷 LLM] chunk {chunk_no}/{chunk_total} 로컬 규칙으로 대체 ({chunk_pct}%)"
+                )
+            except Exception:
+                pass
             combined_groups.extend(_local_major_groups_from_subtitles(core_subtitles, settings=settings))
 
         if not combined_groups or llm_success_count <= 0:
             return None
+        try:
+            from core.runtime.logger import get_logger
+
+            get_logger().log(
+                "✅ [러프컷 LLM] chunked 완료: "
+                f"성공 {llm_success_count}개 · 로컬 대체 {local_fallback_count}개 · 총 {chunk_total}chunk"
+            )
+        except Exception:
+            pass
         return _payload_from_major_groups(
             combined_groups,
             chunk_count=int(scope.get("chunk_count", 0) or 0),
@@ -1840,8 +1958,10 @@ __all__ = [
     "build_editor_roughcut_draft_prompt",
     "build_editor_roughcut_draft_result",
     "describe_editor_roughcut_llm_scope",
+    "editor_roughcut_draft_autorun_enabled",
     "editor_roughcut_draft_enabled",
     "editor_roughcut_draft_llm_allowed",
+    "estimate_editor_roughcut_llm_runtime_sec",
     "is_fast_recognition_mode",
     "merge_editor_roughcut_draft_state",
     "run_editor_roughcut_llm_draft",

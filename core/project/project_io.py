@@ -79,39 +79,10 @@ def _project_payload_for_disk(project: dict[str, Any]) -> dict[str, Any]:
     for key in _PROJECT_RUNTIME_KEYS:
         payload.pop(key, None)
     try:
-        from core.project.project_assets import PROJECT_EXTERNAL_STORAGE, project_uses_external_text_assets
+        from core.project.project_assets import project_uses_external_text_assets, strip_external_text_runtime_payload
 
         if project_uses_external_text_assets(payload):
-            payload.pop("segments", None)
-            subtitles = dict(payload.get("subtitles", {}) or {})
-            subtitles.pop("segments", None)
-            subtitles["storage"] = PROJECT_EXTERNAL_STORAGE
-            payload["subtitles"] = subtitles
-
-            editor_state = dict(payload.get("editor_state", {}) or {})
-            editor_subtitles = dict(editor_state.get("subtitles", {}) or {})
-            editor_subtitles["segments"] = []
-            editor_subtitles["storage"] = PROJECT_EXTERNAL_STORAGE
-            editor_state["subtitles"] = editor_subtitles
-
-            rendering = dict(editor_state.get("rendering", {}) or {})
-            canvas = dict(rendering.get("subtitle_canvas", {}) or {})
-            canvas["segments"] = []
-            rendering["subtitle_canvas"] = canvas
-            editor_state["rendering"] = rendering
-
-            stt_state = dict(editor_state.get("stt", {}) or {})
-            stt_state["preview_segments"] = []
-            stt_state["candidate_tracks"] = {}
-            editor_state["stt"] = stt_state
-            editor_analysis = dict(editor_state.get("analysis", {}) or {})
-            editor_analysis.pop("stt_candidate_tracks", None)
-            editor_state["analysis"] = editor_analysis
-            payload["editor_state"] = editor_state
-
-            analysis = dict(payload.get("analysis", {}) or {})
-            analysis.pop("stt_candidate_tracks", None)
-            payload["analysis"] = analysis
+            strip_external_text_runtime_payload(payload)
     except Exception:
         pass
     return build_storage_project_payload(payload)

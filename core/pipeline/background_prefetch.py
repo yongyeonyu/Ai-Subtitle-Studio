@@ -6,6 +6,9 @@ import time
 from heapq import nsmallest
 from typing import Any
 
+from core.coerce import safe_float as _safe_float, safe_round_int as _safe_int
+from core.runtime.setting_utils import setting_bool as _setting_bool
+
 BACKGROUND_PREFETCH_SCHEMA = "ai_subtitle_studio.background_prefetch.v1"
 _PREFETCH_SEGMENT_KEYS = (
     "start",
@@ -37,32 +40,13 @@ _PREFETCH_CANDIDATE_KEYS = (
 
 
 def _safe_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in {"0", "false", "off", "no", "n", "끔", "아니오"}
-    return bool(value)
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return float(default)
-        return float(value)
-    except Exception:
-        return float(default)
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return int(default)
-        return int(round(float(value)))
-    except Exception:
-        return int(default)
-
+    return _setting_bool(
+        value,
+        default,
+        false_values={"0", "false", "off", "no", "n", "끔", "아니오"},
+        false_only_strings=True,
+        empty_is_default=False,
+    )
 
 def _prefetch_segment_bounds(row: dict[str, Any]) -> tuple[float, float]:
     seg_start = _safe_float(row.get("start", row.get("timeline_start")), 0.0)
@@ -116,15 +100,16 @@ def build_background_prefetch_plan(
     segment_limit = _safe_int(settings.get("background_prefetch_segment_limit"), 10)
     lora_limit = _safe_int(settings.get("background_prefetch_lora_limit"), 4)
     candidate_limit = _safe_int(settings.get("background_prefetch_candidate_limit"), 8)
-    nearby = _segment_window(segments, float(current_sec or 0.0), before_sec, after_sec, segment_limit)
+    current = float(current_sec or 0.0)
+    nearby = _segment_window(segments, current, before_sec, after_sec, segment_limit)
     return {
         "schema": BACKGROUND_PREFETCH_SCHEMA,
         "enabled": enabled,
         "media_path": os.path.abspath(str(media_path or "")) if media_path else "",
-        "current_sec": round(float(current_sec or 0.0), 3),
+        "current_sec": round(current, 3),
         "window": {
-            "start": round(max(0.0, float(current_sec or 0.0) - before_sec), 3),
-            "end": round(float(current_sec or 0.0) + after_sec, 3),
+            "start": round(max(0.0, current - before_sec), 3),
+            "end": round(current + after_sec, 3),
             "before_sec": before_sec,
             "after_sec": after_sec,
         },

@@ -488,6 +488,40 @@ class WordResegmenterTests(unittest.TestCase):
         self.assertEqual(result[0]["text"], "티니핑 전시예요")
         self.assertNotIn("_lora_packaging_policy", result[0])
 
+    def test_non_speaker_multiline_rows_expand_into_consecutive_segments(self):
+        result = subtitle_engine._expand_non_speaker_multiline_segments(
+            [
+                {
+                    "start": 10.0,
+                    "end": 12.4,
+                    "text": "수소를 만들고\n보관해서 자동차를 달리게 하자",
+                    "_lora_packaging_policy": {"task": "lora_card_packaging"},
+                }
+            ]
+        )
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual([item["text"] for item in result], ["수소를 만들고", "보관해서 자동차를 달리게 하자"])
+        self.assertAlmostEqual(result[0]["start"], 10.0)
+        self.assertAlmostEqual(result[-1]["end"], 12.4)
+        self.assertAlmostEqual(result[0]["end"], result[1]["start"])
+        self.assertEqual(result[0]["_lora_packaging_policy"]["output_mode"], "segment_split")
+
+    def test_speaker_split_multiline_rows_keep_line_breaks(self):
+        result = subtitle_engine._expand_non_speaker_multiline_segments(
+            [
+                {
+                    "start": 1.0,
+                    "end": 3.0,
+                    "text": "- 안녕하세요\n- 반갑습니다",
+                    "speaker_list": ["00", "01"],
+                }
+            ]
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "- 안녕하세요\n- 반갑습니다")
+
     def test_common_split_guard_does_not_recut_lora_twenty_char_style(self):
         text = "이번에 마크마가 WEC 데뷔전에서 완주를 두 대 다 했잖아요"
         words = [

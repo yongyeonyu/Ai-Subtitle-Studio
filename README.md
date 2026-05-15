@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.05-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.05-30D158?style=for-the-badge)](RELEASE_v04.00.05.md)
+[![App Version](https://img.shields.io/badge/app-04.00.06-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.06-30D158?style=for-the-badge)](RELEASE_v04.00.06.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -151,10 +151,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.05` |
-| Latest release checkpoint | `v04.00.05` |
-| Handoff document version | `04.00.05-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_5_RELEASED` |
+| App version in code | `04.00.06` |
+| Latest release checkpoint | `v04.00.06` |
+| Handoff document version | `04.00.06-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_6_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -185,7 +185,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.05.md`](RELEASE_v04.00.05.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.06.md`](RELEASE_v04.00.06.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

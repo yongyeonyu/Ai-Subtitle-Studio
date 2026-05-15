@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from typing import Any
 
+from core.coerce import safe_float as _safe_float, safe_round_int as _safe_int
 from core.frame_time import frame_to_sec, normalize_fps, normalize_segments_to_frame_grid, sec_to_nearest_frame
 from core.project.project_format import project_primary_fps
 from core.project.project_srt import parse_srt_to_segments, strip_whisper_control_tokens
@@ -127,21 +128,6 @@ _COMPACT_META_KEYS = {
     "_one_click_fix_request",
 }
 
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(round(float(value)))
-    except (TypeError, ValueError):
-        return int(default)
-
-
 def _project_primary_fps(project: dict[str, Any] | None) -> float:
     return project_primary_fps(project)
 
@@ -186,6 +172,43 @@ def _project_file_path(project: dict[str, Any] | None) -> str:
         if value:
             return os.path.abspath(os.path.expanduser(value))
     return ""
+
+
+def copy_project_rows(rows: Any) -> list[dict[str, Any]]:
+    source_rows = rows if isinstance(rows, list) else list(rows or [])
+    return [dict(row) for row in source_rows if isinstance(row, dict)]
+
+
+def copy_project_track_rows(tracks: Any) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(tracks, dict):
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for source, rows in tracks.items():
+        copied = copy_project_rows(rows)
+        if copied:
+            out[str(source)] = copied
+    return out
+
+
+def stt_candidate_track_counts(tracks: Any, *, count_key: str = "segment_count") -> dict[str, int]:
+    if not isinstance(tracks, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for source, rows in tracks.items():
+        if isinstance(rows, list):
+            counts[str(source)] = len(rows)
+            continue
+        if isinstance(rows, dict):
+            try:
+                counts[str(source)] = int(rows.get(count_key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+    return counts
+
+
+def _track_metadata_rows(track: dict[str, Any]) -> list[Any]:
+    metadata = track.get("metadata")
+    return list(metadata) if isinstance(metadata, list) else []
 
 
 def _inferred_track_path(project: dict[str, Any] | None, key: str) -> str:
@@ -542,7 +565,7 @@ def write_srt_track(rows: list[dict[str, Any]], srt_path: str) -> dict[str, Any]
     prepared_rows = (
         normalize_segments_to_frame_grid(rows, inferred_fps, min_frames=1, preserve_order=True)
         if inferred_fps is not None
-        else [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+        else copy_project_rows(rows)
     )
     lines: list[str] = []
     serial = 1
@@ -654,23 +677,84 @@ def _track_ref(track: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _track_rows_from_write_result(result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    rows = result.get("rows") if isinstance(result, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+def _external_stt_track_payload(stt_external_tracks: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
+    refs: dict[str, dict[str, Any]] = {}
+    counts: dict[str, int] = {}
+    if not isinstance(stt_external_tracks, dict):
+        return refs, counts
+    for source, track in stt_external_tracks.items():
+        if not isinstance(track, dict) or not track:
+            continue
+        source_key = str(source)
+        refs[source_key] = _track_ref(track)
+        try:
+            counts[source_key] = int(track.get("segment_count", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return refs, counts
+
+
+def strip_external_text_runtime_payload(project: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(project, dict):
+        return project
+    project.pop("segments", None)
+    subtitles = dict(project.get("subtitles", {}) or {})
+    subtitles.pop("segments", None)
+    subtitles["storage"] = PROJECT_EXTERNAL_STORAGE
+    project["subtitles"] = subtitles
+
+    editor_state = project.get("editor_state")
+    if isinstance(editor_state, dict):
+        editor_state = dict(editor_state)
+        editor_subtitles = dict(editor_state.get("subtitles", {}) or {})
+        editor_subtitles["segments"] = []
+        editor_subtitles["storage"] = PROJECT_EXTERNAL_STORAGE
+        editor_state["subtitles"] = editor_subtitles
+
+        rendering = dict(editor_state.get("rendering", {}) or {})
+        canvas = dict(rendering.get("subtitle_canvas", {}) or {})
+        canvas["segments"] = []
+        rendering["subtitle_canvas"] = canvas
+        editor_state["rendering"] = rendering
+
+        stt_state = dict(editor_state.get("stt", {}) or {})
+        stt_state["preview_segments"] = []
+        stt_state["candidate_tracks"] = {}
+        editor_state["stt"] = stt_state
+
+        editor_analysis = dict(editor_state.get("analysis", {}) or {})
+        editor_analysis.pop("stt_candidate_tracks", None)
+        editor_state["analysis"] = editor_analysis
+        project["editor_state"] = editor_state
+
+    analysis = dict(project.get("analysis", {}) or {})
+    analysis.pop("stt_candidate_tracks", None)
+    project["analysis"] = analysis
+    return project
+
+
 def load_external_subtitle_segments(project: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(project, dict):
         return []
     hot_cached = project.get("_hot_open_subtitle_segments_cache")
     if isinstance(hot_cached, list) and hot_cached:
-        return [dict(row) for row in hot_cached if isinstance(row, dict)]
+        return copy_project_rows(hot_cached)
     track = _track_from_project(project, _FINAL_TRACK)
     path = resolve_project_asset_path(project, track.get("path"))
     primary_fps = _project_primary_fps(project)
     if path and os.path.exists(path):
         return _merge_srt_metadata(
             parse_srt_to_segments(path),
-            list(track.get("metadata") or []),
+            _track_metadata_rows(track),
             primary_fps=primary_fps,
         )
     cached = project.get("_external_subtitle_segments_cache")
-    return [dict(row) for row in cached] if isinstance(cached, list) else []
+    return copy_project_rows(cached)
 
 
 def load_external_stt_tracks(project: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
@@ -696,7 +780,7 @@ def load_external_stt_tracks(project: dict[str, Any] | None) -> dict[str, list[d
             continue
         rows = _merge_srt_metadata(
             parse_srt_to_segments(path),
-            list(track.get("metadata") or []),
+            _track_metadata_rows(track),
             source=source,
             primary_fps=primary_fps,
         )
@@ -706,13 +790,7 @@ def load_external_stt_tracks(project: dict[str, Any] | None) -> dict[str, list[d
     if out:
         return out
     cached = project.get("_external_stt_tracks_cache")
-    if isinstance(cached, dict):
-        return {
-            str(source): [dict(row) for row in rows]
-            for source, rows in cached.items()
-            if isinstance(rows, list)
-        }
-    return out
+    return copy_project_track_rows(cached)
 
 
 def hydrate_project_text_asset_cache(project: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -723,22 +801,14 @@ def hydrate_project_text_asset_cache(project: dict[str, Any] | None) -> dict[str
         project["_external_subtitle_segments_cache"] = subtitles
     stt_tracks = load_external_stt_tracks(project)
     if stt_tracks:
-        project["_external_stt_tracks_cache"] = {
-            source: [dict(row) for row in rows]
-            for source, rows in stt_tracks.items()
-        }
+        project["_external_stt_tracks_cache"] = stt_tracks
+        stt_counts = stt_candidate_track_counts(stt_tracks)
         editor_state = project.setdefault("editor_state", {})
         if isinstance(editor_state, dict):
             stt_state = editor_state.setdefault("stt", {})
             if isinstance(stt_state, dict):
-                stt_state["candidate_tracks"] = {
-                    source: [dict(row) for row in rows]
-                    for source, rows in stt_tracks.items()
-                }
-                stt_state["candidate_counts"] = {
-                    source: len(rows)
-                    for source, rows in stt_tracks.items()
-                }
+                stt_state["candidate_tracks"] = copy_project_track_rows(stt_tracks)
+                stt_state["candidate_counts"] = dict(stt_counts)
     return project
 
 
@@ -765,15 +835,15 @@ def externalize_project_text_assets(
 
     tracks_manifest: dict[str, Any] = {}
     final_info = write_srt_track(final_segments, os.path.join(subtitle_dir, "final.srt"))
+    final_rows = _track_rows_from_write_result(final_info)
     final_metadata = [
         compact_segment_metadata(row, idx + 1, default_fps=primary_fps)
-        for idx, row in enumerate(list(final_info.get("rows") or []))
+        for idx, row in enumerate(final_rows)
     ]
     final_track = _track_manifest(project_path, _FINAL_TRACK, final_info, final_metadata)
     tracks_manifest[_FINAL_TRACK] = final_track
-    project["_hot_open_subtitle_segments_cache"] = [
-        dict(row) for row in list(final_info.get("rows") or []) if isinstance(row, dict)
-    ]
+    project["_hot_open_subtitle_segments_cache"] = final_rows
+    final_track_ref = _track_ref(final_track)
 
     stt_external_tracks: dict[str, Any] = {}
     for source in ("STT1", "STT2"):
@@ -786,14 +856,16 @@ def externalize_project_text_assets(
             continue
         key = f"{_STT_TRACK_PREFIX}{source.lower()}"
         info = write_srt_track(rows, os.path.join(subtitle_dir, f"{source.lower()}.srt"))
+        persisted_rows = _track_rows_from_write_result(info)
         metadata = [
             compact_segment_metadata(row, idx + 1, source=source, default_fps=primary_fps)
-            for idx, row in enumerate(list(info.get("rows") or []))
+            for idx, row in enumerate(persisted_rows)
         ]
         track = _track_manifest(project_path, key, info, metadata)
         track["source"] = source
         tracks_manifest[key] = track
         stt_external_tracks[source] = track
+    stt_track_refs, stt_track_counts = _external_stt_track_payload(stt_external_tracks)
 
     project["asset_storage"] = {
         "schema": PROJECT_TEXT_ASSET_SCHEMA,
@@ -808,8 +880,8 @@ def externalize_project_text_assets(
     subtitles["srt_path"] = final_track["path"]
     subtitles["segment_count"] = final_track["segment_count"]
     subtitles["segment_signature"] = final_track["signature"]
-    subtitles["external_track"] = _track_ref(final_track)
-    subtitles["external_tracks"] = {_FINAL_TRACK: _track_ref(final_track)}
+    subtitles["external_track"] = dict(final_track_ref)
+    subtitles["external_tracks"] = {_FINAL_TRACK: dict(final_track_ref)}
     subtitles.pop("segments", None)
 
     editor_state = project.get("editor_state")
@@ -829,32 +901,17 @@ def externalize_project_text_assets(
         stt_state = editor_state.setdefault("stt", {})
         stt_state["preview_segments"] = []
         stt_state["candidate_tracks"] = {}
-        stt_state["external_tracks"] = {
-            source: _track_ref(track)
-            for source, track in stt_external_tracks.items()
-        }
-        stt_state["candidate_counts"] = {
-            source: int(track.get("segment_count", 0) or 0)
-            for source, track in stt_external_tracks.items()
-        }
+        stt_state["external_tracks"] = {source: dict(ref) for source, ref in stt_track_refs.items()}
+        stt_state["candidate_counts"] = dict(stt_track_counts)
         editor_analysis = editor_state.setdefault("analysis", {})
         if isinstance(editor_analysis, dict):
             editor_analysis.pop("stt_candidate_tracks", None)
-            editor_analysis["external_stt_tracks"] = {
-                source: _track_ref(track)
-                for source, track in stt_external_tracks.items()
-            }
+            editor_analysis["external_stt_tracks"] = {source: dict(ref) for source, ref in stt_track_refs.items()}
     analysis = project.setdefault("analysis", {})
     analysis.pop("stt_candidate_tracks", None)
     analysis["stt_candidate_schema"] = "stt_candidate_tracks.external_srt.v1"
-    analysis["external_stt_tracks"] = {
-        source: _track_ref(track)
-        for source, track in stt_external_tracks.items()
-    }
-    analysis["stt_candidate_counts"] = {
-        source: int(track.get("segment_count", 0) or 0)
-        for source, track in stt_external_tracks.items()
-    }
+    analysis["external_stt_tracks"] = {source: dict(ref) for source, ref in stt_track_refs.items()}
+    analysis["stt_candidate_counts"] = dict(stt_track_counts)
     return project
 
 
@@ -878,6 +935,8 @@ def project_uses_external_text_assets(project: dict[str, Any] | None) -> bool:
 __all__ = [
     "PROJECT_EXTERNAL_STORAGE",
     "PROJECT_TEXT_ASSET_SCHEMA",
+    "copy_project_rows",
+    "copy_project_track_rows",
     "externalize_project_text_assets",
     "hydrate_project_text_asset_cache",
     "load_external_stt_tracks",
@@ -887,5 +946,6 @@ __all__ = [
     "relative_asset_path",
     "resolve_project_asset_path",
     "sanitize_stt_track_rows",
+    "strip_external_text_runtime_payload",
     "write_srt_track",
 ]

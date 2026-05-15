@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import QMessageBox
 from core.engine.subtitle_engine import save_srt
 from core.native_swift_timeline import capture_undo_snapshot_via_swift
 from core.path_manager import get_srt_path
+from core.project.project_runtime_capture import collect_editor_project_aux_state
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.work_mode import EDITOR_MODE, normalize_work_mode
@@ -939,18 +940,10 @@ class EditorSaveManagerMixin:
             workspace["edit_lock"] = False
         workspace["active_clip_idx"] = int(getattr(self.timeline.canvas, "_active_clip_idx", getattr(main_w, "_active_clip_idx", 0)) or 0)
         workspace["active_work_mode"] = normalize_work_mode(getattr(main_w, "_current_work_mode", EDITOR_MODE))
-        stt_preview_segments = list(getattr(self, "_live_stt_preview_segments", []) or [])
-        voice_activity_segments = []
-        provisional_cut_boundaries = []
-        try:
-            if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
-                canvas = self.timeline.canvas
-                voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
-                provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
-        except Exception:
-            voice_activity_segments = []
-            provisional_cut_boundaries = []
-        provisional_cut_boundaries = self._project_provisional_cut_boundaries_for_save()
+        aux_state = collect_editor_project_aux_state(self)
+        stt_preview_segments = aux_state["stt_preview_segments"]
+        voice_activity_segments = aux_state["voice_activity_segments"]
+        provisional_cut_boundaries = aux_state["provisional_cut_boundaries"]
         stt_mode_state = None
         stt_mode_learning = None
         if getattr(self, "_stt_mode_enabled", False) or getattr(self, "_stt_work_segments", None):

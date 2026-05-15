@@ -25,7 +25,7 @@ Rectangle {
                 required property var modelData
 
                 width: root.width
-                height: modelData.height || (modelData.progressVisible ? 38 : 26)
+                height: modelData.height || (modelData.progressVisible ? ((modelData.meta || "") ? 50 : 38) : 26)
                 radius: 7
                 color: modelData.progressVisible
                        ? (hitArea.containsMouse ? "#10181D" : "transparent")
@@ -163,6 +163,17 @@ Rectangle {
                             width: parent.width
                             text: modelData.subtitle || ""
                             color: "#B9C7D3"
+                            font.pixelSize: 8
+                            font.bold: true
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        Text {
+                            visible: !!(modelData.meta || "")
+                            width: parent.width
+                            text: modelData.meta || ""
+                            color: "#7F919D"
                             font.pixelSize: 8
                             font.bold: true
                             elide: Text.ElideRight

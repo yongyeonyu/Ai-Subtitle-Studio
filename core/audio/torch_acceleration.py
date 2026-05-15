@@ -5,27 +5,9 @@ import platform
 import sys
 from typing import Any
 
+from core.runtime.setting_utils import setting_bool as _setting_bool
 from core.runtime.logger import get_logger
-
-
-_TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "enable"}
-_FALSE_VALUES = {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}
 _ACCEL_LOGGED: set[tuple[str, str]] = set()
-
-
-def _setting_bool(value: Any, default: bool = True) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    text = str(value or "").strip().lower()
-    if not text:
-        return bool(default)
-    if text in _TRUE_VALUES:
-        return True
-    if text in _FALSE_VALUES:
-        return False
-    return bool(default)
 
 
 def _safe_int(value: Any) -> int:

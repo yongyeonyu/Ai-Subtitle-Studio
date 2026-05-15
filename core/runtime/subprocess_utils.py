@@ -53,3 +53,78 @@ def run_subprocess_capture(
             if backoff > 0.0:
                 time.sleep(backoff)
                 backoff *= multiplier
+
+
+def run_subprocess_capture_cancelable(
+    cmd: Iterable[object],
+    *,
+    timeout: float | None = None,
+    env: dict | None = None,
+    cwd: str | None = None,
+    strip_qt: bool = False,
+    cancel_callback=None,
+    poll_interval_sec: float = 0.05,
+    capture_output: bool = True,
+) -> tuple[subprocess.CompletedProcess[str] | None, bool]:
+    """Run a subprocess and allow cooperative cancellation while it is active."""
+    argv = [str(item) for item in cmd]
+    kwargs = hidden_subprocess_kwargs(strip_qt=strip_qt, extra_env=env)
+    poll_sec = max(0.02, float(poll_interval_sec or 0.05))
+    deadline = None
+    if timeout is not None:
+        deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
+
+    process = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=cwd,
+        shell=False,
+        **kwargs,
+    )
+    while True:
+        if callable(cancel_callback):
+            try:
+                if cancel_callback():
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        process.communicate(timeout=max(0.05, poll_sec))
+                    except subprocess.TimeoutExpired:
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        process.communicate()
+                    return None, True
+            except Exception:
+                pass
+        wait_timeout = poll_sec
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                stdout, stderr = process.communicate()
+                raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr)
+            wait_timeout = min(wait_timeout, remaining)
+        try:
+            stdout, stderr = process.communicate(timeout=wait_timeout)
+            return (
+                subprocess.CompletedProcess(
+                    argv,
+                    int(process.returncode or 0),
+                    stdout,
+                    stderr,
+                ),
+                False,
+            )
+        except subprocess.TimeoutExpired:
+            continue

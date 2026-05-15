@@ -990,7 +990,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             stages = []
             self.processor.stage_callback = stages.append
 
-            with patch("core.audio.media_processor.subprocess.Popen", side_effect=fake_popen):
+            with patch("core.audio.media_processor_audio.subprocess.Popen", side_effect=fake_popen):
                 ok = self.processor._run_media_command(
                     ["ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", source, "-acodec", "pcm_s16le", target],
                     label="ffmpeg 음량 평탄화",
@@ -1032,7 +1032,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             stages = []
             self.processor.stage_callback = stages.append
 
-            with patch("core.audio.media_processor.subprocess.Popen", return_value=FakeProcess()):
+            with patch("core.audio.media_processor_audio.subprocess.Popen", return_value=FakeProcess()):
                 ok = self.processor._run_media_command(
                     ["ffmpeg", "-y", "-i", source, "-acodec", "pcm_s16le", target],
                     label="ffmpeg 오디오 추출",

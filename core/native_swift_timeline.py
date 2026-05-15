@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import atexit
-import json
 import subprocess
 import threading
 from typing import Any
 
 import numpy as np
 
+from core.native_json import dumps_json_bytes, dumps_json_text, json_default, loads_json, loads_json_output, write_jsonl_line
 from core.native_swift_subtitle import find_native_cli_path, native_swift_runtime_enabled
 
 _WORKER: subprocess.Popen | None = None
@@ -30,7 +30,7 @@ def _vad_payload(vad_segments: list | tuple | None) -> str:
             continue
         if end > start:
             rows.append({"start": start, "end": end})
-    return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+    return dumps_json_text(rows, compact=True)
 
 
 def _boundary_time_value(item) -> float:
@@ -79,7 +79,7 @@ def build_waveform_columns_via_swift(
             capture_output=True,
             timeout=10,
         )
-        payload: dict[str, Any] = json.loads(proc.stdout.decode("utf-8") or "{}")
+        payload: dict[str, Any] = loads_json_output(proc.stdout, default={})
         heights = payload.get("heights") or []
         speech = payload.get("speech") or []
     except Exception:
@@ -98,12 +98,12 @@ def _run_json_command(command: str, payload: dict[str, Any], *, timeout: float =
     try:
         proc = subprocess.run(
             [str(cli), command],
-            input=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+            input=dumps_json_bytes(payload, compact=True),
             check=True,
             capture_output=True,
             timeout=timeout,
         )
-        decoded = json.loads(proc.stdout.decode("utf-8") or "{}")
+        decoded = loads_json_output(proc.stdout, default={})
     except Exception:
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -137,7 +137,7 @@ def _request_worker(task: str, payload: dict[str, Any]) -> dict[str, Any] | None
     request = dict(payload)
     request["task"] = task
     try:
-        encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+        encoded = dumps_json_text(request, compact=True, default=json_default)
     except Exception:
         return None
     with _WORKER_LOCK:
@@ -145,30 +145,19 @@ def _request_worker(task: str, payload: dict[str, Any]) -> dict[str, Any] | None
         if worker is None or worker.stdin is None or worker.stdout is None:
             return None
         try:
-            worker.stdin.write(encoded.replace("\n", " ") + "\n")
+            write_jsonl_line(worker.stdin, encoded)
             worker.stdin.flush()
             line = worker.stdout.readline()
             if not line:
                 stop_timeline_layout_worker()
                 return None
-            decoded = json.loads(line)
+            decoded = loads_json(line)
             if not isinstance(decoded, dict) or decoded.get("error"):
                 return None
             return decoded
         except Exception:
             stop_timeline_layout_worker()
             return None
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, tuple):
-        return list(value)
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except Exception:
-            pass
-    return str(value)
 
 
 def build_segment_layout_via_swift(

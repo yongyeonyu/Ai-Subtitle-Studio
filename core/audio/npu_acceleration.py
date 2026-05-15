@@ -6,9 +6,9 @@ from core.audio.whisper_coreml import DEFAULT_COREML_MODEL_ID, find_whisperkit_c
 from core.performance import hardware_profile
 from core.runtime import config
 from core.runtime.logger import get_logger
+from core.runtime.setting_utils import setting_bool as _setting_bool
 
 
-_TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}
 _NPU_UNAVAILABLE_NOTICE_KEYS: set[tuple[str, str]] = set()
 _NPU_MODEL_MAP = {
@@ -20,23 +20,6 @@ _NPU_MODEL_MAP = {
     "mlx-community/whisper-large-v3-mlx": DEFAULT_COREML_MODEL_ID,
     "systran/faster-whisper-large-v3": DEFAULT_COREML_MODEL_ID,
 }
-
-
-def _setting_bool(value, default: bool = True) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    text = str(value or "").strip().lower()
-    if not text:
-        return bool(default)
-    if text in _TRUE_VALUES:
-        return True
-    if text in _FALSE_VALUES:
-        return False
-    return bool(default)
-
-
 @lru_cache(maxsize=1)
 def apple_neural_engine_available() -> bool:
     if not config.IS_MAC:
@@ -64,11 +47,11 @@ def npu_whisper_routing_enabled(settings: dict | None = None, *, purpose: str = 
     if not config.IS_MAC:
         return False
     loaded = dict(settings or {})
-    if not _setting_bool(loaded.get("runtime_npu_acceleration_enabled"), True):
+    if not _setting_bool(loaded.get("runtime_npu_acceleration_enabled"), True, false_values=_FALSE_VALUES):
         return False
     if purpose == "live_stt":
-        return _setting_bool(loaded.get("live_stt_npu_prefer_enabled"), True)
-    return _setting_bool(loaded.get("stt_npu_prefer_enabled"), True)
+        return _setting_bool(loaded.get("live_stt_npu_prefer_enabled"), True, false_values=_FALSE_VALUES)
+    return _setting_bool(loaded.get("stt_npu_prefer_enabled"), True, false_values=_FALSE_VALUES)
 
 
 def prefer_npu_whisper_model(

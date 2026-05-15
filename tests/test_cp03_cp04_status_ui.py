@@ -123,11 +123,30 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertIn("AI Subtitle Studio", text)
         self.assertIn("#FFD60A", text)
 
+    def test_saved_status_refresh_does_not_force_sidebar_nav_refresh(self):
+        state_manager = SimpleNamespace(state="ST_PROC", is_locked=True, is_dirty=False)
+        editor = SimpleNamespace(sm=state_manager, _is_ai_processing=True)
+        home = _DummyHome(editor)
+        home._refresh_sidebar_nav_menu = patcher = SimpleNamespace(called=False)
+
+        def _mark_called():
+            patcher.called = True
+
+        home._refresh_sidebar_nav_menu = _mark_called
+        home._refresh_saved_status_label(is_dirty=False)
+
+        self.assertFalse(patcher.called)
+
     def test_generation_progress_snapshot_tracks_elapsed_against_expected(self):
         state_manager = SimpleNamespace(state="ST_PROC", is_locked=True, is_dirty=False)
         status_lbl = QLabel("⏳ [STT] Whisper 중")
         editor = SimpleNamespace(sm=state_manager, _is_ai_processing=True, status_lbl=status_lbl, settings={"stt_ensemble_enabled": True})
         home = _DummyHome(editor)
+        home._runtime_resource_snapshot = {
+            "system_cpu_percent": 18.0,
+            "process_cpu_percent": 56.0,
+            "rss_gb": 0.23,
+        }
         home._current_file_idx = 1
         home._total_files = 1
         home._real_pct = 0
@@ -145,6 +164,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertEqual(snapshot["percent"], 20)
         self.assertEqual(snapshot["progressText"], "20%")
         self.assertEqual(snapshot["subtitle"], "02:00 / 10:00")
+        self.assertEqual(snapshot["meta"], "CPU 18% · PROC 56% · RAM 0.23GB")
         self.assertIn("STT 1/2", snapshot["title"])
 
     def test_generation_progress_snapshot_caps_running_progress_below_100_until_done(self):
@@ -194,6 +214,63 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertTrue(nav_item["progressVisible"])
         self.assertEqual(nav_item["progressPercent"], 100)
         self.assertEqual(nav_item["id"], "generation_status")
+
+    def test_generation_progress_snapshot_stays_running_while_post_generation_roughcut_is_pending(self):
+        state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
+        status_lbl = QLabel("✨ 자막 생성 완료")
+        editor = SimpleNamespace(
+            sm=state_manager,
+            _is_ai_processing=False,
+            status_lbl=status_lbl,
+            settings={"roughcut_llm_enabled": True},
+            _roughcut_draft_pending=True,
+            _roughcut_draft_cleanup_pending=lambda: True,
+        )
+        home = _DummyHome(editor)
+        home._current_file_idx = 1
+        home._total_files = 1
+        home._real_pct = 100
+        home._expected_seconds = {0: 600.0}
+        home._file_start_times = {0: 1000.0}
+        home._file_complete_times = {}
+        home.queue_table = QTableWidget(1, 5)
+        home.queue_table.setItem(0, 0, QTableWidgetItem("저장 준비 중"))
+        home.queue_table.setItem(0, 4, QTableWidgetItem("00:00 / 10:00"))
+
+        with patch("ui.home_sidebar.time.time", return_value=1120.0):
+            snapshot = home._generation_progress_snapshot()
+
+        self.assertTrue(snapshot["running"])
+        self.assertEqual(snapshot["percent"], 20)
+        self.assertEqual(snapshot["progressText"], "20%")
+        self.assertEqual(snapshot["subtitle"], "02:00 / 10:00")
+
+    def test_pipeline_completed_stage_keys_do_not_mark_roughcut_done_while_running(self):
+        state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
+        status_lbl = QLabel("✨ 자막 생성 완료")
+        settings = {
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_provider": "openai",
+            "roughcut_llm_model": "codex",
+        }
+        editor = SimpleNamespace(
+            sm=state_manager,
+            _is_ai_processing=False,
+            status_lbl=status_lbl,
+            settings=settings,
+            _roughcut_draft_status="running",
+            _roughcut_draft_pending=False,
+            _last_roughcut_draft_major_count=12,
+            _roughcut_draft_cleanup_pending=lambda: False,
+            _roughcut_draft_runtime_enabled=lambda: True,
+        )
+        home = _DummyHome(editor)
+
+        current_keys = home._pipeline_current_stage_keys(settings)
+        completed_keys = home._pipeline_completed_stage_keys(settings, current_keys)
+
+        self.assertEqual(current_keys, {"roughcut_llm"})
+        self.assertNotIn("roughcut_llm", completed_keys)
 
     def test_generation_progress_snapshot_appends_completion_quality_score(self):
         state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
@@ -2018,6 +2095,116 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertNotIn("cut_boundary_cache_path", saved["analysis"])
                 self.assertNotIn("cut_boundary_cache_type", saved["analysis"])
                 self.assertTrue(bool(getattr(backend, "_force_cut_boundary_rescan_once", False)))
+            finally:
+                window.close()
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_restart_from_completed_state_restarts_single_file_pipeline_when_backend_thread_is_gone(self):
+        from ui.main.main_window import MainWindow
+
+        class _DeadThread:
+            def is_alive(self):
+                return False
+
+        class _Backend:
+            def __init__(self, files):
+                self.files_to_process = files
+                self.current_folder = os.path.dirname(files[0])
+                self.is_icloud = False
+                self._pipeline_thread = _DeadThread()
+                self._reuse_existing_single_subtitle = True
+                self._reuse_existing_multiclip_subtitles = True
+                self._reuse_clip_indices = {0}
+                self._force_no_reuse_once = False
+                self._speaker_map = ["00"]
+                self.pipeline_start_time = 0.0
+                self.is_first_start = True
+                self._active = False
+                self.start_calls = []
+
+            def restart_current_file(self):
+                raise AssertionError("dead thread fallback should not use restart_current_file")
+
+            def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
+                self.start_calls.append(
+                    {
+                        "files": list(files or []),
+                        "folder": folder,
+                        "is_icloud": bool(is_icloud),
+                        "is_auto_start": bool(is_auto_start),
+                    }
+                )
+
+            def stop(self):
+                self._active = False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.mp4")
+            open(media_path, "wb").close()
+            project_path = os.path.join(tmp, "sample.assp")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "version": "03.04.01",
+                        "phase": "PHASE2",
+                        "media": [{"order": 0, "path": media_path, "type": "video", "duration": 4.0, "offset": 0.0}],
+                        "subtitles": {"segments": [{"start": 0.0, "end": 1.0, "text": "old"}]},
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
+
+            window = MainWindow()
+            try:
+                editor = SimpleNamespace(
+                    media_path=media_path,
+                    text_edit=QTextEdit(),
+                    _segment_queue=[{"start": 0.0, "end": 1.0, "text": "old"}],
+                    _cached_segs=[{"start": 0.0, "end": 1.0, "text": "old"}],
+                    _active_seg_start=1.0,
+                    _completion_handled=True,
+                    _is_dirty=True,
+                    timeline=SimpleNamespace(
+                        canvas=SimpleNamespace(
+                            total_duration=4.0,
+                            segments=[],
+                            gap_segments=[],
+                            vad_segments=[],
+                            active_seg_start=None,
+                            update=lambda: None,
+                            _invalidate_marker_caches=lambda: None,
+                            _invalidate_static_cache=lambda: None,
+                        ),
+                        global_canvas=SimpleNamespace(vad_segments=[]),
+                        update_segments=lambda *args, **kwargs: None,
+                        set_playhead=lambda *args, **kwargs: None,
+                        set_vad_segments=lambda *args, **kwargs: None,
+                        set_boundary_times=lambda *args, **kwargs: None,
+                        set_scan_boundary_times=lambda *args, **kwargs: None,
+                    ),
+                    video_player=SimpleNamespace(
+                        set_context_segments=lambda *args, **kwargs: None,
+                        seek=lambda *args, **kwargs: None,
+                    ),
+                    _get_current_segments=lambda: [{"start": 0.0, "end": 1.0, "text": "old"}],
+                )
+                window._editor_widget = editor
+                window.backend = _Backend([media_path])
+                window._current_project_path = project_path
+
+                self.assertTrue(window._restart_current_pipeline_from_beginning(editor))
+                self.assertEqual(
+                    window.backend.start_calls,
+                    [
+                        {
+                            "files": [media_path],
+                            "folder": os.path.dirname(media_path),
+                            "is_icloud": False,
+                            "is_auto_start": True,
+                        }
+                    ],
+                )
             finally:
                 window.close()
                 window.deleteLater()

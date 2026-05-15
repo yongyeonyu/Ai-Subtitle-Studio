@@ -5,7 +5,12 @@
 from collections.abc import Callable
 
 from core.frame_time import frame_count, frame_duration, frame_to_sec, normalize_fps, sec_to_frame
-from core.media_info import probe_media
+from core.media_info import copy_media_probe_result, probe_media
+from core.project.project_analysis_store import (
+    VOICE_ACTIVITY_SCHEMA,
+    mirror_project_voice_activity_analysis,
+    store_project_voice_activity_segments,
+)
 from core.project.project_format import refresh_project_video_header
 
 ProbeFunc = Callable[[str], dict]
@@ -13,7 +18,7 @@ ProbeFunc = Callable[[str], dict]
 
 def _get_media_probe(filepath: str, probe_func: ProbeFunc | None = None) -> dict:
     try:
-        return dict((probe_func or probe_media)(filepath) or {})
+        return copy_media_probe_result((probe_func or probe_media)(filepath))
     except Exception:
         return {}
 
@@ -379,8 +384,12 @@ def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None 
             _augment_frame_synced_ranges(analysis.get(key), primary_fps)
         segments = analysis.get("voice_activity_segments")
         if isinstance(segments, list):
-            analysis["voice_activity_schema"] = analysis.get("voice_activity_schema") or "subtitle_detection.v1"
-            analysis["voice_activity_timebase"] = dict(project["timeline"]["timebase"])
+            store_project_voice_activity_segments(
+                project,
+                segments,
+                schema=str(analysis.get("voice_activity_schema") or VOICE_ACTIVITY_SCHEMA),
+                timebase=project["timeline"]["timebase"],
+            )
             for idx, seg in enumerate(segments):
                 if not isinstance(seg, dict):
                     continue
@@ -411,14 +420,12 @@ def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None 
                     "end": seg["end_frame"],
                     "timeline_frame_rate": primary_fps,
                 }
-        if isinstance(segments, list) and isinstance(editor_state, dict):
-            editor_state.setdefault("analysis", {})
-            editor_state["analysis"]["voice_activity_segments"] = list(analysis.get("voice_activity_segments") or [])
-            editor_state["analysis"]["voice_activity_schema"] = analysis.get(
-                "voice_activity_schema",
-                "subtitle_detection.v1",
+        if isinstance(segments, list):
+            mirror_project_voice_activity_analysis(
+                project,
+                rows=segments,
+                timebase=project["timeline"]["timebase"],
             )
-            editor_state["analysis"]["voice_activity_timebase"] = dict(project["timeline"]["timebase"])
 
     _augment_frame_synced_ranges(project.get("middle_segments"), primary_fps)
     _augment_frame_synced_ranges(project.get("preliminary_middle_segments"), primary_fps)

@@ -5,6 +5,34 @@ from ui.dialogs.qml_popup import show_context_menu
 
 
 class EditorPipelinePlayheadActionsMixin:
+    def _shadow_playhead_active(self) -> bool:
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        return getattr(canvas, "shadow_playhead_sec", None) is not None if canvas is not None else False
+
+    def _pin_shadow_playhead_from_menu(self, sec: float | None = None) -> None:
+        timeline = getattr(self, "timeline", None)
+        pinner = getattr(timeline, "pin_shadow_playhead", None) if timeline is not None else None
+        if not callable(pinner):
+            return
+        if bool(pinner(sec)):
+            try:
+                shadow_sec = float(getattr(getattr(timeline, "canvas", None), "shadow_playhead_sec", 0.0) or 0.0)
+                self.sm.set_custom_status(f"📍 그림자 플레이헤드 {shadow_sec:.2f}s")
+            except Exception:
+                pass
+
+    def _clear_shadow_playhead_from_menu(self) -> None:
+        timeline = getattr(self, "timeline", None)
+        clearer = getattr(timeline, "clear_shadow_playhead", None) if timeline is not None else None
+        if not callable(clearer):
+            return
+        if bool(clearer()):
+            try:
+                self.sm.set_custom_status("🧹 그림자 플레이헤드 지움")
+            except Exception:
+                pass
+
     def _current_cut_boundary_level(self) -> str:
         try:
             from core.settings import load_settings
@@ -101,6 +129,18 @@ class EditorPipelinePlayheadActionsMixin:
         items.append({"separator": True})
         items.extend(
             [
+                {"id": "shadow_pin", "label": "현재 위치를 그림자 플레이헤드로 고정", "accent": "#FFD60A"},
+                {
+                    "id": "shadow_clear",
+                    "label": "그림자 플레이헤드 지우기",
+                    "enabled": self._shadow_playhead_active(),
+                    "accent": "#A9B0B7",
+                },
+            ]
+        )
+        items.append({"separator": True})
+        items.extend(
+            [
                 {"id": "re_segment", "label": "현재 자막 세그먼트만 재인식", "accent": "#5AC8FA"},
                 {"id": "re_from", "label": "현재부터 끝까지 자막 재인식", "accent": "#34C759"},
             ]
@@ -113,6 +153,10 @@ class EditorPipelinePlayheadActionsMixin:
             return
         if chosen.startswith("cut_boundary:"):
             self._set_cut_boundary_level_from_menu(chosen.split(":", 1)[1])
+        elif chosen == "shadow_pin":
+            self._pin_shadow_playhead_from_menu(sec)
+        elif chosen == "shadow_clear":
+            self._clear_shadow_playhead_from_menu()
         elif chosen == "re_segment":
             self._re_recognize_segment(sec)
         elif chosen == "re_from":

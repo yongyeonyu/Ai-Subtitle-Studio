@@ -22,10 +22,13 @@ from core.project.project_context import (
 from core.project.project_io import read_project_file, write_project_file
 from core.project.project_manager import (
     _prune_project_payload_for_vector_storage,
-    build_model_settings_snapshot,
     _augment_project_frame_metadata,
 )
-from core.project.project_assets import externalize_project_text_assets
+from core.project.project_model_settings import store_project_model_settings_snapshot
+from core.project.project_assets import (
+    copy_project_rows,
+    externalize_project_text_assets,
+)
 from core.cut_boundary import cut_boundary_enabled, project_cut_boundaries, split_segments_by_cut_boundaries, sync_project_cut_boundaries
 from core.frame_time import normalize_fps
 from core.project.project_format import PROJECT_SCHEMA_VERSION
@@ -180,12 +183,12 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
     data['workspace'] = sanitize_workspace_state({**data.get('workspace', {}), **_workspace_snapshot(owner, editor)})
     editor_settings = dict(getattr(editor, 'settings', {}) or {})
     if editor_settings:
-        data['user_settings'] = editor_settings
-        data['model_settings'] = build_model_settings_snapshot(editor_settings)
+        store_project_model_settings_snapshot(data, editor_settings, user_settings_provided=True)
     cut_boundaries = project_cut_boundaries(data)
     if segments is not None:
+        source_segments = segments if isinstance(segments, list) else list(segments or [])
         segments = split_segments_by_cut_boundaries(
-            segments,
+            source_segments,
             cut_boundaries,
             enabled=cut_boundary_enabled(editor_settings or data.get('user_settings', {})),
         )
@@ -199,7 +202,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
     subtitles['storage'] = 'editor_state.rendering.subtitle_canvas'
     subtitles['segment_count'] = len(normalized_segments)
     data['subtitles'] = subtitles
-    data['editor_state'] = build_editor_state(
+    editor_state = build_editor_state(
         mode=mode,
         media_files=media_files,
         segments=normalized_segments,
@@ -209,6 +212,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         cut_boundaries=cut_boundaries,
         primary_fps=primary_fps,
     )
+    data['editor_state'] = editor_state
     data.setdefault('roughcut_state', {})
     if media_files:
         data['media'] = [
@@ -221,7 +225,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         project_path,
         data,
         final_segments=project_segments_to_editor(data),
-        stt_tracks=((data.get("editor_state", {}) or {}).get("stt", {}) or {}).get("candidate_tracks") or {},
+        stt_tracks=((editor_state.get("stt", {}) or {}).get("candidate_tracks")),
     )
     _prune_project_payload_for_vector_storage(data)
     data["project_path"] = os.path.abspath(project_path)
@@ -234,7 +238,7 @@ def restore_project_stt_preview_segments(editor, project: dict[str, Any] | None)
     if editor is None or not isinstance(project, dict):
         return 0
     previews = project_stt_preview_segments(project)
-    restored = [dict(row) for row in previews if isinstance(row, dict)]
+    restored = copy_project_rows(previews)
     try:
         setattr(editor, "_live_stt_preview_segments", restored)
     except Exception:

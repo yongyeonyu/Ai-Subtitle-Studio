@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from core.llm.openai_provider import is_openai_model
 
 

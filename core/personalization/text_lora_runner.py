@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import hashlib
-import subprocess
 import threading
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -11,7 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
+from core.platform_compat import ffmpeg_binary
+from core.runtime.subprocess_utils import run_subprocess_capture_cancelable
 from core.personalization.text_lora_dataset import (
     TEXT_LORA_CORPUS_MANIFEST_PATH,
     TEXT_LORA_CORPUS_PATH,
@@ -608,17 +608,15 @@ def _extract_voice_lora_clips(
         if ffmpeg_single_thread and command and "-threads" not in command:
             command = [command[0], "-threads", "1", *command[1:]]
         try:
-            completed = subprocess.run(
+            completed, cancelled_run = run_subprocess_capture_cancelable(
                 command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 timeout=max(1.0, float(timeout_sec)),
-                **hidden_subprocess_kwargs(),
+                cancel_callback=cancel_callback,
             )
         except Exception as exc:
             return {"status": "error", "item": item, "audio_path": str(output_path), "error": str(exc)}
+        if cancelled_run:
+            return {"status": "cancelled", "item": item, "audio_path": str(output_path)}
         if completed.returncode == 0 and output_path.exists():
             return {"status": "extracted", "item": item, "audio_path": str(output_path)}
         return {

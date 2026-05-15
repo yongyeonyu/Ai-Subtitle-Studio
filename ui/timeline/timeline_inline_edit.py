@@ -1,8 +1,6 @@
-"""
-Backward-compatible shim for the centralized subtitle-segment editing mixin.
-"""
+"""Backward-compatible shim for centralized subtitle-segment editing mixins."""
 
-from ui.timeline.timeline_subtitle_segment_editing import (
+from ui.editor.ux.timeline_subtitle_segment_editing import (
     NEW_SUBTITLE_PLACEHOLDER,
     TimelineInlineEditMixin,
     TimelineSubtitleSegmentEditingMixin,

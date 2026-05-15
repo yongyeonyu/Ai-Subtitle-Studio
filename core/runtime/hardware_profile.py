@@ -16,16 +16,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-
+from core.coerce import positive_int as _positive_int
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _positive_int(value: Any, default: int = 0) -> int:
-    try:
-        parsed = int(float(value))
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default
 
 
 def darwin_sysctl_int(name: str) -> int:

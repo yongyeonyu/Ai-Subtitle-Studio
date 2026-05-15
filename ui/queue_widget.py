@@ -237,19 +237,34 @@ class QueueMixin:
             or text.startswith("⏳ [전처리]")
         )
 
-    def _reset_completed_queue_row_for_restart(self, idx: int):
+    def _queue_status_reopens_completed_row_for_followup(self, status: str) -> bool:
+        text = str(status or "").strip().lower()
+        if not text:
+            return False
+        return "러프컷" in text and ("llm" in text or "후처리" in text)
+
+    def _reset_completed_queue_row_for_restart(
+        self,
+        idx: int,
+        *,
+        preserve_start_time: bool = False,
+        preserve_progress: bool = False,
+    ):
         if hasattr(self, "_file_complete_times"):
             self._file_complete_times.pop(idx, None)
-        if hasattr(self, "_file_start_times"):
+        if not preserve_start_time and hasattr(self, "_file_start_times"):
             self._file_start_times.pop(idx, None)
-        self._real_pct = 0
+        if not preserve_progress:
+            self._real_pct = 0
         try:
             self._current_file_idx = idx + 1
             total = int(getattr(self, "_total_files", 0) or self._queue_row_count())
             if total <= 0:
                 total = self._queue_row_count()
-            self._set_queue_table_item_text(idx, 4, "계산 중")
-            self._set_queue_header_text(format_queue_header(idx + 1, total, 0))
+            if not preserve_start_time:
+                self._set_queue_table_item_text(idx, 4, "계산 중")
+            if not preserve_progress:
+                self._set_queue_header_text(format_queue_header(idx + 1, total, 0))
             timer = getattr(self, "_live_timer", None)
             if timer is not None:
                 timer.start(1000)
@@ -992,8 +1007,14 @@ class QueueMixin:
     ) -> dict[str, object]:
         current_done, current_error, current_active = self._queue_status_flags(current_status)
         if current_done and not incoming_done:
-            if self._queue_status_restarts_completed_row(idx, incoming_status):
-                self._reset_completed_queue_row_for_restart(idx)
+            restart = self._queue_status_restarts_completed_row(idx, incoming_status)
+            followup = self._queue_status_reopens_completed_row_for_followup(incoming_status)
+            if restart or followup:
+                self._reset_completed_queue_row_for_restart(
+                    idx,
+                    preserve_start_time=followup,
+                    preserve_progress=followup,
+                )
                 current_done = False
             else:
                 return {
@@ -1195,7 +1216,24 @@ class QueueMixin:
         except Exception:
             return False
 
-    def _queue_live_header_percent(self, *, total: int, row_statuses: list[str] | None = None) -> int:
+    def _queue_live_header_percent(
+        self,
+        *,
+        total: int,
+        row_statuses: list[str] | None = None,
+        now_ts: float | None = None,
+    ) -> int:
+        metrics_getter = getattr(self, "queue_progress_metrics", None)
+        if callable(metrics_getter):
+            try:
+                metrics = dict(metrics_getter(now_ts=now_ts, running=True) or {})
+                total_expected = float(metrics.get("total_expected", 0.0) or 0.0)
+                known_expected_rows = int(metrics.get("known_expected_rows", 0) or 0)
+                total_files = max(0, int(metrics.get("total_files", total) or total))
+                if total_expected > 0.0 and known_expected_rows >= total_files and total_files > 0:
+                    return max(0, min(100, int(round(float(metrics.get("percent", 0.0) or 0.0)))))
+            except Exception:
+                pass
         statuses = list(row_statuses if row_statuses is not None else self._queue_row_statuses())
         row_metrics = [
             {"status": status_text, "done": bool(self._queue_status_flags(status_text)[0])}
@@ -1236,7 +1274,7 @@ class QueueMixin:
         t = getattr(self, '_total_files', 1)
         self._mark_prior_queue_rows_done(c)
         row_statuses = self._queue_row_statuses()
-        pct = self._queue_live_header_percent(total=t, row_statuses=row_statuses)
+        pct = self._queue_live_header_percent(total=t, row_statuses=row_statuses, now_ts=now)
         self._set_queue_header_text(format_queue_header(c, t, pct))
         self._queue_apply_done_row_visuals(row_statuses=row_statuses)
         self._refresh_active_queue_elapsed(now)

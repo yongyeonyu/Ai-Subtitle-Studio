@@ -77,7 +77,7 @@ class ResponsiveProfileTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_desktop_workspace_layout_preserves_current_sidebar_width(self):
+    def test_desktop_workspace_layout_reapplies_responsive_sidebar_width(self):
         window = MainWindow()
         try:
             window.resize(1600, 900)
@@ -85,21 +85,24 @@ class ResponsiveProfileTests(unittest.TestCase):
             self.app.processEvents()
             window.workspace_splitter.setSizes([210, 1390])
             self.app.processEvents()
-            initial_width = window.workspace_splitter.sizes()[0]
-            self.assertGreaterEqual(initial_width, 204)
+            self.assertGreaterEqual(window.workspace_splitter.sizes()[0], 204)
+
+            profile = responsive_profile_for_size(1600, 900)
+            total = max(1, int(window.width() or 0) - 6)
+            expected_width = responsive_sidebar_width(total, profile)
 
             window._apply_responsive_workspace_layout()
             self.app.processEvents()
 
-            self.assertEqual(window.workspace_splitter.sizes()[0], initial_width)
+            self.assertEqual(window.workspace_splitter.sizes()[0], expected_width)
             locked = window._lock_workspace_sidebar_width()
-            self.assertEqual(locked, initial_width)
+            self.assertEqual(locked, expected_width)
 
             window.workspace_splitter.setSizes([204, 1396])
             window._apply_responsive_workspace_layout()
             self.app.processEvents()
 
-            self.assertEqual(window.workspace_splitter.sizes()[0], initial_width)
+            self.assertEqual(window.workspace_splitter.sizes()[0], expected_width)
         finally:
             window.close()
             window.deleteLater()

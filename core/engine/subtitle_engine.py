@@ -1004,6 +1004,198 @@ def _apply_lora_card_packaging(
     return rows
 
 
+def _is_speaker_split_multiline_segment(row: dict) -> bool:
+    lines = _subtitle_text_lines(str(row.get("text", "") or ""))
+    if len(lines) <= 1:
+        return False
+    speakers = [
+        str(item).strip()
+        for item in list(row.get("speaker_list") or [])
+        if str(item).strip()
+    ]
+    if len(set(speakers)) >= 2:
+        return True
+    return all(str(line).lstrip().startswith(("-", "–", "—")) for line in lines)
+
+
+def _clear_split_timing_projection_fields(row: dict) -> None:
+    for key in (
+        "timeline_start",
+        "timeline_end",
+        "timeline_start_frame",
+        "timeline_end_frame",
+        "start_frame",
+        "end_frame",
+        "frame_range",
+    ):
+        row.pop(key, None)
+
+
+def _multiline_word_groups_for_lines(row: dict, lines: list[str]) -> list[list[dict]] | None:
+    words = [
+        dict(word)
+        for word in list(row.get("words") or [])
+        if isinstance(word, dict) and str(word.get("word", "") or "").strip()
+    ]
+    if len(words) < len(lines):
+        return None
+
+    targets = [max(1, _split_visible_len(line)) for line in lines]
+    groups: list[list[dict]] = []
+    cursor = 0
+    for idx, target in enumerate(targets):
+        remaining_lines = len(targets) - idx
+        remaining_words = len(words) - cursor
+        if remaining_words < remaining_lines:
+            return None
+        if idx == len(targets) - 1:
+            groups.append(words[cursor:])
+            break
+
+        group: list[dict] = []
+        char_count = 0
+        while cursor < len(words):
+            remaining_words = len(words) - cursor
+            if group and remaining_words <= remaining_lines - 1:
+                break
+            word = words[cursor]
+            group.append(word)
+            char_count += max(1, _split_visible_len(str(word.get("word", "") or "")))
+            cursor += 1
+            remaining_words = len(words) - cursor
+            if char_count >= target and remaining_words >= remaining_lines - 1:
+                break
+        if not group:
+            return None
+        groups.append(group)
+    if len(groups) != len(lines) or any(not group for group in groups):
+        return None
+    return groups
+
+
+def _multiline_split_boundaries_from_groups(
+    start: float,
+    end: float,
+    groups: list[list[dict]],
+) -> list[float] | None:
+    if len(groups) <= 1:
+        return []
+    boundaries: list[float] = []
+    min_duration = 0.05
+    for idx in range(len(groups) - 1):
+        left = groups[idx]
+        right = groups[idx + 1]
+        try:
+            left_end = float(left[-1].get("end", left[-1].get("start", start)) or start)
+            right_start = float(right[0].get("start", left_end) or left_end)
+        except Exception:
+            return None
+        if right_start >= left_end:
+            boundary = (left_end + right_start) / 2.0
+        else:
+            boundary = max(left_end, right_start)
+        min_boundary = start + min_duration * (idx + 1)
+        max_boundary = end - min_duration * (len(groups) - idx - 1)
+        boundary = max(min_boundary, min(max_boundary, boundary))
+        boundaries.append(boundary)
+    if any(boundaries[idx] <= boundaries[idx - 1] for idx in range(1, len(boundaries))):
+        return None
+    return boundaries
+
+
+def _multiline_split_boundaries_from_weights(
+    start: float,
+    end: float,
+    lines: list[str],
+) -> list[float]:
+    if len(lines) <= 1:
+        return []
+    weights = [max(1, _split_visible_len(line)) for line in lines]
+    total_weight = max(1, sum(weights))
+    min_duration = 0.05
+    duration = max(float(end) - float(start), min_duration * len(lines))
+    boundaries: list[float] = []
+    consumed = 0
+    for idx, weight in enumerate(weights[:-1]):
+        consumed += weight
+        proposed = start + duration * (consumed / total_weight)
+        min_boundary = start + min_duration * (idx + 1)
+        max_boundary = end - min_duration * (len(lines) - idx - 1)
+        boundaries.append(max(min_boundary, min(max_boundary, proposed)))
+    return boundaries
+
+
+def _expand_non_speaker_multiline_segments(
+    segments: list[dict],
+    settings: dict | None = None,
+) -> list[dict]:
+    rows: list[dict] = []
+    split_segments = 0
+    for seg in list(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        row = dict(seg)
+        lines = _subtitle_text_lines(str(row.get("text", "") or ""))
+        if len(lines) <= 1 or _is_speaker_split_multiline_segment(row):
+            row["text"] = "\n".join(lines) if lines else str(row.get("text", "") or "").strip()
+            rows.append(row)
+            continue
+
+        try:
+            start = max(0.0, float(row.get("start", 0.0) or 0.0))
+            end = max(start, float(row.get("end", start) or start))
+        except Exception:
+            rows.append(row)
+            continue
+
+        min_duration = 0.05
+        if end - start < min_duration * len(lines):
+            row["text"] = " ".join(lines)
+            row.pop("words", None)
+            rows.append(row)
+            continue
+
+        groups = _multiline_word_groups_for_lines(row, lines)
+        boundaries = (
+            _multiline_split_boundaries_from_groups(start, end, groups)
+            if groups is not None
+            else None
+        )
+        if boundaries is None:
+            boundaries = _multiline_split_boundaries_from_weights(start, end, lines)
+            groups = None
+
+        prev_boundary = start
+        for idx, line in enumerate(lines):
+            next_boundary = end if idx == len(lines) - 1 else boundaries[idx]
+            piece = dict(row)
+            piece["text"] = line
+            piece["start"] = round(prev_boundary, 3)
+            piece["end"] = round(max(prev_boundary + min_duration, next_boundary), 3)
+            if groups is not None:
+                piece["words"] = [dict(word) for word in groups[idx]]
+            else:
+                piece.pop("words", None)
+            policy = dict(piece.get("_lora_packaging_policy") or {})
+            policy.update(
+                {
+                    "task": "lora_card_packaging",
+                    "output_mode": "segment_split",
+                    "split_index": idx,
+                    "split_count": len(lines),
+                }
+            )
+            piece["_lora_packaging_policy"] = policy
+            _clear_split_timing_projection_fields(piece)
+            rows.append(piece)
+            prev_boundary = next_boundary
+        split_segments += 1
+
+    if split_segments > 0:
+        get_logger().log(f"[자막줄분리] 일반 줄바꿈 자막 {split_segments}개를 연속 세그먼트로 분할")
+    return rows
+
+
 def _context_repair_output_variant(segments: list[dict], vad_segments: list[dict] | None, settings: dict | None) -> list[dict]:
     repaired, decision = repair_subtitle_context_consistency(segments, settings or {})
     if not decision.get("applied"):
@@ -2764,6 +2956,13 @@ def optimize_segments(
     optimized = _annotate_stage_confidence(optimized, loaded_settings)
     optimized = _annotate_completion_report(optimized, loaded_settings)
     optimized = _enforce_final_subtitle_text_policy(optimized, None)
+    optimized = _expand_non_speaker_multiline_segments(optimized, loaded_settings)
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="line_break_split",
+        stage_label="일반 줄바꿈 세그먼트 분리",
+        segments=optimized,
+    )
     _log_accuracy_metrics(optimized, loaded_settings)
     _record_deep_policy_learning(optimized, loaded_settings)
     _emit_llm_progress(llm_progress_callback, active=False)

@@ -7,6 +7,14 @@ from ui.editor.subtitle_text_edit import SubtitleBlockData
 
 
 class EditorSegmentsBlockSurgeryMixin:
+    def _timeline_inline_split_pending(self) -> bool:
+        canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+        return bool(
+            canvas is not None
+            and getattr(canvas, "_edit_active", False)
+            and hasattr(canvas, "_pending_split_sec")
+        )
+
     def _subtitle_segment_edit_target_block(self):
         doc = getattr(getattr(self, "text_edit", None), "document", lambda: None)()
         if doc is None:
@@ -93,6 +101,8 @@ class EditorSegmentsBlockSurgeryMixin:
         self._redraw_timeline()
 
     def _set_segment_start_to_playhead(self):
+        if self._timeline_inline_split_pending():
+            return
         self._undo_mgr.push_immediate()
         sec = self._snap_to_frame(getattr(self.timeline.canvas, "playhead_sec", getattr(self.video_player, "current_time", 0.0)))
         block = self._subtitle_segment_edit_target_block()
@@ -125,6 +135,8 @@ class EditorSegmentsBlockSurgeryMixin:
         self._finish_block_surgery_edit(cursor)
 
     def _set_segment_end_to_playhead(self):
+        if self._timeline_inline_split_pending():
+            return
         self._undo_mgr.push_immediate()
         sec = self._snap_to_frame(getattr(self.timeline.canvas, "playhead_sec", getattr(self.video_player, "current_time", 0.0)))
         block = self._subtitle_segment_edit_target_block()

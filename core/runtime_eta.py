@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
 from core.audio.stt_quality_presets import normalize_stt_quality_key
+from core.coerce import safe_float as _safe_float, safe_int as _safe_int, safe_str as _safe_str
 from core.json_file import read_json_file, write_json_file_atomic
 from core.native_swift_subtitle import request_native_core_task
 from core.runtime import config
+from core.runtime.setting_utils import setting_bool
 from core.settings import load_settings
 
 
@@ -14,6 +17,8 @@ ETA_HISTORY_SCHEMA = "ai_subtitle_studio.runtime_eta_store.v2"
 _STORE_OVERRIDE_ENV = "AI_SUBTITLE_STUDIO_TIME_HISTORY_FILE"
 _UNKNOWN = "unknown"
 _ETA_STORE_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+_RUNTIME_ETA_TRUE_VALUES = frozenset({"1", "true", "yes", "on", "사용", "켜짐"})
+_ROUGHCUT_AUTORUN_FALSE_VALUES = frozenset({"0", "false", "off", "no", "사용 안함", "사용안함", "끔"})
 
 
 def history_store_path(path: str | None = None) -> str:
@@ -60,39 +65,14 @@ def _write_history_store(path: str, data: dict[str, Any]) -> None:
         _ETA_STORE_CACHE[normalized] = (current[0], current[1], data)
 
 
-def _safe_str(value: Any, default: str = "") -> str:
-    if value is None:
-        return default
-    try:
-        text = str(value).strip()
-    except Exception:
-        return default
-    return text or default
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        parsed = float(value)
-        if parsed == parsed:
-            return parsed
-    except Exception:
-        pass
-    return default
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(float(value))
-    except Exception:
-        return default
-
-
 def _safe_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on", "사용", "켜짐"}
-    return bool(value)
+    return setting_bool(
+        value,
+        default,
+        true_values=_RUNTIME_ETA_TRUE_VALUES,
+        true_only_strings=True,
+        empty_is_default=False,
+    )
 
 
 def _llm_disabled(model: str, provider: str) -> bool:
@@ -110,6 +90,86 @@ def _llm_disabled(model: str, provider: str) -> bool:
 def _normalized_mode(settings: dict[str, Any]) -> str:
     raw = settings.get("stt_quality_preset", settings.get("auto_start_mode", "balanced"))
     return normalize_stt_quality_key(_safe_str(raw, "balanced"))
+
+
+def _roughcut_llm_eta_details(settings: dict[str, Any], duration_sec: float) -> dict[str, Any]:
+    try:
+        from core.roughcut.editor_draft import editor_roughcut_draft_enabled
+        from core.roughcut.roughcut_llm_config import resolve_roughcut_llm_config
+    except Exception:
+        return {
+            "enabled": False,
+            "provider": "none",
+            "model": "none",
+            "chunk_count": 0,
+            "estimated_sec": 0.0,
+        }
+
+    llm_config = resolve_roughcut_llm_config(settings, subtitle_rows=[])
+    provider = str(getattr(llm_config, "provider", "") or "").strip().lower()
+    model = str(getattr(llm_config, "model", "") or "").strip()
+    if not (
+        bool(getattr(llm_config, "enabled", False))
+        and provider not in {"", "none", "disabled", "off"}
+        and model
+        and "사용 안함" not in model
+    ):
+        return {
+            "enabled": False,
+            "provider": provider or "none",
+            "model": model or "none",
+            "chunk_count": 0,
+            "estimated_sec": 0.0,
+        }
+
+    raw_autorun = settings.get("roughcut_run_after_subtitle_generation", None)
+    if isinstance(raw_autorun, str):
+        autorun_enabled: bool | None = raw_autorun.strip().lower() not in _ROUGHCUT_AUTORUN_FALSE_VALUES
+    elif raw_autorun is None:
+        autorun_enabled = None
+    else:
+        autorun_enabled = bool(raw_autorun)
+    if autorun_enabled is not True:
+        autorun_enabled = bool(autorun_enabled) or bool(editor_roughcut_draft_enabled(settings))
+    if not autorun_enabled:
+        return {
+            "enabled": False,
+            "provider": provider,
+            "model": model,
+            "chunk_count": 0,
+            "estimated_sec": 0.0,
+        }
+
+    max_context_rows = max(1, _safe_int(getattr(llm_config, "max_context_rows", 80), 80))
+    chunk_rows = max(1, min(max_context_rows, _safe_int(getattr(llm_config, "chunk_rows", 12), 12)))
+    estimated_rows = max(1, int(round(max(0.0, float(duration_sec or 0.0)) / 6.0)))
+    if estimated_rows <= max_context_rows:
+        chunk_count = 1
+    else:
+        chunk_count = max(1, math.ceil(estimated_rows / float(chunk_rows)))
+    chunk_count = max(1, min(18, int(chunk_count or 1)))
+
+    model_lower = model.lower()
+    base_sec = 6.0
+    per_chunk_sec = 5.5
+    if provider in {"openai", "google", "gemini"}:
+        base_sec = 8.0
+        per_chunk_sec = 6.5
+    if "codex" in model_lower:
+        base_sec = max(base_sec, 10.0)
+        per_chunk_sec = max(per_chunk_sec, 8.0)
+    if provider == "ollama":
+        thread_bonus = max(0, _safe_int(getattr(llm_config, "threads", 1), 1) - 1)
+        per_chunk_sec = max(4.0, per_chunk_sec - min(1.5, 0.35 * thread_bonus))
+
+    estimated_sec = max(8.0, min(240.0, base_sec + (float(chunk_count) * per_chunk_sec)))
+    return {
+        "enabled": True,
+        "provider": provider,
+        "model": model,
+        "chunk_count": chunk_count,
+        "estimated_sec": round(float(estimated_sec), 3),
+    }
 
 
 def _speaker_count(settings: dict[str, Any], startup_diagnostic: dict[str, Any] | None) -> int:
@@ -312,6 +372,7 @@ def build_runtime_eta_payload(
     cut_boundary_state = _cut_boundary_cache_state(target_file, s, runtime_flags)
     vad_state = _vad_cache_state(runtime_flags, s)
     likely_warm_start = _likely_warm_start(s, queue_index, runtime_flags)
+    roughcut_eta = _roughcut_llm_eta_details(s, duration_sec)
     payload: dict[str, Any] = {
         "store_path": history_store_path(store_path),
         "schema": ETA_HISTORY_SCHEMA,
@@ -356,8 +417,14 @@ def build_runtime_eta_payload(
             "speaker_cache_state": _speaker_cache_state(target_file, s),
             "likely_warm_start": likely_warm_start,
             "cache_score": _cache_score(cache_state, runtime_flags),
+            "roughcut_post_generation_enabled": bool(roughcut_eta.get("enabled", False)),
+            "roughcut_estimated_sec": max(0.0, _safe_float(roughcut_eta.get("estimated_sec"), 0.0)),
+            "roughcut_chunk_count": max(0, _safe_int(roughcut_eta.get("chunk_count"), 0)),
         },
     }
+    if roughcut_eta.get("enabled"):
+        payload["variant"]["roughcut_llm_provider"] = _safe_str(roughcut_eta.get("provider"), "none")
+        payload["variant"]["roughcut_llm_model"] = _safe_str(roughcut_eta.get("model"), "none")
     if processing_time_sec is not None:
         payload["processing_time_sec"] = max(0.0, _safe_float(processing_time_sec, 0.0))
     return payload
@@ -488,10 +555,14 @@ def get_expected_time(
         runtime_flags=runtime_flags,
         store_path=store_path,
     )
+    roughcut_estimated_sec = max(0.0, _safe_float((payload.get("runtime") or {}).get("roughcut_estimated_sec"), 0.0))
     predicted = _native_predict(payload)
     if predicted > 0.0:
-        return predicted
-    return _fallback_predict(payload)
+        return predicted + roughcut_estimated_sec
+    predicted = _fallback_predict(payload)
+    if predicted > 0.0:
+        return predicted + roughcut_estimated_sec
+    return predicted
 
 
 def add_history(

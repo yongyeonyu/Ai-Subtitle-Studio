@@ -406,7 +406,13 @@ def schedule_editor_fit_to_view(editor, delay_ms: int = 120) -> None:
         if hasattr(editor, "_schedule_initial_open_layout"):
             editor._schedule_initial_open_layout(delays=delays)
             return
-        if hasattr(timeline, "schedule_time_window_seconds"):
+        if hasattr(timeline, "schedule_initial_open_view"):
+            timeline.schedule_initial_open_view(
+                delays=delays,
+                seconds=10.0,
+                start_sec=0.0,
+            )
+        elif hasattr(timeline, "schedule_time_window_seconds"):
             timeline.schedule_time_window_seconds(
                 10.0,
                 start_sec=0.0,
@@ -520,7 +526,6 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         return False
 
     from core.project.project_context import (
-        project_clip_boundaries,
         project_cut_boundary_provisional_segments,
         project_stt_preview_segments,
         project_voice_activity_segments,
@@ -535,7 +540,7 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         clear_multiclip=False,
         emit_boundary_signal=False,
     )
-    boundaries = apply_project_multiclip_runtime(owner, media, project)
+    apply_project_multiclip_runtime(owner, media, project)
     analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
     preliminary_middle_segments = [
         dict(row)

@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
+
+from core.coerce import safe_float as _shared_safe_float, safe_round_int as _shared_safe_int
+from core.text_utils import (
+    clean_text as _shared_clean_text,
+    compact_text as _shared_compact_text,
+    line_count as _shared_line_count,
+)
 
 
 def safe_bool(value: Any, default: bool = False) -> bool:
@@ -17,35 +23,24 @@ def safe_bool(value: Any, default: bool = False) -> bool:
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return float(default)
-        return float(value)
-    except Exception:
-        return float(default)
+    return float(_shared_safe_float(value, default))
 
 
 def safe_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return int(default)
-        return int(round(float(value)))
-    except Exception:
-        return int(default)
+    return int(_shared_safe_int(value, default))
 
 
 def compact_len(text: Any) -> int:
-    return len(re.sub(r"\s+", "", str(text or "")))
+    return len(_shared_compact_text(text))
 
 
 def compact_text(text: Any) -> str:
-    return re.sub(r"\s+", "", str(text or "")).strip().lower()
+    return _shared_compact_text(text)
 
 
 def clean_text(text: Any) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip()
+    return _shared_clean_text(text)
 
 
 def line_count(text: Any) -> int:
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    return max(1, len(lines))
+    return _shared_line_count(text)

@@ -2,26 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.coerce import safe_float as _safe_float, safe_round_int as _safe_int
 from core.frame_time import frame_count, frame_duration, normalize_fps
 
-PROJECT_SCHEMA_VERSION = "04.00.05"
+PROJECT_SCHEMA_VERSION = "04.00.06"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v4"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(round(float(value)))
-    except (TypeError, ValueError):
-        return int(default)
-
 
 def _timeline_clips(project: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(project, dict):
@@ -99,6 +85,7 @@ def refresh_project_video_header(project: dict[str, Any] | None) -> dict[str, An
     primary_fps = project_primary_fps(project)
     total_duration = _timeline_total_duration(project)
     total_frames = frame_count(total_duration, primary_fps)
+    primary_frame_duration = frame_duration(primary_fps)
     first_clip = clips[0] if clips else {}
     width = _safe_int(first_clip.get("width"), 0)
     height = _safe_int(first_clip.get("height"), 0)
@@ -140,7 +127,7 @@ def refresh_project_video_header(project: dict[str, Any] | None) -> dict[str, An
         "media_kind": media_kind,
         "duration_sec": total_duration,
         "primary_fps": primary_fps,
-        "frame_duration": frame_duration(primary_fps),
+        "frame_duration": primary_frame_duration,
         "total_frames": total_frames,
         "width": width,
         "height": height,
@@ -152,7 +139,7 @@ def refresh_project_video_header(project: dict[str, Any] | None) -> dict[str, An
             "canonical_unit": "frame",
             "mode": "project_video_header",
             "primary_fps": primary_fps,
-            "frame_duration": frame_duration(primary_fps),
+            "frame_duration": primary_frame_duration,
             "timeline_start_frame": 0,
             "timeline_end_frame": total_frames,
             "total_frames": total_frames,

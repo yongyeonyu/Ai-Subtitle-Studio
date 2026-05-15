@@ -77,7 +77,10 @@ class HomeSidebarNavWidget(QWidget):
         heights = []
         for item in self._items:
             try:
-                heights.append(max(26, int(item.get("height", 38 if item.get("progressVisible") else 26) or 26)))
+                default_h = 50 if item.get("progressVisible") and str(item.get("meta", "") or "") else (
+                    38 if item.get("progressVisible") else 26
+                )
+                heights.append(max(26, int(item.get("height", default_h) or 26)))
             except Exception:
                 heights.append(26)
         content_height = sum(heights) + max(0, len(heights) - 1) * item_spacing
@@ -107,7 +110,8 @@ class HomeSidebarNavWidget(QWidget):
             accent = str(item.get("accent", "#3F8CFF") or "#3F8CFF")
             progress_visible = bool(item.get("progressVisible"))
             progress_percent = max(0, min(100, int(item.get("progressPercent", 0) or 0)))
-            item_height = max(26, int(item.get("height", 38 if progress_visible else 26) or 26))
+            default_h = 50 if progress_visible and str(item.get("meta", "") or "") else (38 if progress_visible else 26)
+            item_height = max(26, int(item.get("height", default_h) or 26))
             button.setMinimumHeight(item_height)
             button.setMaximumHeight(item_height)
             active = bool(item.get("active"))
@@ -202,6 +206,13 @@ class HomeSidebarNavWidget(QWidget):
                         "color: #B9C7D3; font-size: 8px; font-weight: 600; background: transparent; border: none;"
                     )
                     body_layout.addWidget(subtitle)
+                meta_text = str(item.get("meta", "") or "")
+                if meta_text:
+                    meta = QLabel(meta_text, body)
+                    meta.setStyleSheet(
+                        "color: #7F919D; font-size: 8px; font-weight: 600; background: transparent; border: none;"
+                    )
+                    body_layout.addWidget(meta)
                 row.addWidget(body, stretch=1)
             else:
                 title = QLabel(str(item.get("title", "") or ""), button)

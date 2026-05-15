@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from core.runtime import config
+from core.runtime.setting_utils import KOREAN_FALSE_VALUES, env_bool as _env_bool, positive_int as _positive_int, setting_bool as _setting_bool
 
 BENCH_SAFE_NATIVE_RUNTIME_SETTINGS: dict[str, Any] = {
     "mac_native_acceleration_enabled": True,
@@ -20,47 +20,12 @@ EXPERIMENTAL_SWIFT_POLICY_KEYS = (
     "native_swift_lora_scoring_enabled",
 )
 
-
-def _setting_bool(settings: dict[str, Any], key: str, default: bool = True) -> bool:
-    value = settings.get(key, default)
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return bool(default)
-    text = str(value or "").strip().casefold()
-    if text in {"0", "false", "off", "no", "사용 안함", "끔", "미사용"}:
-        return False
-    if text in {"1", "true", "on", "yes", "사용", "켬"}:
-        return True
-    return bool(default)
-
-
-def _positive_int(settings: dict[str, Any], key: str, default: int) -> int:
-    try:
-        value = int(float(settings.get(key, default)))
-    except Exception:
-        value = int(default)
-    return value if value > 0 else int(default)
-
-
-def _env_bool(name: str) -> bool | None:
-    value = os.environ.get(name)
-    if value is None:
-        return None
-    text = str(value or "").strip().casefold()
-    if text in {"0", "false", "off", "no"}:
-        return False
-    if text in {"1", "true", "on", "yes"}:
-        return True
-    return None
-
-
 def mac_native_swift_policy_experimental_enabled(settings: dict[str, Any] | None = None) -> bool:
     data = dict(settings or {})
     env = _env_bool("AI_SUBTITLE_STUDIO_SWIFT_POLICY_EXPERIMENTAL")
     if env is not None:
         return env
-    return _setting_bool(data, "native_swift_policy_experimental_enabled", False)
+    return _setting_bool(data.get("native_swift_policy_experimental_enabled"), False, false_values=KOREAN_FALSE_VALUES)
 
 
 def mac_native_runtime_overrides(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -76,7 +41,7 @@ def mac_native_runtime_overrides(settings: dict[str, Any] | None = None) -> dict
     out = dict(BENCH_SAFE_NATIVE_RUNTIME_SETTINGS)
     experimental = mac_native_swift_policy_experimental_enabled(data)
     for key in EXPERIMENTAL_SWIFT_POLICY_KEYS:
-        out[key] = _setting_bool(data, key, False) if experimental else False
+        out[key] = _setting_bool(data.get(key), False, false_values=KOREAN_FALSE_VALUES) if experimental else False
     out["native_swift_policy_experimental_enabled"] = experimental
     return out
 
@@ -91,17 +56,22 @@ def mac_native_backend_plan(settings: dict[str, Any] | None = None) -> dict[str,
     batch quality/split work use native routes.
     """
     data = dict(settings or {})
-    native_enabled = bool(getattr(config, "IS_MAC", False)) and _setting_bool(data, "mac_native_acceleration_enabled", True)
+    native_enabled = bool(getattr(config, "IS_MAC", False)) and _setting_bool(
+        data.get("mac_native_acceleration_enabled"),
+        True,
+        false_values=KOREAN_FALSE_VALUES,
+    )
     experimental_policy = mac_native_swift_policy_experimental_enabled(data)
-    swift_quality_min = _positive_int(data, "native_swift_quality_scoring_min_segments", 64)
-    swift_split_min = _positive_int(data, "native_swift_common_split_min_items", 1000)
+    swift_quality_min = _positive_int(data.get("native_swift_quality_scoring_min_segments"), 64)
+    swift_split_min = _positive_int(data.get("native_swift_common_split_min_items"), 1000)
     return {
         "schema": "ai_subtitle_studio.mac_native_backend_plan.v1",
         "enabled": native_enabled,
         "experimental_swift_policy_enabled": experimental_policy,
         "stt": {
             "route": "whisperkit_coreml_mlx",
-            "enabled": native_enabled and _setting_bool(data, "whisperkit_native_auto_enabled", True),
+            "enabled": native_enabled
+            and _setting_bool(data.get("whisperkit_native_auto_enabled"), True, false_values=KOREAN_FALSE_VALUES),
             "reason": "WhisperKit/CoreML/MLX are the fastest stable STT routes on Apple Silicon.",
         },
         "vad": {
@@ -111,33 +81,40 @@ def mac_native_backend_plan(settings: dict[str, Any] | None = None) -> dict[str,
         },
         "lora": {
             "route": "python_ranker",
-            "enabled": native_enabled and experimental_policy and _setting_bool(data, "native_swift_lora_scoring_enabled", False),
+            "enabled": native_enabled
+            and experimental_policy
+            and _setting_bool(data.get("native_swift_lora_scoring_enabled"), False, false_values=KOREAN_FALSE_VALUES),
             "default_enabled": False,
             "reason": "Swift LoRA scoring remains opt-in because benchmark parity changed top ranking.",
         },
         "deep_learning": {
             "route": "python_policy",
-            "enabled": native_enabled and experimental_policy and _setting_bool(data, "native_swift_deep_policy_enabled", False),
+            "enabled": native_enabled
+            and experimental_policy
+            and _setting_bool(data.get("native_swift_deep_policy_enabled"), False, false_values=KOREAN_FALSE_VALUES),
             "default_enabled": False,
             "reason": "Swift Deep rerank remains opt-in because the Python path was faster in the benchmark.",
         },
         "llm": {
             "route": "native_cpp_macro_grouping_external_llm",
-            "enabled": native_enabled and _setting_bool(data, "native_cpp_llm_macro_groups_enabled", True),
+            "enabled": native_enabled
+            and _setting_bool(data.get("native_cpp_llm_macro_groups_enabled"), True, false_values=KOREAN_FALSE_VALUES),
             "candidate_policy_swift_enabled": native_enabled
             and experimental_policy
-            and _setting_bool(data, "native_swift_llm_candidate_policy_enabled", False),
+            and _setting_bool(data.get("native_swift_llm_candidate_policy_enabled"), False, false_values=KOREAN_FALSE_VALUES),
             "reason": "LLM inference stays with the selected provider; C++ handles macro grouping safely.",
         },
         "quality_scoring": {
             "route": "swift_batch",
-            "enabled": native_enabled and _setting_bool(data, "native_swift_quality_scoring_enabled", True),
+            "enabled": native_enabled
+            and _setting_bool(data.get("native_swift_quality_scoring_enabled"), True, false_values=KOREAN_FALSE_VALUES),
             "min_segments": swift_quality_min,
             "reason": "Swift scorer is used only for large batches where worker overhead is amortized.",
         },
         "common_split": {
             "route": "swift_batch",
-            "enabled": native_enabled and _setting_bool(data, "native_swift_common_split_enabled", True),
+            "enabled": native_enabled
+            and _setting_bool(data.get("native_swift_common_split_enabled"), True, false_values=KOREAN_FALSE_VALUES),
             "min_items": swift_split_min,
             "reason": "Swift split planner is used only for large batches; Python remains faster for small edits.",
         },

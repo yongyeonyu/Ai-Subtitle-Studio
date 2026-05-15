@@ -97,6 +97,9 @@ class SignalHandlersMixin:
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum()
         )
+        tracker = getattr(self, "_automation_track_log_line", None)
+        if callable(tracker):
+            tracker(str(msg or ""))
         if not bool(getattr(self, "_sidebar_engine_refresh_pending", False)):
             self._sidebar_engine_refresh_pending = True
 
@@ -168,11 +171,14 @@ class SignalHandlersMixin:
     def _do_editor_processing_stage(self, text):
         editor = getattr(self, "_editor_widget", None)
         setter = getattr(editor, "set_live_processing_stage", None) if editor is not None else None
+        stage_text = str(text or "")
         if callable(setter):
-            stage_text = str(text or "")
             if getattr(config, "IS_MAC", False):
                 stage_text = stage_text.replace("⏳ ", "", 1)
             setter(stage_text)
+        snapshotter = getattr(self, "_automation_capture_processing_stage", None)
+        if callable(snapshotter):
+            snapshotter(stage_text)
 
     def _do_clear_editor(self):
         if hasattr(self, "_clear_editor_for_full_restart"):
@@ -238,10 +244,13 @@ class SignalHandlersMixin:
         finalizer = getattr(editor, "_finalize_generation_from_backend", None)
         if callable(finalizer):
             finalizer(reason=str(reason or "backend_done"))
-            return
-        fallback = getattr(editor, "_set_process_completed", None)
-        if callable(fallback):
-            fallback()
+        else:
+            fallback = getattr(editor, "_set_process_completed", None)
+            if callable(fallback):
+                fallback()
+        snapshotter = getattr(self, "_automation_finalize_guided_snapshot", None)
+        if callable(snapshotter):
+            snapshotter(str(reason or "backend_done"))
 
     def _do_restart_multiclip(self, files, folder=None):
         if not self.backend:

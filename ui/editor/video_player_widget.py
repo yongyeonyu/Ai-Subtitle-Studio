@@ -15,7 +15,7 @@ from bisect import bisect_right
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSizePolicy, QStackedWidget)
-from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QUrl, QEvent, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QUrl, QEvent, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QColor
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput

@@ -10,12 +10,22 @@ import os
 from datetime import datetime
 from typing import Any
 
+from core.coerce import safe_int as _safe_int
 from core.runtime import config
 from core.frame_time import normalize_fps, sec_to_frame
 from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, project_stt_preview_segments
 from core.cut_boundary import sanitize_cut_boundary_rows
-from core.project.project_assets import externalize_project_text_assets, hydrate_project_text_asset_cache
+from core.project.project_assets import (
+    externalize_project_text_assets,
+    hydrate_project_text_asset_cache,
+)
+from core.project.project_analysis_store import (
+    mirror_project_voice_activity_analysis,
+    store_project_stt_candidate_tracks,
+    store_project_voice_activity_segments,
+)
 from core.project.project_format import PROJECT_SCHEMA_VERSION
+from core.project.project_runtime_capture import collect_editor_project_aux_state
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 from ui.project.project_session_runtime import attach_project_session
@@ -30,13 +40,6 @@ def _safe_name(name: str) -> str:
     out = ''.join('_' if c in banned else c for c in (name or '').strip())
     out = out.strip().strip('.')
     return out or 'untitled_project'
-
-
-def _safe_int(value, default: int = 0) -> int:
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return int(default)
 
 
 def _editor_from_owner(owner):
@@ -167,6 +170,8 @@ def _auto_project_path(owner, media_files: list[str], mode: str) -> str:
 
 def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, srt_path: str | None = None) -> dict[str, Any]:
     editor = _editor_from_owner(owner)
+    segment_rows = segments if isinstance(segments, list) else list(segments or [])
+    srt_abs = os.path.abspath(srt_path) if srt_path else None
     media_files = []
     if getattr(owner, '_multiclip_files', None):
         media_files = [os.path.abspath(p) for p in list(getattr(owner, '_multiclip_files', []))]
@@ -174,7 +179,8 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         media_files = [os.path.abspath(editor.media_path)]
     mode = 'multiclip' if len(media_files) > 1 else 'single'
     project_path = _auto_project_path(owner, media_files, mode)
-    stt_preview_segments = list(getattr(editor, "_live_stt_preview_segments", []) or []) if editor is not None else []
+    aux_state = collect_editor_project_aux_state(editor)
+    stt_preview_segments = aux_state["stt_preview_segments"]
     existing_project = {}
     try:
         if os.path.exists(project_path):
@@ -183,21 +189,8 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
                 stt_preview_segments = project_stt_preview_segments(existing_project)
     except Exception:
         existing_project = {}
-    provisional_cut_boundaries = []
-    voice_activity_segments = []
-    if editor is not None:
-        canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
-        if canvas is not None:
-            try:
-                if hasattr(canvas, "_refresh_voice_activity_segments"):
-                    canvas._refresh_voice_activity_segments()
-                voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
-                provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
-            except Exception:
-                voice_activity_segments = []
-                provisional_cut_boundaries = []
-        if not provisional_cut_boundaries:
-            provisional_cut_boundaries = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
+    provisional_cut_boundaries = aux_state["provisional_cut_boundaries"]
+    voice_activity_segments = aux_state["voice_activity_segments"]
 
     primary_fps = _editor_primary_fps(editor) if editor is not None else 30.0
     cut_boundaries = sanitize_cut_boundary_rows(
@@ -210,7 +203,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
     editor_state = build_editor_state(
         mode=mode,
         media_files=media_files,
-        segments=segments or [],
+        segments=segment_rows,
         workspace=_ui_state(editor) if editor is not None else {},
         clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
         stt_preview_segments=stt_preview_segments,
@@ -227,11 +220,11 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         'project_name': os.path.splitext(os.path.basename(project_path))[0],
         'saved_at': datetime.now().isoformat(timespec='seconds'),
         'media_files': media_files,
-        'srt_path': os.path.abspath(srt_path) if srt_path else None,
+        'srt_path': srt_abs,
         'subtitles': {
             'storage': 'editor_state.rendering.subtitle_canvas',
-            'segment_count': len(segments or []),
-            'srt_path': os.path.abspath(srt_path) if srt_path else '',
+            'segment_count': len(segment_rows),
+            'srt_path': srt_abs or '',
         },
         'ui_state': editor_state.get('workspace', {}),
         'editor_state': editor_state,
@@ -242,28 +235,27 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         },
     }
     if voice_activity_segments:
-        payload.setdefault("analysis", {})
-        payload["analysis"]["voice_activity_schema"] = "subtitle_detection.v1"
-        payload["analysis"]["voice_activity_segments"] = voice_activity_segments
-        payload["editor_state"].setdefault("analysis", {})
-        payload["editor_state"]["analysis"]["voice_activity_segments"] = voice_activity_segments
+        stored_voice_activity = store_project_voice_activity_segments(
+            payload,
+            voice_activity_segments,
+            copy_rows=True,
+        )
+        mirror_project_voice_activity_analysis(payload, rows=stored_voice_activity)
     stt_tracks = (editor_state.get("stt", {}) or {}).get("candidate_tracks")
+    persisted_tracks = None
     if isinstance(stt_tracks, dict) and stt_tracks:
-        payload.setdefault("analysis", {})
-        payload["analysis"]["stt_candidate_schema"] = "stt_candidate_tracks.v1"
-        payload["analysis"]["stt_candidate_tracks"] = stt_tracks
-        payload["analysis"]["stt_candidate_counts"] = {
-            str(source): len(rows)
-            for source, rows in stt_tracks.items()
-            if isinstance(rows, list)
-        }
+        persisted_tracks = store_project_stt_candidate_tracks(
+            payload,
+            stt_tracks,
+            copy_tracks=True,
+        )
     payload['roughcut_state'] = existing_project.get('roughcut_state', {}) if isinstance(existing_project, dict) else {}
     payload.setdefault('roughcut_state', {})
     externalize_project_text_assets(
         project_path,
         payload,
-        final_segments=segments or [],
-        stt_tracks=stt_tracks if isinstance(stt_tracks, dict) else {},
+        final_segments=segment_rows,
+        stt_tracks=persisted_tracks if isinstance(stt_tracks, dict) and stt_tracks else None,
     )
     return payload
 

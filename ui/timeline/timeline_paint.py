@@ -14,7 +14,6 @@ from core.frame_time import frame_count, frame_to_sec, normalize_fps
 from core.runtime import config
 
 from ui.timeline.timeline_constants import (
-    ANALYSIS_TOP,
     CANVAS_H,
     DIAMOND_Y,
     HANDLE_R,
@@ -48,21 +47,18 @@ from ui.timeline.speaker_labels import (
     speaker_labels_for_segment,
 )
 from ui.timeline.timeline_segment_style import (
-    QUALITY_SEGMENT_COLORS,
-    SEGMENT_TEXT_KIND_STYLES,
-    STAGE_CONFIDENCE_COLORS,
-    SUBTITLE_STATE_SEGMENT_COLORS,
+    SEGMENT_TEXT_KIND_STYLES,  # noqa: F401 - compatibility re-export for tests/legacy callers
     build_stt_selection_index,
     cut_boundary_scan_marker_verified,
     final_stt_selection_source,
     official_boundary_marker_visual,
     scan_boundary_marker_label,
     scan_boundary_marker_visual,
-    segment_text_kind,
-    stt_candidate_selected,
-    stt_candidate_selected_by_llm,
+    segment_text_kind,  # noqa: F401 - compatibility re-export for tests/legacy callers
+    stt_candidate_selected,  # noqa: F401 - compatibility re-export for tests/legacy callers
+    stt_candidate_selected_by_llm,  # noqa: F401 - compatibility re-export for tests/legacy callers
     stt_candidate_selection_state,
-    stt_candidate_unselected,
+    stt_candidate_unselected,  # noqa: F401 - compatibility re-export for tests/legacy callers
     stt_preview_source,
     stt_preview_visual_style,
     subtitle_confidence_chips,
@@ -576,7 +572,7 @@ class TimelinePaintMixin:
                     color.setAlpha(int(alpha))
                     _draw_rect_batch(rects, pen=QPen(color, int(border_width)), coalesce=True, max_gap_px=1)
                 return
-            p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
+            p.setFont(QFont(config.FONT, 11, QFont.Weight.Bold))
             radius = max(4.0, min(7.0, float(box_h) / 2.1))
             was_antialias = p.renderHints() & QPainter.RenderHint.Antialiasing
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -838,7 +834,6 @@ class TimelinePaintMixin:
         fps = normalize_fps(self._get_fps() if hasattr(self, "_get_fps") else getattr(self, "frame_rate", 30.0))
         total_frames = max(0, frame_count(total_secs, fps))
         visible_start_frame = max(0, self._frame_from_x(clip_left)) if hasattr(self, "_frame_from_x") else 0
-        visible_end_frame = max(visible_start_frame + 1, self._frame_from_x(clip_right) + 1) if hasattr(self, "_frame_from_x") else total_frames
         major_step_frames, sub_step_frames = self._ruler_step_frames(fps, 80.0)
 
         # 메이저 틱 + 라벨
@@ -1251,6 +1246,11 @@ class TimelinePaintMixin:
                 )
                 is_hover = self._hover_line == seg.get("line")
                 is_editing = (self._edit_active and self._edit_line == seg.get("line"))
+                is_split_editing = bool(
+                    is_editing
+                    and hasattr(self, "_smart_split_edit_active")
+                    and self._smart_split_edit_active()
+                )
                 is_merge_preview = bool(
                     hasattr(self, "_is_merge_preview_segment")
                     and self._is_merge_preview_segment(seg)
@@ -1273,7 +1273,11 @@ class TimelinePaintMixin:
                     playback_active=playback_active,
                     quality_filter=getattr(self, "quality_filter", "all"),
                 )
-                if is_editing:
+                if is_split_editing:
+                    visual_style = dict(visual_style)
+                    visual_style["fill"] = "#4A3416"
+                    visual_style["border"] = "#FF9F0A"
+                elif is_editing:
                     visual_style = dict(visual_style)
                     visual_style["border"] = "#44FF88"
                 if overview_mode and compact_seg:
@@ -1574,6 +1578,13 @@ class TimelinePaintMixin:
             p.setPen(QPen(QColor("#FF1F1F"), 4, Qt.PenStyle.SolidLine))
             for sx in self._snap_lines:
                 p.drawLine(int(sx), 0, int(sx), CANVAS_H)
+
+        shadow_playhead_sec = getattr(self, "shadow_playhead_sec", None)
+        if shadow_playhead_sec is not None:
+            shadow_x = self._x(float(shadow_playhead_sec or 0.0))
+            if clip_left - 8 <= shadow_x <= clip_right + 8:
+                p.setPen(QPen(QColor(255, 214, 10, 170), 2, Qt.PenStyle.DashLine))
+                p.drawLine(int(shadow_x), 0, int(shadow_x), CANVAS_H)
 
         if getattr(self, '_is_listening', False):
             listening_line = getattr(self, "_listening_line", None)

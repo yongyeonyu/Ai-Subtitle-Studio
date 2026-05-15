@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from core.coerce import safe_float as _safe_float, safe_int as _safe_int
 from core.native_text_similarity import edit_distance, similarity_ratio
 from core.personalization.lora_models import line_break_pattern_for_text, stable_hash
+from core.text_utils import clean_text as _clean_text, compact_text as _compact, line_count as _line_count
 
 
 USER_EDIT_METRICS_SCHEMA = "ai_subtitle_studio.user_edit_metrics.v1"
@@ -31,37 +33,6 @@ _TIMING_KEY_PAIRS = (
     ("start_before_edit", "end_before_edit"),
     ("start_original", "end_original"),
 )
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return float(default)
-        return float(value)
-    except Exception:
-        return float(default)
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return int(default)
-        return int(float(value))
-    except Exception:
-        return int(default)
-
-
-def _clean_text(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "").replace("\r\n", "\n").replace("\r", "\n")).strip()
-
-
-def _compact(value: Any) -> str:
-    return re.sub(r"\s+", "", str(value or "")).strip().lower()
-
-
-def _line_count(value: Any) -> int:
-    return len([line for line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").splitlines() if line.strip()])
-
 
 def _punctuation_pattern(value: Any) -> str:
     return "".join(ch for ch in str(value or "") if ch in ".,!?~…")

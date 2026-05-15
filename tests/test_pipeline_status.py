@@ -6,6 +6,8 @@ from core.pipeline_status import (
     generation_stage_keys,
     generation_stage_keys_all,
     generation_stage_label,
+    generation_stage_summary,
+    is_generation_stage_status,
     process_mode_label,
 )
 
@@ -34,6 +36,46 @@ class PipelineStatusTests(unittest.TestCase):
             generation_stage_keys_all(status, stt_ensemble_enabled=True),
             {"stt1", "stt2", "subtitle_llm"},
         )
+
+    def test_pipeline_stage_parser_cached_results_are_not_shared_mutably(self):
+        status = "⏳ [STT] STT1/STT2 병렬 인식 중"
+        first = generation_stage_keys(status, stt_ensemble_enabled=True)
+        first.add("mutated")
+        second = generation_stage_keys(status, stt_ensemble_enabled=True)
+        self.assertEqual(second, {"stt1", "stt2"})
+
+        first_all = generation_stage_keys_all(status, stt_ensemble_enabled=True)
+        first_all.clear()
+        second_all = generation_stage_keys_all(status, stt_ensemble_enabled=True)
+        self.assertEqual(second_all, {"stt1", "stt2"})
+
+    def test_pipeline_stage_label_uses_cached_blob_reduction_without_losing_latest_stage(self):
+        status = "\n".join(
+            [
+                "⏳ [전처리] FFMPEG 오디오 추출 중",
+                "⏳ [음성] RNNoise 음성 보존 노이즈 제거 중",
+            ]
+        )
+        self.assertEqual(generation_stage_keys(status), {"audio"})
+        self.assertEqual(generation_stage_label(status), "음성")
+        self.assertTrue(is_generation_stage_status(status))
+
+    def test_generation_stage_summary_returns_independent_latest_and_all_views(self):
+        status = "\n".join(
+            [
+                "⏳ [STT] STT1/STT2 병렬 인식 중",
+                "⏳ [자막 LLM] 교정/분리 중",
+            ]
+        )
+        summary = generation_stage_summary(status, stt_ensemble_enabled=True)
+        summary["keys"].add("mutated")
+        summary["all_keys"].clear()
+
+        second = generation_stage_summary(status, stt_ensemble_enabled=True)
+        self.assertEqual(second["keys"], {"subtitle_llm"})
+        self.assertEqual(second["all_keys"], {"stt1", "stt2", "subtitle_llm"})
+        self.assertEqual(second["label"], "자막 LLM")
+        self.assertTrue(second["active"])
 
     def test_process_mode_label_uses_processing_state_before_screen_mode(self):
         self.assertEqual(

@@ -32,18 +32,19 @@ from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDT
 from ui.timeline.speaker_labels import current_speaker_settings
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import COLORS, button_style, label_style, line_icon, tool_button_style
-from ui.editor.editor_popup_qt import EditorPopup
+from ui.editor.ux.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.stable_render_frame import StableRenderFrame
-from ui.editor.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
+from ui.editor.ux.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
+from ui.editor.editor_automation import EditorAutomationMixin
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_actions import EditorActionsMixin
 from ui.editor.editor_save_manager import EditorSaveManagerMixin
 from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
-from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
-from ui.editor.editor_video_controls import EditorVideoControlsMixin
-from ui.editor.editor_subtitle_assist import EditorSubtitleAssistMixin
+from ui.editor.ux.editor_timeline_video import EditorTimelineVideoMixin
+from ui.editor.ux.editor_video_controls import EditorVideoControlsMixin
+from ui.editor.ux.editor_subtitle_assist import EditorSubtitleAssistMixin
 from ui.editor.editor_multiclip_context import EditorMulticlipContextMixin
 from ui.editor.editor_speaker_ops import EditorSpeakerOpsMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
@@ -60,6 +61,7 @@ class EditorWidget(
     EditorPipelineMixin,
     EditorCanvasStateMixin,
     EditorSegmentsMixin,
+    EditorAutomationMixin,
     EditorTimelineVideoMixin,
     EditorVideoControlsMixin,
     EditorSubtitleAssistMixin,
@@ -237,6 +239,7 @@ class EditorWidget(
         self._subtitle_context_index_epoch = 0
 
         self._is_initial_load = True if segments else False
+        self._initial_open_view_mode = "window" if segments else "fit"
         if segments:
             self.apply_loaded_canvas_state(
                 segments,
@@ -463,12 +466,25 @@ class EditorWidget(
 
     def _schedule_initial_open_layout(self, delays: tuple[int, ...] = (80, 220, 420)):
         timeline = getattr(self, "timeline", None)
+        mode = str(getattr(self, "_initial_open_view_mode", "window") or "window").strip().lower()
+        normalized_delays = tuple(int(delay) for delay in delays)
+        if mode == "fit":
+            final_delay = max(normalized_delays[-1] if normalized_delays else 0, 760)
+            if final_delay not in normalized_delays:
+                normalized_delays = normalized_delays + (final_delay,)
         try:
-            if timeline is not None and hasattr(timeline, "schedule_time_window_seconds"):
+            if timeline is not None and hasattr(timeline, "schedule_initial_open_view"):
+                timeline.schedule_initial_open_view(
+                    delays=normalized_delays,
+                    mode=mode,
+                    seconds=10.0,
+                    start_sec=0.0,
+                )
+            elif timeline is not None and hasattr(timeline, "schedule_time_window_seconds"):
                 timeline.schedule_time_window_seconds(
                     10.0,
                     start_sec=0.0,
-                    delays=tuple(int(delay) for delay in delays),
+                    delays=normalized_delays,
                 )
         except Exception:
             pass

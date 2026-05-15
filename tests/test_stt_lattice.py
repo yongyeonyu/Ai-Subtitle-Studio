@@ -212,6 +212,7 @@ class STTLatticeTests(unittest.TestCase):
         self.assertEqual(reloaded_segments[0]["manual_rerecognition_candidates"][0]["text"], "수동 후보")
         self.assertEqual(saved["analysis"]["stt_lattice_schema"], STT_LATTICE_ARTIFACT_SCHEMA)
         self.assertTrue(artifact_path.name.endswith(".stt_lattice.json"))
+        self.assertEqual(saved["editor_state"]["analysis"]["stt_lattice_artifact_path"], str(artifact_path))
         self.assertEqual(artifact["segments"][0]["candidate_role_counts"]["manual_re_recognition"], 1)
 
     def test_lattice_artifact_can_persist_to_cache_path(self):

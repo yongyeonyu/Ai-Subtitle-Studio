@@ -418,11 +418,12 @@ class TextLoraDatasetTests(unittest.TestCase):
 
             def fake_run(command, **_kwargs):
                 Path(command[-1]).write_bytes(b"RIFFfake wav data")
-                return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                completed = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return completed, False
 
             with (
                 patch("core.personalization.text_lora_runner.runtime_parallel_worker_plan", return_value=(2, {"reserve_cores": 1})) as worker_plan,
-                patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run),
+                patch("core.personalization.text_lora_runner.run_subprocess_capture_cancelable", side_effect=fake_run),
             ):
                 result = save_voice_lora_training_plan(
                     bridge_path=bridge,
@@ -467,7 +468,7 @@ class TextLoraDatasetTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("core.personalization.text_lora_runner.subprocess.run") as mocked_run:
+            with patch("core.personalization.text_lora_runner.run_subprocess_capture_cancelable") as mocked_run:
                 result = save_voice_lora_training_plan(
                     bridge_path=bridge,
                     output_dir=root / "trained_adapters" / "personal_voice_lora",
@@ -506,9 +507,10 @@ class TextLoraDatasetTests(unittest.TestCase):
             )
 
             def fake_run(_command, **_kwargs):
-                return type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "decode failed"})()
+                completed = type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "decode failed"})()
+                return completed, False
 
-            with patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run):
+            with patch("core.personalization.text_lora_runner.run_subprocess_capture_cancelable", side_effect=fake_run):
                 result = save_voice_lora_training_plan(
                     bridge_path=bridge,
                     output_dir=root / "trained_adapters" / "personal_voice_lora",
@@ -522,6 +524,49 @@ class TextLoraDatasetTests(unittest.TestCase):
             plan = json.loads((root / "voice_lora_training_plan.json").read_text(encoding="utf-8"))
             self.assertEqual(plan["items"][0]["audio_status"], "failed")
             self.assertFalse(Path(plan["items"][0]["audio_path"]).exists())
+
+    def test_voice_lora_training_plan_marks_cancelled_extraction_without_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source.mp4"
+            source.write_bytes(b"fake media")
+            bridge = root / "voice_lora_bridge.jsonl"
+            bridge.write_text(
+                json.dumps(
+                    {
+                        "text": "취소 테스트 음성입니다",
+                        "clip_path": str(source),
+                        "speaker": "me",
+                        "start_sec": 0.0,
+                        "end_sec": 2.0,
+                        "duration_sec": 2.0,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch("core.personalization.text_lora_runner.runtime_parallel_worker_plan", return_value=(1, {"reserve_cores": 1})),
+                patch(
+                    "core.personalization.text_lora_runner.run_subprocess_capture_cancelable",
+                    return_value=(None, True),
+                ),
+            ):
+                result = save_voice_lora_training_plan(
+                    bridge_path=bridge,
+                    output_dir=root / "trained_adapters" / "personal_voice_lora",
+                    plan_path=root / "voice_lora_training_plan.json",
+                    dataset_manifest_path=root / "voice_lora_dataset_manifest.json",
+                    extract_audio=True,
+                )
+
+            self.assertTrue(result["cancelled"])
+            self.assertEqual(result["stored_audio_items"], 0)
+            self.assertEqual(result["extraction_errors"], 0)
+            manifest = json.loads((root / "voice_lora_dataset_manifest.json").read_text(encoding="utf-8"))
+            self.assertTrue(manifest["extraction"]["cancelled"])
 
 
 if __name__ == "__main__":

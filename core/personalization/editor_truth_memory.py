@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -11,6 +10,8 @@ from typing import Any, Iterable
 from core.native_text_similarity import similarity_ratio
 from core.personalization.lora_models import iso_now, stable_hash
 from core.personalization.lora_storage import LORA_INTERNAL_CACHE_DIR
+from core.runtime.json_utils import json_safe as _json_safe
+from core.text_utils import clean_text as _clean_text, compact_text as _compact
 
 
 EDITOR_TRUTH_PATTERN_SCHEMA = "ai_subtitle_studio.editor_truth_pattern.v1"
@@ -26,25 +27,6 @@ def _cache_dir(store_dir: str | Path | None = None) -> Path:
 
 def editor_truth_pattern_path(store_dir: str | Path | None = None) -> Path:
     return _cache_dir(store_dir) / EDITOR_TRUTH_PATTERN_FILE
-
-
-def _clean_text(text: Any) -> str:
-    return re.sub(r"\s+", " ", str(text or "").replace("\r\n", "\n").replace("\r", "\n")).strip()
-
-
-def _compact(text: Any) -> str:
-    return re.sub(r"\s+", "", str(text or "")).strip().lower()
-
-
-def _json_safe(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(item) for item in value]
-    return str(value)
-
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():

@@ -6,9 +6,11 @@ import os
 import re
 from typing import Any, Iterable
 
+from core.coerce import safe_float as _safe_float, safe_round_int as _safe_int
 from core.engine.llm_correction_guard import normalized_text, validate_llm_chunks
 from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
 from core.native_text_similarity import similarity_ratio
+from core.runtime.setting_utils import setting_bool as _setting_bool
 
 
 LLM_CANDIDATE_POLICY_SCHEMA = "ai_subtitle_studio.llm_candidate_policy.v1"
@@ -16,32 +18,13 @@ LLM_CANDIDATE_POLICY_MODEL_ID = "candidate_locked_minimal_diff_v1"
 
 
 def _safe_bool(value: Any, default: bool = True) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in {"0", "false", "off", "no", "끔", "아니오"}
-    return bool(value)
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return float(default)
-        return float(value)
-    except Exception:
-        return float(default)
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return int(default)
-        return int(round(float(value)))
-    except Exception:
-        return int(default)
-
+    return _setting_bool(
+        value,
+        default,
+        false_values={"0", "false", "off", "no", "끔", "아니오"},
+        false_only_strings=True,
+        empty_is_default=False,
+    )
 
 def _clean_line(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip())
@@ -52,7 +35,12 @@ def _compact_len(text: Any) -> int:
 
 
 def _clean_chunks(chunks: Iterable[Any] | None) -> list[str]:
-    return [_clean_line(chunk) for chunk in list(chunks or []) if _clean_line(chunk)]
+    out: list[str] = []
+    for chunk in chunks or ():
+        cleaned = _clean_line(chunk)
+        if cleaned:
+            out.append(cleaned)
+    return out
 
 
 def _chunks_signature(chunks: Iterable[Any] | None) -> str:
@@ -75,8 +63,9 @@ def _is_natural_break(word: str, next_word: str, rules: dict[str, Any] | None) -
 
 
 def _tokenize(text: str) -> list[str]:
-    tokens = [item for item in re.split(r"\s+", str(text or "").strip()) if item]
-    return tokens or ([str(text or "").strip()] if str(text or "").strip() else [])
+    stripped = str(text or "").strip()
+    tokens = [item for item in re.split(r"\s+", stripped) if item]
+    return tokens or ([stripped] if stripped else [])
 
 
 def _greedy_rule_chunks(text: str, threshold: int, rules: dict[str, Any] | None) -> list[str]:

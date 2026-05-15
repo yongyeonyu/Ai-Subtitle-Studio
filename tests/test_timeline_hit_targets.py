@@ -14,7 +14,6 @@ from PyQt6.QtTest import QTest
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_constants import (
-    ANALYSIS_TOP,
     DIAMOND_Y,
     HANDLE_R,
     RULER_H,
@@ -1191,9 +1190,9 @@ class TimelineHitTargetTests(unittest.TestCase):
         canvas.show()
         self.app.processEvents()
         try:
-            QTest.mouseMove(canvas, QPoint(canvas._x(12.0), RULER_H + WAVE_H + 8))
-            self.app.processEvents()
-
+            hit = canvas._scan_boundary_hit_at(canvas._x(12.0), RULER_H + WAVE_H + 8, margin=7)
+            self.assertIsNotNone(hit)
+            canvas._set_hover_scan_boundary(hit)
             self.assertEqual(canvas._hover_scan_boundary_idx, 0)
         finally:
             canvas.close()
@@ -1867,7 +1866,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertEqual(emitted, [(0, "", True)])
             self.assertIsNotNone(canvas._inline_editor)
             self.assertTrue(canvas._inline_editor.isVisible())
-            self.assertEqual(canvas._inline_editor.font().pointSize(), 11)
+            self.assertEqual(canvas._inline_editor.font().pointSize(), 13)
         finally:
             canvas.close()
             canvas.deleteLater()
@@ -1889,7 +1888,7 @@ class TimelineHitTargetTests(unittest.TestCase):
 
             self.assertIsNotNone(editor)
             self.assertTrue(editor.isVisible())
-            self.assertEqual(canvas._subtitle_segment_font().pointSize(), 11)
+            self.assertEqual(canvas._subtitle_segment_font().pointSize(), 13)
             self.assertEqual(canvas._stt_preview_font().pointSize(), 10)
 
             start_cursor = editor.textCursor()
@@ -1931,6 +1930,42 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.close()
             canvas.deleteLater()
 
+    def test_inline_edit_enter_uses_playhead_split_when_started_with_split_mode(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.pps = 120.0
+            canvas.total_duration = 4.0
+            canvas.playhead_sec = 1.8
+            canvas.segments = [
+                {"start": 1.0, "end": 2.8, "text": "정확한 클릭 위치", "line": 0},
+            ]
+            emitted = []
+            canvas.sig_split_request.connect(lambda line, sec, cursor: emitted.append((line, sec, cursor)))
+            canvas.show()
+            self.app.processEvents()
+
+            canvas.start_inline_edit(0, 1.0, split_at_playhead=True)
+            editor = canvas._inline_editor
+
+            self.assertIsNotNone(editor)
+            self.assertAlmostEqual(float(getattr(canvas, "_pending_split_sec", 0.0)), 1.8, places=6)
+
+            cursor = editor.textCursor()
+            cursor.setPosition(4)
+            editor.setTextCursor(cursor)
+            canvas._sync_inline_editor_state_from_widget(text_changed=False)
+
+            QTest.keyClick(editor, Qt.Key.Key_Return)
+            self.app.processEvents()
+
+            self.assertEqual(emitted, [(0, 1.8, 4)])
+            self.assertFalse(canvas._edit_active)
+            self.assertFalse(hasattr(canvas, "_pending_split_sec"))
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
     def test_review_segment_right_click_emits_review_menu_request(self):
         canvas = self._canvas()
         canvas.resize(420, canvas.height())
@@ -1938,12 +1973,13 @@ class TimelineHitTargetTests(unittest.TestCase):
         emitted = []
         canvas.seg_right_clicked.connect(lambda start, _pos: emitted.append(start))
 
-        QTest.mouseClick(
-            canvas,
-            Qt.MouseButton.RightButton,
-            Qt.KeyboardModifier.NoModifier,
-            QPoint(canvas._x(1.5), SEG_TOP + 10),
-        )
+        with patch("ui.timeline.timeline_input.show_context_menu", return_value="review"):
+            QTest.mouseClick(
+                canvas,
+                Qt.MouseButton.RightButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(canvas._x(1.5), SEG_TOP + 10),
+            )
 
         self.assertEqual(emitted, [1.0])
         self.assertFalse(canvas._edit_active)
@@ -1959,15 +1995,58 @@ class TimelineHitTargetTests(unittest.TestCase):
         emitted = []
         canvas.seg_right_clicked.connect(lambda start, _pos: emitted.append(start))
 
-        QTest.mouseClick(
-            canvas,
-            Qt.MouseButton.RightButton,
-            Qt.KeyboardModifier.NoModifier,
-            QPoint(canvas._x(1.5), SEG_TOP + 10),
-        )
+        with patch("ui.timeline.timeline_input.show_context_menu", return_value="review"):
+            QTest.mouseClick(
+                canvas,
+                Qt.MouseButton.RightButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(canvas._x(1.5), SEG_TOP + 10),
+            )
 
         self.assertEqual(emitted, [1.0])
         self.assertFalse(canvas._edit_active)
+
+    def test_normal_segment_right_click_split_action_enters_split_mode(self):
+        canvas = self._canvas()
+        canvas.resize(420, canvas.height())
+        canvas.playhead_sec = 1.8
+        canvas.show()
+        self.app.processEvents()
+
+        with patch("ui.timeline.timeline_input.show_context_menu", return_value="split"):
+            QTest.mouseClick(
+                canvas,
+                Qt.MouseButton.RightButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(canvas._x(1.6), SEG_TOP + 10),
+            )
+
+        self.assertTrue(canvas._edit_active)
+        self.assertAlmostEqual(float(getattr(canvas, "_pending_split_sec", 0.0)), 1.8, places=6)
+        self.assertIsNotNone(canvas._inline_editor)
+        self.assertTrue(canvas._inline_editor.isVisible())
+
+    def test_smart_split_mode_blocks_outside_click_resize_interactions(self):
+        canvas = self._canvas()
+        canvas.resize(420, canvas.height())
+        canvas.playhead_sec = 1.8
+        canvas.show()
+        self.app.processEvents()
+        canvas.start_inline_edit(0, 1.0, split_at_playhead=True)
+        self.assertTrue(canvas._edit_active)
+
+        QTest.mouseClick(
+            canvas,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPoint(canvas._x(1.0), SEG_TOP + 32),
+        )
+        self.app.processEvents()
+
+        self.assertTrue(canvas._edit_active)
+        self.assertFalse(canvas._drag_seg)
+        self.assertIsNone(canvas._drag_edge)
+        self.assertTrue(hasattr(canvas, "_pending_split_sec"))
 
     def test_stt_candidate_lane_click_emits_candidate_selection(self):
         canvas = self._canvas()
@@ -2277,6 +2356,29 @@ class TimelineHitTargetTests(unittest.TestCase):
 
             self.assertAlmostEqual(target["end"], 3.45)
             self.assertEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "user_guide")
+        finally:
+            canvas.deleteLater()
+
+    def test_shadow_playhead_becomes_drag_snap_target(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas.pps = 100.0
+            canvas.total_duration = 5.0
+            canvas.playhead_sec = 3.45
+            canvas.set_shadow_playhead(3.45)
+            canvas.segments = [
+                {"start": 1.0, "end": 1.8, "text": "앞", "line": 0},
+                {"start": 2.5, "end": 3.0, "text": "중간", "line": 1},
+                {"start": 3.7, "end": 4.1, "text": "뒤", "line": 2},
+            ]
+
+            target = canvas.segments[1]
+            canvas._setup_drag(target, "square_right", canvas._x(target["end"]))
+            canvas._apply_drag(0.43)
+
+            self.assertAlmostEqual(target["end"], 3.45)
+            self.assertEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "shadow_playhead")
         finally:
             canvas.deleteLater()
 

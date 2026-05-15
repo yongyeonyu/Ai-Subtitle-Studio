@@ -69,7 +69,10 @@ class MulticlipPipelineMixin:
             for _f in self.files_to_process:
                 if os.path.exists(os.path.splitext(_f)[0] + '.srt'):
                     candidates.append(_f)
-            if getattr(self, '_force_no_reuse_once', False):
+            if getattr(self, "_force_reuse_existing_multiclip_subtitles_once", False):
+                self._force_reuse_existing_multiclip_subtitles_once = False
+                self._reuse_existing_multiclip_subtitles = bool(candidates)
+            elif getattr(self, '_force_no_reuse_once', False):
                 self._force_no_reuse_once = False
                 self._reuse_existing_multiclip_subtitles = False
                 if candidates:
@@ -712,7 +715,7 @@ class MulticlipPipelineMixin:
             # 멀티클립 경계 정보를 UI에 전달 (에디터 열기 전)
             set_runtime_multiclip_state(
                 self.ui,
-                list(files or []),
+                list(self.files_to_process or []),
                 list(clip_boundaries or []),
                 project_boundary_rows=None,
                 emit_boundary_signal=False,

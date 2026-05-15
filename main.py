@@ -168,6 +168,7 @@ warnings.filterwarnings(
 )
 
 from core.runtime import config
+from core.automation.app_command_server import LocalAppCommandServer
 
 if getattr(config, "MACBOOK_ONLY_APP", False) and not getattr(config, "IS_MAC", False):
     sys.stderr.write("AI Subtitle Studio macOS native branch requires macOS.\n")
@@ -195,8 +196,14 @@ from core.runtime.logger import get_logger
 from ui.button_feedback import install_button_click_feedback
 from ui.dialogs.message_box import install_qmessagebox_hooks, show_message
 
+try:
+    get_logger().install_stream_capture()
+except Exception:
+    pass
+
 _QT_APP_SHUTTING_DOWN = False
 _PREV_QT_MESSAGE_HANDLER = None
+_instance_command_server = None
 
 
 def _qt_message_handler(mode, context, message):
@@ -217,10 +224,12 @@ _instance_socket = None
 
 def check_single_instance():
     """프로그램 중복 실행을 완벽하게 차단하는 함수"""
-    global _instance_socket
+    global _instance_socket, _instance_command_server
     _instance_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         _instance_socket.bind(('127.0.0.1', config.INSTANCE_PORT))
+        _instance_command_server = LocalAppCommandServer(_instance_socket)
+        _instance_command_server.start()
     except socket.error:
         QApplication.instance() or QApplication(sys.argv)
         show_message(
@@ -330,6 +339,10 @@ def main():
     install_button_click_feedback(app)
 
     win = MainWindow()
+    if _instance_command_server is not None:
+        _instance_command_server.set_handler(
+            lambda payload: win.dispatch_external_app_command(payload, timeout_sec=15.0)
+        )
     def _shutdown_runtime_in_order():
         global _QT_APP_SHUTTING_DOWN
         _QT_APP_SHUTTING_DOWN = True
@@ -343,7 +356,11 @@ def main():
 
         def _fallback_cleanup():
             try:
-                win._shutdown_personalization_idle_trainer(timeout_sec=0.0)
+                win._shutdown_personalization_idle_trainer(
+                    timeout_sec=0.0,
+                    cleanup=False,
+                    recover=False,
+                )
             except Exception:
                 pass
             try:

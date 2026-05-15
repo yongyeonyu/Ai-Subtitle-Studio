@@ -65,6 +65,15 @@ class _PlaybackEditor(EditorTimelineVideoMixin):
         return self._segments
 
 
+class _WaveformReadyTimeline(TimelineWidget):
+    def __init__(self):
+        super().__init__()
+        self._test_sender = None
+
+    def sender(self):
+        return self._test_sender
+
+
 class _ClickEditor(EditorTimelineVideoMixin):
     def _multiclip_active_offset(self) -> float:
         return 0.0
@@ -562,7 +571,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
         editor._on_timeline_seg_double_clicked(0, 3.0)
 
-        editor.timeline.canvas.start_inline_edit.assert_called_once_with(0, 3.0)
+        editor.timeline.canvas.start_inline_edit.assert_called_once_with(0, 3.0, split_at_playhead=False)
 
     def test_seg_time_changed_schedules_resize_redraw_without_nameerror(self):
         editor = _DummyTimelineVideoEditor()
@@ -1299,6 +1308,102 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_schedule_initial_open_view_reuses_same_window_request(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 180.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, 50.0))
+            timeline.canvas.pps = 50.0
+            timeline.scroll.horizontalScrollBar().setValue(700)
+
+            timeline.schedule_initial_open_view(delays=(0,), seconds=10.0, start_sec=0.0)
+            self.app.processEvents()
+
+            viewport_w = max(1, timeline.scroll.viewport().width())
+            visible_seconds = viewport_w / max(0.001, float(timeline.canvas.pps))
+            self.assertAlmostEqual(visible_seconds, 10.0, delta=0.35)
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+
+            timeline.canvas.pps = 60.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, 60.0))
+            timeline.scroll.horizontalScrollBar().setValue(900)
+
+            timeline.schedule_initial_open_view(delays=(0,), seconds=None)
+            self.app.processEvents()
+
+            visible_seconds = viewport_w / max(0.001, float(timeline.canvas.pps))
+            self.assertAlmostEqual(visible_seconds, 10.0, delta=0.35)
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+        finally:
+            timeline.close()
+
+    def test_single_waveform_ready_reapplies_initial_open_view_request(self):
+        timeline = _WaveformReadyTimeline()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.schedule_initial_open_view(delays=(0,), seconds=10.0, start_sec=0.0)
+            self.app.processEvents()
+
+            timeline.canvas.pps = 60.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(180.0, 60.0))
+            timeline.scroll.horizontalScrollBar().setValue(900)
+
+            timeline._wf_worker = object()
+            timeline._test_sender = timeline._wf_worker
+            timeline._on_waveform_ready([0.0, 0.5, 0.25], 180.0)
+            self.app.processEvents()
+
+            viewport_w = max(1, timeline.scroll.viewport().width())
+            visible_seconds = viewport_w / max(0.001, float(timeline.canvas.pps))
+            self.assertAlmostEqual(visible_seconds, 10.0, delta=0.35)
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+            self.assertAlmostEqual(float(timeline.canvas.total_duration), 180.0, places=3)
+        finally:
+            timeline.close()
+
+    def test_fit_mode_initial_open_view_reapplies_full_fit_after_waveform_ready(self):
+        timeline = _WaveformReadyTimeline()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 180.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.pps = 60.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, 60.0))
+            timeline.scroll.horizontalScrollBar().setValue(900)
+
+            timeline.schedule_initial_open_view(delays=(0,), mode="fit")
+            self.app.processEvents()
+
+            self.assertAlmostEqual(timeline.canvas.pps, timeline._fit_pps_for_duration(dur))
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+
+            timeline.canvas.pps = 72.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, 72.0))
+            timeline.scroll.horizontalScrollBar().setValue(1200)
+
+            timeline._wf_worker = object()
+            timeline._test_sender = timeline._wf_worker
+            timeline._on_waveform_ready([0.0, 0.5, 0.25], dur)
+            self.app.processEvents()
+
+            self.assertAlmostEqual(timeline.canvas.pps, timeline._fit_pps_for_duration(dur))
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+        finally:
+            timeline.close()
+
     def test_ten_second_edit_window_button_order_and_active_segment_centering(self):
         timeline = TimelineWidget()
         try:
@@ -1668,6 +1773,28 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_playhead_overlay_repaints_when_shadow_playhead_changes(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.update_segments([{"start": 0.0, "end": 10.0, "text": "테스트"}], active_sec=0.0, total_dur=10.0)
+            timeline.set_playhead(2.0)
+            self.app.processEvents()
+
+            timeline._playhead_overlay.update = Mock()
+            timeline.pin_shadow_playhead(4.0)
+
+            timeline._playhead_overlay.update.assert_called()
+            dirty = timeline._playhead_overlay.update.call_args.args[0]
+            self.assertIsInstance(dirty, QRect)
+            self.assertLess(dirty.width(), timeline._playhead_overlay.width())
+            self.assertAlmostEqual(timeline.canvas.shadow_playhead_sec, 4.0)
+        finally:
+            timeline.close()
+
     def test_loading_new_single_waveform_clears_stale_duration_and_applies_ready_duration(self):
         timeline = TimelineWidget()
         try:
@@ -1784,6 +1911,30 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertFalse(timeline._playback_center_lock)
             self.assertFalse(timeline._playhead_overlay._center_locked)
+        finally:
+            timeline.close()
+
+    def test_centered_playback_follow_locks_immediately_at_max_zoom(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 300.0
+            timeline.global_canvas.total_duration = 300.0
+            timeline.canvas.pps = 500.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(300.0, 500.0))
+            timeline.scroll.horizontalScrollBar().setValue(0)
+
+            timeline.follow_playhead_centered(40.0, smooth=True)
+
+            self.assertTrue(timeline._playback_center_lock)
+            self.assertFalse(timeline._pending_playback_center_lock)
+            self.assertTrue(timeline._playhead_overlay._center_locked)
+            self.assertTrue(timeline._smooth_scroll_timer.isActive())
+            self.assertEqual(timeline.canvas.playhead_sec, 40.0)
+            self.assertGreater(timeline._target_scroll_x, 0.0)
         finally:
             timeline.close()
 

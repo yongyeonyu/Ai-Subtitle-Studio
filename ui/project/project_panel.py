@@ -15,9 +15,8 @@ from core.project.project_manager import (
     PROJECTS_DIR,
     add_media_to_project,
     create_project,
-    extract_model_settings,
     load_project,
-    merge_project_model_settings,
+    restore_project_model_settings,
     save_project,
 )
 from core.project.project_context import (
@@ -26,6 +25,7 @@ from core.project.project_context import (
     project_roughcut_state,
     project_segments_to_editor,
 )
+from core.project.project_runtime_capture import collect_editor_project_aux_state
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 from ui.editor.editor_project_open_native import (
     open_project_segments_in_editor as native_open_project_segments_in_editor,
@@ -68,6 +68,67 @@ def _rows_are_placeholder_only(rows) -> bool:
 
 
 class ProjectUIMixin:
+    def _open_project_file(self, filepath: str) -> bool:
+        filepath = str(filepath or "").strip()
+        if not filepath:
+            return False
+
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora("project_open")
+
+        project = load_project(filepath, hydrate_text_assets=False)
+        if not project:
+            QMessageBox.warning(self, "오류", "프로젝트 파일을 열 수 없습니다.")
+            return False
+
+        attach_project_session(self, filepath, project, auto_pipeline=False, clear_multiclip=True)
+
+        model_settings, saved_settings = restore_project_model_settings(
+            self._load_local_settings(),
+            project,
+        )
+        if model_settings:
+            self._save_local_settings(saved_settings)
+            if hasattr(self, "_refresh_sidebar_engine_info"):
+                self._refresh_sidebar_engine_info(settings=saved_settings)
+            get_logger().log("🔁 프로젝트 AI 모델 설정 복원 완료")
+
+        media = self._sorted_project_media(project)
+        project_segments = project_segments_to_editor(project, include_analysis_candidates=False)
+
+        srt_path = (
+            project.get("subtitle", {}).get("path", "")
+            or project.get("subtitles", {}).get("srt_path", "")
+        )
+
+        get_logger().log(
+            f"📂 프로젝트 로드: {project.get('project_name', '')} (미디어 {len(media)}개)"
+        )
+
+        if media:
+            if self._open_project_segments_in_editor(filepath, project, media, project_segments):
+                if project_active_work_mode(project) == "roughcut" and project_roughcut_state(project):
+                    def _open_roughcut_deferred():
+                        try:
+                            self._open_roughcut_helper()
+                        except Exception as e:
+                            get_logger().log(f"⚠️ 러프컷 화면 복원 실패: {e}")
+
+                    QTimer.singleShot(180, _open_roughcut_deferred)
+                return True
+
+        if srt_path and os.path.exists(srt_path):
+            self._open_srt_in_editor(srt_path)
+            return True
+
+        if media and self.backend:
+            self.backend.start_pipeline(media)
+            return True
+
+        QMessageBox.warning(self, "오류", "프로젝트에 유효한 미디어 파일이 없습니다.")
+        return False
+
     def _project_cut_boundary_placeholder_rows(self, project: dict) -> list[dict]:
         analysis = project.get("analysis", {}) or {}
         middle_rows = analysis.get("middle_segments")
@@ -242,9 +303,6 @@ class ProjectUIMixin:
             self.backend.start_pipeline(paths)
 
     def _open_project(self):
-        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
-        if callable(pause_lora):
-            pause_lora("project_open")
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "프로젝트 열기",
@@ -253,91 +311,23 @@ class ProjectUIMixin:
         )
         if not filepath:
             return
-
-        project = load_project(filepath, hydrate_text_assets=False)
-        if not project:
-            QMessageBox.warning(self, "오류", "프로젝트 파일을 열 수 없습니다.")
-            return
-
-        attach_project_session(self, filepath, project, auto_pipeline=False, clear_multiclip=True)
-
-        model_settings = extract_model_settings(project)
-        saved_settings = merge_project_model_settings(
-            self._load_local_settings(),
-            project,
-        )
-        if model_settings:
-            self._save_local_settings(saved_settings)
-            if hasattr(self, "_refresh_sidebar_engine_info"):
-                self._refresh_sidebar_engine_info(settings=saved_settings)
-            get_logger().log("🔁 프로젝트 AI 모델 설정 복원 완료")
-
-        media = self._sorted_project_media(project)
-        project_segments = project_segments_to_editor(project, include_analysis_candidates=False)
-
-        srt_path = (
-            project.get("subtitle", {}).get("path", "")
-            or project.get("subtitles", {}).get("srt_path", "")
-        )
-
-        get_logger().log(
-            f"📂 프로젝트 로드: {project.get('project_name', '')} (미디어 {len(media)}개)"
-        )
-
-        if media:
-            if self._open_project_segments_in_editor(filepath, project, media, project_segments):
-                if project_active_work_mode(project) == "roughcut" and project_roughcut_state(project):
-                    def _open_roughcut_deferred():
-                        try:
-                            self._open_roughcut_helper()
-                        except Exception as e:
-                            get_logger().log(f"⚠️ 러프컷 화면 복원 실패: {e}")
-
-                    QTimer.singleShot(180, _open_roughcut_deferred)
-                return
-
-        if srt_path and os.path.exists(srt_path):
-            self._open_srt_in_editor(srt_path)
-            return
-
-        if media and self.backend:
-            self.backend.start_pipeline(media)
-            return
-
-        QMessageBox.warning(self, "오류", "프로젝트에 유효한 미디어 파일이 없습니다.")
+        self._open_project_file(filepath)
 
     def _save_current_project(self, segments=None):
         filepath = getattr(self, "_current_project_path", None)
         if not filepath:
             return
 
-        editor = getattr(self, "_editor_widget", None)
-        stt_preview_segments = []
-        voice_activity_segments = []
-        provisional_cut_boundaries = []
-        if editor is not None:
-            stt_preview_segments = list(getattr(editor, "_live_stt_preview_segments", []) or [])
-            canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
-            if canvas is not None:
-                try:
-                    if hasattr(canvas, "_refresh_voice_activity_segments"):
-                        canvas._refresh_voice_activity_segments()
-                    voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
-                    provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
-                except Exception:
-                    voice_activity_segments = []
-                    provisional_cut_boundaries = []
-            if not provisional_cut_boundaries:
-                provisional_cut_boundaries = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
+        aux_state = collect_editor_project_aux_state(getattr(self, "_editor_widget", None))
 
         save_project(
             filepath,
             segments=segments,
             user_settings=self._load_local_settings(),
             active_work_mode=normalize_work_mode(getattr(self, "_current_work_mode", EDITOR_MODE)),
-            stt_preview_segments=stt_preview_segments,
-            voice_activity_segments=voice_activity_segments,
-            provisional_cut_boundaries=provisional_cut_boundaries,
+            stt_preview_segments=aux_state["stt_preview_segments"],
+            voice_activity_segments=aux_state["voice_activity_segments"],
+            provisional_cut_boundaries=aux_state["provisional_cut_boundaries"],
         )
         get_logger().log("💾 프로젝트 저장 완료")
 

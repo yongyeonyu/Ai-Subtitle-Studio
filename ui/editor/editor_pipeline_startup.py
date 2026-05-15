@@ -9,7 +9,6 @@ from PyQt6.QtCore import QTimer
 
 from core.path_manager import get_srt_path
 from core.project.project_manager import create_project
-from core.runtime.logger import get_logger
 from ui.editor.editor_pipeline_safety import EditorPipelineSafetyMixin
 from ui.project.project_session_runtime import attach_project_session
 

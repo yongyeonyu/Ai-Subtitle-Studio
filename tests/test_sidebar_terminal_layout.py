@@ -136,6 +136,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual((margins.left(), margins.top(), margins.right(), margins.bottom()), (3, 3, 3, 3))
             self.assertEqual(root_layout.spacing(), 3)
             self.assertEqual(window.workspace_splitter.handleWidth(), 3)
+            self.assertFalse(window.workspace_splitter.handle(1).isEnabled())
             self.assertEqual(window.right_layout.spacing(), 3)
             for widget in (
                 window.home_page,
@@ -197,8 +198,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIsNotNone(quality_row)
             self.assertEqual(quality_row.height(), 24)
             self.assertEqual(getattr(window, "sidebar_subtitle_quality_save_btn", None).text(), "저장")
-            self.assertGreaterEqual(window.sidebar_settings_label.minimumHeight(), 100)
-            self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 144)
+            self.assertGreaterEqual(window.sidebar_settings_label.minimumHeight(), 88)
+            self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 122)
+            self.assertFalse(window.sidebar_runtime_label.isVisible())
             quality_combos = [
                 combo for combo in window.home_page.findChildren(QComboBox)
                 if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High", "STT"]
@@ -226,6 +228,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             items = list(getattr(nav, "_items", []) or [])
             self.assertTrue(items)
             self.assertEqual(items[0].get("id"), "generation_status")
+            self.assertEqual(items[0].get("meta"), "CPU -- · PROC -- · RAM --")
         finally:
             window.close()
             window.deleteLater()

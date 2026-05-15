@@ -12,6 +12,7 @@ from PyQt6.QtCore import QTimer
 
 from core.runtime.logger import get_logger
 from ui.project.project_session_runtime import attach_project_session
+from ui.queue.queue_dispatch import dispatch_queue_status, find_queue_row_for_media, sync_saved_queue_state
 
 
 class EditorRoughcutDraftMixin:
@@ -305,23 +306,26 @@ class EditorRoughcutDraftMixin:
 
     def _roughcut_draft_post_generation_autorun_enabled(self) -> bool:
         settings = self._draft_settings_snapshot()
-        value = settings.get("roughcut_run_after_subtitle_generation", None)
-        if isinstance(value, str):
-            enabled = value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
-        elif value is None:
-            enabled = None
-        else:
-            enabled = bool(value)
-        llm_enabled = bool(settings.get("roughcut_llm_enabled", False))
-        if not llm_enabled:
-            return False
-        if enabled is True:
-            return True
-        # 레거시 기본값이 False로 저장된 프로젝트라도 러프컷 LLM을 켠 경우에는
-        # 생성 완료 후 자동 실행이 자연스럽게 이어지도록 보정한다.
-        if self._roughcut_draft_runtime_enabled():
-            return True
-        return bool(enabled)
+        try:
+            from core.roughcut.editor_draft import editor_roughcut_draft_autorun_enabled
+
+            return bool(editor_roughcut_draft_autorun_enabled(settings))
+        except Exception:
+            value = settings.get("roughcut_run_after_subtitle_generation", None)
+            if isinstance(value, str):
+                enabled = value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+            elif value is None:
+                enabled = None
+            else:
+                enabled = bool(value)
+            llm_enabled = bool(settings.get("roughcut_llm_enabled", False))
+            if not llm_enabled:
+                return False
+            if enabled is True:
+                return True
+            if self._roughcut_draft_runtime_enabled():
+                return True
+            return bool(enabled)
 
     def _roughcut_playback_active(self) -> bool:
         try:
@@ -343,35 +347,168 @@ class EditorRoughcutDraftMixin:
         except Exception:
             pass
 
+    def _roughcut_queue_row(self) -> int | None:
+        try:
+            main_w = self.window()
+        except Exception:
+            return None
+        if main_w is None:
+            return None
+        current_row_hint = None
+        current_row_getter = getattr(main_w, "queue_active_row_index", None)
+        if callable(current_row_getter):
+            try:
+                current_row_hint = int(current_row_getter())
+            except Exception:
+                current_row_hint = None
+        return find_queue_row_for_media(
+            main_w,
+            media_path=getattr(self, "media_path", ""),
+            current_row_hint=current_row_hint,
+        )
+
+    def _ensure_roughcut_queue_row(self) -> int | None:
+        row = self._roughcut_queue_row()
+        if row is not None:
+            return row
+        try:
+            main_w = self.window()
+        except Exception:
+            return None
+        if main_w is None:
+            return None
+        media_path = str(getattr(self, "media_path", "") or "")
+        if not media_path:
+            return None
+        row_count_getter = getattr(main_w, "queue_row_count", None)
+        row_count = 0
+        if callable(row_count_getter):
+            try:
+                row_count = max(0, int(row_count_getter() or 0))
+            except Exception:
+                row_count = 0
+        if row_count > 0:
+            return None
+        initializer = getattr(main_w, "init_queue_list", None)
+        if not callable(initializer):
+            return None
+        try:
+            initializer([media_path])
+        except Exception:
+            return None
+        return self._roughcut_queue_row()
+
+    def _roughcut_queue_expected_text(
+        self,
+        row: int | None = None,
+        *,
+        fallback_seconds: float | None = None,
+    ) -> str:
+        if row is None:
+            row = self._ensure_roughcut_queue_row()
+        if row is None:
+            if fallback_seconds and fallback_seconds > 0.0:
+                return str(max(1, int(round(float(fallback_seconds)))))
+            return ""
+        try:
+            main_w = self.window()
+        except Exception:
+            main_w = None
+        expected_getter = getattr(main_w, "queue_row_expected_seconds", None) if main_w is not None else None
+        expected_seconds = 0.0
+        if callable(expected_getter):
+            try:
+                expected_seconds = float(expected_getter(int(row)) or 0.0)
+            except Exception:
+                expected_seconds = 0.0
+        if expected_seconds <= 0.0:
+            if fallback_seconds and fallback_seconds > 0.0:
+                return str(max(1, int(round(float(fallback_seconds)))))
+            return ""
+        metrics_getter = getattr(main_w, "queue_row_metrics", None) if main_w is not None else None
+        if not callable(metrics_getter):
+            return str(max(1, int(round(expected_seconds))))
+        try:
+            metrics = dict(metrics_getter(int(row)) or {})
+        except Exception:
+            return str(max(1, int(round(expected_seconds))))
+        return str(metrics.get("expected_label", "") or "")
+
+    def _mark_roughcut_queue_active(self, status_text: str, *, expected_seconds: float | None = None) -> None:
+        row = self._ensure_roughcut_queue_row()
+        if row is None:
+            return
+        try:
+            main_w = self.window()
+        except Exception:
+            return
+        dispatch_queue_status(
+            main_w,
+            row,
+            status_text,
+            self._roughcut_queue_expected_text(row, fallback_seconds=expected_seconds),
+        )
+
+    def _mark_roughcut_queue_done(self, *, note: str = "") -> None:
+        row = self._ensure_roughcut_queue_row()
+        if row is None:
+            return
+        try:
+            main_w = self.window()
+        except Exception:
+            return
+        if note:
+            dispatch_queue_status(
+                main_w,
+                row,
+                f"✅ 완료 · {note}",
+                self._roughcut_queue_expected_text(row),
+            )
+            return
+        sync_saved_queue_state(
+            main_w,
+            media_path=getattr(self, "media_path", ""),
+            current_row_hint=row,
+        )
+
     def _schedule_post_generation_roughcut_draft(self, force: bool = False):
         if force and not self._roughcut_draft_post_generation_autorun_enabled():
+            self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("disabled")
             get_logger().log("⏭️ 러프컷 자동 실행 생략: 생성 완료 후 자동 실행 설정이 꺼져 있습니다.")
             return
         if not self._roughcut_draft_runtime_enabled():
+            self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("disabled")
             get_logger().log("⏭️ 러프컷 자동 실행 생략: 컷 경계/러프컷 런타임이 비활성화되어 있습니다.")
             return
         timer = getattr(self, "_roughcut_draft_timer", None)
         if timer is None:
+            self._roughcut_draft_pending = False
             return
         if force or not timer.isActive():
+            self._roughcut_draft_pending = True
             self._set_roughcut_draft_status("queued")
+            self._mark_roughcut_queue_active("⏳ [러프컷 LLM] 후처리 대기")
+            get_logger().log("⏳ 러프컷 LLM 후처리 예약: 자막 생성 완료 직후 중분류 초안을 이어서 만듭니다.")
             timer.start(120 if force else 300)
 
     def _run_post_generation_roughcut_draft(self):
         if not self._roughcut_draft_runtime_enabled():
+            self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("disabled")
             return
         if not self._cut_boundary_runtime_settled_for_roughcut():
             timer = getattr(self, "_roughcut_draft_timer", None)
             if timer is not None:
+                self._roughcut_draft_pending = True
                 self._set_roughcut_draft_status("queued")
                 timer.start(900)
             return
         if self._roughcut_playback_active():
             timer = getattr(self, "_roughcut_draft_timer", None)
             if timer is not None:
+                self._roughcut_draft_pending = True
                 self._set_roughcut_draft_status("queued")
                 timer.start(2200)
             return
@@ -385,8 +522,11 @@ class EditorRoughcutDraftMixin:
             if not seg.get("is_gap") and str(seg.get("text", "") or "").strip()
         ]
         if not segments:
+            self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("idle")
+            self._mark_roughcut_queue_done()
             return
+        self._roughcut_draft_pending = True
         self._set_roughcut_draft_status("running")
 
         settings = self._draft_settings_snapshot()
@@ -413,6 +553,33 @@ class EditorRoughcutDraftMixin:
         reviewed_cut_boundaries = self._draft_reviewed_cut_boundaries()
         self._roughcut_draft_generation += 1
         generation = int(self._roughcut_draft_generation)
+
+        try:
+            from core.roughcut.editor_draft import (
+                describe_editor_roughcut_llm_scope,
+                estimate_editor_roughcut_llm_runtime_sec,
+            )
+
+            roughcut_scope = describe_editor_roughcut_llm_scope(
+                segments,
+                settings,
+                cut_boundaries=confirmed_cut_boundaries,
+                provisional_cut_boundaries=provisional_cut_boundaries,
+            )
+            roughcut_chunk_count = max(1, int(roughcut_scope.get("chunk_count", 1) or 1))
+            roughcut_eta_sec = float(estimate_editor_roughcut_llm_runtime_sec(media_duration, settings) or 0.0)
+        except Exception:
+            roughcut_chunk_count = 1
+            roughcut_eta_sec = 0.0
+        eta_label = f" · 예상 {roughcut_eta_sec:.0f}s" if roughcut_eta_sec > 0.0 else ""
+        self._mark_roughcut_queue_active(
+            f"🤖 [러프컷 LLM] 후처리 중 · {roughcut_chunk_count}chunk{eta_label}",
+            expected_seconds=roughcut_eta_sec if roughcut_eta_sec > 0.0 else None,
+        )
+        get_logger().log(
+            "🤖 러프컷 LLM 후처리 시작: "
+            f"자막 row {len(segments)}개 · chunk {roughcut_chunk_count}개{eta_label}"
+        )
 
         def emit_candidate(llm_payload, refinement_source: str):
             from core.roughcut import build_editor_roughcut_candidate_payload, build_editor_roughcut_draft_result
@@ -530,9 +697,11 @@ class EditorRoughcutDraftMixin:
                 )
                 if llm_payload is None:
                     self._roughcut_llm_cooldown_until = time.time() + 10.0
+                    get_logger().log("↩️ 러프컷 LLM 후처리 결과 없음: 로컬 규칙 초안으로 마무리합니다.")
                     emit_candidate(None, "local_after_generation_fallback")
                 else:
                     self._roughcut_llm_cooldown_until = 0.0
+                    get_logger().log("✅ 러프컷 LLM 응답 수신: 초안 저장 단계로 넘깁니다.")
                     emit_candidate(llm_payload, "llm_refined")
             except Exception as exc:
                 self.sig_roughcut_draft_ready.emit(None, [], {"_generation": generation, "refinement_source": "failed"})
@@ -554,10 +723,13 @@ class EditorRoughcutDraftMixin:
             pass
         if refinement_source == "failed":
             self._set_roughcut_draft_status("failed")
+            self._roughcut_draft_pending = False
             self._roughcut_draft_thread = None
+            self._mark_roughcut_queue_done(note="러프컷 미적용")
             self._schedule_post_roughcut_model_release()
             return
         self._set_roughcut_draft_status("saving")
+        self._mark_roughcut_queue_active("💾 [러프컷 LLM] 저장 중")
         try:
             major_count = len(getattr(result, "segments", ()) or ())
             max_major = int(self._draft_settings_snapshot().get("editor_roughcut_draft_max_major_segments", 10) or 10)
@@ -618,6 +790,7 @@ class EditorRoughcutDraftMixin:
                 get_logger().log(f"⚠️ 러프컷 초안 프로젝트 생성 실패: {exc}")
         if not project_path:
             self._set_roughcut_draft_status("failed")
+            self._mark_roughcut_queue_done(note="러프컷 미적용")
             self._schedule_post_roughcut_model_release()
             return
         try:
@@ -675,12 +848,16 @@ class EditorRoughcutDraftMixin:
             last_count = getattr(self, "_last_roughcut_draft_major_count", None)
             if last_count != count:
                 self._last_roughcut_draft_major_count = count
-                get_logger().log(f"자막 생성 후 러프컷 초안 생성: 중분류 {count}개")
+                source_label = "LLM" if refinement_source == "llm_refined" else "로컬"
+                get_logger().log(f"✅ 러프컷 후처리 완료: {source_label} 초안 · 중분류 {count}개")
             self._set_roughcut_draft_status("done", count)
+            self._mark_roughcut_queue_done()
         except Exception as exc:
             self._set_roughcut_draft_status("failed")
+            self._mark_roughcut_queue_done(note="러프컷 미적용")
             get_logger().log(f"⚠️ 러프컷 초안 저장 실패: {exc}")
         finally:
+            self._roughcut_draft_pending = False
             try:
                 self._pending_preliminary_middle_segments = []
             except Exception:

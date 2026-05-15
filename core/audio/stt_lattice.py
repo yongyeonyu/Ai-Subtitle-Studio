@@ -6,11 +6,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
+from core.coerce import safe_float as _safe_float
 from core.media_fingerprint import media_fingerprint_digest
 from core.audio.stt_candidate_scorer import score_stt_candidate
 from core.native_text_similarity import similarity_ratio
 from core.personalization.lora_models import iso_now, stable_hash
 from core.personalization.lora_storage import LORA_INTERNAL_CACHE_DIR
+from core.runtime.json_utils import json_safe as _json_safe
+from core.text_utils import clean_text as _normalize
 
 
 STT_LATTICE_SCHEMA = "ai_subtitle_studio.stt_candidate_lattice.v1"
@@ -39,32 +42,6 @@ def _safe_bool(value: Any, default: bool = True) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in {"0", "false", "off", "no", "끔"}
     return bool(value)
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return float(default)
-        return float(value)
-    except Exception:
-        return float(default)
-
-
-def _normalize(text: Any) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip()
-
-
-def _json_safe(value: Any, *, max_depth: int = 8) -> Any:
-    if max_depth <= 0:
-        return str(value)
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item, max_depth=max_depth - 1) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(item, max_depth=max_depth - 1) for item in list(value)]
-    return str(value)
-
 
 def _compact(text: Any) -> str:
     return re.sub(r"[\s\W_]+", "", str(text or ""), flags=re.UNICODE).lower()

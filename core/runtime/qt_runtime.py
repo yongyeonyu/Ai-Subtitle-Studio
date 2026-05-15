@@ -14,6 +14,7 @@ from typing import Any
 
 from core.json_file import read_json_file
 from core.runtime.hardware_profile import hardware_profile
+from core.runtime.setting_utils import setting_bool as _setting_bool
 from core.settings_profiles import hardcoded_default_settings
 
 
@@ -21,13 +22,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _safe_bool(value: Any, default: bool = True) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in {"0", "false", "off", "no", "끔", "아니오"}
-    return bool(value)
+    return _setting_bool(
+        value,
+        default,
+        false_values={"0", "false", "off", "no", "끔", "아니오"},
+        false_only_strings=True,
+        empty_is_default=False,
+    )
 
 
 def _qt_gpu_rendering_settings_request() -> tuple[bool | None, bool | None, str]:

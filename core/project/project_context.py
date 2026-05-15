@@ -23,11 +23,14 @@ from core.cut_boundary import (
     project_cut_provisional_boundaries,
 )
 from core.project.project_assets import (
+    copy_project_rows,
     load_external_stt_tracks,
     load_external_subtitle_segments,
     project_uses_external_text_assets,
     sanitize_stt_track_rows,
+    stt_candidate_track_counts,
 )
+from core.project.project_analysis_store import normalize_project_voice_activity_segment
 from core.project.project_format import project_primary_fps, project_total_duration
 
 STT_SEGMENT_METADATA_KEYS = (
@@ -253,18 +256,13 @@ def project_voice_activity_segments(project: dict[str, Any]) -> list[dict[str, A
             start = frame_to_sec(start_frame, primary_fps)
         if end_frame is not None:
             end = frame_to_sec(end_frame, primary_fps)
-        seg = {
-            "index": int(item.get("index", idx + 1) or idx + 1),
-            "start": start,
-            "end": max(start, end),
-            "kind": str(item.get("kind", "uncertain") or "uncertain"),
-            "label": str(item.get("label", "") or ""),
-            "source": str(item.get("source", "") or ""),
-            "color": str(item.get("color", "") or ""),
-        }
-        for key in ("score", "priority", "alpha", "selection_state", "selected_source"):
-            if key in item:
-                seg[key] = item.get(key)
+        seg = normalize_project_voice_activity_segment(
+            item,
+            idx,
+            start=start,
+            end=end,
+            include_id=False,
+        )
         if start_frame is not None:
             seg["start_frame"] = _safe_int(start_frame)
             seg["timeline_start_frame"] = _safe_int(start_frame)
@@ -302,49 +300,27 @@ def project_cut_boundary_provisional_segments(project: dict[str, Any]) -> list[d
 def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
     editor_state = project.get("editor_state", {}) or {}
     stt_state = editor_state.get("stt", {}) or {}
-    raw_segments = stt_state.get("preview_segments")
-    if not isinstance(raw_segments, list) or not raw_segments:
-        raw_segments = project.get("_hot_open_stt_preview_segments_cache")
-    if not isinstance(raw_segments, list) or not raw_segments:
-        raw_segments = editor_state.get("stt_preview_segments")
-    if not isinstance(raw_segments, list) or not raw_segments:
-        tracks = stt_state.get("candidate_tracks")
-        if isinstance(tracks, dict) and tracks:
-            raw_segments = []
-            for source, rows in tracks.items():
-                if not isinstance(rows, list):
-                    continue
-                for row in rows:
-                    if isinstance(row, dict):
-                        item = dict(row)
-                        item["stt_preview_source"] = str(source)
-                        raw_segments.append(item)
-        elif project_uses_external_text_assets(project):
-            raw_segments = []
-            for source, rows in load_external_stt_tracks(project).items():
-                for row in rows:
-                    item = dict(row)
-                    item["stt_preview_source"] = str(source)
-                    raw_segments.append(item)
-        else:
-            tracks = (editor_state.get("analysis", {}) or {}).get("stt_candidate_tracks")
-            if not isinstance(tracks, dict):
-                tracks = (project.get("analysis", {}) or {}).get("stt_candidate_tracks")
-            if isinstance(tracks, dict):
-                raw_segments = []
-                for source, rows in tracks.items():
-                    if not isinstance(rows, list):
-                        continue
-                    for row in rows:
-                        if isinstance(row, dict):
-                            item = dict(row)
-                            item["stt_preview_source"] = str(source)
-                            raw_segments.append(item)
-    if not isinstance(raw_segments, list):
-        return []
     primary_fps = project_primary_fps(project)
-    normalized = _normalize_stt_preview_segments(raw_segments, primary_fps=primary_fps)
+    external_text_assets = project_uses_external_text_assets(project)
+    raw_segments = _project_stt_preview_raw_segments(project, editor_state, stt_state)
+    normalized: list[dict[str, Any]] | None = None
+    if raw_segments is None:
+        normalized = _normalize_stt_preview_segments_from_tracks(
+            _project_stt_preview_track_source(
+                project,
+                editor_state,
+                stt_state,
+                external_text_assets=external_text_assets,
+            ),
+            primary_fps=primary_fps,
+        )
+    if normalized is None:
+        normalized = _normalize_stt_preview_segments(raw_segments, primary_fps=primary_fps)
+    if not normalized:
+        return []
     normalized = _trim_segments_to_project_duration(normalized, project, primary_fps=primary_fps)
+    if not normalized:
+        return []
     _attach_clip_context_from_boundaries(normalized, project_clip_boundaries(project))
     return normalized
 
@@ -424,6 +400,58 @@ def _attach_clip_context_from_boundaries(segments: list[dict[str, Any]], boundar
                 break
 
 
+def _project_stt_preview_raw_segments(
+    project: dict[str, Any],
+    editor_state: dict[str, Any],
+    stt_state: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    raw_segments = stt_state.get("preview_segments")
+    if not isinstance(raw_segments, list) or not raw_segments:
+        raw_segments = project.get("_hot_open_stt_preview_segments_cache")
+    if not isinstance(raw_segments, list) or not raw_segments:
+        raw_segments = editor_state.get("stt_preview_segments")
+    return raw_segments if isinstance(raw_segments, list) and raw_segments else None
+
+
+def _project_stt_preview_track_source(
+    project: dict[str, Any],
+    editor_state: dict[str, Any],
+    stt_state: dict[str, Any],
+    *,
+    external_text_assets: bool,
+) -> dict[str, list[dict[str, Any]]] | None:
+    tracks = stt_state.get("candidate_tracks")
+    if isinstance(tracks, dict) and tracks:
+        return tracks
+    if external_text_assets:
+        return load_external_stt_tracks(project)
+    tracks = (editor_state.get("analysis", {}) or {}).get("stt_candidate_tracks")
+    if not isinstance(tracks, dict):
+        tracks = (project.get("analysis", {}) or {}).get("stt_candidate_tracks")
+    return tracks if isinstance(tracks, dict) else None
+
+
+def _project_raw_subtitle_segments(
+    project: dict[str, Any],
+    editor_subtitles: dict[str, Any],
+    vector_canvas: dict[str, Any],
+    *,
+    external_text_assets: bool,
+) -> list[dict[str, Any]]:
+    raw_segments = _segments_from_subtitle_canvas_vector(vector_canvas)
+    if (not raw_segments) and isinstance(project.get("_hot_open_subtitle_segments_cache"), list):
+        raw_segments = copy_project_rows(project.get("_hot_open_subtitle_segments_cache"))
+    if (not raw_segments) and external_text_assets:
+        raw_segments = load_external_subtitle_segments(project)
+    if not isinstance(raw_segments, list):
+        raw_segments = editor_subtitles.get("segments")
+    if not isinstance(raw_segments, list):
+        raw_segments = project.get("segments")
+    if not isinstance(raw_segments, list):
+        raw_segments = (project.get("subtitles", {}) or {}).get("segments", [])
+    return raw_segments if isinstance(raw_segments, list) else []
+
+
 def project_segments_to_editor(
     project: dict[str, Any],
     *,
@@ -432,22 +460,15 @@ def project_segments_to_editor(
     editor_state = project.get("editor_state", {}) or {}
     editor_subtitles = editor_state.get("subtitles", {}) or {}
     vector_canvas = ((editor_state.get("rendering", {}) or {}).get("subtitle_canvas", {}) or {})
-    raw_segments = _segments_from_subtitle_canvas_vector(vector_canvas)
-    if (not raw_segments) and isinstance(project.get("_hot_open_subtitle_segments_cache"), list):
-        raw_segments = [dict(seg) for seg in list(project.get("_hot_open_subtitle_segments_cache") or []) if isinstance(seg, dict)]
-    if (not raw_segments) and project_uses_external_text_assets(project):
-        raw_segments = load_external_subtitle_segments(project)
-    if not isinstance(raw_segments, list):
-        raw_segments = editor_subtitles.get("segments")
-    if not isinstance(raw_segments, list):
-        raw_segments = project.get("segments")
-    if not isinstance(raw_segments, list):
-        raw_segments = (project.get("subtitles", {}) or {}).get("segments", [])
-    if (
-        (not isinstance(raw_segments, list) or not raw_segments)
-        and project_uses_external_text_assets(project)
-    ):
-        raw_segments = load_external_subtitle_segments(project)
+    external_text_assets = project_uses_external_text_assets(project)
+    raw_segments = _project_raw_subtitle_segments(
+        project,
+        editor_subtitles,
+        vector_canvas,
+        external_text_assets=external_text_assets,
+    )
+    if not raw_segments:
+        return []
 
     boundaries = project_clip_boundaries(project)
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
@@ -562,7 +583,7 @@ def project_segments_to_editor(
         item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
     out = _trim_segments_to_project_duration(out, project, primary_fps=primary_fps)
-    if out and include_analysis_candidates and project_uses_external_text_assets(project):
+    if out and include_analysis_candidates and external_text_assets:
         _attach_external_stt_candidates(out, load_external_stt_tracks(project))
         _attach_lattice_candidates_from_artifact(out, project)
     return out
@@ -606,7 +627,7 @@ def _attach_external_stt_candidates(segments: list[dict[str, Any]], tracks: dict
             continue
         candidates = by_frame.get(_candidate_lookup_key(seg, primary_fps), [])
         if candidates:
-            seg["stt_candidates"] = [dict(candidate) for candidate in candidates]
+            seg["stt_candidates"] = copy_project_rows(candidates)
 
 
 def _attach_lattice_candidates_from_artifact(segments: list[dict[str, Any]], project: dict[str, Any]) -> None:
@@ -735,10 +756,7 @@ def build_editor_state(
             "schema": "stt_candidates.v1",
             "preview_segments": stt_preview,
             "candidate_tracks": stt_candidate_tracks,
-            "candidate_counts": {
-                source: len(rows)
-                for source, rows in stt_candidate_tracks.items()
-            },
+            "candidate_counts": stt_candidate_track_counts(stt_candidate_tracks),
         },
         "analysis": {
             "cut_boundary_schema": CUT_BOUNDARY_SCHEMA,
@@ -1159,101 +1177,160 @@ def _normalize_stt_preview_segments(
 ) -> list[dict[str, Any]]:
     fps = normalize_fps(primary_fps or 30.0)
     status_threshold = recheck_threshold() if segments else None
-    out = []
-    for idx, seg in enumerate(segments or []):
-        if not isinstance(seg, dict):
-            continue
-        text = str(seg.get("text", "") or "").strip()
-        if not text:
-            continue
-        source = str(
-            seg.get("stt_preview_source")
-            or seg.get("stt_source")
-            or seg.get("stt_ensemble_source")
-            or "STT1"
-        )
-        preserve_raw_candidate_timing = source.strip().upper() in {"STT1", "STT2"}
-        raw_frame_rate = normalize_fps(
-            seg.get("timeline_frame_rate")
-            or seg.get("frame_rate")
-            or fps
-        )
-        raw_start_frame = seg.get("_stt_original_candidate_start_frame")
-        raw_end_frame = seg.get("_stt_original_candidate_end_frame")
-        raw_start = _safe_float(
-            seg.get(
-                "_stt_original_candidate_start",
-                seg.get("original_start", seg.get("start", seg.get("timeline_start", 0.0))),
-            )
-        )
-        raw_end = _safe_float(
-            seg.get(
-                "_stt_original_candidate_end",
-                seg.get("original_end", seg.get("end", seg.get("timeline_end", raw_start))),
-            ),
-            raw_start,
-        )
-        if raw_start_frame is None:
-            raw_start_frame = sec_to_nearest_frame(raw_start, raw_frame_rate)
-        if raw_end_frame is None:
-            raw_end_frame = sec_to_nearest_frame(raw_end, raw_frame_rate)
-        raw_start_frame = _safe_int(raw_start_frame)
-        raw_end_frame = max(raw_start_frame + 1, _safe_int(raw_end_frame, raw_start_frame))
-        raw_start = frame_to_sec(raw_start_frame, raw_frame_rate)
-        raw_end = frame_to_sec(raw_end_frame, raw_frame_rate)
-        start = raw_start
-        end = raw_end
-        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
-        start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
-        end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
-        if preserve_raw_candidate_timing and start_frame is None:
-            start_frame = raw_start_frame
-        if preserve_raw_candidate_timing and end_frame is None:
-            end_frame = raw_end_frame
-        if start_frame is not None and not preserve_raw_candidate_timing:
-            start = frame_to_sec(start_frame, fps)
-        if end_frame is not None and not preserve_raw_candidate_timing:
-            end = frame_to_sec(end_frame, fps)
-        item = {
-            "index": int(seg.get("index", idx + 1) or idx + 1),
-            "start": start,
-            "end": max(start, end),
-            "text": text,
-            "speaker": str(seg.get("speaker", seg.get("spk", "00")) or "00"),
-            "stt_preview_source": source,
-            "stt_pending": True,
-            "_live_stt_preview": True,
-        }
-        if preserve_raw_candidate_timing:
-            item["_stt_original_candidate_start"] = raw_start
-            item["_stt_original_candidate_end"] = raw_end
-            item["_stt_original_candidate_start_frame"] = raw_start_frame
-            item["_stt_original_candidate_end_frame"] = raw_end_frame
-        for key in ("_clip_idx", "_clip_file", "words", "quality", "quality_history", "quality_candidates"):
-            if key in seg:
-                item[key] = seg.get(key)
-        for key in STT_SEGMENT_METADATA_KEYS:
-            if key in seg and key not in item:
-                item[key] = seg.get(key)
-        item.update(_project_segment_status_payload(item, threshold=status_threshold))
-        if start_frame is None:
-            start_frame = sec_to_nearest_frame(start, fps)
-        if end_frame is None:
-            end_frame = sec_to_nearest_frame(end, fps)
-        item["start_frame"] = _safe_int(start_frame)
-        item["end_frame"] = max(item["start_frame"] + 1, _safe_int(end_frame, item["start_frame"]))
-        item["timeline_start_frame"] = item["start_frame"]
-        item["timeline_end_frame"] = item["end_frame"]
-        item["frame_rate"] = fps
-        item["timeline_frame_rate"] = fps
-        item["frame_range"] = {
-            "unit": "frame",
-            "start": item["start_frame"],
-            "end": item["end_frame"],
-            "timeline_frame_rate": fps,
-        }
-        out.append(item)
+    out: list[dict[str, Any]] = []
+    _append_normalized_stt_preview_segments(
+        out,
+        segments,
+        fps=fps,
+        status_threshold=status_threshold,
+    )
     return out
+
+
+def _append_normalized_stt_preview_segments(
+    out: list[dict[str, Any]],
+    segments: list[dict[str, Any]] | None,
+    *,
+    fps: float,
+    status_threshold: float | None,
+    source_override: str | None = None,
+) -> None:
+    for idx, seg in enumerate(segments or []):
+        item = _normalized_stt_preview_segment(
+            seg,
+            index=idx + 1,
+            fps=fps,
+            status_threshold=status_threshold,
+            source_override=source_override,
+        )
+        if item is not None:
+            out.append(item)
+
+
+def _normalize_stt_preview_segments_from_tracks(
+    tracks: dict[str, list[dict[str, Any]]] | None,
+    *,
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    if not isinstance(tracks, dict) or not tracks:
+        return []
+    fps = normalize_fps(primary_fps or 30.0)
+    status_threshold = recheck_threshold()
+    out: list[dict[str, Any]] = []
+    for source, rows in tracks.items():
+        if not isinstance(rows, list) or not rows:
+            continue
+        _append_normalized_stt_preview_segments(
+            out,
+            rows,
+            fps=fps,
+            status_threshold=status_threshold,
+            source_override=str(source),
+        )
+    return out
+
+
+def _normalized_stt_preview_segment(
+    seg: dict[str, Any],
+    *,
+    index: int,
+    fps: float,
+    status_threshold: float | None,
+    source_override: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(seg, dict):
+        return None
+    text = str(seg.get("text", "") or "").strip()
+    if not text:
+        return None
+    source = str(
+        source_override
+        or seg.get("stt_preview_source")
+        or seg.get("stt_source")
+        or seg.get("stt_ensemble_source")
+        or "STT1"
+    )
+    preserve_raw_candidate_timing = source.strip().upper() in {"STT1", "STT2"}
+    raw_frame_rate = normalize_fps(
+        seg.get("timeline_frame_rate")
+        or seg.get("frame_rate")
+        or fps
+    )
+    raw_start_frame = seg.get("_stt_original_candidate_start_frame")
+    raw_end_frame = seg.get("_stt_original_candidate_end_frame")
+    raw_start = _safe_float(
+        seg.get(
+            "_stt_original_candidate_start",
+            seg.get("original_start", seg.get("start", seg.get("timeline_start", 0.0))),
+        )
+    )
+    raw_end = _safe_float(
+        seg.get(
+            "_stt_original_candidate_end",
+            seg.get("original_end", seg.get("end", seg.get("timeline_end", raw_start))),
+        ),
+        raw_start,
+    )
+    if raw_start_frame is None:
+        raw_start_frame = sec_to_nearest_frame(raw_start, raw_frame_rate)
+    if raw_end_frame is None:
+        raw_end_frame = sec_to_nearest_frame(raw_end, raw_frame_rate)
+    raw_start_frame = _safe_int(raw_start_frame)
+    raw_end_frame = max(raw_start_frame + 1, _safe_int(raw_end_frame, raw_start_frame))
+    raw_start = frame_to_sec(raw_start_frame, raw_frame_rate)
+    raw_end = frame_to_sec(raw_end_frame, raw_frame_rate)
+    start = raw_start
+    end = raw_end
+    frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+    start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+    end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+    if preserve_raw_candidate_timing and start_frame is None:
+        start_frame = raw_start_frame
+    if preserve_raw_candidate_timing and end_frame is None:
+        end_frame = raw_end_frame
+    if start_frame is not None and not preserve_raw_candidate_timing:
+        start = frame_to_sec(start_frame, fps)
+    if end_frame is not None and not preserve_raw_candidate_timing:
+        end = frame_to_sec(end_frame, fps)
+    item = {
+        "index": int(seg.get("index", index) or index),
+        "start": start,
+        "end": max(start, end),
+        "text": text,
+        "speaker": str(seg.get("speaker", seg.get("spk", "00")) or "00"),
+        "stt_preview_source": source,
+        "stt_pending": True,
+        "_live_stt_preview": True,
+    }
+    if preserve_raw_candidate_timing:
+        item["_stt_original_candidate_start"] = raw_start
+        item["_stt_original_candidate_end"] = raw_end
+        item["_stt_original_candidate_start_frame"] = raw_start_frame
+        item["_stt_original_candidate_end_frame"] = raw_end_frame
+    for key in ("_clip_idx", "_clip_file", "words", "quality", "quality_history", "quality_candidates"):
+        if key in seg:
+            item[key] = seg.get(key)
+    for key in STT_SEGMENT_METADATA_KEYS:
+        if key in seg and key not in item:
+            item[key] = seg.get(key)
+    item.update(_project_segment_status_payload(item, threshold=status_threshold))
+    if start_frame is None:
+        start_frame = sec_to_nearest_frame(start, fps)
+    if end_frame is None:
+        end_frame = sec_to_nearest_frame(end, fps)
+    item["start_frame"] = _safe_int(start_frame)
+    item["end_frame"] = max(item["start_frame"] + 1, _safe_int(end_frame, item["start_frame"]))
+    item["timeline_start_frame"] = item["start_frame"]
+    item["timeline_end_frame"] = item["end_frame"]
+    item["frame_rate"] = fps
+    item["timeline_frame_rate"] = fps
+    item["frame_range"] = {
+        "unit": "frame",
+        "start": item["start_frame"],
+        "end": item["end_frame"],
+        "timeline_frame_rate": fps,
+    }
+    return item
 
 
 def _normalize_boundary(item: dict[str, Any], idx: int) -> dict[str, Any]:

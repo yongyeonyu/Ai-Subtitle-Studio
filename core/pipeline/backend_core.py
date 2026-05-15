@@ -58,6 +58,8 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self._prefetch_generation = 0
         self._prefetch_lock = threading.Lock()
         self._current_personalization_runtime_override = {}
+        self._force_no_reuse_once = False
+        self._force_reuse_existing_multiclip_subtitles_once = False
 
     def _apply_personalization_runtime_override_for_file(self, target_file: str) -> dict:
         base_override = dict(getattr(self.ui, "_runtime_settings_override", None) or {})
@@ -137,6 +139,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self._reuse_existing_single_subtitle = False
         self._reuse_existing_multiclip_subtitles = False
         self._reuse_clip_indices = set()
+        self._force_reuse_existing_multiclip_subtitles_once = False
         for attr, value in (
             ("_cut_boundary_pipeline_cache", None),
             ("_cut_boundary_provisional_rows", []),

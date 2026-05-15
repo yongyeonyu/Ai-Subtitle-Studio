@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import core.project.project_io as project_io
+import core.project.project_manager as project_manager
 from core.project.project_io import clear_project_file_cache, read_project_file, write_project_file
 from core.project.project_manager import create_project, extract_model_settings, load_project, merge_project_model_settings, save_project
 from core.project.project_phase1b import enrich_existing_project_file
@@ -27,7 +28,11 @@ from core.project.project_context import (
     project_stt_preview_segments,
     segment_signature,
 )
-from core.project.project_assets import PROJECT_EXTERNAL_STORAGE, externalize_project_text_assets
+from core.project.project_assets import (
+    PROJECT_EXTERNAL_STORAGE,
+    externalize_project_text_assets,
+    hydrate_project_text_asset_cache,
+)
 from core.project.project_format import PROJECT_SCHEMA_VERSION, PROJECT_STORAGE_SCHEMA, PROJECT_VIDEO_SCHEMA
 from core.project.project_srt import parse_srt_to_segments
 from core.cut_boundary import split_segments_by_cut_boundaries
@@ -39,6 +44,28 @@ def _state_segments(state: dict) -> list[dict]:
 
 
 class ProjectContextTests(unittest.TestCase):
+    def test_probe_media_rows_reuses_local_probe_cache_without_aliasing(self):
+        cache_key = project_manager._probe_cache_key("clip1.mp4")
+        probe_cache = {
+            cache_key: {"duration": 10.0, "fps": 30.0, "width": 1920, "height": 1080}
+        }
+
+        with patch("core.project.project_manager.probe_media_many_lookup") as batch_probe, patch(
+            "core.project.project_manager._get_media_probe"
+        ) as single_probe:
+            rows = project_manager._probe_media_rows(
+                ["clip1.mp4", "clip1.mp4"],
+                probe_cache=probe_cache,
+            )
+
+        batch_probe.assert_not_called()
+        single_probe.assert_not_called()
+        self.assertEqual([row["duration"] for row in rows], [10.0, 10.0])
+        self.assertIsNot(rows[0], rows[1])
+        rows[0]["duration"] = 99.0
+        self.assertEqual(rows[1]["duration"], 10.0)
+        self.assertEqual(probe_cache[cache_key]["duration"], 10.0)
+
     def test_create_project_reuses_probe_batch_for_duplicate_media_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             media_path = Path(tmp) / "video.mp4"
@@ -47,13 +74,13 @@ class ProjectContextTests(unittest.TestCase):
 
             def _fake_probe_many(paths):
                 captured["paths"] = list(paths)
-                return [
-                    {"duration": 10.0, "fps": 30.0, "width": 1920, "height": 1080}
-                    for _ in paths
-                ]
+                return {
+                    path: {"duration": 10.0, "fps": 30.0, "width": 1920, "height": 1080}
+                    for path in paths
+                }
 
             with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
-                "core.project.project_manager.probe_media_many",
+                "core.project.project_manager.probe_media_many_lookup",
                 side_effect=_fake_probe_many,
             ), patch("core.project.project_manager._get_media_probe") as single_probe:
                 project_path = Path(
@@ -730,6 +757,7 @@ class ProjectContextTests(unittest.TestCase):
 
         self.assertEqual(loaded["version"], PROJECT_SCHEMA_VERSION)
         self.assertEqual(project_active_work_mode(loaded), "roughcut")
+        self.assertEqual(loaded["editor_state"]["workspace"]["active_work_mode"], "roughcut")
         self.assertEqual(project_roughcut_state(loaded)["source_signature"], "sig")
         self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")
         self.assertEqual(len(project_roughcut_state(loaded)["candidates"]), 1)
@@ -781,6 +809,37 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(restored["selected_whisper_model_secondary"], "secondary-large")
         self.assertEqual(restored["theme"], "dark")
         self.assertNotIn("non_model_ui_key", extract_model_settings(loaded))
+
+    def test_save_project_preliminary_middle_segments_do_not_mutate_input_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            preliminary_rows = [
+                {"major_id": "A", "title": "도입", "start": 0.0, "end": 10.0, "source": "llm"}
+            ]
+            original_rows = [dict(row) for row in preliminary_rows]
+
+            save_project(
+                str(path),
+                preliminary_middle_segments=preliminary_rows,
+            )
+            loaded = load_project(str(path))
+
+        self.assertEqual(preliminary_rows, original_rows)
+        self.assertEqual(loaded["analysis"]["preliminary_middle_segments"][0]["segment_stage"], "preliminary")
 
     def test_save_project_adds_frame_timebase_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1035,6 +1094,7 @@ class ProjectContextTests(unittest.TestCase):
 
         voice_segment = loaded["analysis"]["voice_activity_segments"][0]
         self.assertEqual(loaded["analysis"]["voice_activity_schema"], "subtitle_detection.v1")
+        self.assertEqual(loaded["analysis"]["voice_activity_timebase"]["primary_fps"], 24.0)
         self.assertEqual(voice_segment["start_frame"], 12)
         self.assertEqual(voice_segment["end_frame"], 30)
         self.assertEqual(voice_segment["score"], 82.0)
@@ -1042,6 +1102,7 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(voice_segment["frame_range"]["unit"], "frame")
         self.assertEqual(voice_segment["frame_range"]["start"], 12)
         editor_voice = loaded["editor_state"]["analysis"]["voice_activity_segments"][0]
+        self.assertEqual(loaded["editor_state"]["analysis"]["voice_activity_timebase"]["primary_fps"], 24.0)
         self.assertEqual(editor_voice["start_frame"], 12)
         self.assertEqual(editor_voice["end_frame"], 30)
         restored_voice = project_voice_activity_segments(loaded)[0]
@@ -1286,6 +1347,7 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual({*tracks.keys()}, {"STT1", "STT2"})
         self.assertEqual(tracks["STT1"][0]["text"], "후보 일")
         self.assertEqual(tracks["STT2"][0]["text"], "후보 이")
+        self.assertEqual(loaded["analysis"]["stt_candidate_counts"], {"STT1": 1, "STT2": 1})
         previews = project_stt_preview_segments(loaded)
         self.assertEqual([row["stt_preview_source"] for row in previews], ["STT1", "STT2"])
 
@@ -1868,6 +1930,78 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(lazy_previews[0]["text"], "미리보기")
         self.assertEqual(lazy_previews[0]["stt_preview_source"], "STT1")
 
+    def test_hydrate_project_text_asset_cache_keeps_editor_tracks_independent_from_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            project = {
+                "project_name": "cache-alias-safe",
+                "project_path": str(path),
+                "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[],
+                    primary_fps=30.0,
+                ),
+            }
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=[{"id": "seg-1", "start": 0.0, "end": 1.0, "text": "최종", "speaker": "00"}],
+                stt_tracks={"STT1": [{"start": 0.0, "end": 1.0, "text": "후보", "stt_score": 91.0}]},
+            )
+
+            hydrate_project_text_asset_cache(project)
+            project["_external_stt_tracks_cache"]["STT1"][0]["text"] = "캐시 변경"
+
+        self.assertEqual(project["editor_state"]["stt"]["candidate_tracks"]["STT1"][0]["text"], "후보")
+
+    def test_write_project_file_strips_external_runtime_views_without_mutating_loaded_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            project = {
+                "project_name": "runtime-external",
+                "project_path": str(path),
+                "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[],
+                    primary_fps=30.0,
+                ),
+            }
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=[{"id": "seg-1", "start": 0.0, "end": 1.0, "text": "최종", "speaker": "00"}],
+                stt_tracks={"STT1": [{"start": 0.0, "end": 1.0, "text": "후보", "stt_score": 91.0}]},
+            )
+            hydrate_project_text_asset_cache(project)
+            project["editor_state"]["rendering"]["subtitle_canvas"]["segments"] = [
+                {"start": 0.0, "end": 1.0, "text": "런타임 자막", "speaker": "00"}
+            ]
+            project["editor_state"]["stt"]["preview_segments"] = [
+                {"start": 0.0, "end": 1.0, "text": "런타임 후보", "stt_preview_source": "STT1"}
+            ]
+            project["editor_state"].setdefault("analysis", {})["stt_candidate_tracks"] = {
+                "STT1": [{"start": 0.0, "end": 1.0, "text": "런타임 후보"}]
+            }
+            project.setdefault("analysis", {})["stt_candidate_tracks"] = {
+                "STT1": [{"start": 0.0, "end": 1.0, "text": "런타임 후보"}]
+            }
+
+            write_project_file(str(path), project)
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(project["editor_state"]["rendering"]["subtitle_canvas"]["segments"][0]["text"], "런타임 자막")
+        self.assertEqual(project["editor_state"]["stt"]["preview_segments"][0]["text"], "런타임 후보")
+        self.assertEqual(project["editor_state"]["stt"]["candidate_tracks"]["STT1"][0]["text"], "후보")
+        self.assertEqual(raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["segments"], [])
+        self.assertEqual(raw_payload["editor_state"]["stt"]["preview_segments"], [])
+        self.assertEqual(raw_payload["editor_state"]["stt"]["candidate_tracks"], {})
+        self.assertNotIn("stt_candidate_tracks", raw_payload["editor_state"]["analysis"])
+        self.assertNotIn("stt_candidate_tracks", raw_payload["analysis"])
+
     def test_project_open_recovers_sibling_external_srt_assets_when_manifest_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"
@@ -2044,6 +2178,121 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(preview["subtitle_review_state"], "pending")
         self.assertEqual(preview["subtitle_status_color"], "#FFCC00")
         self.assertEqual(preview["subtitle_status_source"], "STT1")
+
+    def test_project_stt_preview_segments_from_candidate_tracks_do_not_mutate_source_rows(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "editor_state": {
+                "stt": {
+                    "candidate_tracks": {
+                        "STT2": [
+                            {
+                                "start": 0.0,
+                                "end": 1.0,
+                                "text": "후보",
+                                "speaker": "00",
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+
+        preview = project_stt_preview_segments(project)[0]
+
+        self.assertEqual(preview["stt_preview_source"], "STT2")
+        self.assertNotIn(
+            "stt_preview_source",
+            project["editor_state"]["stt"]["candidate_tracks"]["STT2"][0],
+        )
+
+    def test_project_segments_to_editor_loads_external_subtitles_once_when_external_storage_is_authoritative(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "subtitles": {
+                "storage": PROJECT_EXTERNAL_STORAGE,
+                "segments": [{"start": 0.0, "end": 1.0, "text": "inline", "speaker": "00"}],
+            },
+            "editor_state": {
+                "subtitles": {
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "editor", "speaker": "00"}]
+                }
+            },
+        }
+
+        with patch("core.project.project_context.load_external_subtitle_segments", return_value=[]) as loader:
+            segments = project_segments_to_editor(project, include_analysis_candidates=False)
+
+        self.assertEqual(segments, [])
+        loader.assert_called_once_with(project)
+
+    def test_project_stt_preview_segments_loads_external_tracks_once_when_external_storage_is_authoritative(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "subtitles": {"storage": PROJECT_EXTERNAL_STORAGE},
+            "editor_state": {
+                "analysis": {
+                    "stt_candidate_tracks": {
+                        "STT1": [{"start": 0.0, "end": 1.0, "text": "analysis", "speaker": "00"}]
+                    }
+                }
+            },
+        }
+        external_tracks = {
+            "STT1": [{"start": 0.0, "end": 1.0, "text": "external", "speaker": "00"}]
+        }
+
+        with patch("core.project.project_context.load_external_stt_tracks", return_value=external_tracks) as loader:
+            previews = project_stt_preview_segments(project)
+
+        self.assertEqual([row["text"] for row in previews], ["external"])
+        loader.assert_called_once_with(project)
+
+    def test_externalize_project_text_assets_does_not_mutate_input_rows_or_tracks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project.json"
+            segments = [
+                {"start": 0.02, "end": 1.08, "text": "최종", "speaker": "00"},
+            ]
+            stt_tracks = {
+                "STT1": [
+                    {"start": 0.03, "end": 1.04, "text": "후보", "speaker": "00"},
+                ]
+            }
+            original_segments = [dict(row) for row in segments]
+            original_tracks = {
+                source: [dict(row) for row in rows]
+                for source, rows in stt_tracks.items()
+            }
+            project = {
+                "project_path": str(project_path),
+                "subtitles": {},
+                "editor_state": {"stt": {"candidate_tracks": {}}},
+                "analysis": {},
+            }
+
+            externalize_project_text_assets(
+                str(project_path),
+                project,
+                final_segments=segments,
+                stt_tracks=stt_tracks,
+            )
+
+        self.assertEqual(segments, original_segments)
+        self.assertEqual(stt_tracks, original_tracks)
+
+    def test_project_segments_to_editor_hot_open_cache_rows_are_copied(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "_hot_open_subtitle_segments_cache": [
+                {"start": 0.0, "end": 1.0, "text": "원본", "speaker": "00"}
+            ],
+        }
+
+        restored = project_segments_to_editor(project)
+        restored[0]["text"] = "수정됨"
+
+        self.assertEqual(project["_hot_open_subtitle_segments_cache"][0]["text"], "원본")
 
     def test_project_segments_to_editor_resolves_recheck_threshold_once_per_batch(self):
         project = {

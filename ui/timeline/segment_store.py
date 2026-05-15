@@ -5,12 +5,7 @@ from typing import Any
 
 import numpy as np
 
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
+from core.coerce import safe_float as _safe_float
 
 
 class TimelineSegmentStore:

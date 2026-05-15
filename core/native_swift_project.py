@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from typing import Any
 
+from core.native_json import dumps_json_text, loads_json_output
 from core.native_swift_subtitle import find_native_cli_path, native_swift_runtime_enabled, request_native_core_task
 
 
@@ -29,7 +29,7 @@ def read_project_via_swift(filepath: str) -> dict[str, Any] | None:
                 encoding="utf-8",
                 timeout=20,
             )
-            payload = json.loads(proc.stdout or "{}")
+            payload = loads_json_output(proc.stdout, default={})
         except Exception:
             return None
     return payload if isinstance(payload, dict) else None
@@ -45,7 +45,7 @@ def write_project_via_swift(filepath: str, project: dict[str, Any]) -> bool:
     if cli is None:
         return False
     try:
-        raw = json.dumps(project if isinstance(project, dict) else {}, ensure_ascii=False, separators=(",", ":"))
+        raw = dumps_json_text(project if isinstance(project, dict) else {}, compact=True)
         subprocess.run(
             [str(cli), "write-project-json", filepath],
             input=raw,

@@ -8,6 +8,7 @@ import os
 import threading
 import traceback
 
+from core.project.project_runtime_capture import collect_editor_project_aux_state
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.audio.media_processor import VideoProcessor
@@ -238,22 +239,16 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         voice_activity_segments = None
         provisional_cut_boundaries = None
         if editor is not None:
-            live_preview = list(getattr(editor, "_live_stt_preview_segments", []) or [])
+            aux_state = collect_editor_project_aux_state(editor)
+            live_preview = aux_state["stt_preview_segments"]
             if live_preview:
                 stt_preview_segments = live_preview
-            try:
-                canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
-                if canvas is not None:
-                    if hasattr(canvas, "_refresh_voice_activity_segments"):
-                        canvas._refresh_voice_activity_segments()
-                    voice_rows = list(getattr(canvas, "voice_activity_segments", []) or [])
-                    provisional_rows = list(getattr(canvas, "scan_boundary_times", []) or [])
-                    if voice_rows:
-                        voice_activity_segments = voice_rows
-                    if provisional_rows:
-                        provisional_cut_boundaries = provisional_rows
-            except Exception:
-                pass
+            voice_rows = aux_state["voice_activity_segments"]
+            provisional_rows = aux_state["provisional_cut_boundaries"]
+            if voice_rows:
+                voice_activity_segments = voice_rows
+            if provisional_rows:
+                provisional_cut_boundaries = provisional_rows
             if provisional_cut_boundaries is None:
                 auto_rows = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
                 if auto_rows:
@@ -562,6 +557,6 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             cache[target_file] = {}
             return {}
 
-from core.pipeline.topicless_segments import install_topicless_segment_helpers
+from core.pipeline.topicless_segments import install_topicless_segment_helpers  # noqa: E402
 
 install_topicless_segment_helpers(PipelineHelpersMixin)

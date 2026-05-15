@@ -9,6 +9,31 @@ from core.runtime_eta import add_history, build_runtime_eta_payload, get_expecte
 
 
 class RuntimeETAPayloadTests(unittest.TestCase):
+    def test_build_payload_preserves_legacy_true_only_string_bool_behavior(self):
+        payload = build_runtime_eta_payload(
+            "QUALITY:STT:test|LLM:none|DIA:X",
+            60.0,
+            settings={
+                "stt_quality_preset": "balanced",
+                "stt_ensemble_enabled": "maybe",
+                "cut_boundary_cache_enabled": "",
+                "vad_detection_cache_enabled": "yes",
+                "stt_persistent_runtime_reuse_enabled": "unknown",
+                "audio_preset_auto_disabled": "on",
+            },
+            media_info={"duration": 60.0, "fps": 30.0, "width": 1920, "height": 1080},
+            runtime_flags={"prefetch_audio_hit": "mystery", "likely_warm_start": ""},
+            store_path="/tmp/runtime-eta-string-bool.json",
+        )
+
+        self.assertFalse(payload["variant"]["stt_ensemble_enabled"])
+        self.assertFalse(payload["runtime"]["cut_boundary_cache_enabled"])
+        self.assertTrue(payload["runtime"]["vad_cache_enabled"])
+        self.assertFalse(payload["runtime"]["stt_runtime_reuse_enabled"])
+        self.assertFalse(payload["runtime"]["prefetch_audio_hit"])
+        self.assertFalse(payload["runtime"]["likely_warm_start"])
+        self.assertFalse(payload["runtime"]["auto_audio_tune_enabled"])
+
     def test_build_payload_contains_variant_media_and_cache_features(self):
         payload = build_runtime_eta_payload(
             "QUALITY:STT:test|LLM:codex|DIA:O",
@@ -50,6 +75,29 @@ class RuntimeETAPayloadTests(unittest.TestCase):
         self.assertEqual(payload["runtime"]["cache_state"], "warm")
         self.assertTrue(payload["runtime"]["likely_warm_start"])
 
+    def test_build_payload_includes_post_generation_roughcut_eta_when_enabled(self):
+        payload = build_runtime_eta_payload(
+            "QUALITY:STT:test|LLM:roughcut|DIA:X",
+            600.0,
+            settings={
+                "stt_quality_preset": "balanced",
+                "editor_roughcut_draft_enabled": True,
+                "roughcut_llm_enabled": True,
+                "roughcut_run_after_subtitle_generation": True,
+                "roughcut_llm_use_override": True,
+                "roughcut_llm_provider": "ollama",
+                "roughcut_llm_model": "roughcut-local",
+            },
+            media_info={"duration": 600.0, "fps": 30.0, "width": 1920, "height": 1080},
+            store_path="/tmp/runtime-eta-roughcut.json",
+        )
+
+        self.assertTrue(payload["runtime"]["roughcut_post_generation_enabled"])
+        self.assertGreater(payload["runtime"]["roughcut_estimated_sec"], 0.0)
+        self.assertGreaterEqual(payload["runtime"]["roughcut_chunk_count"], 1)
+        self.assertEqual(payload["variant"]["roughcut_llm_provider"], "ollama")
+        self.assertEqual(payload["variant"]["roughcut_llm_model"], "roughcut-local")
+
     def test_get_expected_time_prefers_native_prediction_when_available(self):
         with mock.patch("core.runtime_eta.request_native_core_task", return_value={"predicted_processing_sec": 123.4}):
             predicted = get_expected_time(
@@ -60,6 +108,34 @@ class RuntimeETAPayloadTests(unittest.TestCase):
                 store_path="/tmp/runtime-eta-native.json",
             )
         self.assertEqual(predicted, 123.4)
+
+    def test_get_expected_time_adds_roughcut_eta_to_native_prediction(self):
+        settings = {
+            "stt_quality_preset": "balanced",
+            "editor_roughcut_draft_enabled": True,
+            "roughcut_llm_enabled": True,
+            "roughcut_run_after_subtitle_generation": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "ollama",
+            "roughcut_llm_model": "roughcut-local",
+        }
+        payload = build_runtime_eta_payload(
+            "QUALITY:STT:test|LLM:roughcut|DIA:X",
+            600.0,
+            settings=settings,
+            media_info={"duration": 600.0, "fps": 30.0, "width": 1920, "height": 1080},
+            store_path="/tmp/runtime-eta-native-roughcut.json",
+        )
+        expected = float(payload["runtime"]["roughcut_estimated_sec"] or 0.0)
+        with mock.patch("core.runtime_eta.request_native_core_task", return_value={"predicted_processing_sec": 123.4}):
+            predicted = get_expected_time(
+                "QUALITY:STT:test|LLM:roughcut|DIA:X",
+                600.0,
+                settings=settings,
+                media_info={"duration": 600.0, "fps": 30.0, "width": 1920, "height": 1080},
+                store_path="/tmp/runtime-eta-native-roughcut.json",
+            )
+        self.assertAlmostEqual(predicted, 123.4 + expected, places=3)
 
     def test_add_history_fallback_writes_new_schema_store(self):
         with tempfile.TemporaryDirectory() as tmp:

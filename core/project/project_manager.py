@@ -35,11 +35,18 @@ from core.project.project_context import (
 )
 from core.project.project_assets import (
     PROJECT_EXTERNAL_STORAGE,
+    copy_project_rows,
     externalize_project_text_assets,
     hydrate_project_text_asset_cache,
     load_external_stt_tracks,
     load_external_subtitle_segments,
     project_uses_external_text_assets,
+)
+from core.project.project_analysis_store import (
+    ensure_project_analysis_store as _project_analysis_store,
+    normalize_project_voice_activity_segments as _normalize_project_voice_activity_segments,
+    store_project_stt_candidate_tracks as _store_project_stt_candidate_tracks,
+    store_project_voice_activity_segments as _store_project_voice_activity_segments,
 )
 from core.roughcut.cut_boundary_placeholder import (
     build_topicless_middle_segments,
@@ -56,9 +63,10 @@ from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 from core.project.project_srt import parse_srt_to_segments
 from core.project.project_model_settings import (
-    build_model_settings_snapshot,
     extract_model_settings,
     merge_project_model_settings,
+    restore_project_model_settings,
+    store_project_model_settings_snapshot,
 )
 from core.settings_profiles import sanitize_persisted_settings
 from core.project.recovery_state import (
@@ -73,7 +81,12 @@ from core.project.project_frames import (
     _clip_frame_fields as _clip_frame_fields_impl,
     _get_media_probe as _get_media_probe_impl,
 )
-from core.media_info import probe_media, probe_media_many
+from core.media_info import (
+    copy_media_probe_result,
+    media_probe_result_has_fields,
+    probe_media,
+    probe_media_many_lookup,
+)
 from core.project.project_format import (
     PROJECT_SCHEMA_VERSION,
     PROJECT_STORAGE_SCHEMA,
@@ -93,6 +106,7 @@ __all__ = [
     "get_boundary_times",
     "load_project",
     "merge_project_model_settings",
+    "restore_project_model_settings",
     "save_project",
 ]
 
@@ -188,53 +202,70 @@ def _probe_cache_key(filepath: str) -> str:
     return os.path.normcase(os.path.abspath(os.path.expanduser(str(filepath or ""))))
 
 
+def _copy_probe_result(info: dict | None) -> dict:
+    return copy_media_probe_result(info)
+
+
+def _probe_cache_get(probe_cache: dict[str, dict] | None, cache_key: str) -> dict | None:
+    if probe_cache is None:
+        return None
+    cached = probe_cache.get(cache_key)
+    return _copy_probe_result(cached) if isinstance(cached, dict) and cached else None
+
+
+def _probe_cache_put(
+    probe_cache: dict[str, dict] | None,
+    cache_key: str,
+    info: dict | None,
+    *,
+    assume_owned: bool = False,
+) -> None:
+    if probe_cache is None:
+        return
+    probe_cache[cache_key] = info if assume_owned and isinstance(info, dict) else _copy_probe_result(info)
+
+
+def _probe_result_has_media_fields(info: dict | None) -> bool:
+    return media_probe_result_has_fields(info)
+
+
 def _get_media_probe(filepath: str, *, probe_cache: dict[str, dict] | None = None) -> dict:
     path = str(filepath or "")
     cache_key = _probe_cache_key(path)
-    if probe_cache is not None:
-        cached = probe_cache.get(cache_key)
-        if isinstance(cached, dict) and cached:
-            return dict(cached)
-    info = _get_media_probe_impl(path, probe_func=probe_media)
-    normalized = dict(info or {})
-    if probe_cache is not None:
-        probe_cache[cache_key] = dict(normalized)
+    cached = _probe_cache_get(probe_cache, cache_key)
+    if cached is not None:
+        return cached
+    normalized = _copy_probe_result(_get_media_probe_impl(path, probe_func=probe_media))
+    _probe_cache_put(probe_cache, cache_key, normalized, assume_owned=True)
     return normalized
 
 
 def _probe_media_rows(filepaths: list[str] | None, *, probe_cache: dict[str, dict] | None = None) -> list[dict]:
-    paths = [str(path) for path in list(filepaths or []) if path]
+    paths = [str(path) for path in (filepaths or []) if path]
     if not paths:
         return []
+    cache_keys = [_probe_cache_key(path) for path in paths]
     cached_rows: list[dict | None] = []
     missing_paths: list[str] = []
-    for path in paths:
-        cache_key = _probe_cache_key(path)
-        cached = probe_cache.get(cache_key) if probe_cache is not None else None
-        if isinstance(cached, dict) and cached:
-            cached_rows.append(dict(cached))
+    missing_seen: set[str] = set()
+    for idx, path in enumerate(paths):
+        cache_key = cache_keys[idx]
+        cached = _probe_cache_get(probe_cache, cache_key)
+        if cached is not None:
+            cached_rows.append(cached)
             continue
         cached_rows.append(None)
-        if path not in missing_paths:
+        if path not in missing_seen:
+            missing_seen.add(path)
             missing_paths.append(path)
-    batch_missing = list(probe_media_many(missing_paths)) if missing_paths else []
-    batch_lookup = {
-        path: dict(batch_missing[idx] or {})
-        for idx, path in enumerate(missing_paths)
-    }
+    batch_lookup = probe_media_many_lookup(missing_paths) if missing_paths else {}
     out: list[dict] = []
     for idx, path in enumerate(paths):
-        info = dict(cached_rows[idx] or batch_lookup.get(path) or {})
-        if not (
-            float(info.get("duration", 0.0) or 0.0) > 0.0
-            or float(info.get("fps", 0.0) or 0.0) > 0.0
-            or int(info.get("width", 0) or 0) > 0
-            or int(info.get("height", 0) or 0) > 0
-        ):
+        info = _copy_probe_result(cached_rows[idx] or batch_lookup.get(path))
+        if not _probe_result_has_media_fields(info):
             info = _get_media_probe(path, probe_cache=probe_cache)
-        normalized = dict(info or {})
-        if probe_cache is not None:
-            probe_cache[_probe_cache_key(path)] = dict(normalized)
+        normalized = _copy_probe_result(info)
+        _probe_cache_put(probe_cache, cache_keys[idx], normalized, assume_owned=True)
         out.append(normalized)
     return out
 
@@ -255,7 +286,7 @@ def _build_clip_rows(
     for idx, path in enumerate(paths):
         ext = os.path.splitext(path)[1].lower()
         m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-        info = dict(probe_rows[idx] or {}) if idx < len(probe_rows) else _get_media_probe(path, probe_cache=probe_cache)
+        info = probe_rows[idx] if idx < len(probe_rows) else _get_media_probe(path, probe_cache=probe_cache)
         dur = float(info.get("duration", 0.0) or 0.0)
         fps = normalize_fps(info.get("fps", 0.0) or 30.0)
         width = int(info.get("width", 0) or 0)
@@ -343,6 +374,305 @@ def _project_total_duration(clips: list[dict] | None) -> float:
     return max((float(item.get("timeline_end", 0.0) or 0.0) for item in list(clips or [])), default=0.0)
 
 
+def _dict_rows(rows) -> list[dict]:
+    return [row for row in list(rows or []) if isinstance(row, dict)]
+
+
+def _ordered_media_paths(rows) -> list[str]:
+    return [
+        str(item.get("path", "") or "")
+        for item in sorted(_dict_rows(rows), key=lambda item: item.get("order", 0))
+        if item.get("path")
+    ]
+
+
+def _clip_source_paths(clips) -> list[str]:
+    return [
+        str(item.get("source_path", "") or "")
+        for item in list(clips or [])
+        if item.get("source_path")
+    ]
+
+
+def _project_media_rows_from_clips(clips, *, allow_missing_fps: bool = False) -> list[dict]:
+    return [
+        {
+            "order": item["order"],
+            "path": item["source_path"],
+            "type": item["type"],
+            "duration": item["source_duration"],
+            "offset": item["timeline_start"],
+            "fps": item.get("fps", 0.0) if allow_missing_fps else item["fps"],
+            "width": item.get("width", 0),
+            "height": item.get("height", 0),
+        }
+        for item in list(clips or [])
+    ]
+
+
+def _project_primary_media_path(project: dict) -> str:
+    media_items = _dict_rows(project.get("media"))
+    if not media_items:
+        return ""
+    return str(media_items[0].get("path", "") or "")
+
+
+def _project_workspace_store(project: dict) -> tuple[dict, dict | None]:
+    workspace = project.get("workspace")
+    if not isinstance(workspace, dict):
+        workspace = {}
+        project["workspace"] = workspace
+    editor_state = project.get("editor_state")
+    if not isinstance(editor_state, dict):
+        return workspace, None
+    editor_workspace = editor_state.get("workspace")
+    if not isinstance(editor_workspace, dict):
+        editor_workspace = {}
+        editor_state["workspace"] = editor_workspace
+    return workspace, editor_workspace
+
+
+def _store_project_workspace(project: dict, workspace: dict | None) -> dict:
+    normalized = sanitize_workspace_state(workspace)
+    project_workspace, editor_workspace = _project_workspace_store(project)
+    project_workspace.clear()
+    project_workspace.update(normalized)
+    if editor_workspace is not None:
+        editor_workspace.clear()
+        editor_workspace.update(normalized)
+    return normalized
+
+
+def _store_project_active_work_mode(project: dict, active_work_mode: object) -> str:
+    normalized = normalize_work_mode(active_work_mode)
+    project_workspace, editor_workspace = _project_workspace_store(project)
+    project_workspace["active_work_mode"] = normalized
+    if editor_workspace is not None:
+        editor_workspace["active_work_mode"] = normalized
+    return normalized
+
+
+def _store_project_analysis_artifact(
+    project: dict,
+    *,
+    schema_key: str,
+    path_key: str,
+    summary_key: str,
+    count_key: str,
+    result: dict | None,
+) -> None:
+    analysis, editor_analysis = _project_analysis_store(project)
+    payload = result if isinstance(result, dict) else {}
+    path = str(payload.get("path", "") or "")
+    summary = payload.get("summary", {})
+    analysis[schema_key] = payload.get("schema")
+    analysis[path_key] = path
+    analysis[summary_key] = summary
+    analysis[count_key] = payload.get("segment_count", 0)
+    if editor_analysis is not None:
+        editor_analysis[path_key] = path
+        editor_analysis[summary_key] = summary
+
+
+def _store_project_model_settings_snapshot(
+    project: dict,
+    *,
+    effective_user_settings: dict,
+    user_settings_provided: bool,
+) -> None:
+    store_project_model_settings_snapshot(
+        project,
+        effective_user_settings,
+        user_settings_provided=user_settings_provided,
+    )
+
+
+def _editor_clip_boundaries(clips) -> list[dict]:
+    return [
+        {
+            "start": item.get("timeline_start", 0.0),
+            "end": item.get("timeline_end", 0.0),
+            "file": item.get("source_path", ""),
+            "name": os.path.basename(item.get("source_path", "")),
+        }
+        for item in _dict_rows(clips)
+    ]
+
+
+def _editor_seed_segments(rows) -> list[dict]:
+    return [
+        {
+            "start": item.get("timeline_start", 0.0),
+            "end": item.get("timeline_end", 0.0),
+            "text": item.get("text", ""),
+            "speaker": item.get("speaker", "00"),
+        }
+        for item in list(rows or [])
+    ]
+
+
+def _editor_workspace_state(project: dict, workspace: dict | None = None) -> dict:
+    return workspace if workspace is not None else (project.get("workspace", {}) or {})
+
+
+def _store_project_editor_state(
+    project: dict,
+    *,
+    media_files: list[str] | tuple[str, ...] | None,
+    segments: list[dict] | None,
+    workspace: dict | None,
+    clip_boundaries: list[dict] | None,
+    stt_preview_segments: list[dict] | None = None,
+    cut_boundaries: list[dict] | None = None,
+    provisional_cut_boundaries: list[dict] | None = None,
+    primary_fps: float | None = None,
+) -> dict:
+    normalized_media_files = [str(path) for path in list(media_files or []) if path]
+    project["editor_state"] = build_editor_state(
+        mode="multiclip" if len(normalized_media_files) > 1 else "single",
+        media_files=normalized_media_files,
+        segments=segments or [],
+        workspace=workspace,
+        clip_boundaries=clip_boundaries,
+        stt_preview_segments=stt_preview_segments,
+        cut_boundaries=cut_boundaries,
+        provisional_cut_boundaries=provisional_cut_boundaries,
+        primary_fps=primary_fps,
+    )
+    return project["editor_state"]
+
+
+def _save_editor_state_write_inputs(
+    *,
+    voice_activity_segments: list[dict] | None,
+    media_paths: list[str] | None,
+    stt_preview_segments: list[dict] | None,
+    segments: list[dict] | None,
+    editor_media_files: list[str],
+    effective_stt_preview_segments: list[dict] | None,
+) -> tuple[list[str], list[dict] | None] | None:
+    if voice_activity_segments is not None:
+        return editor_media_files, effective_stt_preview_segments
+    if media_paths is not None:
+        return list(media_paths or []), effective_stt_preview_segments
+    if stt_preview_segments is not None:
+        return editor_media_files, stt_preview_segments
+    if segments is not None:
+        return editor_media_files, effective_stt_preview_segments
+    return None
+
+
+def _store_editor_state_after_save(
+    project: dict,
+    *,
+    voice_activity_segments: list[dict] | None,
+    media_paths: list[str] | None,
+    stt_preview_segments: list[dict] | None,
+    effective_stt_preview_segments: list[dict] | None,
+    segments: list[dict] | None,
+    project_segment_rows: list[dict] | None,
+    editor_media_files: list[str],
+    editor_workspace: dict | None,
+    editor_clip_boundaries: list[dict] | None,
+    primary_fps: float | None,
+    cut_boundaries: list[dict] | None,
+    provisional_cut_boundaries: list[dict] | None,
+) -> None:
+    write_inputs = _save_editor_state_write_inputs(
+        voice_activity_segments=voice_activity_segments,
+        media_paths=media_paths,
+        stt_preview_segments=stt_preview_segments,
+        segments=segments,
+        editor_media_files=editor_media_files,
+        effective_stt_preview_segments=effective_stt_preview_segments,
+    )
+    if write_inputs is None:
+        return
+    media_files, preview_rows = write_inputs
+    _store_project_editor_state(
+        project,
+        media_files=media_files,
+        segments=project_segment_rows,
+        workspace=editor_workspace,
+        clip_boundaries=editor_clip_boundaries,
+        stt_preview_segments=preview_rows,
+        cut_boundaries=cut_boundaries,
+        provisional_cut_boundaries=provisional_cut_boundaries,
+        primary_fps=primary_fps,
+    )
+
+
+def _store_project_recovery_checkpoint(
+    project: dict,
+    *,
+    filepath: str,
+    segments: list[dict] | None,
+    settings: dict,
+    srt_path: str | None,
+    recovery_state: dict | None,
+) -> None:
+    primary_media_path = _project_primary_media_path(project)
+    existing_recovery = (
+        (project.get("analysis", {}) or {}).get("recovery_state")
+        or ((project.get("editor_state", {}) or {}).get("analysis", {}) or {}).get("recovery_state")
+        or {}
+    )
+    artifacts: dict[str, str] = {}
+    if srt_path is not None:
+        artifacts["srt_path"] = srt_path
+    if isinstance(recovery_state, dict) and recovery_state:
+        checkpoint = dict(recovery_state)
+        if checkpoint.get("schema") != "ai_subtitle_studio.recovery_state.v1":
+            checkpoint = build_recovery_checkpoint(
+                media_path=primary_media_path,
+                project_path=filepath,
+                stage=str(checkpoint.get("stage", "save") or "save"),
+                status=str(checkpoint.get("status", "saved") or "saved"),
+                detail=str(checkpoint.get("detail", "") or ""),
+                segments=segments,
+                artifacts=dict(checkpoint.get("artifacts", {}) or artifacts),
+                settings=settings,
+                previous_state=existing_recovery if isinstance(existing_recovery, dict) else None,
+            )
+        checkpoint = merge_recovery_checkpoint(existing_recovery, checkpoint)
+    else:
+        checkpoint = build_recovery_checkpoint(
+            media_path=primary_media_path,
+            project_path=filepath,
+            stage="save",
+            status="saved",
+            detail="project_saved",
+            segments=segments,
+            artifacts=artifacts,
+            settings=settings,
+            previous_state=existing_recovery if isinstance(existing_recovery, dict) else None,
+        )
+    attach_recovery_state_to_project(project, checkpoint)
+
+
+def _store_project_roughcut_payload(
+    project: dict,
+    *,
+    roughcut_state: dict | None,
+    middle_segments,
+    preliminary_middle_segments,
+) -> None:
+    if roughcut_state is not None:
+        project["roughcut_state"] = dict(roughcut_state or {})
+    else:
+        project.setdefault("roughcut_state", project.get("roughcut_state", {}) or {})
+
+    if middle_segments is not None:
+        _store_project_middle_segments(project, middle_segments)
+    else:
+        selected_middle_segments = _selected_roughcut_candidate_segments(project.get("roughcut_state", {}) or {})
+        if selected_middle_segments:
+            _store_project_middle_segments(project, selected_middle_segments)
+
+    if preliminary_middle_segments is not None:
+        _store_project_preliminary_middle_segments(project, preliminary_middle_segments)
+
+
 def _project_middle_segment_rows(rows) -> list[dict]:
     out: list[dict] = []
     for idx, row in enumerate(list(rows or []), start=1):
@@ -411,16 +741,16 @@ def _project_middle_segment_rows(rows) -> list[dict]:
 
 
 def _selected_roughcut_candidate_segments(roughcut_state: dict | None) -> list[dict]:
-    state = dict(roughcut_state or {})
+    state = roughcut_state if isinstance(roughcut_state, dict) else {}
     selected = str(state.get("selected_candidate_id") or "").strip()
-    candidates = [dict(item) for item in list(state.get("candidates", []) or []) if isinstance(item, dict)]
+    candidates = _dict_rows(state.get("candidates"))
     if not candidates:
         return []
     candidate = next((item for item in candidates if str(item.get("candidate_id") or "") == selected), None)
     if candidate is None:
         candidate = candidates[0]
     rows = candidate.get("segments")
-    return [dict(row) for row in list(rows or []) if isinstance(row, dict)] if isinstance(rows, list) else []
+    return copy_project_rows(rows)
 
 
 def _store_project_middle_segments(project: dict, rows) -> list[dict]:
@@ -429,24 +759,21 @@ def _store_project_middle_segments(project: dict, rows) -> list[dict]:
     saved_rows = _project_middle_segment_rows(rows)
     if not saved_rows:
         return []
+    saved_rows_placeholder_only = rows_are_placeholder_only(saved_rows)
     project.setdefault("analysis", {})
     project["analysis"]["middle_segment_schema"] = "middle_segments.v1"
     project["analysis"]["middle_segments"] = list(saved_rows)
     project["analysis"]["middle_segments_updated_at"] = datetime.now().isoformat()
-    project["analysis"]["middle_segments_placeholder_only"] = rows_are_placeholder_only(saved_rows)
+    project["analysis"]["middle_segments_placeholder_only"] = saved_rows_placeholder_only
     project["middle_segments"] = list(saved_rows)
     if rows_are_placeholder_only(project.get("roughcut_segments", [])):
         project["roughcut_segments"] = list(saved_rows)
     return saved_rows
 
 
-def _store_project_preliminary_middle_segments(project: dict, rows) -> list[dict]:
-    if not isinstance(project, dict):
-        return []
-    project.setdefault("analysis", {})
-    saved_rows = _project_middle_segment_rows(rows)
+def _preliminary_middle_segment_rows(rows: list[dict] | None) -> list[dict]:
     stamped_rows: list[dict] = []
-    for row in list(saved_rows or []):
+    for row in list(rows or []):
         item = dict(row)
         item["segment_stage"] = "preliminary"
         item["segment_stage_name"] = "예비 중분류 세그먼트"
@@ -454,6 +781,15 @@ def _store_project_preliminary_middle_segments(project: dict, rows) -> list[dict
         item["preview_lane"] = "global_top"
         item["preview_reference"] = "cut_boundary_topicless_middle_segments"
         stamped_rows.append(item)
+    return stamped_rows
+
+
+def _store_project_preliminary_middle_segments(project: dict, rows) -> list[dict]:
+    if not isinstance(project, dict):
+        return []
+    project.setdefault("analysis", {})
+    saved_rows = _project_middle_segment_rows(rows)
+    stamped_rows = _preliminary_middle_segment_rows(saved_rows)
     if stamped_rows:
         project["analysis"]["preliminary_middle_segments_schema"] = "middle_segments.preliminary.v1"
         project["analysis"]["preliminary_middle_segments"] = list(stamped_rows)
@@ -502,7 +838,7 @@ def _scan_confirmed_cut_boundaries_for_project(
     settings: dict | None = None,
     primary_fps: float = 30.0,
 ) -> list[dict]:
-    clips = [dict(item) for item in list(clips or []) if isinstance(item, dict)]
+    clips = _dict_rows(clips)
     settings = dict(settings or {})
     if not clips or not cut_boundary_enabled(settings):
         return []
@@ -588,7 +924,7 @@ def _prefill_project_cut_boundary_artifacts(
     settings: dict | None = None,
     primary_fps: float = 30.0,
 ) -> list[dict]:
-    clips = [dict(item) for item in list(clips or []) if isinstance(item, dict)]
+    clips = _dict_rows(clips)
     settings = dict(settings or {})
     if not clips or not cut_boundary_enabled(settings):
         return []
@@ -622,38 +958,21 @@ def _finalize_project_middle_segment_artifacts(
         return []
 
     analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
-    reference_rows = [
-        dict(row)
-        for row in list(
-            analysis.get("cut_boundary_topicless_middle_segments")
-            or analysis.get("topicless_middle_segments")
-            or analysis.get("middle_segments")
-            or []
-        )
-        if isinstance(row, dict)
-    ]
-    reviewed_rows = [
-        dict(row)
-        for row in list(
-            analysis.get("cut_boundary_reviewed_rows")
-            or analysis.get("cut_boundaries")
-            or []
-        )
-        if isinstance(row, dict)
-    ]
-    confirmed_rows = [dict(row) for row in list(analysis.get("cut_boundaries", []) or []) if isinstance(row, dict)]
-    media_files = [str(item.get("source_path", "") or "") for item in list(clips or []) if isinstance(item, dict)]
+    reference_rows = copy_project_rows(
+        analysis.get("cut_boundary_topicless_middle_segments")
+        or analysis.get("topicless_middle_segments")
+        or analysis.get("middle_segments")
+        or []
+    )
+    reviewed_rows = copy_project_rows(
+        analysis.get("cut_boundary_reviewed_rows")
+        or analysis.get("cut_boundaries")
+        or []
+    )
+    confirmed_rows = copy_project_rows(analysis.get("cut_boundaries", []) or [])
+    media_files = _clip_source_paths(clips)
     source_path = media_files[0] if media_files else ""
-    clip_boundaries = [
-        {
-            "start": float(item.get("timeline_start", 0.0) or 0.0),
-            "end": float(item.get("timeline_end", 0.0) or 0.0),
-            "file": str(item.get("source_path", "") or ""),
-            "name": os.path.basename(str(item.get("source_path", "") or "")),
-        }
-        for item in list(clips or [])
-        if isinstance(item, dict)
-    ]
+    clip_boundaries = _editor_clip_boundaries(clips)
     llm_payload = run_editor_roughcut_llm_draft(
         source_segments,
         settings=settings or {},
@@ -730,8 +1049,8 @@ def _externalize_project_payload(
             return externalize_project_text_assets(
                 filepath,
                 project,
-                final_segments=list(recovered_subtitles or []),
-                stt_tracks=dict(recovered_stt_tracks or {}),
+                final_segments=recovered_subtitles,
+                stt_tracks=recovered_stt_tracks,
             )
         project.pop("asset_storage", None)
         subtitles = project.setdefault("subtitles", {})
@@ -857,32 +1176,7 @@ def create_project(
             "segment_count": len(segments),
         },
 
-        "editor_state": build_editor_state(
-            mode="multiclip" if len(media_paths or []) > 1 else "single",
-            media_files=list(media_paths or []),
-            segments=[
-                {
-                    "start": seg.get("timeline_start", 0.0),
-                    "end": seg.get("timeline_end", 0.0),
-                    "text": seg.get("text", ""),
-                    "speaker": seg.get("speaker", "00"),
-                }
-                for seg in segments
-            ],
-            workspace={},
-            clip_boundaries=[
-                {
-                    "start": c["timeline_start"],
-                    "end": c["timeline_end"],
-                    "file": c["source_path"],
-                    "name": os.path.basename(c["source_path"]),
-                }
-                for c in clips
-            ],
-            cut_boundaries=[],
-            provisional_cut_boundaries=[],
-            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
-        ),
+        "editor_state": {},
 
         "roughcut_state": {},
 
@@ -911,23 +1205,21 @@ def create_project(
         },
 
         "user_settings": persisted_user_settings,
-        "model_settings": build_model_settings_snapshot(persisted_user_settings),
 
         # 하위 호환용
-        "media": [
-            {
-                "order": c["order"],
-                "path": c["source_path"],
-                "type": c["type"],
-                "duration": c["source_duration"],
-                "offset": c["timeline_start"],
-                "fps": c["fps"],
-                "width": c.get("width", 0),
-                "height": c.get("height", 0),
-            }
-            for c in clips
-        ]
+        "media": _project_media_rows_from_clips(clips)
     }
+    _store_project_editor_state(
+        project,
+        media_files=list(media_paths or []),
+        segments=_editor_seed_segments(segments),
+        workspace={},
+        clip_boundaries=_editor_clip_boundaries(clips),
+        cut_boundaries=[],
+        provisional_cut_boundaries=[],
+        primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+    )
+    store_project_model_settings_snapshot(project, persisted_user_settings, user_settings_provided=True)
 
     filename = f"{name}.json"
     filepath = os.path.join(PROJECTS_DIR, filename)
@@ -1050,19 +1342,7 @@ def save_project(
             "clips": clips
         }]
 
-        project["media"] = [
-            {
-                "order": c["order"],
-                "path": c["source_path"],
-                "type": c["type"],
-                "duration": c["source_duration"],
-                "offset": c["timeline_start"],
-                "fps": c["fps"],
-                "width": c.get("width", 0),
-                "height": c.get("height", 0),
-            }
-            for c in clips
-        ]
+        project["media"] = _project_media_rows_from_clips(clips)
 
     # ── SRT 경로 ──
     if srt_path is not None:
@@ -1087,9 +1367,7 @@ def save_project(
         if explicit_stt_preview_update
         else project_stt_preview_segments(project)
     )
-    project["_hot_open_stt_preview_segments_cache"] = [
-        dict(row) for row in list(effective_stt_preview_segments or []) if isinstance(row, dict)
-    ]
+    project["_hot_open_stt_preview_segments_cache"] = copy_project_rows(effective_stt_preview_segments)
     new_segs = None
     if segments is not None:
         from core.cut_boundary import magnetize_segments_to_cut_boundaries
@@ -1177,250 +1455,82 @@ def save_project(
         project["subtitles"]["segment_count"] = len(new_segs)
 
     project_segment_rows = new_segs if new_segs is not None else project_segments_to_editor(project)
+    editor_media_files = _ordered_media_paths(project.get("media", []))
+    editor_clip_boundaries = _editor_clip_boundaries(clips)
+    editor_workspace = _editor_workspace_state(project, workspace)
 
     if voice_activity_segments is not None:
-        project.setdefault("analysis", {})
-        project["analysis"]["voice_activity_schema"] = "subtitle_detection.v1"
-        project["analysis"]["voice_activity_segments"] = [
-            _normalize_voice_activity_segment(item, idx)
-            for idx, item in enumerate(voice_activity_segments or [])
-            if isinstance(item, dict)
-        ]
-
-        project["editor_state"] = build_editor_state(
-            mode="multiclip" if len(media_paths or project.get("media", []) or []) > 1 else "single",
-            media_files=[
-                item.get("path", "")
-                for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
-                if item.get("path")
-            ],
-            segments=project_segment_rows,
-            workspace=workspace or project.get("workspace", {}) or {},
-            clip_boundaries=[
-                {
-                    "start": c.get("timeline_start", 0.0),
-                    "end": c.get("timeline_end", 0.0),
-                    "file": c.get("source_path", ""),
-                    "name": os.path.basename(c.get("source_path", "")),
-                }
-                for c in clips
-            ],
-            stt_preview_segments=effective_stt_preview_segments,
-            cut_boundaries=existing_cut_boundaries,
-            provisional_cut_boundaries=existing_provisional_cut_boundaries,
-            primary_fps=primary_fps,
+        _store_project_voice_activity_segments(
+            project,
+            _normalize_project_voice_activity_segments(
+                voice_activity_segments,
+                priority_as_int=True,
+            ),
         )
     elif media_paths is not None:
         clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
-        project["editor_state"] = build_editor_state(
-            mode="multiclip" if len(media_paths) > 1 else "single",
-            media_files=list(media_paths or []),
-            segments=project_segment_rows,
-            workspace=workspace or project.get("workspace", {}) or {},
-            clip_boundaries=[
-                {
-                    "start": c.get("timeline_start", 0.0),
-                    "end": c.get("timeline_end", 0.0),
-                    "file": c.get("source_path", ""),
-                    "name": os.path.basename(c.get("source_path", "")),
-                }
-                for c in clips
-            ],
-            stt_preview_segments=effective_stt_preview_segments,
-            cut_boundaries=existing_cut_boundaries,
-            provisional_cut_boundaries=existing_provisional_cut_boundaries,
-            primary_fps=primary_fps,
-        )
-    elif stt_preview_segments is not None:
-        project["editor_state"] = build_editor_state(
-            mode="multiclip" if len(project.get("media", []) or []) > 1 else "single",
-            media_files=[
-                item.get("path", "")
-                for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
-                if item.get("path")
-            ],
-            segments=project_segment_rows,
-            workspace=workspace or project.get("workspace", {}) or {},
-            clip_boundaries=[
-                {
-                    "start": c.get("timeline_start", 0.0),
-                    "end": c.get("timeline_end", 0.0),
-                    "file": c.get("source_path", ""),
-                    "name": os.path.basename(c.get("source_path", "")),
-                }
-                for c in clips
-            ],
-            stt_preview_segments=stt_preview_segments,
-            cut_boundaries=existing_cut_boundaries,
-            provisional_cut_boundaries=existing_provisional_cut_boundaries,
-            primary_fps=primary_fps,
-        )
-    elif segments is not None:
-        project["editor_state"] = build_editor_state(
-            mode="multiclip" if len(project.get("media", []) or []) > 1 else "single",
-            media_files=[
-                item.get("path", "")
-                for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
-                if item.get("path")
-            ],
-            segments=project_segment_rows,
-            workspace=workspace or project.get("workspace", {}) or {},
-            clip_boundaries=[
-                {
-                    "start": c.get("timeline_start", 0.0),
-                    "end": c.get("timeline_end", 0.0),
-                    "file": c.get("source_path", ""),
-                    "name": os.path.basename(c.get("source_path", "")),
-                }
-                for c in clips
-            ],
-            stt_preview_segments=effective_stt_preview_segments,
-            cut_boundaries=existing_cut_boundaries,
-            provisional_cut_boundaries=existing_provisional_cut_boundaries,
-            primary_fps=primary_fps,
-        )
+        editor_clip_boundaries = _editor_clip_boundaries(clips)
+
+    _store_editor_state_after_save(
+        project,
+        voice_activity_segments=voice_activity_segments,
+        media_paths=media_paths,
+        stt_preview_segments=stt_preview_segments,
+        effective_stt_preview_segments=effective_stt_preview_segments,
+        segments=segments,
+        project_segment_rows=project_segment_rows,
+        editor_media_files=editor_media_files,
+        editor_workspace=editor_workspace,
+        editor_clip_boundaries=editor_clip_boundaries,
+        primary_fps=primary_fps,
+        cut_boundaries=existing_cut_boundaries,
+        provisional_cut_boundaries=existing_provisional_cut_boundaries,
+    )
 
     # ── 사용자 설정 ──
-    if user_settings is not None:
-        project["user_settings"] = effective_user_settings
-        project["model_settings"] = build_model_settings_snapshot(effective_user_settings)
-    elif "model_settings" not in project and isinstance(project.get("user_settings"), dict):
-        project["model_settings"] = build_model_settings_snapshot(project.get("user_settings"))
+    _store_project_model_settings_snapshot(
+        project,
+        effective_user_settings=effective_user_settings,
+        user_settings_provided=user_settings is not None,
+    )
 
     # ── 작업 환경 ──
     if workspace is not None:
-        workspace = sanitize_workspace_state(workspace)
-        project["workspace"] = workspace
-        if project.get("editor_state"):
-            project["editor_state"]["workspace"] = workspace
+        workspace = _store_project_workspace(project, workspace)
 
     if active_work_mode:
-        active_work_mode = normalize_work_mode(active_work_mode)
-        project.setdefault("workspace", {})
-        project["workspace"]["active_work_mode"] = active_work_mode
-        if project.get("editor_state"):
-            project["editor_state"].setdefault("workspace", {})
-            project["editor_state"]["workspace"]["active_work_mode"] = active_work_mode
+        active_work_mode = _store_project_active_work_mode(project, active_work_mode)
 
-    if roughcut_state is not None:
-        project["roughcut_state"] = dict(roughcut_state or {})
-    else:
-        project.setdefault("roughcut_state", project.get("roughcut_state", {}) or {})
-    if middle_segments is not None:
-        _store_project_middle_segments(project, middle_segments)
-    else:
-        selected_middle_segments = _selected_roughcut_candidate_segments(project.get("roughcut_state", {}) or {})
-        if selected_middle_segments:
-            _store_project_middle_segments(project, selected_middle_segments)
-    if preliminary_middle_segments is not None:
-        _store_project_preliminary_middle_segments(project, preliminary_middle_segments)
+    _store_project_roughcut_payload(
+        project,
+        roughcut_state=roughcut_state,
+        middle_segments=middle_segments,
+        preliminary_middle_segments=preliminary_middle_segments,
+    )
 
     editor_stt = (project.get("editor_state", {}) or {}).get("stt", {}) or {}
     candidate_tracks = editor_stt.get("candidate_tracks")
-    if isinstance(candidate_tracks, dict) and candidate_tracks:
-        project.setdefault("analysis", {})
-        project["analysis"]["stt_candidate_schema"] = "stt_candidate_tracks.v1"
-        project["analysis"]["stt_candidate_tracks"] = candidate_tracks
-        project["analysis"]["stt_candidate_counts"] = {
-            str(source): len(rows)
-            for source, rows in candidate_tracks.items()
-            if isinstance(rows, list)
-        }
+    _store_project_stt_candidate_tracks(project, candidate_tracks)
 
     if persist_analysis_artifacts and segments is not None:
-        try:
-            from core.engine.subtitle_accuracy_graph import persist_subtitle_accuracy_graph
-
-            media_items = list(project.get("media") or [])
-            primary_media_path = ""
-            if media_items and isinstance(media_items[0], dict):
-                primary_media_path = str(media_items[0].get("path") or "")
-            graph_result = persist_subtitle_accuracy_graph(
-                list(segments or []),
-                effective_user_settings,
-                media_path=primary_media_path,
-                project_path=filepath,
-            )
-            project.setdefault("analysis", {})
-            project["analysis"]["subtitle_accuracy_graph_schema"] = graph_result.get("schema")
-            project["analysis"]["subtitle_accuracy_graph_path"] = graph_result.get("path", "")
-            project["analysis"]["subtitle_accuracy_graph_summary"] = graph_result.get("summary", {})
-            project["analysis"]["subtitle_accuracy_graph_segment_count"] = graph_result.get("segment_count", 0)
-            if project.get("editor_state"):
-                project["editor_state"].setdefault("analysis", {})
-                project["editor_state"]["analysis"]["subtitle_accuracy_graph_path"] = graph_result.get("path", "")
-                project["editor_state"]["analysis"]["subtitle_accuracy_graph_summary"] = graph_result.get("summary", {})
-        except Exception:
-            pass
-        try:
-            from core.audio.stt_lattice import persist_stt_lattice_artifact
-
-            media_items = list(project.get("media") or [])
-            primary_media_path = ""
-            if media_items and isinstance(media_items[0], dict):
-                primary_media_path = str(media_items[0].get("path") or "")
-            lattice_result = persist_stt_lattice_artifact(
-                list(segments or []),
-                effective_user_settings,
-                media_path=primary_media_path,
-                project_path=filepath,
-            )
-            project.setdefault("analysis", {})
-            project["analysis"]["stt_lattice_schema"] = lattice_result.get("schema")
-            project["analysis"]["stt_lattice_artifact_path"] = lattice_result.get("path", "")
-            project["analysis"]["stt_lattice_summary"] = lattice_result.get("summary", {})
-            project["analysis"]["stt_lattice_segment_count"] = lattice_result.get("segment_count", 0)
-            if project.get("editor_state"):
-                project["editor_state"].setdefault("analysis", {})
-                project["editor_state"]["analysis"]["stt_lattice_artifact_path"] = lattice_result.get("path", "")
-                project["editor_state"]["analysis"]["stt_lattice_summary"] = lattice_result.get("summary", {})
-        except Exception:
-            pass
+        _persist_project_analysis_artifacts(
+            filepath,
+            project,
+            segments=segments,
+            settings=effective_user_settings,
+        )
 
     project["mode"] = "multiclip" if len(project_media_files(project)) > 1 else "single"
 
     try:
-        media_items = list(project.get("media") or [])
-        primary_media_path = ""
-        if media_items and isinstance(media_items[0], dict):
-            primary_media_path = str(media_items[0].get("path") or "")
-        existing_recovery = (
-            (project.get("analysis", {}) or {}).get("recovery_state")
-            or ((project.get("editor_state", {}) or {}).get("analysis", {}) or {}).get("recovery_state")
-            or {}
+        _store_project_recovery_checkpoint(
+            project,
+            filepath=filepath,
+            segments=project_segment_rows,
+            settings=effective_user_settings,
+            srt_path=srt_path,
+            recovery_state=recovery_state if isinstance(recovery_state, dict) else None,
         )
-        settings_for_recovery = effective_user_settings
-        artifacts = {}
-        if srt_path is not None:
-            artifacts["srt_path"] = srt_path
-        if isinstance(recovery_state, dict) and recovery_state:
-            checkpoint = dict(recovery_state)
-            if checkpoint.get("schema") != "ai_subtitle_studio.recovery_state.v1":
-                checkpoint = build_recovery_checkpoint(
-                    media_path=primary_media_path,
-                    project_path=filepath,
-                    stage=str(checkpoint.get("stage", "save") or "save"),
-                    status=str(checkpoint.get("status", "saved") or "saved"),
-                    detail=str(checkpoint.get("detail", "") or ""),
-                    segments=project_segment_rows,
-                    artifacts=dict(checkpoint.get("artifacts", {}) or artifacts),
-                    settings=settings_for_recovery,
-                    previous_state=existing_recovery if isinstance(existing_recovery, dict) else None,
-                )
-            checkpoint = merge_recovery_checkpoint(existing_recovery, checkpoint)
-        else:
-            checkpoint = build_recovery_checkpoint(
-                media_path=primary_media_path,
-                project_path=filepath,
-                stage="save",
-                status="saved",
-                detail="project_saved",
-                segments=project_segment_rows,
-                artifacts=artifacts,
-                settings=settings_for_recovery,
-                previous_state=existing_recovery if isinstance(existing_recovery, dict) else None,
-            )
-        attach_recovery_state_to_project(project, checkpoint)
     except Exception:
         pass
 
@@ -1447,26 +1557,55 @@ def save_project(
     )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
+def _persist_project_analysis_artifacts(
+    filepath: str,
+    project: dict,
+    *,
+    segments: list[dict] | None,
+    settings: dict | None,
+) -> None:
+    segment_rows = list(segments or [])
+    primary_media_path = _project_primary_media_path(project)
 
+    try:
+        from core.engine.subtitle_accuracy_graph import persist_subtitle_accuracy_graph
 
-def _normalize_voice_activity_segment(item: dict, idx: int) -> dict:
-    start = float(item.get("start", 0.0) or 0.0)
-    end = float(item.get("end", start) or start)
-    normalized = {
-        "id": str(item.get("id") or f"subtitle_detection_{idx + 1:04d}"),
-        "index": idx + 1,
-        "start": start,
-        "end": max(start, end),
-        "kind": str(item.get("kind", "uncertain") or "uncertain"),
-        "label": str(item.get("label", "") or ""),
-        "source": str(item.get("source", "") or ""),
-        "color": str(item.get("color", "") or ""),
-        "priority": int(item.get("priority", 0) or 0),
-    }
-    for key in ("score", "alpha", "selection_state", "selected_source"):
-        if key in item:
-            normalized[key] = item.get(key)
-    return normalized
+        graph_result = persist_subtitle_accuracy_graph(
+            list(segment_rows),
+            settings,
+            media_path=primary_media_path,
+            project_path=filepath,
+        )
+        _store_project_analysis_artifact(
+            project,
+            schema_key="subtitle_accuracy_graph_schema",
+            path_key="subtitle_accuracy_graph_path",
+            summary_key="subtitle_accuracy_graph_summary",
+            count_key="subtitle_accuracy_graph_segment_count",
+            result=graph_result,
+        )
+    except Exception:
+        pass
+
+    try:
+        from core.audio.stt_lattice import persist_stt_lattice_artifact
+
+        lattice_result = persist_stt_lattice_artifact(
+            list(segment_rows),
+            settings,
+            media_path=primary_media_path,
+            project_path=filepath,
+        )
+        _store_project_analysis_artifact(
+            project,
+            schema_key="stt_lattice_schema",
+            path_key="stt_lattice_artifact_path",
+            summary_key="stt_lattice_summary",
+            count_key="stt_lattice_segment_count",
+            result=lattice_result,
+        )
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────
@@ -1543,7 +1682,7 @@ def get_boundary_times(project: dict) -> list:
     1. analysis.cut_boundaries 정식 컷 경계
     2. 멀티클립 클립 경계(하위 호환 fallback)
     """
-    confirmed = [dict(row) for row in list(project_cut_boundaries(project) or []) if isinstance(row, dict)]
+    confirmed = copy_project_rows(project_cut_boundaries(project) or [])
     if confirmed:
         return confirmed
 
@@ -1575,7 +1714,7 @@ def add_media_to_project(filepath: str, new_paths: list):
     project["phase"] = "PHASE2"
 
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
-    existing_paths = {c["source_path"] for c in clips}
+    existing_paths = set(_clip_source_paths(clips))
     max_order = max((c.get("order", 0) for c in clips), default=-1)
     cumulative = max((c.get("timeline_end", 0.0) for c in clips), default=0.0)
     incoming_paths = [str(path) for path in list(new_paths or []) if path and path not in existing_paths]
@@ -1596,35 +1735,15 @@ def add_media_to_project(filepath: str, new_paths: list):
         "clips": clips
     }]
 
-    project["media"] = [
-        {
-            "order": c["order"],
-            "path": c["source_path"],
-            "type": c["type"],
-            "duration": c["source_duration"],
-            "offset": c["timeline_start"],
-            "fps": c.get("fps", 0.0),
-            "width": c.get("width", 0),
-            "height": c.get("height", 0),
-        }
-        for c in clips
-    ]
+    project["media"] = _project_media_rows_from_clips(clips, allow_missing_fps=True)
     primary_fps = project_primary_fps(project)
     existing_segments = project_segments_to_editor(project)
-    project["editor_state"] = build_editor_state(
-        mode="multiclip" if len(project["media"]) > 1 else "single",
-        media_files=[item["path"] for item in sorted(project["media"], key=lambda item: item.get("order", 0))],
+    _store_project_editor_state(
+        project,
+        media_files=_ordered_media_paths(project.get("media", [])),
         segments=existing_segments,
-        workspace=project.get("workspace", {}) or {},
-        clip_boundaries=[
-            {
-                "start": c.get("timeline_start", 0.0),
-                "end": c.get("timeline_end", 0.0),
-                "file": c.get("source_path", ""),
-                "name": os.path.basename(c.get("source_path", "")),
-            }
-            for c in clips
-        ],
+        workspace=_editor_workspace_state(project),
+        clip_boundaries=_editor_clip_boundaries(clips),
         cut_boundaries=project_cut_boundaries(project),
         provisional_cut_boundaries=project_cut_provisional_boundaries(project),
         primary_fps=primary_fps,
@@ -1691,28 +1810,12 @@ def merge_srt_to_project(filepath: str) -> int | None:
     project.setdefault("subtitles", {})
     project["subtitles"]["segments"] = all_segments
     primary_fps = project_primary_fps(project)
-    project["editor_state"] = build_editor_state(
-        mode="multiclip" if len(clips) > 1 else "single",
-        media_files=[clip.get("source_path", "") for clip in clips if clip.get("source_path")],
-        segments=[
-            {
-                "start": seg.get("timeline_start", 0.0),
-                "end": seg.get("timeline_end", 0.0),
-                "text": seg.get("text", ""),
-                "speaker": seg.get("speaker", "00"),
-            }
-            for seg in all_segments
-        ],
-        workspace=project.get("workspace", {}) or {},
-        clip_boundaries=[
-            {
-                "start": clip.get("timeline_start", 0.0),
-                "end": clip.get("timeline_end", 0.0),
-                "file": clip.get("source_path", ""),
-                "name": os.path.basename(clip.get("source_path", "")),
-            }
-            for clip in clips
-        ],
+    _store_project_editor_state(
+        project,
+        media_files=_clip_source_paths(clips),
+        segments=_editor_seed_segments(all_segments),
+        workspace=_editor_workspace_state(project),
+        clip_boundaries=_editor_clip_boundaries(clips),
         cut_boundaries=project_cut_boundaries(project),
         provisional_cut_boundaries=project_cut_provisional_boundaries(project),
         primary_fps=primary_fps,

@@ -19,9 +19,9 @@ from ui.timeline.timeline_constants import (
     SEG_TOP,
     _build_gaps,
 )
+from ui.editor.ux.timeline_input import TimelineInputMixin
+from ui.editor.ux.timeline_subtitle_segment_editing import TimelineInlineEditMixin
 from ui.timeline.timeline_paint import TimelinePaintMixin
-from ui.timeline.timeline_input import TimelineInputMixin
-from ui.timeline.timeline_inline_edit import TimelineInlineEditMixin
 from ui.timeline.segment_store import TimelineSegmentStore
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
@@ -93,6 +93,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.active_seg_line: int | None = None
         self.playhead_sec: float = 0.0
         self._last_playhead_px: int | None = None
+        self.shadow_playhead_sec: float | None = None
+        self._last_shadow_playhead_px: int | None = None
         self._waveform = None
         self.boundary_times: list[float] = []
         self.scan_boundary_times: list[float] = []
@@ -308,6 +310,9 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self._sync_active_segment_key(self.active_seg_start)
         if getattr(self, "playhead_sec", None) is not None:
             self.playhead_sec = self._normalize_canvas_sec(self.playhead_sec)
+        if getattr(self, "shadow_playhead_sec", None) is not None:
+            self.shadow_playhead_sec = self._normalize_canvas_sec(self.shadow_playhead_sec)
+            self._last_shadow_playhead_px = self._x(self.shadow_playhead_sec)
         if getattr(self, "llm_review_segment", None):
             self.llm_review_segment = self._normalize_canvas_row(self.llm_review_segment)
         self.user_alignment_guides = self._normalize_user_alignment_guides(getattr(self, "user_alignment_guides", []))
@@ -1164,6 +1169,37 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             left = max(0, min(old_px, px) - 12)
             right = min(self.width(), max(old_px, px) + 13)
             self.update(QRect(left, 0, max(1, right - left), CANVAS_H))
+
+    def set_shadow_playhead(self, sec) -> bool:
+        normalized = None if sec is None else self._normalize_canvas_sec(sec)
+        current = getattr(self, "shadow_playhead_sec", None)
+        if normalized is None and current is None:
+            return False
+        if normalized is not None and current is not None and abs(float(normalized) - float(current)) < 0.001:
+            return False
+        old_px = self._last_shadow_playhead_px
+        self.shadow_playhead_sec = normalized
+        self._last_shadow_playhead_px = None if normalized is None else self._x(normalized)
+        self._drag_snap_base_cache_key = None
+        self._drag_snap_base_candidates = []
+        if getattr(self, "_external_playhead_overlay", False):
+            return True
+        if old_px is None and self._last_shadow_playhead_px is None:
+            return True
+        if old_px is None:
+            px = int(self._last_shadow_playhead_px or 0)
+            self.update(QRect(max(0, px - 12), 0, 25, CANVAS_H))
+            return True
+        if self._last_shadow_playhead_px is None:
+            self.update(QRect(max(0, old_px - 12), 0, 25, CANVAS_H))
+            return True
+        left = max(0, min(old_px, self._last_shadow_playhead_px) - 12)
+        right = min(self.width(), max(old_px, self._last_shadow_playhead_px) + 13)
+        self.update(QRect(left, 0, max(1, right - left), CANVAS_H))
+        return True
+
+    def clear_shadow_playhead(self) -> bool:
+        return self.set_shadow_playhead(None)
 
     def set_waveform(self, wf):
         self._waveform = wf

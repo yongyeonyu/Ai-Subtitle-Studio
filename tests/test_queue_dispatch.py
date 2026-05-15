@@ -119,6 +119,8 @@ class QueueDispatchTests(unittest.TestCase):
                 self._queue_row_cache = []
                 self._sidebar_queue_cache_items = []
                 self._sidebar_queue_cache_header = ""
+                self.backend = None
+                self.backend_fast = None
                 self._live_timer = type("_Timer", (), {"start": lambda _self, _interval: None, "stop": lambda _self: None})()
 
             def _show_bottom_queue_table(self):
@@ -149,6 +151,8 @@ class QueueDispatchTests(unittest.TestCase):
                 self._queue_row_cache = []
                 self._sidebar_queue_cache_items = []
                 self._sidebar_queue_cache_header = ""
+                self.backend = None
+                self.backend_fast = None
                 self._live_timer = type("_Timer", (), {"start": lambda _self, _interval: None, "stop": lambda _self: None})()
 
             def _show_bottom_queue_table(self):
@@ -178,6 +182,8 @@ class QueueDispatchTests(unittest.TestCase):
                 self._queue_row_cache = []
                 self._sidebar_queue_cache_items = []
                 self._sidebar_queue_cache_header = ""
+                self.backend = None
+                self.backend_fast = None
                 self._live_timer = type("_Timer", (), {"start": lambda _self, _interval: None, "stop": lambda _self: None})()
 
             def _show_bottom_queue_table(self):
@@ -327,6 +333,46 @@ class QueueDispatchTests(unittest.TestCase):
         self.assertEqual(queue.queue_row_status_text(0), "재시작 준비 중")
         self.assertEqual(queue.queue_table.item(0, 2).text(), "1280x720")
         self.assertEqual(queue.queue_table.item(0, 4).text(), "00:00 / 00:15")
+
+    def test_completed_row_reopens_for_roughcut_followup_without_resetting_elapsed(self):
+        class _DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._current_file_idx = 1
+                self._total_files = 1
+                self._real_pct = 100
+                self._expected_seconds = {0: 120.0}
+                self._file_start_times = {0: 100.0}
+                self._file_complete_times = {}
+                self._queue_row_cache = []
+                self._sidebar_queue_cache_items = []
+                self._sidebar_queue_cache_header = ""
+                self.backend = None
+                self.backend_fast = None
+                self._live_timer = type("_Timer", (), {"start": lambda _self, _interval: None, "stop": lambda _self: None})()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = _DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+        queue._expected_seconds[0] = 120.0
+        queue._file_start_times[0] = 100.0
+        with patch("ui.queue_widget.time.time", return_value=130.0):
+            queue.update_queue_status(0, "✅ 완료", "02:00", "1920x1080", "02:00")
+        with patch("ui.queue_widget.time.time", return_value=140.0):
+            queue.update_queue_status(0, "🤖 [러프컷 LLM] 후처리 중", "02:00", "1920x1080", "02:00")
+            queue._update_live_queue_header()
+
+        self.assertEqual(queue.queue_row_status_text(0), "🤖 [러프컷 LLM] 후처리 중")
+        self.assertEqual(queue._file_start_times[0], 100.0)
+        self.assertNotIn(0, queue._file_complete_times)
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "00:40 / 02:00")
+        self.assertEqual(queue.queue_header_lbl.text(), "큐 리스트 : (1/1) - 33% 완료")
 
     def test_queue_sidebar_helpers_expose_header_items_probe_and_completion(self):
         class _DummyQueue(QueueMixin):

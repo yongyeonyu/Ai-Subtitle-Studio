@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ from core.personalization.lora_runtime_policy import (
 from core.personalization.lora_storage import load_best_settings, load_learned_rules
 from core.personalization.lora_vector_retriever import retrieve_lora_context
 from core.runtime import config
+from core.text_utils import clean_text as _norm, compact_text as _compact
 from core.utils import load_subtitle_rules
 from core.subtitle_quality.correction_memory import search_correction_memory
 from core.subtitle_quality.wrong_answer_memory import search_wrong_answer_memory
@@ -30,15 +30,6 @@ def runtime_lora_enabled(settings: dict[str, Any] | None) -> bool:
         settings.get("subtitle_quality_auto_correct_enabled")
         or settings.get("editor_lora_runtime_enabled")
     )
-
-
-def _norm(text: Any) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip()
-
-
-def _compact(text: Any) -> str:
-    return re.sub(r"\s+", "", str(text or "")).strip().lower()
-
 
 def _limit_items(items: list[Any], limit: int, *, max_chars: int = 36) -> list[str]:
     out: list[str] = []

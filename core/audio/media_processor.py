@@ -11,7 +11,6 @@ import json
 import hashlib
 import os
 import shutil
-import subprocess
 import sys  # noqa: F401 - compatibility hook for runtime/test patching
 import threading
 import time  # noqa: F401 - compatibility hook for heartbeat tests/runtime patching

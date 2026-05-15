@@ -866,6 +866,21 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(boundaries[0]["timeline_sec"], 5.0)
         self.assertEqual(boundaries[1]["timeline_sec"], 17.0)
 
+    def test_get_boundary_times_returns_copied_confirmed_rows(self):
+        project = {
+            "timeline": {"tracks": [{"clips": []}]},
+            "analysis": {
+                "cut_boundaries": [
+                    {"timeline_sec": 5.0, "timeline_frame": 150, "fps": 30.0},
+                ]
+            },
+        }
+
+        boundaries = get_boundary_times(project)
+        boundaries[0]["timeline_sec"] = 99.0
+
+        self.assertEqual(project["analysis"]["cut_boundaries"][0]["timeline_sec"], 5.0)
+
     def test_reload_replaces_pending_segments_before_project_restore(self):
         editor = _Editor()
         restored = [{"start": 1.0, "end": 2.0, "text": "restored"}]
@@ -1046,6 +1061,20 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         stt_previews = [seg for seg in editor.timeline.updated[0] if seg.get("_live_stt_preview")]
         self.assertEqual(subtitle_drafts, [])
         self.assertEqual([seg["text"] for seg in stt_previews], ["STT1 후보", "STT2 후보"])
+
+    def test_restore_project_stt_preview_segments_copies_project_rows(self):
+        editor = _LivePreviewEditor()
+        project = {
+            "_hot_open_stt_preview_segments_cache": [
+                {"start": 1.0, "end": 2.0, "text": "원본", "stt_preview_source": "STT1"}
+            ]
+        }
+
+        restored = restore_project_stt_preview_segments(editor, project)
+        editor._live_stt_preview_segments[0]["text"] = "수정됨"
+
+        self.assertEqual(restored, 1)
+        self.assertEqual(project["_hot_open_stt_preview_segments_cache"][0]["text"], "원본")
 
     def test_live_subtitle_preview_is_removed_when_final_segment_overlaps(self):
         editor = _LivePreviewEditor()

@@ -1157,6 +1157,7 @@ class PersonalizationIdleTrainer(QObject):
         self._startup_recovery_running = False
         self._startup_recovery_complete = False
         self._startup_recovery_timer_scheduled = False
+        self._shutdown_started = False
         self._learning_status_signal.connect(self._notify_learning_status_changed_on_main)
         if recover_on_init:
             self.recover_startup_jobs(reason="trainer_startup")
@@ -1268,6 +1269,8 @@ class PersonalizationIdleTrainer(QObject):
             self._native_input_watchdog_stop.wait(interval)
 
     def _handle_native_input_snapshot(self, snapshot: dict[str, Any] | None) -> bool:
+        if bool(getattr(self, "_shutdown_started", False)):
+            return False
         if not isinstance(snapshot, dict):
             return False
         recent = bool(snapshot.get("recent", False))
@@ -1341,6 +1344,8 @@ class PersonalizationIdleTrainer(QObject):
         return dict(self._last_run_result or {})
 
     def _notify_learning_status_changed_on_main(self) -> None:
+        if bool(getattr(self, "_shutdown_started", False)):
+            return
         refresher = getattr(self.owner, "_refresh_saved_status_label", None)
         if callable(refresher):
             try:
@@ -1349,7 +1354,12 @@ class PersonalizationIdleTrainer(QObject):
                 pass
 
     def _notify_learning_status_changed(self) -> None:
-        self._learning_status_signal.emit()
+        if bool(getattr(self, "_shutdown_started", False)):
+            return
+        try:
+            self._learning_status_signal.emit()
+        except RuntimeError:
+            return
 
     def _cleanup_after_stop(
         self,
@@ -1402,6 +1412,8 @@ class PersonalizationIdleTrainer(QObject):
         return result
 
     def run_pending_now(self, *, low_resource: bool = False) -> dict[str, Any]:
+        if bool(getattr(self, "_shutdown_started", False)):
+            return {"started": False, "reason": "shutdown_in_progress"}
         if self.is_busy():
             return {"started": False, "reason": "busy"}
         self._stop_requested.clear()
@@ -1428,6 +1440,10 @@ class PersonalizationIdleTrainer(QObject):
                 if not continuous or self._stop_requested.is_set() or not self.has_pending_jobs():
                     break
         finally:
+            with self._worker_lock:
+                current = getattr(self, "_worker_thread", None)
+                if current is threading.current_thread():
+                    self._worker_thread = None
             self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
             self._log_auto_learning_status("백그라운드 완료")
             self._current_learning_mode = ""
@@ -1436,6 +1452,8 @@ class PersonalizationIdleTrainer(QObject):
 
     def start_background_run(self, *, low_resource: bool = True, continuous: bool = False) -> dict[str, Any]:
         with self._worker_lock:
+            if bool(getattr(self, "_shutdown_started", False)):
+                return {"started": False, "reason": "shutdown_in_progress"}
             if self.is_busy():
                 return {"started": False, "reason": "busy"}
             if not self.has_pending_jobs():
@@ -1520,7 +1538,11 @@ class PersonalizationIdleTrainer(QObject):
         cleanup: bool = True,
         recover: bool = True,
     ) -> dict[str, Any]:
-        self._poll_timer.stop()
+        self._shutdown_started = True
+        try:
+            self._poll_timer.stop()
+        except RuntimeError:
+            pass
         self._native_input_watchdog_stop.set()
         self._stop_requested.set()
         self._suspend_reason = "shutdown"
@@ -1529,6 +1551,10 @@ class PersonalizationIdleTrainer(QObject):
             self._cleanup_after_stop("shutdown", include_gpu=True, throttle_sec=0.0)
         thread = self._worker_thread
         alive = bool(thread is not None and thread.is_alive())
+        fast_detach = (not cleanup) and (not recover) and max(0.0, float(timeout_sec or 0.0)) <= 0.0
+        if fast_detach:
+            self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
+            return {"stopped": True, "busy": False, "detached": alive}
         if alive:
             try:
                 thread.join(timeout=max(0.0, float(timeout_sec)))
@@ -1637,6 +1663,8 @@ class PersonalizationIdleTrainer(QObject):
         return idle_for < int(self.idle_window_ms + LOW_RESOURCE_TO_HEAVY_IDLE_MS)
 
     def _poll(self) -> None:
+        if bool(getattr(self, "_shutdown_started", False)):
+            return
         if self.is_busy():
             return
         if not self._owner_idle():

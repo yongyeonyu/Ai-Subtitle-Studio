@@ -4,6 +4,7 @@
 ui/home_ui.py
 MainWindow 홈 화면 빌드 Mixin
 """
+import json
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -28,6 +29,12 @@ from ui.style import button_style, label_style, line_icon, tool_button_style
 
 
 class HomeUIMixin(HomeSidebarMixin):
+    def _sidebar_nav_signature(self, items: list[dict] | None) -> str:
+        try:
+            return json.dumps(list(items or []), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return repr(list(items or []))
+
     def _home_auto_source_payload(self, scope: str):
         cache = dict(getattr(self, "_home_auto_source_cache", {}) or {})
         cached = cache.get(str(scope or ""))
@@ -208,7 +215,7 @@ class HomeUIMixin(HomeSidebarMixin):
 
     def _sidebar_status_card(self):
         card = QWidget()
-        card.setMinimumHeight(144)
+        card.setMinimumHeight(122)
         card.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;")
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 6, 10, 5)
@@ -223,7 +230,7 @@ class HomeUIMixin(HomeSidebarMixin):
             self.sidebar_runtime_label = QLabel("", self.home_page)
         self.sidebar_settings_label.setWordWrap(True)
         self.sidebar_settings_label.setMinimumWidth(0)
-        self.sidebar_settings_label.setMinimumHeight(100)
+        self.sidebar_settings_label.setMinimumHeight(88)
         self.sidebar_settings_label.setTextFormat(Qt.TextFormat.RichText)
         self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
         self.sidebar_runtime_label.setWordWrap(True)
@@ -231,12 +238,12 @@ class HomeUIMixin(HomeSidebarMixin):
         self.sidebar_runtime_label.setMinimumHeight(30)
         self.sidebar_runtime_label.setTextFormat(Qt.TextFormat.RichText)
         self.sidebar_runtime_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
+        self.sidebar_runtime_label.hide()
         self._refresh_sidebar_engine_info()
         if hasattr(self, "_refresh_sidebar_runtime_monitor"):
             self._refresh_sidebar_runtime_monitor()
         lay.addWidget(self._create_sidebar_subtitle_quality_row(card))
         lay.addWidget(self.sidebar_settings_label)
-        lay.addWidget(self.sidebar_runtime_label)
         return card
     def _toggle_sidebar_stt_mode(self):
         self._current_work_mode = EDITOR_MODE
@@ -392,19 +399,29 @@ class HomeUIMixin(HomeSidebarMixin):
 
     def _ensure_sidebar_nav_menu(self):
         panel = getattr(self, "sidebar_nav_menu", None)
+        items = self._sidebar_nav_items()
+        signature = self._sidebar_nav_signature(items)
         if not isinstance(panel, HomeSidebarNavWidget):
             panel = HomeSidebarNavWidget(self.home_page)
             panel.actionTriggered.connect(self._handle_sidebar_nav_action)
             self.sidebar_nav_menu = panel
-        panel.set_items(self._sidebar_nav_items())
+            self._sidebar_nav_last_signature = ""
+        if str(getattr(self, "_sidebar_nav_last_signature", "") or "") != signature:
+            panel.set_items(items)
+            self._sidebar_nav_last_signature = signature
         return panel
 
     def _refresh_sidebar_nav_menu(self):
         panel = getattr(self, "sidebar_nav_menu", None)
         if not isinstance(panel, HomeSidebarNavWidget):
             return
+        items = self._sidebar_nav_items()
+        signature = self._sidebar_nav_signature(items)
+        if str(getattr(self, "_sidebar_nav_last_signature", "") or "") == signature:
+            return
         try:
-            panel.set_items(self._sidebar_nav_items())
+            panel.set_items(items)
+            self._sidebar_nav_last_signature = signature
         except RuntimeError:
             self.sidebar_nav_menu = None
 

@@ -3,6 +3,7 @@
 import json
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,7 +22,7 @@ from core.performance import (
     native_thread_budget,
     runtime_scheduler_reserve_cores,
 )
-from core.native_json import dumps_json_text, loads_json
+from core.native_json import dumps_json_text, loads_json, loads_json_output, write_jsonl_line
 
 
 class PerformanceMediaCacheTest(unittest.TestCase):
@@ -61,11 +62,143 @@ class PerformanceMediaCacheTest(unittest.TestCase):
             self.assertEqual(third, first)
             run_mock.assert_not_called()
 
+    def test_probe_media_cache_returns_independent_dicts_after_caller_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = Path(tmp) / "sample.mp4"
+            media.write_bytes(b"media")
+            cache_dir = Path(tmp) / "cache"
+            payload = {
+                "format": {"duration": "12.5"},
+                "streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30000/1001"}],
+            }
+
+            with patch("core.media_info.media_probe_cache_dir", return_value=cache_dir), \
+                 patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+                 patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))):
+                first = media_info.probe_media(str(media))
+                first["duration"] = 99.0
+                second = media_info.probe_media(str(media))
+
+            self.assertEqual(second["duration"], 12.5)
+
+    def test_probe_media_disk_cache_rehydrate_returns_independent_dicts_after_caller_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = Path(tmp) / "sample.mp4"
+            media.write_bytes(b"media")
+            cache_dir = Path(tmp) / "cache"
+            payload = {
+                "format": {"duration": "12.5"},
+                "streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30000/1001"}],
+            }
+
+            with patch("core.media_info.media_probe_cache_dir", return_value=cache_dir), \
+                 patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+                 patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))):
+                media_info.probe_media(str(media))
+
+            media_info.clear_media_probe_cache_memory()
+            with patch("core.media_info.media_probe_cache_dir", return_value=cache_dir), \
+                 patch("core.media_info.subprocess.run") as run_mock:
+                first = media_info.probe_media(str(media))
+                first["duration"] = 99.0
+                second = media_info.probe_media(str(media))
+
+            run_mock.assert_not_called()
+            self.assertEqual(second["duration"], 12.5)
+
+    def test_probe_media_ignores_malformed_disk_cache_payload_and_reprobes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = Path(tmp) / "sample.mp4"
+            media.write_bytes(b"media")
+            cache_dir = Path(tmp) / "cache"
+            payload = {
+                "format": {"duration": "12.5"},
+                "streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30000/1001"}],
+            }
+
+            with patch("core.media_info.media_probe_cache_dir", return_value=cache_dir), \
+                 patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+                 patch("core.media_info.read_json_path", return_value=["broken-cache"]), \
+                 patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))) as run_mock:
+                result = media_info.probe_media(str(media))
+
+            self.assertEqual(result["duration"], 12.5)
+            self.assertEqual(result["width"], 1920)
+            self.assertEqual(run_mock.call_count, 1)
+
     def test_probe_media_many_preserves_order(self):
         with patch("core.media_info.probe_media", side_effect=lambda path: {"duration": float(path[-1])}):
             result = media_info.probe_media_many(["clip1", "clip2", "clip3"], max_workers=3)
 
         self.assertEqual([item["duration"] for item in result], [1.0, 2.0, 3.0])
+
+    def test_probe_media_many_lookup_deduplicates_paths_and_returns_unique_map(self):
+        with patch(
+            "core.media_info.probe_media",
+            side_effect=lambda path: {"path": path, "duration": float(path[-1])},
+        ) as probe_mock:
+            result = media_info.probe_media_many_lookup(["clip2", "clip1", "clip2"], max_workers=4)
+
+        self.assertEqual(probe_mock.call_count, 2)
+        self.assertEqual(list(result), ["clip2", "clip1"])
+        self.assertEqual(result["clip1"]["duration"], 1.0)
+        self.assertEqual(result["clip2"]["duration"], 2.0)
+
+    def test_probe_media_many_deduplicates_duplicate_paths_but_returns_independent_dicts(self):
+        with patch(
+            "core.media_info.probe_media",
+            side_effect=lambda path: {"path": path, "duration": float(path[-1])},
+        ) as probe_mock:
+            result = media_info.probe_media_many(["clip1", "clip1", "clip2", "clip1"], max_workers=4)
+
+        self.assertEqual(probe_mock.call_count, 2)
+        self.assertEqual([item["path"] for item in result], ["clip1", "clip1", "clip2", "clip1"])
+        self.assertIsNot(result[0], result[1])
+        result[0]["duration"] = 99.0
+        self.assertEqual(result[1]["duration"], 1.0)
+
+    def test_probe_media_many_keeps_single_use_rows_without_extra_copy(self):
+        probe_results = {
+            "clip1": {"path": "clip1", "duration": 1.0},
+            "clip2": {"path": "clip2", "duration": 2.0},
+        }
+        with patch(
+            "core.media_info.probe_media",
+            side_effect=lambda path: probe_results[path],
+        ):
+            result = media_info.probe_media_many(["clip1", "clip1", "clip2"], max_workers=4)
+
+        self.assertIsNot(result[0], probe_results["clip1"])
+        self.assertIsNot(result[1], probe_results["clip1"])
+        self.assertIs(result[2], probe_results["clip2"])
+
+    def test_probe_media_audio_only_payload_keeps_audio_defaults(self):
+        payload = {
+            "format": {"duration": "61.2"},
+            "streams": [],
+        }
+        with patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+             patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))):
+            result = media_info.probe_media("sample.wav", use_cache=False)
+
+        self.assertEqual(result["duration"], 61.2)
+        self.assertEqual(result["info_txt"], "오디오 파일")
+        self.assertEqual(result["len_txt"], "01:01")
+
+    def test_probe_media_uses_stream_duration_when_format_duration_is_missing(self):
+        payload = {
+            "format": {},
+            "streams": [{"duration": "8.4", "width": 1280, "height": 720, "r_frame_rate": "24000/1001"}],
+        }
+        with patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+             patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))):
+            result = media_info.probe_media("sample.mp4", use_cache=False)
+
+        self.assertEqual(result["duration"], 8.4)
+        self.assertEqual(result["width"], 1280)
+        self.assertEqual(result["height"], 720)
+        self.assertAlmostEqual(result["fps"], 23.976023976, places=6)
+        self.assertEqual(result["len_txt"], "00:08")
 
     def test_probe_media_memory_cache_is_bounded(self):
         original_max = media_info._MEDIA_PROBE_MEM_CACHE_MAX
@@ -440,6 +573,15 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         encoded = dumps_json_text(payload, indent=2, append_newline=True)
         self.assertTrue(encoded.endswith("\n"))
         self.assertEqual(loads_json(encoded), payload)
+
+    def test_native_json_output_helper_uses_default_for_empty_output(self):
+        self.assertEqual(loads_json_output("", default={"ok": False}), {"ok": False})
+        self.assertEqual(loads_json_output(b"", default=[]), [])
+
+    def test_native_json_write_jsonl_line_appends_single_newline(self):
+        stream = StringIO()
+        write_jsonl_line(stream, "{\"ok\":true}")
+        self.assertEqual(stream.getvalue(), "{\"ok\":true}\n")
 
 
 if __name__ == "__main__":

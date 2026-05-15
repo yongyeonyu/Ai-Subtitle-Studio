@@ -269,6 +269,45 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             recover.assert_not_called()
             trainer.deleteLater()
 
+    def test_fast_shutdown_detaches_busy_worker_and_suppresses_late_ui_notifications(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            owner = _DummyOwner()
+            refresh_calls = []
+            owner._refresh_saved_status_label = lambda: refresh_calls.append("refresh")
+            trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
+            trainer._poll_timer.stop()
+            stop_event = threading.Event()
+            worker_done = threading.Event()
+
+            def _busy_worker():
+                try:
+                    stop_event.wait(0.3)
+                finally:
+                    worker_done.set()
+
+            trainer._worker_thread = threading.Thread(target=_busy_worker, daemon=True)
+            trainer._worker_thread.start()
+            try:
+                trainer._notify_learning_status_changed()
+                self.assertEqual(refresh_calls, ["refresh"])
+                refresh_calls.clear()
+
+                result = trainer.shutdown(timeout_sec=0.0, cleanup=False, recover=False)
+
+                self.assertTrue(result["stopped"])
+                self.assertFalse(result["busy"])
+                self.assertTrue(result["detached"])
+                trainer._notify_learning_status_changed()
+                self.assertEqual(refresh_calls, [])
+            finally:
+                stop_event.set()
+                worker_done.wait(timeout=1.0)
+                if trainer._worker_thread is not None:
+                    trainer._worker_thread.join(timeout=1.0)
+                trainer.deleteLater()
+
     def test_enqueue_full_training_jobs_requeues_completed_jobs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)
@@ -706,9 +745,10 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             processed = []
             def fake_run(command, **_kwargs):
                 Path(command[-1]).write_bytes(b"RIFFfake wav data")
-                return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                completed = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return completed, False
 
-            with patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run):
+            with patch("core.personalization.text_lora_runner.run_subprocess_capture_cancelable", side_effect=fake_run):
                 for _ in range(6):
                     result = run_training_queue_once(tmpdir)
                     processed.append(result)

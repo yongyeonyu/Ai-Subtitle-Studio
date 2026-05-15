@@ -8,7 +8,7 @@ ui/editor_pipeline.py
 - update_progress: 완료 조건 단일화 (EditorPipeline만 완료 판단)
 - 기존 기능 100% 유지
 """
-from PyQt6.QtCore import QTimer
+from PyQt6 import QtCore
 
 from ui.editor.editor_pipeline_cleanup import EditorPipelineCleanupMixin
 from ui.editor.editor_pipeline_completion import EditorPipelineCompletionMixin
@@ -17,6 +17,8 @@ from ui.editor.editor_pipeline_playhead_actions import EditorPipelinePlayheadAct
 from ui.editor.editor_pipeline_signal_bridge import EditorPipelineSignalBridgeMixin
 from ui.editor.editor_pipeline_startup import EditorPipelineStartupMixin
 from ui.editor.editor_pipeline_status import EditorPipelineStatusMixin
+
+QTimer = QtCore.QTimer
 
 
 class EditorPipelineMixin(
