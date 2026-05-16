@@ -55,6 +55,7 @@ class EditorSegmentsRuntimeCacheMixin:
     def _mark_dirty(self):
         if hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
             return
+        self._skip_prev_confirm_once = False
         started_editing = False
         if hasattr(self, "sm"):
             if hasattr(self.sm, "start_editing") and not getattr(self.sm, "is_locked", False):

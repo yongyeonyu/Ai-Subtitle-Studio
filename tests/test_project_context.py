@@ -126,6 +126,29 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(payload["subtitles"]["segment_count"], 1)
         self.assertEqual(payload["editor_state"]["subtitles"]["segment_count"], 1)
 
+    def test_create_project_uses_project_only_extension_and_list_ignores_plain_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "video.mp4"
+            media_path.write_bytes(b"video")
+
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 30.0},
+            ):
+                project_path = Path(
+                    create_project(
+                        "project_extension_filter_case",
+                        media_paths=[str(media_path)],
+                        user_settings={},
+                    )
+                )
+                (Path(tmp) / "not_a_project.json").write_text("{}", encoding="utf-8")
+                listed = project_manager.list_projects()
+
+        self.assertEqual(project_path.suffix, project_manager.PROJECT_FILE_EXTENSION)
+        self.assertTrue(project_manager.is_project_file_path(project_path.name))
+        self.assertEqual([item["path"] for item in listed], [str(project_path)])
+
     def test_create_project_archives_existing_base_json_inside_backup_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
             media_path = str(Path(tmp) / "video.mp4")
@@ -147,7 +170,7 @@ class ProjectContextTests(unittest.TestCase):
 
             backup_dir = Path(tmp) / "프로젝트백업"
             legacy_archived = backup_dir / "same_name_1.json"
-            archived = backup_dir / "same_name_2.json"
+            archived = backup_dir / f"same_name_1{project_manager.PROJECT_FILE_EXTENSION}"
 
             self.assertEqual(first_path, second_path)
             self.assertTrue(second_path.exists())
@@ -452,6 +475,31 @@ class ProjectContextTests(unittest.TestCase):
             state["rendering"]["subtitle_canvas"]["segment_signature"],
         )
 
+    def test_build_editor_state_roundtrip_preserves_gap_segments(self):
+        state = build_editor_state(
+            mode="single",
+            media_files=["/tmp/a.mp4"],
+            segments=[
+                {"start": 0.0, "end": 1.0, "text": "앞 자막", "speaker": "00"},
+                {"start": 1.0, "end": 2.0, "text": "", "speaker": "00", "is_gap": True},
+                {"start": 2.0, "end": 3.0, "text": "뒤 자막", "speaker": "00"},
+            ],
+            primary_fps=30.0,
+        )
+
+        vector_canvas = state["rendering"]["subtitle_canvas"]
+        self.assertEqual([row["text"] for row in vector_canvas["segments"]], ["앞 자막", "뒤 자막"])
+        self.assertEqual(len(vector_canvas["gap_segments"]), 1)
+        self.assertEqual(vector_canvas["gap_segments"][0]["kind"], "subtitle_gap")
+        self.assertEqual(vector_canvas["gap_segments"][0]["time"]["start_frame"], 30)
+        self.assertEqual(vector_canvas["gap_segments"][0]["time"]["end_frame"], 60)
+
+        restored = _state_segments(state)
+        self.assertEqual([bool(seg.get("is_gap")) for seg in restored], [False, True, False])
+        self.assertEqual(restored[1]["text"], "")
+        self.assertEqual(restored[1]["start_frame"], 30)
+        self.assertEqual(restored[1]["end_frame"], 60)
+
     def test_project_io_roundtrip_preserves_stt_unicode_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"
@@ -733,7 +781,7 @@ class ProjectContextTests(unittest.TestCase):
 
         pending, confirmed = _state_segments(state)
         self.assertEqual(pending["subtitle_review_state"], "pending")
-        self.assertEqual(pending["subtitle_status_color"], "#FFCC00")
+        self.assertEqual(pending["subtitle_status_color"], "#FFD60A")
         self.assertEqual(pending["subtitle_status_schema"], "subtitle_status.v1")
         self.assertEqual(pending["subtitle_status_source"], "STT1")
         self.assertEqual(confirmed["subtitle_review_state"], "confirmed")
@@ -807,6 +855,107 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")
         self.assertEqual(len(project_roughcut_state(loaded)["candidates"]), 1)
         self.assertEqual(project_segments_to_editor(loaded)[0]["text"], "저장")
+
+    def test_save_project_compacts_roughcut_middle_segments_to_frame_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.aissproj"
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {
+                            "tracks": [
+                                {
+                                    "clips": [
+                                        {
+                                            "id": "clip_a",
+                                            "source_path": "/tmp/a.mp4",
+                                            "timeline_start": 0.0,
+                                            "timeline_end": 10.0,
+                                            "timeline_start_frame": 0,
+                                            "timeline_end_frame": 599,
+                                            "source_frame_rate": 59.94,
+                                            "fps": 59.94,
+                                            "order": 0,
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        "media": [{"order": 0, "path": "/tmp/a.mp4", "fps": 59.94}],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            middle_rows = [
+                {
+                    "major_id": "A",
+                    "title": "도입",
+                    "summary": "중분류 요약",
+                    "start": 2.0,
+                    "end": 4.0,
+                    "status": "confirmed",
+                }
+            ]
+            roughcut_result = {
+                "segments": list(middle_rows),
+                "chapters": [
+                    {
+                        "chapter_id": "A_0001",
+                        "major_id": "A",
+                        "title": "첫 챕터",
+                        "start": 2.0,
+                        "end": 3.0,
+                    }
+                ],
+                "guide_markdown": "guide",
+                "markdown_guide": "guide",
+                "schema_version": "roughcut_result.v2",
+            }
+            roughcut_state = {
+                "selected_candidate_id": "candidate_a",
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_a",
+                        "segments": list(middle_rows),
+                        "chapters": list(roughcut_result["chapters"]),
+                        "guide_markdown": "guide",
+                        "markdown_guide": "guide",
+                        "schema_version": "roughcut_result.v2",
+                    }
+                ],
+            }
+
+            save_project(
+                str(path),
+                middle_segments=middle_rows,
+                roughcut_result=roughcut_result,
+                roughcut_state=roughcut_state,
+            )
+            with open(path, encoding="utf-8") as handle:
+                raw = json.load(handle)
+            loaded = load_project(str(path))
+
+        self.assertEqual(raw["storage_schema"], PROJECT_STORAGE_SCHEMA)
+        self.assertNotIn("middle_segments", raw)
+        self.assertNotIn("roughcut_result", raw)
+        stored_middle = raw["analysis"]["middle_segments"][0]
+        self.assertEqual((stored_middle["start_frame"], stored_middle["end_frame"]), (120, 240))
+        self.assertNotIn("start", stored_middle)
+        stored_result = raw["analysis"]["roughcut_result"]["segments"][0]
+        self.assertEqual((stored_result["start_frame"], stored_result["end_frame"]), (120, 240))
+        self.assertNotIn("start", stored_result)
+        stored_candidate = raw["roughcut_state"]["candidates"][0]["segments"][0]
+        self.assertEqual((stored_candidate["start_frame"], stored_candidate["end_frame"]), (120, 240))
+        self.assertNotIn("start", stored_candidate)
+        self.assertEqual(loaded["middle_segments"][0]["major_id"], "A")
+        self.assertAlmostEqual(loaded["middle_segments"][0]["start"], 120.0 / 59.94, places=6)
+        self.assertAlmostEqual(loaded["roughcut_result"]["segments"][0]["end"], 240.0 / 59.94, places=6)
+        self.assertEqual(loaded["roughcut_result"]["chapters"][0]["chapter_id"], "A_0001")
 
     def test_save_project_externalize_reuses_editor_canvas_segments_without_second_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1492,7 +1641,7 @@ class ProjectContextTests(unittest.TestCase):
 
         first, second = project_segments_to_editor(loaded)
         self.assertEqual(first["subtitle_review_state"], "pending")
-        self.assertEqual(first["subtitle_status_color"], "#FFCC00")
+        self.assertEqual(first["subtitle_status_color"], "#FFD60A")
         self.assertEqual(first["stt_candidates"][0]["stt_score_color"], "#52C759")
         self.assertEqual(second["subtitle_review_state"], "confirmed")
         self.assertEqual(second["subtitle_status_color"], "#34C759")
@@ -1852,6 +2001,9 @@ class ProjectContextTests(unittest.TestCase):
             stt1_meta = raw_payload["asset_storage"]["tracks"]["stt_stt1"]["metadata"][0]
 
             self.assertEqual(raw_payload["subtitles"]["storage"], "external_srt")
+            self.assertEqual(raw_payload["asset_storage"]["timebase"]["unit"], "frame")
+            self.assertEqual(raw_payload["asset_storage"]["timebase"]["srt_quantization"], "frame_grid_to_srt_millisecond")
+            self.assertEqual(raw_payload["asset_storage"]["tracks"]["final"]["timebase"]["unit"], "frame")
             self.assertEqual(raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["segments"], [])
             self.assertEqual(raw_payload["editor_state"]["stt"]["candidate_tracks"], {})
             self.assertNotIn("stt_candidate_tracks", raw_payload["analysis"])
@@ -2254,6 +2406,48 @@ class ProjectContextTests(unittest.TestCase):
         self.assertNotIn("stt_candidate_tracks", raw_payload["editor_state"]["analysis"])
         self.assertNotIn("stt_candidate_tracks", raw_payload["analysis"])
 
+    def test_externalized_project_roundtrip_preserves_gap_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.aissproj"
+            segments = [
+                {"id": "seg-1", "start": 0.0, "end": 1.0, "text": "앞 자막", "speaker": "00"},
+                {"id": "gap-1", "start": 1.0, "end": 2.0, "text": "", "speaker": "00", "is_gap": True},
+                {"id": "seg-2", "start": 2.0, "end": 3.0, "text": "뒤 자막", "speaker": "00"},
+            ]
+            project = {
+                "project_name": "gap-roundtrip",
+                "project_path": str(path),
+                "timeline": {
+                    "timebase": {"primary_fps": 30.0},
+                    "tracks": [{"clips": []}],
+                },
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=segments,
+                    primary_fps=30.0,
+                ),
+            }
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=segments,
+                stt_tracks={},
+            )
+            write_project_file(str(path), project)
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = read_project_file(str(path))
+
+        self.assertEqual(raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["segments"], [])
+        self.assertEqual(len(raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["gap_segments"]), 1)
+        self.assertEqual(
+            raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["gap_segments"][0]["time"]["start_frame"],
+            30,
+        )
+        restored = project_segments_to_editor(payload, include_analysis_candidates=False)
+        self.assertEqual([bool(seg.get("is_gap")) for seg in restored], [False, True, False])
+        self.assertEqual([seg.get("text", "") for seg in restored], ["앞 자막", "", "뒤 자막"])
+
     def test_project_open_recovers_sibling_external_srt_assets_when_manifest_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"
@@ -2414,7 +2608,7 @@ class ProjectContextTests(unittest.TestCase):
                             "speaker": "00",
                             "stt_preview_source": "STT1",
                             "subtitle_review_state": "pending",
-                            "subtitle_status_color": "#FFCC00",
+                            "subtitle_status_color": "#FFD60A",
                             "subtitle_status_schema": "subtitle_status.v1",
                             "subtitle_status_score": 0.72,
                             "subtitle_status_source": "STT1",
@@ -2428,7 +2622,7 @@ class ProjectContextTests(unittest.TestCase):
             preview = project_stt_preview_segments(project)[0]
 
         self.assertEqual(preview["subtitle_review_state"], "pending")
-        self.assertEqual(preview["subtitle_status_color"], "#FFCC00")
+        self.assertEqual(preview["subtitle_status_color"], "#FFD60A")
         self.assertEqual(preview["subtitle_status_source"], "STT1")
 
     def test_project_stt_preview_segments_from_candidate_tracks_do_not_mutate_source_rows(self):

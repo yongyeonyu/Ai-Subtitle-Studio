@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 
+from core.roughcut.cut_boundary_placeholder import extract_topicless_placeholders_from_project
 from ui.project.project_panel import ProjectUIMixin
 
 
@@ -165,6 +166,70 @@ class ProjectCutBoundaryResumeTests(unittest.TestCase):
 
             self.assertFalse(resumed)
             self.assertEqual(ui.backend.calls, [])
+
+    def test_extract_topicless_placeholders_prefers_placeholder_rows_over_final_middle_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "sample.json")
+            open(media, "wb").close()
+            self._write_project(
+                project_path,
+                media,
+                {
+                    "cut_boundary_topicless_middle_segments": [
+                        {
+                            "id": "P1",
+                            "major_id": "A",
+                            "title": "주제없음",
+                            "is_topicless_placeholder": True,
+                            "start": 0.0,
+                            "end": 10.0,
+                        }
+                    ],
+                    "middle_segments": [
+                        {
+                            "id": "M1",
+                            "major_id": "A",
+                            "title": "실제 중분류",
+                            "status": "confirmed",
+                            "start": 0.0,
+                            "end": 10.0,
+                        }
+                    ],
+                },
+            )
+
+            rows = extract_topicless_placeholders_from_project(project_path)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["title"], "주제없음")
+            self.assertTrue(rows[0]["is_topicless_placeholder"])
+
+    def test_extract_topicless_placeholders_returns_empty_without_placeholder_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "sample.json")
+            open(media, "wb").close()
+            self._write_project(
+                project_path,
+                media,
+                {
+                    "middle_segments": [
+                        {
+                            "id": "M1",
+                            "major_id": "A",
+                            "title": "실제 중분류",
+                            "status": "confirmed",
+                            "start": 0.0,
+                            "end": 10.0,
+                        }
+                    ],
+                },
+            )
+
+            rows = extract_topicless_placeholders_from_project(project_path)
+
+            self.assertEqual(rows, [])
 
 
 if __name__ == "__main__":

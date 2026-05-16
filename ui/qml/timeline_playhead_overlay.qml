@@ -1,4 +1,5 @@
 import QtQuick 2.15
+import "AppPalette.js" as Palette
 
 Item {
     id: root
@@ -39,7 +40,7 @@ Item {
             width: 14
             height: 14
             radius: 7
-            color: root.playheadBusy ? "#FF453A" : "#FFCC00"
+            color: root.playheadBusy ? Palette.danger : Palette.warning
             border.color: "#FFFFFF"
             border.width: 1
             antialiasing: true

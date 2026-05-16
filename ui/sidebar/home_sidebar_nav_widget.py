@@ -77,8 +77,8 @@ class HomeSidebarNavWidget(QWidget):
         heights = []
         for item in self._items:
             try:
-                default_h = 50 if item.get("progressVisible") and str(item.get("meta", "") or "") else (
-                    38 if item.get("progressVisible") else 26
+                default_h = 42 if item.get("progressVisible") and str(item.get("meta", "") or "") else (
+                    32 if item.get("progressVisible") else 26
                 )
                 heights.append(max(26, int(item.get("height", default_h) or 26)))
             except Exception:
@@ -110,7 +110,7 @@ class HomeSidebarNavWidget(QWidget):
             accent = str(item.get("accent", "#3F8CFF") or "#3F8CFF")
             progress_visible = bool(item.get("progressVisible"))
             progress_percent = max(0, min(100, int(item.get("progressPercent", 0) or 0)))
-            default_h = 50 if progress_visible and str(item.get("meta", "") or "") else (38 if progress_visible else 26)
+            default_h = 42 if progress_visible and str(item.get("meta", "") or "") else (32 if progress_visible else 26)
             item_height = max(26, int(item.get("height", default_h) or 26))
             button.setMinimumHeight(item_height)
             button.setMaximumHeight(item_height)
@@ -168,7 +168,7 @@ class HomeSidebarNavWidget(QWidget):
             button.leaveEvent = lambda _event, _w=button: _w.setStyleSheet(_w._normal_ss)
 
             row = QHBoxLayout(button)
-            row.setContentsMargins(8, 4 if progress_visible else 0, 8, 4 if progress_visible else 0)
+            row.setContentsMargins(8, 2 if progress_visible else 0, 8, 2 if progress_visible else 0)
             row.setSpacing(7)
             badge = QLabel(str(item.get("badge", "") or ""), button)
             badge.setFixedSize(16, 16)
@@ -184,7 +184,7 @@ class HomeSidebarNavWidget(QWidget):
                 body = QWidget(button)
                 body_layout = QVBoxLayout(body)
                 body_layout.setContentsMargins(0, 0, 0, 0)
-                body_layout.setSpacing(1)
+                body_layout.setSpacing(0)
                 title_row = QHBoxLayout()
                 title_row.setContentsMargins(0, 0, 0, 0)
                 title_row.setSpacing(6)

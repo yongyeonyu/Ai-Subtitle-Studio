@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import gc
+import heapq
 import os
 import sys
 import tempfile
 import time
 import tracemalloc
 from collections import deque
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -18,25 +20,46 @@ _RUNTIME_DISK_USAGE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, Any]]] =
 _RUNTIME_DISK_ROOT_INDEX_MAX_AGE_SEC = 90.0
 _RUNTIME_DISK_ROOT_INDEX: dict[str, dict[str, Any]] = {}
 _DiskFileEntry = tuple[float, int, str]
+_RSS_PSUTIL_PROCESS: Any = None
+_RSS_PSUTIL_UNAVAILABLE = False
+_RUSAGE_VALUE_IS_KB = bool(os.name == "posix" and getattr(os, "uname", lambda: None)().sysname.lower() != "darwin")
+_RUNTIME_TRIM_TARGETS = (
+    ("core.media_info", "clear_media_probe_cache_memory"),
+    ("core.project.project_io", "clear_project_file_cache"),
+    ("core.personalization.lora_vector_retriever", "clear_lora_retrieval_caches"),
+    ("core.native_macos_memory", "clear_native_memory_snapshot_cache"),
+    ("core.native_swift_policy", "trim_native_policy_worker_cache"),
+)
+_RUNTIME_TRIM_CALLABLES: list[tuple[str, Callable[[], Any]]] | None = None
+_NATIVE_PRUNE_CALLABLE_UNSET = object()
+_NATIVE_PRUNE_CALLABLE: Callable[..., dict[str, Any] | None] | None | object = _NATIVE_PRUNE_CALLABLE_UNSET
 
 
 def process_rss_bytes() -> int:
-    try:
-        import psutil  # type: ignore
+    global _RSS_PSUTIL_PROCESS, _RSS_PSUTIL_UNAVAILABLE
+    if not _RSS_PSUTIL_UNAVAILABLE:
+        try:
+            import psutil  # type: ignore
+        except ImportError:
+            _RSS_PSUTIL_UNAVAILABLE = True
+        else:
+            try:
+                if _RSS_PSUTIL_PROCESS is None:
+                    _RSS_PSUTIL_PROCESS = psutil.Process(os.getpid())
+                return max(0, int(_RSS_PSUTIL_PROCESS.memory_info().rss))
+            except (OSError, RuntimeError, AttributeError, TypeError, psutil.Error):
+                _RSS_PSUTIL_PROCESS = None
 
-        return max(0, int(psutil.Process(os.getpid()).memory_info().rss))
-    except Exception:
-        pass
     try:
         import resource
 
         value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss or 0)
         if value <= 0:
             return 0
-        if os.name == "posix" and os.uname().sysname.lower() != "darwin":
+        if _RUSAGE_VALUE_IS_KB:
             return value * 1024
         return value
-    except Exception:
+    except (ImportError, OSError, RuntimeError, AttributeError, TypeError, ValueError):
         return 0
 
 
@@ -47,9 +70,22 @@ def runtime_memory_monitor_dir() -> Path:
 
 
 def default_runtime_disk_cache_paths() -> list[Path]:
-    output_dir = Path(config.OUTPUT_DIR)
-    dataset_dir = Path(config.DATASET_DIR)
-    temp_dir = Path(tempfile.gettempdir())
+    return list(_default_runtime_disk_cache_paths_cached(
+        str(config.OUTPUT_DIR),
+        str(config.DATASET_DIR),
+        tempfile.gettempdir(),
+    ))
+
+
+@lru_cache(maxsize=8)
+def _default_runtime_disk_cache_paths_cached(
+    output_dir_text: str,
+    dataset_dir_text: str,
+    temp_dir_text: str,
+) -> tuple[Path, ...]:
+    output_dir = Path(output_dir_text)
+    dataset_dir = Path(dataset_dir_text)
+    temp_dir = Path(temp_dir_text)
     paths = [
         dataset_dir / "video_preview_cache",
         output_dir / ".media_probe_cache",
@@ -69,7 +105,7 @@ def default_runtime_disk_cache_paths() -> list[Path]:
             continue
         seen.add(key)
         deduped.append(path)
-    return deduped
+    return tuple(deduped)
 
 
 def runtime_disk_cache_usage(paths: list[str | Path] | None = None) -> dict[str, Any]:
@@ -163,20 +199,28 @@ def _invalidate_runtime_disk_usage_cache(roots: list[Path]) -> None:
     root_keys: set[str] = set()
     for root in roots:
         root_keys.add(str(root))
-        try:
-            root_keys.add(str(root.expanduser().resolve(strict=False)))
-        except OSError:
-            pass
+        root_keys.add(_expanded_resolved_path_text(str(root)))
     for cache_key in list(_RUNTIME_DISK_USAGE_CACHE.keys()):
         if any(part in root_keys for part in cache_key):
             _RUNTIME_DISK_USAGE_CACHE.pop(cache_key, None)
 
 
+def _invalidate_runtime_disk_root_index(roots: list[Path]) -> None:
+    for root in roots:
+        _RUNTIME_DISK_ROOT_INDEX.pop(_runtime_disk_root_key(root), None)
+
+
 def _runtime_disk_root_key(root: Path) -> str:
+    return _expanded_resolved_path_text(str(root))
+
+
+@lru_cache(maxsize=1024)
+def _expanded_resolved_path_text(path_text: str) -> str:
+    path = Path(path_text).expanduser()
     try:
-        return str(root.expanduser().resolve(strict=False))
+        return str(path.resolve(strict=False))
     except OSError:
-        return str(root.expanduser())
+        return str(path)
 
 
 def _scan_runtime_disk_root(root: Path, *, now: float | None = None) -> dict[str, Any]:
@@ -262,15 +306,9 @@ def _runtime_disk_root_entry(
 
 def _runtime_cache_root_for_path(path: Path, roots: list[Path] | None = None) -> Path | None:
     candidates = roots or default_runtime_disk_cache_paths()
-    try:
-        target = str(path.expanduser().resolve(strict=False))
-    except OSError:
-        target = str(path.expanduser())
+    target = _expanded_resolved_path_text(str(path))
     for root in candidates:
-        try:
-            root_text = str(root.expanduser().resolve(strict=False))
-        except OSError:
-            root_text = str(root.expanduser())
+        root_text = _expanded_resolved_path_text(str(root))
         if target == root_text or target.startswith(root_text + os.sep):
             return root
     return None
@@ -389,6 +427,12 @@ def prune_runtime_disk_caches(
 ) -> dict[str, Any]:
     target_total_bytes = max(0, int(target_total_bytes or 0))
     roots = [Path(p) for p in (paths or default_runtime_disk_cache_paths())]
+    native_result = _prune_runtime_disk_caches_native(roots, target_total_bytes=target_total_bytes)
+    if native_result is not None:
+        _invalidate_runtime_disk_root_index(roots)
+        _invalidate_runtime_disk_usage_cache(roots)
+        return native_result
+
     total_bytes = _runtime_cache_total_bytes(roots)
     if total_bytes <= target_total_bytes:
         return {
@@ -397,15 +441,18 @@ def prune_runtime_disk_caches(
             "remaining_bytes": max(0, total_bytes),
             "target_total_bytes": target_total_bytes,
         }
-    file_entries: list[_DiskFileEntry] = list(_iter_runtime_cache_file_entries(roots))
-    total_bytes = sum(size for _mtime, size, _path in file_entries)
+    file_heap: list[tuple[float, str, str, int]] = []
+    total_bytes = 0
+    for mtime, size, path in _iter_runtime_cache_file_entries(roots):
+        total_bytes += size
+        file_heap.append((mtime, os.path.basename(path), path, size))
+    heapq.heapify(file_heap)
 
     removed_files = 0
     removed_bytes = 0
     if total_bytes > target_total_bytes:
-        for _mtime, size, path in sorted(file_entries, key=lambda item: (item[0], os.path.basename(item[2]))):
-            if total_bytes <= target_total_bytes:
-                break
+        while file_heap and total_bytes > target_total_bytes:
+            _mtime, _basename, path, size = heapq.heappop(file_heap)
             try:
                 os.unlink(path)
             except OSError:
@@ -423,6 +470,53 @@ def prune_runtime_disk_caches(
     }
 
 
+def _prune_runtime_disk_caches_native(
+    roots: list[Path],
+    *,
+    target_total_bytes: int,
+) -> dict[str, Any] | None:
+    func = _native_prune_callable()
+    if func is None:
+        return None
+    try:
+        return func(
+            roots,
+            target_total_bytes=target_total_bytes,
+        )
+    except Exception:
+        return None
+
+
+def _native_prune_callable() -> Callable[..., dict[str, Any] | None] | None:
+    global _NATIVE_PRUNE_CALLABLE
+    if _NATIVE_PRUNE_CALLABLE is not _NATIVE_PRUNE_CALLABLE_UNSET:
+        return _NATIVE_PRUNE_CALLABLE
+    try:
+        from core.native_swift_runtime_cache import prune_runtime_disk_caches_via_swift
+    except ImportError:
+        _NATIVE_PRUNE_CALLABLE = None
+        return None
+    _NATIVE_PRUNE_CALLABLE = prune_runtime_disk_caches_via_swift
+    return prune_runtime_disk_caches_via_swift
+
+
+def _runtime_trim_callables() -> list[tuple[str, Callable[[], Any]]]:
+    global _RUNTIME_TRIM_CALLABLES
+    if _RUNTIME_TRIM_CALLABLES is not None:
+        return _RUNTIME_TRIM_CALLABLES
+    resolved: list[tuple[str, Callable[[], Any]]] = []
+    for module_name, func_name in _RUNTIME_TRIM_TARGETS:
+        try:
+            module = __import__(module_name, fromlist=[func_name])
+            func = getattr(module, func_name, None)
+        except (ImportError, AttributeError):
+            continue
+        if callable(func):
+            resolved.append((f"{module_name}.{func_name}", func))
+    _RUNTIME_TRIM_CALLABLES = resolved
+    return resolved
+
+
 def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = False) -> dict[str, Any]:
     stage_text = str(stage or "warning").strip().lower()
     actions: list[str] = []
@@ -433,19 +527,10 @@ def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = Fa
         settings = dict(load_settings() or {})
     except Exception:
         settings = {}
-    for module_name, func_name in (
-        ("core.media_info", "clear_media_probe_cache_memory"),
-        ("core.project.project_io", "clear_project_file_cache"),
-        ("core.personalization.lora_vector_retriever", "clear_lora_retrieval_caches"),
-        ("core.native_macos_memory", "clear_native_memory_snapshot_cache"),
-        ("core.native_swift_policy", "trim_native_policy_worker_cache"),
-    ):
+    for action_name, func in _runtime_trim_callables():
         try:
-            module = __import__(module_name, fromlist=[func_name])
-            func = getattr(module, func_name, None)
-            if callable(func):
-                func()
-                actions.append(f"{module_name}.{func_name}")
+            func()
+            actions.append(action_name)
         except Exception:
             continue
     try:
@@ -724,7 +809,9 @@ class RuntimeMemoryManager:
         return result
 
     def _pressure_stage(self, snapshot: dict[str, Any]) -> str:
-        resource = dict(snapshot.get("resource") or {})
+        resource = snapshot.get("resource")
+        if not isinstance(resource, dict):
+            resource = {}
         native_stage = str(resource.get("memory_pressure_stage", "") or "").strip().lower()
         if native_stage == "critical":
             return "critical"

@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QScrollArea
 
 from core.frame_time import frame_count, frame_to_sec, normalize_fps
 from core.runtime import config
+from ui.style import COLORS
 
 from ui.timeline.timeline_constants import (
     CANVAS_H,
@@ -20,6 +21,8 @@ from ui.timeline.timeline_constants import (
     ICON_SZ,
     LANE_LABEL_GUTTER_W,
     RULER_H,
+    SCORE_H,
+    SCORE_TOP,
     SEG_BOT,
     SEG_TOP,
     SEGMENT_HANDLE_MIN_WIDTH,
@@ -29,6 +32,7 @@ from ui.timeline.timeline_constants import (
     STT1_TOP,
     STT2_BOT,
     STT2_TOP,
+    STT_PREVIEW_VERTICAL_INSET,
     SUBTITLE_BOT,
     SUBTITLE_TOP,
     VOICE_ACTIVITY_BOT,
@@ -38,9 +42,12 @@ from ui.timeline.timeline_constants import (
     WAVE_MID,
 )
 from ui.timeline.timeline_analysis import (
+    SUBTITLE_SCORE_DETECTION_KINDS,
     analysis_markers_for_widget,
     roughcut_major_markers_for_widget,
+    subtitle_score_overlay_marker,
 )
+from ui.timeline.stt_preview_layout import MAX_STT_PREVIEW_SUBLANES, assign_stt_preview_lanes, stt_preview_lane_geometry
 from ui.timeline.speaker_labels import (
     current_speaker_settings,
     normalize_speaker_id,
@@ -301,7 +308,9 @@ class TimelinePaintMixin:
         subtitle_bot = SUBTITLE_BOT
         speaker_top = SPEAKER_TOP
         speaker_bot = SPEAKER_BOT
-        voice_mid = (VOICE_ACTIVITY_TOP + VOICE_ACTIVITY_BOT) // 2
+        voice_top = VOICE_ACTIVITY_TOP
+        voice_bot = VOICE_ACTIVITY_BOT
+        voice_mid = voice_top + ((voice_bot - voice_top) // 2)
         track_bottom = SEG_BOT
         selected_final_stt_segments = []
         selected_final_stt_index = {}
@@ -313,11 +322,21 @@ class TimelinePaintMixin:
             stt1_preview_segments = lane_data.get("stt1_preview_segments") or []
             stt2_preview_segments = lane_data.get("stt2_preview_segments") or []
             selected_final_stt_index = lane_data.get("selected_final_index") or {}
+            stt1_lane_map = lane_data.get("stt1_lane_map") or {}
+            stt1_lane_count = int(lane_data.get("stt1_lane_count") or 1)
+            stt2_lane_map = lane_data.get("stt2_lane_map") or {}
+            stt2_lane_count = int(lane_data.get("stt2_lane_count") or 1)
+            stt_selection_states = lane_data.get("stt_selection_states") or {}
         else:
             stt_preview_segments = []
             final_stt_segments = []
             stt1_preview_segments = []
             stt2_preview_segments = []
+            stt1_lane_map = {}
+            stt1_lane_count = 1
+            stt2_lane_map = {}
+            stt2_lane_count = 1
+            stt_selection_states = {}
             for seg in visible_segments:
                 if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
                     stt_preview_segments.append(seg)
@@ -400,8 +419,9 @@ class TimelinePaintMixin:
 
         def _draw_subtitle_detection_lane(mid_y):
             clip = paint_clip
-            lane_top = mid_y - 12
-            lane_h = 24
+            lane_top = voice_top
+            lane_h = max(8, voice_bot - voice_top)
+            center_y = lane_top + (lane_h // 2)
             p.setPen(Qt.PenStyle.NoPen)
             voice_segments = (
                 visible_voice_activity_segments
@@ -437,6 +457,12 @@ class TimelinePaintMixin:
                         visible_end_sec,
                         pad_sec=0.10,
                     )
+            voice_segments = [
+                vs for vs in list(voice_segments or [])
+                if str(vs.get("kind", "") or "").strip().lower() not in SUBTITLE_SCORE_DETECTION_KINDS
+            ]
+            if not voice_segments:
+                return
 
             fill_batches: dict[tuple[str, int], list[QRect]] = {}
             border_batches: dict[tuple[str, int], list[QRect]] = {}
@@ -469,7 +495,45 @@ class TimelinePaintMixin:
                     )
                     p.restore()
             p.setPen(QPen(QColor(87, 157, 255, 80), 1))
-            p.drawLine(max(0, clip.left()), mid_y, min(total_w, clip.right() + 1), mid_y)
+            p.drawLine(max(0, clip.left()), center_y, min(total_w, clip.right() + 1), center_y)
+
+        def _draw_subtitle_score_labels(segments):
+            if not segments:
+                return
+            if SCORE_H <= 8:
+                return
+            p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
+            fm = p.fontMetrics()
+            segment_rects = []
+            label_items = []
+            for seg in segments:
+                try:
+                    x1 = self._x(float(seg.get("start", 0.0) or 0.0))
+                    x2 = self._x(float(seg.get("end", seg.get("start", 0.0)) or 0.0))
+                except Exception:
+                    continue
+                if x2 < clip_left or x1 > clip_right:
+                    continue
+                width = max(2, int(x2 - x1))
+                segment_rects.append(QRect(int(x1), int(SCORE_TOP), width, int(SCORE_H)))
+                marker = subtitle_score_overlay_marker(seg)
+                if marker and width >= 44:
+                    label_items.append((int(x1), width, marker))
+            _draw_rect_batch(
+                segment_rects,
+                fill=QColor(31, 40, 46, 205),
+                pen=QPen(QColor(82, 96, 108, 220), 1),
+                coalesce=False,
+            )
+            for x1, width, marker in label_items:
+                if width < 44:
+                    continue
+                text_rect = QRect(x1, int(SCORE_TOP), width, int(SCORE_H))
+                label = fm.elidedText(str(marker.get("label", "") or ""), Qt.TextElideMode.ElideRight, max(8, width - 6))
+                p.setPen(QColor(0, 0, 0, 190))
+                p.drawText(text_rect.translated(1, 1), Qt.AlignmentFlag.AlignCenter, label)
+                p.setPen(QColor(str(marker.get("color", COLORS["warning"]) or COLORS["warning"])))
+                p.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, label)
 
         def _analysis_silence_markers():
             if hasattr(self, "analysis_markers_visible_cached"):
@@ -743,7 +807,7 @@ class TimelinePaintMixin:
                 STT1_TOP - 3,
                 STT2_TOP - 3,
                 speaker_top - 3,
-                voice_mid - 14,
+                voice_top - 2,
                 track_bottom,
             ):
                 p.drawLine(draw_left, y, draw_right, y)
@@ -936,7 +1000,7 @@ class TimelinePaintMixin:
 
         p.fillRect(QRect(clip_left, SEG_TOP, max(1, clip_right - clip_left), SEG_BOT - SEG_TOP), QColor("#11181C"))
         p.setPen(QPen(QColor("#2D3942"), 1))
-        for y in (subtitle_top - 5, STT1_TOP - 3, STT2_TOP - 3, speaker_top - 3, voice_mid - 14, track_bottom):
+        for y in (subtitle_top - 5, STT1_TOP - 3, STT2_TOP - 3, speaker_top - 3, voice_top - 2, track_bottom):
             p.drawLine(clip_left, y, clip_right, y)
 
         def _draw_gap_lane(gaps):
@@ -1005,9 +1069,22 @@ class TimelinePaintMixin:
         if not dragging_timing:
             _draw_gap_lane(visible_gap_segments)
 
-        def _draw_stt_preview_lane(preview_segments, lane_top, lane_bot, fill_hex, border_hex, text_hex):
+        def _draw_stt_preview_lane(
+            preview_segments,
+            lane_top,
+            lane_bot,
+            fill_hex,
+            border_hex,
+            text_hex,
+            *,
+            sublane_map=None,
+            sublane_count: int = 1,
+            selection_state_map=None,
+        ):
             if not preview_segments:
                 return
+            preview_top = lane_top + STT_PREVIEW_VERTICAL_INSET
+            preview_height = max(12, (lane_bot - lane_top) - (STT_PREVIEW_VERTICAL_INSET * 2))
             if ultra_dense_segment_mode and len(preview_segments) >= 96 and not selected_final_stt_segments:
                 spans: list[tuple[int, int]] = []
                 cur_l: int | None = None
@@ -1032,11 +1109,20 @@ class TimelinePaintMixin:
                 if cur_l is not None:
                     spans.append((cur_l, cur_r))
                 if spans:
-                    rects = [QRect(left, lane_top, max(1, right - left), lane_bot - lane_top) for left, right in spans]
+                    rects = [QRect(left, preview_top, max(1, right - left), preview_height) for left, right in spans]
                     _draw_rect_batch(rects, fill=QColor(fill_hex))
                     _draw_rect_batch(rects, pen=QPen(QColor(border_hex), 1))
                 return
-            p.setFont(self._stt_preview_font() if hasattr(self, "_stt_preview_font") else QFont(config.FONT, 10))
+            sublane_map = dict(sublane_map or {})
+            sublane_count = max(1, int(sublane_count or 1))
+            if not sublane_map:
+                sublane_map, sublane_count = assign_stt_preview_lanes(preview_segments)
+            preview_font = self._stt_preview_font() if hasattr(self, "_stt_preview_font") else QFont(config.FONT, 10)
+            if sublane_count >= MAX_STT_PREVIEW_SUBLANES:
+                preview_font = QFont(preview_font)
+                preview_font.setPointSize(max(8, preview_font.pointSize() - 1))
+            p.setFont(preview_font)
+            selection_state_map = dict(selection_state_map or {})
             fills: dict[tuple[str, int], list[QRect]] = {}
             borders: dict[tuple[str, int, int], list[QRect]] = {}
             detail_items = []
@@ -1046,12 +1132,17 @@ class TimelinePaintMixin:
                 sw = max(2, x2 - x1)
                 if x2 < clip_left or x1 > clip_right:
                     continue
-                rect = QRect(x1 + 1, lane_top, max(2, sw - 2), lane_bot - lane_top)
-                selection_state = (
-                    stt_candidate_selection_state(seg, selected_final_stt_segments, selected_final_stt_index)
-                    if selected_final_stt_segments
-                    else ""
+                sublane_y, sublane_h = stt_preview_lane_geometry(
+                    lane_top,
+                    lane_bot,
+                    sublane_map.get(id(seg), 0),
+                    sublane_count,
+                    inset=STT_PREVIEW_VERTICAL_INSET,
                 )
+                rect = QRect(x1 + 1, sublane_y, max(2, sw - 2), sublane_h)
+                selection_state = str(selection_state_map.get(id(seg), "") or "")
+                if not selection_state and selected_final_stt_segments:
+                    selection_state = stt_candidate_selection_state(seg, selected_final_stt_segments, selected_final_stt_index)
                 is_selected = selection_state in {"manual", "llm"}
                 visual = stt_preview_visual_style(
                     seg,
@@ -1062,7 +1153,7 @@ class TimelinePaintMixin:
                 )
                 _append_batch(fills, (str(visual["fill"]), int(visual["alpha"])), rect)
                 _append_batch(borders, (str(visual["border"]), 255, int(visual["border_width"])), rect)
-                if rect.width() >= 52 and not dense_segment_mode:
+                if rect.width() >= 40 and rect.height() >= 14 and not ultra_dense_segment_mode:
                     detail_items.append((seg, rect, selection_state, is_selected, visual))
             _draw_color_batches(fills)
             for (color_name, alpha, border_width), rects in borders.items():
@@ -1085,16 +1176,16 @@ class TimelinePaintMixin:
                     p.restore()
                     if badge_w:
                         badge_rect = QRect(rect.right() - badge_w - 4, rect.y() + 6, badge_w, 18)
-                        badge_fill = QColor("#5A4600" if selection_state == "llm" else "#174A2A")
-                        badge_border = QColor("#FFCC00" if selection_state == "llm" else "#34C759")
+                        badge_fill = QColor(COLORS["warning_badge"] if selection_state == "llm" else "#174A2A")
+                        badge_border = QColor(COLORS["warning"] if selection_state == "llm" else "#34C759")
                         badge_text = "LLM" if selection_state == "llm" else "선택"
                         p.fillRect(badge_rect, badge_fill)
                         p.setPen(QPen(badge_border, 1))
                         p.drawRect(badge_rect)
-                        p.setPen(QColor("#FFF2A8"))
+                        p.setPen(QColor(COLORS["warning_text_soft"]))
                         p.setFont(QFont(config.FONT, 7, QFont.Weight.Bold))
                         p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
-                        p.setFont(self._stt_preview_font() if hasattr(self, "_stt_preview_font") else QFont(config.FONT, 10))
+                        p.setFont(preview_font)
 
         def _draw_vector_subtitle_strips(segments):
             """Batch dense subtitle geometry so large projects repaint like vector strips."""
@@ -1131,7 +1222,7 @@ class TimelinePaintMixin:
                         continue
                     is_active = active_start_f is not None and abs(start - active_start_f) < 0.001
                     is_hover = hover_line == seg.get("line")
-                    if (is_active or is_hover) and not playback_light_mode:
+                    if is_active or is_hover:
                         detail_segments.append(seg)
                         continue
                     x2 = max(x1 + 1, x2)
@@ -1174,12 +1265,16 @@ class TimelinePaintMixin:
                 if x2 < clip_left or x1 > clip_right:
                     continue
                 sw = max(2, x2 - x1)
-                rect = QRect(x1 + 1, subtitle_top, max(2, sw - 2), subtitle_bot - subtitle_top)
+                rect = (
+                    self._subtitle_segment_visual_rect(seg, x1, x2, subtitle_top, subtitle_bot)
+                    if hasattr(self, "_subtitle_segment_visual_rect")
+                    else QRect(x1 + 1, subtitle_top, max(2, sw - 2), subtitle_bot - subtitle_top)
+                )
                 is_active = self._is_active_segment(seg) if hasattr(self, "_is_active_segment") else (
                     self.active_seg_start is not None and abs(float(seg.get("start", 0.0) or 0.0) - self.active_seg_start) < 0.001
                 )
                 is_hover = self._hover_line == seg.get("line")
-                if (is_active or is_hover) and not playback_light_mode:
+                if is_active or is_hover:
                     continue
                 style_key = subtitle_segment_style_cache_key(
                     seg,
@@ -1222,8 +1317,28 @@ class TimelinePaintMixin:
             return drawn_ids
 
         if not scenegraph_subtitles:
-            _draw_stt_preview_lane(stt1_preview_segments, STT1_TOP, STT1_BOT, "#173524", "#34C759", "#D7FFE4")
-            _draw_stt_preview_lane(stt2_preview_segments, STT2_TOP, STT2_BOT, "#1A3148", "#64D2FF", "#BDEBFF")
+            _draw_stt_preview_lane(
+                stt1_preview_segments,
+                STT1_TOP,
+                STT1_BOT,
+                "#173524",
+                "#34C759",
+                "#D7FFE4",
+                sublane_map=stt1_lane_map,
+                sublane_count=stt1_lane_count,
+                selection_state_map=stt_selection_states,
+            )
+            _draw_stt_preview_lane(
+                stt2_preview_segments,
+                STT2_TOP,
+                STT2_BOT,
+                "#1A3148",
+                "#64D2FF",
+                "#BDEBFF",
+                sublane_map=stt2_lane_map,
+                sublane_count=stt2_lane_count,
+                selection_state_map=stt_selection_states,
+            )
 
             seg_font = self._subtitle_segment_font() if hasattr(self, "_subtitle_segment_font") else QFont(config.FONT, 11); p.setFont(seg_font)
             detail_segments = final_stt_segments
@@ -1244,7 +1359,11 @@ class TimelinePaintMixin:
                 x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = max(2, x2 - x1)
                 if x2 < clip_left or x1 > clip_right:
                     continue
-                rect = QRect(x1 + 1, subtitle_top, max(2, sw - 2), subtitle_bot - subtitle_top)
+                rect = (
+                    self._subtitle_segment_visual_rect(seg, x1, x2, subtitle_top, subtitle_bot)
+                    if hasattr(self, "_subtitle_segment_visual_rect")
+                    else QRect(x1 + 1, subtitle_top, max(2, sw - 2), subtitle_bot - subtitle_top)
+                )
                 is_active = self._is_active_segment(seg) if hasattr(self, "_is_active_segment") else (
                     self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.001
                 )
@@ -1264,8 +1383,8 @@ class TimelinePaintMixin:
                     and hasattr(self, "_native_inline_editor_active")
                     and self._native_inline_editor_active()
                 )
-                render_active = bool(is_active and not playback_light_mode)
-                render_hover = bool(is_hover and not playback_light_mode)
+                render_active = bool(is_active)
+                render_hover = bool(is_hover)
                 focus_detail = bool(render_active or render_hover or is_editing or is_merge_preview)
                 compact_seg = sw < 24 or (dense_segment_mode and not focus_detail)
                 is_stt_pending = bool(seg.get("stt_pending"))
@@ -1280,7 +1399,7 @@ class TimelinePaintMixin:
                 if is_split_editing:
                     visual_style = dict(visual_style)
                     visual_style["fill"] = "#4A3416"
-                    visual_style["border"] = "#FF9F0A"
+                    visual_style["border"] = COLORS["warning"]
                 elif is_editing:
                     visual_style = dict(visual_style)
                     visual_style["border"] = "#44FF88"
@@ -1372,15 +1491,15 @@ class TimelinePaintMixin:
                         c -= (len(line) + 1)
                     curr_y = ty0
                     for i, line in enumerate(lines):
-                        p.setPen(QColor("#FFFF88"))
+                        p.setPen(QColor(COLORS["warning_text_soft"]))
                         if preedit and i == r:
                             pre_start = c - len(preedit)
                             p.drawText(tx0, curr_y, line)
                             pre_w_start = fm.horizontalAdvance(line[:pre_start])
                             pre_w_end = fm.horizontalAdvance(line[:c])
-                            p.setPen(QColor("#FFFF00"))
+                            p.setPen(QColor(COLORS["warning"]))
                             p.drawText(tx0 + pre_w_start, curr_y, preedit)
-                            p.setPen(QPen(QColor("#FFFF00"), 1))
+                            p.setPen(QPen(QColor(COLORS["warning"]), 1))
                             p.drawLine(tx0 + pre_w_start, curr_y + 1, tx0 + pre_w_end, curr_y + 1)
                         else:
                             p.drawText(tx0, curr_y, line)
@@ -1408,7 +1527,7 @@ class TimelinePaintMixin:
                             is_llm_choice = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
                             badge_rect = QRect(max(text_left + 6, text_right - 38), rect.y() + 6, 38, 18)
                             badge_fill = QColor("#5A4600" if is_llm_choice else "#174A2A")
-                            badge_border = QColor("#FFCC00" if is_llm_choice else "#34C759")
+                            badge_border = QColor(COLORS["warning"] if is_llm_choice else "#34C759")
                             badge_text_color = QColor("#FFF2A8" if is_llm_choice else "#D7FFE4")
                             p.fillRect(badge_rect, badge_fill)
                             p.setPen(QPen(badge_border, 1))
@@ -1442,6 +1561,8 @@ class TimelinePaintMixin:
                     rh = self._hover_handle_matches(seg, "right")
                     self._draw_handle(p, x1, True, QColor("#44FF88") if lh else QColor("#888888"))
                     self._draw_handle(p, x2, False, QColor("#44FF88") if rh else QColor("#888888"))
+
+        _draw_subtitle_score_labels(final_stt_segments)
 
         llm_review = dict(getattr(self, "llm_review_segment", {}) or {})
         if llm_review.get("active"):
@@ -1481,7 +1602,7 @@ class TimelinePaintMixin:
                     QPoint(bx, cy + r),
                     QPoint(bx - r, cy),
                 ])
-                p.setPen(QPen(QColor("#FFD400"), 2))
+                p.setPen(QPen(QColor(COLORS["warning"]), 2))
                 p.setBrush(QBrush(fill))
                 p.drawPolygon(pts)
                 p.setPen(QPen(QColor("#061018"), 1))
@@ -1641,7 +1762,7 @@ class TimelinePaintMixin:
             handle_r = 7
             self._playhead_handle_rect = QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            p.setBrush(QBrush(QColor("#FF453A" if getattr(self, "playhead_busy", False) else "#FFCC00")))
+            p.setBrush(QBrush(QColor("#FF453A" if getattr(self, "playhead_busy", False) else COLORS["warning"])))
             p.setPen(QPen(QColor("#FFFFFF"), 1))
             p.drawEllipse(self._playhead_handle_rect)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)

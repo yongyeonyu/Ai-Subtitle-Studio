@@ -14,7 +14,7 @@ from ui.responsive_profile import (
     responsive_sidebar_width,
 )
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
-from ui.style import settings_button_style
+from ui.style import APP_PANEL_GAP, settings_button_style
 
 
 class ResponsiveProfileTests(unittest.TestCase):
@@ -50,7 +50,9 @@ class ResponsiveProfileTests(unittest.TestCase):
             window.global_menu_bar.refresh()
             self.app.processEvents()
 
-            self.assertEqual(window.global_menu_bar.height(), 58)
+            self.assertEqual(window.global_menu_bar.visual_panel_height(), window._project_info_button_height())
+            self.assertEqual(window.global_menu_bar.visual_panel_height(), 48)
+            self.assertEqual(window.global_menu_bar.height(), window.global_menu_bar.visual_panel_height())
             for button in window.global_menu_bar._tool_buttons:
                 self.assertGreaterEqual(button.height(), 48)
                 self.assertGreaterEqual(button.width(), 48)
@@ -88,7 +90,7 @@ class ResponsiveProfileTests(unittest.TestCase):
             self.assertGreaterEqual(window.workspace_splitter.sizes()[0], 204)
 
             profile = responsive_profile_for_size(1600, 900)
-            total = max(1, int(window.width() or 0) - 6)
+            total = max(1, int(window.width() or 0) - (APP_PANEL_GAP * 2) - window.workspace_splitter.handleWidth())
             expected_width = responsive_sidebar_width(total, profile)
 
             window._apply_responsive_workspace_layout()
@@ -103,6 +105,29 @@ class ResponsiveProfileTests(unittest.TestCase):
             self.app.processEvents()
 
             self.assertEqual(window.workspace_splitter.sizes()[0], expected_width)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_global_menu_height_matches_project_info_button(self):
+        window = MainWindow()
+        try:
+            window.resize(1920, 1080)
+            window.global_menu_bar.refresh()
+            window._sync_project_info_button_height()
+            self.app.processEvents()
+
+            project_button = getattr(window, "_project_info_button_card", None)
+            project_slot = getattr(window, "_project_info_button_slot", None)
+            self.assertIsNotNone(project_button)
+            self.assertIsNotNone(project_slot)
+            self.assertEqual(window.global_menu_bar.visual_panel_height(), project_button.height())
+            self.assertEqual(window.global_menu_bar.height(), window.global_menu_bar.visual_panel_height())
+            self.assertEqual(project_slot.height(), project_button.height())
+            self.assertEqual(window.global_menu_bar.visual_panel_height(), 38)
+            for button in window.global_menu_bar._tool_buttons:
+                self.assertEqual(button.height(), window.global_menu_bar.visual_panel_height())
         finally:
             window.close()
             window.deleteLater()

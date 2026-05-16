@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QWidget
 
 from core.runtime import config
 from core.state_manager import SubtitleStateManager
@@ -22,6 +22,7 @@ from ui.home_ui import HomeUIMixin
 from ui.main.main_signals import SignalHandlersMixin
 from ui.menu_bar import StatusRail
 from ui.queue_widget import QueueMixin
+from ui.style import COLORS
 
 
 class _DummyHome(QObject, QueueMixin, HomeUIMixin):
@@ -214,6 +215,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertTrue(nav_item["progressVisible"])
         self.assertEqual(nav_item["progressPercent"], 100)
         self.assertEqual(nav_item["id"], "generation_status")
+        self.assertEqual(nav_item["height"], 42)
 
     def test_generation_progress_snapshot_stays_running_while_post_generation_roughcut_is_pending(self):
         state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
@@ -1295,9 +1297,9 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             if item["active"]
         ]
         self.assertEqual(active_rows, [2])
-        self.assertNotEqual(queue.queue_table.item(0, 0).foreground().color().name().upper(), "#FFD84D")
-        self.assertNotEqual(queue.queue_table.item(1, 0).foreground().color().name().upper(), "#FFD84D")
-        self.assertEqual(queue.queue_table.item(2, 0).foreground().color().name().upper(), "#FFD84D")
+        self.assertNotEqual(queue.queue_table.item(0, 0).foreground().color().name().upper(), COLORS["warning"])
+        self.assertNotEqual(queue.queue_table.item(1, 0).foreground().color().name().upper(), COLORS["warning"])
+        self.assertEqual(queue.queue_table.item(2, 0).foreground().color().name().upper(), COLORS["warning"])
 
     def test_queue_header_advance_repairs_prior_incomplete_rows(self):
         class DummyTimer:
@@ -1532,6 +1534,13 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         with patch("ui.queue_widget.time.time", return_value=100.0):
             queue.update_queue_status(0, "[STT] STT1/STT2 병렬 인식 중", "15:54", "", "15:54")
 
+        with patch("ui.queue_widget.time.time", return_value=130.0):
+            queue._update_live_queue_header()
+
+        self.assertNotIn(0, queue._file_start_times)
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "15:54")
+
+        queue.backend.pipeline_start_time = 100.0
         with patch("ui.queue_widget.time.time", return_value=306.0):
             queue._update_live_queue_header()
 
@@ -1683,6 +1692,45 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 editor._on_exit()
                 self.assertFalse(prompted)
                 self.assertTrue(exited)
+            finally:
+                editor.close()
+
+    def test_segment_timing_edit_after_save_prompts_on_editor_exit(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.m4a")
+            open(media_path, "wb").close()
+            editor = EditorWidget(
+                "sample.m4a",
+                [{"start": 0.0, "end": 1.0, "text": "첫 자막", "speaker": "00"}],
+                media_path=media_path,
+            )
+            try:
+                editor._flush_queue()
+                editor._mark_initial_segments_saved()
+                editor._skip_prev_confirm_once = True
+
+                editor._on_seg_time_changed(0, 0.5, 1.5, "square_right")
+                self.app.processEvents()
+
+                self.assertTrue(editor._has_unsaved_changes())
+                self.assertTrue(editor.sm.is_dirty)
+                self.assertFalse(editor._skip_prev_confirm_once)
+
+                prompted = []
+                editor._show_confirm_dialog = lambda *args, **kwargs: (
+                    prompted.append(args),
+                    QMessageBox.StandardButton.Cancel,
+                )[1]
+                exited = []
+                editor.sig_exit.connect(lambda *args: exited.append(True))
+                editor._skip_prev_confirm_once = True
+
+                editor._on_exit()
+
+                self.assertTrue(prompted)
+                self.assertFalse(exited)
             finally:
                 editor.close()
 

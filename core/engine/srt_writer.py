@@ -87,7 +87,7 @@ def save_srt(
     spk1_id = s.get("spk1_id", "00")
     spk1_c = s.get("spk1_color", "#FFFFFF")
     spk2_id = s.get("spk2_id", "01")
-    spk2_c = s.get("spk2_color", "#FFFF00")
+    spk2_c = s.get("spk2_color", "#FFD60A")
     spk3_id = s.get("spk3_id", "02")
     spk3_c = s.get("spk3_color", "#00FFFF")
     cmap = {spk1_id: spk1_c, spk2_id: spk2_c, spk3_id: spk3_c}

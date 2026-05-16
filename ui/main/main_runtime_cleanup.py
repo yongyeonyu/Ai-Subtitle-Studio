@@ -134,18 +134,26 @@ class MainRuntimeCleanupMixin:
                 def _shutdown_editor_video_player():
                     video_player = getattr(editor, "video_player", None)
                     if video_player is not None:
-                        shutdown_backend = getattr(video_player, "shutdown_backend", None)
-                        if callable(shutdown_backend):
-                            shutdown_backend()
-                        timer = getattr(video_player, "_ui_timer", None)
-                        if timer is not None:
-                            timer.stop()
-                        if hasattr(video_player, "pause_video"):
+                        destructive_video_cleanup = bool(force or stop_active)
+                        if destructive_video_cleanup:
+                            shutdown_backend = getattr(video_player, "shutdown_backend", None)
+                            if callable(shutdown_backend):
+                                shutdown_backend()
+                            timer = getattr(video_player, "_ui_timer", None)
+                            if timer is not None:
+                                timer.stop()
+                            if hasattr(video_player, "pause_video"):
+                                video_player.pause_video()
+                            for player_name in ("media_player", "vocal_player", "audio_player"):
+                                player = getattr(video_player, player_name, None)
+                                if player is not None and hasattr(player, "stop"):
+                                    player.stop()
+                            return
+                        suspend_for_navigation = getattr(video_player, "suspend_for_navigation", None)
+                        if callable(suspend_for_navigation):
+                            suspend_for_navigation()
+                        elif hasattr(video_player, "pause_video"):
                             video_player.pause_video()
-                        for player_name in ("media_player", "vocal_player", "audio_player"):
-                            player = getattr(video_player, player_name, None)
-                            if player is not None and hasattr(player, "stop"):
-                                player.stop()
                 _run_cleanup_step(f"{context} editor video player shutdown", _shutdown_editor_video_player)
 
                 def _stop_editor_timeline_waveform():
@@ -274,7 +282,7 @@ class MainRuntimeCleanupMixin:
             should_force = False
         if not should_force:
             return False
-        delay_ms = 180 if getattr(config, "IS_MAC", False) else 320
+        delay_ms = 80 if getattr(config, "IS_MAC", False) else 320
         _run_cleanup_step(
             "app about-to-quit forced process exit",
             lambda: schedule_exit(delay_ms=delay_ms),
@@ -535,6 +543,19 @@ class MainRuntimeCleanupMixin:
         if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
             return
         delay_sec = max(0.02, float(max(20, int(delay_ms))) / 1000.0)
+        if getattr(config, "IS_MAC", False):
+            _run_cleanup_step(
+                "native forced process exit watchdog",
+                lambda: __import__(
+                    "core.native_macos_exit",
+                    fromlist=["schedule_native_forced_exit"],
+                ).schedule_native_forced_exit(
+                    pid=os.getpid(),
+                    delay_ms=max(0, int(delay_ms)),
+                    term_grace_ms=50,
+                ),
+                default=False,
+            )
         try:
             timer = _main_window_threading_module().Timer(delay_sec, lambda: os._exit(0))
             timer.daemon = True

@@ -9,21 +9,25 @@ from unittest.mock import Mock, call, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtGui import QColor, QWheelEvent, QTextCursor
-from PyQt6.QtCore import QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
 
+from core.frame_time import frame_to_sec
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_helpers import build_segment_lookup
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
+from ui.editor.ux.editor_tab_timing import EditorTabTimingMixin
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
+from ui.editor.editor_segments_timeline_context import EditorSegmentsTimelineContextMixin
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_canvas import TimelineCanvasBase
 from ui.timeline.timeline_global import (
     GlobalCanvasBase,
+    MINIMAP_HEIGHT,
     MINIMAP_PRELIMINARY_LANE_BG,
     MINIMAP_REFERENCE_LANE_BG,
     MINIMAP_SILENCE_LANE_BG,
@@ -34,6 +38,26 @@ from ui.timeline.timeline_global import (
 
 class _DummyEditor(EditorSegmentsMixin):
     pass
+
+
+class _TabTimingEditor(EditorTabTimingMixin, EditorSegmentsMixin):
+    def _current_frame_fps(self) -> float:
+        return 30.0
+
+    def _get_current_segments(self):
+        return list(getattr(self, "_segments", []) or [])
+
+
+class _ProjectLoadedPreviewEditor(EditorSegmentsTimelineContextMixin):
+    def _build_live_subtitle_preview_segments(self, preview, confirmed):
+        return [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "임시 자막",
+                "_live_subtitle_preview": True,
+            }
+        ]
 
 
 class _GuardedSegmentList(list):
@@ -205,6 +229,185 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             editor._redraw_timeline.assert_called_once()
         finally:
             editor.text_edit.close()
+
+    def test_tab_extends_nearest_previous_subtitle_end_to_playhead(self):
+        editor = _TabTimingEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._on_seg_time_changed = Mock()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄")
+        first_block = editor.text_edit.document().findBlockByNumber(0)
+        first_block.setUserData(SubtitleBlockData("00", 1.0, end_sec=2.0))
+        second_block = editor.text_edit.document().findBlockByNumber(1)
+        second_block.setUserData(SubtitleBlockData("00", 4.0, end_sec=5.0))
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 2.0, "text": "첫 줄"},
+            {"line": 1, "start": 4.0, "end": 5.0, "text": "둘째 줄"},
+        ]
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=1, active_seg_start=4.0, playhead_sec=2.6))
+        editor.video_player = SimpleNamespace(current_time=0.0)
+
+        try:
+            editor._trigger_magnet()
+
+            editor._undo_mgr.push_immediate.assert_called_once()
+            editor._on_seg_time_changed.assert_called_once_with(0, 1.0, 2.6, "square_right")
+        finally:
+            editor.text_edit.close()
+
+    def test_tab_extends_nearest_next_subtitle_start_to_playhead(self):
+        editor = _TabTimingEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._on_seg_time_changed = Mock()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄")
+        first_block = editor.text_edit.document().findBlockByNumber(0)
+        first_block.setUserData(SubtitleBlockData("00", 1.0, end_sec=2.0))
+        second_block = editor.text_edit.document().findBlockByNumber(1)
+        second_block.setUserData(SubtitleBlockData("00", 4.0, end_sec=5.0))
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 2.0, "text": "첫 줄"},
+            {"line": 1, "start": 4.0, "end": 5.0, "text": "둘째 줄"},
+        ]
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=0, active_seg_start=1.0, playhead_sec=3.7))
+        editor.video_player = SimpleNamespace(current_time=0.0)
+
+        try:
+            editor._trigger_magnet()
+
+            editor._undo_mgr.push_immediate.assert_called_once()
+            editor._on_seg_time_changed.assert_called_once_with(1, 3.7, 5.0, "square_left")
+        finally:
+            editor.text_edit.close()
+
+    def test_tab_moves_attached_boundary_as_diamond(self):
+        editor = _TabTimingEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._on_seg_time_changed = Mock()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n붙은 자막")
+        first_block = editor.text_edit.document().findBlockByNumber(0)
+        first_block.setUserData(SubtitleBlockData("00", 1.0, end_sec=4.0))
+        second_block = editor.text_edit.document().findBlockByNumber(1)
+        second_block.setUserData(SubtitleBlockData("00", 4.0, end_sec=6.0))
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 4.0, "text": "앞 자막"},
+            {"line": 1, "start": 4.0, "end": 6.0, "text": "붙은 자막"},
+        ]
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=1, active_seg_start=4.0, playhead_sec=4.5))
+        editor.video_player = SimpleNamespace(current_time=0.0)
+
+        try:
+            editor._trigger_magnet()
+
+            editor._undo_mgr.push_immediate.assert_called_once()
+            self.assertEqual(
+                editor._on_seg_time_changed.call_args_list,
+                [
+                    call(0, 1.0, 4.5, "diamond"),
+                    call(1, 4.5, 6.0, "diamond"),
+                ],
+            )
+        finally:
+            editor.text_edit.close()
+
+    def test_tab_trims_current_subtitle_start_when_playhead_is_inside_detached_segment(self):
+        editor = _TabTimingEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._on_seg_time_changed = Mock()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n현재 자막")
+        first_block = editor.text_edit.document().findBlockByNumber(0)
+        first_block.setUserData(SubtitleBlockData("00", 1.0, end_sec=4.0))
+        second_block = editor.text_edit.document().findBlockByNumber(1)
+        second_block.setUserData(SubtitleBlockData("00", 5.0, end_sec=8.0))
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 4.0, "text": "앞 자막"},
+            {"line": 1, "start": 5.0, "end": 8.0, "text": "현재 자막"},
+        ]
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=1, active_seg_start=5.0, playhead_sec=5.6))
+        editor.video_player = SimpleNamespace(current_time=0.0)
+
+        try:
+            editor._trigger_magnet()
+
+            editor._undo_mgr.push_immediate.assert_called_once()
+            editor._on_seg_time_changed.assert_called_once_with(1, 5.6, 8.0, "square_left")
+        finally:
+            editor.text_edit.close()
+
+    def test_tab_trims_current_subtitle_end_when_playhead_is_inside_detached_segment(self):
+        editor = _TabTimingEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._on_seg_time_changed = Mock()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("현재 자막\n뒤 자막")
+        first_block = editor.text_edit.document().findBlockByNumber(0)
+        first_block.setUserData(SubtitleBlockData("00", 5.0, end_sec=8.0))
+        second_block = editor.text_edit.document().findBlockByNumber(1)
+        second_block.setUserData(SubtitleBlockData("00", 9.0, end_sec=11.0))
+        editor._segments = [
+            {"line": 0, "start": 5.0, "end": 8.0, "text": "현재 자막"},
+            {"line": 1, "start": 9.0, "end": 11.0, "text": "뒤 자막"},
+        ]
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=0, active_seg_start=5.0, playhead_sec=7.7))
+        editor.video_player = SimpleNamespace(current_time=0.0)
+
+        try:
+            editor._trigger_magnet()
+
+            editor._undo_mgr.push_immediate.assert_called_once()
+            editor._on_seg_time_changed.assert_called_once_with(0, 5.0, 7.7, "square_right")
+        finally:
+            editor.text_edit.close()
+
+    def test_tab_no_longer_falls_back_to_canvas_diamond_snap(self):
+        editor = _TabTimingEditor()
+        editor._on_seg_time_changed = Mock()
+        editor._segments = []
+        canvas = SimpleNamespace(playhead_sec=3.0, _snap_closest_diamond=Mock())
+        editor.timeline = SimpleNamespace(canvas=canvas)
+
+        changed = editor._trigger_magnet()
+
+        self.assertFalse(changed)
+        canvas._snap_closest_diamond.assert_not_called()
+
+    def test_timeline_canvas_tab_requests_editor_timing_action(self):
+        timeline = TimelineWidget()
+        calls = []
+        try:
+            timeline.tab_timing_requested.connect(lambda: calls.append("tab"))
+            timeline.canvas._snap_closest_diamond = Mock()
+            timeline.canvas.setFocus()
+
+            QTest.keyClick(timeline.canvas, Qt.Key.Key_Tab)
+            self.app.processEvents()
+
+            self.assertTrue(calls)
+            timeline.canvas._snap_closest_diamond.assert_not_called()
+        finally:
+            timeline.close()
+            timeline.deleteLater()
+            self.app.processEvents()
+
+    def test_project_loaded_stt_preview_does_not_add_subtitle_draft_lane(self):
+        editor = _ProjectLoadedPreviewEditor()
+        editor._stt_preview_subtitle_drafts_enabled = False
+        editor._live_stt_preview_segments = [
+            {"start": 0.0, "end": 1.0, "text": "후보", "stt_pending": True, "stt_preview_source": "STT1"}
+        ]
+        confirmed = [{"start": 1.0, "end": 2.0, "text": "확정"}]
+
+        combined = editor._timeline_segments_with_live_preview(confirmed)
+
+        self.assertEqual([row["text"] for row in combined], ["후보", "확정"])
+        self.assertFalse(any(row.get("_live_subtitle_preview") for row in combined))
 
     def test_auto_quality_review_defers_while_video_is_playing(self):
         editor = _AutoQualityEditor()
@@ -2444,6 +2647,33 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_timeline_canvas_prefers_saved_frame_bounds_over_srt_milliseconds(self):
+        timeline = TimelineWidget()
+        fps = 59.94005994005994
+        try:
+            timeline.set_frame_rate(fps)
+            timeline.update_segments(
+                [
+                    {
+                        "start": 32.015,
+                        "end": 34.985,
+                        "start_frame": 1919,
+                        "end_frame": 2097,
+                        "timeline_frame_rate": fps,
+                        "text": "와",
+                    }
+                ],
+                active_sec=0.0,
+                total_dur=40.0,
+            )
+
+            segment = timeline.canvas.segments[0]
+            self.assertEqual((segment["start_frame"], segment["end_frame"]), (1919, 2097))
+            self.assertAlmostEqual(segment["start"], frame_to_sec(1919, fps), places=9)
+            self.assertAlmostEqual(segment["end"], frame_to_sec(2097, fps), places=9)
+        finally:
+            timeline.close()
+
     def test_timeline_canvases_do_not_share_opengl_video_surface(self):
         self.assertIs(TimelineCanvasBase, QWidget)
         self.assertIs(GlobalCanvasBase, QWidget)
@@ -2461,12 +2691,12 @@ class TimelinePlayheadFitTests(unittest.TestCase):
                 20.0,
             )
             timeline.global_canvas.set_vad_segments([])
-            self.assertEqual(timeline.global_canvas.height(), 48)
+            self.assertEqual(timeline.global_canvas.height(), MINIMAP_HEIGHT)
 
             pixmap = timeline.global_canvas._build_static_cache()
 
             self.assertFalse(pixmap.isNull())
-            self.assertEqual(pixmap.height(), 48)
+            self.assertEqual(pixmap.height(), MINIMAP_HEIGHT)
         finally:
             timeline.close()
 
@@ -2530,8 +2760,9 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             pixmap = canvas._build_static_cache()
             image = pixmap.toImage()
-            preview_inside_y = 5
-            reference_inside_y = 15
+            top_lane_h = max(1, (canvas.height() // 2) - 1)
+            preview_inside_y = max(2, top_lane_h // 4)
+            reference_inside_y = max(preview_inside_y + 2, (top_lane_h * 3) // 4)
             inside_x = canvas._sec_to_px(5.0)
             border_x = canvas._sec_to_px(1.0)
 
@@ -2710,6 +2941,93 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         self.assertFalse(getattr(canvas, "_scan_cut_input_locked", True))
         editor.timeline.set_playhead_busy.assert_called_with(False)
         editor.video_player.set_scan_cut_active.assert_called_with(0)
+
+    def test_cancel_scan_cut_releases_capture_and_thumbnail_memory(self):
+        editor = _DummyTimelineVideoEditor()
+        capture = SimpleNamespace(release=Mock())
+        thumb_label = SimpleNamespace(clear_pixmap=Mock())
+        video_widget = object()
+        video_stack = SimpleNamespace(setCurrentWidget=Mock())
+        canvas = SimpleNamespace()
+        editor.timeline = SimpleNamespace(
+            canvas=canvas,
+            set_playhead_busy=Mock(),
+            set_playback_center_lock=Mock(),
+        )
+        editor.video_player = SimpleNamespace(
+            set_scan_cut_active=Mock(),
+            info_label=SimpleNamespace(setText=Mock()),
+            thumb_label=thumb_label,
+            video_stack=video_stack,
+            video_widget=video_widget,
+        )
+        editor._scan_cut_timer = SimpleNamespace(stop=Mock())
+        editor._auto_cut_boundary_scan_active = False
+        editor._scan_cut_state = {"cancel_requested": False}
+        editor._scan_cv2_capture = capture
+        editor._scan_cv2_source_path = "/tmp/sample.mp4"
+        editor._scan_cut_strict_verify_bundle_cache = {"verify_fn": object()}
+        editor._scan_logged_capture_resolution = True
+        editor._scan_last_preview_sec = 12.0
+        editor._scan_last_preview_thumbnail_at = 99.0
+
+        editor._cancel_scan_cut("same-button-toggle")
+
+        capture.release.assert_called_once()
+        thumb_label.clear_pixmap.assert_called_once()
+        video_stack.setCurrentWidget.assert_called_once_with(video_widget)
+        self.assertIsNone(editor._scan_cv2_capture)
+        self.assertIsNone(editor._scan_cv2_source_path)
+        self.assertIsNone(editor._scan_cut_strict_verify_bundle_cache)
+        self.assertFalse(editor._scan_logged_capture_resolution)
+        self.assertEqual(editor._scan_last_preview_sec, 0.0)
+        self.assertEqual(editor._scan_last_preview_thumbnail_at, 0.0)
+
+    def test_scan_cut_button_starts_visual_search_from_playhead_without_cached_jump(self):
+        editor = _DummyTimelineVideoEditor()
+        editor.settings = {"cut_boundary_detection_enabled": True}
+        editor.video_fps = 30.0
+        editor.video_player = SimpleNamespace(
+            pause_video=Mock(),
+            set_scan_cut_active=Mock(),
+            info_label=SimpleNamespace(setText=Mock()),
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(total_duration=60.0),
+            set_playhead_busy=Mock(),
+            set_playback_center_lock=Mock(),
+        )
+        editor._scan_jump_to_cached_cut_boundary = Mock(side_effect=AssertionError("cached jump should stay unused"))
+        editor._manual_global_sec_from_player = Mock(return_value=3.0)
+        editor._scan_threshold = Mock(return_value=24.0)
+        editor._scan_interval_ms = Mock(return_value=1)
+        editor._scan_max_frames = Mock(return_value=0)
+        editor._scan_capture_image_at_global = Mock(return_value=None)
+        editor._scan_terminal_log = Mock()
+        editor._scan_image_backend_label = Mock(return_value="opencv-gray-cross")
+
+        editor._on_scan_cut_requested(1)
+
+        editor.video_player.pause_video.assert_called_once()
+        editor._scan_capture_image_at_global.assert_called_once_with(3.0)
+        editor.video_player.set_scan_cut_active.assert_any_call(1)
+        editor.video_player.set_scan_cut_active.assert_any_call(0)
+
+    def test_editor_mouse_press_stops_active_scan_cut_immediately(self):
+        editor = EditorWidget(
+            "sample.m4a",
+            [{"start": 0.0, "end": 1.0, "text": "테스트", "speaker": "00"}],
+        )
+        try:
+            editor._scan_cut_state = {"direction": 1}
+            editor._cancel_scan_cut = Mock()
+
+            handled = editor.eventFilter(editor.timeline.canvas, QEvent(QEvent.Type.MouseButtonPress))
+
+            self.assertTrue(handled)
+            editor._cancel_scan_cut.assert_called_once_with("mouse-click-stop")
+        finally:
+            editor.close()
 
     def test_zoom_buttons_anchor_to_visible_playhead(self):
         timeline = TimelineWidget()

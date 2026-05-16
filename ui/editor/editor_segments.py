@@ -35,6 +35,7 @@ from ui.editor.editor_segments_stt_candidates import EditorSegmentsSttCandidates
 from ui.editor.editor_segments_stt_selection_flow import EditorSegmentsSttSelectionFlowMixin
 from ui.editor.editor_segments_text_ops import EditorSegmentsTextOpsMixin
 from ui.editor.editor_segments_timeline_context import EditorSegmentsTimelineContextMixin
+from ui.style import COLORS
 
 
 class EditorSegmentsMixin(
@@ -127,6 +128,7 @@ class EditorSegmentsMixin(
         if not preview:
             return
 
+        self._stt_preview_subtitle_drafts_enabled = True
         existing_preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
         existing_preview = self._clamp_segments_to_clip_duration(existing_preview, log_changes=False)
         preview = self._clamp_segments_to_clip_duration(preview, log_changes=False)
@@ -168,6 +170,7 @@ class EditorSegmentsMixin(
         rows = self._clamp_segments_to_clip_duration(rows, log_changes=False)
         if not rows:
             return
+        self._stt_preview_subtitle_drafts_enabled = True
         try:
             confirmed = [seg for seg in self._get_current_segments() if not seg.get("is_gap")]
         except Exception:
@@ -419,7 +422,7 @@ class EditorSegmentsMixin(
 
     def _live_preview_changed_char_format(self) -> QTextCharFormat:
         fmt = self._live_preview_base_char_format()
-        fmt.setForeground(QColor("#FFD84D"))
+        fmt.setForeground(QColor(COLORS["warning"]))
         return fmt
 
     def _live_preview_changed_ranges(self, old_text: str, new_text: str) -> list[tuple[int, int]]:

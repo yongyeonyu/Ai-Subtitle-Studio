@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QFileDialog, QDialog, QMessageBox, QInputDialog
 from core.runtime.logger import get_logger
 from core.path_manager import get_last_folder
 from core.project.project_manager import (
+    PROJECT_FILE_FILTER,
     PROJECTS_DIR,
     add_media_to_project,
     create_project,
@@ -43,7 +44,6 @@ from ui.project.project_session_runtime import (
 PROJECT_MEDIA_FILTER = (
     "Media Files (*.mp4 *.mov *.MOV *.MP4 *.m4v *.lrf *.wav *.m4a *.m2a *.mp3 *.aac)"
 )
-PROJECT_FILE_FILTER = "Project Files (*.json)"
 
 
 def _is_placeholder_middle_row(row: dict) -> bool:
@@ -131,9 +131,6 @@ class ProjectUIMixin:
 
     def _project_cut_boundary_placeholder_rows(self, project: dict) -> list[dict]:
         analysis = project.get("analysis", {}) or {}
-        middle_rows = analysis.get("middle_segments")
-        if isinstance(middle_rows, list) and middle_rows and not _rows_are_placeholder_only(middle_rows):
-            return [dict(row) for row in middle_rows if isinstance(row, dict)]
         rows = []
         for key in (
             "cut_boundary_topicless_middle_segments",
@@ -149,7 +146,11 @@ class ProjectUIMixin:
             raw = project.get("middle_segments")
             if isinstance(raw, list):
                 rows = raw
-        return [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+        return [
+            dict(row)
+            for row in list(rows or [])
+            if isinstance(row, dict) and _is_placeholder_middle_row(row)
+        ]
 
     def _project_cut_boundary_resume_needed(self, project: dict) -> bool:
         analysis = project.get("analysis", {}) or {}

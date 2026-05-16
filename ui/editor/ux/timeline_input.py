@@ -17,6 +17,7 @@ from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.editor_helpers import find_segment_at
 from ui.responsive_profile import responsive_profile_for_size
 from ui.editor.ux.timeline_canvas_editing import apply_timing_drag
+from ui.style import COLORS
 
 from ui.timeline.speaker_labels import current_speaker_settings, speaker_labels_for_segment
 from ui.timeline.timeline_constants import (
@@ -79,13 +80,13 @@ class TimelineInputMixin:
             return
         items = []
         if self._segment_needs_manual_review(seg):
-            items.append({"id": "review", "label": "검토 메뉴", "accent": "#FFCC00"})
+            items.append({"id": "review", "label": "검토 메뉴", "accent": COLORS["warning"]})
         items.append(
             {
                 "id": "split",
                 "label": "자막 분할",
                 "enabled": self._smart_split_ready_for_segment(seg),
-                "accent": "#FF9F0A",
+                "accent": COLORS["warning"],
             }
         )
         chosen = show_context_menu(self, gpos, items)
@@ -186,21 +187,60 @@ class TimelineInputMixin:
         except Exception:
             return None
 
+    def _armed_shadow_playhead_sec(self) -> float | None:
+        value = getattr(self, "_shadow_playhead_armed_sec", None)
+        if value is None:
+            return None
+        try:
+            return self._snap_to_frame(float(value or 0.0))
+        except Exception:
+            return None
+
     def _set_shadow_playhead(self, sec: float | None) -> bool:
         owner = self._timeline_widget_owner()
         setter = getattr(owner, "set_shadow_playhead", None) if owner is not None else None
         if not callable(setter):
+            setter = getattr(self, "set_shadow_playhead", None)
+        if not callable(setter):
             return False
+        if sec is not None:
+            self._disarm_shadow_playhead()
         try:
             return bool(setter(sec))
         except Exception:
             return False
 
+    def _arm_shadow_playhead(self, sec: float | None, *, clear_visible: bool = True) -> bool:
+        if sec is None:
+            self._disarm_shadow_playhead()
+            if clear_visible:
+                self._clear_shadow_playhead()
+            return False
+        try:
+            armed_sec = self._snap_to_frame(float(sec or 0.0))
+        except Exception:
+            return False
+        setattr(self, "_shadow_playhead_armed_sec", armed_sec)
+        if clear_visible:
+            self._clear_shadow_playhead()
+        return True
+
+    def _disarm_shadow_playhead(self) -> bool:
+        if getattr(self, "_shadow_playhead_armed_sec", None) is None:
+            return False
+        self._shadow_playhead_armed_sec = None
+        return True
+
+    def _show_armed_shadow_playhead(self) -> bool:
+        armed_sec = self._armed_shadow_playhead_sec()
+        if armed_sec is None:
+            return False
+        self._shadow_playhead_armed_sec = None
+        return self._set_shadow_playhead(armed_sec)
+
     def _pin_shadow_playhead(self, sec: float | None = None) -> bool:
         owner = self._timeline_widget_owner()
-        if owner is None:
-            return False
-        pinner = getattr(owner, "pin_shadow_playhead", None)
+        pinner = getattr(owner, "pin_shadow_playhead", None) if owner is not None else None
         if callable(pinner):
             try:
                 return bool(pinner(sec))
@@ -212,6 +252,8 @@ class TimelineInputMixin:
     def _clear_shadow_playhead(self) -> bool:
         owner = self._timeline_widget_owner()
         clearer = getattr(owner, "clear_shadow_playhead", None) if owner is not None else None
+        if not callable(clearer):
+            clearer = getattr(self, "clear_shadow_playhead", None)
         if not callable(clearer):
             return False
         try:
@@ -227,7 +269,21 @@ class TimelineInputMixin:
             return False
         if not force and abs(target_sec - current_sec) < 0.001:
             return False
-        return self._pin_shadow_playhead(current_sec)
+        armed_sec = self._armed_shadow_playhead_sec()
+        if armed_sec is None:
+            return False
+        if not force and abs(current_sec - armed_sec) >= 0.001:
+            return False
+        return self._show_armed_shadow_playhead()
+
+    def _consume_shadow_playhead_snap(self, snapped: dict | None) -> bool:
+        if not isinstance(snapped, dict):
+            return False
+        if str(snapped.get("kind") or "") != "shadow_playhead":
+            return False
+        self._disarm_shadow_playhead()
+        self._clear_shadow_playhead()
+        return True
 
     def _emit_scrub_with_shadow(self, sec: float, *, remember_shadow: bool = True) -> None:
         target_sec = self._snap_to_frame(float(sec or 0.0))
@@ -333,7 +389,10 @@ class TimelineInputMixin:
         return VOICE_ACTIVITY_TOP <= int(y) <= VOICE_ACTIVITY_BOT
 
     def focusNextPrevChild(self, next):
-        self._snap_closest_diamond()
+        if bool(next):
+            signal = getattr(self, "tab_timing_requested", None)
+            if signal is not None and hasattr(signal, "emit"):
+                signal.emit()
         return False
 
     def _arrow_key_hold_repeat_interval_ms(self) -> int:
@@ -450,7 +509,12 @@ class TimelineInputMixin:
             if seg: self.start_inline_edit(seg.get("line", 0), seg["start"])
             ev.accept(); return
 
-        if ev.key() == Qt.Key.Key_Tab: self._snap_closest_diamond(); ev.accept(); return
+        if ev.key() == Qt.Key.Key_Tab:
+            signal = getattr(self, "tab_timing_requested", None)
+            if signal is not None and hasattr(signal, "emit"):
+                signal.emit()
+            ev.accept()
+            return
         if ev.key() == Qt.Key.Key_Up: self.focus_mode = "waveform"; self.update(); ev.accept(); return
         elif ev.key() == Qt.Key.Key_Down: self.focus_mode = "segment"; self.update(); ev.accept(); return
 
@@ -648,9 +712,9 @@ class TimelineInputMixin:
         return None
 
     def _stt_candidate_at(self, x: int, y: int):
-        if STT1_TOP <= y <= STT1_BOT:
+        if STT1_TOP <= y < STT1_BOT:
             lane_source = "STT1"
-        elif STT2_TOP <= y <= STT2_BOT:
+        elif STT2_TOP <= y < STT2_BOT:
             lane_source = "STT2"
         else:
             return None
@@ -971,7 +1035,12 @@ class TimelineInputMixin:
         for left, right in zip(editable, editable[1:]):
             left_idx, s1 = left
             right_idx, s2 = right
-            if abs(float(s1.get("end", 0.0) or 0.0) - float(s2.get("start", 0.0) or 0.0)) < 0.05:
+            touches = (
+                self._segments_share_frame_boundary(s1, s2)
+                if hasattr(self, "_segments_share_frame_boundary")
+                else abs(float(s1.get("end", 0.0) or 0.0) - float(s2.get("start", 0.0) or 0.0)) < 0.001
+            )
+            if touches:
                 pairs.append((left_idx, right_idx, s1, s2))
                 ends.append(float(s1.get("end", 0.0) or 0.0))
         self._diamond_pairs_cache_key = key
@@ -1288,7 +1357,6 @@ class TimelineInputMixin:
             self._drag_diamond_pair = (left_idx, right_idx)
             self._drag_diamond_orig = s1["end"]; self._drag_x0 = x
             self._clear_active_gaps_for_segment_drag()
-            self._pin_shadow_playhead()
             self._drag_snap_candidates_cache = self._drag_snap_candidates()
             self._drag_last_paint_rect = self._drag_visual_rect()
             self._emit_scrub_with_shadow(click_sec)
@@ -1390,7 +1458,6 @@ class TimelineInputMixin:
         if hasattr(self, "_cursor_timer"):
             self._cursor_timer.stop()
         self.drag_started.emit(); self._drag_seg, self._drag_edge = s, edge; self._drag_x0 = x
-        self._pin_shadow_playhead()
         self.active_seg_start = float(s.get("start", 0.0) or 0.0)
         if hasattr(self, "_sync_active_segment_key"):
             self._sync_active_segment_key(seg=s)
@@ -1882,53 +1949,3 @@ class TimelineInputMixin:
         if best:
             return self._snap_to_frame(best_start), self._snap_to_frame(best_guide), best
         return start, start, None
-
-    def _snap_closest_diamond(self):
-        if self.playhead_sec <= 0: return
-        closest_seg_idx = None; closest_edge = None; min_dist = float('inf')
-        for i, seg in enumerate(self.segments):
-            ds = abs(seg["start"] - self.playhead_sec)
-            if ds < min_dist: min_dist = ds; closest_seg_idx = i; closest_edge = "start"
-            de = abs(seg["end"] - self.playhead_sec)
-            if de < min_dist: min_dist = de; closest_seg_idx = i; closest_edge = "end"
-
-        if closest_seg_idx is not None and min_dist <= 2.0:
-            seg = self.segments[closest_seg_idx]
-            nb = self._snap_to_frame(self.playhead_sec); ml = self._snap_to_frame(0.1)
-            is_joint = False; joint_idx = None
-
-            if closest_edge == "start" and closest_seg_idx > 0:
-                ps = self.segments[closest_seg_idx - 1]
-                if abs(ps["end"] - seg["start"]) < 0.05: is_joint = True; joint_idx = closest_seg_idx - 1
-            elif closest_edge == "end" and closest_seg_idx < len(self.segments) - 1:
-                ns = self.segments[closest_seg_idx + 1]
-                if abs(seg["end"] - ns["start"]) < 0.05: is_joint = True; joint_idx = closest_seg_idx + 1
-
-            if is_joint:
-                if closest_edge == "start": s1, s2 = self.segments[joint_idx], seg
-                else: s1, s2 = seg, self.segments[joint_idx]
-                nb = max(self._snap_to_frame(s1["start"] + ml), min(self._snap_to_frame(s2["end"] - ml), nb))
-                s1["end"] = s2["start"] = nb
-                self._emit_diamond_pair_time_changed((joint_idx, closest_seg_idx) if closest_edge == "start" else (closest_seg_idx, joint_idx))
-            else:
-                if closest_edge == "start":
-                    ll = self.segments[closest_seg_idx - 1]["end"] if closest_seg_idx > 0 else 0.0
-                    nb = max(self._snap_to_frame(ll), min(self._snap_to_frame(seg["end"] - ml), nb))
-                    seg["start"] = nb
-                    self.seg_time_changed.emit(seg.get("line", 0), seg["start"], seg["end"], "square_left")
-                else:
-                    lr = self.segments[closest_seg_idx + 1]["start"] if closest_seg_idx < len(self.segments) - 1 else self.total_duration
-                    nb = max(self._snap_to_frame(seg["start"] + ml), min(self._snap_to_frame(lr), nb))
-                    seg["end"] = nb
-                    self.seg_time_changed.emit(seg.get("line", 0), seg["start"], seg["end"], "square_right")
-            if bool(getattr(self, "auto_generate_gap_segments", True)):
-                self.gap_segments = _build_gaps(self.segments, self.total_duration, self._get_fps())
-            else:
-                self.gap_segments = [
-                    dict(gap)
-                    for gap in list(getattr(self, "gap_segments", []) or [])
-                    if bool(gap.get("_explicit_gap"))
-                ]
-            if hasattr(self, "_invalidate_render_cache"):
-                self._invalidate_render_cache()
-            self.update()

@@ -805,6 +805,25 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
         self._reset_playhead_smoothing(global_sec)
         self.timeline.set_playhead(global_sec)
+        arm_shadow = getattr(self.timeline, "arm_shadow_playhead", None)
+        if callable(arm_shadow):
+            try:
+                arm_shadow(global_sec)
+            except Exception:
+                pass
+        else:
+            canvas = getattr(self.timeline, "canvas", None)
+            if canvas is not None:
+                try:
+                    canvas._shadow_playhead_armed_sec = global_sec
+                except Exception:
+                    pass
+            clear_shadow = getattr(self.timeline, "clear_shadow_playhead", None)
+            if callable(clear_shadow):
+                try:
+                    clear_shadow()
+                except Exception:
+                    pass
         self.timeline.center_to_sec(global_sec, smooth=False)
 
     def _snapshot_timeline_view_for_resize(self) -> dict:

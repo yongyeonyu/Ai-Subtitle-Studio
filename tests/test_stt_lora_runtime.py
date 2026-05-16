@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.stt_mode.lora_runtime import (
+    build_stt_dictation_resegment_policy,
     build_stt_runtime_policy_bundle,
     collect_stt_protected_terms,
     export_stt_runtime_bundle,
@@ -46,6 +47,14 @@ def test_build_stt_runtime_policy_bundle_exposes_dedicated_stt_lora_sections():
     assert bundle["subtitle_style_policy"]["max_lines"] == 2
     assert bundle["stt_vad_segment_model"]["vad_models"] == ["silero", "ten_vad"]
     assert "VR" in bundle["stt_dictation_resegment_policy"]["protected_terms"]
+
+
+def test_learning_event_count_avoids_list_materialization():
+    events = ({"id": f"evt_{index}"} for index in range(3))
+
+    policy = build_stt_dictation_resegment_policy(learning_events=events)
+
+    assert policy["learning_event_count"] == 3
 
 
 def test_export_stt_runtime_bundle_writes_separate_stt_lora_bundle(tmp_path):

@@ -15,6 +15,7 @@ from core.runtime import config
 from core.runtime.logger import get_logger
 from ui.editor.ux.timestamp_area import TimestampArea
 from ui.gpu_rendering import gpu_backend_name, make_accelerated_viewport, scenegraph_enabled
+from ui.style import COLORS
 
 
 def _is_deleted_qt_runtime_error(exc: BaseException) -> bool:
@@ -217,7 +218,7 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         self.quality_filter = "all"
         self._quality_colors = {
             "green": QColor(31, 88, 55, 84),
-            "yellow": QColor(112, 86, 16, 90),
+            "yellow": QColor(255, 214, 10, 90),
             "red": QColor(120, 34, 34, 106),
             "gray": QColor(80, 86, 94, 80),
         }
@@ -928,8 +929,8 @@ class SubtitleTextEdit(QTextEdit):
                     bg_fill = "#16303C"
                     italic = True
                 elif getattr(ud, "stt_pending", False):
-                    accent = "#FF9F2F"
-                    bg_fill = "#332414"
+                    accent = COLORS["warning"]
+                    bg_fill = COLORS["warning_surface"]
                 elif getattr(ud, "is_gap", False):
                     accent = "#5E5E64"
             active = block.blockNumber() == self.textCursor().blockNumber()

@@ -4,9 +4,13 @@ from typing import Any
 
 from core.coerce import safe_float as _safe_float, safe_round_int as _safe_int
 from core.frame_time import frame_count, frame_duration, normalize_fps
+from core.project.project_roughcut_store import (
+    compact_project_roughcut_payload,
+    hydrate_project_roughcut_payload,
+)
 
 PROJECT_SCHEMA_VERSION = "04.00.07"
-PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v4"
+PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v5"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 
 def _timeline_clips(project: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -220,6 +224,7 @@ def hydrate_project_runtime_views(project: dict[str, Any] | None) -> dict[str, A
     if isinstance(editor_state, dict):
         editor_state["frame_timebase"] = dict(timebase)
         editor_state["media_files"] = [str(item.get("path") or "") for item in media_rows if item.get("path")]
+    hydrate_project_roughcut_payload(project, primary_fps=primary_fps)
     project["mode"] = "multiclip" if len(media_rows) > 1 else "single"
     project["storage_schema"] = PROJECT_STORAGE_SCHEMA
     project["version"] = PROJECT_SCHEMA_VERSION
@@ -230,6 +235,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload = dict(project or {})
     header = refresh_project_video_header(payload)
     payload["video"] = header
+    compact_project_roughcut_payload(payload, primary_fps=project_primary_fps(payload))
     payload["storage_schema"] = PROJECT_STORAGE_SCHEMA
     payload["version"] = PROJECT_SCHEMA_VERSION
     payload.pop("frame_timebase", None)

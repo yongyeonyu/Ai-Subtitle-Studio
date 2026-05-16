@@ -25,7 +25,7 @@ from core.settings import load_settings, save_settings
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE
 from ui.home_sidebar import HomeSidebarMixin
 from ui.sidebar.home_sidebar_nav_widget import HomeSidebarNavWidget
-from ui.style import button_style, label_style, line_icon, tool_button_style
+from ui.style import APP_PANEL_GAP, button_style, label_style, line_icon, tool_button_style
 
 
 class HomeUIMixin(HomeSidebarMixin):
@@ -104,8 +104,9 @@ class HomeUIMixin(HomeSidebarMixin):
         if old_layout is not None: QWidget().setLayout(old_layout)
         is_unified = bool(getattr(self, "_unified_dashboard", False))
         layout = QVBoxLayout(self.home_page)
-        layout.setContentsMargins(8 if is_unified else 30, 12 if is_unified else 20, 8 if is_unified else 30, 8 if is_unified else 15)
-        layout.setSpacing(5)
+        unified_gap = APP_PANEL_GAP
+        layout.setContentsMargins(unified_gap if is_unified else 30, unified_gap if is_unified else 20, unified_gap if is_unified else 30, 0 if is_unified else 15)
+        layout.setSpacing(unified_gap if is_unified else 5)
         if not is_unified:
             layout.addSpacing(40)
         icloud_files, count_str, comp_str = self._home_auto_source_payload("icloud")
@@ -147,11 +148,10 @@ class HomeUIMixin(HomeSidebarMixin):
             layout.addWidget(title)
             layout.addSpacing(6)
         columns = QVBoxLayout() if is_unified else QHBoxLayout()
-        columns.setSpacing(8)
-        left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(2 if is_unified else 4)
+        columns.setSpacing(unified_gap if is_unified else 8)
+        left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(unified_gap if is_unified else 4)
         if is_unified:
             left_col.addWidget(self._ensure_sidebar_nav_menu())
-            left_col.addSpacing(2)
             left_col.addWidget(self._icloud_btn("☁ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
             left_col.addWidget(self._icloud_btn("▣ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
             left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=7)
@@ -188,7 +188,7 @@ class HomeUIMixin(HomeSidebarMixin):
             )
             if terminal_panel is not None:
                 terminal_panel.setVisible(bool(getattr(self, "_log_visible", True)))
-                layout.addWidget(terminal_panel, stretch=1)
+                layout.addWidget(terminal_panel)
             layout.addWidget(self._project_info_card(expanded=False))
             if bool(getattr(self, "_project_info_expanded", False)):
                 QTimer.singleShot(0, self._show_project_info_overlay)
@@ -212,6 +212,8 @@ class HomeUIMixin(HomeSidebarMixin):
             layout.addLayout(bottom_bar)
         if is_unified:
             self._sync_project_info_button_height()
+            QTimer.singleShot(0, self._sync_sidebar_terminal_panel_height)
+            QTimer.singleShot(120, self._sync_sidebar_terminal_panel_height)
         self._ensure_watchdog_timer()
 
 
@@ -219,6 +221,7 @@ class HomeUIMixin(HomeSidebarMixin):
         card = QWidget()
         card.setMinimumHeight(122)
         card.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;")
+        self._sidebar_status_card_widget = card
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 6, 10, 5)
         lay.setSpacing(3)
@@ -247,6 +250,32 @@ class HomeUIMixin(HomeSidebarMixin):
         lay.addWidget(self._create_sidebar_subtitle_quality_row(card))
         lay.addWidget(self.sidebar_settings_label)
         return card
+
+    def _sync_sidebar_terminal_panel_height(self):
+        if not bool(getattr(self, "_unified_dashboard", False)):
+            return
+        home_page = getattr(self, "home_page", None)
+        terminal = getattr(self, "sidebar_terminal_panel", None)
+        status_card = getattr(self, "_sidebar_status_card_widget", None)
+        project_slot = getattr(self, "_project_info_button_slot", None) or getattr(self, "_project_info_button_card", None)
+        if home_page is None or terminal is None or status_card is None or project_slot is None:
+            return
+        layout = home_page.layout()
+        if layout is None:
+            return
+        try:
+            spacing = max(0, int(layout.spacing()))
+            top = int(status_card.geometry().bottom()) + 1 + spacing
+            bottom = int(project_slot.geometry().top()) - spacing
+        except RuntimeError:
+            return
+        minimum_height = 116
+        if bottom <= top:
+            return
+        target_height = max(minimum_height, bottom - top)
+        if terminal.height() == target_height and terminal.minimumHeight() == target_height and terminal.maximumHeight() == target_height:
+            return
+        terminal.setFixedHeight(target_height)
     def _toggle_sidebar_stt_mode(self):
         self._current_work_mode = EDITOR_MODE
         editor = getattr(self, "_editor_widget", None)
@@ -666,21 +695,18 @@ class HomeUIMixin(HomeSidebarMixin):
             profile = self._current_responsive_profile() if hasattr(self, "_current_responsive_profile") else None
         except Exception:
             profile = None
-        menu_bar_height = int(getattr(profile, "menu_bar_height", 0) or 0)
-        if menu_bar_height <= 0:
-            try:
-                from ui.menu_bar import MENU_BAR_HEIGHT as DEFAULT_MENU_BAR_HEIGHT
-                menu_bar_height = DEFAULT_MENU_BAR_HEIGHT
-            except Exception:
-                menu_bar_height = 48
-        bottom_inset = 0
         try:
-            layout = self.home_page.layout() if hasattr(self, "home_page") else None
-            if layout is not None:
-                bottom_inset = int(layout.contentsMargins().bottom())
+            from ui.menu_bar import panel_visual_height_for_profile
+
+            return panel_visual_height_for_profile(profile)
         except Exception:
-            bottom_inset = 0
-        return max(38, menu_bar_height - max(0, bottom_inset))
+            return max(38, int(getattr(profile, "menu_button_height", 38) or 38))
+
+    def _project_info_button_slot_height(self) -> int:
+        return self._project_info_button_height()
+
+    def _project_info_button_top_inset(self) -> int:
+        return 0
 
     def _sync_project_info_button_height(self):
         button = getattr(self, "_project_info_button_card", None)
@@ -689,6 +715,17 @@ class HomeUIMixin(HomeSidebarMixin):
         target_height = self._project_info_button_height()
         if target_height > 0 and button.height() != target_height:
             button.setFixedHeight(target_height)
+        slot = getattr(self, "_project_info_button_slot", None)
+        slot_height = max(target_height, self._project_info_button_slot_height())
+        if slot is not None and slot.height() != slot_height:
+            slot.setFixedHeight(slot_height)
+        slot_layout = getattr(self, "_project_info_button_slot_layout", None)
+        if slot_layout is not None:
+            top_inset = min(max(0, slot_height - target_height), self._project_info_button_top_inset())
+            bottom_inset = max(0, slot_height - target_height - top_inset)
+            margins = slot_layout.contentsMargins()
+            if margins.top() != top_inset or margins.bottom() != bottom_inset:
+                slot_layout.setContentsMargins(0, top_inset, 0, bottom_inset)
 
     def _project_info_card(self, expanded=None, overlay=False):
         if expanded is None:
@@ -697,6 +734,7 @@ class HomeUIMixin(HomeSidebarMixin):
             expanded = bool(expanded)
         if not expanded and not overlay:
             target_height = self._project_info_button_height()
+            slot_height = max(target_height, self._project_info_button_slot_height())
             btn = QToolButton()
             btn.setText("프로젝트 정보")
             btn.setIcon(line_icon("project", "#E8EEF5", 15))
@@ -709,7 +747,7 @@ class HomeUIMixin(HomeSidebarMixin):
                 "QToolButton { "
                 "background: #1B2429; color: #F5F7FA; "
                 "border: 1px solid #2D3942; border-radius: 7px; "
-                "padding: 0 10px; font-size: 12px; font-weight: 700; "
+                "padding: 0 12px; font-size: 12px; font-weight: 700; "
                 "text-align: left; "
                 "} "
                 "QToolButton:hover { background: #202A31; border-color: #465663; }"
@@ -717,7 +755,19 @@ class HomeUIMixin(HomeSidebarMixin):
             )
             btn.clicked.connect(self._toggle_project_info_card)
             self._project_info_button_card = btn
-            return btn
+            slot = QWidget()
+            slot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            slot.setFixedHeight(slot_height)
+            slot.setStyleSheet("background: transparent; border: none;")
+            slot_layout = QVBoxLayout(slot)
+            top_inset = min(max(0, slot_height - target_height), self._project_info_button_top_inset())
+            bottom_inset = max(0, slot_height - target_height - top_inset)
+            slot_layout.setContentsMargins(0, top_inset, 0, bottom_inset)
+            slot_layout.setSpacing(0)
+            slot_layout.addWidget(btn)
+            self._project_info_button_slot = slot
+            self._project_info_button_slot_layout = slot_layout
+            return slot
 
         card = QWidget()
         card.setStyleSheet(
@@ -941,7 +991,22 @@ class HomeUIMixin(HomeSidebarMixin):
         activate_editor_idle = getattr(self, "_activate_editor_idle_mode", None)
         if callable(activate_editor_idle):
             activate_editor_idle(reason="editor_screen")
+        self._restore_editor_video_after_navigation(editor)
         self._refresh_work_mode_ui()
+
+    def _restore_editor_video_after_navigation(self, editor):
+        video_player = getattr(editor, "video_player", None)
+        if video_player is None:
+            return
+        restore = getattr(video_player, "restore_after_navigation", None)
+        if callable(restore):
+            QTimer.singleShot(0, restore)
+            QTimer.singleShot(120, restore)
+            return
+        try:
+            QTimer.singleShot(0, lambda: video_player.resizeEvent(None))
+        except Exception:
+            pass
 
     def _open_roughcut_helper(self):
         self._current_work_mode = ROUGHCUT_MODE

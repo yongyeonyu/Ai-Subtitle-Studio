@@ -9,6 +9,7 @@ from PyQt6.QtGui import QTextCursor
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import get_sub_block_indices
+from ui.style import COLORS
 
 
 class EditorSpeakerOpsMixin:
@@ -16,7 +17,7 @@ class EditorSpeakerOpsMixin:
         max_spk = int(self.settings.get("max_speakers", 1))
         spk_map = {
             "00": self.settings.get("spk1_color", "#FFFFFF"),
-            "01": self.settings.get("spk2_color", "#FFFF00"),
+            "01": self.settings.get("spk2_color", COLORS["warning"]),
             "02": self.settings.get("spk3_color", "#00FFFF")
         }
         available_spks = [f"{i:02d}" for i in range(max_spk)]

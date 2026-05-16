@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from core.runtime.logger import get_logger
 from ui.dialogs.qml_popup import show_context_menu
+from ui.style import COLORS
 
 
 class EditorPipelinePlayheadActionsMixin:
@@ -129,7 +130,7 @@ class EditorPipelinePlayheadActionsMixin:
         items.append({"separator": True})
         items.extend(
             [
-                {"id": "shadow_pin", "label": "현재 위치를 그림자 플레이헤드로 고정", "accent": "#FFD60A"},
+                {"id": "shadow_pin", "label": "현재 위치를 그림자 플레이헤드로 고정", "accent": COLORS["warning"]},
                 {
                     "id": "shadow_clear",
                     "label": "그림자 플레이헤드 지우기",

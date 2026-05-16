@@ -23,13 +23,32 @@ from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 
 class _FrameStepTimeline:
     def __init__(self, sec=1.0):
-        self.canvas = SimpleNamespace(playhead_sec=sec, _active_clip_idx=0)
+        self.canvas = SimpleNamespace(playhead_sec=sec, shadow_playhead_sec=None, _shadow_playhead_armed_sec=None, _active_clip_idx=0)
         self.playhead_calls = []
         self.center_calls = []
+        self.shadow_calls = []
+        self.arm_calls = []
+        self.clear_shadow_calls = 0
 
     def set_playhead(self, sec):
         self.canvas.playhead_sec = sec
         self.playhead_calls.append(sec)
+
+    def set_shadow_playhead(self, sec):
+        self.canvas.shadow_playhead_sec = sec
+        self.shadow_calls.append(sec)
+        return True
+
+    def clear_shadow_playhead(self):
+        self.canvas.shadow_playhead_sec = None
+        self.clear_shadow_calls += 1
+        return True
+
+    def arm_shadow_playhead(self, sec):
+        self.canvas._shadow_playhead_armed_sec = sec
+        self.arm_calls.append(sec)
+        self.clear_shadow_playhead()
+        return True
 
     def center_to_sec(self, sec, smooth=False):
         self.center_calls.append((sec, smooth))
@@ -553,6 +572,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                 widget.load(f.name, [])
 
             info_text = widget.info_label.text()
+            self.assertIn("\n", info_text)
             self.assertIn("3840x2160", info_text)
             self.assertIn("59.94fps", info_text)
             self.assertIn("yuv420p10le", info_text)
@@ -591,6 +611,33 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertIn("1920x1080", widget.info_label.text())
             self.assertIn("24fps", widget.info_label.text())
             self.assertNotIn("불러오는 중", widget.info_label.text())
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_ui_tick_restores_source_meta_badge_while_source_is_not_ready(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+                widget._current_source_path = f.name
+                widget._source_ready = False
+                widget.apply_source_media_probe(f.name, {
+                    "duration": 12.0,
+                    "fps": 59.94,
+                    "width": 1920,
+                    "height": 1080,
+                    "bit_rate": 12000000,
+                    "pix_fmt": "yuv420p",
+                    "color_space": "bt709",
+                })
+                widget.info_label.setText("")
+
+                widget._ui_tick()
+
+            self.assertIn("1920x1080", widget.info_label.text())
+            self.assertIn("59.94fps", widget.info_label.text())
+            self.assertIn("\n", widget.info_label.text())
         finally:
             widget.close()
             widget.deleteLater()
@@ -1149,6 +1196,17 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         self.assertEqual(len(editor.video_player.frame_seek_calls), 1)
         self.assertAlmostEqual(editor.video_player.frame_seek_calls[0], 1.04, places=4)
         self.assertEqual(editor.video_player.seek_direct_calls, [])
+
+    def test_frame_step_arms_shadow_playhead_at_keyboard_target_frame(self):
+        editor = _FrameStepEditor()
+
+        editor._on_step_frame(1)
+
+        self.assertEqual(editor.timeline.shadow_calls, [])
+        self.assertEqual(len(editor.timeline.arm_calls), 1)
+        self.assertAlmostEqual(editor.timeline.arm_calls[0], 1.04, places=4)
+        self.assertAlmostEqual(editor.timeline.canvas._shadow_playhead_armed_sec, 1.04, places=4)
+        self.assertIsNone(editor.timeline.canvas.shadow_playhead_sec)
 
     def test_frame_step_accepts_multi_frame_direction_for_keyboard_acceleration(self):
         editor = _FrameStepEditor()

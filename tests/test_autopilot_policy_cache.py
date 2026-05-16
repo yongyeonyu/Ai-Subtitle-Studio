@@ -1,10 +1,15 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from core.autopilot_cache import (
     LRUCacheManager,
     NegativeCache,
+    model_hash,
+    settings_hash,
+    stable_json_dumps,
     read_compressed_jsonl,
     stage_cache_key,
     write_compressed_jsonl,
@@ -124,6 +129,20 @@ class AutoPilotPolicyCacheTests(unittest.TestCase):
 
         self.assertNotEqual(base, changed)
 
+    def test_stable_json_dumps_keeps_sorted_output_without_presorting_dict(self):
+        payload = {"z": 1, "a": {"b": 2}}
+
+        self.assertEqual(stable_json_dumps(payload), '{"a":{"b":2},"z":1}')
+
+    def test_settings_and_model_hash_skip_unneeded_copy_paths(self):
+        settings = {"z": 1, "a": 2}
+        models = {"stt": "large-v3"}
+
+        self.assertEqual(settings_hash(settings), settings_hash(dict(settings)))
+        self.assertNotEqual(settings_hash(settings, keys=["a"]), settings_hash(settings, keys=["z"]))
+        self.assertEqual(model_hash(models), model_hash(dict(models)))
+        self.assertNotEqual(model_hash(models), model_hash(models, llm="codex"))
+
     def test_compressed_jsonl_and_memory_caches(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = write_compressed_jsonl(Path(tmp) / "diag.jsonl", [{"a": 1}, {"b": 2}], prefer_zstd=False)
@@ -142,6 +161,49 @@ class AutoPilotPolicyCacheTests(unittest.TestCase):
         lru.put("c", 3)
         self.assertIsNone(lru.get("b"))
         self.assertEqual(lru.get("a"), 1)
+
+    def test_gzip_jsonl_write_streams_rows_without_materializing_input(self):
+        def row_iter():
+            yield {"a": 1}
+            yield {"b": 2}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = write_compressed_jsonl(Path(tmp) / "diag.jsonl", row_iter(), prefer_zstd=False)
+            rows = read_compressed_jsonl(out["path"])
+
+        self.assertEqual(out["rows"], 2)
+        self.assertEqual(rows, [{"a": 1}, {"b": 2}])
+
+    def test_zstd_jsonl_read_streams_without_full_read(self):
+        class FakeReader:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def readable(self):
+                return True
+
+            def read(self, _size=-1):
+                if _size == -1:
+                    raise AssertionError("zstd jsonl should not read the full file at once")
+                if not hasattr(self, "_lines"):
+                    self._lines = [b'{"a":1}\n', b'{"b":2}\n', b""]
+                return self._lines.pop(0)
+
+        class FakeDecompressor:
+            def stream_reader(self, _raw):
+                return FakeReader()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "diag.jsonl.zst"
+            path.write_bytes(b"compressed")
+            fake_zstd = SimpleNamespace(ZstdDecompressor=lambda: FakeDecompressor())
+            with patch.dict("sys.modules", {"zstandard": fake_zstd}):
+                rows = read_compressed_jsonl(path)
+
+        self.assertEqual(rows, [{"a": 1}, {"b": 2}])
 
 
 if __name__ == "__main__":

@@ -350,7 +350,7 @@ class FileOpsMixin:
         if callable(confirm_exit) and not confirm_exit():
             return
         self._quick_exit_requested = True
-        exit_delay_ms = 30 if getattr(config, "IS_MAC", False) else 60
+        exit_delay_ms = 20 if getattr(config, "IS_MAC", False) else 60
         schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
         if callable(schedule_exit):
             run_nonfatal_ui_step(

@@ -1566,6 +1566,10 @@ def _apply_stt_candidate_decision(seg: dict, selected_decision: dict | None) -> 
     if selected_start is not None and selected_end is not None and selected_end > selected_start:
         out["start"] = selected_start
         out["end"] = selected_end
+        out["_stt_original_candidate_start"] = selected_start
+        out["_stt_original_candidate_end"] = selected_end
+        out["original_start"] = selected_start
+        out["original_end"] = selected_end
     return out, True
 
 

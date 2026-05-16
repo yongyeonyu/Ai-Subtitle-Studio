@@ -1,5 +1,6 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
+import "AppPalette.js" as Palette
 
 Item {
     id: root
@@ -105,12 +106,12 @@ Item {
                 id: queueCard
                 property bool currentActive: index === root.activeQueueIndex() && modelData.active && !modelData.done && !modelData.error
                 property string statusText: modelData.done ? "완료" : (modelData.statusDisplay || modelData.status || "대기 중")
-                property color statusColor: modelData.done ? "#55D97A" : (modelData.error ? "#FF6B78" : (currentActive ? "#FFD84D" : "#9DB0BB"))
+                property color statusColor: modelData.done ? "#55D97A" : (modelData.error ? "#FF6B78" : (currentActive ? Palette.warning : "#9DB0BB"))
                 property string timeText: modelData.eta || "-"
                 width: list.width - (list.contentHeight > list.height ? 8 : 0)
                 height: 76
-                color: modelData.done ? "#13261D" : (modelData.error ? "#291719" : (currentActive ? "#17242C" : "#121A1E"))
-                border.color: modelData.done ? "#286B43" : (modelData.error ? "#6D2E35" : (currentActive ? "#FFD84D" : "#1D2A31"))
+                color: modelData.done ? "#13261D" : (modelData.error ? "#291719" : (currentActive ? Palette.warningSurfaceAlt : "#121A1E"))
+                border.color: modelData.done ? "#286B43" : (modelData.error ? "#6D2E35" : (currentActive ? Palette.warning : "#1D2A31"))
                 border.width: currentActive ? 2 : 1
                 radius: 6
 

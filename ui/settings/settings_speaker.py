@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
 
 from ui.settings.settings_common import DATASET_DIR, _create_bottom_buttons
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
-from ui.style import button_style, label_style, settings_dialog_stylesheet
+from ui.style import COLORS, button_style, label_style, settings_dialog_stylesheet
 
 
 class SpeakerDialog(QDialog):
@@ -166,7 +166,7 @@ class SpeakerDialog(QDialog):
             return row_w, txt_id, chk
 
         self.row1, self.txt1, _ = create_row(1, "00", "#FFFFFF", False)
-        self.row2, self.txt2, self.chk2 = create_row(2, "01", "#FFFF00", True)
+        self.row2, self.txt2, self.chk2 = create_row(2, "01", COLORS["warning"], True)
         self.row3, self.txt3, self.chk3 = create_row(3, "02", "#00FFFF", True)
 
         form.addRow("", self.row1)

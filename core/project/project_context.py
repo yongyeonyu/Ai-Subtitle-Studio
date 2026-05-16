@@ -440,10 +440,27 @@ def _project_raw_subtitle_segments(
     external_text_assets: bool,
 ) -> list[dict[str, Any]]:
     raw_segments = _segments_from_subtitle_canvas_vector(vector_canvas)
+    gap_segments = [dict(seg) for seg in raw_segments if isinstance(seg, dict) and bool(seg.get("is_gap"))] if raw_segments else []
+    if external_text_assets:
+        merged_segments = _merge_gap_segments_into_project_rows(
+            load_external_subtitle_segments(project),
+            gap_segments,
+        )
+        if merged_segments:
+            return merged_segments
+        if isinstance(project.get("_hot_open_subtitle_segments_cache"), list):
+            merged_segments = _merge_gap_segments_into_project_rows(
+                copy_project_rows(project.get("_hot_open_subtitle_segments_cache")),
+                gap_segments,
+            )
+            if merged_segments:
+                return merged_segments
+        return []
     if (not raw_segments) and isinstance(project.get("_hot_open_subtitle_segments_cache"), list):
-        raw_segments = copy_project_rows(project.get("_hot_open_subtitle_segments_cache"))
-    if (not raw_segments) and external_text_assets:
-        raw_segments = load_external_subtitle_segments(project)
+        raw_segments = _merge_gap_segments_into_project_rows(
+            copy_project_rows(project.get("_hot_open_subtitle_segments_cache")),
+            gap_segments,
+        )
     if not isinstance(raw_segments, list):
         raw_segments = editor_subtitles.get("segments")
     if not isinstance(raw_segments, list):
@@ -553,6 +570,8 @@ def project_segments_to_editor(
             "original_text": str(seg.get("original_text", "") or ""),
             "dictated_text": str(seg.get("dictated_text", "") or ""),
         }
+        if bool(seg.get("is_gap")):
+            item["is_gap"] = True
         if seg.get("id"):
             item["id"] = str(seg.get("id") or "")
         if seg.get("index") is not None:
@@ -610,7 +629,8 @@ def project_segments_to_editor(
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg:
                 item[key] = seg.get(key)
-        item.update(_project_segment_status_payload(item, threshold=status_threshold))
+        if not bool(item.get("is_gap")):
+            item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
     out = _trim_segments_to_project_duration(out, project, primary_fps=primary_fps)
     if out and include_analysis_candidates and external_text_assets:
@@ -749,6 +769,7 @@ def build_editor_state(
     fps = normalize_fps(primary_fps or 30.0)
     normalized_media_files = [os.path.abspath(path) for path in media_files if path]
     normalized_segments = _normalize_editor_segments(segments, primary_fps=fps)
+    normalized_gap_segments = _normalize_gap_segments(segments, primary_fps=fps)
     segment_signature_value = segment_signature(normalized_segments)
     boundaries = [_normalize_boundary(item, idx) for idx, item in enumerate(clip_boundaries or [])]
     stt_preview = _normalize_stt_preview_segments(
@@ -792,6 +813,7 @@ def build_editor_state(
         "rendering": {
             "subtitle_canvas": build_subtitle_canvas_vector_state(
                 normalized_segments,
+                gap_segments=normalized_gap_segments,
                 primary_fps=fps,
                 segment_signature_value=segment_signature_value,
             ),
@@ -992,6 +1014,7 @@ def _vector_style_ref(seg: dict[str, Any]) -> str:
 def build_subtitle_canvas_vector_state(
     segments: list[dict[str, Any]],
     *,
+    gap_segments: list[dict[str, Any]] | None = None,
     primary_fps: float = 30.0,
     segment_signature_value: str | None = None,
 ) -> dict[str, Any]:
@@ -1061,6 +1084,51 @@ def build_subtitle_canvas_vector_state(
         if meta:
             obj["meta"] = meta
         objects.append(obj)
+    gap_objects: list[dict[str, Any]] = []
+    for idx, seg in enumerate(gap_segments or []):
+        if not isinstance(seg, dict):
+            continue
+        start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
+        end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
+        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+        local_fps = normalize_fps(
+            seg.get("timeline_frame_rate")
+            or frame_range.get("timeline_frame_rate")
+            or seg.get("frame_rate")
+            or seg.get("source_frame_rate")
+            or fps
+        )
+        start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is None:
+            start_frame = sec_to_frame(start, local_fps)
+        if end_frame is None:
+            end_frame = sec_to_frame(max(start, end), local_fps)
+        start_frame = _safe_int(start_frame)
+        end_frame = max(start_frame, _safe_int(end_frame, start_frame))
+        clip: dict[str, Any] = {}
+        if seg.get("_clip_idx") is not None:
+            clip["index"] = int(seg.get("_clip_idx") or 0)
+        if seg.get("_clip_file"):
+            clip["file"] = str(seg.get("_clip_file") or "")
+        obj = {
+            "id": str(seg.get("id") or f"subtitle_gap_vector_{idx + 1:04d}"),
+            "kind": "subtitle_gap",
+            "source_index": int(seg.get("index", idx + 1) or idx + 1),
+            "line": int(seg.get("line", idx) or idx),
+            "time": {
+                "unit": "frame",
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "timeline_frame_rate": local_fps,
+            },
+            "flags": {
+                "is_gap": True,
+            },
+        }
+        if clip:
+            obj["clip"] = clip
+        gap_objects.append(obj)
     return {
         "schema": SUBTITLE_CANVAS_VECTOR_SCHEMA,
         "coordinate_space": {
@@ -1075,6 +1143,7 @@ def build_subtitle_canvas_vector_state(
             "fallback": "",
         },
         "segments": objects,
+        "gap_segments": gap_objects,
         "segment_signature": (
             str(segment_signature_value)
             if segment_signature_value is not None
@@ -1089,16 +1158,15 @@ def _segments_from_subtitle_canvas_vector(vector_canvas: dict[str, Any]) -> list
     if str(vector_canvas.get("schema", "") or "") != SUBTITLE_CANVAS_VECTOR_SCHEMA:
         return None
     rows = vector_canvas.get("segments")
-    if not isinstance(rows, list):
+    gap_rows = vector_canvas.get("gap_segments")
+    if not isinstance(rows, list) and not isinstance(gap_rows, list):
         return None
     fps = normalize_fps(
         ((vector_canvas.get("coordinate_space", {}) or {}).get("timeline_frame_rate"))
         or 30.0
     )
     out: list[dict[str, Any]] = []
-    for idx, row in enumerate(rows):
-        if not isinstance(row, dict):
-            continue
+    def append_row(row: dict[str, Any], idx: int, *, is_gap: bool) -> None:
         timing = row.get("time", {}) if isinstance(row.get("time"), dict) else {}
         local_fps = normalize_fps(timing.get("timeline_frame_rate") or fps)
         start_frame = timing.get("start_frame")
@@ -1109,10 +1177,12 @@ def _segments_from_subtitle_canvas_vector(vector_canvas: dict[str, Any]) -> list
             "line": int(row.get("line", idx) or idx),
             "start": start,
             "end": max(start, end),
-            "text": str(row.get("text", "") or ""),
+            "text": "" if is_gap else str(row.get("text", "") or ""),
             "speaker": str(row.get("speaker", "00") or "00"),
             "speaker_list": list(row.get("speaker_list", []) or []),
         }
+        if is_gap:
+            item["is_gap"] = True
         if row.get("id"):
             item["id"] = str(row.get("id") or "")
         if row.get("source_index") is not None:
@@ -1148,6 +1218,15 @@ def _segments_from_subtitle_canvas_vector(vector_canvas: dict[str, Any]) -> list
             if key in meta:
                 item[key] = meta.get(key)
         out.append(item)
+    for idx, row in enumerate(rows or []):
+        if isinstance(row, dict):
+            append_row(row, idx, is_gap=False)
+    for idx, row in enumerate(gap_rows or []):
+        if isinstance(row, dict):
+            append_row(row, idx, is_gap=True)
+    out.sort(key=_project_segment_sort_key)
+    for idx, seg in enumerate(out):
+        seg["line"] = idx
     return out
 
 
@@ -1217,6 +1296,85 @@ def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: f
         item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
     return out
+
+
+def _normalize_gap_segments(segments: list[dict[str, Any]], *, primary_fps: float = 30.0) -> list[dict[str, Any]]:
+    fps = normalize_fps(primary_fps or 30.0)
+    out: list[dict[str, Any]] = []
+    for idx, seg in enumerate(segments or []):
+        if not isinstance(seg, dict) or not bool(seg.get("is_gap")):
+            continue
+        start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
+        end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
+        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+        start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is None:
+            start_frame = sec_to_frame(start, fps)
+        else:
+            start = frame_to_sec(start_frame, fps)
+        if end_frame is None:
+            end_frame = sec_to_frame(max(start, end), fps)
+        else:
+            end = frame_to_sec(end_frame, fps)
+        start_frame = _safe_int(start_frame)
+        end_frame = max(start_frame, _safe_int(end_frame, start_frame))
+        item = {
+            "line": int(seg.get("line", idx) or idx),
+            "start": frame_to_sec(start_frame, fps),
+            "end": frame_to_sec(end_frame, fps),
+            "text": "",
+            "speaker": str(seg.get("speaker", seg.get("spk", "00")) or "00"),
+            "speaker_list": list(seg.get("speaker_list", []) or []),
+            "is_gap": True,
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "timeline_start_frame": start_frame,
+            "timeline_end_frame": end_frame,
+            "frame_rate": fps,
+            "timeline_frame_rate": fps,
+            "frame_range": {
+                "unit": "frame",
+                "start": start_frame,
+                "end": end_frame,
+                "timeline_frame_rate": fps,
+            },
+        }
+        for key in (
+            "id",
+            "index",
+            "_clip_idx",
+            "_clip_file",
+            "clip_local_start_frame",
+            "clip_local_end_frame",
+            "source_frame_rate",
+        ):
+            if key in seg:
+                item[key] = seg.get(key)
+        out.append(item)
+    return out
+
+
+def _project_segment_sort_key(seg: dict[str, Any]) -> tuple[float, float, int, int, int]:
+    start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
+    end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
+    line = _safe_int(seg.get("line"), 0)
+    index = _safe_int(seg.get("index"), 0)
+    return (start, end, int(bool(seg.get("is_gap"))), line, index)
+
+
+def _merge_gap_segments_into_project_rows(
+    subtitle_rows: list[dict[str, Any]] | None,
+    gap_rows: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    rows = [dict(seg) for seg in (subtitle_rows or []) if isinstance(seg, dict)]
+    rows.extend(dict(seg) for seg in (gap_rows or []) if isinstance(seg, dict))
+    if not rows:
+        return []
+    rows.sort(key=_project_segment_sort_key)
+    for idx, seg in enumerate(rows):
+        seg["line"] = idx
+    return rows
 
 
 def _normalize_stt_preview_segments(

@@ -245,6 +245,45 @@ class QueueDispatchTests(unittest.TestCase):
         self.assertNotIn(0, queue._file_start_times)
         self.assertEqual(queue.queue_table.item(0, 4).text(), "01:15")
 
+    def test_generation_status_waits_for_actual_start_before_elapsed_clock(self):
+        class _DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._current_file_idx = 1
+                self._total_files = 1
+                self._real_pct = 0
+                self._expected_seconds = {}
+                self._file_start_times = {}
+                self._file_complete_times = {}
+                self._queue_row_cache = []
+                self._sidebar_queue_cache_items = []
+                self._sidebar_queue_cache_header = ""
+                self.backend = None
+                self.backend_fast = None
+                self._live_timer = type("_Timer", (), {"start": lambda _self, _interval: None, "stop": lambda _self: None})()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = _DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+
+        with patch("ui.queue_widget.time.time", return_value=100.0):
+            queue.update_queue_status(0, "자막 생성 중", "01:15", "1920x1080", "01:15")
+
+        self.assertNotIn(0, queue._file_start_times)
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "01:15")
+
+        queue.mark_queue_execution_started(now_ts=100.0)
+        with patch("ui.queue_widget.time.time", return_value=105.0):
+            queue._update_live_queue_header()
+
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "00:05 / 01:15")
+
     def test_queue_progress_metrics_exposes_completion_counts(self):
         class _DummyQueue(QueueMixin):
             def __init__(self):
@@ -367,6 +406,7 @@ class QueueDispatchTests(unittest.TestCase):
         queue = _DummyQueue()
         queue.init_queue_list(["/tmp/clip_a.mp4"])
         queue.update_queue_status(0, "✅ 완료", "00:20", "1920x1080", "00:20")
+        queue.mark_queue_execution_started()
         queue.update_queue_status(0, "재시작 준비 중", "00:15", "1280x720", "00:15")
 
         self.assertEqual(queue.queue_row_status_text(0), "재시작 준비 중")
@@ -438,6 +478,7 @@ class QueueDispatchTests(unittest.TestCase):
         queue = _DummyQueue()
         queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"])
         queue.update_queue_status(0, "✅ 완료")
+        queue.mark_queue_execution_started()
         queue.update_queue_status(1, "⏳ [STT] Whisper 중", "20", "1920x1080", "00:10")
         queue.update_queue_header(2, 2, 50, "")
 
@@ -490,6 +531,7 @@ class QueueDispatchTests(unittest.TestCase):
 
         queue = _DummyQueue()
         queue.init_queue_list(["/tmp/clip_a.mp4"])
+        queue.mark_queue_execution_started()
         queue.update_queue_status(0, "⏳ [STT] Whisper 중", "20", "1920x1080", "00:10")
 
         table_snapshot = queue.queue_row_snapshot(0)

@@ -10,7 +10,7 @@ import os
 
 from PyQt6.QtCore import QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from core.runtime import config
 from core.pipeline_status import generation_stage_label, process_mode_label
@@ -28,8 +28,19 @@ MENU_CACHE_WIDTH = 82
 MENU_SMALL_ICON = 17
 MENU_WIDE_ICON = 16
 MENU_ACTION_ICON = 18
-MENU_TEXT_UNDER_ICON_PADDING = "5px 5px 2px 5px"
+MENU_TEXT_UNDER_ICON_PADDING = "3px 5px 1px 5px"
 MENU_PANEL_RADIUS = 7
+
+
+def panel_visual_height_for_profile(profile) -> int:
+    return max(
+        MENU_BUTTON_HEIGHT,
+        int(getattr(profile, "menu_button_height", MENU_BUTTON_HEIGHT) or MENU_BUTTON_HEIGHT),
+    )
+
+
+def panel_outer_height_for_profile(profile) -> int:
+    return panel_visual_height_for_profile(profile)
 
 
 class StatusRail(QWidget):
@@ -339,15 +350,27 @@ class GlobalMenuBar(QWidget):
         self.setObjectName("GlobalMenuBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
-            "QWidget#GlobalMenuBar { "
+            "QWidget#GlobalMenuBar { background: transparent; border: none; } "
+            "QWidget#GlobalMenuBarShell { "
             f"background: #151C20; border: 1px solid #2D3942; border-radius: {MENU_PANEL_RADIUS}px; "
             "} "
             "QWidget#MenuBarGroup { background: transparent; border: none; }"
         )
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(8, 4, 8, 4)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._outer_layout = outer
+
+        self._panel_shell = QWidget(self)
+        self._panel_shell.setObjectName("GlobalMenuBarShell")
+        self._panel_shell.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        outer.addWidget(self._panel_shell)
+
+        root = QHBoxLayout(self._panel_shell)
+        root.setContentsMargins(8, 0, 8, 0)
         root.setSpacing(6)
+        self._root_layout = root
 
         self.left_group = QWidget()
         self.left_group.setObjectName("MenuBarGroup")
@@ -501,8 +524,7 @@ class GlobalMenuBar(QWidget):
 
     def refresh(self):
         profile = self._current_responsive_profile()
-        if self.height() != profile.menu_bar_height:
-            self.setFixedHeight(profile.menu_bar_height)
+        self._sync_panel_height(profile)
         editor = self._active_editor()
         has_editor = editor is not None
         mode = normalize_work_mode(getattr(self.main_window, "_current_work_mode", EDITOR_MODE))
@@ -572,6 +594,36 @@ class GlobalMenuBar(QWidget):
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setFixedHeight(profile.menu_button_height)
                     btn.setFixedWidth(max(profile.touch_target, MENU_SMALL_WIDTH))
+
+    def _sync_panel_height(self, profile):
+        panel_height = panel_visual_height_for_profile(profile)
+        full_height = panel_outer_height_for_profile(profile)
+        if self.height() != full_height:
+            self.setFixedHeight(full_height)
+        panel_shell = getattr(self, "_panel_shell", None)
+        if panel_shell is not None and panel_shell.height() != panel_height:
+            panel_shell.setFixedHeight(panel_height)
+        outer_layout = getattr(self, "_outer_layout", None)
+        if outer_layout is not None:
+            outer_margins = outer_layout.contentsMargins()
+            if (
+                outer_margins.left() != 0
+                or outer_margins.top() != 0
+                or outer_margins.right() != 0
+                or outer_margins.bottom() != 0
+            ):
+                outer_layout.setContentsMargins(0, 0, 0, 0)
+        layout = getattr(self, "_root_layout", None)
+        if layout is not None:
+            margins = layout.contentsMargins()
+            if margins.top() != 0 or margins.bottom() != 0:
+                layout.setContentsMargins(8, 0, 8, 0)
+
+    def visual_panel_height(self) -> int:
+        panel_shell = getattr(self, "_panel_shell", None)
+        if panel_shell is not None:
+            return int(panel_shell.height() or 0)
+        return int(self.height() or 0)
 
     def _current_responsive_profile(self):
         win = self.window()

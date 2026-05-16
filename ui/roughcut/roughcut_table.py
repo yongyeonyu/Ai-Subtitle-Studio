@@ -5,9 +5,11 @@ from __future__ import annotations
 import os
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QTableWidgetItem
 
 from ui.roughcut.roughcut_format import EDITABLE_COLUMNS, fmt_time
+from ui.style import COLORS
 
 
 class RoughcutTableMixin:
@@ -93,7 +95,7 @@ class RoughcutTableMixin:
 
     def _style_status_item(self, item: QTableWidgetItem, status: str) -> None:
         if status == "사용자 수정됨":
-            item.setForeground(Qt.GlobalColor.yellow)
+            item.setForeground(QColor(COLORS["warning"]))
         elif status == "검토 필요":
             item.setForeground(Qt.GlobalColor.red)
         else:
@@ -107,7 +109,7 @@ class RoughcutTableMixin:
             item.setForeground(Qt.GlobalColor.green)
             item.setToolTip("ideal: 충분한 gap boundary")
         else:
-            item.setForeground(Qt.GlobalColor.yellow)
+            item.setForeground(QColor(COLORS["warning"]))
             item.setToolTip("acceptable: phrase boundary 또는 짧은 gap/edge")
 
     def _set_empty_state(self):
@@ -292,8 +294,8 @@ class RoughcutTableMixin:
             color = "#9AF0B0"
             border = "#2B5A3A"
         elif safety == "acceptable":
-            color = "#FFD68A"
-            border = "#6A4B18"
+            color = COLORS["warning"]
+            border = COLORS["warning_border"]
         return (
             "QLabel { background: #10161A; "
             f"color: {color}; border: 1px solid {border}; "

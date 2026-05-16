@@ -12,6 +12,7 @@ from PyQt6.QtCore import QPoint, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QComboBox, QTableWidgetItem, QWidget, QMessageBox
 
 from ui.main.main_window import MainWindow
+from ui.style import APP_PANEL_GAP, COLORS
 
 
 class SidebarTerminalLayoutTests(unittest.TestCase):
@@ -72,6 +73,27 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIn("설정 적용: LLM(exaone3.5:7.8b)", raw)
             self.assertIn("[텍스트 LoRA] 자동 교정 허용", raw)
             self.assertIn("[정제-교정사전] 누적적용 8회", raw)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_terminal_log_prefers_current_stage_percent_header(self):
+        window = MainWindow()
+        try:
+            window._generation_progress_snapshot = lambda: {
+                "running": True,
+                "title": "자막 생성 | STT 1",
+                "progressText": "37%",
+                "percent": 37,
+                "percentValue": 37.0,
+            }
+            window.append_log("[stt] 병렬 인식 시작")
+
+            lines = [line for line in window.log_text.toPlainText().splitlines() if line.strip()]
+            self.assertGreaterEqual(len(lines), 1)
+            self.assertEqual(lines[0], "진행: STT 1 · 37%")
+            self.assertIn("진행: 음성을 자막 초안으로 바꾸고 있어요.", "\n".join(lines[1:]))
         finally:
             window.close()
             window.deleteLater()
@@ -152,16 +174,16 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_main_panel_borders_have_single_line_and_three_pixel_gaps(self):
+    def test_main_panel_borders_have_single_line_and_shared_gaps(self):
         window = MainWindow()
         try:
             root_layout = window.centralWidget().layout()
             margins = root_layout.contentsMargins()
-            self.assertEqual((margins.left(), margins.top(), margins.right(), margins.bottom()), (3, 3, 3, 3))
-            self.assertEqual(root_layout.spacing(), 3)
-            self.assertEqual(window.workspace_splitter.handleWidth(), 3)
+            self.assertEqual((margins.left(), margins.top(), margins.right(), margins.bottom()), (APP_PANEL_GAP, APP_PANEL_GAP, APP_PANEL_GAP, APP_PANEL_GAP))
+            self.assertEqual(root_layout.spacing(), APP_PANEL_GAP)
+            self.assertEqual(window.workspace_splitter.handleWidth(), APP_PANEL_GAP)
             self.assertFalse(window.workspace_splitter.handle(1).isEnabled())
-            self.assertEqual(window.right_layout.spacing(), 3)
+            self.assertEqual(window.right_layout.spacing(), APP_PANEL_GAP)
             for widget in (
                 window.home_page,
                 window.stack,
@@ -172,6 +194,41 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIn("border-radius: 7px", window.stack.styleSheet())
             self.assertIn("border-radius: 7px", window.bottom_work_panel.styleSheet())
             self.assertIn("border-radius: 7px", window.global_menu_bar.styleSheet())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_unified_sidebar_margins_match_queue_status_gap(self):
+        window = MainWindow()
+        try:
+            window._unified_dashboard = True
+            window.resize(2048, 1258)
+            window._build_home_content()
+            window.show()
+            self.app.processEvents()
+
+            home_layout = window.home_page.layout()
+            home_margins = home_layout.contentsMargins()
+            self.assertEqual(
+                (home_margins.left(), home_margins.top(), home_margins.right(), home_margins.bottom()),
+                (APP_PANEL_GAP, APP_PANEL_GAP, APP_PANEL_GAP, 0),
+            )
+            self.assertEqual(home_layout.spacing(), APP_PANEL_GAP)
+
+            queue_panel = getattr(window, "sidebar_queue_panel", None)
+            self.assertIsNotNone(queue_panel)
+            left_layout = queue_panel.parentWidget().layout()
+            self.assertEqual(left_layout.spacing(), APP_PANEL_GAP)
+
+            status_card = window.sidebar_settings_label.parentWidget()
+            queue_bottom = queue_panel.mapTo(window, QPoint(0, queue_panel.height())).y()
+            status_top = status_card.mapTo(window, QPoint(0, 0)).y()
+            self.assertEqual(status_top - queue_bottom, APP_PANEL_GAP)
+
+            home_right = window.home_page.mapTo(window, QPoint(window.home_page.width(), 0)).x()
+            right_left = window.right_workspace.mapTo(window, QPoint(0, 0)).x()
+            self.assertEqual(right_left - home_right, APP_PANEL_GAP)
         finally:
             window.close()
             window.deleteLater()
@@ -256,6 +313,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertTrue(items)
             self.assertEqual(items[0].get("id"), "generation_status")
             self.assertEqual(items[0].get("meta"), "CPU -- · PROC -- · RAM --")
+            self.assertEqual(items[0].get("height"), 42)
+            self.assertEqual(nav.minimumHeight(), 42 + (4 * (len(items) - 1)) + (26 * (len(items) - 1)))
         finally:
             window.close()
             window.deleteLater()
@@ -1199,7 +1258,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             )
 
             self.assertEqual(panel._table.item(0, 0).text(), "자막 생성 완료 판정 중")
-            self.assertEqual(panel._table.item(0, 0).foreground().color().name().upper(), "#FFD84D")
+            self.assertEqual(panel._table.item(0, 0).foreground().color().name().upper(), COLORS["warning"])
         finally:
             window.close()
             window.deleteLater()
@@ -1227,7 +1286,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(panel._table.currentRow(), 8)
             active_fg = panel._table.item(8, 1).foreground().color().name().upper()
             waiting_fg = panel._table.item(0, 1).foreground().color().name().upper()
-            self.assertEqual(active_fg, "#FFD84D")
+            self.assertEqual(active_fg, COLORS["warning"])
             self.assertEqual(waiting_fg, "#9DB0BB")
         finally:
             window.close()
@@ -1254,7 +1313,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             panel.set_queue("큐 리스트 : (2/4) - 10% 완료", items)
 
             self.assertEqual(panel._table.currentRow(), 1)
-            self.assertEqual(panel._table.item(1, 1).foreground().color().name().upper(), "#FFD84D")
+            self.assertEqual(panel._table.item(1, 1).foreground().color().name().upper(), COLORS["warning"])
             self.assertEqual(panel._table.item(2, 1).foreground().color().name().upper(), "#9DB0BB")
         finally:
             window.close()
@@ -1405,24 +1464,63 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.app.processEvents()
 
             button = getattr(window, "_project_info_button_card", None)
+            slot = getattr(window, "_project_info_button_slot", None)
             terminal = getattr(window, "sidebar_terminal_panel", None)
             self.assertIsNotNone(button)
+            self.assertIsNotNone(slot)
             self.assertIsNotNone(terminal)
-            self.assertGreater(button.y(), terminal.y())
+            self.assertGreater(
+                button.mapTo(window, QPoint(0, 0)).y(),
+                terminal.mapTo(window, QPoint(0, 0)).y(),
+            )
             self.assertEqual(
                 button.mapTo(window, QPoint(0, 0)).y(),
                 window.global_menu_bar.mapTo(window, QPoint(0, 0)).y(),
             )
+            self.assertEqual(slot.height(), button.height())
+            self.assertEqual(window.global_menu_bar.height(), button.height())
 
             window._toggle_project_info_card()
             self.app.processEvents()
             overlay = getattr(window, "_project_info_overlay", None)
             self.assertIsNotNone(overlay)
-            self.assertLess(overlay.y(), button.y())
+            self.assertLess(
+                overlay.mapTo(window, QPoint(0, 0)).y(),
+                button.mapTo(window, QPoint(0, 0)).y(),
+            )
 
             window._toggle_project_info_card()
             self.app.processEvents()
             self.assertIsNone(getattr(window, "_project_info_overlay", None))
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_terminal_panel_fills_gap_between_status_and_project_button(self):
+        window = MainWindow()
+        try:
+            window._unified_dashboard = True
+            window.resize(2048, 1258)
+            window._build_home_content()
+            window.show()
+            self.app.processEvents()
+
+            terminal = getattr(window, "sidebar_terminal_panel", None)
+            status_card = getattr(window, "_sidebar_status_card_widget", None)
+            slot = getattr(window, "_project_info_button_slot", None)
+            self.assertIsNotNone(terminal)
+            self.assertIsNotNone(status_card)
+            self.assertIsNotNone(slot)
+
+            status_bottom = status_card.mapTo(window, QPoint(0, status_card.height())).y()
+            terminal_top = terminal.mapTo(window, QPoint(0, 0)).y()
+            terminal_bottom = terminal.mapTo(window, QPoint(0, terminal.height())).y()
+            slot_top = slot.mapTo(window, QPoint(0, 0)).y()
+
+            self.assertEqual(terminal_top - status_bottom, APP_PANEL_GAP)
+            self.assertEqual(slot_top - terminal_bottom, APP_PANEL_GAP)
+            self.assertGreater(terminal.height(), 190)
         finally:
             window.close()
             window.deleteLater()
@@ -1443,7 +1541,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 button.mapTo(window, QPoint(0, 0)).y(),
                 window.global_menu_bar.mapTo(window, QPoint(0, 0)).y(),
             )
-            self.assertGreaterEqual(button.height(), MENU_BUTTON_HEIGHT)
+            self.assertEqual(button.height(), MENU_BUTTON_HEIGHT)
             for menu_button in window.global_menu_bar._tool_buttons:
                 self.assertEqual(menu_button.height(), MENU_BUTTON_HEIGHT)
                 self.assertLessEqual(menu_button.iconSize().height(), 18)
@@ -1834,6 +1932,67 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_home_navigation_preserves_idle_editor_video_surface(self):
+        window = MainWindow()
+
+        class _Video:
+            def __init__(self):
+                self._ui_timer = QTimer()
+                self._ui_timer.start(10_000)
+                self.paused = False
+                self.shutdown_calls = 0
+                self.media_player = mock.Mock()
+                self.vocal_player = mock.Mock()
+
+            def suspend_for_navigation(self):
+                self.paused = True
+
+            def shutdown_backend(self):
+                self.shutdown_calls += 1
+
+        class _Editor(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.sm = SimpleNamespace(is_locked=False, state="ST_IDLE")
+                self._is_ai_processing = False
+                self._roughcut_draft_timer = QTimer()
+                self._roughcut_draft_timer.start(10_000)
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 1
+                self.video_player = _Video()
+
+            def _set_roughcut_draft_status(self, _status):
+                pass
+
+        editor = _Editor()
+        try:
+            window._editor_widget = editor
+            with mock.patch("core.audio.live_stt.stop_live_stt_worker", return_value=False), \
+                 mock.patch(
+                     "core.platform_compat.cleanup_app_runtime_processes",
+                     return_value={
+                         "ollama_models": 0,
+                         "ollama_processes": 0,
+                         "child_processes": 0,
+                         "legacy_preview_ffmpeg": 0,
+                     },
+                 ):
+                cleaned = window._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.1)
+
+            self.assertFalse(cleaned)
+            self.assertTrue(editor.video_player.paused)
+            self.assertEqual(editor.video_player.shutdown_calls, 0)
+            editor.video_player.media_player.stop.assert_not_called()
+            editor.video_player.vocal_player.stop.assert_not_called()
+            self.assertTrue(editor.video_player._ui_timer.isActive())
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_app_exit_force_does_not_log_pipeline_stop_for_idle_backend(self):
         window = MainWindow()
 
@@ -2030,7 +2189,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 window._quick_exit()
 
             expected_timeout = 0.08 if sys.platform == "darwin" else 0.15
-            expected_delay = 30 if sys.platform == "darwin" else 60
+            expected_delay = 20 if sys.platform == "darwin" else 60
             self.assertEqual(events, [("schedule", expected_delay), ("pause", "앱 종료"), ("cleanup_async", expected_timeout)])
             quit_app.assert_called_once()
         finally:
@@ -2078,7 +2237,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             scheduled = window._schedule_forced_exit_for_busy_about_to_quit()
 
             self.assertTrue(scheduled)
-            self.assertEqual(calls, [180 if sys.platform == "darwin" else 320])
+            self.assertEqual(calls, [80 if sys.platform == "darwin" else 320])
         finally:
             window._personalization_idle_trainer = None
             window.close()
@@ -2422,6 +2581,43 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertTrue(first)
             self.assertFalse(second)
             cleanup_runtime.assert_called_once()
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_open_editor_screen_restores_video_surface_after_home(self):
+        window = MainWindow()
+
+        class _Video:
+            def __init__(self):
+                self.restore_calls = 0
+
+            def restore_after_navigation(self):
+                self.restore_calls += 1
+
+        class _Editor(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.video_player = _Video()
+
+        editor = _Editor()
+        try:
+            window.stack.addWidget(editor)
+            window._editor_widget = editor
+            window._attach_global_menu_to_editor = mock.Mock()
+            window._show_bottom_queue_table = mock.Mock()
+            window._release_ai_models_for_editor_mode = mock.Mock()
+            window._activate_editor_idle_mode = mock.Mock()
+            window._build_home_content = mock.Mock()
+
+            window._open_editor_screen()
+            self.app.processEvents()
+
+            self.assertGreaterEqual(editor.video_player.restore_calls, 1)
         finally:
             window._editor_widget = None
             editor.close()

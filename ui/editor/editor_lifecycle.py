@@ -531,40 +531,49 @@ class EditorLifecycleMixin:
                 if hasattr(self._editor_widget, '_stop_pipeline'):
                     self._editor_widget._stop_pipeline()
 
-            if getattr(self._editor_widget, '_skip_prev_confirm_once', False):
+            skip_confirm_once = bool(getattr(self._editor_widget, '_skip_prev_confirm_once', False))
+            if skip_confirm_once:
                 self._editor_widget._skip_prev_confirm_once = False
-                event.accept()
-            else:
-                is_dirty = False
+                skip_clean = True
                 try:
                     dirty_checker = getattr(self._editor_widget, "_has_unsaved_changes", None)
-                    if callable(dirty_checker):
-                        is_dirty = bool(dirty_checker())
-                    elif hasattr(self._editor_widget, 'sm'):
-                        is_dirty = bool(self._editor_widget.sm.is_dirty)
+                    skip_clean = not callable(dirty_checker) or not bool(dirty_checker())
                 except Exception:
-                    pass
+                    skip_clean = True
+                if skip_clean:
+                    event.accept()
+                    return
 
-                if is_dirty:
-                    helper = getattr(self._editor_widget, "_confirm_close_before_exit", None)
-                    if callable(helper):
-                        if not helper("종료 확인"):
-                            event.ignore()
-                            return
+            is_dirty = False
+            try:
+                dirty_checker = getattr(self._editor_widget, "_has_unsaved_changes", None)
+                if callable(dirty_checker):
+                    is_dirty = bool(dirty_checker())
+                elif hasattr(self._editor_widget, 'sm'):
+                    is_dirty = bool(self._editor_widget.sm.is_dirty)
+            except Exception:
+                pass
+
+            if is_dirty:
+                helper = getattr(self._editor_widget, "_confirm_close_before_exit", None)
+                if callable(helper):
+                    if not helper("종료 확인"):
+                        event.ignore()
+                        return
+                    event.accept()
+                else:
+                    reply = confirm_save_changes(self, title="종료 확인")
+                    if reply == QMessageBox.StandardButton.Yes:
+                        if hasattr(self._editor_widget, '_on_save'):
+                            self._editor_widget._on_save()
+                        event.accept()
+                    elif reply == QMessageBox.StandardButton.No:
                         event.accept()
                     else:
-                        reply = confirm_save_changes(self, title="종료 확인")
-                        if reply == QMessageBox.StandardButton.Yes:
-                            if hasattr(self._editor_widget, '_on_save'):
-                                self._editor_widget._on_save()
-                            event.accept()
-                        elif reply == QMessageBox.StandardButton.No:
-                            event.accept()
-                        else:
-                            event.ignore()
-                            return
-                else:
-                    event.accept()
+                        event.ignore()
+                        return
+            else:
+                event.accept()
         else:
             event.accept()
             return

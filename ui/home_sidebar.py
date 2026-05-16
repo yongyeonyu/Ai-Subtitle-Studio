@@ -38,7 +38,7 @@ from ui.queue.queue_formatting import (
 )
 from ui.queue.queue_dispatch import queue_active_row_index, queue_progress_state
 from ui.settings.settings_common import filter_available_whisper_models, whisper_model_display_name
-from ui.style import line_icon
+from ui.style import COLORS, line_icon
 
 
 def _runtime_load_settings():
@@ -830,7 +830,7 @@ class HomeSidebarMixin:
             "progressText": snapshot["progressText"],
             "meta": snapshot["meta"],
             "fillColor": "#153A25",
-            "height": 50,
+            "height": 42,
             "tooltip": snapshot["tooltip"],
         }
 
@@ -945,6 +945,13 @@ class HomeSidebarMixin:
             "</table>"
         )
         label.setToolTip(tooltip)
+        log_widget = getattr(self, "log_text", None)
+        refresher = getattr(log_widget, "refresh_display", None) if log_widget is not None else None
+        if callable(refresher):
+            try:
+                refresher()
+            except Exception:
+                pass
 
     def _runtime_title_status_color(self) -> str:
         snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
@@ -959,7 +966,7 @@ class HomeSidebarMixin:
         stage = str(snapshot.get("pressure_stage", "normal") or "normal")
         return {
             "normal": "#34C759",
-            "warning": "#FFD60A",
+            "warning": COLORS["warning"],
             "critical": "#FF453A",
             "exit": "#FF9500",
         }.get(stage, "#34C759")
@@ -1607,7 +1614,7 @@ class HomeSidebarMixin:
         return completed
 
     def _pipeline_model_link(self, key: str, text: str, *, current: bool = False, completed: bool = False) -> str:
-        color = "#00D46A" if completed else ("#FFD60A" if current else "#F5F7FA")
+        color = "#00D46A" if completed else (COLORS["warning"] if current else "#F5F7FA")
         dropdown_icon = " ▾" if key in {"cut_boundary", "stt1", "stt2", "subtitle_llm", "roughcut_llm"} else ""
         return (
             f"<a href='model:{escape(key)}' "
@@ -1637,7 +1644,7 @@ class HomeSidebarMixin:
             completed = key in completed_keys
             current = key in current_keys and not completed
             bg_style = " background-color:#12362A;" if current else ""
-            num_color = "#00D46A" if completed else ("#FFD60A" if current else "#F5F7FA")
+            num_color = "#00D46A" if completed else (COLORS["warning"] if current else "#F5F7FA")
             stage_color = num_color if (completed or current) else "#F5F7FA"
             model_color = num_color if (completed or current) else "#F5F7FA"
             model_html = (

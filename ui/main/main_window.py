@@ -12,7 +12,7 @@ import threading
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QSplitter, QPushButton,
+    QSplitter, QPushButton, QSizePolicy,
 )
 from PyQt6.QtCore import QDateTime, QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
@@ -27,7 +27,7 @@ from ui.main.workspace_stack import MainWorkspaceStack
 from ui.sidebar.project_sidebar_widget import ProjectSidebarWidget
 from ui.log.terminal_log_widget import TerminalLogWidget
 from ui.responsive_profile import responsive_profile_for_size, responsive_sidebar_width
-from ui.style import button_style, label_style, line_icon
+from ui.style import APP_PANEL_GAP, button_style, label_style, line_icon
 
 from ui.project.project_panel import ProjectUIMixin
 from ui.project.project_session_runtime import detach_project_session, set_project_boundary_rows
@@ -52,7 +52,7 @@ from core.path_manager import (
 )
 from core.settings import load_settings, save_settings
 
-MAIN_PANEL_GAP = 3
+MAIN_PANEL_GAP = APP_PANEL_GAP
 
 
 class MainWindow(
@@ -569,7 +569,8 @@ class MainWindow(
         if splitter is None or sidebar is None:
             return
         profile = self._current_responsive_profile()
-        total = max(1, int(self.width() or 0) - (MAIN_PANEL_GAP * 2))
+        handle_w = int(splitter.handleWidth() or 0)
+        total = max(1, int(self.width() or 0) - (MAIN_PANEL_GAP * 2) - handle_w)
         if not bool(getattr(self, "_log_visible", True)):
             run_nonfatal_ui_step(
                 "반응형 레이아웃",
@@ -623,7 +624,8 @@ class MainWindow(
             default=[],
         )
         current_w = int(sizes[0]) if len(sizes) >= 2 and int(sizes[0]) > 0 else 0
-        total = max(1, sum(sizes) if sizes else int(self.width() or 0) - (MAIN_PANEL_GAP * 2))
+        handle_w = int(splitter.handleWidth() or 0)
+        total = max(1, sum(sizes) if sizes else int(self.width() or 0) - (MAIN_PANEL_GAP * 2) - handle_w)
         target = int(width or current_w or responsive_sidebar_width(total, profile))
         target = max(profile.sidebar_min_width, min(profile.sidebar_max_width, target))
         self._workspace_sidebar_locked_width = target
@@ -665,14 +667,21 @@ class MainWindow(
             QTimer.singleShot(0, menu.refresh)
         if hasattr(self, "_sync_project_info_button_height"):
             QTimer.singleShot(0, self._sync_project_info_button_height)
+        if hasattr(self, "_sync_sidebar_terminal_panel_height"):
+            QTimer.singleShot(0, self._sync_sidebar_terminal_panel_height)
 
     def _create_sidebar_terminal_panel(self):
         panel = TerminalLogWidget(self.home_page)
         panel.setMinimumHeight(116)
-        panel.setMaximumHeight(190)
+        panel.setMaximumHeight(16777215)
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         panel.setStyleSheet(
             "QWidget#TerminalLogPanel { background: #11181C; border: 1px solid #2D3942; border-radius: 7px; }"
         )
+        if callable(getattr(self, "_generation_progress_snapshot", None)):
+            panel.log_text.set_progress_snapshot_getter(
+                lambda: dict(getattr(self, "_generation_progress_snapshot", lambda: {})() or {})
+            )
         self.sidebar_terminal_panel = panel
         self.log_text = panel.log_text
         return panel
@@ -2130,7 +2139,7 @@ class MainWindow(
             event.ignore()
             return
         try:
-            self._schedule_forced_process_exit(delay_ms=30 if getattr(config, "IS_MAC", False) else 60)
+            self._schedule_forced_process_exit(delay_ms=20 if getattr(config, "IS_MAC", False) else 60)
         except Exception:
             pass
         busy_before_exit = False

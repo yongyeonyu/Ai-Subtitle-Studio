@@ -16,10 +16,10 @@ class TabletViewportSmokeTests(unittest.TestCase):
 
     def test_main_window_tablet_landscape_and_portrait_smoke(self):
         cases = [
-            ("tablet_landscape", 1180, 820, 58),
-            ("tablet_portrait", 820, 1180, 60),
+            ("tablet_landscape", 1180, 820),
+            ("tablet_portrait", 820, 1180),
         ]
-        for profile, width, height, menu_h in cases:
+        for profile, width, height in cases:
             with self.subTest(profile=profile):
                 window = MainWindow()
                 try:
@@ -29,7 +29,9 @@ class TabletViewportSmokeTests(unittest.TestCase):
                     window.global_menu_bar.refresh()
                     self.app.processEvents()
 
-                    self.assertEqual(window.global_menu_bar.height(), menu_h)
+                    self.assertEqual(window.global_menu_bar.visual_panel_height(), window._project_info_button_height())
+                    self.assertEqual(window.global_menu_bar.visual_panel_height(), 48)
+                    self.assertEqual(window.global_menu_bar.height(), window.global_menu_bar.visual_panel_height())
                     sizes = window.workspace_splitter.sizes()
                     self.assertGreater(sizes[0], 0)
                     self.assertGreater(sizes[1], sizes[0])

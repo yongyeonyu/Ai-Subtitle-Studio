@@ -681,6 +681,61 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(canvas._diamond_index_at(209, DIAMOND_Y, margin=5), 0)
         self.assertIsNone(canvas._diamond_index_at(211, DIAMOND_Y, margin=5))
 
+    def test_attached_subtitle_visual_rects_meet_at_diamond_frame_boundary(self):
+        canvas = self._canvas()
+        try:
+            left, right = canvas.segments
+            left_rect = canvas._subtitle_segment_visual_rect(
+                left,
+                canvas._x(left["start"]),
+                canvas._x(left["end"]),
+                SUBTITLE_TOP,
+                SUBTITLE_BOT,
+            )
+            right_rect = canvas._subtitle_segment_visual_rect(
+                right,
+                canvas._x(right["start"]),
+                canvas._x(right["end"]),
+                SUBTITLE_TOP,
+                SUBTITLE_BOT,
+            )
+
+            self.assertEqual(len(canvas._diamond_pairs()), 1)
+            self.assertEqual(left_rect.x() + left_rect.width(), right_rect.x())
+        finally:
+            canvas.deleteLater()
+
+    def test_one_frame_gap_does_not_show_attached_diamond(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.set_frame_rate(30.0)
+            canvas.pps = 300.0
+            canvas.total_duration = 4.0
+            canvas.segments = [
+                {"start": 1.0, "end": 2.0, "text": "앞", "line": 0},
+                {"start": 2.0 + (1.0 / 30.0), "end": 3.0, "text": "뒤", "line": 1},
+            ]
+            left, right = canvas.segments
+            left_rect = canvas._subtitle_segment_visual_rect(
+                left,
+                canvas._x(left["start"]),
+                canvas._x(left["end"]),
+                SUBTITLE_TOP,
+                SUBTITLE_BOT,
+            )
+            right_rect = canvas._subtitle_segment_visual_rect(
+                right,
+                canvas._x(right["start"]),
+                canvas._x(right["end"]),
+                SUBTITLE_TOP,
+                SUBTITLE_BOT,
+            )
+
+            self.assertEqual(canvas._diamond_pairs(), [])
+            self.assertGreater(right_rect.x(), left_rect.x() + left_rect.width())
+        finally:
+            canvas.deleteLater()
+
     def test_tablet_profile_expands_diamond_hit_target(self):
         canvas = self._canvas()
         canvas.setProperty("responsive_profile_override", "tablet_landscape")
@@ -1804,7 +1859,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertTrue(canvas._is_active_segment(canvas.segments[0]))
         self.assertFalse(canvas._is_active_segment(canvas.segments[1]))
 
-    def test_playback_active_segment_follows_playhead_not_stale_active_line(self):
+    def test_playback_does_not_retarget_active_segment_to_playhead(self):
         canvas = self._canvas()
         canvas.segments = [
             {"start": 1.00, "end": 2.00, "text": "앞", "line": 0},
@@ -1815,8 +1870,21 @@ class TimelineHitTargetTests(unittest.TestCase):
         canvas.playhead_sec = 2.4
         canvas._timeline_playback_active = lambda: True
 
-        self.assertFalse(canvas._is_active_segment(canvas.segments[0]))
-        self.assertTrue(canvas._is_active_segment(canvas.segments[1]))
+        self.assertTrue(canvas._is_active_segment(canvas.segments[0]))
+        self.assertFalse(canvas._is_active_segment(canvas.segments[1]))
+
+    def test_external_playhead_overlay_does_not_repaint_timeline_body_during_playback(self):
+        canvas = self._canvas()
+        canvas.resize(640, canvas.height())
+        canvas._external_playhead_overlay = True
+        canvas._timeline_playback_active = lambda: True
+        canvas.playhead_sec = 1.2
+        canvas._last_playhead_px = canvas._x(1.2)
+
+        with patch.object(canvas, "update") as update:
+            canvas.set_playhead(2.4)
+
+        update.assert_not_called()
 
     def test_hovered_arrow_stays_active_when_segment_objects_refresh(self):
         canvas = self._canvas()
@@ -1889,7 +1957,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertIsNotNone(editor)
             self.assertTrue(editor.isVisible())
             self.assertEqual(canvas._subtitle_segment_font().pointSize(), 13)
-            self.assertEqual(canvas._stt_preview_font().pointSize(), 10)
+            self.assertEqual(canvas._stt_preview_font().pointSize(), 9)
 
             start_cursor = editor.textCursor()
             start_cursor.setPosition(0)
@@ -2375,12 +2443,40 @@ class TimelineHitTargetTests(unittest.TestCase):
 
             target = canvas.segments[1]
             canvas._setup_drag(target, "square_right", canvas._x(target["end"]))
+            self.assertAlmostEqual(canvas.shadow_playhead_sec, 3.45)
             canvas._apply_drag(0.43)
 
             self.assertAlmostEqual(target["end"], 3.45)
             self.assertEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "shadow_playhead")
+            self.assertIsNone(canvas.shadow_playhead_sec)
         finally:
             canvas.deleteLater()
+
+    def test_mouse_click_materializes_last_arrow_frame_as_shadow_playhead(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.frame_rate = 100.0
+            canvas.pps = 100.0
+            canvas.total_duration = 5.0
+            canvas.playhead_sec = 2.0
+            canvas._arm_shadow_playhead(2.0)
+            scrubbed = []
+            canvas.scrub_sec.connect(scrubbed.append)
+
+            QTest.mouseClick(
+                canvas,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(canvas._x(3.2), SEG_TOP + 32),
+            )
+
+            self.assertEqual(scrubbed, [3.2])
+            self.assertAlmostEqual(canvas.shadow_playhead_sec or 0.0, 2.0, places=4)
+            self.assertIsNone(getattr(canvas, "_shadow_playhead_armed_sec", None))
+        finally:
+            canvas.deleteLater()
+
 
     def test_timing_confirm_request_confirms_review_segment(self):
         editor = _ReviewEditor()

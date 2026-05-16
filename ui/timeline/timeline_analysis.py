@@ -11,11 +11,12 @@ from core.project.subtitle_status import (
     SUBTITLE_STATUS_COLORS,
     subtitle_detection_score,
 )
+from ui.style import COLORS
 
 
 SAFETY_COLORS = {
     "ideal": "#34C759",
-    "acceptable": "#FFCC00",
+    "acceptable": COLORS["warning"],
     "risky": "#FF453A",
 }
 
@@ -29,7 +30,7 @@ ACTION_COLORS = {
 
 QUALITY_COLORS = {
     "green": "#34C759",
-    "yellow": "#FFCC00",
+    "yellow": COLORS["warning"],
     "red": "#FF453A",
     "gray": "#8E8E93",
 }
@@ -45,6 +46,14 @@ VOICE_ACTIVITY_STYLES = {
 
 SUBTITLE_DETECTION_NEEDS_SELECTION_COLOR = "#8E8E93"
 SUBTITLE_DETECTION_IDLE_COLOR = "#2D3942"
+SUBTITLE_SCORE_DETECTION_KINDS = {
+    "conflict",
+    "llm_selected",
+    "manual_selected",
+    "pending",
+    "recheck",
+    "subtitle_score",
+}
 MAJOR_SEGMENT_COLORS = (
     "#00E676",  # A
     "#FF453A",  # B
@@ -552,7 +561,7 @@ def subtitle_detection_segments_for_editor(
                 state,
                 source=source,
                 label=label,
-                color=SUBTITLE_STATUS_COLORS["pending"],
+                color=COLORS["warning"],
                 priority=92 if llm_selected else 84,
                 alpha=158,
                 score=score,
@@ -567,7 +576,7 @@ def subtitle_detection_segments_for_editor(
                 "subtitle_score",
                 source="quality",
                 label=_subtitle_detection_label("미확정", score),
-                color=SUBTITLE_STATUS_COLORS["pending"],
+                color=COLORS["warning"],
                 priority=54,
                 alpha=126,
                 score=score,
@@ -580,18 +589,74 @@ def subtitle_detection_segments_for_editor(
     return _resolve_non_overlapping_voice_activity(candidates)
 
 
+def subtitle_score_overlay_marker(seg: dict, *, recheck_threshold: float | None = None) -> dict | None:
+    """Return compact score text that can be rendered above the subtitle row."""
+    if not isinstance(seg, dict) or seg.get("is_gap") or seg.get("stt_pending") or seg.get("_live_stt_preview"):
+        return None
+    start = _as_float(seg.get("start"))
+    end = _as_float(seg.get("end"))
+    if start is None or end is None or end <= start:
+        return None
+
+    llm_selected = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
+    manually_selected = bool(str(seg.get("stt_selected_source", "") or "").strip())
+    source = _selected_stt_source(seg)
+    score = _subtitle_detection_score(seg, source)
+    quality = dict(seg.get("quality") or {})
+    flags = {str(flag) for flag in (quality.get("flags") or [])}
+    manually_confirmed = bool(quality.get("manual_confirmed")) or "manual_confirmed" in flags
+    if manually_confirmed:
+        return None
+
+    review_state = subtitle_review_state(
+        seg,
+        recheck_threshold=_cached_recheck_threshold() if recheck_threshold is None else float(recheck_threshold),
+    )
+    if review_state == "recheck":
+        label = _subtitle_detection_label("재검사", score)
+        color = SUBTITLE_STATUS_COLORS["recheck"]
+        kind = "recheck"
+    elif review_state == "conflict" and not (llm_selected or manually_selected):
+        label = _subtitle_detection_label("판단불가", score)
+        color = SUBTITLE_STATUS_COLORS["conflict"]
+        kind = "conflict"
+    elif source in {"STT1", "STT2"}:
+        label = _subtitle_detection_label(source, score, suffix="미확정")
+        color = COLORS["warning"]
+        kind = "llm_selected" if llm_selected else ("manual_selected" if manually_selected else "pending")
+    elif quality:
+        label = _subtitle_detection_label("미확정", score)
+        color = COLORS["warning"]
+        kind = "subtitle_score"
+    else:
+        return None
+
+    return {
+        "start": round(float(start), 3),
+        "end": round(float(end), 3),
+        "kind": kind,
+        "label": label,
+        "color": color,
+        "score": score,
+    }
+
+
 def subtitle_detection_color(score: float | None) -> str:
     value = 50.0 if score is None else max(0.0, min(100.0, float(score)))
+    warning = COLORS["warning"].lstrip("#")
+    warning_r = int(warning[0:2], 16)
+    warning_g = int(warning[2:4], 16)
+    warning_b = int(warning[4:6], 16)
     if value >= 50.0:
         ratio = (value - 50.0) / 50.0
-        r = round(255 + (52 - 255) * ratio)
-        g = round(204 + (199 - 204) * ratio)
-        b = round(0 + (89 - 0) * ratio)
+        r = round(warning_r + (52 - warning_r) * ratio)
+        g = round(warning_g + (199 - warning_g) * ratio)
+        b = round(warning_b + (89 - warning_b) * ratio)
     else:
         ratio = value / 50.0
-        r = round(255 + (255 - 255) * ratio)
-        g = round(69 + (204 - 69) * ratio)
-        b = round(58 + (0 - 58) * ratio)
+        r = round(255 + (warning_r - 255) * ratio)
+        g = round(69 + (warning_g - 69) * ratio)
+        b = round(58 + (warning_b - 58) * ratio)
     return f"#{r:02X}{g:02X}{b:02X}"
 
 

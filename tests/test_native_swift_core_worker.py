@@ -25,6 +25,7 @@ class NativeSwiftCoreWorkerTests(unittest.TestCase):
         stop_native_core_worker()
 
     def test_swift_runtime_defaults_on_for_macos_and_keeps_disable_switch(self):
+        native_subtitle._native_swift_runtime_enabled_cached.cache_clear()
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch("core.native_swift_subtitle.sys.platform", "darwin"):
             self.assertTrue(native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_PROJECT_IO"))
 
@@ -39,6 +40,18 @@ class NativeSwiftCoreWorkerTests(unittest.TestCase):
             "darwin",
         ):
             self.assertFalse(native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_TIMELINE"))
+
+    def test_swift_runtime_enabled_reuses_cached_env_decision(self):
+        native_subtitle._native_swift_runtime_enabled_cached.cache_clear()
+        with mock.patch.dict(os.environ, {"AI_SUBTITLE_STUDIO_SWIFT_CORE": "1"}, clear=True), \
+             mock.patch("core.native_swift_subtitle.sys.platform", "darwin"):
+            self.assertTrue(native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_PROJECT_IO"))
+            with mock.patch(
+                "core.native_swift_subtitle._env_state_value",
+                side_effect=AssertionError("runtime env state should be cached"),
+            ):
+                self.assertTrue(native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_PROJECT_IO"))
+        native_subtitle._native_swift_runtime_enabled_cached.cache_clear()
 
     def test_core_worker_reuses_single_swift_process_across_srt_and_project_tasks(self):
         if find_native_cli_path() is None:
@@ -85,6 +98,86 @@ class NativeSwiftCoreWorkerTests(unittest.TestCase):
             self.assertIsInstance(loaded, dict)
             self.assertEqual(loaded["project_name"], "worker-test")
             self.assertNotIn("_project_file_path", loaded)
+
+    def test_core_worker_skips_cli_path_lookup_after_worker_is_running(self):
+        if find_native_cli_path() is None:
+            self.skipTest("AIStudioNativeCLI release build is not available")
+
+        env = {"AI_SUBTITLE_STUDIO_SWIFT_CORE": "1"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            first = request_native_core_task("pipeline_status_summary", {"status_text": "⏳ [STT] 진행 중"})
+            self.assertIsInstance(first, dict)
+            with mock.patch(
+                "core.native_swift_subtitle.find_native_cli_path",
+                side_effect=AssertionError("running worker should be reused without path lookup"),
+            ):
+                second = request_native_core_task("pipeline_status_summary", {"status_text": "⏳ [VAD] 검사 중"})
+
+        self.assertIsInstance(second, dict)
+        self.assertEqual(second.get("keys"), ["vad"])
+
+    def test_find_native_cli_path_reuses_cached_hit_for_same_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = Path(tmp) / "AIStudioNativeCLI"
+            cli.write_text("#!/bin/sh\n", encoding="utf-8")
+            cli.chmod(0o755)
+            native_subtitle._CLI_PATH_CACHE_ENV = None
+            native_subtitle._CLI_PATH_CACHE = None
+            native_subtitle._CLI_PATH_CACHE_AT = 0.0
+
+            with mock.patch.dict(os.environ, {"AI_SUBTITLE_STUDIO_NATIVE_CLI": str(cli)}, clear=True):
+                first = find_native_cli_path()
+                with mock.patch(
+                    "core.native_swift_subtitle._candidate_cli_paths",
+                    side_effect=AssertionError("cached CLI path should be reused"),
+                ):
+                    second = find_native_cli_path()
+
+        self.assertEqual(first, cli)
+        self.assertEqual(second, cli)
+
+    def test_find_native_cli_path_skips_recent_hit_stat_for_same_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = Path(tmp) / "AIStudioNativeCLI"
+            cli.write_text("#!/bin/sh\n", encoding="utf-8")
+            cli.chmod(0o755)
+            native_subtitle._CLI_PATH_CACHE_ENV = None
+            native_subtitle._CLI_PATH_CACHE = None
+            native_subtitle._CLI_PATH_CACHE_AT = 0.0
+
+            with mock.patch.dict(os.environ, {"AI_SUBTITLE_STUDIO_NATIVE_CLI": str(cli)}, clear=True), \
+                 mock.patch("core.native_swift_subtitle.time.time", return_value=100.0):
+                first = find_native_cli_path()
+
+            with mock.patch.dict(os.environ, {"AI_SUBTITLE_STUDIO_NATIVE_CLI": str(cli)}, clear=True), \
+                 mock.patch("core.native_swift_subtitle.time.time", return_value=101.0), \
+                 mock.patch("pathlib.Path.exists", side_effect=AssertionError("recent CLI hit should not stat")):
+                second = find_native_cli_path()
+
+        self.assertEqual(first, cli)
+        self.assertEqual(second, cli)
+
+    def test_find_native_cli_path_reuses_short_lived_miss_for_same_env(self):
+        native_subtitle._CLI_PATH_CACHE_ENV = None
+        native_subtitle._CLI_PATH_CACHE = None
+        native_subtitle._CLI_PATH_CACHE_AT = 0.0
+
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("core.native_swift_subtitle._candidate_cli_paths", return_value=[]), \
+             mock.patch("core.native_swift_subtitle.time.time", return_value=100.0):
+            self.assertIsNone(find_native_cli_path())
+
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch(
+                 "core.native_swift_subtitle._candidate_cli_paths",
+                 side_effect=AssertionError("recent CLI miss should be cached briefly"),
+             ), \
+             mock.patch("core.native_swift_subtitle.time.time", return_value=101.0):
+            self.assertIsNone(find_native_cli_path())
+
+        native_subtitle._CLI_PATH_CACHE_ENV = None
+        native_subtitle._CLI_PATH_CACHE = None
+        native_subtitle._CLI_PATH_CACHE_AT = 0.0
 
     def test_core_worker_handles_runtime_eta_roundtrip(self):
         if find_native_cli_path() is None:

@@ -150,10 +150,6 @@ def extract_topicless_placeholders_from_project(project_path: str) -> list[dict]
 
     analysis = project.get("analysis", {}) if isinstance(project, dict) else {}
 
-    middle_rows = analysis.get("middle_segments", [])
-    if isinstance(middle_rows, list) and middle_rows and not rows_are_placeholder_only(middle_rows):
-        return [dict(row) for row in middle_rows if isinstance(row, dict)]
-
     for key in (
         "cut_boundary_topicless_middle_segments",
         "topicless_middle_segments",
@@ -161,27 +157,25 @@ def extract_topicless_placeholders_from_project(project_path: str) -> list[dict]
         "middle_segments",
     ):
         rows = analysis.get(key, [])
-        if rows:
-            return list(rows)
+        if isinstance(rows, list) and rows:
+            placeholder_rows = [dict(row) for row in rows if isinstance(row, dict) and _is_placeholder_row(row)]
+            if placeholder_rows:
+                return placeholder_rows
 
     for key in ("roughcut", "roughcut_draft", "roughcut_result"):
         box = project.get(key, {})
         if isinstance(box, dict):
             rows = box.get("segments", [])
             if rows and all(_is_placeholder_row(row) for row in rows if isinstance(row, dict)):
-                return list(rows)
-
-    rows = project.get("middle_segments", [])
-    if isinstance(rows, list) and rows and not rows_are_placeholder_only(rows):
-        return [dict(row) for row in rows if isinstance(row, dict)]
+                return [dict(row) for row in rows if isinstance(row, dict)]
 
     rows = project.get("roughcut_segments", [])
     if rows and all(_is_placeholder_row(row) for row in rows if isinstance(row, dict)):
-        return list(rows)
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     rows = project.get("middle_segments", [])
     if rows and all(_is_placeholder_row(row) for row in rows if isinstance(row, dict)):
-        return list(rows)
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     return []
 

@@ -437,7 +437,7 @@ class PipelineCutBoundaryMixin:
             marked["status"] = "verifying"
             marked["detector_stage"] = "follower"
             marked["follower_active"] = True
-            marked["line_color"] = "#FFCC00"
+            marked["line_color"] = "#FFD60A"
             marked["line_style"] = "dash"
             marked["ui_label"] = "후발대 확인"
             provisional_rows[idx] = marked

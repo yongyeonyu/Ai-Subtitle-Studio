@@ -23,7 +23,7 @@ from ui.timeline.timeline_constants import HANDLE_R, SUBTITLE_BOT, SUBTITLE_TOP
 
 NEW_SUBTITLE_PLACEHOLDER = "새자막"
 SUBTITLE_SEGMENT_FONT_PT = 13
-STT_PREVIEW_FONT_PT = 10
+STT_PREVIEW_FONT_PT = 9
 
 
 class _TimelineInlineTextEdit(QPlainTextEdit):
@@ -199,6 +199,14 @@ def apply_timing_drag(canvas, delta: float) -> None:
         except Exception:
             return None
 
+    def _consume_shadow_snap(snapped: dict | None) -> None:
+        consumer = getattr(canvas, "_consume_shadow_playhead_snap", None)
+        if callable(consumer):
+            try:
+                consumer(snapped)
+            except Exception:
+                pass
+
     if edge == "diamond":
         pair = getattr(canvas, "_drag_diamond_pair", None)
         if pair is not None and pair[0] < len(canvas.segments) and pair[1] < len(canvas.segments):
@@ -217,8 +225,10 @@ def apply_timing_drag(canvas, delta: float) -> None:
             )
             if native:
                 boundary = canvas._snap_to_frame(float(native.get("start", orig) or orig))
+                snapped = _native_snapped(native)
                 s1["end"] = s2["start"] = boundary
-                canvas._set_drag_guides(boundary, _native_snapped(native))
+                canvas._set_drag_guides(boundary, snapped)
+                _consume_shadow_snap(snapped)
                 canvas._update_drag_visual_rect(before_rect)
                 return
             next_boundary = canvas._snap_to_frame(orig + delta)
@@ -232,6 +242,7 @@ def apply_timing_drag(canvas, delta: float) -> None:
             )
             s1["end"] = s2["start"] = next_boundary
             canvas._set_drag_guides(next_boundary, snapped)
+            _consume_shadow_snap(snapped)
             canvas._update_drag_visual_rect(before_rect)
         return
 
@@ -311,7 +322,9 @@ def apply_timing_drag(canvas, delta: float) -> None:
         if native:
             seg["end"] = canvas._snap_to_frame(float(native.get("end", seg.get("end", min_end)) or min_end))
             _sync_adjacent_segments_for_live_drag()
-            canvas._set_drag_guides(seg["end"], _native_snapped(native))
+            snapped = _native_snapped(native)
+            canvas._set_drag_guides(seg["end"], snapped)
+            _consume_shadow_snap(snapped)
             canvas._update_drag_visual_rect(before_rect)
             return
 
@@ -336,7 +349,9 @@ def apply_timing_drag(canvas, delta: float) -> None:
                 canvas.active_seg_start = seg["start"]
             if hasattr(canvas, "_sync_active_segment_key"):
                 canvas._sync_active_segment_key(seg=seg)
-            canvas._set_drag_guides(seg["start"], _native_snapped(native))
+            snapped = _native_snapped(native)
+            canvas._set_drag_guides(seg["start"], snapped)
+            _consume_shadow_snap(snapped)
             canvas._update_drag_visual_rect(before_rect)
             return
 
@@ -364,7 +379,9 @@ def apply_timing_drag(canvas, delta: float) -> None:
             if hasattr(canvas, "_sync_active_segment_key"):
                 canvas._sync_active_segment_key(seg=seg)
             guide_time = canvas._snap_to_frame(float(native.get("guideTime", seg["start"]) or seg["start"]))
-            canvas._set_drag_guides(guide_time, _native_snapped(native))
+            snapped = _native_snapped(native)
+            canvas._set_drag_guides(guide_time, snapped)
+            _consume_shadow_snap(snapped)
             canvas._update_drag_visual_rect(before_rect)
             return
 
@@ -376,6 +393,7 @@ def apply_timing_drag(canvas, delta: float) -> None:
         seg["end"], snapped = canvas._snap_drag_time(next_end, snap_candidates, snap_threshold, min_end, limit)
         _sync_adjacent_segments_for_live_drag()
         canvas._set_drag_guides(seg["end"], snapped)
+        _consume_shadow_snap(snapped)
 
     elif edge == "square_left":
         next_start = canvas._snap_to_frame(canvas._drag_s0_start + delta)
@@ -389,6 +407,7 @@ def apply_timing_drag(canvas, delta: float) -> None:
         if hasattr(canvas, "_sync_active_segment_key"):
             canvas._sync_active_segment_key(seg=seg)
         canvas._set_drag_guides(seg["start"], snapped)
+        _consume_shadow_snap(snapped)
 
     elif edge == "center":
         duration = drag_duration
@@ -411,6 +430,7 @@ def apply_timing_drag(canvas, delta: float) -> None:
         if hasattr(canvas, "_sync_active_segment_key"):
             canvas._sync_active_segment_key(seg=seg)
         canvas._set_drag_guides(guide_time, snapped)
+        _consume_shadow_snap(snapped)
 
     canvas._update_drag_visual_rect(before_rect)
 

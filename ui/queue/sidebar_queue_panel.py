@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.queue.queue_formatting import DEFAULT_QUEUE_HEADER
+from ui.style import COLORS
 
 
 class SidebarQueuePanel(QWidget):
@@ -64,7 +65,7 @@ class SidebarQueuePanel(QWidget):
             "border-top: none; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; "
             "font-size: 10px; } "
             "QTableWidget::item { padding: 5px 6px; border-bottom: 1px solid #1D2A31; } "
-            "QTableWidget::item:selected { background: #17242C; color: #FFD84D; } "
+            f"QTableWidget::item:selected {{ background: {COLORS['warning_surface_alt']}; color: {COLORS['warning']}; }} "
             "QScrollBar:vertical { background: #0A1013; width: 8px; margin: 3px 2px 3px 0; "
             "border: none; border-radius: 4px; } "
             "QScrollBar::handle:vertical { background: #33424A; min-height: 28px; border-radius: 4px; } "
@@ -126,8 +127,8 @@ class SidebarQueuePanel(QWidget):
             done = bool(item.get("done"))
             error = bool(item.get("error"))
             active = row == first_active_row and bool(item.get("active")) and not done and not error
-            row_color = "#55D97A" if done else ("#FF6B78" if error else ("#FFD84D" if active else "#9DB0BB"))
-            row_bg = "#13261D" if done else ("#291719" if error else ("#17242C" if active else "#121A1E"))
+            row_color = "#55D97A" if done else ("#FF6B78" if error else (COLORS["warning"] if active else "#9DB0BB"))
+            row_bg = "#13261D" if done else ("#291719" if error else (COLORS["warning_surface_alt"] if active else "#121A1E"))
             if active:
                 active_row = row
             status = item.get("statusDisplay") or item.get("status", "대기 중")

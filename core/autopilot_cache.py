@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import gzip
 import hashlib
-import json
 import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
+
+from core.native_json import dumps_json_bytes, dumps_json_text, loads_json
 
 
 AUTOPILOT_CACHE_SCHEMA = "ai_subtitle_studio.autopilot_cache.v1"
@@ -17,7 +18,7 @@ STAGE_CACHE_ALGORITHM_VERSION = "autopilot-stage-cache-v1"
 
 def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(key): _json_safe(child) for key, child in sorted(value.items(), key=lambda item: str(item[0]))}
+        return {str(key): _json_safe(child) for key, child in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_json_safe(item) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -26,23 +27,30 @@ def _json_safe(value: Any) -> Any:
 
 
 def stable_json_dumps(value: Any) -> str:
-    return json.dumps(_json_safe(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return dumps_json_text(_json_safe(value), sort_keys=True, compact=True)
+
+
+def _stable_json_bytes(value: Any, *, append_newline: bool = False) -> bytes:
+    return dumps_json_bytes(_json_safe(value), sort_keys=True, compact=True, append_newline=append_newline)
 
 
 def stable_hash(value: Any, *, length: int = 16) -> str:
-    digest = hashlib.sha256(stable_json_dumps(value).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(_stable_json_bytes(value)).hexdigest()
     return digest[: max(8, int(length or 16))]
 
 
 def settings_hash(settings: dict[str, Any] | None, *, keys: Iterable[str] | None = None) -> str:
-    data = dict(settings or {})
-    if keys is not None:
-        key_set = {str(key) for key in keys}
-        data = {key: value for key, value in data.items() if str(key) in key_set}
+    data = settings or {}
+    if keys is None:
+        return stable_hash(data)
+    key_set = {str(key) for key in keys}
+    data = {key: value for key, value in data.items() if str(key) in key_set}
     return stable_hash(data)
 
 
 def model_hash(models: dict[str, Any] | None = None, **kwargs: Any) -> str:
+    if not kwargs:
+        return stable_hash(models or {})
     data = dict(models or {})
     data.update(kwargs)
     return stable_hash(data)
@@ -50,7 +58,7 @@ def model_hash(models: dict[str, Any] | None = None, **kwargs: Any) -> str:
 
 def cut_boundary_fingerprint(boundaries: Iterable[Any] | None) -> str:
     rows = []
-    for item in list(boundaries or []):
+    for item in boundaries or []:
         if isinstance(item, dict):
             rows.append(
                 {
@@ -89,10 +97,16 @@ def stage_cache_key(
     return stable_hash(payload, length=32)
 
 
+def _iter_dict_rows(rows: Iterable[dict[str, Any]] | None) -> Iterable[dict[str, Any]]:
+    for row in rows or []:
+        yield dict(row)
+
+
 def write_compressed_jsonl(path: str | Path, rows: Iterable[dict[str, Any]], *, prefer_zstd: bool = True) -> dict[str, Any]:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    row_list = [dict(row) for row in list(rows or [])]
+    row_source = rows or []
+    row_list = [dict(row) for row in row_source] if prefer_zstd else None
     codec = "plain"
     final_path = target
     if prefer_zstd:
@@ -103,22 +117,24 @@ def write_compressed_jsonl(path: str | Path, rows: Iterable[dict[str, Any]], *, 
             with open(final_path, "wb") as raw:
                 with zstd.ZstdCompressor(level=3).stream_writer(raw) as writer:
                     for row in row_list:
-                        writer.write((stable_json_dumps(row) + "\n").encode("utf-8"))
+                        writer.write(_stable_json_bytes(row, append_newline=True))
             codec = "zstd"
             return {"schema": AUTOPILOT_CACHE_SCHEMA, "path": str(final_path), "codec": codec, "rows": len(row_list)}
         except Exception:
-            pass
+            codec = "plain"
     if str(target).endswith(".gz"):
         final_path = target
     elif target.suffix:
         final_path = target.with_suffix(target.suffix + ".gz")
     else:
         final_path = Path(str(target) + ".jsonl.gz")
-    with gzip.open(final_path, "wt", encoding="utf-8") as fh:
-        for row in row_list:
-            fh.write(stable_json_dumps(row) + "\n")
+    row_count = 0
+    with gzip.open(final_path, "wb") as fh:
+        for row in (row_list if row_list is not None else _iter_dict_rows(row_source)):
+            fh.write(_stable_json_bytes(row, append_newline=True))
+            row_count += 1
     codec = "gzip"
-    return {"schema": AUTOPILOT_CACHE_SCHEMA, "path": str(final_path), "codec": codec, "rows": len(row_list)}
+    return {"schema": AUTOPILOT_CACHE_SCHEMA, "path": str(final_path), "codec": codec, "rows": row_count}
 
 
 def read_compressed_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -133,10 +149,20 @@ def read_compressed_jsonl(path: str | Path) -> list[dict[str, Any]]:
 
             with open(source, "rb") as raw:
                 with zstd.ZstdDecompressor().stream_reader(raw) as reader:
-                    text = reader.read().decode("utf-8")
-            for line in text.splitlines():
-                if line.strip():
-                    rows.append(json.loads(line))
+                    pending = b""
+                    while True:
+                        chunk = reader.read(64 * 1024)
+                        if not chunk:
+                            break
+                        lines = (pending + chunk).splitlines(keepends=True)
+                        pending = b""
+                        if lines and not lines[-1].endswith((b"\n", b"\r")):
+                            pending = lines.pop()
+                        for line in lines:
+                            if line.strip():
+                                rows.append(loads_json(line))
+                    if pending.strip():
+                        rows.append(loads_json(pending))
             return rows
         except Exception:
             return []
@@ -144,7 +170,7 @@ def read_compressed_jsonl(path: str | Path) -> list[dict[str, Any]]:
     with opener(source, "rt", encoding="utf-8") as fh:  # type: ignore[arg-type]
         for line in fh:
             if line.strip():
-                rows.append(json.loads(line))
+                rows.append(loads_json(line))
     return rows
 
 
@@ -156,8 +182,9 @@ class NegativeCache:
 
     def put(self, key: str, value: Any = True) -> None:
         now = time.monotonic()
-        self._items[str(key)] = (now, value)
-        self._items.move_to_end(str(key))
+        raw_key = str(key)
+        self._items[raw_key] = (now, value)
+        self._items.move_to_end(raw_key)
         while len(self._items) > self.max_items:
             self._items.popitem(last=False)
 
@@ -191,9 +218,10 @@ class LRUCacheManager:
 
     def get(self, key: str, default: Any = None) -> Any:
         raw_key = str(key)
-        if raw_key not in self._items:
+        try:
+            value = self._items[raw_key]
+        except KeyError:
             return default
-        value = self._items[raw_key]
         self._items.move_to_end(raw_key)
         return value
 

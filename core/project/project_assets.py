@@ -13,7 +13,9 @@ from core.utils import seconds_to_srt_time
 
 
 PROJECT_TEXT_ASSET_SCHEMA = "ai_subtitle_studio.project_text_assets.v1"
+PROJECT_TEXT_ASSET_TIMEBASE_SCHEMA = "ai_subtitle_studio.project_text_assets.timebase.v1"
 PROJECT_EXTERNAL_STORAGE = "external_srt"
+SRT_FRAME_QUANTIZATION_MODE = "frame_grid_to_srt_millisecond"
 
 _FINAL_TRACK = "final"
 _STT_TRACK_PREFIX = "stt_"
@@ -517,6 +519,43 @@ def _compact_value(value: Any, depth: int = 0) -> Any:
     return str(value)
 
 
+def _subtitle_gap_vector_rows(
+    segments: list[dict[str, Any]] | None,
+    *,
+    primary_fps: float,
+) -> list[dict[str, Any]]:
+    fps = normalize_fps(primary_fps or 30.0)
+    out: list[dict[str, Any]] = []
+    for idx, seg in enumerate(segments or []):
+        if not isinstance(seg, dict) or not bool(seg.get("is_gap")):
+            continue
+        timing = _segment_frame_payload(seg, default_fps=fps, min_frames=1)
+        clip: dict[str, Any] = {}
+        if seg.get("_clip_idx") is not None:
+            clip["index"] = int(seg.get("_clip_idx") or 0)
+        if seg.get("_clip_file"):
+            clip["file"] = str(seg.get("_clip_file") or "")
+        item = {
+            "id": str(seg.get("id") or f"subtitle_gap_vector_{len(out) + 1:04d}"),
+            "kind": "subtitle_gap",
+            "source_index": int(seg.get("index", idx + 1) or idx + 1),
+            "line": int(seg.get("line", idx) or idx),
+            "time": {
+                "unit": "frame",
+                "start_frame": int(timing["start_frame"]),
+                "end_frame": int(timing["end_frame"]),
+                "timeline_frame_rate": float(timing["timeline_frame_rate"]),
+            },
+            "flags": {
+                "is_gap": True,
+            },
+        }
+        if clip:
+            item["clip"] = clip
+        out.append(item)
+    return out
+
+
 def compact_segment_metadata(
     seg: dict[str, Any],
     index: int,
@@ -646,6 +685,7 @@ def write_srt_track(
 
 
 def _track_manifest(project_path: str, key: str, srt_info: dict[str, Any], metadata: list[dict[str, Any]]) -> dict[str, Any]:
+    first_meta = metadata[0] if metadata and isinstance(metadata[0], dict) else {}
     return {
         "schema": PROJECT_TEXT_ASSET_SCHEMA,
         "key": key,
@@ -654,6 +694,12 @@ def _track_manifest(project_path: str, key: str, srt_info: dict[str, Any], metad
         "segment_count": int(srt_info.get("count", 0) or 0),
         "signature": str(srt_info.get("signature", "") or ""),
         "size_bytes": int(srt_info.get("size_bytes", 0) or 0),
+        "timebase": {
+            "schema": PROJECT_TEXT_ASSET_TIMEBASE_SCHEMA,
+            "unit": "frame",
+            "primary_fps": normalize_fps(first_meta.get("timeline_frame_rate") or 30.0),
+            "srt_quantization": SRT_FRAME_QUANTIZATION_MODE,
+        },
         "metadata": metadata,
     }
 
@@ -884,6 +930,7 @@ def externalize_project_text_assets(
         min_frames=1,
         preserve_order=True,
     )
+    gap_vector_rows = _subtitle_gap_vector_rows(final_segments, primary_fps=primary_fps)
     stt_tracks = dict(stt_tracks or {})
 
     tracks_manifest: dict[str, Any] = {}
@@ -928,6 +975,12 @@ def externalize_project_text_assets(
         "mode": PROJECT_EXTERNAL_STORAGE,
         "base_dir": relative_asset_path(project_path, asset_dir),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "timebase": {
+            "schema": PROJECT_TEXT_ASSET_TIMEBASE_SCHEMA,
+            "unit": "frame",
+            "primary_fps": primary_fps,
+            "srt_quantization": SRT_FRAME_QUANTIZATION_MODE,
+        },
         "tracks": tracks_manifest,
     }
 
@@ -952,6 +1005,7 @@ def externalize_project_text_assets(
         canvas = rendering.setdefault("subtitle_canvas", {})
         canvas.setdefault("schema", "subtitle_canvas.vector.v2")
         canvas["segments"] = []
+        canvas["gap_segments"] = gap_vector_rows
         canvas["segment_signature"] = final_track["signature"]
         canvas["source"] = PROJECT_EXTERNAL_STORAGE
         stt_state = editor_state.setdefault("stt", {})

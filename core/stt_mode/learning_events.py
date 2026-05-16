@@ -3,12 +3,12 @@
 """Append-only learning events for STT Mode."""
 from __future__ import annotations
 
-import json
 import os
 import uuid
 from datetime import datetime
 from typing import Any
 
+from core.native_json import dumps_json_bytes
 from core.runtime import config
 
 
@@ -91,8 +91,8 @@ def append_learning_events(
             continue
         ids.add(event_id)
         path = dataset_file_for_event(str(event.get("event_type") or ""), dataset_dir=dataset_dir)
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        with open(path, "ab") as handle:
+            handle.write(dumps_json_bytes(event, sort_keys=True, append_newline=True))
         written += 1
     return {"written": written, "skipped": skipped, "known_event_ids": ids}
 
@@ -107,7 +107,7 @@ def import_learning_events_from_project(
         return {"written": 0, "skipped": 0, "known_event_ids": set(existing_ids or set())}
     learning = project.get("stt_mode_learning") if isinstance(project.get("stt_mode_learning"), dict) else {}
     events = learning.get("events") if isinstance(learning, dict) else []
-    return append_learning_events(list(events or []), dataset_dir=dataset_dir, existing_ids=existing_ids)
+    return append_learning_events(events or [], dataset_dir=dataset_dir, existing_ids=existing_ids)
 
 
 __all__ = [

@@ -576,7 +576,7 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
         self.info_label = _MirrorLabel("영상 정보를 불러오는 중...")
         self.info_label.setObjectName("VideoSourceMetaLabel")
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.info_label.setWordWrap(False)
+        self.info_label.setWordWrap(True)
         self.info_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.info_label.setMinimumHeight(32)
         self.info_label.setStyleSheet(
@@ -585,8 +585,8 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
             " background: #1A2127;"
             " border: 1px solid #2D3942;"
             " border-radius: 9px;"
-            " padding: 0 12px;"
-            " font-size: 10px;"
+            " padding: 1px 12px 0 12px;"
+            " font-size: 9px;"
             "}"
         )
         status_layout.addWidget(self.info_label, 1)
@@ -798,34 +798,60 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
 
     def _format_source_media_summary(self) -> str:
         info = dict(getattr(self, "_source_media_info", {}) or {})
-        parts: list[str] = []
+        first_line: list[str] = []
+        second_line: list[str] = []
         preview_label = str(getattr(self, "_source_preview_label", "") or "").strip()
         if preview_label:
-            parts.append(preview_label)
+            first_line.append(preview_label)
         width = int(info.get("width", 0) or 0)
         height = int(info.get("height", 0) or 0)
         if width > 0 and height > 0:
-            parts.append(f"{width}x{height}")
+            first_line.append(f"{width}x{height}")
         fps_text = self._format_probe_fps(info.get("fps", 0.0))
         if fps_text:
-            parts.append(fps_text)
+            first_line.append(fps_text)
         color_text = self._format_probe_color_info(info)
         if color_text:
-            parts.append(color_text)
+            second_line.append(color_text)
         bitrate_text = self._format_probe_bitrate(info.get("bit_rate", 0))
         if bitrate_text:
-            parts.append(bitrate_text)
-        return " | ".join(part for part in parts if part)
+            second_line.append(bitrate_text)
+        lines = []
+        if first_line:
+            lines.append(" | ".join(part for part in first_line if part))
+        if second_line:
+            lines.append(" | ".join(part for part in second_line if part))
+        return "\n".join(line for line in lines if line)
+
+    def _source_info_fallback_text(self) -> str:
+        status_text = str(getattr(self, "_source_info_status_text", "") or "").strip()
+        if status_text:
+            return status_text
+        if str(getattr(self, "_current_source_path", "") or "").strip():
+            return "메타데이터 준비 중"
+        return ""
 
     def _refresh_source_info_label(self):
         label = getattr(self, "info_label", None)
         if label is None:
             return
-        status_text = str(getattr(self, "_source_info_status_text", "") or "").strip()
         summary_text = self._format_source_media_summary()
-        text = status_text or summary_text
+        text = summary_text or self._source_info_fallback_text()
         label.setText(text)
         label.setToolTip(text)
+
+    def _ensure_source_info_label_visible(self):
+        label = getattr(self, "info_label", None)
+        if label is None:
+            return
+        try:
+            current_text = str(label.text() or "").strip()
+        except Exception:
+            current_text = ""
+        if current_text:
+            return
+        if self._format_source_media_summary() or self._source_info_fallback_text():
+            self._refresh_source_info_label()
 
     def _set_source_info_status(self, text: str):
         self._source_info_status_text = str(text or "")
@@ -926,9 +952,16 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
             return None
 
     def _quick_control_bar_state(self) -> dict:
+        info_label = getattr(self, "info_label", None)
+        info_text = ""
+        if info_label is not None:
+            try:
+                info_text = str(info_label.text() or "")
+            except Exception:
+                info_text = ""
         return {
             "timeText": str(getattr(self.time_label, "text", lambda: "")() or ""),
-            "infoText": str(getattr(self.info_label, "text", lambda: "")() or ""),
+            "infoText": info_text,
             "frameText": str(getattr(self.frame_count_label, "text", lambda: "")() or ""),
             "sourceNameText": (
                 str(getattr(self.source_name_label, "text", lambda: "")() or "")
@@ -1736,6 +1769,84 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
                 self._ensure_vocal_player().pause()
             self._update_btn()
 
+    def suspend_for_navigation(self) -> None:
+        """Pause playback while keeping the video surface reusable after page switches."""
+        try:
+            self.pause_video()
+        except Exception:
+            pass
+        try:
+            if not self._ui_timer.isActive():
+                self._ui_timer.start()
+        except Exception:
+            pass
+
+    def restore_after_navigation(self) -> None:
+        """Reattach the visible video surface after returning from Home to Editor."""
+        was_shutdown = bool(getattr(self, "_shutdown_in_progress", False))
+        self._shutdown_in_progress = False
+        for widget_name in ("video_stack", "thumb_label", "sub_label", "quick_subtitle_overlay"):
+            widget = getattr(self, widget_name, None)
+            try:
+                if widget is not None:
+                    widget.setUpdatesEnabled(True)
+                    if widget_name in {"video_stack", "thumb_label"}:
+                        widget.show()
+            except Exception:
+                pass
+        try:
+            self.setUpdatesEnabled(True)
+            self.show()
+        except Exception:
+            pass
+        if was_shutdown:
+            try:
+                self.media_player.durationChanged.connect(self._on_duration_changed)
+            except Exception:
+                pass
+            try:
+                self.media_player.mediaStatusChanged.connect(self._on_media_status_changed)
+            except Exception:
+                pass
+        try:
+            if hasattr(self.video_widget, "video_item"):
+                self.media_player.setVideoOutput(self.video_widget.video_item)
+        except Exception:
+            pass
+        try:
+            if not self._ui_timer.isActive():
+                self._ui_timer.start()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "_pending_media_source_path", ""):
+                self._ensure_media_source_loaded()
+                self._sync_media_position_for_frame(int(getattr(self, "current_frame", 0) or 0))
+        except Exception:
+            pass
+        try:
+            source_path = str(getattr(self, "_current_source_path", "") or "")
+            if (
+                not bool(getattr(self, "_video_surface_primed", False))
+                and self._is_video_file(source_path)
+            ):
+                (
+                    self._show_precomputed_thumbnail_at(source_path, self.current_time)
+                    or self._show_precomputed_thumbnail_at(source_path, 0.0)
+                )
+            else:
+                self.video_stack.setCurrentIndex(0)
+        except Exception:
+            pass
+        try:
+            self._refresh_source_info_label()
+            self._refresh_source_name_label()
+            self._update_frame_count_label(force=True)
+            self.resizeEvent(None)
+            self.update()
+        except Exception:
+            pass
+
     def _update_btn(self):
         is_playing = self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
         if self._last_btn_state == is_playing:
@@ -1746,6 +1857,7 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
 
     def _ui_tick(self):
         self._update_btn()
+        self._ensure_source_info_label_visible()
         if not getattr(self, '_source_ready', True):
             return
         is_playing = self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState

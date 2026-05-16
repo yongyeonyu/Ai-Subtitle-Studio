@@ -262,7 +262,12 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         for left, right in zip(editable, editable[1:]):
             left_idx, s1 = left
             right_idx, s2 = right
-            if abs(float(s1.get("end", 0.0) or 0.0) - float(s2.get("start", 0.0) or 0.0)) < 0.05:
+            touches = (
+                self._segments_share_frame_boundary(s1, s2)
+                if hasattr(self, "_segments_share_frame_boundary")
+                else abs(float(s1.get("end", 0.0) or 0.0) - float(s2.get("start", 0.0) or 0.0)) < 0.001
+            )
+            if touches:
                 pairs.append((left_idx, right_idx, s1, s2))
                 ends.append(float(s1.get("end", 0.0) or 0.0))
         self._diamond_pairs_cache_key = key
@@ -316,7 +321,6 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         self.drag_started.emit()
         self._drag_seg, self._drag_edge = s, edge
         self._drag_x0 = x
-        self._pin_shadow_playhead()
         self.active_seg_start = float(s.get("start", 0.0) or 0.0)
         if hasattr(self, "_sync_active_segment_key"):
             self._sync_active_segment_key(seg=s)

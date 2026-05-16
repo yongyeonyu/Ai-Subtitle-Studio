@@ -186,7 +186,7 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
         self.assertTrue(marked)
         self.assertEqual(provisional_rows[0]["status"], "verifying")
         self.assertEqual(provisional_rows[0]["detector_stage"], "follower")
-        self.assertEqual(provisional_rows[0]["line_color"], "#FFCC00")
+        self.assertEqual(provisional_rows[0]["line_color"], "#FFD60A")
 
         removed = backend._remove_cut_boundary_checked_rows(
             provisional_rows,

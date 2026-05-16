@@ -25,7 +25,7 @@ Rectangle {
                 required property var modelData
 
                 width: root.width
-                height: modelData.height || (modelData.progressVisible ? ((modelData.meta || "") ? 50 : 38) : 26)
+                height: modelData.height || (modelData.progressVisible ? ((modelData.meta || "") ? 42 : 32) : 26)
                 radius: 7
                 color: modelData.progressVisible
                        ? (hitArea.containsMouse ? "#10181D" : "transparent")
@@ -108,8 +108,8 @@ Rectangle {
                     anchors.bottom: parent.bottom
                     anchors.leftMargin: 10
                     anchors.rightMargin: 10
-                    anchors.topMargin: 4
-                    anchors.bottomMargin: 4
+                    anchors.topMargin: 2
+                    anchors.bottomMargin: 2
                     spacing: 7
 
                     Rectangle {
@@ -132,7 +132,7 @@ Rectangle {
                     Column {
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width - 23
-                        spacing: 1
+                        spacing: 0
 
                         Row {
                             width: parent.width

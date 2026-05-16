@@ -27,6 +27,7 @@ from ui.queue.queue_formatting import (
     queue_expected_time_is_unknown,
     queue_status_flags,
 )
+from ui.style import COLORS
 
 
 class QueueMixin:
@@ -198,6 +199,7 @@ class QueueMixin:
         self._expected_seconds = {}
         self._file_start_times = {}
         self._file_complete_times = {}
+        self._queue_execution_started_at = 0.0
         self._queue_row_cache = []
         self._sidebar_queue_cache_items = []
         self._sidebar_queue_cache_header = header_text
@@ -383,7 +385,7 @@ class QueueMixin:
         if state["error"]:
             return QColor("#FF6B78"), QColor("#291719")
         if active:
-            return QColor("#FFD84D"), QColor("#15212A")
+            return QColor(COLORS["warning"]), QColor(COLORS["warning_surface_alt_soft"])
         return QColor("#9DB0BB"), QColor("#121A1E")
 
     def _queue_sidebar_item_for_row(
@@ -862,6 +864,7 @@ class QueueMixin:
         self._expected_seconds = {}
         self._file_start_times = {}
         self._file_complete_times = {}
+        self._queue_execution_started_at = 0.0
         self._queue_row_cache = []
         self._real_pct = 0
         if files:
@@ -900,8 +903,43 @@ class QueueMixin:
         self._refresh_queue_sidebar_views()
         self._live_timer.start(1000)
 
+    def _queue_backend_pipeline_started_at(self) -> float:
+        started_values = []
+        for backend_name in ("backend_fast", "backend"):
+            backend = getattr(self, backend_name, None)
+            if backend is None:
+                continue
+            try:
+                started_at = float(getattr(backend, "pipeline_start_time", 0.0) or 0.0)
+            except Exception:
+                continue
+            if started_at > 0.0:
+                started_values.append(started_at)
+        return min(started_values) if started_values else 0.0
+
+    def _queue_execution_started_at_value(self) -> float:
+        try:
+            explicit_started_at = float(getattr(self, "_queue_execution_started_at", 0.0) or 0.0)
+        except Exception:
+            explicit_started_at = 0.0
+        if explicit_started_at > 0.0:
+            return explicit_started_at
+        return self._queue_backend_pipeline_started_at()
+
+    def _queue_execution_started(self) -> bool:
+        return self._queue_execution_started_at_value() > 0.0
+
+    def mark_queue_execution_started(self, now_ts: float | None = None) -> None:
+        try:
+            started_at = float(now_ts if now_ts is not None else time.time())
+        except Exception:
+            started_at = time.time()
+        self._queue_execution_started_at = max(0.0, started_at)
+
     def _queue_mark_row_started(self, idx: int, *, incoming_active: bool, now_ts: float | None = None) -> None:
         if not incoming_active or idx in self._file_start_times:
+            return
+        if not self._queue_execution_started():
             return
         status_text = self._queue_table_item_text(idx, 0)
         if not self._queue_elapsed_tracking_active(status_text):
@@ -1261,10 +1299,13 @@ class QueueMixin:
             metrics = self.queue_row_metrics(active_row, now_ts=now_value)
             if bool(metrics["done"]) or not bool(metrics["status_active"]):
                 return False
+            if active_row not in self._file_start_times and not self._queue_execution_started():
+                return False
             if not self._queue_elapsed_tracking_active(str(metrics.get("status", "") or "")):
                 return False
             if active_row not in self._file_start_times:
-                self._file_start_times[active_row] = now_value
+                started_at = self._queue_execution_started_at_value()
+                self._file_start_times[active_row] = started_at if started_at > 0.0 else now_value
             self._set_queue_table_item_text(
                 active_row,
                 4,

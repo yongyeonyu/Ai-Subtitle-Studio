@@ -17,6 +17,8 @@ from ui.timeline.timeline_constants import (
     CANVAS_H,
     ICON_SZ,
     SEG_TOP,
+    SUBTITLE_BOT,
+    SUBTITLE_TOP,
     _build_gaps,
 )
 from ui.editor.ux.timeline_input import TimelineInputMixin
@@ -56,6 +58,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     provisional_cut_boundary_requested = pyqtSignal(float)
     provisional_cut_boundary_delete_requested = pyqtSignal(int, float)
     diamond_merge           = pyqtSignal(int, int)
+    tab_timing_requested    = pyqtSignal()
     sig_smart_split         = pyqtSignal(int, float, bool)
     sig_speech_result       = pyqtSignal(str)
     speaker_changed         = pyqtSignal(int, str)
@@ -94,6 +97,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.playhead_sec: float = 0.0
         self._last_playhead_px: int | None = None
         self.shadow_playhead_sec: float | None = None
+        self._shadow_playhead_armed_sec: float | None = None
         self._last_shadow_playhead_px: int | None = None
         self._waveform = None
         self.boundary_times: list[float] = []
@@ -225,6 +229,59 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def _frame_step_sec(self) -> float:
         return 1.0 / max(1.0, float(self._get_fps() or 30.0))
 
+    def _segment_frame_bounds(self, seg: dict | None) -> tuple[int, int] | None:
+        if not isinstance(seg, dict):
+            return None
+        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+
+        def _coerce_frame(value):
+            try:
+                return max(0, int(round(float(value))))
+            except (TypeError, ValueError):
+                return None
+
+        start_frame = _coerce_frame(seg.get("timeline_start_frame", seg.get("start_frame", frame_range.get("start"))))
+        end_frame = _coerce_frame(seg.get("timeline_end_frame", seg.get("end_frame", frame_range.get("end"))))
+        if start_frame is None:
+            start_frame = self._frame_from_sec(float(seg.get("start", 0.0) or 0.0))
+        if end_frame is None:
+            end_frame = self._frame_from_sec(float(seg.get("end", seg.get("start", 0.0)) or 0.0))
+        if end_frame < start_frame:
+            start_frame, end_frame = end_frame, start_frame
+        return start_frame, end_frame
+
+    def _segments_share_frame_boundary(self, left: dict | None, right: dict | None) -> bool:
+        left_bounds = self._segment_frame_bounds(left)
+        right_bounds = self._segment_frame_bounds(right)
+        if left_bounds is None or right_bounds is None:
+            return False
+        return int(left_bounds[1]) == int(right_bounds[0])
+
+    def _subtitle_segment_attached_edges(self, seg: dict | None) -> tuple[bool, bool]:
+        if not isinstance(seg, dict):
+            return False, False
+        prev_seg = self._get_prev_seg(seg) if hasattr(self, "_get_prev_seg") else None
+        next_seg = self._get_next_seg(seg) if hasattr(self, "_get_next_seg") else None
+        return (
+            self._segments_share_frame_boundary(prev_seg, seg),
+            self._segments_share_frame_boundary(seg, next_seg),
+        )
+
+    def _subtitle_segment_visual_rect(
+        self,
+        seg: dict | None,
+        x1: int,
+        x2: int,
+        top: int,
+        bottom: int,
+    ) -> QRect:
+        attached_left, attached_right = self._subtitle_segment_attached_edges(seg)
+        left = int(x1) + (0 if attached_left else 1)
+        right = int(x2) - (0 if attached_right else 1)
+        if right <= left:
+            right = max(left + 2, int(x2))
+        return QRect(left, int(top), max(2, right - left), max(1, int(bottom) - int(top)))
+
     def _normalize_canvas_sec(self, sec) -> float:
         try:
             value = float(sec or 0.0)
@@ -234,6 +291,17 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def _normalize_canvas_row(self, row: dict, *, preserve_positive_span: bool = True) -> dict:
         item = dict(row or {})
+        fps = self._get_fps()
+        frame_range = item.get("frame_range", {}) if isinstance(item.get("frame_range"), dict) else {}
+        start_frame = item.get("timeline_start_frame", item.get("start_frame", frame_range.get("start")))
+        end_frame = item.get("timeline_end_frame", item.get("end_frame", frame_range.get("end")))
+
+        def _coerce_frame(value):
+            try:
+                return max(0, int(round(float(value))))
+            except (TypeError, ValueError):
+                return None
+
         try:
             raw_start = float(item.get("start", 0.0) or 0.0)
         except Exception:
@@ -242,14 +310,50 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             raw_end = float(item.get("end", raw_start) or raw_start)
         except Exception:
             raw_end = raw_start
-        start = self._normalize_canvas_sec(raw_start)
-        end = self._normalize_canvas_sec(raw_end)
+
+        if start_frame is None:
+            start = self._normalize_canvas_sec(raw_start)
+            start_frame = self._frame_from_sec(start)
+        else:
+            start_frame = _coerce_frame(start_frame)
+            if start_frame is None:
+                start = self._normalize_canvas_sec(raw_start)
+                start_frame = self._frame_from_sec(start)
+            else:
+                start = self._sec_from_frame(start_frame)
+
+        if end_frame is None:
+            end = self._normalize_canvas_sec(raw_end)
+            end_frame = self._frame_from_sec(end)
+        else:
+            end_frame = _coerce_frame(end_frame)
+            if end_frame is None:
+                end = self._normalize_canvas_sec(raw_end)
+                end_frame = self._frame_from_sec(end)
+            else:
+                end = self._sec_from_frame(end_frame)
+
         if end < start:
             start, end = end, start
+            start_frame, end_frame = end_frame, start_frame
         if preserve_positive_span and raw_end > raw_start and end <= start:
-            end = self._normalize_canvas_sec(start + self._frame_step_sec())
+            end_frame = int(start_frame) + 1
+            end = self._sec_from_frame(end_frame)
         item["start"] = start
         item["end"] = max(start, end)
+        item["start_frame"] = int(start_frame)
+        item["end_frame"] = int(max(start_frame, end_frame))
+        item["timeline_start_frame"] = item["start_frame"]
+        item["timeline_end_frame"] = item["end_frame"]
+        item["frame_rate"] = fps
+        item["timeline_frame_rate"] = fps
+        item["frame_range"] = {
+            **frame_range,
+            "unit": "frame",
+            "start": item["start_frame"],
+            "end": item["end_frame"],
+            "timeline_frame_rate": fps,
+        }
         return item
 
     def _normalize_explicit_gap_rows(self, gaps) -> list[dict]:
@@ -409,13 +513,19 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         )
 
     def visible_segment_lanes_cached(self, visible_segments) -> dict[str, object]:
-        from ui.timeline.timeline_segment_style import build_stt_selection_index, final_stt_selection_source, stt_preview_source
+        from ui.timeline.stt_preview_layout import assign_stt_preview_lanes
+        from ui.timeline.timeline_segment_style import (
+            build_stt_selection_index,
+            final_stt_selection_source,
+            stt_candidate_selection_state,
+            stt_preview_source,
+        )
 
         rows = visible_segments if isinstance(visible_segments, list) else list(visible_segments or [])
         key = (
             int(getattr(self, "_render_epoch", 0) or 0),
-            id(rows),
             len(rows),
+            tuple(id(seg) for seg in rows if isinstance(seg, dict)),
         )
         if key == getattr(self, "_visible_segment_lanes_cache_key", None):
             cached = getattr(self, "_visible_segment_lanes_cache", None)
@@ -440,14 +550,26 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             final_segments.append(seg)
             if final_stt_selection_source(seg):
                 selected_final_segments.append(seg)
+        selected_final_index = build_stt_selection_index(selected_final_segments)
+        stt1_lane_map, stt1_lane_count = assign_stt_preview_lanes(stt1_preview_segments)
+        stt2_lane_map, stt2_lane_count = assign_stt_preview_lanes(stt2_preview_segments)
+        stt_selection_states = {
+            id(seg): stt_candidate_selection_state(seg, selected_final_segments, selected_final_index)
+            for seg in stt_preview_segments
+        }
         data = {
             "visible_segments": rows,
             "stt_preview_segments": stt_preview_segments,
             "final_segments": final_segments,
             "selected_final_segments": selected_final_segments,
-            "selected_final_index": build_stt_selection_index(selected_final_segments),
+            "selected_final_index": selected_final_index,
             "stt1_preview_segments": stt1_preview_segments,
             "stt2_preview_segments": stt2_preview_segments,
+            "stt1_lane_map": stt1_lane_map,
+            "stt1_lane_count": stt1_lane_count,
+            "stt2_lane_map": stt2_lane_map,
+            "stt2_lane_count": stt2_lane_count,
+            "stt_selection_states": stt_selection_states,
         }
         self._visible_segment_lanes_cache_key = key
         self._visible_segment_lanes_cache = data
@@ -1110,16 +1232,6 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self.active_seg_line = None
 
     def _is_active_segment(self, seg) -> bool:
-        if hasattr(self, "_timeline_playback_active") and self._timeline_playback_active():
-            try:
-                start = float(seg.get("start", 0.0) or 0.0)
-                end = float(seg.get("end", start) or start)
-                playhead = float(getattr(self, "playhead_sec", 0.0) or 0.0)
-                fps = max(1.0, float(self._get_fps() or 30.0))
-                edge_tol = max(0.001, min(0.05, 2.0 / fps))
-                return start - edge_tol <= playhead < end + edge_tol
-            except Exception:
-                return False
         active_line = getattr(self, "active_seg_line", None)
         if active_line is not None:
             try:
@@ -1152,12 +1264,19 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.update()
 
     def set_active(self, sec):
-        old_rect = self._active_segment_repaint_rect()
-        self.active_seg_start = self._normalize_canvas_sec(sec)
+        normalized_sec = self._normalize_canvas_sec(sec)
+        try:
+            if self.active_seg_start is not None and abs(float(self.active_seg_start) - float(normalized_sec)) < 0.001:
+                return
+        except Exception:
+            pass
+        playback_focus = bool(self._timeline_playback_active()) if hasattr(self, "_timeline_playback_active") else False
+        old_rect = self._active_segment_repaint_rect(playback_focus=playback_focus)
+        self.active_seg_start = normalized_sec
         self._sync_active_segment_key(self.active_seg_start)
         if getattr(self, "_edit_active", False) and hasattr(self, "_sync_inline_editor_geometry"):
             self._sync_inline_editor_geometry()
-        dirty = old_rect.united(self._active_segment_repaint_rect())
+        dirty = old_rect.united(self._active_segment_repaint_rect(playback_focus=playback_focus))
         self._update_dirty_rect(dirty)
 
     def set_playhead(self, sec):
@@ -1165,6 +1284,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         px = self._x(sec)
         if self.playhead_sec == sec or self._last_playhead_px == px:
             return
+        old_sec = float(getattr(self, "playhead_sec", 0.0) or 0.0)
         old_px = self._last_playhead_px
         self.playhead_sec = sec
         self._last_playhead_px = px
@@ -1179,6 +1299,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def set_shadow_playhead(self, sec) -> bool:
         normalized = None if sec is None else self._normalize_canvas_sec(sec)
+        if normalized is not None:
+            self._shadow_playhead_armed_sec = None
         current = getattr(self, "shadow_playhead_sec", None)
         if normalized is None and current is None:
             return False
@@ -1238,7 +1360,14 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 return seg
         return None
 
-    def _segment_repaint_rect(self, seg, *, margin: int = 34, full_height: bool = False) -> QRect:
+    def _segment_repaint_rect(
+        self,
+        seg,
+        *,
+        margin: int = 34,
+        full_height: bool = False,
+        subtitle_focus_only: bool = False,
+    ) -> QRect:
         if not seg:
             return QRect()
         try:
@@ -1250,22 +1379,74 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         margin = int(margin) + frame_px
         left = max(0, min(x1, x2) - margin)
         right = min(max(self.width(), self.total_width()), max(x1, x2) + int(margin))
-        top = 0 if full_height else max(0, SEG_TOP - 18)
-        bottom = CANVAS_H if full_height else CANVAS_H
+        if full_height:
+            top = 0
+            bottom = CANVAS_H
+        elif subtitle_focus_only:
+            top = max(0, SUBTITLE_TOP - 2)
+            bottom = min(CANVAS_H, SUBTITLE_BOT + 3)
+        else:
+            top = max(0, SEG_TOP - 18)
+            bottom = CANVAS_H
         return QRect(left, top, max(1, right - left), max(1, bottom - top))
 
     def _segment_repaint_rect_for_line(self, line_num: int, *, margin: int = 34) -> QRect:
         seg = self._segment_for_line(int(line_num)) if hasattr(self, "_segment_for_line") else next((s for s in self.segments if int(s.get("line", -999999)) == int(line_num)), None)
         return self._segment_repaint_rect(seg, margin=margin)
 
-    def _active_segment_repaint_rect(self) -> QRect:
+    def _active_segment_repaint_rect(self, *, playback_focus: bool = False) -> QRect:
         if getattr(self, "active_seg_start", None) is None and getattr(self, "active_seg_line", None) is None:
             return QRect()
         dirty = QRect()
         candidates = self._active_segment_candidates() if hasattr(self, "_active_segment_candidates") else self.segments
         for seg in candidates:
             if self._is_active_segment(seg):
-                rect = self._segment_repaint_rect(seg, margin=48)
+                rect = self._segment_repaint_rect(seg, margin=48, subtitle_focus_only=playback_focus)
+                dirty = rect if dirty.isNull() else dirty.united(rect)
+        return dirty
+
+    def _playback_segments_for_sec(self, sec: float | None) -> list[dict]:
+        if sec is None:
+            return []
+        try:
+            center = float(sec)
+        except Exception:
+            return []
+        fps = max(1.0, float(self._get_fps() or 30.0))
+        edge_tol = max(0.001, min(0.05, 2.0 / fps))
+        if hasattr(self, "_visible_items_for_paint"):
+            candidates = self._visible_items_for_paint(
+                getattr(self, "segments", []),
+                "segments",
+                center,
+                center,
+                pad_sec=max(0.10, edge_tol),
+            )
+        else:
+            candidates = list(getattr(self, "segments", []) or [])
+        hits: list[dict] = []
+        for seg in candidates:
+            if not isinstance(seg, dict):
+                continue
+            try:
+                start = float(seg.get("start", 0.0) or 0.0)
+                end = float(seg.get("end", start) or start)
+            except Exception:
+                continue
+            if start - edge_tol <= center < end + edge_tol:
+                hits.append(seg)
+        return hits
+
+    def _playback_transition_repaint_rect(self, old_sec: float | None, new_sec: float | None) -> QRect:
+        dirty = QRect()
+        seen: set[int] = set()
+        for sec in (old_sec, new_sec):
+            for seg in self._playback_segments_for_sec(sec):
+                seg_id = id(seg)
+                if seg_id in seen:
+                    continue
+                seen.add(seg_id)
+                rect = self._segment_repaint_rect(seg, margin=48, subtitle_focus_only=True)
                 dirty = rect if dirty.isNull() else dirty.united(rect)
         return dirty
 

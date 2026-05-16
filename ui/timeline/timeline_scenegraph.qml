@@ -31,9 +31,19 @@ Item {
             }
 
             Loader {
+                active: !!modelData.showScoreSegment
+                sourceComponent: scoreSegmentComponent
+            }
+
+            Loader {
                 anchors.fill: parent
                 active: !!modelData.showText
                 sourceComponent: segmentTextComponent
+            }
+
+            Loader {
+                active: !!modelData.showScoreText
+                sourceComponent: scoreTextComponent
             }
 
             Loader {
@@ -55,6 +65,22 @@ Item {
     }
 
     Component {
+        id: scoreSegmentComponent
+
+        Rectangle {
+            x: 0
+            y: modelData.scoreSegmentY - modelData.y
+            width: parent.width
+            height: Math.max(1, modelData.scoreSegmentH)
+            color: "#1F282E"
+            opacity: 0.82
+            border.color: "#52606C"
+            border.width: 1
+            radius: 0
+        }
+    }
+
+    Component {
         id: segmentTextComponent
 
         Text {
@@ -69,11 +95,47 @@ Item {
             text: modelData.text
             color: modelData.textColor
             font.family: root.fontFamily
-            font.pixelSize: modelData.preview ? 11 : 14
+            font.pixelSize: modelData.preview ? 10 : 14
             elide: parent.width < 164 ? Text.ElideRight : Text.ElideNone
             wrapMode: parent.width < 164 ? Text.NoWrap : Text.WordWrap
             verticalAlignment: parent.width < 164 ? Text.AlignVCenter : Text.AlignTop
             clip: true
+        }
+    }
+
+    Component {
+        id: scoreTextComponent
+
+        Text {
+            x: 0
+            y: modelData.scoreY - modelData.y
+            width: parent.width
+            height: 15
+            text: modelData.scoreText
+            color: modelData.scoreColor
+            font.family: root.fontFamily
+            font.pixelSize: 11
+            font.bold: true
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+            clip: true
+
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 1
+                anchors.topMargin: 1
+                text: parent.text
+                color: "#000000"
+                opacity: 0.65
+                font.family: parent.font.family
+                font.pixelSize: parent.font.pixelSize
+                font.bold: parent.font.bold
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+                z: -1
+            }
         }
     }
 

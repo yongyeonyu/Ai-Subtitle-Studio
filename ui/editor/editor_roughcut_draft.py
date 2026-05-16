@@ -811,6 +811,7 @@ class EditorRoughcutDraftMixin:
                 project_path,
                 segments=segments,
                 middle_segments=list(candidate.get("segments", []) or []),
+                roughcut_result=candidate,
                 preliminary_middle_segments=(
                     list(candidate.get("segments", []) or [])
                     if refinement_source == "llm_refined"

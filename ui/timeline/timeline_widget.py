@@ -247,7 +247,7 @@ class TimelinePlayheadOverlay(QWidget):
             painter.drawLine(px, 0, px, self.height())
             handle_r = 7
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setBrush(QBrush(QColor("#FF453A" if self._busy else "#FFCC00")))
+            painter.setBrush(QBrush(QColor("#FF453A" if self._busy else COLORS["warning"])))
             painter.setPen(QPen(QColor("#FFFFFF"), 1))
             painter.drawEllipse(px - handle_r, 2, handle_r * 2, handle_r * 2)
         painter.end()
@@ -279,6 +279,7 @@ class TimelineWidget(QWidget):
     sig_clip_selected = pyqtSignal(int)
     waveform_ready = pyqtSignal(str, float)
     subtitle_magnet_requested = pyqtSignal()
+    tab_timing_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -290,11 +291,11 @@ class TimelineWidget(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 4, 10, 1)
-        lay.setSpacing(1)
+        lay.setSpacing(0)
 
         toolbar_checkbox_style = """
             QCheckBox {
-                color: #FFFF00;
+                color: %s;
                 font-size: 12px;
                 font-weight: bold;
                 background: transparent;
@@ -302,15 +303,15 @@ class TimelineWidget(QWidget):
             QCheckBox::indicator {
                 width: 14px;
                 height: 14px;
-                border: 1.5px solid #FFFF00;
+                border: 1.5px solid %s;
                 background: transparent;
                 border-radius: 2px;
             }
             QCheckBox::indicator:checked {
-                background: #FFFF00;
-                border: 1.5px solid #FFFF00;
+                background: %s;
+                border: 1.5px solid %s;
             }
-        """
+        """ % (COLORS["warning"], COLORS["warning"], COLORS["warning"], COLORS["warning"])
         self.lock_chk = QCheckBox("Lock Edit")
         self.lock_chk.setStyleSheet(toolbar_checkbox_style)
 
@@ -399,6 +400,7 @@ class TimelineWidget(QWidget):
         self.canvas.provisional_cut_boundary_requested.connect(self.provisional_cut_boundary_requested.emit)
         self.canvas.provisional_cut_boundary_delete_requested.connect(self.provisional_cut_boundary_delete_requested.emit)
         self.canvas.diamond_merge.connect(self.diamond_merge)
+        self.canvas.tab_timing_requested.connect(self.tab_timing_requested.emit)
         self.canvas.sig_smart_split.connect(self.sig_smart_split)
         self.canvas.step_frame.connect(self.step_frame)
 
@@ -1163,6 +1165,11 @@ class TimelineWidget(QWidget):
         if canvas is None or not hasattr(canvas, "set_shadow_playhead"):
             return False
         normalized = None if sec is None else self.snap_sec_to_frame(sec)
+        if normalized is not None:
+            try:
+                canvas._shadow_playhead_armed_sec = None
+            except Exception:
+                pass
         changed = bool(canvas.set_shadow_playhead(normalized))
         if changed:
             self._sync_playhead_overlay()
@@ -1170,6 +1177,18 @@ class TimelineWidget(QWidget):
 
     def clear_shadow_playhead(self):
         return self.set_shadow_playhead(None)
+
+    def arm_shadow_playhead(self, sec: float | None):
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            return False
+        normalized = None if sec is None else self.snap_sec_to_frame(sec)
+        try:
+            canvas._shadow_playhead_armed_sec = normalized
+        except Exception:
+            return False
+        self.clear_shadow_playhead()
+        return normalized is not None
 
     def pin_shadow_playhead(self, sec: float | None = None):
         target = getattr(self.canvas, "playhead_sec", 0.0) if sec is None else sec

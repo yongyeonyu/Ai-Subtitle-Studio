@@ -1321,6 +1321,38 @@ class EditorScanCutCoreMixin:
         except Exception:
             pass
 
+    def _release_scan_cut_runtime_memory(self, *, clear_thumbnail: bool = True) -> None:
+        try:
+            cap = getattr(self, "_scan_cv2_capture", None)
+            if cap is not None:
+                cap.release()
+        except Exception:
+            pass
+        self._scan_cv2_capture = None
+        self._scan_cv2_source_path = None
+        self._scan_cv2_last_frame_idx = None
+        self._scan_cut_strict_verify_bundle_cache = None
+        self._scan_logged_capture_resolution = False
+        self._scan_last_preview_sec = 0.0
+        self._scan_last_preview_thumbnail_at = 0.0
+
+        if not clear_thumbnail:
+            return
+
+        try:
+            vp = getattr(self, "video_player", None)
+            if vp is None:
+                return
+            thumb = getattr(vp, "thumb_label", None)
+            if thumb is not None and hasattr(thumb, "clear_pixmap"):
+                thumb.clear_pixmap()
+            stack = getattr(vp, "video_stack", None)
+            video_widget = getattr(vp, "video_widget", None)
+            if stack is not None and video_widget is not None and hasattr(stack, "setCurrentWidget"):
+                stack.setCurrentWidget(video_widget)
+        except Exception:
+            pass
+
     def _cancel_scan_cut(self, reason: str = "cancelled", *, update_label: bool = True):
         current_state = getattr(self, "_scan_cut_state", None)
         if isinstance(current_state, dict):
@@ -1333,6 +1365,7 @@ class EditorScanCutCoreMixin:
             pass
 
         self._scan_cut_state = None
+        self._release_scan_cut_runtime_memory()
         self._set_scan_cut_button_active(0)
         if hasattr(self, "_scan_set_timeline_input_locked"):
             self._scan_set_timeline_input_locked(False)
@@ -1507,9 +1540,6 @@ class EditorScanCutCoreMixin:
                 return
             self._cancel_scan_cut("switch-direction", update_label=False)
 
-        if self._scan_jump_to_cached_cut_boundary(direction):
-            return
-
         if hasattr(self.video_player, "pause_video"):
             self.video_player.pause_video()
 
@@ -1609,6 +1639,8 @@ class EditorScanCutCoreMixin:
         현재 에디터가 연결된 프로젝트 JSON 경로를 최대한 안전하게 찾는다.
         프로젝트가 없으면 빈 문자열을 반환한다.
         """
+        from core.project.project_manager import is_project_file_path
+
         candidates = [
             "project_file",
             "project_path",
@@ -1626,7 +1658,7 @@ class EditorScanCutCoreMixin:
                     value = str(getattr(obj, attr, "") or "")
                 except Exception:
                     value = ""
-                if value and value.endswith(".json") and os.path.exists(value):
+                if value and is_project_file_path(value) and os.path.exists(value):
                     return value
 
         try:
@@ -1634,7 +1666,7 @@ class EditorScanCutCoreMixin:
             if isinstance(state, dict):
                 for key in ("path", "project_file", "project_path"):
                     value = str(state.get(key, "") or "")
-                    if value and value.endswith(".json") and os.path.exists(value):
+                    if value and is_project_file_path(value) and os.path.exists(value):
                         return value
         except Exception:
             pass

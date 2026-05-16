@@ -30,7 +30,10 @@ class EditorSegmentsSttSelectionFlowMixin:
             for seg in list(getattr(self, "_live_editor_preview_segments", []) or [])
             if isinstance(seg, dict) and not seg.get("is_gap") and str(seg.get("text", "") or "").strip()
         ]
-        if explicit_subtitle_preview:
+        subtitle_preview: list[dict] = []
+        if not bool(getattr(self, "_stt_preview_subtitle_drafts_enabled", True)):
+            explicit_subtitle_preview = []
+        elif explicit_subtitle_preview:
             subtitle_preview = sorted(
                 explicit_subtitle_preview,
                 key=lambda seg: (
@@ -38,7 +41,7 @@ class EditorSegmentsSttSelectionFlowMixin:
                     float(seg.get("end", 0.0) or 0.0),
                 ),
             )
-        else:
+        elif bool(getattr(self, "_stt_preview_subtitle_drafts_enabled", True)):
             subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
         combined = sorted(
             confirmed + subtitle_preview + preview,

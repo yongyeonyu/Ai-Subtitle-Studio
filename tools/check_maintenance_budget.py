@@ -28,6 +28,7 @@ FILE_ALLOWLIST = {
 FUNCTION_ALLOWLIST = {
     "core/audio/media_processor.py:extract_audio",
     "core/audio/media_processor_transcribe.py:transcribe",
+    "core/runtime/multi_process.py:apply_apple_m_subtitle_pipeline_plan",
     "core/pipeline/single_pipeline.py:_process_one",
     "core/project/project_manager.py:save_project",
     "ui/main/app_command_bridge.py:execute_app_command",

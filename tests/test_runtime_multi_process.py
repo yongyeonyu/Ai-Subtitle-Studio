@@ -1,4 +1,5 @@
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +7,8 @@ from unittest.mock import patch
 
 from core.runtime.multi_process import (
     RuntimeResourceCoordinator,
+    _ACCELERATION_CALLOUTS_UNSET,
+    _runtime_acceleration_callouts,
     apply_apple_m_subtitle_pipeline_plan,
     manual_lora_runtime_settings,
     runtime_acceleration_snapshot,
@@ -23,6 +26,52 @@ class _Logger:
 
 
 class RuntimeMultiProcessTests(unittest.TestCase):
+    def setUp(self):
+        import core.runtime.multi_process as multi_process
+
+        multi_process._ACCELERATION_CALLOUTS = _ACCELERATION_CALLOUTS_UNSET
+
+    def tearDown(self):
+        import core.runtime.multi_process as multi_process
+
+        multi_process._ACCELERATION_CALLOUTS = _ACCELERATION_CALLOUTS_UNSET
+
+    def test_runtime_acceleration_callouts_are_resolved_once(self):
+        first = _runtime_acceleration_callouts()
+        with patch("builtins.__import__", side_effect=AssertionError("acceleration imports should be cached")):
+            second = _runtime_acceleration_callouts()
+
+        self.assertIs(first, second)
+
+    def test_runtime_resource_coordinator_reuses_psutil_module_after_init(self):
+        class FakeProcess:
+            def __init__(self):
+                self.calls = 0
+
+            def cpu_percent(self, interval=None):
+                self.calls += 1
+                return 33.0
+
+        class FakePsutil:
+            process = FakeProcess()
+            system_calls = 0
+
+            @classmethod
+            def Process(cls, _pid):
+                return cls.process
+
+            @classmethod
+            def cpu_percent(cls, interval=None):
+                cls.system_calls += 1
+                return 44.0
+
+        with patch.dict(sys.modules, {"psutil": FakePsutil}):
+            coordinator = RuntimeResourceCoordinator(settings={}, logger=None)
+
+        with patch("builtins.__import__", side_effect=AssertionError("psutil should be reused after init")):
+            self.assertEqual(coordinator._sample_system_cpu_percent(), 44.0)
+            self.assertEqual(coordinator._sample_process_cpu_percent(), 33.0)
+
     def test_apply_apple_m_subtitle_pipeline_plan_sets_shared_worker_budget(self):
         snapshot = {
             "logical_cores": 10,

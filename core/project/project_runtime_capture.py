@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from core.project.project_assets import copy_project_rows
@@ -107,17 +109,127 @@ def editor_provisional_cut_boundaries_for_save(editor: Any) -> list[Any]:
     return _copy_boundary_rows(getattr(editor, "_auto_cut_boundary_scan_lines", None))
 
 
+def _editor_runtime_sources(editor: Any) -> list[Any]:
+    sources: list[Any] = [editor]
+    timeline = getattr(editor, "timeline", None)
+    canvas = _editor_timeline_canvas(editor)
+    global_canvas = getattr(timeline, "global_canvas", None) if timeline is not None else None
+    window = None
+    try:
+        window = editor.window()
+    except Exception:
+        window = None
+    for item in (window, timeline, canvas, global_canvas):
+        if item is not None:
+            sources.append(item)
+    return sources
+
+
+def _first_row_list_from_sources(sources: list[Any], attrs: tuple[str, ...]) -> list[dict[str, Any]]:
+    for source in sources:
+        for attr in attrs:
+            rows = getattr(source, attr, None)
+            copied = copy_project_rows(rows)
+            if copied:
+                return copied
+    return []
+
+
+def _copy_roughcut_result_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return deepcopy(value)
+    if is_dataclass(value):
+        return asdict(value)
+    if value is None:
+        return {}
+    payload: dict[str, Any] = {}
+    for key in (
+        "segments",
+        "chapters",
+        "edit_decisions",
+        "edl_segments",
+        "guide_markdown",
+        "markdown_guide",
+        "video_summary",
+        "warnings",
+        "draft_state",
+        "schema_version",
+        "result_schema_version",
+        "packed_phrases",
+        "chunks",
+        "cut_points",
+        "title_suggestions",
+    ):
+        try:
+            item = getattr(value, key, None)
+        except Exception:
+            item = None
+        if item not in (None, ""):
+            payload[key] = deepcopy(item)
+    return payload
+
+
+def collect_editor_roughcut_project_state(editor: Any) -> dict[str, Any]:
+    if editor is None:
+        return {
+            "middle_segments": [],
+            "preliminary_middle_segments": [],
+            "roughcut_result": {},
+        }
+    sources = _editor_runtime_sources(editor)
+    middle_segments = _first_row_list_from_sources(
+        sources,
+        (
+            "_middle_segments",
+            "middle_segments",
+            "_roughcut_segments",
+            "roughcut_segments",
+            "_chapter_segments",
+            "chapter_segments",
+            "_roughcut_draft_segments",
+            "_cut_boundary_topicless_middle_segments",
+            "cut_boundary_topicless_middle_segments",
+        ),
+    )
+    preliminary_middle_segments = _first_row_list_from_sources(
+        sources,
+        ("_preliminary_middle_segments", "preliminary_middle_segments"),
+    )
+    roughcut_result: dict[str, Any] = {}
+    for source in sources:
+        for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
+            roughcut_result = _copy_roughcut_result_payload(getattr(source, attr, None))
+            if roughcut_result:
+                break
+        if roughcut_result:
+            break
+    if not middle_segments and isinstance(roughcut_result.get("segments"), list):
+        middle_segments = copy_project_rows(roughcut_result.get("segments"))
+    return {
+        "middle_segments": middle_segments,
+        "preliminary_middle_segments": preliminary_middle_segments,
+        "roughcut_result": roughcut_result,
+    }
+
+
 def collect_editor_project_aux_state(editor: Any) -> dict[str, list[Any]]:
     if editor is None:
         return {
             "stt_preview_segments": [],
             "voice_activity_segments": [],
             "provisional_cut_boundaries": [],
+            "middle_segments": [],
+            "preliminary_middle_segments": [],
+            "roughcut_result": {},
         }
+    roughcut_state = collect_editor_roughcut_project_state(editor)
     return {
         "stt_preview_segments": copy_editor_live_stt_preview_segments(editor),
         "voice_activity_segments": copy_editor_voice_activity_segments(editor),
         "provisional_cut_boundaries": editor_provisional_cut_boundaries_for_save(editor),
+        "middle_segments": roughcut_state["middle_segments"],
+        "preliminary_middle_segments": roughcut_state["preliminary_middle_segments"],
+        "roughcut_result": roughcut_state["roughcut_result"],
     }
 
 
@@ -127,6 +239,8 @@ def count_editor_project_aux_state(editor: Any, *, refresh: bool = True) -> dict
             "stt_preview_segment_count": 0,
             "voice_activity_segment_count": 0,
             "provisional_cut_boundary_count": 0,
+            "middle_segment_count": 0,
+            "preliminary_middle_segment_count": 0,
         }
     canvas = _editor_timeline_canvas(editor)
     if refresh and canvas is not None and hasattr(canvas, "_refresh_voice_activity_segments"):
@@ -155,4 +269,8 @@ def count_editor_project_aux_state(editor: Any, *, refresh: bool = True) -> dict
             getattr(canvas, "voice_activity_segments", []) if canvas is not None else []
         ),
         "provisional_cut_boundary_count": _row_count(provisional),
+        "middle_segment_count": _row_count(collect_editor_roughcut_project_state(editor).get("middle_segments")),
+        "preliminary_middle_segment_count": _row_count(
+            collect_editor_roughcut_project_state(editor).get("preliminary_middle_segments")
+        ),
     }

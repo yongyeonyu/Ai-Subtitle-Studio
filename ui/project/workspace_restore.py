@@ -41,7 +41,7 @@ class WorkspaceMixin:
 
     def _auto_save_project(self, srt_path, segments):
         try:
-            from core.project.project_manager import PROJECTS_DIR, create_project, save_project
+            from core.project.project_manager import create_project, project_file_path_for_name, save_project
 
             editor = self._editor_widget
             if not editor:
@@ -55,7 +55,7 @@ class WorkspaceMixin:
                 project_path = self._current_project_path
             else:
                 base_name = os.path.splitext(os.path.basename(media_path))[0]
-                project_path = os.path.join(PROJECTS_DIR, f"{base_name}.json")
+                project_path = project_file_path_for_name(base_name)
 
                 if not os.path.exists(project_path):
                     project_path = create_project(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 
 from core.audio.stt_candidate_scorer import stt_score_to_color
+from ui.style import COLORS
 from ui.timeline.timeline_analysis import SUBTITLE_STATUS_COLORS, subtitle_review_state
 
 
@@ -23,21 +24,21 @@ SEGMENT_TEXT_KIND_STYLES = {
 
 QUALITY_SEGMENT_COLORS = {
     "green": ("#203A2A", "#34C759"),
-    "yellow": ("#3B341D", "#FFCC00"),
+    "yellow": (COLORS["warning_surface"], COLORS["warning"]),
     "red": ("#4A1F24", "#FF453A"),
     "gray": ("#2F343A", "#8E8E93"),
 }
 
 SUBTITLE_STATE_SEGMENT_COLORS = {
     "confirmed": ("#203A2A", SUBTITLE_STATUS_COLORS["confirmed"]),
-    "pending": ("#3B341D", SUBTITLE_STATUS_COLORS["pending"]),
+    "pending": (COLORS["warning_surface"], COLORS["warning"]),
     "recheck": ("#4A1F24", SUBTITLE_STATUS_COLORS["recheck"]),
     "conflict": ("#2F343A", SUBTITLE_STATUS_COLORS["conflict"]),
 }
 
 STAGE_CONFIDENCE_COLORS = {
     "green": "#34C759",
-    "yellow": "#FFCC00",
+    "yellow": COLORS["warning"],
     "red": "#FF453A",
     "gray": "#8E8E93",
 }
@@ -171,15 +172,41 @@ def subtitle_render_detail_mode(
         return "full"
     count = max(0, int(visible_segment_count or 0))
     zoom = max(0.0, float(pps or 0.0))
-    # Playback must not remove labels that are readable while paused. Keep text
-    # detail based on density/zoom only so subtitle segments remain legible.
-    if playback_active:
-        return "full"
+    # Keep playback on the same density profile as pause. Forcing "full" here
+    # makes STT/subtitle lanes switch paint modes only while playing, which
+    # looks like a refresh and costs more CPU.
     if count >= 180 or (count >= 72 and zoom < 24.0) or (count >= 32 and zoom < 10.0):
         return "ultra"
     if count >= 56 or (count >= 28 and zoom < 40.0):
         return "dense"
     return "full"
+
+
+def _mix_hex(base_hex: str, accent_hex: str, ratio: float) -> str:
+    ratio = max(0.0, min(1.0, float(ratio or 0.0)))
+
+    def _channels(value: str) -> tuple[int, int, int]:
+        raw = str(value or "").strip().lstrip("#")
+        if len(raw) == 3:
+            raw = "".join(ch * 2 for ch in raw)
+        if len(raw) != 6:
+            raise ValueError("invalid hex color")
+        return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+
+    try:
+        base_r, base_g, base_b = _channels(base_hex)
+        accent_r, accent_g, accent_b = _channels(accent_hex)
+    except Exception:
+        return str(base_hex or accent_hex or "#242A30")
+
+    def _blend_channel(left: int, right: int) -> int:
+        return max(0, min(255, int(round((left * (1.0 - ratio)) + (right * ratio)))))
+
+    return "#{:02X}{:02X}{:02X}".format(
+        _blend_channel(base_r, accent_r),
+        _blend_channel(base_g, accent_g),
+        _blend_channel(base_b, accent_b),
+    )
 
 
 def cut_boundary_scan_marker_verified(marker) -> bool:
@@ -207,7 +234,7 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
             or stage == "follower"
             or bool(marker.get("follower_active"))
         ):
-            return {"color": "#FFCC00", "width": 2, "style": "dash"}
+            return {"color": COLORS["warning"], "width": 2, "style": "dash"}
     if cut_boundary_scan_marker_verified(marker):
         return {"color": "#8E8E93", "width": 1, "style": "dot"}
     if isinstance(marker, dict):
@@ -387,13 +414,27 @@ def subtitle_segment_visual_style(
         text = ""
     else:
         base_fill = "#222A31" if hover else "#242A30"
-        fill = "#4A1F24" if is_stt_pending else ("#1D3D76" if active and not playback_active else base_fill)
+        fill = "#4A1F24" if is_stt_pending else ("#1D3D76" if active else base_fill)
         border = "#FF453A" if is_stt_pending else ("#8AB8FF" if active else "#3A4650")
         text = ""
 
     if muted_by_filter:
         fill = "#1A2025"
         border = "#2D3942"
+
+    accentable_idle = (
+        not kind_style
+        and not quality
+        and review_state not in SUBTITLE_STATE_SEGMENT_COLORS
+        and not is_stt_pending
+    )
+    accentable_conflict = review_state == "conflict"
+    if active and (accentable_conflict or accentable_idle):
+        fill = _mix_hex(fill, "#1D3D76", 0.26)
+        border = "#8AB8FF"
+    elif hover and (accentable_conflict or accentable_idle):
+        fill = _mix_hex(fill, "#24425C", 0.14)
+        border = "#5AAEFF"
 
     return {"fill": fill, "border": border, "text": text, "muted": muted_by_filter}
 
@@ -451,7 +492,7 @@ def stt_preview_visual_style(
     is_selected = state in {"manual", "llm"}
     is_unselected = state == "unselected"
     fill = score_hex or fill_hex
-    border = "#FFCC00" if state == "llm" else ("#FFFFFF" if is_selected else (score_hex or border_hex))
+    border = COLORS["warning"] if state == "llm" else ("#FFFFFF" if is_selected else (score_hex or border_hex))
     return {
         "fill": fill,
         "border": border,

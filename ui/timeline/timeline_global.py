@@ -37,6 +37,7 @@ MINIMAP_PENDING_BORDER = QColor("#C3B6FF")
 MINIMAP_SILENCE_FILL = QColor(255, 159, 10, 152)
 MINIMAP_SILENCE_BORDER = QColor("#FFD27A")
 MINIMAP_SUBTITLE_MERGE_GAP_PX = 4
+MINIMAP_HEIGHT = 72
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -45,7 +46,7 @@ class GlobalCanvas(GlobalCanvasBase):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setFixedHeight(48)
+        self.setFixedHeight(MINIMAP_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
@@ -339,7 +340,7 @@ class GlobalCanvas(GlobalCanvasBase):
         p.drawLine(0, divider_y, w, divider_y)
         p.drawRect(QRect(0, 0, max(1, w - 1), max(1, h - 1)))
 
-        def _rect_for_lane(start: float, end: float, lane: QRect, *, min_h_pad: int = 3) -> QRect:
+        def _rect_for_lane(start: float, end: float, lane: QRect, *, min_h_pad: int = 1) -> QRect:
             if total <= 0:
                 return QRect()
             x = int(start * (w / total))
@@ -373,7 +374,7 @@ class GlobalCanvas(GlobalCanvasBase):
                     end = max(start, float(marker.get("end", start) or start))
                 except Exception:
                     continue
-                rect = _rect_for_lane(start, end, preview_lane, min_h_pad=2)
+                rect = _rect_for_lane(start, end, preview_lane, min_h_pad=1)
                 if rect.isEmpty():
                     continue
                 border = QColor(str(marker.get("color", MINIMAP_MAJOR_BORDER.name())))
@@ -391,7 +392,7 @@ class GlobalCanvas(GlobalCanvasBase):
                     end = max(start, float(marker.get("end", start) or start))
                 except Exception:
                     continue
-                rect = _rect_for_lane(start, end, reference_lane, min_h_pad=2)
+                rect = _rect_for_lane(start, end, reference_lane, min_h_pad=1)
                 if rect.isEmpty():
                     continue
                 border = QColor(str(marker.get("color", MINIMAP_MAJOR_BORDER.name())))
@@ -415,7 +416,7 @@ class GlobalCanvas(GlobalCanvasBase):
                     end = max(start, float(marker.get("end", start) or start))
                 except Exception:
                     continue
-                rect = _rect_for_lane(start, end, top_lane, min_h_pad=3)
+                rect = _rect_for_lane(start, end, top_lane, min_h_pad=1)
                 if rect.isEmpty():
                     continue
                 border = QColor(str(marker.get("color", MINIMAP_MAJOR_BORDER.name())))
@@ -459,7 +460,7 @@ class GlobalCanvas(GlobalCanvasBase):
                     float(s.get("start", 0.0) or 0.0),
                     float(s.get("end", 0.0) or 0.0),
                     subtitle_lane,
-                    min_h_pad=2,
+                    min_h_pad=1,
                 )
                 if s.get("stt_pending"):
                     pending_rects.append(rect)
@@ -473,7 +474,7 @@ class GlobalCanvas(GlobalCanvasBase):
                     end = max(start, float(marker.get("end", start) or start))
                 except Exception:
                     continue
-                silence_rects.append(_rect_for_lane(start, end, silence_lane, min_h_pad=2))
+                silence_rects.append(_rect_for_lane(start, end, silence_lane, min_h_pad=1))
             if confirmed_rects:
                 p.setBrush(MINIMAP_SUBTITLE_FILL)
                 p.drawRects(confirmed_rects)

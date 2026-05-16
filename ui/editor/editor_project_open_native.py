@@ -15,7 +15,12 @@ from typing import Callable
 
 from PyQt6.QtCore import QTimer
 
-from core.project.project_manager import PROJECTS_DIR, load_project
+from core.project.project_manager import (
+    PROJECTS_DIR,
+    is_project_file_path,
+    load_project,
+    project_file_path_for_name,
+)
 from core.runtime.logger import get_logger
 from ui.project.project_session_runtime import (
     apply_project_multiclip_runtime,
@@ -154,23 +159,23 @@ def project_sidecar_candidates_for_srt(srt_path: str, media_path: str | None = N
     if srt_abs:
         srt_dir = os.path.dirname(srt_abs)
         srt_stem = os.path.splitext(os.path.basename(srt_abs))[0]
-        _add(os.path.join(PROJECTS_DIR, f"{srt_stem}.json"))
+        _add(project_file_path_for_name(srt_stem))
 
         if os.path.basename(srt_dir) == "subtitles":
             asset_dir = os.path.dirname(srt_dir)
             asset_name = os.path.basename(asset_dir)
             if asset_name.endswith(".assets"):
                 project_name = asset_name[: -len(".assets")]
-                _add(os.path.join(os.path.dirname(asset_dir), f"{project_name}.json"))
+                _add(project_file_path_for_name(project_name, folder=os.path.dirname(asset_dir)))
 
     media_abs = normalized_open_path(media_path)
     if media_abs and media_abs != srt_abs:
         media_stem = os.path.splitext(os.path.basename(media_abs))[0]
-        _add(os.path.join(PROJECTS_DIR, f"{media_stem}.json"))
+        _add(project_file_path_for_name(media_stem))
 
     try:
         for name in os.listdir(PROJECTS_DIR):
-            if not name.lower().endswith(".json"):
+            if not is_project_file_path(name):
                 continue
             _add(os.path.join(PROJECTS_DIR, name))
     except Exception:
@@ -245,9 +250,9 @@ def find_project_for_srt_open(srt_path: str, media_path: str | None = None) -> t
         if os.path.basename(srt_dir) == "subtitles":
             asset_dir = os.path.dirname(srt_dir)
             asset_name = os.path.basename(asset_dir)
-            expected = os.path.join(
-                os.path.dirname(asset_dir),
-                f"{asset_name.removesuffix('.assets')}.json",
+            expected = project_file_path_for_name(
+                asset_name.removesuffix(".assets"),
+                folder=os.path.dirname(asset_dir),
             )
             if normalized_open_path(project_path) == normalized_open_path(expected):
                 return project_path, project
@@ -497,6 +502,7 @@ def _apply_loaded_editor_segments(
     provisional_boundaries: list[dict] | list[float] | None = None,
     voice_activity_segments: list[dict] | None = None,
     stt_preview_segments: list[dict] | None = None,
+    stt_preview_subtitle_drafts: bool | None = None,
     mark_dirty: bool = False,
 ) -> None:
     if hasattr(editor, "apply_loaded_canvas_state"):
@@ -507,6 +513,7 @@ def _apply_loaded_editor_segments(
             provisional_boundaries=provisional_boundaries,
             voice_activity_segments=voice_activity_segments,
             stt_preview_segments=stt_preview_segments,
+            stt_preview_subtitle_drafts=stt_preview_subtitle_drafts,
             mark_dirty=mark_dirty,
         )
         return
@@ -531,6 +538,7 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         project_voice_activity_segments,
     )
     from core.project.project_format import project_primary_fps
+    from core.project.project_roughcut_store import hydrate_project_roughcut_payload
 
     attach_project_session(
         owner,
@@ -542,6 +550,15 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
     )
     apply_project_multiclip_runtime(owner, media, project)
     analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+    middle_segments = [
+        dict(row)
+        for row in list(
+            analysis.get("middle_segments")
+            or project.get("middle_segments")
+            or []
+        )
+        if isinstance(row, dict)
+    ]
     preliminary_middle_segments = [
         dict(row)
         for row in list(
@@ -551,6 +568,12 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         )
         if isinstance(row, dict)
     ]
+    roughcut_result = (
+        analysis.get("roughcut_result")
+        if isinstance(analysis.get("roughcut_result"), dict)
+        else project.get("roughcut_result")
+    )
+    roughcut_result = dict(roughcut_result) if isinstance(roughcut_result, dict) else None
     owner._on_save_cb = None
     owner._on_start_cb = None
     owner._on_prev_cb = None
@@ -562,6 +585,32 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         return False
     try:
         primary_fps = float(project_primary_fps(project) or 30.0)
+        hydrate_project_roughcut_payload(project, primary_fps=primary_fps)
+        analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+        middle_segments = [
+            dict(row)
+            for row in list(
+                analysis.get("middle_segments")
+                or project.get("middle_segments")
+                or []
+            )
+            if isinstance(row, dict)
+        ]
+        preliminary_middle_segments = [
+            dict(row)
+            for row in list(
+                analysis.get("preliminary_middle_segments")
+                or project.get("preliminary_middle_segments")
+                or []
+            )
+            if isinstance(row, dict)
+        ]
+        roughcut_result = (
+            analysis.get("roughcut_result")
+            if isinstance(analysis.get("roughcut_result"), dict)
+            else project.get("roughcut_result")
+        )
+        roughcut_result = dict(roughcut_result) if isinstance(roughcut_result, dict) else None
         try:
             setattr(editor, "video_fps", primary_fps)
         except Exception:
@@ -601,14 +650,33 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
             provisional_boundaries=provisional_boundaries,
             voice_activity_segments=voice_activity,
             stt_preview_segments=[],
+            stt_preview_subtitle_drafts=False,
             mark_dirty=False,
         )
         for obj in (owner, editor, timeline, canvas, global_canvas):
             if obj is None:
                 continue
+            for attr in (
+                "_middle_segments",
+                "middle_segments",
+                "_roughcut_segments",
+                "roughcut_segments",
+                "_chapter_segments",
+                "chapter_segments",
+                "_roughcut_draft_segments",
+            ):
+                try:
+                    setattr(obj, attr, list(middle_segments))
+                except Exception:
+                    pass
             for attr in ("_preliminary_middle_segments", "preliminary_middle_segments"):
                 try:
                     setattr(obj, attr, list(preliminary_middle_segments))
+                except Exception:
+                    pass
+            for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
+                try:
+                    setattr(obj, attr, dict(roughcut_result) if isinstance(roughcut_result, dict) else None)
                 except Exception:
                     pass
         if len(media) > 1 and hasattr(editor, "_apply_multiclip_state_from_owner"):
@@ -630,6 +698,7 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
                 if hasattr(editor, "apply_canvas_aux_state"):
                     editor.apply_canvas_aux_state(
                         stt_preview_segments=stt_preview,
+                        stt_preview_subtitle_drafts=False,
                         schedule_timeline=bool(stt_preview),
                     )
                 runtime_refresh = getattr(owner, "_refresh_opened_editor_runtime", None)

@@ -1,4 +1,5 @@
 import QtQuick 2.15
+import "AppPalette.js" as Palette
 
 Rectangle {
     id: root
@@ -15,10 +16,10 @@ Rectangle {
     readonly property color borderColor: "#D7DEE7"
     readonly property color textColor: "#111820"
     readonly property color mutedColor: "#52606B"
-    readonly property color accentColor: iconKind === "danger" ? "#FF453A"
-        : iconKind === "warning" ? "#FF9F0A"
-        : iconKind === "question" ? "#5AC8FA"
-        : "#34C759"
+    readonly property color accentColor: iconKind === "danger" ? Palette.danger
+        : iconKind === "warning" ? Palette.warning
+        : iconKind === "question" ? Palette.info
+        : Palette.accent
 
     Rectangle {
         anchors.fill: parent
@@ -90,12 +91,12 @@ Rectangle {
                             height: 36
                             radius: 10
                             color: modelData.kind === "primary" ? "#0A84FF"
-                                : modelData.kind === "warning" ? "#FF9F0A"
-                                : modelData.kind === "danger" ? "#FF453A"
+                                : modelData.kind === "warning" ? Palette.warning
+                                : modelData.kind === "danger" ? Palette.danger
                                 : "#E8ECF2"
                             border.width: modelData.default ? 2 : 1
                             border.color: modelData.kind === "primary" ? "#52A6FF"
-                                : modelData.kind === "warning" ? "#FFC46A"
+                                : modelData.kind === "warning" ? Palette.warning
                                 : modelData.kind === "danger" ? "#FF8B84"
                                 : "#D1D8E0"
 

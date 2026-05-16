@@ -900,6 +900,9 @@ class EditorActionsMixin:
         stt_preview_segments = aux_state["stt_preview_segments"]
         voice_activity_segments = aux_state["voice_activity_segments"]
         provisional_cut_boundaries = aux_state["provisional_cut_boundaries"]
+        middle_segments = aux_state["middle_segments"]
+        preliminary_middle_segments = aux_state["preliminary_middle_segments"]
+        roughcut_result = aux_state["roughcut_result"]
         stt_mode_state = None
         stt_mode_learning = None
         if getattr(self, "_stt_mode_enabled", False) or getattr(self, "_stt_work_segments", None):
@@ -942,6 +945,8 @@ class EditorActionsMixin:
             media_paths=_media_paths,
             srt_path=get_srt_path(media_path),
             segments=segs,
+            middle_segments=middle_segments,
+            roughcut_result=roughcut_result,
             user_settings=dict(getattr(self, "settings", {}) or {}),
             workspace=workspace,
             active_work_mode=workspace['active_work_mode'],
@@ -951,6 +956,7 @@ class EditorActionsMixin:
             stt_mode_learning=stt_mode_learning,
             provisional_cut_boundaries=provisional_cut_boundaries,
             persist_analysis_artifacts=bool(persist_analysis_artifacts),
+            preliminary_middle_segments=preliminary_middle_segments,
         )
         get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
         return project_path
@@ -966,8 +972,13 @@ class EditorActionsMixin:
 
         if getattr(self, "_skip_prev_confirm_once", False):
             self._skip_prev_confirm_once = False
-            self._go_home()
-            return
+            try:
+                if not self._has_unsaved_changes():
+                    self._go_home()
+                    return
+            except Exception:
+                self._go_home()
+                return
 
         is_dirty = False
         try:
@@ -1008,8 +1019,13 @@ class EditorActionsMixin:
 
         if getattr(self, "_skip_prev_confirm_once", False):
             self._skip_prev_confirm_once = False
-            _emit_exit()
-            return
+            try:
+                if not self._has_unsaved_changes():
+                    _emit_exit()
+                    return
+            except Exception:
+                _emit_exit()
+                return
 
         is_dirty = False
         try:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from core.coerce import positive_int as _positive_int
 from core.performance import (
@@ -34,6 +34,8 @@ from core.runtime.setting_utils import setting_bool as _setting_bool
 BENCH_LOCKED_CUT_PIONEER_WORKERS = 4
 BENCH_LOCKED_CUT_FOLLOWER_WORKERS = 4
 BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS = 4
+_ACCELERATION_CALLOUTS_UNSET = object()
+_ACCELERATION_CALLOUTS: tuple[Callable[[], bool], Callable[..., dict[str, Any]]] | object = _ACCELERATION_CALLOUTS_UNSET
 
 
 def _int_value(value: Any, default: int = 0) -> int:
@@ -363,13 +365,10 @@ def _cut_boundary_topology_worker_limit(
     }
 
 
-def runtime_acceleration_snapshot(settings: dict[str, Any] | None = None) -> dict[str, Any]:
-    settings = dict(settings or {})
-    acceleration_enabled = _setting_bool(settings.get("runtime_hardware_acceleration_enabled"), True)
-    try:
-        accelerators = dict(hardware_profile().get("accelerators", {}) or {})
-    except Exception:
-        accelerators = {}
+def _runtime_acceleration_callouts() -> tuple[Callable[[], bool], Callable[..., dict[str, Any]]]:
+    global _ACCELERATION_CALLOUTS
+    if _ACCELERATION_CALLOUTS is not _ACCELERATION_CALLOUTS_UNSET:
+        return _ACCELERATION_CALLOUTS
     try:
         from core.audio.npu_acceleration import apple_neural_engine_available
         from core.audio.torch_acceleration import torch_acceleration_snapshot
@@ -379,6 +378,19 @@ def runtime_acceleration_snapshot(settings: dict[str, Any] | None = None) -> dic
 
         def torch_acceleration_snapshot(*args, **kwargs) -> dict[str, Any]:  # type: ignore[no-redef]
             return {}
+
+    _ACCELERATION_CALLOUTS = (apple_neural_engine_available, torch_acceleration_snapshot)
+    return _ACCELERATION_CALLOUTS
+
+
+def runtime_acceleration_snapshot(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = dict(settings or {})
+    acceleration_enabled = _setting_bool(settings.get("runtime_hardware_acceleration_enabled"), True)
+    try:
+        accelerators = dict(hardware_profile().get("accelerators", {}) or {})
+    except Exception:
+        accelerators = {}
+    apple_neural_engine_available, torch_acceleration_snapshot = _runtime_acceleration_callouts()
 
     torch_snapshot = dict(torch_acceleration_snapshot(settings=settings, task="runtime") or {})
     ordered_backends = list(torch_snapshot.get("ordered_backends") or [])
@@ -541,14 +553,17 @@ class RuntimeResourceCoordinator:
         self._last_process_cpu_percent = 0.0
         self._last_disk_usage_at = 0.0
         self._last_disk_usage: dict[str, Any] = {"total_bytes": 0, "file_count": 0}
+        self._psutil_module = None
         self._psutil_process = None
         try:
             import psutil  # type: ignore
 
+            self._psutil_module = psutil
             self._psutil_process = psutil.Process(os.getpid())
             psutil.cpu_percent(interval=None)
             self._psutil_process.cpu_percent(interval=None)
         except Exception:
+            self._psutil_module = None
             self._psutil_process = None
 
     def set_exit_mode(self, active: bool) -> None:
@@ -663,14 +678,14 @@ class RuntimeResourceCoordinator:
             if bool(getattr(window, "_auto_processing_active", False)):
                 labels.append("auto")
         except Exception:
-            pass
+            labels = labels
         for backend_name, label in (("backend", "pipeline"), ("backend_fast", "fast")):
             try:
                 backend = getattr(window, backend_name, None)
                 if backend is not None and bool(getattr(backend, "_active", False)):
                     labels.append(label)
             except Exception:
-                pass
+                continue
         try:
             editor = getattr(window, "_editor_widget", None)
             if editor is not None and bool(getattr(editor, "_is_ai_processing", False)):
@@ -678,18 +693,19 @@ class RuntimeResourceCoordinator:
             if editor is not None and bool(getattr(editor, "_stt_mode_enabled", False)):
                 labels.append("stt")
         except Exception:
-            pass
+            editor = None
         if self._exit_mode:
             labels.append("exit")
         return labels
 
     def _sample_system_cpu_percent(self) -> float:
+        psutil = self._psutil_module
+        if psutil is None:
+            return self._last_system_cpu_percent
         try:
-            import psutil  # type: ignore
-
             self._last_system_cpu_percent = float(psutil.cpu_percent(interval=None) or 0.0)
         except Exception:
-            pass
+            return self._last_system_cpu_percent
         return self._last_system_cpu_percent
 
     def _sample_process_cpu_percent(self) -> float:
@@ -699,14 +715,14 @@ class RuntimeResourceCoordinator:
         try:
             self._last_process_cpu_percent = float(proc.cpu_percent(interval=None) or 0.0)
         except Exception:
-            pass
+            return self._last_process_cpu_percent
         return self._last_process_cpu_percent
 
     def _write_snapshot(self, snapshot: dict[str, Any]) -> None:
         try:
             atomic_write_json(runtime_monitor_dir() / "latest.json", snapshot)
         except Exception:
-            pass
+            return
 
     def _maybe_log(self, snapshot: dict[str, Any]) -> None:
         if self.logger is None:
@@ -733,7 +749,7 @@ class RuntimeResourceCoordinator:
                 f"ACTIVE {', '.join(active_labels or ['idle'])}"
             )
         except Exception:
-            pass
+            return
 
 
 __all__ = [

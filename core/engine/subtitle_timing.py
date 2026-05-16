@@ -340,6 +340,23 @@ def _compact_text(value: object) -> str:
 
 
 def _selected_stt_candidate_span(seg: dict) -> tuple[float, float] | None:
+    raw_start = _as_float(
+        seg.get(
+            "_stt_original_candidate_start",
+            seg.get("original_start"),
+        ),
+        None,
+    )
+    raw_end = _as_float(
+        seg.get(
+            "_stt_original_candidate_end",
+            seg.get("original_end"),
+        ),
+        raw_start,
+    ) if raw_start is not None else None
+    if raw_start is not None and raw_end is not None and raw_end > raw_start:
+        return raw_start, raw_end
+
     candidates = [dict(candidate) for candidate in list(seg.get("stt_candidates") or []) if isinstance(candidate, dict)]
     if not candidates:
         return None
@@ -357,8 +374,20 @@ def _selected_stt_candidate_span(seg: dict) -> tuple[float, float] | None:
             selected_sources.append(value)
 
     def _candidate_bounds(candidate: dict) -> tuple[float, float] | None:
-        start = _as_float(candidate.get("start"), 0.0)
-        end = _as_float(candidate.get("end"), start)
+        start = _as_float(
+            candidate.get(
+                "original_start",
+                candidate.get("_stt_original_candidate_start", candidate.get("start")),
+            ),
+            0.0,
+        )
+        end = _as_float(
+            candidate.get(
+                "original_end",
+                candidate.get("_stt_original_candidate_end", candidate.get("end")),
+            ),
+            start,
+        )
         if end <= start:
             return None
         return start, end
@@ -537,6 +566,57 @@ def _clamp_segment_to_anchor_window(
         }
     )
     seg["_timing_anchor_window_policy"] = policy
+    return start, end
+
+
+def _clamp_segment_to_selected_stt_window(
+    seg: dict,
+    start: float,
+    end: float,
+    min_duration: float,
+) -> tuple[float, float]:
+    if bool(seg.get("manual_stt_candidate_locked")):
+        return start, end
+    bounds = _selected_stt_candidate_span(seg)
+    if bounds is None:
+        return start, end
+
+    window_start = float(bounds[0])
+    window_end = float(bounds[1])
+    if window_end <= window_start:
+        return start, end
+
+    old_start = start
+    old_end = end
+    start = max(float(start), window_start)
+    end = min(float(end), window_end)
+
+    required = max(0.05, float(min_duration))
+    if end < start + required:
+        if old_start < window_start:
+            start = window_start
+            end = min(window_end, start + required)
+        elif old_end > window_end:
+            end = window_end
+            start = max(window_start, end - required)
+        else:
+            start = window_start
+            end = window_end
+
+    if end <= start:
+        return old_start, old_end
+
+    changed = abs(start - old_start) >= 0.001 or abs(end - old_end) >= 0.001
+    if changed:
+        seg["_timing_stt_window_policy"] = {
+            "task": "subtitle_timing_selected_stt_window",
+            "window_start": round(window_start, 3),
+            "window_end": round(window_end, 3),
+            "old_start": round(old_start, 3),
+            "old_end": round(old_end, 3),
+            "new_start": round(start, 3),
+            "new_end": round(end, 3),
+        }
     return start, end
 
 
@@ -752,6 +832,26 @@ def _candidate_frame_rate(candidate: dict, fallback: dict) -> float | None:
 
 
 def _update_candidate_time_fields(candidate: dict, start: float, end: float, fallback_segment: dict) -> None:
+    original_start = _as_float(
+        candidate.get(
+            "original_start",
+            candidate.get("_stt_original_candidate_start", candidate.get("start")),
+        ),
+        0.0,
+    )
+    original_end = _as_float(
+        candidate.get(
+            "original_end",
+            candidate.get("_stt_original_candidate_end", candidate.get("end")),
+        ),
+        original_start,
+    )
+    if original_end > original_start:
+        candidate["original_start"] = round(original_start, 3)
+        candidate["original_end"] = round(original_end, 3)
+        candidate["_stt_original_candidate_start"] = round(original_start, 3)
+        candidate["_stt_original_candidate_end"] = round(original_end, 3)
+
     start = max(0.0, float(start or 0.0))
     end = max(start + 0.05, float(end or start + 0.05))
     candidate["start"] = round(start, 3)
@@ -760,6 +860,15 @@ def _update_candidate_time_fields(candidate: dict, start: float, end: float, fal
     candidate["timeline_end"] = candidate["end"]
     fps = _candidate_frame_rate(candidate, fallback_segment)
     if fps:
+        original_start_frame = sec_to_frame(candidate["original_start"], fps) if "original_start" in candidate else None
+        original_end_frame = (
+            max(original_start_frame + 1, sec_to_frame(candidate["original_end"], fps))
+            if original_start_frame is not None and "original_end" in candidate
+            else None
+        )
+        if original_start_frame is not None and original_end_frame is not None:
+            candidate["_stt_original_candidate_start_frame"] = original_start_frame
+            candidate["_stt_original_candidate_end_frame"] = original_end_frame
         start_frame = sec_to_frame(candidate["start"], fps)
         end_frame = max(start_frame + 1, sec_to_frame(candidate["end"], fps))
         candidate["start_frame"] = start_frame
@@ -1505,6 +1614,12 @@ def apply_final_gap_settings(
             float(cur["end"]),
             min_duration,
             cur_settings,
+        )
+        cur["start"], cur["end"] = _clamp_segment_to_selected_stt_window(
+            cur,
+            float(cur["start"]),
+            float(cur["end"]),
+            min_duration,
         )
         _update_frame_fields(cur, float(cur["start"]), float(cur["end"]))
         cur["_final_gap_settings_applied"] = True

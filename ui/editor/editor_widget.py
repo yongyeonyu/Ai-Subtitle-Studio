@@ -42,6 +42,7 @@ from ui.editor.editor_actions import EditorActionsMixin
 from ui.editor.editor_save_manager import EditorSaveManagerMixin
 from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
+from ui.editor.ux.editor_tab_timing import EditorTabTimingMixin
 from ui.editor.ux.editor_timeline_video import EditorTimelineVideoMixin
 from ui.editor.ux.editor_video_controls import EditorVideoControlsMixin
 from ui.editor.ux.editor_subtitle_assist import EditorSubtitleAssistMixin
@@ -63,6 +64,7 @@ class EditorWidget(
     EditorSegmentsMixin,
     EditorAutomationMixin,
     EditorTimelineVideoMixin,
+    EditorTabTimingMixin,
     EditorVideoControlsMixin,
     EditorSubtitleAssistMixin,
     EditorMulticlipContextMixin,
@@ -403,6 +405,7 @@ class EditorWidget(
             if getattr(self.sm, "is_dirty", False) and hasattr(self, "_mark_save_completed"):
                 self._mark_save_completed(touch_saved_time=False)
             return
+        self._skip_prev_confirm_once = False
         self.sm.start_editing()
         if hasattr(self, "_note_editor_foreground_activity"):
             self._note_editor_foreground_activity()
@@ -542,6 +545,11 @@ class EditorWidget(
         self.text_edit.timestamp_deleted.connect(self._on_seg_to_gap)
         self.text_edit.speaker_circle_clicked.connect(self._show_speaker_circle_menu)
         self.text_edit.speaker_circle_dropped.connect(self._on_speaker_circle_dropped)
+        try:
+            self.text_edit.installEventFilter(self)
+            self.text_edit.viewport().installEventFilter(self)
+        except Exception:
+            pass
 
         ew_layout.addWidget(self.text_edit)
         self._editor_focus_border = QWidget(editor_wrap)
@@ -574,6 +582,18 @@ class EditorWidget(
             self.video_player.scan_cut_requested.connect(self._on_scan_cut_requested)
         self.video_player.setStyleSheet("background: #000000; border: none; border-radius: 0px;")
         self.video_frame.add_content(self.video_player)
+        for widget in (
+            self.video_player,
+            getattr(self.video_player, "video_container", None),
+            getattr(self.video_player, "video_stack", None),
+            getattr(self.video_player, "video_widget", None),
+            getattr(self.video_player, "thumb_label", None),
+        ):
+            try:
+                if widget is not None:
+                    widget.installEventFilter(self)
+            except Exception:
+                pass
         self.splitter.addWidget(self.video_frame)
         self.splitter.setStretchFactor(0, 63); self.splitter.setStretchFactor(1, 37)
         self.splitter.setCollapsible(0, False); self.splitter.setCollapsible(1, False)
@@ -596,6 +616,16 @@ class EditorWidget(
         if hasattr(self.timeline, 'canvas'):
             self.timeline.canvas.show_waveform = True
             self.timeline.canvas.update()
+        for widget in (
+            self.timeline,
+            getattr(self.timeline, "canvas", None),
+            getattr(self.timeline, "global_canvas", None),
+        ):
+            try:
+                if widget is not None:
+                    widget.installEventFilter(self)
+            except Exception:
+                pass
 
         # ✅ 여기 딱 한 번만 connect
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'sig_split_request'):
@@ -629,6 +659,7 @@ class EditorWidget(
         if hasattr(self.timeline, 'lock_chk'):         self.timeline.lock_chk.toggled.connect(self._on_lock_changed)
         if hasattr(self.timeline, 'repeat_chk'):       self.timeline.repeat_chk.toggled.connect(self._on_repeat_segment_toggled)
         if hasattr(self.timeline, 'subtitle_magnet_requested'): self.timeline.subtitle_magnet_requested.connect(self._on_subtitle_magnet_requested)
+        if hasattr(self.timeline, 'tab_timing_requested'): self.timeline.tab_timing_requested.connect(self._trigger_magnet)
         if hasattr(self.timeline, 'diamond_merge'):    self.timeline.diamond_merge.connect(self._on_diamond_merge)
         if hasattr(self.timeline, 'sig_inline_text_changed'): self.timeline.sig_inline_text_changed.connect(self._on_inline_text_changed)
         if hasattr(self.timeline, 'sig_editing_mode'):        self.timeline.sig_editing_mode.connect(self._on_seg_editing_mode)
@@ -716,6 +747,17 @@ class EditorWidget(
             QTimer.singleShot(0, self._sync_editor_focus_border)
 
     def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonPress and getattr(self, "_scan_cut_state", None):
+            video_player = getattr(self, "video_player", None)
+            scan_buttons = {
+                getattr(video_player, "btn_scan_prev_cut", None),
+                getattr(video_player, "btn_scan_next_cut", None),
+            }
+            if obj not in scan_buttons:
+                cancel_scan = getattr(self, "_cancel_scan_cut", None)
+                if callable(cancel_scan):
+                    cancel_scan("mouse-click-stop")
+                    return True
         if obj is getattr(self, "_editor_wrap", None) and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._sync_editor_focus_border)
         if obj is getattr(self, "_editor_wrap", None) and event.type() == QEvent.Type.Wheel:
@@ -1567,7 +1609,7 @@ class EditorWidget(
     def _update_highlighter_colors(self):
         cmap = {
             self.settings.get("spk1_id", "00"): self.settings.get("spk1_color", "#FFFFFF"),
-            self.settings.get("spk2_id", "01"): self.settings.get("spk2_color", "#FFFF00"),
+            self.settings.get("spk2_id", "01"): self.settings.get("spk2_color", COLORS["warning"]),
             self.settings.get("spk3_id", "02"): self.settings.get("spk3_color", "#00FFFF"),
         }
         self._highlighter.speaker_colors = cmap; self._highlighter.rehighlight()

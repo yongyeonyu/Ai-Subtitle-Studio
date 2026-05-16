@@ -19,6 +19,8 @@ except Exception:
 
 
 
+# Canonical app palette. Keep visual-semantic colors here so Python and QML
+# surfaces can converge on the same accents instead of drifting by feature.
 COLORS = {
     "bg": "#0F1518",
     "sidebar": "#11181C",
@@ -31,11 +33,21 @@ COLORS = {
     "text": "#F5F7FA",
     "muted": "#A9B0B7",
     "danger": "#FF3B30",
-    "warning": "#FF9500",
+    "warning": "#FFD60A",
+    "warning_surface": "#3B341D",
+    "warning_surface_alt": "#17242C",
+    "warning_surface_alt_soft": "#15212A",
+    "warning_badge": "#5A4600",
+    "warning_border": "#6A4B18",
+    "warning_text_soft": "#FFF2A8",
     "info": "#5AC8FA",
     "accent": "#34C759",
     "separator": "#2D3942",
 }
+
+# Shared gutter used by the main shell and the home sidebar so visible panel
+# gaps stay aligned instead of drifting by surface.
+APP_PANEL_GAP = 5
 
 _LINE_ICON_CACHE_MAX = 256
 _LINE_ICON_CACHE = OrderedDict()

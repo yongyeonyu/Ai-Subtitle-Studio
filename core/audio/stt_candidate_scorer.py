@@ -21,6 +21,7 @@ _HARD_HALLUCINATION_RE = re.compile(
     re.IGNORECASE,
 )
 DEFAULT_MIN_STT_KEEP_SCORE = 24.0
+_MID_WARNING_RGB = (255, 214, 10)
 
 
 def _as_float(value: Any, default: float | None = None) -> float | None:
@@ -428,16 +429,17 @@ def _attach_native_vad_alignment(row: dict[str, Any], info: dict[str, Any]) -> N
 
 def stt_score_to_color(score: float | None) -> str:
     value = 50.0 if score is None else _clip(score)
+    mid_r, mid_g, mid_b = _MID_WARNING_RGB
     if value >= 50.0:
         ratio = (value - 50.0) / 50.0
-        r = round(255 + (52 - 255) * ratio)
-        g = round(204 + (199 - 204) * ratio)
-        b = round(0 + (89 - 0) * ratio)
+        r = round(mid_r + (52 - mid_r) * ratio)
+        g = round(mid_g + (199 - mid_g) * ratio)
+        b = round(mid_b + (89 - mid_b) * ratio)
     else:
         ratio = value / 50.0
-        r = round(255 + (255 - 255) * ratio)
-        g = round(69 + (204 - 69) * ratio)
-        b = round(58 + (0 - 58) * ratio)
+        r = round(255 + (mid_r - 255) * ratio)
+        g = round(69 + (mid_g - 69) * ratio)
+        b = round(58 + (mid_b - 58) * ratio)
     return f"#{r:02X}{g:02X}{b:02X}"
 
 

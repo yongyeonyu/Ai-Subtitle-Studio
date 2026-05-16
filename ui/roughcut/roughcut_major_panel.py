@@ -255,8 +255,8 @@ class RoughcutMajorPanel(QWidget):
             color = "#BBDFFF"
             border = "#24527A"
         elif status == "needs_review":
-            color = "#FFD68A"
-            border = "#6A4B18"
+            color = COLORS["warning"]
+            border = COLORS["warning_border"]
         return (
             "QLabel { background: #10161A; "
             f"color: {color}; border: 1px solid {border}; border-radius: 6px; "

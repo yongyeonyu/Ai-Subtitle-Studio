@@ -230,8 +230,10 @@ class EditorVideoControlsMixin:
     # Shortcut Actions
     # ---------------------------------------------------------
     def _trigger_magnet(self):
-        if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
-            self.timeline.canvas._snap_closest_diamond()
+        move_tab_timing = getattr(self, "_move_tab_timing_boundary", None)
+        if callable(move_tab_timing):
+            return move_tab_timing()
+        return False
 
     def _toggle_focus(self):
         if self.timeline.hasFocus() or self.timeline.canvas.hasFocus() or self.timeline.global_canvas.hasFocus() or self.timeline.scroll.hasFocus():

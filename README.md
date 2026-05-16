@@ -102,9 +102,9 @@ Local macOS beta package:
 packaging/macos/build_beta_dmg.sh
 ```
 
-Build the DMG only for release or beta distribution validation. Normal native
-refactor and optimization work should stop at Swift/Python tests plus app bundle
-checks when needed.
+Build the DMG only when explicitly requested. Even release work should stop at
+Swift/Python tests plus app bundle checks unless the user specifically asks for
+DMG packaging or validation.
 
 Local update test:
 

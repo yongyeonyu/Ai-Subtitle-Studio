@@ -7,7 +7,7 @@ from core.runtime import config
 
 SUBTITLE_STATUS_COLORS = {
     "confirmed": "#34C759",
-    "pending": "#FFCC00",
+    "pending": "#FFD60A",
     "recheck": "#FF453A",
     "conflict": "#8E8E93",
 }

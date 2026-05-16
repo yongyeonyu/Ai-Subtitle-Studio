@@ -25,9 +25,13 @@ from ui.timeline.timeline_analysis import (
     subtitle_generation_silence_segments_for_editor,
     subtitle_review_state,
     subtitle_detection_color,
+    subtitle_score_overlay_marker,
     voice_activity_segments_for_editor,
 )
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
+from ui.timeline.timeline_constants import STT1_BOT, STT1_TOP, STT_PREVIEW_VERTICAL_INSET
+from ui.timeline.stt_preview_layout import MAX_STT_PREVIEW_SUBLANES, assign_stt_preview_lanes, stt_preview_lane_geometry
+from ui.style import COLORS
 
 
 class TimelineSegmentColorTests(unittest.TestCase):
@@ -67,10 +71,10 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(style["fill"], SEGMENT_TEXT_KIND_STYLES["speech"]["fill"])
         self.assertEqual(style["border"], SEGMENT_TEXT_KIND_STYLES["speech"]["border"])
 
-    def test_subtitle_segment_visual_style_keeps_idle_fill_during_playback(self):
+    def test_subtitle_segment_visual_style_keeps_active_fill_during_playback(self):
         seg = {"start": 0.0, "end": 1.0, "text": "일반 자막"}
 
-        idle_style = subtitle_segment_visual_style(seg, active=False, hover=False, quality_filter="all")
+        active_style = subtitle_segment_visual_style(seg, active=True, hover=False, quality_filter="all")
         playback_style = subtitle_segment_visual_style(
             seg,
             active=True,
@@ -79,10 +83,45 @@ class TimelineSegmentColorTests(unittest.TestCase):
             quality_filter="all",
         )
 
-        self.assertEqual(playback_style["fill"], idle_style["fill"])
-        self.assertEqual(playback_style["border"], idle_style["border"])
+        self.assertEqual(playback_style["fill"], active_style["fill"])
+        self.assertEqual(playback_style["border"], active_style["border"])
 
-    def test_scenegraph_keeps_idle_segment_style_during_playback(self):
+    def test_subtitle_render_detail_mode_keeps_density_profile_during_playback(self):
+        paused = subtitle_render_detail_mode(
+            visible_segment_count=96,
+            pps=18.0,
+            playback_active=False,
+        )
+        playing = subtitle_render_detail_mode(
+            visible_segment_count=96,
+            pps=18.0,
+            playback_active=True,
+        )
+
+        self.assertEqual(paused, "ultra")
+        self.assertEqual(playing, paused)
+
+    def test_active_conflict_subtitle_gets_active_accent_instead_of_plain_gray(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "충돌 자막",
+            "stt_ensemble_needs_llm_review": True,
+            "stt_candidates": [
+                {"source": "STT1", "text": "여기로 가자", "score": 0.84},
+                {"source": "STT2", "text": "이거로 하자", "score": 0.82},
+            ],
+        }
+
+        idle = subtitle_segment_visual_style(seg, active=False, hover=False, quality_filter="all")
+        active = subtitle_segment_visual_style(seg, active=True, hover=False, quality_filter="all")
+
+        self.assertEqual(idle["fill"], "#2F343A")
+        self.assertEqual(idle["border"], "#8E8E93")
+        self.assertNotEqual(active["fill"], idle["fill"])
+        self.assertEqual(active["border"], "#8AB8FF")
+
+    def test_scenegraph_keeps_selected_segment_style_during_playback(self):
         objects = build_scenegraph_subtitle_segments(
             [
                 {
@@ -112,12 +151,71 @@ class TimelineSegmentColorTests(unittest.TestCase):
         )
 
         by_line = {obj["line"]: obj for obj in objects}
-        idle_first = subtitle_segment_visual_style(objects[0] | {"stt_ensemble_needs_llm_review": True}, active=False, hover=False, quality_filter="all")
+        active_first = subtitle_segment_visual_style(objects[0] | {"stt_ensemble_needs_llm_review": True}, active=True, hover=False, quality_filter="all")
         idle_second = subtitle_segment_visual_style(objects[1] | {"stt_ensemble_needs_llm_review": True}, active=False, hover=False, quality_filter="all")
-        self.assertEqual(by_line[0]["fill"], idle_first["fill"])
+        self.assertEqual(by_line[0]["fill"], active_first["fill"])
         self.assertEqual(by_line[1]["fill"], idle_second["fill"])
-        self.assertEqual(by_line[0]["borderWidth"], 1)
+        self.assertEqual(by_line[0]["borderWidth"], 2)
         self.assertEqual(by_line[1]["borderWidth"], 1)
+
+    def test_scenegraph_stacks_overlapping_stt_preview_candidates_per_source(self):
+        objects = build_scenegraph_subtitle_segments(
+            [
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "STT1 첫 후보",
+                    "line": 0,
+                    "stt_pending": True,
+                    "stt_preview_source": "STT1",
+                    "stt_score_color": "#FF453A",
+                },
+                {
+                    "start": 1.2,
+                    "end": 2.2,
+                    "text": "STT1 둘 후보",
+                    "line": 1,
+                    "stt_pending": True,
+                    "stt_preview_source": "STT1",
+                    "stt_score_color": "#34C759",
+                },
+            ],
+            pps=160.0,
+            fps=30.0,
+            visible_start_sec=0.0,
+            visible_end_sec=3.0,
+        )
+
+        self.assertEqual(len(objects), 2)
+        by_text = {row["text"]: row for row in objects}
+        first = by_text["STT1 첫 후보"]
+        second = by_text["STT1 둘 후보"]
+        self.assertEqual(first["y"], STT1_TOP + STT_PREVIEW_VERTICAL_INSET)
+        self.assertGreater(second["y"], first["y"])
+        self.assertLessEqual(first["y"] + first["h"], second["y"])
+        self.assertGreaterEqual(first["h"], ((STT1_BOT - STT1_TOP) - (STT_PREVIEW_VERTICAL_INSET * 2) - 1) // 2)
+        self.assertEqual(first["fill"], "#FF453A")
+        self.assertEqual(second["fill"], "#34C759")
+
+    def test_stt_preview_lane_assignment_caps_visible_split_count_to_three_rows(self):
+        segments = [
+            {"start": 1.0, "end": 2.0, "text": "a"},
+            {"start": 1.0, "end": 2.0, "text": "b"},
+            {"start": 1.0, "end": 2.0, "text": "c"},
+            {"start": 1.0, "end": 2.0, "text": "d"},
+        ]
+
+        lane_map, lane_count = assign_stt_preview_lanes(segments)
+
+        self.assertEqual(lane_count, MAX_STT_PREVIEW_SUBLANES)
+        self.assertEqual({lane_map[id(seg)] for seg in segments}, {0, 1, 2})
+
+        slot_heights = {
+            stt_preview_lane_geometry(STT1_TOP, STT1_BOT, lane_map[id(seg)], lane_count, inset=STT_PREVIEW_VERTICAL_INSET)[1]
+            for seg in segments
+        }
+        self.assertEqual(len(slot_heights), 1)
+        self.assertGreaterEqual(next(iter(slot_heights)), 24)
 
     def test_manual_confirmed_subtitle_keeps_green_border_under_filters(self):
         seg = {
@@ -149,8 +247,8 @@ class TimelineSegmentColorTests(unittest.TestCase):
 
         style = subtitle_segment_visual_style(seg, active=False, hover=False, quality_filter="보통")
 
-        self.assertEqual(style["fill"], "#3B341D")
-        self.assertEqual(style["border"], "#FFCC00")
+        self.assertEqual(style["fill"], COLORS["warning_surface"])
+        self.assertEqual(style["border"], COLORS["warning"])
         self.assertFalse(style["muted"])
 
     def test_unconfirmed_high_score_subtitle_is_yellow_not_green(self):
@@ -166,8 +264,8 @@ class TimelineSegmentColorTests(unittest.TestCase):
         style = subtitle_segment_visual_style(seg, active=False, hover=False, quality_filter="all")
 
         self.assertEqual(subtitle_review_state(seg), "pending")
-        self.assertEqual(style["fill"], "#3B341D")
-        self.assertEqual(style["border"], "#FFCC00")
+        self.assertEqual(style["fill"], COLORS["warning_surface"])
+        self.assertEqual(style["border"], COLORS["warning"])
 
     def test_low_score_subtitle_is_recheck_red(self):
         seg = {
@@ -246,7 +344,7 @@ class TimelineSegmentColorTests(unittest.TestCase):
 
         self.assertEqual([chip["stage"] for chip in chips], ["cut", "stt", "llm", "lora", "final"])
         self.assertEqual(chips[0]["color"], "#FF453A")
-        self.assertEqual(chips[1]["color"], "#FFCC00")
+        self.assertEqual(chips[1]["color"], COLORS["warning"])
         self.assertEqual(chips[2]["color"], "#34C759")
         self.assertEqual(chips[3]["color"], "#8E8E93")
 
@@ -277,11 +375,11 @@ class TimelineSegmentColorTests(unittest.TestCase):
         )
         self.assertEqual(
             subtitle_render_detail_mode(visible_segment_count=48, pps=20.0, editing=False, scenegraph=False, playback_active=True),
-            "full",
+            "dense",
         )
         self.assertEqual(
             subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=False, scenegraph=False, playback_active=True),
-            "full",
+            "ultra",
         )
         self.assertEqual(
             subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=False, scenegraph=True),
@@ -460,10 +558,24 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(voice_segments[0]["kind"], "llm_selected")
         self.assertEqual(voice_segments[0]["source"], "STT2")
         self.assertEqual(voice_segments[0]["label"], "STT2 미확정 82점")
-        self.assertEqual(voice_segments[0]["color"], "#FFCC00")
+        self.assertEqual(voice_segments[0]["color"], COLORS["warning"])
         self.assertEqual(voice_segments[1]["kind"], "recheck")
         self.assertIn("재검사", voice_segments[1]["label"])
         self.assertEqual(voice_segments[1]["color"], "#FF453A")
+
+    def test_subtitle_score_overlay_reuses_detection_label_without_bottom_box(self):
+        seg = {
+            "start": 1.0,
+            "end": 2.0,
+            "text": "재검사",
+            "quality": {"confidence_label": "red", "confidence_score": 31},
+        }
+
+        marker = subtitle_score_overlay_marker(seg, recheck_threshold=60.0)
+
+        self.assertEqual(marker["kind"], "recheck")
+        self.assertEqual(marker["label"], "재검사 31점")
+        self.assertEqual(marker["color"], "#FF453A")
 
     def test_subtitle_detection_conflict_state_is_gray(self):
         segments = [
@@ -565,7 +677,7 @@ class TimelineSegmentColorTests(unittest.TestCase):
 
     def test_subtitle_detection_score_color_steps_from_red_to_green(self):
         self.assertEqual(subtitle_detection_color(0), "#FF453A")
-        self.assertEqual(subtitle_detection_color(50), "#FFCC00")
+        self.assertEqual(subtitle_detection_color(50), COLORS["warning"])
         self.assertEqual(subtitle_detection_color(100), "#34C759")
 
     def test_unselected_stt_candidate_keeps_score_color(self):
@@ -732,7 +844,7 @@ class TimelineSegmentColorTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(style, {"color": "#FFCC00", "width": 2, "style": "dash"})
+        self.assertEqual(style, {"color": COLORS["warning"], "width": 2, "style": "dash"})
 
     def test_scan_boundary_labels_keep_temporary_and_audio_as_lines_only(self):
         self.assertEqual(
@@ -847,7 +959,7 @@ class TimelineSegmentColorTests(unittest.TestCase):
         markers = roughcut_markers(result)
 
         self.assertEqual([marker["label"] for marker in markers], ["정상", "주의", "위험"])
-        self.assertEqual([marker["color"] for marker in markers], ["#34C759", "#FFCC00", "#FF453A"])
+        self.assertEqual([marker["color"] for marker in markers], ["#34C759", COLORS["warning"], "#FF453A"])
 
 
 if __name__ == "__main__":

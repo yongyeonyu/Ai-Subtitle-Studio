@@ -268,12 +268,22 @@ class EditorPipelineSignalBridgeMixin(EditorPipelineSafetyMixin):
                 )
                 if isinstance(row, dict)
             ]
+            middle_rows = [
+                dict(row)
+                for row in list(
+                    analysis.get("middle_segments")
+                    or project.get("middle_segments")
+                    or []
+                )
+                if isinstance(row, dict)
+            ]
             provisional_rows = [
                 dict(row)
                 for row in list(analysis.get("cut_boundary_provisional_boundaries") or [])
                 if isinstance(row, dict)
             ]
-            rows = [dict(row) for row in list(extract_topicless_placeholders_from_project(project_path) or [])]
+            placeholder_rows = [dict(row) for row in list(extract_topicless_placeholders_from_project(project_path) or [])]
+            rows = list(middle_rows or placeholder_rows)
 
             if not provisional_rows:
                 try:
@@ -302,6 +312,10 @@ class EditorPipelineSignalBridgeMixin(EditorPipelineSafetyMixin):
                 except Exception:
                     pass
             try:
+                self._cut_boundary_topicless_middle_segments = list(placeholder_rows)
+            except Exception:
+                pass
+            try:
                 self._cut_boundary_reviewed_rows = list(reviewed_rows)
             except Exception:
                 pass
@@ -312,7 +326,12 @@ class EditorPipelineSignalBridgeMixin(EditorPipelineSafetyMixin):
                     pass
 
             result_dict = None
-            if rows:
+            stored_result = analysis.get("roughcut_result")
+            if isinstance(stored_result, dict):
+                result_dict = dict(stored_result)
+            elif isinstance(project.get("roughcut_result"), dict):
+                result_dict = dict(project.get("roughcut_result"))
+            elif rows:
                 placeholder_only = rows_are_placeholder_only(rows)
                 review_required = any(
                     bool(row.get("needs_review"))
@@ -370,6 +389,10 @@ class EditorPipelineSignalBridgeMixin(EditorPipelineSafetyMixin):
                     except Exception:
                         pass
                 try:
+                    setattr(obj, "_cut_boundary_topicless_middle_segments", list(placeholder_rows))
+                except Exception:
+                    pass
+                try:
                     invalidator = getattr(obj, "_invalidate_marker_caches", None)
                     if callable(invalidator):
                         invalidator()
@@ -411,9 +434,32 @@ class EditorPipelineSignalBridgeMixin(EditorPipelineSafetyMixin):
                     setattr(owner, "_cut_boundary_reviewed_rows", list(reviewed_rows))
                 except Exception:
                     pass
+                for attr in (
+                    "_cut_boundary_topicless_middle_segments",
+                    "_roughcut_segments",
+                    "roughcut_segments",
+                    "_middle_segments",
+                    "middle_segments",
+                    "_chapter_segments",
+                    "chapter_segments",
+                    "_roughcut_draft_segments",
+                ):
+                    try:
+                        setattr(owner, attr, list(rows))
+                    except Exception:
+                        pass
+                try:
+                    setattr(owner, "_cut_boundary_topicless_middle_segments", list(placeholder_rows))
+                except Exception:
+                    pass
                 for attr in ("_preliminary_middle_segments", "preliminary_middle_segments"):
                     try:
                         setattr(owner, attr, list(preliminary_rows))
+                    except Exception:
+                        pass
+                for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
+                    try:
+                        setattr(owner, attr, dict(result_dict) if isinstance(result_dict, dict) else None)
                     except Exception:
                         pass
                 for name in refresh_names:

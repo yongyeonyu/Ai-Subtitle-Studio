@@ -24,11 +24,18 @@ from core.project.project_analysis_store import (
     store_project_stt_candidate_tracks,
     store_project_voice_activity_segments,
 )
+from core.project.project_roughcut_store import (
+    selected_roughcut_candidate,
+    store_project_middle_segments,
+    store_project_preliminary_middle_segments,
+    store_project_roughcut_result,
+)
 from core.project.project_format import PROJECT_SCHEMA_VERSION
 from core.project.project_runtime_capture import collect_editor_project_aux_state
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 from ui.project.project_session_runtime import attach_project_session
+from core.project.project_manager import project_file_path_for_name
 
 PROJECTS_DIR = getattr(config, "PROJECTS_DIR", os.path.join(config.BASE_DIR, 'projects'))
 os.makedirs(PROJECTS_DIR, exist_ok=True)
@@ -165,7 +172,7 @@ def _auto_project_path(owner, media_files: list[str], mode: str) -> str:
     else:
         media_path = media_files[0] if media_files else getattr(_editor_from_owner(owner), 'media_path', '')
         base = _safe_name(os.path.splitext(os.path.basename(media_path))[0] if media_path else 'single_project')
-    return os.path.join(PROJECTS_DIR, f'{base}.json')
+    return project_file_path_for_name(base)
 
 
 def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, srt_path: str | None = None) -> dict[str, Any]:
@@ -193,6 +200,9 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         existing_project = {}
     provisional_cut_boundaries = aux_state["provisional_cut_boundaries"]
     voice_activity_segments = aux_state["voice_activity_segments"]
+    middle_segments = aux_state["middle_segments"]
+    preliminary_middle_segments = aux_state["preliminary_middle_segments"]
+    roughcut_result = aux_state["roughcut_result"]
 
     primary_fps = _editor_primary_fps(editor) if editor is not None else 30.0
     cut_boundaries = sanitize_cut_boundary_rows(
@@ -253,6 +263,30 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         )
     payload['roughcut_state'] = existing_project.get('roughcut_state', {}) if isinstance(existing_project, dict) else {}
     payload.setdefault('roughcut_state', {})
+    if not middle_segments and isinstance(existing_project, dict):
+        middle_segments = list(
+            ((existing_project.get("analysis", {}) or {}).get("middle_segments"))
+            or existing_project.get("middle_segments")
+            or []
+        )
+    if not preliminary_middle_segments and isinstance(existing_project, dict):
+        preliminary_middle_segments = list(
+            ((existing_project.get("analysis", {}) or {}).get("preliminary_middle_segments"))
+            or existing_project.get("preliminary_middle_segments")
+            or []
+        )
+    if not roughcut_result and isinstance(existing_project, dict):
+        roughcut_result = (
+            ((existing_project.get("analysis", {}) or {}).get("roughcut_result"))
+            or existing_project.get("roughcut_result")
+            or selected_roughcut_candidate(existing_project.get("roughcut_state", {}) or {})
+        )
+    if middle_segments:
+        store_project_middle_segments(payload, middle_segments, primary_fps=primary_fps)
+    if preliminary_middle_segments:
+        store_project_preliminary_middle_segments(payload, preliminary_middle_segments, primary_fps=primary_fps)
+    if roughcut_result:
+        store_project_roughcut_result(payload, roughcut_result, primary_fps=primary_fps)
     externalize_project_text_assets(
         project_path,
         payload,

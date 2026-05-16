@@ -41,6 +41,7 @@ class EditorCanvasStateMixin:
         provisional_boundaries: list[dict] | list[float] | None = None,
         voice_activity_segments: list[dict] | None = None,
         stt_preview_segments: list[dict] | None = None,
+        stt_preview_subtitle_drafts: bool | None = None,
         schedule_timeline: bool = True,
     ) -> None:
         timeline = getattr(self, "timeline", None)
@@ -63,6 +64,9 @@ class EditorCanvasStateMixin:
                 if isinstance(seg, dict)
             ]
 
+        if stt_preview_subtitle_drafts is not None:
+            self._stt_preview_subtitle_drafts_enabled = bool(stt_preview_subtitle_drafts)
+
         if schedule_timeline and hasattr(self, "_schedule_timeline"):
             self._schedule_timeline()
 
@@ -77,6 +81,7 @@ class EditorCanvasStateMixin:
         provisional_boundaries: list[dict] | list[float] | None = None,
         voice_activity_segments: list[dict] | None = None,
         stt_preview_segments: list[dict] | None = None,
+        stt_preview_subtitle_drafts: bool | None = None,
     ) -> list[dict]:
         ordered = list([] if segments is None else segments)
         if hasattr(self, "_normalize_multiclip_segment_order"):
@@ -138,6 +143,7 @@ class EditorCanvasStateMixin:
             provisional_boundaries=provisional_boundaries,
             voice_activity_segments=voice_activity_segments,
             stt_preview_segments=stt_preview_segments,
+            stt_preview_subtitle_drafts=stt_preview_subtitle_drafts,
             schedule_timeline=True,
         )
         return ordered

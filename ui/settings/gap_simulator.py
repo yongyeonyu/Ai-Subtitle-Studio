@@ -13,6 +13,7 @@ from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QFontMetrics
 from PyQt6.QtCore import Qt, QRect
 from core.runtime import config
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
+from ui.style import COLORS
 
 
 GapSimulatorBase = accelerated_widget_base()
@@ -584,7 +585,7 @@ class GapSimulatorWidget(GapSimulatorBase):
                 "#B66A1E" if row.get("gap_action") else "#256E9A",
                 str(row.get("text", "")),
                 f"간격 파라미터 적용\n{row.get('gap_action', '보정 없음')}",
-                outline="#FFCC00" if row.get("gap_action") else "",
+                outline=COLORS["warning"] if row.get("gap_action") else "",
             )
 
         draw_lane_title(330, "5. 최종 자막", "#34C759")

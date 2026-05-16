@@ -212,14 +212,16 @@ Rectangle {
             clip: true
             Text {
                 id: infoTextItem
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
+                anchors.fill: parent
                 anchors.leftMargin: 13
-                anchors.right: parent.right
                 anchors.rightMargin: 13
+                anchors.topMargin: 4
+                anchors.bottomMargin: 4
                 text: root.infoText
                 color: "#A9B0B7"
-                font.pixelSize: 10
+                font.pixelSize: 9
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                maximumLineCount: 2
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
             }

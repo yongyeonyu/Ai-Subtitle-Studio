@@ -48,6 +48,14 @@ from core.project.project_analysis_store import (
     store_project_stt_candidate_tracks as _store_project_stt_candidate_tracks,
     store_project_voice_activity_segments as _store_project_voice_activity_segments,
 )
+from core.project.project_roughcut_store import (
+    normalize_middle_segment_rows,
+    selected_roughcut_candidate,
+    mark_preliminary_middle_segment_rows,
+    store_project_middle_segments,
+    store_project_preliminary_middle_segments,
+    store_project_roughcut_result,
+)
 from core.roughcut.cut_boundary_placeholder import (
     build_topicless_middle_segments,
     rows_are_placeholder_only,
@@ -98,6 +106,8 @@ from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import normalize_work_mode
 
 __all__ = [
+    "PROJECT_FILE_EXTENSION",
+    "PROJECT_FILE_FILTER",
     "PROJECTS_DIR",
     "add_media_to_project",
     "create_project",
@@ -106,8 +116,10 @@ __all__ = [
     "get_boundary_times",
     "load_project",
     "merge_project_model_settings",
+    "project_file_path_for_name",
     "restore_project_model_settings",
     "save_project",
+    "is_project_file_path",
 ]
 
 
@@ -120,10 +132,29 @@ PROJECTS_DIR = getattr(
     "PROJECTS_DIR",
     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "projects"),
 )
+PROJECT_FILE_EXTENSION = ".aissproj"
+PROJECT_FILE_FILTER = f"AI Subtitle Studio Project Files (*{PROJECT_FILE_EXTENSION})"
 
 
 def ensure_projects_dir():
     os.makedirs(PROJECTS_DIR, exist_ok=True)
+
+
+def _safe_name(name: str) -> str:
+    banned = r'<>:"/\|?*'
+    out = ''.join('_' if c in banned else c for c in (name or '').strip())
+    out = out.strip().strip('.')
+    return out or 'untitled_project'
+
+
+def is_project_file_path(path: str | None) -> bool:
+    name = str(path or "").strip().lower()
+    return bool(name) and name.endswith(PROJECT_FILE_EXTENSION)
+
+
+def project_file_path_for_name(name: str, *, folder: str | None = None) -> str:
+    safe_name = _safe_name(name)
+    return os.path.join(folder or PROJECTS_DIR, f"{safe_name}{PROJECT_FILE_EXTENSION}")
 
 
 def _move_legacy_numbered_project_backups(folder: str, base: str, ext: str, backup_dir: str) -> None:
@@ -169,6 +200,8 @@ def _archive_existing_base_project(filepath: str) -> str | None:
     base, ext = os.path.splitext(os.path.basename(filepath))
     ext = ext or ".json"
     _move_legacy_numbered_project_backups(folder, base, ext, backup_dir)
+    if ext != ".json":
+        _move_legacy_numbered_project_backups(folder, base, ".json", backup_dir)
     counter = 1
     while True:
         archived = os.path.join(backup_dir, f"{base}_{counter}{ext}")
@@ -664,6 +697,7 @@ def _store_project_roughcut_payload(
     roughcut_state: dict | None,
     middle_segments,
     preliminary_middle_segments,
+    roughcut_result,
 ) -> None:
     if roughcut_state is not None:
         project["roughcut_state"] = dict(roughcut_state or {})
@@ -679,136 +713,43 @@ def _store_project_roughcut_payload(
 
     if preliminary_middle_segments is not None:
         _store_project_preliminary_middle_segments(project, preliminary_middle_segments)
+    if roughcut_result is not None:
+        store_project_roughcut_result(project, roughcut_result, primary_fps=project_primary_fps(project))
+    else:
+        candidate_payload = selected_roughcut_candidate(project.get("roughcut_state", {}) or {})
+        if candidate_payload:
+            store_project_roughcut_result(project, candidate_payload, primary_fps=project_primary_fps(project))
 
 
 def _project_middle_segment_rows(rows) -> list[dict]:
-    out: list[dict] = []
-    for idx, row in enumerate(list(rows or []), start=1):
-        if not isinstance(row, dict):
-            continue
-        item = dict(row)
-        major_id = str(item.get("major_id") or item.get("segment_id") or item.get("id") or chr(64 + min(idx, 26))).strip()
-        if not major_id:
-            major_id = chr(64 + min(idx, 26))
-        segment_id = str(item.get("segment_id") or item.get("id") or major_id).strip() or major_id
-        title = str(item.get("title") or item.get("name") or f"중분류 {major_id}").strip()
-        summary = str(item.get("summary") or item.get("llm_summary") or "").strip()
-        try:
-            start = float(item.get("start", item.get("timeline_start", 0.0)) or 0.0)
-        except Exception:
-            start = 0.0
-        try:
-            end = float(item.get("end", item.get("timeline_end", start)) or start)
-        except Exception:
-            end = start
-        placeholder = bool(
-            item.get("is_topicless_placeholder")
-            or item.get("is_cut_boundary_placeholder")
-            or str(item.get("story_role") or "") == "topicless_placeholder"
-            or title == "주제없음"
-        )
-        default_display_title = major_id if placeholder else f"{major_id} - {title}"
-        tags = item.get("tags", item.get("keywords", [])) or []
-        if isinstance(tags, str):
-            tags = [tags]
-        keywords = [str(tag).strip() for tag in list(tags or []) if str(tag).strip()]
-        stored_keywords = item.get("keywords", keywords)
-        if isinstance(stored_keywords, str):
-            stored_keywords = [stored_keywords]
-        item.update(
-            {
-                "id": str(item.get("id") or major_id),
-                "segment_id": segment_id,
-                "chapter_id": str(item.get("chapter_id") or major_id),
-                "major_id": major_id,
-                "title": title,
-                "name": str(item.get("name") or title),
-                "display_title": str(item.get("display_title") or default_display_title).strip(),
-                "display_name": str(item.get("display_name") or item.get("display_title") or default_display_title).strip(),
-                "label": str(item.get("label") or item.get("display_title") or default_display_title).strip(),
-                "summary": summary,
-                "llm_summary": str(item.get("llm_summary") or summary)[:240],
-                "start": start,
-                "end": max(start, end),
-                "timeline_start": start,
-                "timeline_end": max(start, end),
-                "tags": keywords,
-                "keywords": [str(tag).strip() for tag in list(stored_keywords or []) if str(tag).strip()],
-                "source": str(item.get("source") or ("cut_boundary" if placeholder else "roughcut_draft")).strip(),
-                "level": str(item.get("level") or "middle"),
-                "segment_type": str(item.get("segment_type") or "middle"),
-                "roughcut_level": str(item.get("roughcut_level") or "middle"),
-                "category": str(item.get("category") or "middle"),
-                "is_middle_segment": True,
-                "is_topicless_placeholder": placeholder,
-                "is_cut_boundary_placeholder": bool(item.get("is_cut_boundary_placeholder") or placeholder),
-            }
-        )
-        out.append(item)
-    return out
+    probe_row = next((dict(row) for row in list(rows or []) if isinstance(row, dict)), {})
+    fps = (
+        probe_row.get("timeline_frame_rate")
+        or probe_row.get("frame_rate")
+        or ((probe_row.get("frame_range") or {}).get("timeline_frame_rate") if isinstance(probe_row.get("frame_range"), dict) else None)
+        or 30.0
+    )
+    return normalize_middle_segment_rows(rows, primary_fps=fps)
 
 
 def _selected_roughcut_candidate_segments(roughcut_state: dict | None) -> list[dict]:
-    state = roughcut_state if isinstance(roughcut_state, dict) else {}
-    selected = str(state.get("selected_candidate_id") or "").strip()
-    candidates = _dict_rows(state.get("candidates"))
-    if not candidates:
-        return []
-    candidate = next((item for item in candidates if str(item.get("candidate_id") or "") == selected), None)
-    if candidate is None:
-        candidate = candidates[0]
-    rows = candidate.get("segments")
+    rows = selected_roughcut_candidate(roughcut_state).get("segments")
     return copy_project_rows(rows)
 
 
 def _store_project_middle_segments(project: dict, rows) -> list[dict]:
-    if not isinstance(project, dict):
-        return []
-    saved_rows = _project_middle_segment_rows(rows)
-    if not saved_rows:
-        return []
-    saved_rows_placeholder_only = rows_are_placeholder_only(saved_rows)
-    project.setdefault("analysis", {})
-    project["analysis"]["middle_segment_schema"] = "middle_segments.v1"
-    project["analysis"]["middle_segments"] = list(saved_rows)
-    project["analysis"]["middle_segments_updated_at"] = datetime.now().isoformat()
-    project["analysis"]["middle_segments_placeholder_only"] = saved_rows_placeholder_only
-    project["middle_segments"] = list(saved_rows)
+    saved_rows = store_project_middle_segments(project, rows, primary_fps=project_primary_fps(project))
     if rows_are_placeholder_only(project.get("roughcut_segments", [])):
         project["roughcut_segments"] = list(saved_rows)
     return saved_rows
 
 
 def _preliminary_middle_segment_rows(rows: list[dict] | None) -> list[dict]:
-    stamped_rows: list[dict] = []
-    for row in list(rows or []):
-        item = dict(row)
-        item["segment_stage"] = "preliminary"
-        item["segment_stage_name"] = "예비 중분류 세그먼트"
-        item["source"] = str(item.get("source") or "roughcut_llm_preliminary")
-        item["preview_lane"] = "global_top"
-        item["preview_reference"] = "cut_boundary_topicless_middle_segments"
-        stamped_rows.append(item)
-    return stamped_rows
+    return mark_preliminary_middle_segment_rows(_project_middle_segment_rows(rows))
 
 
 def _store_project_preliminary_middle_segments(project: dict, rows) -> list[dict]:
-    if not isinstance(project, dict):
-        return []
-    project.setdefault("analysis", {})
-    saved_rows = _project_middle_segment_rows(rows)
-    stamped_rows = _preliminary_middle_segment_rows(saved_rows)
-    if stamped_rows:
-        project["analysis"]["preliminary_middle_segments_schema"] = "middle_segments.preliminary.v1"
-        project["analysis"]["preliminary_middle_segments"] = list(stamped_rows)
-        project["analysis"]["preliminary_middle_segments_updated_at"] = datetime.now().isoformat()
-        project["preliminary_middle_segments"] = list(stamped_rows)
-    else:
-        project["analysis"].pop("preliminary_middle_segments_schema", None)
-        project["analysis"].pop("preliminary_middle_segments", None)
-        project["analysis"].pop("preliminary_middle_segments_updated_at", None)
-        project.pop("preliminary_middle_segments", None)
-    return stamped_rows
+    return store_project_preliminary_middle_segments(project, rows, primary_fps=project_primary_fps(project))
 
 
 def _project_roughcut_source_segments(segments: list[dict] | None) -> list[dict]:
@@ -1009,6 +950,7 @@ def _finalize_project_middle_segment_artifacts(
     project["roughcut_state"] = merge_editor_roughcut_draft_state(project.get("roughcut_state", {}) or {}, candidate)
     candidate_rows = candidate.get("segments") or []
     _store_project_preliminary_middle_segments(project, candidate_rows)
+    store_project_roughcut_result(project, candidate, primary_fps=project_primary_fps(project))
     return _store_project_middle_segments(project, candidate_rows)
 
 
@@ -1228,8 +1170,7 @@ def create_project(
     )
     store_project_model_settings_snapshot(project, persisted_user_settings, user_settings_provided=True)
 
-    filename = f"{name}.json"
-    filepath = os.path.join(PROJECTS_DIR, filename)
+    filepath = project_file_path_for_name(name)
     archived_path = _archive_existing_base_project(filepath)
     if archived_path:
         project.setdefault("history", {})
@@ -1293,6 +1234,7 @@ def save_project(
     srt_path: Optional[str] = None,
     segments: Optional[List[dict]] = None,
     middle_segments: Optional[List[dict]] = None,
+    roughcut_result: Optional[dict] = None,
     user_settings: Optional[dict] = None,
     workspace: Optional[dict] = None,
     roughcut_state: Optional[dict] = None,
@@ -1513,6 +1455,7 @@ def save_project(
         roughcut_state=roughcut_state,
         middle_segments=middle_segments,
         preliminary_middle_segments=preliminary_middle_segments,
+        roughcut_result=roughcut_result,
     )
 
     editor_stt = (project.get("editor_state", {}) or {}).get("stt", {}) or {}
@@ -1660,7 +1603,7 @@ def list_projects() -> list:
     ensure_projects_dir()
     result = []
     for fname in os.listdir(PROJECTS_DIR):
-        if not fname.endswith(".json"):
+        if not is_project_file_path(fname):
             continue
         path = os.path.join(PROJECTS_DIR, fname)
         try:

@@ -14,7 +14,9 @@ class EditorSegmentsTimelineContextMixin:
         if not preview:
             return timeline_segs
         confirmed = [seg for seg in timeline_segs if not seg.get("is_gap")]
-        subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
+        subtitle_preview = []
+        if bool(getattr(self, "_stt_preview_subtitle_drafts_enabled", True)):
+            subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
         return sorted(
             confirmed + subtitle_preview + preview,
             key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),

@@ -54,9 +54,11 @@ func printUsage() {
       native-policy-lora-score-json
       native-policy-jsonl-worker
       native-memory-snapshot-json
+      runtime-disk-cache-prune-json
       native-input-activity-json
       runtime-eta-predict-json
       runtime-eta-record-json
+      app-exit-watchdog --pid <pid> [--delay-ms 20] [--term-grace-ms 50]
 
     """.utf8))
 }
@@ -72,6 +74,10 @@ func run() throws {
     switch command {
     case "version":
         print("AIStudioNativeCLI 0.1")
+
+    case "app-exit-watchdog":
+        let options = try AppExitWatchdog.parseOptions(Array(args))
+        AppExitWatchdog.run(options: options)
 
     case "srt-to-json":
         guard let path = args.first else {
@@ -172,6 +178,8 @@ func run() throws {
                     response = MediaProbeNative.normalize(payload: payload)
                 case "pipeline_status_summary":
                     response = PipelineStatusNative.summary(payload: payload)
+                case "runtime_disk_cache_prune":
+                    response = RuntimeDiskCache.prune(payload: payload)
                 default:
                     response = ["error": "Unsupported core task: \(task)"]
                 }
@@ -521,6 +529,10 @@ func run() throws {
     case "native-memory-snapshot-json":
         let payload = try readJSONObjectFromStdin()
         try writeJSONObject(MemoryPressure.snapshot(payload: payload))
+
+    case "runtime-disk-cache-prune-json":
+        let payload = try readJSONObjectFromStdin()
+        try writeJSONObject(RuntimeDiskCache.prune(payload: payload))
 
     case "native-input-activity-json":
         let payload = try readJSONObjectFromStdin()

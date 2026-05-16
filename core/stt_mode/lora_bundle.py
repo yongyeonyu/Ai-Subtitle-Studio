@@ -10,6 +10,7 @@ import zipfile
 from datetime import datetime
 from typing import Any
 
+from core.native_json import dumps_json_bytes
 from core.runtime import config
 from core.stt_mode.models import STT_LORA_BUNDLE_SCHEMA, STT_MODE_LEARNING_SCHEMA, STT_MODE_STATE_SCHEMA
 
@@ -34,8 +35,8 @@ def _now_id() -> str:
 
 
 def _json_dump(path: str, payload: dict[str, Any]) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+    with open(path, "wb") as handle:
+        handle.write(dumps_json_bytes(payload, indent=2, sort_keys=True))
 
 
 def _read_json(path: str) -> dict[str, Any]:
@@ -47,7 +48,7 @@ def _read_json(path: str) -> dict[str, Any]:
 def _manifest_for_checksum(path: str) -> bytes:
     data = _read_json(path)
     data["checksum"] = ""
-    return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return dumps_json_bytes(data, sort_keys=True, compact=True)
 
 
 def calculate_bundle_checksum(bundle_dir: str) -> str:
@@ -201,8 +202,9 @@ def validate_stt_lora_bundle(bundle_dir: str) -> dict[str, Any]:
     errors: list[str] = []
     if manifest.get("schema") != STT_LORA_BUNDLE_SCHEMA:
         errors.append("invalid_schema")
+    compatible_schemas = set(manifest.get("compatible_project_schema") or [])
     for schema in (STT_MODE_STATE_SCHEMA, STT_MODE_LEARNING_SCHEMA):
-        if schema not in list(manifest.get("compatible_project_schema") or []):
+        if schema not in compatible_schemas:
             errors.append(f"missing_compatible_schema:{schema}")
     adapters = manifest.get("adapters") if isinstance(manifest.get("adapters"), dict) else {}
     for key in ("stt_dictation_resegment", "stt_vad_segment_model", "subtitle_style_policy"):

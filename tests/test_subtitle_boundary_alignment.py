@@ -4,6 +4,7 @@ from core.cut_boundary import magnetize_segments_to_cut_boundaries
 from core.engine.subtitle_timing import (
     align_stt_candidates_to_subtitle_segments,
     align_stt_preview_to_subtitle_segments,
+    apply_final_gap_settings,
 )
 from ui.timeline.timeline_analysis import (
     editor_analysis_markers,
@@ -78,6 +79,50 @@ class SubtitleBoundaryAlignmentTests(unittest.TestCase):
         self.assertEqual(aligned[0]["text"], "보조 표시")
         self.assertEqual((aligned[0]["start"], aligned[0]["end"]), (1.0, 4.0))
         self.assertTrue(aligned[0]["preview_aligned_to_subtitle_segments"])
+
+    def test_final_gap_settings_keep_generated_subtitle_inside_selected_stt_window(self):
+        segments = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "확정 자막",
+                "stt_selected_source": "STT1",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 1.1, "end": 1.9, "text": "확정 자막"},
+                ],
+            },
+        ]
+
+        adjusted = apply_final_gap_settings(
+            segments,
+            {"single_subtitle_end": 0.4, "sub_min_duration": 0.1},
+            force=True,
+        )
+
+        self.assertEqual((adjusted[0]["start"], adjusted[0]["end"]), (1.1, 1.9))
+
+    def test_aligned_candidate_rows_keep_raw_stt_bounds_for_later_clamp(self):
+        segments = [
+            {
+                "start": 1.0,
+                "end": 2.3,
+                "text": "확정 자막",
+                "stt_selected_source": "STT1",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 1.1, "end": 1.9, "text": "확정 자막"},
+                ],
+            },
+        ]
+
+        aligned = align_stt_candidates_to_subtitle_segments(segments)
+        candidate = aligned[0]["stt_candidates"][0]
+
+        self.assertEqual((candidate["start"], candidate["end"]), (1.0, 2.3))
+        self.assertEqual((candidate["original_start"], candidate["original_end"]), (1.1, 1.9))
+
+        adjusted = apply_final_gap_settings(aligned, {"sub_min_duration": 0.1}, force=True)
+
+        self.assertEqual((adjusted[0]["start"], adjusted[0]["end"]), (1.1, 1.9))
 
     def test_analysis_lanes_ignore_stt_candidate_timing(self):
         segments = [

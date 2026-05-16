@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core import media_info
+from core import native_json
 from core.performance import (
     adaptive_llm_worker_count,
     adaptive_worker_count,
@@ -657,11 +658,38 @@ class PerformanceMediaCacheTest(unittest.TestCase):
     def test_native_json_output_helper_uses_default_for_empty_output(self):
         self.assertEqual(loads_json_output("", default={"ok": False}), {"ok": False})
         self.assertEqual(loads_json_output(b"", default=[]), [])
+        self.assertEqual(loads_json_output(bytearray(), default={"empty": True}), {"empty": True})
 
     def test_native_json_write_jsonl_line_appends_single_newline(self):
         stream = StringIO()
         write_jsonl_line(stream, "{\"ok\":true}")
         self.assertEqual(stream.getvalue(), "{\"ok\":true}\n")
+
+    def test_native_json_enabled_reuses_normalized_env_decision(self):
+        native_json._native_json_env_enabled.cache_clear()
+        with patch("core.native_json.orjson", object()), patch.dict("os.environ", {"AI_SUBTITLE_NATIVE_JSON": " false "}):
+            self.assertFalse(native_json.native_json_enabled())
+            before = native_json._native_json_env_enabled.cache_info()
+            self.assertFalse(native_json.native_json_enabled())
+            after = native_json._native_json_env_enabled.cache_info()
+            self.assertEqual(after.hits, before.hits + 1)
+        native_json._native_json_env_enabled.cache_clear()
+
+    def test_native_json_dump_options_are_cached(self):
+        class FakeOrjson:
+            OPT_NON_STR_KEYS = 1
+            OPT_INDENT_2 = 2
+            OPT_SORT_KEYS = 4
+            OPT_APPEND_NEWLINE = 8
+
+        native_json._orjson_dump_options.cache_clear()
+        with patch("core.native_json.orjson", FakeOrjson):
+            self.assertEqual(native_json._orjson_dump_options(2, True, True), 15)
+            before = native_json._orjson_dump_options.cache_info()
+            self.assertEqual(native_json._orjson_dump_options(2, True, True), 15)
+            after = native_json._orjson_dump_options.cache_info()
+        self.assertEqual(after.hits, before.hits + 1)
+        native_json._orjson_dump_options.cache_clear()
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from ui.editor.undo_manager import UndoManager
 from core.project.project_manager import get_boundary_times
 from ui.editor import editor_project_open_native as project_open_native_module
 from ui.project.project_panel import ProjectUIMixin
+from ui.style import COLORS
 from core.project.project_assets import externalize_project_text_assets
 from core.project.project_phase1b import restore_project_stt_preview_segments
 
@@ -585,6 +586,61 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.video_player.context_segments, segments)
         self.assertEqual(editor.video_player.display_time, 0.0)
         self.assertEqual(getattr(editor, "_preliminary_middle_segments")[0]["major_id"], "A")
+
+    def test_project_open_restores_final_middle_segments_and_roughcut_result(self):
+        editor = _ProjectOpenEditor()
+        window = _ProjectOpenWindow(editor)
+        segments = [{"start": 0.0, "end": 2.0, "text": "프로젝트 자막", "speaker": "00"}]
+        project = {
+            "project_name": "roughcut-runtime",
+            "timeline": {"tracks": [{"clips": [{"source_path": "/tmp/sample.mp4", "fps": 59.94}]}]},
+            "editor_state": {},
+            "analysis": {
+                "middle_segments": [
+                    {
+                        "major_id": "A",
+                        "title": "실제 중분류",
+                        "start_frame": 120,
+                        "end_frame": 240,
+                        "timeline_frame_rate": 59.94,
+                    }
+                ],
+                "roughcut_result": {
+                    "segments": [
+                        {
+                            "major_id": "A",
+                            "title": "실제 중분류",
+                            "start_frame": 120,
+                            "end_frame": 240,
+                            "timeline_frame_rate": 59.94,
+                        }
+                    ],
+                    "chapters": [
+                        {
+                            "chapter_id": "A_0001",
+                            "title": "첫 챕터",
+                            "start_frame": 120,
+                            "end_frame": 180,
+                            "timeline_frame_rate": 59.94,
+                        }
+                    ],
+                    "schema_version": "roughcut_result.v2",
+                },
+            },
+        }
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            opened = window._open_project_segments_in_editor(
+                "/tmp/sample_project.aissproj",
+                project,
+                ["/tmp/sample.mp4"],
+                segments,
+            )
+
+        self.assertTrue(opened)
+        self.assertEqual(getattr(editor, "_middle_segments")[0]["major_id"], "A")
+        self.assertAlmostEqual(getattr(editor, "_middle_segments")[0]["start"], 120.0 / 59.94, places=6)
+        self.assertEqual(getattr(editor, "_roughcut_result")["chapters"][0]["chapter_id"], "A_0001")
 
     def test_apply_loaded_canvas_state_uses_segment_frame_rate_from_project_rows(self):
         editor = _CanvasStateEditor()
@@ -1253,7 +1309,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             for fragment in yellow_fragments:
                 fmt = fragment.charFormat()
                 self.assertTrue(fmt.fontItalic())
-                self.assertEqual(fmt.foreground().color().name().lower(), "#ffd84d")
+                self.assertEqual(fmt.foreground().color().name().lower(), COLORS["warning"].lower())
         finally:
             editor.text_edit.close()
 

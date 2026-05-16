@@ -15,7 +15,10 @@ from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.runtime import config
 from ui.gpu_rendering import scenegraph_enabled
 from ui.timeline.speaker_labels import current_speaker_settings, normalize_speaker_id, speaker_labels_for_segment
+from ui.timeline.timeline_analysis import subtitle_score_overlay_marker
 from ui.timeline.timeline_constants import (
+    SCORE_H,
+    SCORE_TOP,
     SEGMENT_HANDLE_MIN_WIDTH,
     SPEAKER_BOT,
     SPEAKER_TOP,
@@ -23,6 +26,7 @@ from ui.timeline.timeline_constants import (
     STT1_TOP,
     STT2_BOT,
     STT2_TOP,
+    STT_PREVIEW_VERTICAL_INSET,
     SUBTITLE_BOT,
     SUBTITLE_TOP,
 )
@@ -34,6 +38,7 @@ from ui.timeline.timeline_paint import (
     subtitle_confidence_chips,
     subtitle_segment_visual_style,
 )
+from ui.timeline.stt_preview_layout import assign_stt_preview_lanes, stt_preview_lane_geometry
 
 
 QML_PATH = Path(__file__).with_name("timeline_scenegraph.qml")
@@ -116,6 +121,8 @@ def build_scenegraph_subtitle_segments(
     """Build FPS-anchored vector primitives consumed by the QML SceneGraph."""
     rows: list[dict[str, Any]] = []
     final_rows: list[dict[str, Any]] = []
+    stt1_preview_rows: list[dict[str, Any]] = []
+    stt2_preview_rows: list[dict[str, Any]] = []
     preview_present = False
     for seg in segments or ():
         if not isinstance(seg, dict) or seg.get("is_gap"):
@@ -123,9 +130,16 @@ def build_scenegraph_subtitle_segments(
         rows.append(seg)
         is_preview = bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
         preview_present = preview_present or is_preview
-        if not is_preview:
+        if is_preview:
+            if stt_preview_source(seg) == "STT2":
+                stt2_preview_rows.append(seg)
+            else:
+                stt1_preview_rows.append(seg)
+        else:
             final_rows.append(seg)
     final_selection_index = build_stt_selection_index(final_rows) if preview_present else {}
+    stt1_lane_map, stt1_lane_count = assign_stt_preview_lanes(stt1_preview_rows)
+    stt2_lane_map, stt2_lane_count = assign_stt_preview_lanes(stt2_preview_rows)
     fps = normalize_fps(fps or 30.0)
     px_per_frame = max(0.001, float(pps or 1.0) / fps)
     speaker_settings = current_speaker_settings(speaker_settings or {})
@@ -133,9 +147,6 @@ def build_scenegraph_subtitle_segments(
     visible_start_frame = sec_to_frame(max(0.0, visible_start_sec) - 0.35, fps)
     visible_end_frame = sec_to_frame(max(visible_start_sec, visible_end_sec) + 0.35, fps)
     objects: list[dict[str, Any]] = []
-    playhead_value = float(playhead_sec or 0.0) if playhead_sec is not None else 0.0
-    playback_edge_tol = max(0.001, min(0.05, 2.0 / fps)) if playback_active and playhead_sec is not None else 0.0
-
     for idx, seg in enumerate(rows):
         start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
         end = max(start, _safe_float(seg.get("end", seg.get("timeline_end", start)), start))
@@ -148,8 +159,13 @@ def build_scenegraph_subtitle_segments(
         source = stt_preview_source(seg)
         if is_preview:
             if source == "STT2":
-                y = STT2_TOP
-                h = STT2_BOT - STT2_TOP
+                y, h = stt_preview_lane_geometry(
+                    STT2_TOP,
+                    STT2_BOT,
+                    stt2_lane_map.get(id(seg), 0),
+                    stt2_lane_count,
+                    inset=STT_PREVIEW_VERTICAL_INSET,
+                )
                 visual = stt_preview_visual_style(
                     seg,
                     selection_state=stt_candidate_selection_state(seg, final_rows, final_selection_index),
@@ -158,8 +174,13 @@ def build_scenegraph_subtitle_segments(
                     text_hex="#BDEBFF",
                 )
             else:
-                y = STT1_TOP
-                h = STT1_BOT - STT1_TOP
+                y, h = stt_preview_lane_geometry(
+                    STT1_TOP,
+                    STT1_BOT,
+                    stt1_lane_map.get(id(seg), 0),
+                    stt1_lane_count,
+                    inset=STT_PREVIEW_VERTICAL_INSET,
+                )
                 visual = stt_preview_visual_style(
                     seg,
                     selection_state=stt_candidate_selection_state(seg, final_rows, final_selection_index),
@@ -178,19 +199,16 @@ def build_scenegraph_subtitle_segments(
             is_hover = False
         else:
             line = seg.get("line")
-            if playback_active and playhead_sec is not None:
-                is_active = start - playback_edge_tol <= playhead_value < end + playback_edge_tol
-            else:
-                is_active = (
-                    (active_line is not None and line == active_line)
-                    or (
-                        active_start is not None
-                        and abs(start - float(active_start)) < 0.001
-                    )
+            is_active = (
+                (active_line is not None and line == active_line)
+                or (
+                    active_start is not None
+                    and abs(start - float(active_start)) < 0.001
                 )
+            )
             is_hover = hover_line is not None and line == hover_line
-            render_active = bool(is_active and not playback_active)
-            render_hover = bool(is_hover and not playback_active)
+            render_active = bool(is_active)
+            render_hover = bool(is_hover)
             visual = subtitle_segment_visual_style(
                 seg,
                 active=render_active,
@@ -238,6 +256,7 @@ def build_scenegraph_subtitle_segments(
             speaker_fill = _darker_hex(speaker_color, 135)
             speaker_names = " / ".join(speaker_labels_for_segment(speaker_settings, seg)) if show_speaker_text else ""
             show_speaker_text = bool(show_speaker_text and speaker_names)
+        score_marker = subtitle_score_overlay_marker(seg) if not is_preview else None
         display_text = str(seg.get("text", "") or "") if show_text else ""
         chip_rows = subtitle_confidence_chips(seg) if show_confidence_chips else []
         objects.append(
@@ -264,6 +283,13 @@ def build_scenegraph_subtitle_segments(
                 "speakerH": float(SPEAKER_BOT - SPEAKER_TOP),
                 "speakerFill": speaker_fill if show_speaker_bar else "",
                 "speakerText": speaker_names if show_speaker_text else "",
+                "scoreText": str((score_marker or {}).get("label", "") or ""),
+                "scoreColor": str((score_marker or {}).get("color", "#FFD60A") or "#FFD60A"),
+                "scoreY": float(SCORE_TOP),
+                "scoreSegmentY": float(SCORE_TOP),
+                "scoreSegmentH": float(SCORE_H),
+                "showScoreSegment": bool(not is_preview),
+                "showScoreText": bool(score_marker and width >= 44.0),
                 "showText": show_text,
                 "showConfidenceChips": show_confidence_chips,
                 "showSpeakerBar": show_speaker_bar,
@@ -342,8 +368,8 @@ class TimelineSceneGraphLayer:
             int(scroll_x or 0),
             round(float(visible_start_sec or 0.0), 3),
             round(float(visible_end_sec or 0.0), 3),
-            None if playback_active else (None if active_start is None else int(sec_to_frame(float(active_start), fps))),
-            None if playback_active else (None if active_line is None else int(active_line)),
+            None if active_start is None else int(sec_to_frame(float(active_start), fps)),
+            None if active_line is None else int(active_line),
             None if hover_line is None else int(hover_line),
             bool(playback_active),
             str(quality_filter or "all"),

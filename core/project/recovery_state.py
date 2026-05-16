@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from datetime import datetime
 from typing import Any
 
 from core.media_fingerprint import media_fingerprint_digest, media_fingerprint_snapshot
+from core.native_json import dumps_json_bytes
 
 RECOVERY_STATE_SCHEMA = "ai_subtitle_studio.recovery_state.v1"
 RECOVERY_CONTROLS_SCHEMA = "ai_subtitle_studio.recovery_controls.v1"
@@ -73,10 +73,10 @@ def _settings_digest(settings: dict[str, Any] | None) -> str:
     if not isinstance(settings, dict) or not settings:
         return ""
     try:
-        raw = json.dumps(settings, ensure_ascii=False, sort_keys=True, default=str)
+        raw = dumps_json_bytes(settings, sort_keys=True, default=str)
     except Exception:
-        raw = str(sorted(settings.keys()))
-    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+        raw = str(sorted(settings.keys())).encode("utf-8", errors="ignore")
+    return hashlib.sha1(raw).hexdigest()
 
 
 def media_recovery_snapshot(media_path: str) -> dict[str, Any]:

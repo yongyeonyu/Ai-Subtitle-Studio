@@ -37,6 +37,15 @@ def _iter_text_rows(*row_groups: list[dict[str, Any]] | None) -> list[str]:
     return out
 
 
+def _iterable_count(values: Any) -> int:
+    if values is None:
+        return 0
+    try:
+        return len(values)
+    except TypeError:
+        return sum(1 for _item in values)
+
+
 def collect_stt_protected_terms(
     *,
     settings: dict[str, Any] | None = None,
@@ -105,7 +114,7 @@ def build_stt_dictation_resegment_policy(
         "balance_by_text_length": setting_bool(cfg, "stt_mode_balance_by_text_length", True),
         "netflix_style_enabled": setting_bool(cfg, "stt_mode_netflix_style_enabled", True),
         "protected_terms": protected_terms,
-        "learning_event_count": len(list(learning_events or [])),
+        "learning_event_count": _iterable_count(learning_events),
     }
 
 
@@ -159,7 +168,7 @@ def build_stt_vad_segment_model(
         "max_work_segment_sec": setting_float(cfg, "stt_mode_max_work_segment_sec", 9.0),
         "work_segment_count": len(rows),
         "confidence_counts": dict(confidence_counts),
-        "learning_event_count": len(list(learning_events or [])),
+        "learning_event_count": _iterable_count(learning_events),
     }
 
 
