@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from core.media_fingerprint import media_file_fingerprint, media_fingerprint_digest
+from core.media_fingerprint import media_fingerprint_digest, media_fingerprint_snapshot
 
 RECOVERY_STATE_SCHEMA = "ai_subtitle_studio.recovery_state.v1"
 RECOVERY_CONTROLS_SCHEMA = "ai_subtitle_studio.recovery_controls.v1"
@@ -81,20 +81,15 @@ def _settings_digest(settings: dict[str, Any] | None) -> str:
 
 def media_recovery_snapshot(media_path: str) -> dict[str, Any]:
     path = os.path.abspath(os.path.expanduser(str(media_path or "")))
-    snapshot = {
-        "path": path,
-        "name": os.path.basename(path),
-        "exists": bool(path and os.path.exists(path)),
-        "fingerprint": media_file_fingerprint(path) if path else "",
-        "fingerprint_digest": media_fingerprint_digest(path) if path else "",
+    snapshot = media_fingerprint_snapshot(path) if path else {
+        "path": "",
+        "exists": False,
+        "size": 0,
+        "mtime_ns": 0,
+        "fingerprint": "",
+        "fingerprint_digest": "",
     }
-    try:
-        stat = os.stat(path)
-        snapshot["size"] = int(getattr(stat, "st_size", 0) or 0)
-        snapshot["mtime_ns"] = int(getattr(stat, "st_mtime_ns", int(getattr(stat, "st_mtime", 0.0) * 1_000_000_000)))
-    except OSError:
-        snapshot["size"] = 0
-        snapshot["mtime_ns"] = 0
+    snapshot["name"] = os.path.basename(path)
     return snapshot
 
 

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 import unittest
 
 from core.runtime.logger import get_logger
-from core.project.project_runtime_capture import collect_editor_project_aux_state
+from core.project.project_runtime_capture import collect_editor_project_aux_state, count_editor_project_aux_state
 
 
 class _Canvas:
@@ -13,6 +13,28 @@ class _Canvas:
 
     def _refresh_voice_activity_segments(self):
         self.refresh_calls += 1
+
+
+class _LenOnlyRows:
+    def __init__(self, count: int):
+        self.count = int(count)
+
+    def __len__(self):
+        return self.count
+
+    def __iter__(self):
+        raise AssertionError("status counts must not copy row payloads")
+
+
+class _StreamingRows:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __bool__(self):
+        raise AssertionError("runtime capture rows should not be truth-tested")
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 class ProjectRuntimeCaptureTests(unittest.TestCase):
@@ -77,6 +99,45 @@ class ProjectRuntimeCaptureTests(unittest.TestCase):
                 for line in get_logger().recent_lines(10)
             )
         )
+
+    def test_count_editor_project_aux_state_uses_lengths_without_copying_rows(self):
+        canvas = _Canvas()
+        canvas.voice_activity_segments = _LenOnlyRows(7)
+        canvas.scan_boundary_times = _LenOnlyRows(3)
+        editor = SimpleNamespace(
+            _live_stt_preview_segments=_LenOnlyRows(5),
+            timeline=SimpleNamespace(canvas=canvas),
+        )
+
+        counts = count_editor_project_aux_state(editor)
+
+        self.assertEqual(canvas.refresh_calls, 1)
+        self.assertEqual(
+            counts,
+            {
+                "stt_preview_segment_count": 5,
+                "voice_activity_segment_count": 7,
+                "provisional_cut_boundary_count": 3,
+            },
+        )
+
+    def test_collect_editor_project_aux_state_accepts_streaming_boundary_rows_without_truth_testing(self):
+        canvas = _Canvas()
+        canvas.voice_activity_segments = _StreamingRows([{"start": 1.0, "end": 2.0, "kind": "speech"}])
+        canvas.scan_boundary_times = _StreamingRows([{"timeline_sec": 3.0, "status": "canvas"}])
+        editor = SimpleNamespace(
+            _live_stt_preview_segments=_StreamingRows([{"text": "preview", "start": 0.1, "end": 0.5}]),
+            timeline=SimpleNamespace(canvas=canvas),
+        )
+        editor._project_provisional_cut_boundaries_for_save = lambda: _StreamingRows(
+            [{"timeline_sec": 9.0, "status": "editor-policy"}]
+        )
+
+        captured = collect_editor_project_aux_state(editor)
+
+        self.assertEqual(captured["stt_preview_segments"][0]["text"], "preview")
+        self.assertEqual(captured["voice_activity_segments"][0]["kind"], "speech")
+        self.assertEqual(captured["provisional_cut_boundaries"][0]["status"], "editor-policy")
 
 
 if __name__ == "__main__":

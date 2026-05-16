@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.llm.secure_keys import get_api_key
-from core.media_fingerprint import media_file_fingerprint, media_fingerprint_digest
+from core.media_fingerprint import media_fingerprint_snapshot
 from core.media_info import probe_media
 from core.performance import (
     bounded_worker_count,
@@ -1345,11 +1345,16 @@ class VideoProcessorAudioHelpersMixin:
     ) -> dict:
         try:
             source = os.path.abspath(video_path)
-            stat = os.stat(video_path)
-            source_size = int(stat.st_size)
-            source_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
-            source_fingerprint = media_file_fingerprint(video_path, sample_bytes=512 * 1024, include_samples=True)
-            source_fingerprint_digest = media_fingerprint_digest(video_path, sample_bytes=512 * 1024, include_samples=True)
+            snapshot = media_fingerprint_snapshot(
+                video_path,
+                sample_bytes=512 * 1024,
+                include_samples=True,
+                missing_digest="",
+            )
+            source_size = int(snapshot.get("size", 0) or 0)
+            source_mtime_ns = int(snapshot.get("mtime_ns", 0) or 0)
+            source_fingerprint = str(snapshot.get("fingerprint", source) or source)
+            source_fingerprint_digest = str(snapshot.get("fingerprint_digest", "") or "")
         except Exception:
             source = os.path.abspath(video_path or "")
             source_size = 0
@@ -1628,11 +1633,15 @@ class VideoProcessorAudioHelpersMixin:
     ) -> dict:
         try:
             source = os.path.abspath(str(wav_path or ""))
-            stat = os.stat(source)
-            source_size = int(stat.st_size)
-            source_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
-            source_fingerprint = media_file_fingerprint(source, sample_bytes=512 * 1024, include_samples=True)
-            source_digest = media_fingerprint_digest(source, sample_bytes=512 * 1024, include_samples=True)
+            snapshot = media_fingerprint_snapshot(
+                source,
+                sample_bytes=512 * 1024,
+                include_samples=True,
+            )
+            source_size = int(snapshot.get("size", 0) or 0)
+            source_mtime_ns = int(snapshot.get("mtime_ns", 0) or 0)
+            source_fingerprint = str(snapshot.get("fingerprint", source) or source)
+            source_digest = str(snapshot.get("fingerprint_digest", "") or "")
         except Exception:
             source = os.path.abspath(str(wav_path or ""))
             source_size = 0

@@ -663,6 +663,8 @@ class MainWindow(
         menu = getattr(self, "global_menu_bar", None)
         if menu is not None:
             QTimer.singleShot(0, menu.refresh)
+        if hasattr(self, "_sync_project_info_button_height"):
+            QTimer.singleShot(0, self._sync_project_info_button_height)
 
     def _create_sidebar_terminal_panel(self):
         panel = TerminalLogWidget(self.home_page)

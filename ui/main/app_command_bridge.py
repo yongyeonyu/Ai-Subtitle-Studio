@@ -11,11 +11,32 @@ from PyQt6.QtWidgets import QApplication
 from core.automation.app_command_protocol import build_command_result, normalize_command_payload
 from core.media_queue_order import media_entry_allowed, ordered_media_files
 from core.mode_policy import normalize_mode
-from core.project.project_runtime_capture import collect_editor_project_aux_state
+from core.project.project_runtime_capture import count_editor_project_aux_state
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.settings import load_settings, save_settings
 from core.settings_simplifier import apply_simple_operation_mode
+
+_STATUS_SNAPSHOT_CACHE_TTL_SEC = 0.35
+_STATUS_SNAPSHOT_CACHE_LOCK = threading.Lock()
+_STATUS_SNAPSHOT_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+_STAGE_LOG_TOKENS = (
+    "오디오 추출",
+    "오토 오디오",
+    "ClearVoice",
+    "컷 경계",
+    "러프컷",
+    "자막 생성 중",
+    "자막 생성 완료",
+    "자막 LLM",
+    "저장 준비 중",
+    "STT",
+    "stt",
+    "Whisper",
+    "whisper",
+    "단어 타임태그",
+)
+_STAGE_LOG_TOKENS_LOWER = tuple(str(token).lower() for token in _STAGE_LOG_TOKENS)
 
 
 def _noop(*_args: Any, **_kwargs: Any) -> None:
@@ -265,25 +286,7 @@ def _is_stage_log_line(line: str) -> bool:
     if not text:
         return False
     lowered = text.lower()
-    return any(
-        token in text or token in lowered
-        for token in (
-            "오디오 추출",
-            "오토 오디오",
-            "ClearVoice",
-            "컷 경계",
-            "러프컷",
-            "자막 생성 중",
-            "자막 생성 완료",
-            "자막 LLM",
-            "저장 준비 중",
-            "STT",
-            "stt",
-            "Whisper",
-            "whisper",
-            "단어 타임태그",
-        )
-    )
+    return any(token in lowered for token in _STAGE_LOG_TOKENS_LOWER)
 
 
 def _recent_stage_logs_snapshot(limit: int = 20) -> list[str]:
@@ -298,12 +301,37 @@ def _recent_log_payload(
     stage_scan_limit: int = 160,
     stage_limit: int = 20,
 ) -> tuple[list[str], list[str]]:
+    logger = get_logger()
+    getter = getattr(logger, "recent_lines_and_filtered", None)
+    if callable(getter):
+        def _snapshot() -> tuple[list[str], list[str]]:
+            recent, stage = getter(
+                recent_limit=recent_limit,
+                filtered_scan_limit=stage_scan_limit,
+                filtered_limit=stage_limit,
+                predicate=_is_stage_log_line,
+            )
+            return (
+                [str(line or "") for line in recent if str(line or "")],
+                [str(line or "") for line in stage if str(line or "")],
+            )
+
+        return _bridge_best_effort(
+            "recent log payload snapshot",
+            _snapshot,
+            default=([], []),
+        )
     scan_size = max(1, max(int(recent_limit or 40), int(stage_scan_limit or 160)))
     lines = _recent_logs_snapshot(scan_size)
     recent_size = max(1, int(recent_limit or 40))
     stage_size = max(1, int(stage_limit or 20))
     matched = [line for line in lines if _is_stage_log_line(line)]
     return lines[-recent_size:], matched[-stage_size:]
+
+
+def _runtime_resource_snapshot(owner: Any) -> dict[str, Any]:
+    snapshot = getattr(owner, "_runtime_resource_snapshot", None)
+    return dict(snapshot or {}) if isinstance(snapshot, dict) else {}
 
 
 def _queue_runtime_snapshot(owner: Any) -> dict[str, Any]:
@@ -364,22 +392,18 @@ def _editor_runtime_snapshot(editor: Any) -> dict[str, Any]:
 
 
 def _editor_aux_counts(editor: Any) -> dict[str, int]:
-    if editor is None:
-        return {
-            "stt_preview_segment_count": 0,
-            "voice_activity_segment_count": 0,
-            "provisional_cut_boundary_count": 0,
-        }
-    aux = _bridge_best_effort(
-        "editor auxiliary state snapshot",
-        lambda: dict(collect_editor_project_aux_state(editor) or {}),
-        default={},
-    )
-    return {
-        "stt_preview_segment_count": len(list(aux.get("stt_preview_segments", []) or [])),
-        "voice_activity_segment_count": len(list(aux.get("voice_activity_segments", []) or [])),
-        "provisional_cut_boundary_count": len(list(aux.get("provisional_cut_boundaries", []) or [])),
+    empty = {
+        "stt_preview_segment_count": 0,
+        "voice_activity_segment_count": 0,
+        "provisional_cut_boundary_count": 0,
     }
+    if editor is None:
+        return empty
+    return _bridge_best_effort(
+        "editor auxiliary count snapshot",
+        lambda: dict(count_editor_project_aux_state(editor) or {}),
+        default=empty,
+    )
 
 
 def _command_option_bool(options: dict[str, Any], key: str, default: bool = False) -> bool:
@@ -458,9 +482,31 @@ def _status_snapshot(owner: Any) -> dict[str, Any]:
         "editor_aux_counts": _editor_aux_counts(editor),
         "guided_snapshot_run": guided_state,
         "queue_runtime": _queue_runtime_snapshot(owner),
+        "runtime_resource": _runtime_resource_snapshot(owner),
         "recent_logs": recent_logs,
         "recent_stage_logs": recent_stage_logs,
     }
+
+
+def _cached_status_snapshot(owner: Any) -> dict[str, Any]:
+    now = time.monotonic()
+    owner_key = id(owner)
+    with _STATUS_SNAPSHOT_CACHE_LOCK:
+        cached = _STATUS_SNAPSHOT_CACHE.get(owner_key)
+        if cached is not None and (now - cached[0]) <= _STATUS_SNAPSHOT_CACHE_TTL_SEC:
+            return dict(cached[1])
+    snapshot = _status_snapshot(owner)
+    with _STATUS_SNAPSHOT_CACHE_LOCK:
+        _STATUS_SNAPSHOT_CACHE[owner_key] = (now, dict(snapshot))
+    return snapshot
+
+
+def _clear_status_snapshot_cache(owner: Any | None = None) -> None:
+    with _STATUS_SNAPSHOT_CACHE_LOCK:
+        if owner is None:
+            _STATUS_SNAPSHOT_CACHE.clear()
+        else:
+            _STATUS_SNAPSHOT_CACHE.pop(id(owner), None)
 
 
 def _editor_pipeline_start_callback(owner: Any, media_path: str, *, is_auto_start: bool = False):
@@ -488,10 +534,15 @@ def execute_app_command(owner: Any, payload: dict[str, Any] | None) -> dict[str,
         return build_command_result(command, ok=False, accepted=False, error=error, message=message)
 
     if command == "ping":
-        return ok(message="pong", data=_status_snapshot(owner))
+        return ok(message="pong", data=_cached_status_snapshot(owner))
 
     if command == "status":
-        return ok(data=_status_snapshot(owner))
+        return ok(data=_cached_status_snapshot(owner))
+
+    if command == "guided-subtitle-status":
+        return ok(data=_cached_status_snapshot(owner))
+
+    _clear_status_snapshot_cache(owner)
 
     if command == "editor-set-playhead":
         editor = getattr(owner, "_editor_widget", None)
@@ -933,9 +984,6 @@ def execute_app_command(owner: Any, payload: dict[str, Any] | None) -> dict[str,
                 "status": _status_snapshot(owner),
             },
         )
-
-    if command == "guided-subtitle-status":
-        return ok(data=_status_snapshot(owner))
 
     if command == "queue-files":
         files = [_normalize_path(path) for path in command_payload.get("paths", [])]

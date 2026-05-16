@@ -1,6 +1,6 @@
 <!--
-Document-Version: 04.00.06-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_6_RELEASED
+Document-Version: 04.00.07-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_7_RELEASED
 Last-Updated: 2026-05-16
 Updated-By: Codex
 Purpose: Remaining work queue only.
@@ -11,6 +11,7 @@ Purpose: Remaining work queue only.
 
 - This file contains only unfinished or parked work.
 - Completed items must be removed instead of kept as history.
+- In-progress parent items may keep short `Progress` and `Remaining` notes, but fully completed standalone items must be deleted from this queue.
 - Release history belongs in `RELEASE_v*.md`.
 - Bootstrap and operating rules belong in `AGENTS.md`.
 - Product overview belongs in `README.md`.
@@ -19,9 +20,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.06"
-document_version: "04.00.06-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_6_RELEASED"
+app_version: "04.00.07"
+document_version: "04.00.07-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_7_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -72,21 +73,17 @@ review_method:
   Progress: live preview ingest/seam helpers, STT candidate selection helpers, manual STT selection flow/timeline preview redraw, queue append/flush flow, current document-to-segment serialization, bulk-load row normalization, queue post-flush/autoseek policy, bulk-load document apply/finalize steps, text search/replace, popup-trigger, line-edit mutation helpers, shared segment reload flow, manual edit/split handlers, timeline redraw/context/drag lifecycle, low-level block surgery helpers, and dirty/runtime activity/cache invalidation helpers are now extracted into `ui/editor/editor_segments_live_preview.py`, `ui/editor/editor_segments_stt_candidates.py`, `ui/editor/editor_segments_stt_selection_flow.py`, `ui/editor/editor_segments_queue_flush.py`, `ui/editor/editor_segments_current_state.py`, `ui/editor/editor_segments_bulk_prepare.py`, `ui/editor/editor_segments_text_ops.py`, `ui/editor/editor_segments_reload.py`, `ui/editor/editor_segments_manual_edits.py`, `ui/editor/editor_segments_timeline_context.py`, `ui/editor/editor_segments_block_surgery.py`, and `ui/editor/editor_segments_runtime_cache.py`.
   Remaining targets: `editor_multiclip` stack의 남은 orchestration polish와 owner synchronization 예외 정리입니다. owner/runtime state access는 `ui/editor/editor_multiclip_owner_bridge.py`와 `ui/editor/editor_multiclip_runtime_state.py`로 이미 상당 부분 축소됐습니다.
 
-- [ ] Split `ui/editor/editor_pipeline.py` into lifecycle-safe services.
-  Goal: isolate backend start/stop orchestration, queue updates, post-process cleanup, and partial rerun logic.
-  Why: this file mixes UI mutation, worker lifecycle, state recovery, and exception swallowing; it is one of the highest-risk regression zones.
-  Progress: processing/abort helpers and generation-complete cleanup/autosave/fallback recovery helpers are now extracted into `ui/editor/editor_pipeline_cleanup.py`; backend signal wiring plus cut-boundary placeholder bridge are now extracted into `ui/editor/editor_pipeline_signal_bridge.py`; partial rerun state preparation and `_run_partial_backend` worker orchestration are now extracted into `ui/editor/editor_pipeline_partial_rerun.py`; startup/prescan/layout restore orchestration is now extracted into `ui/editor/editor_pipeline_startup.py`; live processing stage/progress/final status updates are now extracted into `ui/editor/editor_pipeline_status.py`; generation-complete UI sync/deferred-learning/resource-cleanup orchestration is now extracted into `ui/editor/editor_pipeline_completion.py`; playhead menu/cut-boundary submenu/manual rerun actions are now extracted into `ui/editor/editor_pipeline_playhead_actions.py`.
-  Remaining targets: `ui/editor/editor_pipeline.py` itself is now mostly a composition shell; the remaining work is broad-exception cleanup and a few direct UI/backend convenience calls across the extracted pipeline service modules.
-
 - [ ] Split `ui/editor/video_player_widget.py` into overlay, transport, and provider adapters.
   Goal: move playback controls, subtitle overlay state, frame sync, and provider-specific rendering into separate units.
   Why: 2,184 lines and 140 functions makes this the single largest UI function surface; playback regressions are hard to isolate.
   Extra note: several silent exception blocks here hide video subtitle overlay failures.
+  Progress: subtitle overlay/context/provider refresh and lookup ownership now lives in `ui/editor/video_player_subtitles.py`; remaining work is the transport/provider adapter split and typed cleanup logging inside the player.
 
 - [ ] Break up `ui/timeline/timeline_paint.py` and stop using one giant `paintEvent`.
   Goal: move row layout, subtitle lane text painting, helper-line painting, selection overlays, and playhead/marker painting into separate paint passes.
   Why: `paintEvent` alone is 1,341 lines, which makes rendering behavior fragile and hard to benchmark.
   Success condition: each paint pass becomes independently testable and cacheable.
+  Progress: voice-activity lane paint now reuses the cached visible-window marker list instead of copying the cached list again on every paint; the hot cache-return microbenchmark improved 11.543x and removed about 399,841 bytes of repeated peak allocation on a 50k-marker cache. Remaining work is the broader paint-pass split.
 
 - [ ] Refactor the cut-boundary stack away from monolithic helper builders.
   Files: `core/pipeline/cut_boundary_helpers.py`, `core/cut_boundary_auto_scan.py`, `core/cut_boundary_auto_verify.py`, `core/cut_boundary.py`.
@@ -125,6 +122,8 @@ review_method:
   `ui/dialogs/export_dialog.py`
   `core/project/data_manager.py`
   Why: repository-wide scan found very large numbers of silent failure paths; many current bugs become invisible instead of diagnosable.
+  Progress: changed timeline viewport/playback fallback cleanup paths now use typed non-fatal exception tuples so the maintenance guard can block new broad silent catches in the touched files. `core/runtime/logger.py` no longer swallows stream/UI emit failures through broad `Exception`; it records typed internal diagnostics to `sys.__stderr__` when the logger itself cannot deliver a message.
+  Remaining: finish the high-priority files listed above, starting with the remaining `ui/main/*`, `ui/editor/video_player_widget.py`, cut-boundary, audio, and project cleanup paths that still rely on broad fallback handling.
 
 - [ ] Introduce a shared `log_and_swallow` helper only for truly non-fatal UI cleanup code.
   Goal: centralize cases where best-effort cleanup is acceptable while still recording what failed.
@@ -136,7 +135,8 @@ review_method:
   Goal: keep the macOS Terminal output grep-friendly and sequence-aware for live debugging while preserving the existing in-app terminal widget behavior.
   Why: `core/runtime/logger.py` now emits timestamped/leveled/staged terminal lines, but most source modules still write free-form human messages with inconsistent stage vocabulary and severity semantics.
   First targets: `ui/main/app_command_bridge.py`, `core/pipeline/backend_core.py`, `core/pipeline/single_pipeline.py`, `core/pipeline/cut_boundary_helpers.py`, `core/audio/media_processor*.py`, `core/engine/subtitle_engine.py`, `ui/editor/editor_pipeline_*`, `ui/editor/editor_save_manager.py`.
-  Progress: app-command status snapshots now derive `recent_logs` and `recent_stage_logs` from a single logger-buffer read, which keeps the Codex CLI/mobile status polling path lighter while preserving the same externally visible payload.
+  Progress: app-command status snapshots now derive `recent_logs` and `recent_stage_logs` from a single logger-buffer read, reuse a short TTL cache for repeated `ping/status/guided-subtitle-status` polling, clear the cache before mutating commands, expose `runtime_resource` metrics, and count large STT/VAD/cut-boundary aux lists without copying row payloads. `core/runtime/logger.py` now also returns recent-line tails without full deque materialization and reuses pre-lowercased stage patterns, reducing repeated appctl/status/log polling allocation without changing terminal text or subtitle logic.
+  Remaining: propagate the shared stage/severity vocabulary into the first-target modules above and retire the remaining free-form terminal writes.
 
 ## Full Repository Review Backlog
 
@@ -170,6 +170,7 @@ review_method:
 - [ ] Add a CI guard that fails when a new function exceeds the agreed complexity budget.
   Suggested tools: `ruff`, `radon`, or a custom AST rule.
   Why: without an automated budget, large functions keep growing during urgent bugfixes.
+  Progress: `tools/check_maintenance_budget.py` now scans changed source files for file/function length and broad silent-exception regressions with an initial legacy allowlist; the current timeline cache batch passes the guard after typed cleanup. Remaining work is wiring it into CI.
 
 ### 2. Duplicate helper consolidation
 
@@ -188,6 +189,7 @@ review_method:
   `core/runtime/json_utils.py`
   `core/runtime/setting_utils.py`
   Progress: `core/coerce.py` now also provides shared `safe_round_int(...)`, `safe_str(...)`, and `positive_int(...)`; `core/runtime/json_utils.py` now provides shared recursive `json_safe(...)`; `core/text_utils.py` now centralizes whitespace-cleaning / compact-text / line-count helpers; `core/runtime/setting_utils.py` now centralizes shared bool/env/positive-int coercion for lower-risk runtime/native paths, including the legacy true-only string-bool semantics still needed by `core/runtime_eta.py`; project text-asset row/track copy helpers are now shared by `core/project/project_assets.py`, `core/project/project_manager.py`, `core/project/project_context.py`, `core/project/project_snapshot.py`, and `core/project/project_phase1b.py`; `core/project/project_snapshot.py` also now consumes shared numeric coercion instead of keeping its own local int parser; `core/pipeline_status.py` now also shares a single blob-stage/label reduction path instead of maintaining separate near-duplicate loops; and additional project/runtime/timeline/personalization/audio modules (`core/runtime_eta.py`, `core/pipeline/background_prefetch.py`, `core/project/project_format.py`, `core/project/project_assets.py`, `core/engine/llm_candidate_policy.py`, `core/engine/subtitle_accuracy_utils.py`, `core/personalization/runtime_lora_context.py`, `core/personalization/editor_truth_memory.py`, `core/personalization/user_edit_metrics.py`, `core/audio/stt_lattice.py`, `ui/timeline/segment_store.py`, `ui/timeline/timeline_scenegraph.py`, `core/performance.py`, `core/runtime/qt_runtime.py`) have started consuming the shared helpers instead of open-coded local copies.
+  Remaining: finish migrating the remaining duplicated coercion helpers in settings/UI codepaths and remove leftover one-off local variants once their callers are covered.
 
 ### 3. Dead-code and wrong-wiring cleanup
 
@@ -228,19 +230,6 @@ review_method:
   Why: the same logical segment rows are copied into multiple lists/dicts for subtitle, STT1, STT2, live preview, queue flush, and save payload construction.
   Proposed direction: canonical segment store plus lightweight lane-specific views.
 
-- [ ] Stop copying full row dictionaries in background prefetch.
-  File: `core/pipeline/background_prefetch.py`
-  Why: nearby segments are cloned and then used for LLM/Lora/STT prefetch decisions, which adds avoidable CPU and memory churn.
-  Proposed direction: immutable row references plus a small precomputed feature bundle instead of full dict copies.
-  Progress: nearby rows are now projected into lightweight prefetch payloads instead of `dict(row)` copies, and timeline playback reuses the cached segment list when scheduling prefetch.
-
-- [ ] Add hard cache budgets and pruning to thumbnail and preview caches.
-  Files:
-  `core/roughcut/thumbnail_cache.py`
-  `core/video_preview_proxy.py`
-  runtime disk cache paths in `core/runtime/memory_manager.py`
-  Why: thumbnail and preview caches grow independently and are not clearly governed by one budget.
-
 - [ ] Make project load/save lazily hydrate large text assets.
   Files:
   `core/project/project_manager.py`
@@ -248,13 +237,7 @@ review_method:
   `core/project/project_assets.py`
   Why: STT tracks, candidate lattices, preview rows, and subtitle quality payloads do not all need to enter memory at open time.
   Proposed direction: keep file-backed metadata handles until a lane or panel is actually opened.
-  Progress: `core/project/project_assets.py` now centralizes repeated track-row copy and metadata normalization helpers so external text-asset cache hydration avoids extra ad hoc `list(...)`/`dict(...)` copy paths while the broader lazy-open design remains unchanged; `core/project/project_context.py` now normalizes STT candidate-track previews directly from track maps instead of building an extra temporary preview row list first, reuses one deterministic preview-source resolver for hot-open/editor/external/analysis fallback order, and now resolves authoritative external subtitle rows through one helper so lazy-open editor restore no longer re-invokes the same external subtitle load path twice for empty-authoritative projects; hot-open subtitle cache / external STT candidate attachment paths also now reuse the same shared row-copy helper instead of carrying local `dict(...)` loops; the same copy/restore path is now reused by `core/project/project_snapshot.py` plus `core/project/project_phase1b.py` so snapshot/enrich/preview-restore flows stop maintaining their own row-copy variants; save/enrich/recovery callers now also stop doing redundant pre-`externalize_project_text_assets(...)` deep copies because the externalization layer already normalizes/copies its own input rows and tracks; `core/project/project_manager.py` now trims a remaining full `roughcut_state` dict copy on selected-candidate reads while sharing one helper for preliminary middle-segment row stamping instead of open-coded loops; repeated `build_editor_state(...)` media/clip-boundary/workspace/STT-preview input assembly is now funneled through one `_store_project_editor_state(...)` helper across create/save/add-media/merge-SRT flows instead of being rebuilt inline in each branch; the same file now reuses shared clip→media row, clip→source path, and subtitle row→editor seed projections so create/save/add-media/merge-SRT plus roughcut draft setup stop carrying their own near-identical list builders; editor-side live STT preview / voice-activity / provisional cut-boundary capture now also shares one runtime helper across autosave, queue save, project snapshot, and project-panel save paths instead of repeating refresh/copy/fallback branches; and external text-asset persistence now reuses `write_srt_track(...)` result rows directly instead of immediately re-copying them, builds STT external refs/counts in one pass, and keeps parsed STT-track caches as the hot cache while only copying the editor-facing candidate-track view, which cuts one more copy layer from hydrate/externalize flows without changing alias safety.
-
-- [ ] Keep media probe cache result handling lean and copy-safe.
-  Files:
-  `core/media_info.py`
-  Why: media probe results are returned and cached frequently during project create/open/save flows, so extra dict churn here multiplies quickly.
-  Progress: cache hit/write paths now reuse a single normalized result copy per step, in-memory cache rehydration/writeback no longer re-copies the same already-owned normalized payload before reinserting it, `probe_media(...)` now uses shared `loads_json_output(...)` for stdout decoding, `probe_media_many(...)` now also has a unique-path fast path that skips the extra result-map/copy roundtrip when the batch has no duplicate files and avoids extra dict copies for paths that appear only once inside mixed duplicate batches, duplicate-path detection inside those mixed batches now uses a lighter seen/repeated set pass instead of a full `Counter`, batch unique/repeated path planning is now computed in one pass instead of separate unique-build plus duplicate rescans, `core/media_info.py` now also provides a unique-path `probe_media_many_lookup(...)` map helper so callers that already need path lookup can skip building an extra `zip(...)` result map, `core/project/project_manager.py` now shares copy-safe local probe-cache get/set/validation helpers instead of open-coded `dict(...)` wrapping across create/save/add-media flows, consumes that lookup helper directly in `_probe_media_rows(...)` to avoid another hot-path batch reshape, deduplicates missing-path tracking with a set instead of repeated list membership checks, and no longer wraps already-copied probe rows in another temporary `dict(...)` during clip-row construction; `core/media_info.py` now also routes disk-cache read/write through shared cache-payload helpers so schema/key/result validation and serialized payload shaping stay in one deterministic path; first-hit disk-cache rehydrate now also returns an independent caller copy so cache safety remains intact after memory-cache clears; and the lookup/list batch helpers now share one worker-count and unique-result execution path so duplicate-planning callers stop rebuilding the same executor/map wiring separately.
+  Progress: `core/project/project_assets.py` now centralizes repeated track-row copy and metadata normalization helpers so external text-asset cache hydration avoids extra ad hoc `list(...)`/`dict(...)` copy paths while the broader lazy-open design remains unchanged; `core/project/project_context.py` now normalizes STT candidate-track previews directly from track maps instead of building an extra temporary preview row list first, reuses one deterministic preview-source resolver for hot-open/editor/external/analysis fallback order, and now resolves authoritative external subtitle rows through one helper so lazy-open editor restore no longer re-invokes the same external subtitle load path twice for empty-authoritative projects; hot-open subtitle cache / external STT candidate attachment paths also now reuse the same shared row-copy helper instead of carrying local `dict(...)` loops; the same copy/restore path is now reused by `core/project/project_snapshot.py` plus `core/project/project_phase1b.py` so snapshot/enrich/preview-restore flows stop maintaining their own row-copy variants; save/enrich/recovery callers now also stop doing redundant pre-`externalize_project_text_assets(...)` deep copies because the externalization layer already normalizes/copies its own input rows and tracks; `core/project/project_manager.py` now trims a remaining full `roughcut_state` dict copy on selected-candidate reads while sharing one helper for preliminary middle-segment row stamping instead of open-coded loops; repeated `build_editor_state(...)` media/clip-boundary/workspace/STT-preview input assembly is now funneled through one `_store_project_editor_state(...)` helper across create/save/add-media/merge-SRT flows instead of being rebuilt inline in each branch; the same file now reuses shared clip→media row, clip→source path, and subtitle row→editor seed projections so create/save/add-media/merge-SRT plus roughcut draft setup stop carrying their own near-identical list builders; editor-side live STT preview / voice-activity / provisional cut-boundary capture now also shares one runtime helper across autosave, queue save, project snapshot, and project-panel save paths instead of repeating refresh/copy/fallback branches; external text-asset persistence now reuses `write_srt_track(...)` result rows directly instead of immediately re-copying them, builds STT external refs/counts in one pass, and keeps parsed STT-track caches as the hot cache while only copying the editor-facing candidate-track view; project row copy/SRT write/canvas FPS hydration now avoid extra temporary list materialization for streaming row inputs without changing alias-safety copies; and the shared frame-grid normalization plus runtime-capture boundary copy paths now also accept streaming rows directly instead of wrapping them in extra `list(...)` materialization before save/open/status capture work.
 
 - [ ] Pool audio workers and tear them down on inactivity instead of per-instance retention.
   Files:
@@ -264,11 +247,6 @@ review_method:
   `core/audio/worker_threads.py`
   Why: persistent workers are useful, but today their ownership is diffuse and easy to leak across editor/backend transitions.
 
-- [ ] Replace repeated recursive cache-size scans with indexed accounting.
-  File: `core/runtime/memory_manager.py`
-  Why: repeated directory walks are resource-heavy and scale poorly as runtime caches grow.
-  Proposed direction: maintain an incremental size ledger updated on write/delete plus occasional reconciliation scan.
-
 - [ ] Review personalization bundle memory pressure before more learning features are added.
   Files:
   `core/personalization/idle_trainer.py`
@@ -276,6 +254,7 @@ review_method:
   `core/personalization/subtitle_lora_runtime.py`
   Why: training queues, bundle manifests, retrieval indexes, and large JSON/JSONL payloads are loaded and reshaped in multiple places.
   Proposed direction: stream JSONL where possible, cap in-memory training history windows, and lazily rebuild retrieval indexes.
+  Progress: unified LoRA bundle attachment scans now walk the trained-adapter tree through `os.scandir` instead of materializing `Path.rglob("*")` results, and archive rewrite retries now reuse prebuilt manifest/payload bytes instead of serializing the same large JSON again.
 
 ### 5. Resource and CPU reduction ideas
 
@@ -290,6 +269,8 @@ review_method:
   related media helpers in `core/media_info.py`
   Why: project I/O should mostly be serialization and validation, not repeated probing unless the media fingerprint changed.
   Progress: `core/media_info.py` now isolates ffprobe result shaping into deterministic normalization helpers (`_parse_fps`, `_duration_text`, `_normalize_probe_payload`) so future project I/O and native migration work can reuse the parse/shape layer without reopening the subprocess/cache orchestration path; batch probing also now deduplicates same-path requests inside one `probe_media_many(...)` call, and the common unique-path case skips the extra result-map/copy assembly entirely, which cuts duplicate ffprobe work and per-save/open allocation churn when project I/O hands the same or many distinct clips through repeated lists.
+  Additional progress: unchanged-media fingerprint caching now skips repeated sample hashing before resolving the probe cache path.
+  Remaining: push more save/open/reopen flows onto persisted probe metadata so unchanged media stays on the serialized fast path instead of falling back to fresh probing.
 
 - [ ] Replace repeated full-list sorts and per-frame recomputations in timeline/editor hot paths with visible-window caches.
   Files:
@@ -298,19 +279,8 @@ review_method:
   `ui/timeline/timeline_canvas.py`
   `ui/editor/editor_timeline_video.py`
   Why: playback and scrubbing should not rebuild or re-sort everything when only a narrow time range is visible.
-  Progress: timeline canvas now exposes cached visible subtitle/STT lane partitions for paint hot paths, scenegraph subtitle sync consumes visible window rows instead of cloning the full segment list, background prefetch no longer deep-copies every segment dict before windowing, timeline click nearest-start fallback now uses cached `starts` arrays instead of scanning the entire segment list, and scenegraph subtitle rendering now builds preview/final row partitions in one pass while deferring speaker-label/bar decoration work until width/detail thresholds actually need it.
-
-- [ ] Audit icon/style generation caching.
-  File: `ui/style.py`
-  Why: `line_icon` is unusually large for a style helper and is a good candidate for memoization or prebuilt assets.
-  Progress: `line_icon` now shares one cache insertion path, and SVG icon assets are read once then recolored from an in-memory template cache instead of re-reading the file on each color/size miss.
-
-- [ ] Move repeated subprocess retry/backoff policies into shared helpers.
-  Files:
-  `core/audio/media_processor_audio.py`
-  `core/audio/media_processor.py`
-  `core/llm/codex_provider.py`
-  Why: the same resource error handling pattern is duplicated across ffmpeg, whisper backends, and Codex CLI execution.
+  Progress: timeline canvas now exposes cached visible subtitle/STT lane partitions for paint hot paths, scenegraph subtitle sync consumes visible window rows instead of cloning the full segment list, background prefetch no longer deep-copies every segment dict before windowing, timeline click nearest-start fallback now uses cached `starts` arrays instead of scanning the entire segment list, and scenegraph subtitle rendering now builds preview/final row partitions in one pass while deferring speaker-label/bar decoration work until width/detail thresholds actually need it. Voice-activity paint now also returns/reuses the cached visible marker list directly, avoiding per-paint cached-list copies.
+  Remaining: finish moving the remaining editor-timeline recomputation paths and sort-heavy render/input branches onto the same visible-window cache model.
 
 ### 6. Python-specific optimization opportunities
 
@@ -336,6 +306,8 @@ review_method:
   `core/runtime_eta.py`
   Why: serialization-heavy bookkeeping is convenient but costly when done often.
   Progress: `runtime_eta` now reuses a path/mtime keyed in-memory history-store cache for repeated prediction/record lookups, runtime disk-cache usage scans are shared through a short TTL cache instead of rescanning the same directories immediately, and the shared `core/native_json.py` layer now supports compact dumps plus shared fallback serialization hooks so native bridge callers can avoid repeating ad hoc `json.dumps(..., separators=...)` payload assembly.
+  Additional progress: `core/personalization/lora_store_bundle.py` now routes bundle size estimation through the shared compact-bytes JSON helper and reuses the same encoded manifest/payload bytes across archive retries, while `core/project/project_context.py` hashes subtitle segment signatures from compact JSON bytes directly instead of building an intermediate text string and encoding it again.
+  Remaining: cut the remaining hot-path size-estimation and cache-bookkeeping re-serialization in personalization and runtime-memory flows that still rebuild equivalent JSON payloads repeatedly.
 
 ## App-by-App Review Results and Follow-up Actions
 
@@ -371,7 +343,7 @@ review_method:
   `ui/editor/video_overlay_widgets.py`
   `ui/editor/video_playback_backend.py`
   Why: overlay behavior and transport control should not be entangled.
-  Progress: subtitle context rows were already lightweight; the player now also reuses prebuilt normalized rows and parallel timing arrays instead of duplicating them on every provider/context refresh, and overlay geometry/text/style ownership is extracted into a dedicated overlay mixin so transport code is less entangled with overlay updates.
+  Progress: subtitle context rows were already lightweight; the player now also reuses prebuilt normalized rows and parallel timing arrays instead of duplicating them on every provider/context refresh, overlay geometry/text/style ownership is extracted into a dedicated overlay mixin, and subtitle display/provider refresh/lookup logic is now in `ui/editor/video_player_subtitles.py`. Remaining work is the transport/provider adapter split.
 
 - [ ] Reduce editor save/reload race surfaces.
   Files:
@@ -482,7 +454,8 @@ review_method:
   `core/native_swift_timeline.py`
   `core/native_json.py`
   Why: large JSON payloads across the bridge can erase native performance gains.
-  Progress: native bridge callers now share compact JSON encode/decode helpers through `core/native_json.py`, including shared `json_default(...)` fallback handling plus shared `loads_json_output(...)` / `write_jsonl_line(...)` bridge helpers, so worker and one-shot Swift/macOS payload paths no longer duplicate open-coded compact serialization logic; JSONL worker calls also now avoid per-request newline-rewrite string copies in the Swift/core/timeline/policy/quality/common-split bridges, `core/pipeline_status.py` now caches whole-status stage-key/label reductions on top of its normalized line/token parsing, reuses one processing-stage helper for both active-stage detection and process-mode labeling, keeps the hot-path STT stage-set comparisons on shared frozen constants instead of rebuilding equivalent literals, and now also exposes one cached summary path so UI consumers can read latest/all stage keys plus display label without reinterpreting the same status blob multiple times, while related pure-Python normalization layers for the next native-safe candidates are also more isolated now (`core/project/project_model_settings.py` now builds summary/snapshot payloads from one shared selection bundle helper, exposes project-level snapshot/summary accessors for deterministic JSON-like reads, avoids materializing full timestamped snapshot payloads for summary-only legacy reads, fast-paths already-normalized setting maps instead of always iterating the full model-key allowlist again, reuses stored snapshot settings directly for extract/merge reads instead of re-filtering already-normalized keys, adds a one-pass restore helper so project-open flows can fetch both the selected settings view and merged local-restore payload without repeating the same normalization pass, now skips model-summary reconstruction entirely on extract/merge/restore paths that only need selected settings, and continues to route restore/merge through one shared selected-settings merge helper so deterministic snapshot-backed project-open reads keep less duplicate stored-vs-legacy wiring; `core/media_info.py` now exposes shared probe-result copy/presence helpers that `core/project/project_manager.py` and `core/project/project_frames.py` reuse instead of keeping second local definitions beside their probe-cache/frame-augment wiring).
+  Progress: native bridge callers now share compact JSON encode/decode helpers through `core/native_json.py`, including shared `json_default(...)` fallback handling plus shared `loads_json_output(...)` / `write_jsonl_line(...)` bridge helpers, so worker and one-shot Swift/macOS payload paths no longer duplicate open-coded compact serialization logic; JSONL worker calls also now avoid per-request newline-rewrite string copies in the Swift/core/timeline/policy/quality/common-split bridges; `PipelineStatus.swift` plus `core/native_swift_pipeline_status.py` now add an adaptive native stage-summary path for `core/pipeline_status.py`, so larger multiline status blobs can use the persistent core JSONL worker while smaller blobs stay on the cheaper in-process Python parser/cache and do not pay bridge overhead; `core/pipeline_status.py` still caches whole-status stage-key/label reductions, reuses one processing-stage helper for both active-stage detection and process-mode labeling, keeps the hot-path STT stage-set comparisons on shared frozen constants instead of rebuilding equivalent literals, and now also exposes one cached summary path so UI consumers can read latest/all stage keys plus display label without reinterpreting the same status blob multiple times, while related pure-Python normalization layers for the next native-safe candidates are also more isolated now (`core/project/project_model_settings.py` now builds summary/snapshot payloads from one shared selection bundle helper, exposes project-level snapshot/summary accessors for deterministic JSON-like reads, avoids materializing full timestamped snapshot payloads for summary-only legacy reads, fast-paths already-normalized setting maps instead of always iterating the full model-key allowlist again, reuses stored snapshot settings directly for extract/merge reads instead of re-filtering already-normalized keys, adds a one-pass restore helper so project-open flows can fetch both the selected settings view and merged local-restore payload without repeating the same normalization pass, now skips model-summary reconstruction entirely on extract/merge/restore paths that only need selected settings, and continues to route restore/merge through one shared selected-settings merge helper so deterministic snapshot-backed project-open reads keep less duplicate stored-vs-legacy wiring; `core/media_info.py` now exposes shared probe-result copy/presence helpers that `core/project/project_manager.py` and `core/project/project_frames.py` reuse instead of keeping second local definitions beside their probe-cache/frame-augment wiring).
+  Remaining: keep `core/project/project_model_settings.py` on the Python side for now because the payload is too small to justify bridge cost, and re-measure only the larger `media_info`, cut-boundary, and subtitle-scoring payload families before promoting more logic native.
 
 ## Functions and files that need simplification
 
@@ -546,8 +519,10 @@ review_method:
 
 - [ ] Add a repository-wide "broad exception" lint rule.
   Why: current silent failure density is too high for a UI-heavy app with many background workers.
+  Progress: `tools/check_maintenance_budget.py` now blocks new changed-file broad silent-exception patterns outside the initial legacy allowlist; remaining work is CI integration and allowlist burn-down.
 
 - [ ] Add a "max function length" and "max file length" gate for source under `core/`, `ui/`, and `native/`.
+  Progress: `tools/check_maintenance_budget.py` now enforces changed-file size/function budgets with an initial allowlist; remaining work is CI integration and progressively tightening legacy exemptions.
 
 ## Parked Work
 

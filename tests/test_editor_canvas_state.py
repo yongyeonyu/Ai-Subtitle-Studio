@@ -4,6 +4,17 @@ from types import SimpleNamespace
 from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 
 
+class _StreamingRows:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __bool__(self):
+        raise AssertionError("canvas state rows should not be truth-tested")
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
 class _DummyTimeline:
     def __init__(self):
         self.boundary_times = None
@@ -96,13 +107,27 @@ class EditorCanvasStateTests(unittest.TestCase):
 
         editor.apply_canvas_aux_state(
             boundary_times=[0.5],
-            stt_preview_segments=[{"line": 1}],
+            stt_preview_segments=_StreamingRows([{"line": 1}]),
             schedule_timeline=False,
         )
 
         self.assertEqual(editor.timeline.boundary_times, [0.5])
         self.assertEqual(editor._live_stt_preview_segments, [{"line": 1}])
         self.assertEqual(editor.schedule_count, 0)
+
+    def test_loaded_canvas_state_fps_scans_stream_without_extra_truth_test(self):
+        editor = _DummyEditor()
+
+        fps = editor._loaded_canvas_state_fps(
+            _StreamingRows(
+                [
+                    {"start": 0.0, "end": 1.0, "text": "a"},
+                    {"start": 1.0, "end": 2.0, "text": "b", "timeline_frame_rate": 24.0},
+                ]
+            )
+        )
+
+        self.assertEqual(fps, 24.0)
 
     def test_apply_loaded_canvas_state_clamps_segments_to_video_duration(self):
         editor = _DummyEditor()
@@ -121,6 +146,23 @@ class EditorCanvasStateTests(unittest.TestCase):
         self.assertEqual(ordered[0]["text"], "tail")
         self.assertLessEqual(float(ordered[0]["end"]), 10.0)
         self.assertEqual([seg["text"] for seg in editor.reloaded["segments"]], ["tail"])
+
+    def test_apply_loaded_canvas_state_accepts_streaming_rows_without_truth_testing(self):
+        editor = _DummyEditor()
+
+        ordered = editor.apply_loaded_canvas_state(
+            _StreamingRows(
+                [
+                    {"start": 1.0, "end": 2.0, "text": "둘째"},
+                    {"start": 0.0, "end": 1.0, "text": "첫째"},
+                ]
+            ),
+            preserve_view=False,
+            mark_dirty=False,
+        )
+
+        self.assertEqual([seg["text"] for seg in ordered], ["첫째", "둘째"])
+        self.assertEqual([seg["text"] for seg in editor.reloaded["segments"]], ["첫째", "둘째"])
 
 
 if __name__ == "__main__":

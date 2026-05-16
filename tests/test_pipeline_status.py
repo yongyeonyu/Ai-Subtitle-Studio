@@ -1,7 +1,9 @@
 # Version: 03.07.04
 # Phase: PHASE2
 import unittest
+from unittest import mock
 
+import core.pipeline_status as pipeline_status
 from core.pipeline_status import (
     generation_stage_keys,
     generation_stage_keys_all,
@@ -13,6 +15,13 @@ from core.pipeline_status import (
 
 
 class PipelineStatusTests(unittest.TestCase):
+    def tearDown(self):
+        pipeline_status._generation_stage_label_cached.cache_clear()
+        pipeline_status._normalized_status_lines_cached.cache_clear()
+        pipeline_status._stage_keys_from_blob_cached.cache_clear()
+        pipeline_status._stage_summary_cached.cache_clear()
+        pipeline_status._status_stage_keys_cached.cache_clear()
+
     def test_preprocess_status_wins_over_audio_and_vad_words(self):
         status = "⏳ [전처리] FFMPEG 오디오 추출 및 기본 필터 적용 중"
         self.assertEqual(generation_stage_keys(status), {"preprocess"})
@@ -60,6 +69,11 @@ class PipelineStatusTests(unittest.TestCase):
         self.assertEqual(generation_stage_label(status), "음성")
         self.assertTrue(is_generation_stage_status(status))
 
+    def test_generation_stage_label_respects_stt_ensemble_flag(self):
+        status = "⏳ [STT] STT1/STT2 병렬 인식 중"
+        self.assertEqual(generation_stage_label(status, stt_ensemble_enabled=False), "STT 1")
+        self.assertEqual(generation_stage_label(status, stt_ensemble_enabled=True), "STT 1/2")
+
     def test_generation_stage_summary_returns_independent_latest_and_all_views(self):
         status = "\n".join(
             [
@@ -76,6 +90,25 @@ class PipelineStatusTests(unittest.TestCase):
         self.assertEqual(second["all_keys"], {"stt1", "stt2", "subtitle_llm"})
         self.assertEqual(second["label"], "자막 LLM")
         self.assertTrue(second["active"])
+
+    def test_generation_stage_summary_accepts_native_reduction_for_large_blob(self):
+        status = "\n".join(f"status line {idx}" for idx in range(20))
+        with mock.patch.object(
+            pipeline_status,
+            "summarize_pipeline_status_via_swift",
+            return_value={
+                "keys": ["stt1", "stt2"],
+                "all_keys": ["stt1", "stt2", "subtitle_llm"],
+                "label": "STT 1/2",
+                "active": True,
+            },
+        ) as native_mock:
+            summary = generation_stage_summary(status, stt_ensemble_enabled=True)
+        self.assertEqual(summary["keys"], {"stt1", "stt2"})
+        self.assertEqual(summary["all_keys"], {"stt1", "stt2", "subtitle_llm"})
+        self.assertEqual(summary["label"], "STT 1/2")
+        self.assertTrue(summary["active"])
+        native_mock.assert_called_once()
 
     def test_process_mode_label_uses_processing_state_before_screen_mode(self):
         self.assertEqual(

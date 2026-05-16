@@ -17,7 +17,7 @@ class BottomWorkPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("BottomLogPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(named_panel_style("BottomLogPanel", "surface", radius=0))
+        self.setStyleSheet(named_panel_style("BottomLogPanel", "surface", radius=7))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)

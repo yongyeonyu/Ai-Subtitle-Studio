@@ -5,7 +5,7 @@ from typing import Any
 from core.coerce import safe_float as _safe_float, safe_round_int as _safe_int
 from core.frame_time import frame_count, frame_duration, normalize_fps
 
-PROJECT_SCHEMA_VERSION = "04.00.06"
+PROJECT_SCHEMA_VERSION = "04.00.07"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v4"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 

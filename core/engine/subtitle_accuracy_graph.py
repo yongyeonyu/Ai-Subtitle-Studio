@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -38,6 +39,23 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _iter_dict_rows(rows: Any) -> Iterable[dict[str, Any]]:
+    for row in (() if rows is None else rows):
+        if isinstance(row, dict):
+            yield row
+
+
+def _sequence_head(rows: Any, limit: int) -> list[Any]:
+    max_items = max(0, int(limit or 0))
+    if max_items <= 0:
+        return []
+    if isinstance(rows, list):
+        return rows[:max_items]
+    if isinstance(rows, tuple):
+        return list(rows[:max_items])
+    return list(islice(() if rows is None else rows, max_items))
+
+
 def _segment_id(segment: dict[str, Any], index: int) -> str:
     explicit = str(segment.get("id") or segment.get("segment_id") or "").strip()
     if explicit:
@@ -67,17 +85,20 @@ def _compact_stt_outputs(segment: dict[str, Any]) -> dict[str, Any]:
         "manual_re_recognition_candidates",
         "stt_manual_candidates",
     ):
-        rows = [dict(item) for item in list(segment.get(key) or []) if isinstance(item, dict)]
-        if rows:
-            outputs[key] = [
+        compact_rows: list[dict[str, Any]] = []
+        for item in _iter_dict_rows(segment.get(key)):
+            compact_rows.append(
                 {
                     "source": str(item.get("source") or item.get("label") or ""),
                     "text": str(item.get("text") or "")[:240],
                     "score": _json_safe(item.get("score", item.get("stt_score"))),
                     "confidence": _json_safe(item.get("confidence", item.get("confidence_score"))),
                 }
-                for item in rows[:10]
-            ]
+            )
+            if len(compact_rows) >= 10:
+                break
+        if compact_rows:
+            outputs[key] = compact_rows
     for key in (
         "stt_ensemble_llm_selected_source",
         "stt_ensemble_llm_selected_label",
@@ -106,10 +127,10 @@ def _compact_lora(segment: dict[str, Any]) -> dict[str, Any]:
         "profile": {
             "top_score": _json_safe(profile.get("top_score")),
             "used_kinds": _json_safe(profile.get("used_kinds") or {}),
-            "examples": _json_safe(list(profile.get("examples") or [])[:6]),
-            "setting_sources": _json_safe(list(profile.get("setting_sources") or [])[:6]),
-            "style_hints": _json_safe(list(profile.get("style_hints") or [])[:6]),
-            "exclusions": _json_safe(list(profile.get("exclusions") or [])[:6]),
+            "examples": _json_safe(_sequence_head(profile.get("examples"), 6)),
+            "setting_sources": _json_safe(_sequence_head(profile.get("setting_sources"), 6)),
+            "style_hints": _json_safe(_sequence_head(profile.get("style_hints"), 6)),
+            "exclusions": _json_safe(_sequence_head(profile.get("exclusions"), 6)),
         },
     }
 
@@ -152,14 +173,21 @@ def _compact_llm(segment: dict[str, Any]) -> dict[str, Any]:
 def _compact_timing(segment: dict[str, Any]) -> dict[str, Any]:
     start = _safe_float(segment.get("start", segment.get("timeline_start")), 0.0)
     end = _safe_float(segment.get("end", segment.get("timeline_end")), start)
-    words = [dict(item) for item in list(segment.get("words") or []) if isinstance(item, dict)]
+    word_count = 0
+    first_word = None
+    last_word = None
+    for item in _iter_dict_rows(segment.get("words")):
+        word_count += 1
+        if first_word is None:
+            first_word = item
+        last_word = item
     return {
         "start": round(start, 3),
         "end": round(end, 3),
         "duration_sec": round(max(0.0, end - start), 3),
-        "word_count": len(words),
-        "first_word": _json_safe(words[0]) if words else None,
-        "last_word": _json_safe(words[-1]) if words else None,
+        "word_count": word_count,
+        "first_word": _json_safe(first_word) if first_word is not None else None,
+        "last_word": _json_safe(last_word) if last_word is not None else None,
         "timing_policy": _json_safe(segment.get("_deep_timing_policy") or {}),
         "timing_fusion_policy": _json_safe(segment.get("_timing_fusion_policy") or {}),
         "gap_settings": _json_safe(segment.get("_lora_gap_settings") or {}),
@@ -173,14 +201,32 @@ def build_subtitle_accuracy_graph(
     media_path: str = "",
     project_path: str = "",
 ) -> dict[str, Any]:
-    rows = [dict(row) for row in list(segments or []) if isinstance(row, dict) and not row.get("is_gap")]
+    rows = [row for row in _iter_dict_rows(segments) if not row.get("is_gap")]
     explanations = subtitle_decision_explanations(rows)
     explanations_by_index = {int(item.get("index", idx)): item for idx, item in enumerate(explanations)}
     segment_graphs: list[dict[str, Any]] = []
+    rollback_count = 0
+    llm_called_count = 0
+    llm_skipped_count = 0
     for index, segment in enumerate(rows):
         graph = dict(segment.get("_accuracy_decision_graph") or {})
         if graph.get("schema") != SUBTITLE_ACCURACY_SCHEMA:
             graph = {"schema": SUBTITLE_ACCURACY_SCHEMA, "decisions": []}
+        llm_payload = _compact_llm(segment)
+        llm_gate_policy = llm_payload.get("llm_gate_policy") if isinstance(llm_payload, dict) else {}
+        if isinstance(llm_gate_policy, dict):
+            call_llm = llm_gate_policy.get("call_llm")
+            if call_llm:
+                llm_called_count += 1
+            elif call_llm is False:
+                llm_skipped_count += 1
+        if llm_payload.get("llm_rollback_policy"):
+            rollback_count += 1
+        verifier_decisions = [
+            item
+            for item in _iter_dict_rows(graph.get("decisions"))
+            if str(item.get("task") or "") in {"llm_verifier", "llm_rollback", "llm_candidate_policy", "llm_minimize"}
+        ]
         segment_graphs.append(
             {
                 "segment_id": _segment_id(segment, index),
@@ -192,21 +238,14 @@ def build_subtitle_accuracy_graph(
                 "raw_stt_outputs": _compact_stt_outputs(segment),
                 "lora": _compact_lora(segment),
                 "deep_learning": _compact_deep(segment),
-                "llm": _compact_llm(segment),
-                "verifier_decisions": _json_safe(
-                    [
-                        item
-                        for item in list(graph.get("decisions") or [])
-                        if str(item.get("task") or "") in {"llm_verifier", "llm_rollback", "llm_candidate_policy", "llm_minimize"}
-                    ]
-                ),
+                "llm": llm_payload,
+                "verifier_decisions": _json_safe(verifier_decisions),
                 "timing": _compact_timing(segment),
                 "decision_graph": _json_safe(graph),
                 "final_explanation": _json_safe(explanations_by_index.get(index, {})),
             }
         )
     metrics = subtitle_accuracy_metrics(rows, settings or {})
-    rollback_count = sum(1 for row in segment_graphs if row.get("llm", {}).get("llm_rollback_policy"))
     try:
         media_digest = media_fingerprint_digest(media_path, sample_bytes=0, include_samples=False) if media_path else ""
     except Exception:
@@ -221,8 +260,8 @@ def build_subtitle_accuracy_graph(
         "summary": {
             "metrics": _json_safe(metrics),
             "rollback_count": rollback_count,
-            "llm_called_count": sum(1 for row in segment_graphs if row.get("llm", {}).get("llm_gate_policy", {}).get("call_llm")),
-            "llm_skipped_count": sum(1 for row in segment_graphs if row.get("llm", {}).get("llm_gate_policy", {}).get("call_llm") is False),
+            "llm_called_count": llm_called_count,
+            "llm_skipped_count": llm_skipped_count,
         },
         "segments": segment_graphs,
     }

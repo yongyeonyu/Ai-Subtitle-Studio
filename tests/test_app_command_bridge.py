@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.runtime.logger import get_logger
+import ui.main.app_command_bridge as app_bridge
 from ui.main.app_command_bridge import execute_app_command
 
 
@@ -448,6 +449,7 @@ class AppCommandBridgeTests(unittest.TestCase):
         clearer = getattr(get_logger(), "clear_recent_lines", None)
         if callable(clearer):
             clearer()
+        app_bridge._clear_status_snapshot_cache()
 
     def test_open_project_command_uses_path_based_helper(self):
         owner = _DummyOwner()
@@ -586,6 +588,7 @@ class AppCommandBridgeTests(unittest.TestCase):
     def test_status_command_reports_current_runtime_snapshot(self):
         owner = _DummyOwner()
         owner._current_project_path = "/tmp/project.json"
+        owner._runtime_resource_snapshot = {"rss_gb": 1.25, "pressure_stage": "normal"}
         owner.backend._active = True
         get_logger().log("status log line")
         get_logger().log("🎯 자막 생성 중")
@@ -597,8 +600,53 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["data"]["backend_active"])
         self.assertTrue(result["data"]["editor_open"])
         self.assertEqual(result["data"]["editor_runtime"]["segment_count"], 2)
+        self.assertEqual(result["data"]["runtime_resource"]["rss_gb"], 1.25)
         self.assertIn("status log line", result["data"]["recent_logs"])
         self.assertIn("🎯 자막 생성 중", result["data"]["recent_stage_logs"])
+
+    def test_status_command_reuses_short_ttl_snapshot_for_polling(self):
+        owner = _DummyOwner()
+        with patch("ui.main.app_command_bridge._status_snapshot", wraps=app_bridge._status_snapshot) as snapshot:
+            first = execute_app_command(owner, {"command": "status"})
+            second = execute_app_command(owner, {"command": "status"})
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(snapshot.call_count, 1)
+
+    def test_status_command_uses_logger_combined_tail_helper(self):
+        owner = _DummyOwner()
+        logger = get_logger()
+        logger.log("plain status line")
+        logger.log("🎯 자막 생성 중")
+
+        with patch.object(logger, "recent_lines_and_filtered", wraps=logger.recent_lines_and_filtered) as getter:
+            result = execute_app_command(owner, {"command": "status"})
+
+        self.assertTrue(result["ok"])
+        getter.assert_called_once()
+        self.assertIn("plain status line", result["data"]["recent_logs"])
+        self.assertIn("🎯 자막 생성 중", result["data"]["recent_stage_logs"])
+
+    def test_guided_subtitle_status_reuses_short_ttl_snapshot_for_polling(self):
+        owner = _DummyOwner()
+        with patch("ui.main.app_command_bridge._status_snapshot", wraps=app_bridge._status_snapshot) as snapshot:
+            first = execute_app_command(owner, {"command": "guided-subtitle-status"})
+            second = execute_app_command(owner, {"command": "guided-subtitle-status"})
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(snapshot.call_count, 1)
+
+    def test_state_changing_command_clears_status_cache(self):
+        owner = _DummyOwner()
+        execute_app_command(owner, {"command": "status"})
+        execute_app_command(owner, {"command": "editor-set-playhead", "options": {"sec": 1.5}})
+
+        result = execute_app_command(owner, {"command": "status"})
+
+        self.assertTrue(result["ok"])
+        self.assertAlmostEqual(result["data"]["editor_runtime"]["playhead_sec"], 1.5)
 
     def test_editor_set_playhead_command_updates_editor_runtime(self):
         owner = _DummyOwner()

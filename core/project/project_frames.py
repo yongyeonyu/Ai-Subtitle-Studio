@@ -4,6 +4,7 @@
 
 from collections.abc import Callable
 
+from core.coerce import safe_float as _safe_float, safe_round_int as _safe_int
 from core.frame_time import frame_count, frame_duration, frame_to_sec, normalize_fps, sec_to_frame
 from core.media_info import copy_media_probe_result, probe_media
 from core.project.project_analysis_store import (
@@ -21,6 +22,63 @@ def _get_media_probe(filepath: str, probe_func: ProbeFunc | None = None) -> dict
         return copy_media_probe_result((probe_func or probe_media)(filepath))
     except Exception:
         return {}
+
+
+def _store_probe_hint_row(
+    lookup: dict[str, dict[str, float | int]],
+    item: dict,
+    *,
+    path_key: str,
+    duration_key: str,
+) -> None:
+    if not isinstance(item, dict):
+        return
+    path = str(item.get(path_key) or item.get("source_path") or "")
+    if not path:
+        return
+    hint: dict[str, float | int] = {}
+    duration = _safe_float(item.get(duration_key), 0.0)
+    fps = _safe_float(item.get("fps"), 0.0)
+    width = _safe_int(item.get("width"), 0)
+    height = _safe_int(item.get("height"), 0)
+    if duration > 0.0:
+        hint["duration"] = duration
+    if fps > 0.0:
+        hint["fps"] = normalize_fps(fps)
+    if width > 0:
+        hint["width"] = width
+    if height > 0:
+        hint["height"] = height
+    if not hint:
+        return
+    existing = lookup.get(path)
+    if not isinstance(existing, dict):
+        lookup[path] = hint
+        return
+    for key, value in hint.items():
+        existing.setdefault(key, value)
+
+
+def _stored_probe_hints(project: dict[str, object] | None) -> dict[str, dict[str, float | int]]:
+    lookup: dict[str, dict[str, float | int]] = {}
+    if not isinstance(project, dict):
+        return lookup
+    media_rows = project.get("media")
+    if isinstance(media_rows, list):
+        for item in media_rows:
+            _store_probe_hint_row(lookup, item, path_key="path", duration_key="duration")
+    video = project.get("video")
+    if isinstance(video, dict):
+        for item in list(video.get("clips") or []):
+            _store_probe_hint_row(lookup, item, path_key="path", duration_key="duration_sec")
+    return lookup
+
+
+def _clip_has_timing_fields(clip: dict, hint: dict[str, float | int] | None = None) -> bool:
+    hint = hint if isinstance(hint, dict) else {}
+    fps = _safe_float(clip.get("fps", clip.get("source_frame_rate")), 0.0) or _safe_float(hint.get("fps"), 0.0)
+    duration = _safe_float(clip.get("source_duration"), 0.0) or _safe_float(hint.get("duration"), 0.0)
+    return fps > 0.0 and duration > 0.0
 
 
 def _clip_frame_fields(timeline_start: float, timeline_end: float, fps: float, timeline_fps: float) -> dict:
@@ -186,30 +244,35 @@ def _augment_frame_synced_ranges(rows, primary_fps: float) -> None:
 
 def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None = None):
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
+    probe_hints = _stored_probe_hints(project)
     first_info = {}
     if clips:
         first_path = str(clips[0].get("source_path", "") or "")
-        if not (
-            float(clips[0].get("fps", 0.0) or 0.0) > 0.0
-            and float(clips[0].get("source_duration", 0.0) or 0.0) > 0.0
-        ):
+        first_hint = probe_hints.get(first_path, {})
+        if not _clip_has_timing_fields(clips[0], first_hint):
             first_info = _get_media_probe(first_path, probe_func=probe_func) if first_path else {}
-    primary_fps = normalize_fps((clips[0].get("fps") or first_info.get("fps")) if clips else 30.0)
+        else:
+            first_info = first_hint
+    primary_fps = normalize_fps(
+        (clips[0].get("fps") or clips[0].get("source_frame_rate") or first_info.get("fps"))
+        if clips
+        else 30.0
+    )
 
     for clip in clips:
         path = str(clip.get("source_path", "") or "")
-        needs_probe = bool(path) and not (
-            float(clip.get("fps", 0.0) or 0.0) > 0.0
-            and float(clip.get("source_duration", 0.0) or 0.0) > 0.0
-        )
-        info = _get_media_probe(path, probe_func=probe_func) if needs_probe else {}
-        fps = normalize_fps(clip.get("fps") or info.get("fps") or 30.0)
+        hint = probe_hints.get(path, {})
+        needs_probe = bool(path) and not _clip_has_timing_fields(clip, hint)
+        info = _get_media_probe(path, probe_func=probe_func) if needs_probe else hint
+        fps = normalize_fps(clip.get("fps") or clip.get("source_frame_rate") or hint.get("fps") or info.get("fps") or 30.0)
         start = float(clip.get("timeline_start", 0.0) or 0.0)
         end = float(clip.get("timeline_end", start) or start)
         clip.update(_clip_frame_fields(start, end, fps, primary_fps))
-        clip["source_duration"] = float(clip.get("source_duration", info.get("duration", end - start)) or max(0.0, end - start))
-        clip["width"] = int(clip.get("width", info.get("width", 0)) or 0)
-        clip["height"] = int(clip.get("height", info.get("height", 0)) or 0)
+        clip["source_duration"] = float(
+            clip.get("source_duration") or hint.get("duration") or info.get("duration") or max(0.0, end - start)
+        )
+        clip["width"] = int(clip.get("width") or hint.get("width") or info.get("width") or 0)
+        clip["height"] = int(clip.get("height") or hint.get("height") or info.get("height") or 0)
 
     total_duration = float(project.get("timeline", {}).get("total_duration", 0.0) or 0.0)
     total_frames = frame_count(total_duration, primary_fps)

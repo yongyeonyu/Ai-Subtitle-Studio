@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import core.personalization.lora_store_bundle as bundle_mod
 from core.personalization.lora_models import (
     ExcludedParentheticalRow,
     LearnedRuleEntry,
@@ -770,6 +771,107 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
                 int(payload["bundle_budget"]["estimated_payload_bytes"]),
                 int(payload["bundle_budget"]["soft_max_bytes"]),
             )
+
+    def test_refresh_unified_lora_data_bundle_scans_attachments_without_rglob(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            append_truth_table_rows(
+                [
+                    TruthTableRow(
+                        media_id="attachment-scan",
+                        media_path="/tmp/attachment-scan.mp4",
+                        subtitle_path="/tmp/attachment-scan.srt",
+                        segment_id="attachment-scan:1",
+                        start_sec=0.0,
+                        end_sec=1.0,
+                        raw_ground_truth_text="첨부 스캔 테스트",
+                        speech_training_text="첨부 스캔 테스트",
+                    ).to_record()
+                ],
+                tmpdir,
+            )
+            adapter_file = paths["trained_adapters"] / "personal_text_lora" / "adapter.bin"
+            adapter_file.parent.mkdir(parents=True, exist_ok=True)
+            adapter_file.write_bytes(b"adapter")
+
+            with patch("pathlib.Path.rglob", side_effect=AssertionError("bundle refresh should not materialize attachment rglob results")):
+                result = refresh_unified_lora_data_bundle(tmpdir, force=True)
+
+            self.assertTrue(result["bucket_files"]["high"]["path"])
+            self.assertTrue(Path(result["bucket_files"]["high"]["path"]).exists())
+
+    def test_refresh_unified_lora_data_bundle_reuses_loaded_sources_across_buckets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            append_prompt_trials(
+                [
+                    TrialRecord(
+                        trial_type="prompt",
+                        media_id="source-reuse",
+                        media_path="/tmp/source-reuse.mp4",
+                        subtitle_path="/tmp/source-reuse.srt",
+                        config={"provider": "inherit"},
+                        prompt_template_id="source_reuse",
+                        prompt_text="reuse loaded sources",
+                        status="complete",
+                        score=91.0,
+                    ).to_record()
+                ],
+                tmpdir,
+            )
+            original_read_jsonl = bundle_mod.read_jsonl
+            original_read_json = bundle_mod.read_json
+            jsonl_calls: dict[str, int] = {}
+            json_calls: dict[str, int] = {}
+
+            def _count_jsonl(path, *args, **kwargs):
+                jsonl_calls[str(path)] = jsonl_calls.get(str(path), 0) + 1
+                return original_read_jsonl(path, *args, **kwargs)
+
+            def _count_json(path, *args, **kwargs):
+                json_calls[str(path)] = json_calls.get(str(path), 0) + 1
+                return original_read_json(path, *args, **kwargs)
+
+            with patch("core.personalization.lora_store_bundle.read_jsonl", side_effect=_count_jsonl), \
+                 patch("core.personalization.lora_store_bundle.read_json", side_effect=_count_json):
+                refresh_unified_lora_data_bundle(tmpdir, force=True)
+
+            self.assertEqual(jsonl_calls[str(paths["prompt_trials"])], 1)
+            self.assertEqual(json_calls[str(paths["training_queue"])], 1)
+            self.assertEqual(json_calls[str(paths["retention_policy"])], 1)
+
+    def test_refresh_unified_lora_data_bundle_scans_attachment_tree_once(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            append_truth_table_rows(
+                [
+                    TruthTableRow(
+                        media_id="attachment-once",
+                        media_path="/tmp/attachment-once.mp4",
+                        subtitle_path="/tmp/attachment-once.srt",
+                        segment_id="attachment-once:1",
+                        start_sec=0.0,
+                        end_sec=1.0,
+                        raw_ground_truth_text="첨부는 한 번만 스캔",
+                        speech_training_text="첨부는 한 번만 스캔",
+                    ).to_record()
+                ],
+                tmpdir,
+            )
+            adapter_file = paths["trained_adapters"] / "personal_text_lora" / "adapter.bin"
+            adapter_file.parent.mkdir(parents=True, exist_ok=True)
+            adapter_file.write_bytes(b"adapter")
+
+            with patch(
+                "core.personalization.lora_store_bundle._iter_lora_archive_attachment_files",
+                wraps=bundle_mod._iter_lora_archive_attachment_files,
+            ) as scan_mock:
+                refresh_unified_lora_data_bundle(tmpdir, force=True)
+
+            self.assertEqual(scan_mock.call_count, 1)
 
     def test_delete_pending_lora_data_removes_pending_rows_and_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:

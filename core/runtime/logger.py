@@ -15,8 +15,22 @@ import io
 import threading
 from collections import deque
 from datetime import datetime
+from itertools import islice
+from typing import Callable
 
 from PyQt6.QtCore import QObject, pyqtSignal
+
+
+def _write_internal_error(context: str, exc: BaseException) -> None:
+    try:
+        import sys
+
+        stream = getattr(sys, "__stderr__", None)
+        if stream is None:
+            return
+        stream.write(f"[AppLogger:{context}] {type(exc).__name__}: {exc}\n")
+    except (OSError, RuntimeError, ValueError):
+        return
 
 
 class _LogEmitter(QObject):
@@ -71,8 +85,8 @@ class _TerminalHeaderStream(io.TextIOBase):
                 self._buffer = ""
             try:
                 self._stream.flush()
-            except Exception:
-                pass
+            except (OSError, RuntimeError, ValueError) as exc:
+                _write_internal_error("stream-flush", exc)
 
 
 class AppLogger:
@@ -93,6 +107,10 @@ class AppLogger:
         ("project", ("프로젝트", "project")),
         ("runtime", ("AutoPilot", "runtime", "런타임")),
         ("memory", ("메모리 상태", "GPU", "리소스", "idle timer")),
+    )
+    _STAGE_PATTERNS_LOWER = tuple(
+        (stage, tuple(pattern.lower() for pattern in patterns))
+        for stage, patterns in _STAGE_PATTERNS
     )
 
     def __new__(cls):
@@ -116,8 +134,8 @@ class AppLogger:
         if self._ui_callback:
             try:
                 self._emitter.log_signal.disconnect(self._ui_callback)
-            except Exception:
-                pass
+            except (RuntimeError, TypeError) as exc:
+                _write_internal_error("disconnect-ui-callback", exc)
         self._ui_callback = callback
         self._emitter.log_signal.connect(callback)
 
@@ -125,8 +143,8 @@ class AppLogger:
         if self._ui_callback:
             try:
                 self._emitter.log_signal.disconnect(self._ui_callback)
-            except Exception:
-                pass
+            except (RuntimeError, TypeError) as exc:
+                _write_internal_error("clear-ui-callback", exc)
             self._ui_callback = None
 
     def _now_text(self) -> str:
@@ -155,9 +173,9 @@ class AppLogger:
     def _infer_stage(self, line: str) -> str:
         text = str(line or "")
         lowered = text.lower()
-        for stage, patterns in self._STAGE_PATTERNS:
+        for stage, patterns in self._STAGE_PATTERNS_LOWER:
             for pattern in patterns:
-                if pattern.lower() in lowered:
+                if pattern in lowered:
                     return stage
         return self._DEFAULT_STAGE
 
@@ -189,8 +207,8 @@ class AppLogger:
                 try:
                     target.write(self._format_terminal_line(line, level=level, stage=stage) + "\n")
                     target.flush()
-                except Exception:
-                    pass
+                except (OSError, RuntimeError, ValueError) as exc:
+                    _write_internal_error("terminal-write", exc)
 
     def _emit_terminal(self, msg: str, *, level: str | None = None, stage: str | None = None) -> None:
         self._emit_terminal_lines(self._split_terminal_lines(msg), level=level, stage=stage)
@@ -215,13 +233,42 @@ class AppLogger:
         self._emit_terminal(line, level=level, stage=stage)
         try:
             self._emitter.log_signal.emit(line)
-        except Exception:
-            pass
+        except (RuntimeError, TypeError) as exc:
+            _write_internal_error("emit-ui-log", exc)
 
     def recent_lines(self, limit: int = 40) -> list[str]:
         size = max(1, int(limit or 40))
         with self._recent_lock:
-            return list(self._recent_lines)[-size:]
+            if size >= len(self._recent_lines):
+                return list(self._recent_lines)
+            lines = list(islice(reversed(self._recent_lines), size))
+        lines.reverse()
+        return lines
+
+    def recent_lines_and_filtered(
+        self,
+        *,
+        recent_limit: int = 40,
+        filtered_scan_limit: int = 160,
+        filtered_limit: int = 20,
+        predicate: Callable[[str], bool] | None = None,
+    ) -> tuple[list[str], list[str]]:
+        recent_size = max(1, int(recent_limit or 40))
+        filtered_size = max(1, int(filtered_limit or 20))
+        scan_size = max(recent_size, int(filtered_scan_limit or 160), filtered_size)
+        recent_lines: list[str] = []
+        filtered_lines: list[str] = []
+        with self._recent_lock:
+            for index, line in enumerate(reversed(self._recent_lines)):
+                if index < recent_size:
+                    recent_lines.append(line)
+                if predicate is not None and index < scan_size and len(filtered_lines) < filtered_size and predicate(line):
+                    filtered_lines.append(line)
+                if index + 1 >= scan_size:
+                    break
+        recent_lines.reverse()
+        filtered_lines.reverse()
+        return recent_lines, filtered_lines
 
     def clear_recent_lines(self) -> None:
         with self._recent_lock:

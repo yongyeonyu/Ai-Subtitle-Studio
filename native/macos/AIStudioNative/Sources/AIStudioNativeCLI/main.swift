@@ -168,6 +168,10 @@ func run() throws {
                     response = CutBoundaryCachePlanner.settingsPayload(payload: payload)
                 case "cut_boundary_cache_plan":
                     response = CutBoundaryCachePlanner.plan(payload: payload)
+                case "media_probe_normalize_json":
+                    response = MediaProbeNative.normalize(payload: payload)
+                case "pipeline_status_summary":
+                    response = PipelineStatusNative.summary(payload: payload)
                 default:
                     response = ["error": "Unsupported core task: \(task)"]
                 }

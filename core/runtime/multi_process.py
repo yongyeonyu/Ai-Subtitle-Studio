@@ -519,6 +519,15 @@ def runtime_llm_worker_plan(
     return workers, meta
 
 
+def _snapshot_active_labels(snapshot: dict[str, Any] | None) -> list[Any] | tuple[Any, ...]:
+    labels = snapshot.get("active_labels") if isinstance(snapshot, dict) else None
+    if isinstance(labels, list):
+        return labels
+    if isinstance(labels, tuple):
+        return labels
+    return ()
+
+
 class RuntimeResourceCoordinator:
     def __init__(self, *, settings: dict[str, Any] | None = None, logger: Any = None) -> None:
         self.settings = dict(settings or {})
@@ -548,6 +557,11 @@ class RuntimeResourceCoordinator:
     def latest_snapshot(self) -> dict[str, Any]:
         return dict(self._latest or {})
 
+    def _status_data(self, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+        if isinstance(snapshot, dict) and snapshot:
+            return snapshot
+        return self._latest if isinstance(self._latest, dict) else {}
+
     def poll(self, *, window=None) -> dict[str, Any]:
         now = time.time()
         resource = current_resource_snapshot(self.settings)
@@ -555,7 +569,7 @@ class RuntimeResourceCoordinator:
         if not self._last_disk_usage or (now - self._last_disk_usage_at) >= 60.0:
             self._last_disk_usage = runtime_disk_cache_usage()
             self._last_disk_usage_at = now
-        disk_usage = dict(self._last_disk_usage or {})
+        disk_usage = self._last_disk_usage if isinstance(self._last_disk_usage, dict) else {}
         accelerators = runtime_acceleration_snapshot(self.settings)
         system_cpu = self._sample_system_cpu_percent()
         process_cpu = self._sample_process_cpu_percent()
@@ -583,13 +597,13 @@ class RuntimeResourceCoordinator:
             "resource": resource,
         }
         self._latest = snapshot
-        self._last_snapshot_at = time.time()
+        self._last_snapshot_at = now
         self._write_snapshot(snapshot)
         self._maybe_log(snapshot)
         return dict(snapshot)
 
     def status_html(self, snapshot: dict[str, Any] | None = None) -> str:
-        data = dict(snapshot or self._latest or {})
+        data = self._status_data(snapshot)
         if not data:
             return ""
         return (
@@ -601,7 +615,7 @@ class RuntimeResourceCoordinator:
         )
 
     def status_color(self, snapshot: dict[str, Any] | None = None) -> str:
-        data = dict(snapshot or self._latest or {})
+        data = self._status_data(snapshot)
         stage = str(data.get("pressure_stage", "normal") or "normal")
         return {
             "normal": "#34C759",
@@ -611,10 +625,11 @@ class RuntimeResourceCoordinator:
         }.get(stage, "#34C759")
 
     def status_plain(self, snapshot: dict[str, Any] | None = None) -> str:
-        data = dict(snapshot or self._latest or {})
+        data = self._status_data(snapshot)
         if not data:
             return ""
-        active = ", ".join(str(item) for item in list(data.get("active_labels", []) or [])[:4]) or "idle"
+        active_labels = _snapshot_active_labels(data)
+        active = ", ".join(str(item) for item in active_labels[:4]) or "idle"
         return (
             f"cpu={float(data.get('system_cpu_percent', 0.0)):.0f}% "
             f"proc={float(data.get('process_cpu_percent', 0.0)):.0f}% "
@@ -699,7 +714,7 @@ class RuntimeResourceCoordinator:
         if not _setting_bool(self.settings.get("runtime_monitor_terminal_log_enabled"), False):
             return
         stage = str(snapshot.get("pressure_stage", "normal") or "normal")
-        active_labels = list(snapshot.get("active_labels", []) or [])
+        active_labels = _snapshot_active_labels(snapshot)
         if stage == "normal" and not active_labels:
             return
         now = time.time()

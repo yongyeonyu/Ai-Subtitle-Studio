@@ -47,6 +47,12 @@ def _compact(text: Any) -> str:
     return re.sub(r"[\s\W_]+", "", str(text or ""), flags=re.UNICODE).lower()
 
 
+def _iter_dict_rows(rows: Any) -> Iterable[dict[str, Any]]:
+    for row in (() if rows is None else rows):
+        if isinstance(row, dict):
+            yield row
+
+
 def _similarity(left: Any, right: Any) -> float:
     ltxt = _compact(left)
     rtxt = _compact(right)
@@ -115,9 +121,8 @@ def _candidate_role(candidate_key: str, candidate: dict[str, Any]) -> str:
 
 
 def _words_from_candidate(candidate: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_words = [word for word in list(candidate.get("words") or []) if isinstance(word, dict)]
     words: list[dict[str, Any]] = []
-    for raw in raw_words:
+    for raw in _iter_dict_rows(candidate.get("words")):
         text = _word_text(raw)
         if not text:
             continue
@@ -238,13 +243,13 @@ def collect_stt_lattice_candidates(
             "text": _normalize(segment.get("text")),
             "start": segment.get("start", segment.get("timeline_start")),
             "end": segment.get("end", segment.get("timeline_end")),
-            "words": list(segment.get("words") or []),
+            "words": segment.get("words"),
             "score": segment.get("score") or segment.get("stt_score"),
         }
         add("current", current, "CURRENT")
     for candidate_key in STT_LATTICE_CANDIDATE_KEYS:
         fallback_source = "MANUAL" if "manual" in candidate_key else "STT"
-        for candidate in list(segment.get(candidate_key) or []):
+        for candidate in _iter_dict_rows(segment.get(candidate_key)):
             add(candidate_key, candidate, fallback_source)
             if limit is not None and limit > 0 and len(out) >= limit:
                 return out
@@ -270,7 +275,13 @@ def _segment_id(segment: dict[str, Any], index: int) -> str:
 
 
 def _candidate_for_artifact(candidate: dict[str, Any], *, word_limit: int = 128) -> dict[str, Any]:
-    words = [dict(word) for word in list(candidate.get("words") or []) if isinstance(word, dict)]
+    max_words = max(1, int(word_limit or 1))
+    compact_words: list[dict[str, Any]] = []
+    word_count = 0
+    for word in _iter_dict_rows(candidate.get("words")):
+        word_count += 1
+        if len(compact_words) < max_words:
+            compact_words.append(word)
     compact = {
         "candidate_index": candidate.get("candidate_index"),
         "candidate_key": str(candidate.get("candidate_key") or ""),
@@ -296,9 +307,9 @@ def _candidate_for_artifact(candidate: dict[str, Any], *, word_limit: int = 128)
     ):
         if key in candidate:
             compact[key] = _json_safe(candidate.get(key))
-    if words:
-        compact["words"] = _json_safe(words[: max(1, int(word_limit or 1))], max_depth=5)
-        compact["word_count"] = len(words)
+    if compact_words:
+        compact["words"] = _json_safe(compact_words, max_depth=5)
+        compact["word_count"] = word_count
     return compact
 
 
@@ -312,19 +323,23 @@ def build_stt_lattice_artifact(
     settings = dict(settings or {})
     candidate_limit = int(_safe_float(settings.get("stt_lattice_artifact_candidate_limit"), 64))
     word_limit = int(_safe_float(settings.get("stt_lattice_artifact_word_limit"), 128))
-    rows = [dict(row) for row in list(segments or []) if isinstance(row, dict) and not row.get("is_gap")]
+    rows = [row for row in _iter_dict_rows(segments) if not row.get("is_gap")]
     role_counts: dict[str, int] = {}
     source_counts: dict[str, int] = {}
     segment_rows: list[dict[str, Any]] = []
     accepted_count = 0
+    total_candidate_count = 0
 
     for index, segment in enumerate(rows):
         candidates = collect_stt_lattice_candidates(segment, include_current=True, limit=max(1, candidate_limit))
+        candidate_role_counts: dict[str, int] = {}
         for candidate in candidates:
             role = str(candidate.get("candidate_role") or "unknown")
             source = str(candidate.get("source") or "unknown").upper()
             role_counts[role] = role_counts.get(role, 0) + 1
+            candidate_role_counts[role] = candidate_role_counts.get(role, 0) + 1
             source_counts[source] = source_counts.get(source, 0) + 1
+            total_candidate_count += 1
         policy = dict(segment.get("_stt_lattice_policy") or {})
         if policy.get("accepted"):
             accepted_count += 1
@@ -344,11 +359,7 @@ def build_stt_lattice_artifact(
                 "selector_policy": _json_safe(policy),
                 "candidate_lattice": [_candidate_for_artifact(candidate, word_limit=word_limit) for candidate in candidates],
                 "candidate_count": len(candidates),
-                "candidate_role_counts": {
-                    role: sum(1 for candidate in candidates if str(candidate.get("candidate_role") or "") == role)
-                    for role in sorted({str(candidate.get("candidate_role") or "") for candidate in candidates})
-                    if role
-                },
+                "candidate_role_counts": {role: candidate_role_counts[role] for role in sorted(candidate_role_counts)},
             }
         )
 
@@ -364,7 +375,7 @@ def build_stt_lattice_artifact(
         "project_path": str(project_path or ""),
         "segment_count": len(segment_rows),
         "summary": {
-            "candidate_count": sum(row.get("candidate_count", 0) for row in segment_rows),
+            "candidate_count": total_candidate_count,
             "accepted_count": accepted_count,
             "role_counts": role_counts,
             "source_counts": source_counts,

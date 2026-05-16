@@ -168,6 +168,7 @@ warnings.filterwarnings(
 )
 
 from core.runtime import config
+from core.automation.app_command_protocol import build_command_payload, send_command_to_app
 from core.automation.app_command_server import LocalAppCommandServer
 
 if getattr(config, "MACBOOK_ONLY_APP", False) and not getattr(config, "IS_MAC", False):
@@ -191,10 +192,10 @@ except Exception:
 configure_qt_gpu_rendering_before_app()
 
 from PyQt6.QtCore import QTimer, qInstallMessageHandler
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication
 from core.runtime.logger import get_logger
 from ui.button_feedback import install_button_click_feedback
-from ui.dialogs.message_box import install_qmessagebox_hooks, show_message
+from ui.dialogs.message_box import install_qmessagebox_hooks
 
 try:
     get_logger().install_stream_capture()
@@ -222,6 +223,14 @@ def _qt_message_handler(mode, context, message):
 
 _instance_socket = None
 
+
+def _activate_existing_instance() -> None:
+    try:
+        send_command_to_app(build_command_payload("show-home"), timeout_sec=0.35)
+    except Exception:
+        pass
+
+
 def check_single_instance():
     """프로그램 중복 실행을 완벽하게 차단하는 함수"""
     global _instance_socket, _instance_command_server
@@ -231,15 +240,16 @@ def check_single_instance():
         _instance_command_server = LocalAppCommandServer(_instance_socket)
         _instance_command_server.start()
     except socket.error:
-        QApplication.instance() or QApplication(sys.argv)
-        show_message(
-            None,
-            "중복 실행 방지",
-            f"{config.APP_NAME}가 이미 실행 중입니다.\n기존에 열려있는 창을 확인해 주세요.",
-            icon=QMessageBox.Icon.Warning,
-            buttons=QMessageBox.StandardButton.Ok,
-            default=QMessageBox.StandardButton.Ok,
-        )
+        try:
+            _instance_socket.close()
+        except Exception:
+            pass
+        _instance_socket = None
+        _activate_existing_instance()
+        try:
+            sys.stderr.write(f"{config.APP_NAME} is already running; duplicate launcher exiting.\n")
+        except Exception:
+            pass
         sys.exit(0)
 
 
@@ -346,6 +356,12 @@ def main():
     def _shutdown_runtime_in_order():
         global _QT_APP_SHUTTING_DOWN
         _QT_APP_SHUTTING_DOWN = True
+        schedule_forced_exit = getattr(win, "_schedule_forced_exit_for_busy_about_to_quit", None)
+        if callable(schedule_forced_exit):
+            try:
+                schedule_forced_exit()
+            except Exception:
+                pass
         cleanup_runtime = getattr(win, "_start_runtime_cleanup_for_app_exit_async", None)
         if callable(cleanup_runtime):
             cleanup_runtime(timeout_sec=0.08 if getattr(config, "IS_MAC", False) else 0.15)

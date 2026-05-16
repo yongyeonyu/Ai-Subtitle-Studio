@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 from core.runtime import config
 from core.settings import load_settings, save_settings
 from core.path_manager import load_settings as _path_load_settings, save_settings as _path_save_settings
-from core.pipeline_status import generation_stage_label, generation_stage_summary
+from core.pipeline_status import generation_stage_keys, generation_stage_keys_all, generation_stage_label, generation_stage_summary
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
     apply_recommended_stt_quality_defaults,
@@ -1162,12 +1162,7 @@ class HomeSidebarMixin:
             if widget is None:
                 continue
             try:
-                if hasattr(widget, "toPlainText"):
-                    text = str(widget.toPlainText() or "")
-                elif hasattr(widget, "text"):
-                    text = str(widget.text() or "")
-                else:
-                    text = ""
+                text = self._sidebar_terminal_raw_text(widget)
                 if text:
                     parts.append(text[-16000:])
             except RuntimeError:
@@ -1187,21 +1182,124 @@ class HomeSidebarMixin:
                         parts.append(str(label.text() or ""))
                 except RuntimeError:
                     pass
+        parts.extend(self._pipeline_queue_probe_parts())
+        return "\n".join(parts)
+
+    def _sidebar_terminal_raw_text(self, widget) -> str:
+        if widget is None:
+            return ""
+        raw_getter = getattr(widget, "raw_log_text", None)
+        if callable(raw_getter):
+            try:
+                return str(raw_getter() or "")
+            except Exception:
+                return ""
+        if hasattr(widget, "toPlainText"):
+            return str(widget.toPlainText() or "")
+        if hasattr(widget, "text"):
+            return str(widget.text() or "")
+        return ""
+
+    def _pipeline_queue_probe_parts(self) -> list[str]:
         queue_probe = getattr(self, "queue_status_probe_parts", None)
         if callable(queue_probe):
             try:
-                parts.extend(str(part or "") for part in list(queue_probe(0, (0, 2, 4)) or []) if str(part or ""))
+                return [
+                    str(part or "")
+                    for part in list(queue_probe(0, (0, 2, 4)) or [])
+                    if str(part or "")
+                ]
             except Exception:
-                pass
-        else:
-            cache = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
-            if cache:
-                item = dict(cache[0] or {})
-                for key in ("statusRaw", "infoRaw", "etaRaw"):
-                    value = str(item.get(key, "") or "")
-                    if value:
-                        parts.append(value)
+                return []
+        cache = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+        if not cache:
+            return []
+        item = dict(cache[0] or {})
+        parts: list[str] = []
+        for key in ("statusRaw", "infoRaw", "etaRaw"):
+            value = str(item.get(key, "") or "")
+            if value:
+                parts.append(value)
+        return parts
+
+    def _pipeline_recent_log_blob(self, *, line_limit: int = 18) -> str:
+        widget = getattr(self, "log_text", None)
+        if widget is None:
+            return ""
+        try:
+            text = self._sidebar_terminal_raw_text(widget)
+        except RuntimeError:
+            return ""
+        if not text:
+            return ""
+        normalized = str(text).replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+        lines = [line.strip() for line in normalized.splitlines() if str(line or "").strip()]
+        if not lines:
+            return ""
+        return "\n".join(lines[-max(1, int(line_limit or 18)):])
+
+    def _pipeline_runtime_stage_blob(self) -> str:
+        parts: list[str] = []
+        recent_log = self._pipeline_recent_log_blob()
+        if recent_log:
+            parts.append(recent_log)
+        editor = self._active_editor()
+        if editor is not None:
+            for attr in ("status_label", "status_lbl"):
+                label = getattr(editor, attr, None)
+                if label is None:
+                    continue
+                try:
+                    if hasattr(label, "text"):
+                        value = str(label.text() or "")
+                    else:
+                        value = ""
+                except RuntimeError:
+                    value = ""
+                if value:
+                    parts.append(value)
         return "\n".join(parts)
+
+    def _pipeline_current_stage_cluster(self, keys: set[str]) -> set[str]:
+        active = set(keys or set())
+        if active & {"stt1", "stt2", "subtitle_llm", "vad", "lora", "deep_learning"}:
+            return {"stt1", "stt2", "subtitle_llm", "vad", "lora", "deep_learning"}
+        if active & {"audio", "cut_boundary"}:
+            return {"audio", "cut_boundary"}
+        if active & {"preprocess"}:
+            return {"preprocess"}
+        return active
+
+    def _pipeline_runtime_stage_keys(self, *, stt_ensemble_enabled: bool) -> set[str]:
+        blob = self._pipeline_runtime_stage_blob()
+        if not blob:
+            return set()
+        normalized = str(blob or "").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+        lines = [line.strip() for line in normalized.splitlines() if str(line or "").strip()]
+        if not lines:
+            return set()
+
+        latest_keys: set[str] = set()
+        for line in reversed(lines):
+            keys = generation_stage_keys(line, stt_ensemble_enabled=stt_ensemble_enabled)
+            if keys:
+                latest_keys = set(keys)
+                break
+        if not latest_keys:
+            return set()
+
+        cluster = self._pipeline_current_stage_cluster(latest_keys)
+        active_keys: set[str] = set()
+        for line in reversed(lines):
+            keys = generation_stage_keys(line, stt_ensemble_enabled=stt_ensemble_enabled)
+            if not keys:
+                continue
+            if keys & cluster:
+                active_keys.update(keys & cluster)
+                continue
+            if active_keys:
+                break
+        return active_keys or latest_keys
 
     def _pipeline_cached_stage_keys(self, blob: str) -> set[str]:
         text = str(blob or "").lower()
@@ -1336,14 +1434,30 @@ class HomeSidebarMixin:
         if not self._is_subtitle_generation_running():
             return set()
 
+        stt_ensemble_enabled = bool(settings.get("stt_ensemble_enabled", False))
+        queue_blob = "\n".join(self._pipeline_queue_probe_parts())
+        if queue_blob:
+            keys = generation_stage_keys_all(
+                queue_blob,
+                stt_ensemble_enabled=stt_ensemble_enabled,
+            )
+            if keys:
+                return keys
+
+        keys = self._pipeline_runtime_stage_keys(
+            stt_ensemble_enabled=stt_ensemble_enabled,
+        )
+        if keys:
+            return keys
+
         blob = self._pipeline_status_blob()
         stage_summary = generation_stage_summary(
             blob,
-            stt_ensemble_enabled=bool(settings.get("stt_ensemble_enabled", False)),
+            stt_ensemble_enabled=stt_ensemble_enabled,
         )
-        keys = set(stage_summary["all_keys"])
+        keys = set(stage_summary["keys"])
         if not keys:
-            keys = set(stage_summary["keys"])
+            keys = set(stage_summary["all_keys"])
         return keys
 
     def _pipeline_completed_stage_keys(self, settings: dict, current_keys: set[str]) -> set[str]:

@@ -8,13 +8,16 @@ import time
 import tracemalloc
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from core.performance import atomic_write_json, current_resource_snapshot
 from core.runtime import config
 
 _DISK_USAGE_CACHE_MAX_AGE_SEC = 15.0
 _RUNTIME_DISK_USAGE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+_RUNTIME_DISK_ROOT_INDEX_MAX_AGE_SEC = 90.0
+_RUNTIME_DISK_ROOT_INDEX: dict[str, dict[str, Any]] = {}
+_DiskFileEntry = tuple[float, int, str]
 
 
 def process_rss_bytes() -> int:
@@ -45,8 +48,10 @@ def runtime_memory_monitor_dir() -> Path:
 
 def default_runtime_disk_cache_paths() -> list[Path]:
     output_dir = Path(config.OUTPUT_DIR)
+    dataset_dir = Path(config.DATASET_DIR)
     temp_dir = Path(tempfile.gettempdir())
     paths = [
+        dataset_dir / "video_preview_cache",
         output_dir / ".media_probe_cache",
         output_dir / "cut_boundary_cache",
         output_dir / "waveform_cache",
@@ -78,29 +83,17 @@ def runtime_disk_cache_usage(paths: list[str | Path] | None = None) -> dict[str,
     file_count = 0
     directories: list[dict[str, Any]] = []
     for root in roots:
-        if not root.exists():
-            directories.append({"path": str(root), "exists": False, "bytes": 0, "files": 0})
-            continue
-        if root.is_file():
-            size = max(0, int(root.stat().st_size or 0))
-            total_bytes += size
-            file_count += 1
-            directories.append({"path": str(root), "exists": True, "bytes": size, "files": 1})
-            continue
-        dir_bytes = 0
-        dir_files = 0
-        for child in root.rglob("*"):
-            try:
-                if not child.is_file():
-                    continue
-                size = max(0, int(child.stat().st_size or 0))
-            except Exception:
-                continue
-            dir_bytes += size
-            dir_files += 1
-        total_bytes += dir_bytes
-        file_count += dir_files
-        directories.append({"path": str(root), "exists": True, "bytes": dir_bytes, "files": dir_files})
+        root_entry = _runtime_disk_root_entry(root, now=now)
+        size = int(root_entry.get("bytes", 0) or 0)
+        files = int(root_entry.get("files", 0) or 0)
+        total_bytes += size
+        file_count += files
+        directories.append({
+            "path": str(root),
+            "exists": bool(root_entry.get("exists", False)),
+            "bytes": size,
+            "files": files,
+        })
     result = {
         "paths": [str(root) for root in roots],
         "total_bytes": total_bytes,
@@ -112,6 +105,283 @@ def runtime_disk_cache_usage(paths: list[str | Path] | None = None) -> dict[str,
     return dict(result)
 
 
+def _directory_usage(root: Path) -> tuple[int, int]:
+    total_bytes = 0
+    file_count = 0
+    for _mtime, size, _path in _iter_directory_file_entries(root):
+        total_bytes += size
+        file_count += 1
+    return total_bytes, file_count
+
+
+def _iter_directory_file_entries(root: Path) -> Iterator[_DiskFileEntry]:
+    stack = [str(root)]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        stat = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    yield (
+                        float(stat.st_mtime or 0.0),
+                        max(0, int(stat.st_size or 0)),
+                        entry.path,
+                    )
+        except OSError:
+            continue
+
+
+def _iter_runtime_cache_file_entries(roots: list[Path]) -> Iterator[_DiskFileEntry]:
+    for root in roots:
+        root_entry = _runtime_disk_root_entry(root)
+        if not bool(root_entry.get("exists", False)):
+            continue
+        if bool(root_entry.get("is_file", False)):
+            for path_text, (mtime, size) in (root_entry.get("entries") or {}).items():
+                yield (float(mtime or 0.0), max(0, int(size or 0)), path_text)
+            continue
+        for path_text, (mtime, size) in (root_entry.get("entries") or {}).items():
+            yield (float(mtime or 0.0), max(0, int(size or 0)), path_text)
+
+
+def _runtime_cache_total_bytes(roots: list[Path]) -> int:
+    total_bytes = 0
+    for root in roots:
+        total_bytes += int(_runtime_disk_root_entry(root).get("bytes", 0) or 0)
+    return total_bytes
+
+
+def _invalidate_runtime_disk_usage_cache(roots: list[Path]) -> None:
+    root_keys: set[str] = set()
+    for root in roots:
+        root_keys.add(str(root))
+        try:
+            root_keys.add(str(root.expanduser().resolve(strict=False)))
+        except OSError:
+            pass
+    for cache_key in list(_RUNTIME_DISK_USAGE_CACHE.keys()):
+        if any(part in root_keys for part in cache_key):
+            _RUNTIME_DISK_USAGE_CACHE.pop(cache_key, None)
+
+
+def _runtime_disk_root_key(root: Path) -> str:
+    try:
+        return str(root.expanduser().resolve(strict=False))
+    except OSError:
+        return str(root.expanduser())
+
+
+def _scan_runtime_disk_root(root: Path, *, now: float | None = None) -> dict[str, Any]:
+    root = Path(root).expanduser()
+    now = float(now if now is not None else time.time())
+    key = _runtime_disk_root_key(root)
+    if not root.exists():
+        entry = {
+            "root": str(root),
+            "exists": False,
+            "bytes": 0,
+            "files": 0,
+            "entries": {},
+            "is_file": False,
+            "scanned_at": now,
+        }
+        _RUNTIME_DISK_ROOT_INDEX[key] = entry
+        return entry
+    if root.is_file():
+        try:
+            stat = root.stat()
+        except OSError:
+            entry = {
+                "root": str(root),
+                "exists": False,
+                "bytes": 0,
+                "files": 0,
+                "entries": {},
+                "is_file": False,
+                "scanned_at": now,
+            }
+            _RUNTIME_DISK_ROOT_INDEX[key] = entry
+            return entry
+        path_text = str(root)
+        entry = {
+            "root": path_text,
+            "exists": True,
+            "bytes": max(0, int(stat.st_size or 0)),
+            "files": 1,
+            "entries": {path_text: (float(stat.st_mtime or 0.0), max(0, int(stat.st_size or 0)))},
+            "is_file": True,
+            "scanned_at": now,
+        }
+        _RUNTIME_DISK_ROOT_INDEX[key] = entry
+        return entry
+    file_entries: dict[str, tuple[float, int]] = {}
+    total_bytes = 0
+    file_count = 0
+    for mtime, size, path_text in _iter_directory_file_entries(root):
+        file_entries[path_text] = (mtime, size)
+        total_bytes += size
+        file_count += 1
+    entry = {
+        "root": str(root),
+        "exists": True,
+        "bytes": total_bytes,
+        "files": file_count,
+        "entries": file_entries,
+        "is_file": False,
+        "scanned_at": now,
+    }
+    _RUNTIME_DISK_ROOT_INDEX[key] = entry
+    return entry
+
+
+def _runtime_disk_root_entry(
+    root: Path,
+    *,
+    now: float | None = None,
+    force_rescan: bool = False,
+) -> dict[str, Any]:
+    key = _runtime_disk_root_key(root)
+    cached = _RUNTIME_DISK_ROOT_INDEX.get(key)
+    now = float(now if now is not None else time.time())
+    if (
+        force_rescan
+        or cached is None
+        or (now - float(cached.get("scanned_at", 0.0) or 0.0)) >= _RUNTIME_DISK_ROOT_INDEX_MAX_AGE_SEC
+    ):
+        return _scan_runtime_disk_root(root, now=now)
+    return cached
+
+
+def _runtime_cache_root_for_path(path: Path, roots: list[Path] | None = None) -> Path | None:
+    candidates = roots or default_runtime_disk_cache_paths()
+    try:
+        target = str(path.expanduser().resolve(strict=False))
+    except OSError:
+        target = str(path.expanduser())
+    for root in candidates:
+        try:
+            root_text = str(root.expanduser().resolve(strict=False))
+        except OSError:
+            root_text = str(root.expanduser())
+        if target == root_text or target.startswith(root_text + os.sep):
+            return root
+    return None
+
+
+def _runtime_root_entries(root_entry: dict[str, Any]) -> dict[str, tuple[float, int]]:
+    entries = root_entry.get("entries")
+    if isinstance(entries, dict):
+        return entries
+    fresh: dict[str, tuple[float, int]] = {}
+    root_entry["entries"] = fresh
+    return fresh
+
+
+def register_runtime_cache_path(
+    path: str | Path,
+    *,
+    root: str | Path | None = None,
+    size_bytes: int | None = None,
+) -> None:
+    target = Path(path).expanduser()
+    root_path = Path(root).expanduser() if root is not None else _runtime_cache_root_for_path(target)
+    if root_path is None:
+        return
+    now = time.time()
+    root_entry = _runtime_disk_root_entry(root_path, now=now)
+    path_text = str(target)
+    try:
+        stat = target.stat()
+        new_size = max(0, int(size_bytes if size_bytes is not None else (stat.st_size or 0)))
+        new_mtime = float(stat.st_mtime or now)
+    except OSError:
+        return
+    old_mtime, old_size = (0.0, 0)
+    entries = _runtime_root_entries(root_entry)
+    old_entry = entries.get(path_text)
+    if old_entry is not None:
+        old_mtime, old_size = old_entry
+    if bool(root_entry.get("is_file", False)):
+        root_entry["exists"] = True
+        root_entry["bytes"] = new_size
+        root_entry["files"] = 1
+        root_entry["entries"] = {path_text: (new_mtime, new_size)}
+        root_entry["scanned_at"] = now
+        _invalidate_runtime_disk_usage_cache([root_path])
+        return
+    if path_text not in entries:
+        root_entry["files"] = int(root_entry.get("files", 0) or 0) + 1
+    root_entry["bytes"] = int(root_entry.get("bytes", 0) or 0) - int(old_size or 0) + new_size
+    entries[path_text] = (new_mtime, new_size)
+    root_entry["entries"] = entries
+    root_entry["exists"] = True
+    root_entry["scanned_at"] = now
+    _RUNTIME_DISK_ROOT_INDEX[_runtime_disk_root_key(root_path)] = root_entry
+    _invalidate_runtime_disk_usage_cache([root_path])
+
+
+def unregister_runtime_cache_path(
+    path: str | Path,
+    *,
+    root: str | Path | None = None,
+    size_bytes: int | None = None,
+) -> None:
+    target = Path(path).expanduser()
+    root_path = Path(root).expanduser() if root is not None else _runtime_cache_root_for_path(target)
+    if root_path is None:
+        return
+    root_entry = _runtime_disk_root_entry(root_path)
+    path_text = str(target)
+    entries = _runtime_root_entries(root_entry)
+    old_entry = entries.pop(path_text, None)
+    old_size = int(old_entry[1] if old_entry is not None else (size_bytes or 0))
+    if bool(root_entry.get("is_file", False)):
+        root_entry["exists"] = False
+        root_entry["bytes"] = 0
+        root_entry["files"] = 0
+        root_entry["entries"] = {}
+        root_entry["scanned_at"] = time.time()
+        _RUNTIME_DISK_ROOT_INDEX[_runtime_disk_root_key(root_path)] = root_entry
+        _invalidate_runtime_disk_usage_cache([root_path])
+        return
+    if old_entry is None and size_bytes is None:
+        _invalidate_runtime_disk_usage_cache([root_path])
+        return
+    root_entry["entries"] = entries
+    root_entry["bytes"] = max(0, int(root_entry.get("bytes", 0) or 0) - old_size)
+    if old_entry is not None:
+        root_entry["files"] = max(0, int(root_entry.get("files", 0) or 0) - 1)
+    root_entry["scanned_at"] = time.time()
+    _RUNTIME_DISK_ROOT_INDEX[_runtime_disk_root_key(root_path)] = root_entry
+    _invalidate_runtime_disk_usage_cache([root_path])
+
+
+def runtime_disk_cache_budget_bytes(settings: dict[str, Any] | None = None) -> int:
+    data = dict(settings or {})
+    default_gb = float(getattr(config, "DEFAULT_ADV_SETTINGS", {}).get("runtime_memory_disk_cache_budget_gb", 12.0) or 12.0)
+    total_gb = float(data.get("runtime_memory_disk_cache_budget_gb", default_gb) or default_gb)
+    return max(256 * 1024 * 1024, int(total_gb * (1024 ** 3)))
+
+
+def scaled_runtime_cache_budget_bytes(
+    *,
+    ratio: float,
+    minimum_bytes: int,
+    maximum_bytes: int,
+    settings: dict[str, Any] | None = None,
+) -> int:
+    scaled = int(runtime_disk_cache_budget_bytes(settings) * max(0.0, float(ratio or 0.0)))
+    return max(int(minimum_bytes), min(int(maximum_bytes), scaled))
+
+
 def prune_runtime_disk_caches(
     *,
     paths: list[str | Path] | None = None,
@@ -119,38 +389,32 @@ def prune_runtime_disk_caches(
 ) -> dict[str, Any]:
     target_total_bytes = max(0, int(target_total_bytes or 0))
     roots = [Path(p) for p in (paths or default_runtime_disk_cache_paths())]
-    file_entries: list[tuple[float, int, Path]] = []
-    total_bytes = 0
-    for root in roots:
-        if not root.exists():
-            continue
-        candidates = [root] if root.is_file() else list(root.rglob("*"))
-        for child in candidates:
-            try:
-                if not child.is_file():
-                    continue
-                stat = child.stat()
-            except Exception:
-                continue
-            size = max(0, int(stat.st_size or 0))
-            total_bytes += size
-            file_entries.append((float(stat.st_mtime or 0.0), size, child))
+    total_bytes = _runtime_cache_total_bytes(roots)
+    if total_bytes <= target_total_bytes:
+        return {
+            "removed_files": 0,
+            "removed_bytes": 0,
+            "remaining_bytes": max(0, total_bytes),
+            "target_total_bytes": target_total_bytes,
+        }
+    file_entries: list[_DiskFileEntry] = list(_iter_runtime_cache_file_entries(roots))
+    total_bytes = sum(size for _mtime, size, _path in file_entries)
 
     removed_files = 0
     removed_bytes = 0
     if total_bytes > target_total_bytes:
-        for _mtime, size, path in sorted(file_entries, key=lambda item: (item[0], item[2].name)):
+        for _mtime, size, path in sorted(file_entries, key=lambda item: (item[0], os.path.basename(item[2]))):
             if total_bytes <= target_total_bytes:
                 break
             try:
-                path.unlink()
-            except Exception:
+                os.unlink(path)
+            except OSError:
                 continue
             total_bytes -= size
             removed_files += 1
             removed_bytes += size
-    for cache_key in {tuple(str(root) for root in roots), tuple(str(root.resolve()) if root.exists() else str(root) for root in roots)}:
-        _RUNTIME_DISK_USAGE_CACHE.pop(cache_key, None)
+            unregister_runtime_cache_path(path, size_bytes=size)
+    _invalidate_runtime_disk_usage_cache(roots)
     return {
         "removed_files": removed_files,
         "removed_bytes": removed_bytes,
@@ -567,7 +831,11 @@ __all__ = [
     "default_runtime_disk_cache_paths",
     "process_rss_bytes",
     "prune_runtime_disk_caches",
+    "register_runtime_cache_path",
+    "runtime_disk_cache_budget_bytes",
     "runtime_disk_cache_usage",
     "runtime_memory_monitor_dir",
+    "scaled_runtime_cache_budget_bytes",
     "trim_runtime_memory_caches",
+    "unregister_runtime_cache_path",
 ]

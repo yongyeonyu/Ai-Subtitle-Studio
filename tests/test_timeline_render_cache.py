@@ -344,6 +344,7 @@ class TimelineRenderCacheTests(unittest.TestCase):
 
             def fake_detection(segments, vad_segments, gap_segments, total_duration):
                 seen["segments"] = list(segments)
+                seen["segments_ref"] = segments
                 return [{"start": 10.0, "end": 13.0, "kind": "speech", "label": "음성", "color": "#34C759"}]
 
             with patch("ui.timeline.timeline_analysis.subtitle_detection_segments_for_editor", side_effect=fake_detection):
@@ -354,9 +355,18 @@ class TimelineRenderCacheTests(unittest.TestCase):
                     [],
                     [],
                 )
+                cached_markers = canvas.visible_voice_activity_segments_cached(
+                    9.5,
+                    13.5,
+                    visible_segments,
+                    [],
+                    [],
+                )
 
             self.assertEqual(seen["segments"], visible_segments)
+            self.assertIs(seen["segments_ref"], visible_segments)
             self.assertEqual(len(markers), 1)
+            self.assertIs(markers, cached_markers)
         finally:
             canvas.close()
 

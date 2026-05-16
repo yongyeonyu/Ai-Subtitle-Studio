@@ -19,15 +19,30 @@ from core.native_json import loads_json_output, read_json_path
 from core.performance import atomic_write_json, ffprobe_worker_count, media_probe_cache_dir
 from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 
+try:
+    from core.native_swift_media_info import normalize_probe_json_via_swift
+except Exception:
+    normalize_probe_json_via_swift = None  # type: ignore[assignment]
+
 _CACHE_SCHEMA = 1
 _MEDIA_PROBE_MEM_CACHE_MAX = 384
+_FINGERPRINT_MEM_CACHE_MAX = 384
 _MEM_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_FINGERPRINT_CACHE: "OrderedDict[str, tuple[int, int, str, Path]]" = OrderedDict()
 _MEM_CACHE_LOCK = threading.RLock()
 _DEFAULT_RESULT = {
     "duration": 0.0,
     "width": 0,
     "height": 0,
     "fps": 0.0,
+    "bit_rate": 0,
+    "pix_fmt": "",
+    "color_space": "",
+    "color_transfer": "",
+    "color_primaries": "",
+    "codec_name": "",
+    "profile": "",
+    "bits_per_raw_sample": 0,
     "info_txt": "오디오 파일",
     "len_txt": "-",
 }
@@ -49,9 +64,23 @@ def copy_media_probe_result(info: Any, *, use_defaults: bool = False) -> dict:
 
 def _fingerprint(filepath: str) -> tuple[str, Path] | tuple[None, None]:
     try:
-        Path(filepath).expanduser().stat()
+        path = Path(filepath).expanduser()
+        stat = path.stat()
+        cache_key = str(path.resolve())
+        stat_key = (int(getattr(stat, "st_mtime_ns", 0) or 0), int(stat.st_size or 0))
+        with _MEM_CACHE_LOCK:
+            cached = _FINGERPRINT_CACHE.get(cache_key)
+            if cached is not None and cached[0] == stat_key[0] and cached[1] == stat_key[1]:
+                _FINGERPRINT_CACHE.move_to_end(cache_key)
+                return cached[2], cached[3]
         digest = media_fingerprint_digest(filepath, sample_bytes=512 * 1024, include_samples=True)
-        return digest, media_probe_cache_dir() / f"{digest}.json"
+        cache_path = media_probe_cache_dir() / f"{digest}.json"
+        with _MEM_CACHE_LOCK:
+            _FINGERPRINT_CACHE[cache_key] = (stat_key[0], stat_key[1], digest, cache_path)
+            _FINGERPRINT_CACHE.move_to_end(cache_key)
+            while len(_FINGERPRINT_CACHE) > _FINGERPRINT_MEM_CACHE_MAX:
+                _FINGERPRINT_CACHE.popitem(last=False)
+        return digest, cache_path
     except Exception:
         return None, None
 
@@ -78,6 +107,18 @@ def _duration_text(duration: float) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+def _normalize_probe_output_text(output_text: Any) -> dict:
+    text = str(output_text or "")
+    if normalize_probe_json_via_swift is not None and text:
+        try:
+            native = normalize_probe_json_via_swift(text)
+        except Exception:
+            native = None
+        if isinstance(native, dict):
+            return native
+    return _normalize_probe_payload(loads_json_output(text, default={}))
+
+
 def _normalize_probe_payload(payload: Any) -> dict:
     result = _default_result()
     if not isinstance(payload, dict):
@@ -85,6 +126,7 @@ def _normalize_probe_payload(payload: Any) -> dict:
     fmt = payload.get("format")
     fmt_dict = fmt if isinstance(fmt, dict) else {}
     duration = _safe_float(fmt_dict.get("duration"), 0.0)
+    result["bit_rate"] = max(0, _safe_int(fmt_dict.get("bit_rate"), 0))
 
     streams = payload.get("streams")
     stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
@@ -93,10 +135,18 @@ def _normalize_probe_payload(payload: Any) -> dict:
             duration = _safe_float(stream.get("duration"), 0.0)
         width = max(0, _safe_int(stream.get("width"), 0))
         height = max(0, _safe_int(stream.get("height"), 0))
-        fps = _parse_fps(stream.get("r_frame_rate"))
+        fps = _parse_fps(stream.get("r_frame_rate")) or _parse_fps(stream.get("avg_frame_rate"))
         result["width"] = width
         result["height"] = height
         result["fps"] = fps
+        result["bit_rate"] = max(0, _safe_int(stream.get("bit_rate"), _safe_int(fmt_dict.get("bit_rate"), 0)))
+        result["pix_fmt"] = str(stream.get("pix_fmt", "") or "").strip()
+        result["color_space"] = str(stream.get("color_space", "") or "").strip()
+        result["color_transfer"] = str(stream.get("color_transfer", "") or "").strip()
+        result["color_primaries"] = str(stream.get("color_primaries", "") or "").strip()
+        result["codec_name"] = str(stream.get("codec_name", "") or "").strip()
+        result["profile"] = str(stream.get("profile", "") or "").strip()
+        result["bits_per_raw_sample"] = max(0, _safe_int(stream.get("bits_per_raw_sample"), 0))
         if width and height:
             result["info_txt"] = f"{width}x{height} ({fps:.2f}fps)"
 
@@ -224,7 +274,7 @@ def _ffprobe_command(filepath: str) -> list[str]:
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=width,height,r_frame_rate:format=duration",
+        "stream=width,height,r_frame_rate,avg_frame_rate,bit_rate,pix_fmt,color_space,color_transfer,color_primaries,codec_name,profile,bits_per_raw_sample:format=duration,bit_rate",
         "-of",
         "json",
         filepath,
@@ -233,7 +283,7 @@ def _ffprobe_command(filepath: str) -> list[str]:
 
 def probe_media(filepath: str, *, use_cache: bool = True) -> dict:
     """
-    Returns: {duration, width, height, fps, info_txt, len_txt}
+    Returns: {duration, width, height, fps, bit_rate, pix_fmt, color_space, color_transfer, color_primaries, codec_name, profile, bits_per_raw_sample, info_txt, len_txt}
     """
     cache_key, cache_path = _fingerprint(filepath) if use_cache else (None, None)
     if cache_key and cache_path:
@@ -252,7 +302,7 @@ def probe_media(filepath: str, *, use_cache: bool = True) -> dict:
             timeout=5,
             **hidden_subprocess_kwargs(),
         )
-        result = _normalize_probe_payload(loads_json_output(proc.stdout, default={}))
+        result = _normalize_probe_output_text(proc.stdout)
     except Exception:
         result = _default_result()
     if cache_key and cache_path and result.get("duration", 0.0) > 0:

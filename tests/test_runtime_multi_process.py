@@ -546,6 +546,21 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(data["pressure_stage"], "exit")
         self.assertTrue(data["exit_mode"])
 
+    def test_runtime_resource_coordinator_latest_snapshot_stays_defensive_copy(self):
+        coordinator = RuntimeResourceCoordinator(settings={}, logger=None)
+        coordinator._latest = {
+            "pressure_stage": "normal",
+            "active_labels": ["pipeline"],
+            "rss_gb": 1.25,
+        }
+
+        snapshot = coordinator.latest_snapshot()
+        snapshot["pressure_stage"] = "critical"
+        snapshot["active_labels"] = ["mutated"]
+
+        self.assertEqual(coordinator._latest["pressure_stage"], "normal")
+        self.assertEqual(coordinator._latest["active_labels"], ["pipeline"])
+
     def test_runtime_acceleration_snapshot_reports_enabled_backends(self):
         hardware = {
             "accelerators": {"metal": True, "neural_engine_path": "/tmp/ane"},

@@ -168,6 +168,22 @@ class STTLatticeTests(unittest.TestCase):
         self.assertEqual(artifact["summary"]["role_counts"]["manual_re_recognition"], 1)
         self.assertEqual(artifact["segments"][0]["candidate_count"], 4)
 
+    def test_build_lattice_artifact_does_not_mutate_input_segment(self):
+        segment = {
+            "id": "seg_a",
+            "start": 0.0,
+            "end": 1.0,
+            "text": "기본",
+            "words": [{"word": "기본", "start": 0.0, "end": 0.5}],
+            "stt_candidates": [{"source": "STT1", "text": "기본", "words": [{"word": "기본", "start": 0.0, "end": 0.5}]}],
+            "_stt_lattice_policy": {"accepted": True, "confidence": 0.8},
+        }
+        original = json.loads(json.dumps(segment, ensure_ascii=False))
+
+        build_stt_lattice_artifact([segment], {"stt_lattice_artifact_candidate_limit": 16})
+
+        self.assertEqual(segment, original)
+
     def test_project_metadata_and_artifact_preserve_lattice_after_save(self):
         segment = {
             "id": "seg_lattice",

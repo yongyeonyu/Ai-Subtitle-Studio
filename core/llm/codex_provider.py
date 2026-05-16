@@ -36,8 +36,9 @@ _OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
-_DEFAULT_CODEX_SPLIT_EFFORT = "minimal"
+_DEFAULT_CODEX_SPLIT_EFFORT = "low"
 _DEFAULT_CODEX_JSON_EFFORT = "low"
+_MINIMAL_EFFORT_TOOL_CONFLICT_SEEN = False
 
 def is_codex_model(model_name: str) -> bool:
     text = str(model_name or "").strip()
@@ -214,6 +215,23 @@ def _command(codex_bin: str, schema_path: Path | None, output_path: Path, *, eff
     return cmd
 
 
+def _minimal_effort_tool_conflict(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return (
+        "reasoning.effort 'minimal'" in lowered
+        and "tools cannot be used" in lowered
+    )
+
+
+def _effort_attempts(effort: str) -> list[str]:
+    normalized = str(effort or "").strip()
+    if normalized.lower() != "minimal":
+        return [normalized] if normalized else []
+    if _MINIMAL_EFFORT_TOOL_CONFLICT_SEEN:
+        return ["low"]
+    return [normalized, "low"]
+
+
 def _run_codex_json_task(
     model_name: str,
     prompt: str,
@@ -233,39 +251,51 @@ def _run_codex_json_task(
         if isinstance(schema, dict):
             schema_path = tmpdir / "schema.json"
             schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
-        cmd = _command(codex_bin, schema_path, output_path, effort=_effort(task_kind))
         env = os.environ.copy()
         env.setdefault("NO_COLOR", "1")
-        try:
-            proc = run_subprocess_capture(
-                cmd,
-                input_text=task_prompt,
-                cwd=str(tmpdir),
-                env=env,
-                timeout=_timeout(timeout),
-                retries=_retry_count(),
-                retry_backoff_sec=_retry_backoff_sec(),
+        global _MINIMAL_EFFORT_TOOL_CONFLICT_SEEN
+        efforts = _effort_attempts(_effort(task_kind))
+        last_detail = ""
+        for attempt_index, current_effort in enumerate(efforts):
+            attempt_output_path = (
+                output_path if len(efforts) == 1 else tmpdir / f"last_message_{attempt_index}.json"
             )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("Codex CLI 실행 시간이 초과되었습니다.") from exc
-        except OSError as exc:
-            raise RuntimeError(f"Codex CLI 실행에 실패했습니다: {exc}") from exc
+            cmd = _command(codex_bin, schema_path, attempt_output_path, effort=current_effort)
+            try:
+                proc = run_subprocess_capture(
+                    cmd,
+                    input_text=task_prompt,
+                    cwd=str(tmpdir),
+                    env=env,
+                    timeout=_timeout(timeout),
+                    retries=_retry_count(),
+                    retry_backoff_sec=_retry_backoff_sec(),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("Codex CLI 실행 시간이 초과되었습니다.") from exc
+            except OSError as exc:
+                raise RuntimeError(f"Codex CLI 실행에 실패했습니다: {exc}") from exc
 
-        stdout = str(proc.stdout or "")
-        stderr = str(proc.stderr or "")
-        if proc.returncode != 0:
-            detail = (stderr or stdout or "no output").strip()[:800]
-            raise RuntimeError(f"Codex CLI 인증 또는 실행에 실패했습니다: {detail}")
+            stdout = str(proc.stdout or "")
+            stderr = str(proc.stderr or "")
+            if proc.returncode != 0:
+                last_detail = (stderr or stdout or "no output").strip()
+                if current_effort != efforts[-1] and _minimal_effort_tool_conflict(last_detail):
+                    _MINIMAL_EFFORT_TOOL_CONFLICT_SEEN = True
+                    continue
+                detail = last_detail[:800]
+                raise RuntimeError(f"Codex CLI 인증 또는 실행에 실패했습니다: {detail}")
 
-        output_text = ""
-        try:
-            if output_path.exists():
-                output_text = output_path.read_text(encoding="utf-8", errors="replace").strip()
-        except Exception:
             output_text = ""
-        if not output_text:
-            output_text = stdout.strip()
-        return output_text
+            try:
+                if attempt_output_path.exists():
+                    output_text = attempt_output_path.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                output_text = ""
+            if not output_text:
+                output_text = stdout.strip()
+            return output_text
+        raise RuntimeError(f"Codex CLI 인증 또는 실행에 실패했습니다: {last_detail[:800] or 'no output'}")
 
 
 def split_text(model_name: str, prompt: str, timeout: int = 120) -> list[str] | None:

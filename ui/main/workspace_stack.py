@@ -5,7 +5,7 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QStackedWidget
 
-from ui.style import app_stylesheet
+from ui.style import app_stylesheet, named_panel_style
 
 
 class MainWorkspaceStack(QStackedWidget):
@@ -17,5 +17,5 @@ class MainWorkspaceStack(QStackedWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
             app_stylesheet()
-            + "#MainWorkspaceStack { background: #11181C; border: none; border-radius: 0px; }"
+            + named_panel_style("MainWorkspaceStack", "sidebar", radius=7)
         )

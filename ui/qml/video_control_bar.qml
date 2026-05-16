@@ -39,18 +39,6 @@ Rectangle {
     }
 
     TextMetrics {
-        id: infoTextMetrics
-        font: infoTextItem.font
-        text: root.infoText
-    }
-
-    TextMetrics {
-        id: sourceTextMetrics
-        font: sourceText.font
-        text: root.sourceNameText
-    }
-
-    TextMetrics {
         id: frameTextMetrics
         font: frameTextItem.font
         text: root.frameText
@@ -213,10 +201,9 @@ Rectangle {
 
         Rectangle {
             id: infoBadge
-            visible: root.infoText.length > 0
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            width: visible ? Math.min(280, Math.ceil(infoTextMetrics.boundingRect.width) + 26) : 0
+            width: Math.max(0, Math.floor((parent.width - 6) / 2))
             height: 32
             radius: 9
             color: "#1A2127"
@@ -234,17 +221,16 @@ Rectangle {
                 color: "#A9B0B7"
                 font.pixelSize: 10
                 elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
             }
         }
 
         Rectangle {
             id: sourceBadge
-            visible: root.sourceNameText.length > 0
-            anchors.left: infoBadge.visible ? infoBadge.right : parent.left
-            anchors.leftMargin: infoBadge.visible ? 6 : 0
+            anchors.left: infoBadge.right
+            anchors.leftMargin: 6
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            width: visible ? Math.max(0, parent.width - (infoBadge.visible ? infoBadge.width + 6 : 0)) : 0
             height: 32
             radius: 9
             color: "#182126"
@@ -264,6 +250,7 @@ Rectangle {
                 font.bold: true
                 elide: Text.ElideRight
                 horizontalAlignment: Text.AlignRight
+                verticalAlignment: Text.AlignVCenter
             }
         }
     }

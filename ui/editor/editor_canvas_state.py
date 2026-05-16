@@ -20,7 +20,7 @@ class EditorCanvasStateMixin:
             return 0.0
 
     def _loaded_canvas_state_fps(self, segments: list[dict] | None = None) -> float:
-        for seg in list(segments or []):
+        for seg in ([] if segments is None else segments):
             if not isinstance(seg, dict):
                 continue
             frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
@@ -59,7 +59,7 @@ class EditorCanvasStateMixin:
         if stt_preview_segments is not None:
             self._live_stt_preview_segments = [
                 dict(seg)
-                for seg in list(stt_preview_segments or [])
+                for seg in stt_preview_segments
                 if isinstance(seg, dict)
             ]
 
@@ -78,7 +78,7 @@ class EditorCanvasStateMixin:
         voice_activity_segments: list[dict] | None = None,
         stt_preview_segments: list[dict] | None = None,
     ) -> list[dict]:
-        ordered = list(segments or [])
+        ordered = list([] if segments is None else segments)
         if hasattr(self, "_normalize_multiclip_segment_order"):
             ordered = self._normalize_multiclip_segment_order(ordered)
         else:

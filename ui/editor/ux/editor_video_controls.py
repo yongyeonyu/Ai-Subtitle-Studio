@@ -84,6 +84,8 @@ class EditorVideoControlsMixin:
         height = int(info.get("height", 0) or 0)
         raw_aspect = (width / height) if width > 0 and height > 0 else 16 / 9
         self._video_preview_aspect = (16 / 9) if raw_aspect >= 1.25 else 1.0
+        if hasattr(self, "video_player") and hasattr(self.video_player, "apply_source_media_probe"):
+            self.video_player.apply_source_media_probe(path, info)
 
     def _schedule_deferred_video_probe(self, path: str, *, delay_ms: int = 120) -> None:
         token = object()

@@ -174,9 +174,14 @@ def _project_file_path(project: dict[str, Any] | None) -> str:
     return ""
 
 
+def _iter_project_rows(rows: Any):
+    if rows is None:
+        return ()
+    return rows
+
+
 def copy_project_rows(rows: Any) -> list[dict[str, Any]]:
-    source_rows = rows if isinstance(rows, list) else list(rows or [])
-    return [dict(row) for row in source_rows if isinstance(row, dict)]
+    return [dict(row) for row in _iter_project_rows(rows) if isinstance(row, dict)]
 
 
 def copy_project_track_rows(tracks: Any) -> dict[str, list[dict[str, Any]]]:
@@ -188,6 +193,22 @@ def copy_project_track_rows(tracks: Any) -> dict[str, list[dict[str, Any]]]:
         if copied:
             out[str(source)] = copied
     return out
+
+
+def copy_project_track_rows_with_counts(
+    tracks: Any,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int]]:
+    if not isinstance(tracks, dict):
+        return {}, {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    counts: dict[str, int] = {}
+    for source, rows in tracks.items():
+        copied = copy_project_rows(rows)
+        if copied:
+            source_key = str(source)
+            out[source_key] = copied
+            counts[source_key] = len(copied)
+    return out, counts
 
 
 def stt_candidate_track_counts(tracks: Any, *, count_key: str = "segment_count") -> dict[str, int]:
@@ -208,7 +229,7 @@ def stt_candidate_track_counts(tracks: Any, *, count_key: str = "segment_count")
 
 def _track_metadata_rows(track: dict[str, Any]) -> list[Any]:
     metadata = track.get("metadata")
-    return list(metadata) if isinstance(metadata, list) else []
+    return metadata if isinstance(metadata, list) else []
 
 
 def _inferred_track_path(project: dict[str, Any] | None, key: str) -> str:
@@ -387,7 +408,7 @@ def _stt_track_row_score(row: dict[str, Any]) -> float:
 
 
 def sanitize_stt_track_rows(
-    rows: list[dict[str, Any]] | None,
+    rows: Any,
     *,
     source: str = "",
     primary_fps: float = 30.0,
@@ -400,7 +421,7 @@ def sanitize_stt_track_rows(
     same normalized text so reopening a project never erodes the candidate set.
     """
     cleaned: list[tuple[int, dict[str, Any]]] = []
-    for idx, row in enumerate(rows or []):
+    for idx, row in enumerate(_iter_project_rows(rows)):
         if not isinstance(row, dict) or row.get("is_gap"):
             continue
         text = strip_whisper_control_tokens(str(row.get("text", "") or ""))
@@ -539,10 +560,30 @@ def compact_segment_metadata(
     return meta
 
 
-def write_srt_track(rows: list[dict[str, Any]], srt_path: str) -> dict[str, Any]:
+def _materialize_project_rows(rows: Any) -> list[Any]:
+    if isinstance(rows, list):
+        return rows
+    return list(() if rows is None else rows)
+
+
+def _write_srt_entry(handle, serial: int, start: float, end: float, text: str) -> None:
+    handle.write(f"{serial}\n")
+    handle.write(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}\n")
+    handle.write(text)
+    handle.write("\n\n")
+
+
+def write_srt_track(
+    rows: list[dict[str, Any]],
+    srt_path: str,
+    *,
+    metadata_source: str = "",
+    metadata_default_fps: float | None = None,
+) -> dict[str, Any]:
     os.makedirs(os.path.dirname(os.path.abspath(srt_path)), exist_ok=True)
+    source_rows = _materialize_project_rows(rows)
     inferred_fps = None
-    for row in list(rows or []):
+    for row in source_rows:
         if not isinstance(row, dict):
             continue
         frame_range = row.get("frame_range")
@@ -563,40 +604,43 @@ def write_srt_track(rows: list[dict[str, Any]], srt_path: str) -> dict[str, Any]
         if inferred_fps is not None:
             break
     prepared_rows = (
-        normalize_segments_to_frame_grid(rows, inferred_fps, min_frames=1, preserve_order=True)
+        normalize_segments_to_frame_grid(source_rows, inferred_fps, min_frames=1, preserve_order=True)
         if inferred_fps is not None
-        else copy_project_rows(rows)
+        else copy_project_rows(source_rows)
     )
-    lines: list[str] = []
     serial = 1
     persisted: list[dict[str, Any]] = []
-    for row in prepared_rows:
-        if not isinstance(row, dict) or row.get("is_gap"):
-            continue
-        text = strip_whisper_control_tokens(str(row.get("text", "") or "")).replace(".", "")
-        if not text:
-            continue
-        start = _segment_start(row)
-        end = _segment_end(row)
-        if end <= start:
-            end = start + 0.1
-        lines.extend(
-            [
-                str(serial),
-                f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}",
-                text,
-                "",
-            ]
-        )
-        persisted.append({**row, "start": start, "end": end, "text": text})
-        serial += 1
+    metadata: list[dict[str, Any]] | None = [] if metadata_default_fps is not None else None
     with open(srt_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines))
+        for row in prepared_rows:
+            if not isinstance(row, dict) or row.get("is_gap"):
+                continue
+            text = strip_whisper_control_tokens(str(row.get("text", "") or "")).replace(".", "")
+            if not text:
+                continue
+            start = _segment_start(row)
+            end = _segment_end(row)
+            if end <= start:
+                end = start + 0.1
+            _write_srt_entry(handle, serial, start, end, text)
+            persisted_row = {**row, "start": start, "end": end, "text": text}
+            persisted.append(persisted_row)
+            if metadata is not None:
+                metadata.append(
+                    compact_segment_metadata(
+                        persisted_row,
+                        serial,
+                        source=metadata_source,
+                        default_fps=float(metadata_default_fps or 30.0),
+                    )
+                )
+            serial += 1
     return {
         "path": srt_path,
         "count": len(persisted),
         "signature": _track_signature(persisted),
         "size_bytes": os.path.getsize(srt_path) if os.path.exists(srt_path) else 0,
+        "metadata": metadata if metadata is not None else [],
         "rows": persisted,
     }
 
@@ -615,14 +659,14 @@ def _track_manifest(project_path: str, key: str, srt_info: dict[str, Any], metad
 
 
 def _merge_srt_metadata(
-    rows: list[dict[str, Any]],
+    rows: Any,
     metadata: list[Any],
     *,
     source: str = "",
     primary_fps: float = 30.0,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for idx, row in enumerate(rows or []):
+    for idx, row in enumerate(_iter_project_rows(rows)):
         if not isinstance(row, dict):
             continue
         item = dict(row)
@@ -656,14 +700,18 @@ def _track_from_project(project: dict[str, Any], key: str) -> dict[str, Any]:
     asset_storage = project.get("asset_storage", {}) if isinstance(project.get("asset_storage"), dict) else {}
     tracks = asset_storage.get("tracks", {}) if isinstance(asset_storage.get("tracks"), dict) else {}
     track = tracks.get(key)
-    if isinstance(track, dict):
+    if isinstance(track, dict) and track:
         return track
     if key == _FINAL_TRACK:
         direct = subtitles.get("external_track")
-        if isinstance(direct, dict):
+        if isinstance(direct, dict) and direct:
             return direct
         external_tracks = subtitles.get("external_tracks")
-        if isinstance(external_tracks, dict) and isinstance(external_tracks.get(_FINAL_TRACK), dict):
+        if (
+            isinstance(external_tracks, dict)
+            and isinstance(external_tracks.get(_FINAL_TRACK), dict)
+            and external_tracks.get(_FINAL_TRACK)
+        ):
             return external_tracks[_FINAL_TRACK]
     inferred = _inferred_track_ref(project, key)
     return inferred if inferred else {}
@@ -680,6 +728,11 @@ def _track_ref(track: dict[str, Any]) -> dict[str, Any]:
 def _track_rows_from_write_result(result: dict[str, Any] | None) -> list[dict[str, Any]]:
     rows = result.get("rows") if isinstance(result, dict) else None
     return rows if isinstance(rows, list) else []
+
+
+def _track_metadata_from_write_result(result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    metadata = result.get("metadata") if isinstance(result, dict) else None
+    return metadata if isinstance(metadata, list) else []
 
 
 def _external_stt_track_payload(stt_external_tracks: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
@@ -826,7 +879,7 @@ def externalize_project_text_assets(
     os.makedirs(subtitle_dir, exist_ok=True)
     primary_fps = _project_primary_fps(project)
     final_segments = normalize_segments_to_frame_grid(
-        list(final_segments or []),
+        final_segments,
         primary_fps,
         min_frames=1,
         preserve_order=True,
@@ -834,12 +887,13 @@ def externalize_project_text_assets(
     stt_tracks = dict(stt_tracks or {})
 
     tracks_manifest: dict[str, Any] = {}
-    final_info = write_srt_track(final_segments, os.path.join(subtitle_dir, "final.srt"))
+    final_info = write_srt_track(
+        final_segments,
+        os.path.join(subtitle_dir, "final.srt"),
+        metadata_default_fps=primary_fps,
+    )
     final_rows = _track_rows_from_write_result(final_info)
-    final_metadata = [
-        compact_segment_metadata(row, idx + 1, default_fps=primary_fps)
-        for idx, row in enumerate(final_rows)
-    ]
+    final_metadata = _track_metadata_from_write_result(final_info)
     final_track = _track_manifest(project_path, _FINAL_TRACK, final_info, final_metadata)
     tracks_manifest[_FINAL_TRACK] = final_track
     project["_hot_open_subtitle_segments_cache"] = final_rows
@@ -848,19 +902,21 @@ def externalize_project_text_assets(
     stt_external_tracks: dict[str, Any] = {}
     for source in ("STT1", "STT2"):
         rows = sanitize_stt_track_rows(
-            list(stt_tracks.get(source) or []),
+            stt_tracks.get(source),
             source=source,
             primary_fps=primary_fps,
         )
         if not rows:
             continue
         key = f"{_STT_TRACK_PREFIX}{source.lower()}"
-        info = write_srt_track(rows, os.path.join(subtitle_dir, f"{source.lower()}.srt"))
+        info = write_srt_track(
+            rows,
+            os.path.join(subtitle_dir, f"{source.lower()}.srt"),
+            metadata_source=source,
+            metadata_default_fps=primary_fps,
+        )
         persisted_rows = _track_rows_from_write_result(info)
-        metadata = [
-            compact_segment_metadata(row, idx + 1, source=source, default_fps=primary_fps)
-            for idx, row in enumerate(persisted_rows)
-        ]
+        metadata = _track_metadata_from_write_result(info)
         track = _track_manifest(project_path, key, info, metadata)
         track["source"] = source
         tracks_manifest[key] = track
@@ -937,6 +993,7 @@ __all__ = [
     "PROJECT_TEXT_ASSET_SCHEMA",
     "copy_project_rows",
     "copy_project_track_rows",
+    "copy_project_track_rows_with_counts",
     "externalize_project_text_assets",
     "hydrate_project_text_asset_cache",
     "load_external_stt_tracks",

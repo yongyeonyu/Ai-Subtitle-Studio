@@ -1,0 +1,97 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from core.project.project_assets import copy_project_rows, externalize_project_text_assets, write_srt_track
+
+
+class _StreamingRows:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __bool__(self):
+        raise AssertionError("streaming rows should not be truth-tested")
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class ProjectAssetsTests(unittest.TestCase):
+    def test_copy_project_rows_accepts_streaming_rows_without_truth_testing(self):
+        rows = _StreamingRows([{"text": "a"}, "skip", {"text": "b"}])
+
+        copied = copy_project_rows(rows)
+        copied[0]["text"] = "changed"
+
+        self.assertEqual([row["text"] for row in copied], ["changed", "b"])
+        self.assertEqual(rows._rows[0]["text"], "a")
+
+    def test_write_srt_track_reuses_single_materialized_stream_for_fps_inference(self):
+        rows = _StreamingRows(
+            [
+                {"start": 0.0, "end": 1.0, "text": "첫 자막", "timeline_frame_rate": 30.0},
+                {"start": 1.0, "end": 2.0, "text": "둘째 자막", "timeline_frame_rate": 30.0},
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "track.srt"
+
+            info = write_srt_track(rows, str(path))
+
+            text = path.read_text(encoding="utf-8")
+        self.assertEqual(info["count"], 2)
+        self.assertIn("첫 자막", text)
+        self.assertIn("둘째 자막", text)
+
+    def test_write_srt_track_can_return_compact_metadata_in_same_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "track.srt"
+
+            info = write_srt_track(
+                [{"start": 0.0, "end": 1.0, "text": "메타데이터", "speaker": "00"}],
+                str(path),
+                metadata_source="STT1",
+                metadata_default_fps=30.0,
+            )
+
+        self.assertEqual(info["count"], 1)
+        self.assertEqual(info["metadata"][0]["source"], "STT1")
+        self.assertTrue(info["metadata"][0]["text_hash"])
+
+    def test_externalize_project_text_assets_accepts_streaming_rows_without_truth_testing(self):
+        final_rows = _StreamingRows(
+            [
+                {"start": 0.02, "end": 1.08, "text": "최종", "timeline_frame_rate": 30.0},
+            ]
+        )
+        stt_rows = _StreamingRows(
+            [
+                {"start": 0.03, "end": 1.04, "text": "후보", "speaker": "00"},
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project.json"
+            project = {
+                "project_path": str(project_path),
+                "subtitles": {},
+                "editor_state": {"stt": {"candidate_tracks": {}}},
+                "analysis": {},
+            }
+
+            externalize_project_text_assets(
+                str(project_path),
+                project,
+                final_segments=final_rows,
+                stt_tracks={"STT1": stt_rows},
+            )
+
+            final_srt = (Path(tmp) / "project.assets" / "subtitles" / "final.srt").read_text(encoding="utf-8")
+            stt_srt = (Path(tmp) / "project.assets" / "subtitles" / "stt1.srt").read_text(encoding="utf-8")
+
+        self.assertIn("최종", final_srt)
+        self.assertIn("후보", stt_srt)
+
+
+if __name__ == "__main__":
+    unittest.main()

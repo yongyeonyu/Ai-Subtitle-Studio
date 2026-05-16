@@ -4,13 +4,23 @@ from typing import Any
 
 from core.project.project_assets import (
     copy_project_rows,
-    copy_project_track_rows,
+    copy_project_track_rows_with_counts,
     stt_candidate_track_counts,
 )
 
 VOICE_ACTIVITY_SCHEMA = "subtitle_detection.v1"
 STT_CANDIDATE_TRACK_SCHEMA = "stt_candidate_tracks.v1"
 VOICE_ACTIVITY_OPTIONAL_KEYS = ("score", "priority", "alpha", "selection_state", "selected_source")
+
+
+def _iter_rows(rows: Any):
+    if rows is None:
+        return ()
+    return rows
+
+
+def _dict_rows_list(rows: Any) -> list[dict[str, Any]]:
+    return [row for row in _iter_rows(rows) if isinstance(row, dict)]
 
 
 def ensure_project_analysis_store(project: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -37,7 +47,7 @@ def store_project_voice_activity_segments(
     timebase: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     analysis, _editor_analysis = ensure_project_analysis_store(project)
-    stored_rows = copy_project_rows(rows) if copy_rows else [row for row in list(rows or []) if isinstance(row, dict)]
+    stored_rows = copy_project_rows(rows) if copy_rows else _dict_rows_list(rows)
     analysis["voice_activity_schema"] = schema
     analysis["voice_activity_segments"] = stored_rows
     if isinstance(timebase, dict):
@@ -81,7 +91,7 @@ def normalize_project_voice_activity_segments(
     priority_as_int: bool = False,
 ) -> list[dict[str, Any]]:
     normalized_rows: list[dict[str, Any]] = []
-    for idx, item in enumerate(rows or []):
+    for idx, item in enumerate(_iter_rows(rows)):
         if not isinstance(item, dict):
             continue
         normalized = normalize_project_voice_activity_segment(item, idx)
@@ -127,8 +137,13 @@ def store_project_stt_candidate_tracks(
     if not isinstance(candidate_tracks, dict) or not candidate_tracks:
         return {}
     analysis, _editor_analysis = ensure_project_analysis_store(project)
-    stored_tracks = copy_project_track_rows(candidate_tracks) if copy_tracks else candidate_tracks
+    counts: dict[str, int]
+    if copy_tracks:
+        stored_tracks, counts = copy_project_track_rows_with_counts(candidate_tracks)
+    else:
+        stored_tracks = candidate_tracks
+        counts = stt_candidate_track_counts(stored_tracks)
     analysis["stt_candidate_schema"] = schema
     analysis["stt_candidate_tracks"] = stored_tracks
-    analysis["stt_candidate_counts"] = stt_candidate_track_counts(stored_tracks)
+    analysis["stt_candidate_counts"] = counts
     return stored_tracks

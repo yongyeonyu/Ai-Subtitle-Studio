@@ -6,12 +6,10 @@ ui/video_player_widget.py - PyQt6 비디오 플레이어
 """
 import os
 import json
-import hashlib
 import subprocess
 import tempfile
 import time
 import threading
-from bisect import bisect_right
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSizePolicy, QStackedWidget)
@@ -23,10 +21,11 @@ from core.runtime import config
 from core.frame_time import build_frame_time_map, normalize_fps, sec_to_floor_frame, snap_sec_to_frame
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail, thumbnail_cache_path
-from core.video_preview_proxy import preview_proxy_path_for
+from core.video_preview_proxy import preview_proxy_path_for, register_preview_proxy_created
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
 from ui.editor.video_playback_backend import create_video_backend
 from ui.editor.video_player_overlay_mixin import VideoPlayerOverlayMixin
+from ui.editor.video_player_subtitles import VideoPlayerSubtitleMixin
 from ui.editor.video_overlay_widgets import (
     ThumbnailLabel,
     SubtitleLabel,
@@ -132,7 +131,7 @@ class _WorkerProxy:
             refresh_subtitle=False,
         )
 
-class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
+class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidget):
     frame_step_requested = pyqtSignal(int)
     scan_cut_requested = pyqtSignal(int)
     initial_thumbnail_ready = pyqtSignal(str, str)
@@ -187,6 +186,9 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
         self._last_unprimed_thumbnail_at: float = 0.0
         self._last_unprimed_thumbnail_sec: float | None = None
         self._source_display_name: str = ""
+        self._source_media_info: dict[str, object] = {}
+        self._source_info_status_text: str = "영상 정보를 불러오는 중..."
+        self._source_preview_label: str = ""
         self._initial_thumbnail_request_key: str = ""
         self._proxy_build_proc = None
         self._proxy_build_src: str = ""
@@ -561,32 +563,55 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
         )
         ctrl_layout.addWidget(self.frame_count_label)
 
-        ctrl_layout.addStretch()
+        ctrl_layout.addSpacing(12)
 
-        self.info_label = _MirrorLabel("영상을 불러오는 중...")
-        self.info_label.setWordWrap(True)
-        self.info_label.setMaximumHeight(34)
-        self.info_label.setStyleSheet("color: #A9B0B7; font-size: 10px; background: transparent; border: none;")
-        ctrl_layout.addWidget(self.info_label)
+        self.status_info_container = QWidget(ctrl)
+        self.status_info_container.setObjectName("VideoStatusInfoContainer")
+        self.status_info_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.status_info_container.setFixedHeight(32)
+        status_layout = QHBoxLayout(self.status_info_container)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(6)
 
-        self.source_name_label = _MirrorLabel(ctrl)
+        self.info_label = _MirrorLabel("영상 정보를 불러오는 중...")
+        self.info_label.setObjectName("VideoSourceMetaLabel")
+        self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.info_label.setWordWrap(False)
+        self.info_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.info_label.setMinimumHeight(32)
+        self.info_label.setStyleSheet(
+            "QLabel#VideoSourceMetaLabel {"
+            " color: #A9B0B7;"
+            " background: #1A2127;"
+            " border: 1px solid #2D3942;"
+            " border-radius: 9px;"
+            " padding: 0 12px;"
+            " font-size: 10px;"
+            "}"
+        )
+        status_layout.addWidget(self.info_label, 1)
+
+        self.source_name_label = _MirrorLabel("")
         self.source_name_label.setObjectName("VideoSourceNameLabel")
         self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.source_name_label.setWordWrap(False)
         self.source_name_label.setMinimumWidth(0)
-        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.source_name_label.setMinimumHeight(32)
         self.source_name_label.setStyleSheet(
             "QLabel#VideoSourceNameLabel {"
             " color: #EAF2F8;"
-            " background: transparent;"
-            " border: none;"
-            " padding: 0;"
+            " background: #182126;"
+            " border: 1px solid #2F4852;"
+            " border-radius: 9px;"
+            " padding: 0 12px;"
             " font-size: 10px;"
             " font-weight: 700;"
             "}"
         )
-        self.source_name_label.hide()
-        ctrl_layout.addWidget(self.source_name_label)
+        status_layout.addWidget(self.source_name_label, 1)
+
+        ctrl_layout.addWidget(self.status_info_container, 1)
         return ctrl
 
     def _build_ui(self):
@@ -603,6 +628,8 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
             label.text_changed.connect(self._sync_quick_control_bar)
             label.visible_changed.connect(self._sync_quick_control_bar)
         self._quick_control_bar = self._create_quick_control_bar(ctrl)
+        self._refresh_source_info_label()
+        self._refresh_source_name_label()
         self._sync_quick_control_bar()
 
         layout.addWidget(ctrl)
@@ -729,6 +756,109 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
             QPushButton:pressed {{ background: #1D2329; }}
         """
 
+    def _format_probe_fps(self, fps_value) -> str:
+        try:
+            fps = float(fps_value or 0.0)
+        except Exception:
+            fps = 0.0
+        if fps <= 0.0:
+            return ""
+        return f"{fps:.2f}".rstrip("0").rstrip(".") + "fps"
+
+    def _format_probe_bitrate(self, bit_rate_value) -> str:
+        try:
+            bit_rate = int(bit_rate_value or 0)
+        except Exception:
+            bit_rate = 0
+        if bit_rate <= 0:
+            return ""
+        if bit_rate >= 1_000_000:
+            return f"{bit_rate / 1_000_000.0:.1f}".rstrip("0").rstrip(".") + "Mbps"
+        if bit_rate >= 1_000:
+            return f"{bit_rate / 1_000.0:.0f}kbps"
+        return f"{bit_rate}bps"
+
+    def _format_probe_color_info(self, info: dict | None) -> str:
+        info = dict(info or {})
+        pix_fmt = str(info.get("pix_fmt", "") or "").strip()
+        primaries = str(info.get("color_primaries", "") or "").strip()
+        color_space = str(info.get("color_space", "") or "").strip()
+        transfer = str(info.get("color_transfer", "") or "").strip()
+        tokens: list[str] = []
+        if pix_fmt:
+            tokens.append(pix_fmt)
+        for value in (primaries, color_space, transfer):
+            if value and value not in tokens:
+                tokens.append(value)
+            if len(tokens) >= 3:
+                break
+        if not tokens:
+            return ""
+        return " ".join(tokens)
+
+    def _format_source_media_summary(self) -> str:
+        info = dict(getattr(self, "_source_media_info", {}) or {})
+        parts: list[str] = []
+        preview_label = str(getattr(self, "_source_preview_label", "") or "").strip()
+        if preview_label:
+            parts.append(preview_label)
+        width = int(info.get("width", 0) or 0)
+        height = int(info.get("height", 0) or 0)
+        if width > 0 and height > 0:
+            parts.append(f"{width}x{height}")
+        fps_text = self._format_probe_fps(info.get("fps", 0.0))
+        if fps_text:
+            parts.append(fps_text)
+        color_text = self._format_probe_color_info(info)
+        if color_text:
+            parts.append(color_text)
+        bitrate_text = self._format_probe_bitrate(info.get("bit_rate", 0))
+        if bitrate_text:
+            parts.append(bitrate_text)
+        return " | ".join(part for part in parts if part)
+
+    def _refresh_source_info_label(self):
+        label = getattr(self, "info_label", None)
+        if label is None:
+            return
+        status_text = str(getattr(self, "_source_info_status_text", "") or "").strip()
+        summary_text = self._format_source_media_summary()
+        text = status_text or summary_text
+        label.setText(text)
+        label.setToolTip(text)
+
+    def _set_source_info_status(self, text: str):
+        self._source_info_status_text = str(text or "")
+        self._refresh_source_info_label()
+
+    def apply_source_media_probe(self, path: str, info: dict | None):
+        current_path = str(getattr(self, "_current_source_path", "") or "")
+        target_path = str(path or "")
+        try:
+            if current_path and target_path and os.path.normpath(current_path) != os.path.normpath(target_path):
+                return
+        except Exception:
+            if current_path and target_path and current_path != target_path:
+                return
+        probe_info = dict(info or {})
+        self._source_media_info = probe_info
+        width = int(probe_info.get("width", 0) or 0)
+        height = int(probe_info.get("height", 0) or 0)
+        self._source_width = width
+        self._source_height = height
+        if width > 0 and height > 0:
+            self._source_aspect = width / height
+        duration = float(probe_info.get("duration", 0.0) or 0.0)
+        fps = float(probe_info.get("fps", 0.0) or 0.0)
+        if duration > 0.0 or fps > 0.0:
+            self._rebuild_frame_time_map(
+                duration=duration or self.total_time or 0.0,
+                fps=fps or self.frame_rate or 30.0,
+            )
+        if self._source_info_status_text in {"", "영상 정보를 불러오는 중...", "영상을 불러오는 중..."}:
+            self._source_info_status_text = ""
+        self._refresh_source_info_label()
+
     def _set_source_name_badge(self, path: str):
         name = os.path.basename(str(path or "").strip())
         self._source_display_name = name
@@ -736,9 +866,6 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
         if label is None:
             return
         label.setToolTip(name)
-        if not name:
-            label.hide()
-            return
         self._refresh_source_name_label()
 
     def _refresh_source_name_label(self):
@@ -746,11 +873,8 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
         if label is None:
             return
         name = str(getattr(self, "_source_display_name", "") or "")
-        if not name:
-            label.hide()
-            return
         label.setText(name)
-        label.show()
+        label.setToolTip(name)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -887,13 +1011,13 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
                 self._proxy_playback_path = ""
                 self._source_ready = False
                 try:
-                    self.info_label.setText("720p 프리뷰 생성 중...")
+                    self._set_source_info_status("720p 프리뷰 생성 중...")
                 except Exception:
                     pass
                 return ""
             if self._source_needs_preview_proxy():
                 try:
-                    self.info_label.setText("720p 프리뷰 준비 중")
+                    self._set_source_info_status("720p 프리뷰 준비 중")
                 except Exception:
                     pass
         return path
@@ -991,6 +1115,10 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
             os.replace(_tmp_dst, dst)
         except OSError:
             return
+        try:
+            register_preview_proxy_created(dst)
+        except Exception:
+            pass
         if os.path.normpath(getattr(self, "_current_source_path", "") or "") == os.path.normpath(src):
             self._switch_to_proxy(dst)
 
@@ -1007,7 +1135,8 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
             self._proxy_playback_path = _proxy_path
             self._media_source_loaded = True
             self._source_ready = True
-            self.info_label.setText("HEVC 프리뷰")
+            self._source_preview_label = "HEVC 프리뷰"
+            self._set_source_info_status("")
             pending_autoplay = bool(getattr(self, "_pending_autoplay", False))
             self._video_surface_primed = bool(was_playing or pending_autoplay)
             self._pending_autoplay = False
@@ -1049,20 +1178,15 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
         if os.path.exists(path):
             self._set_source_name_badge(path)
             self._current_source_path = path
+            self._source_media_info = {}
+            self._source_preview_label = ""
+            self._set_source_info_status("영상 정보를 불러오는 중..." if defer_probe else "영상을 불러오는 중...")
             self._video_surface_primed = False
             if not defer_probe:
                 try:
                     from core.media_info import probe_media
                     info = probe_media(path)
-                    w = float(info.get("width", 0) or 0)
-                    h = float(info.get("height", 0) or 0)
-                    self._source_width = int(w) if w > 0 else 0
-                    self._source_height = int(h) if h > 0 else 0
-                    self._rebuild_frame_time_map(
-                        duration=float(info.get("duration", 0.0) or self.total_time or 0.0),
-                        fps=float(info.get("fps", 0.0) or self.frame_rate or 30.0),
-                    )
-                    self._source_aspect = (w / h) if w > 0 and h > 0 else (16 / 9)
+                    self.apply_source_media_probe(path, info)
                 except Exception:
                     self._source_aspect = 16 / 9
                     self._source_width = 0
@@ -1078,7 +1202,8 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
                 self.audio_output.setVolume(1.0)
             self.has_vocal_track = False
             if playback_path:
-                self.info_label.setText("")
+                if not defer_probe:
+                    self._set_source_info_status("")
             if self._is_video_file(path) and self._pending_thumb_path is None:
                 if defer_probe:
                     self._schedule_initial_thumbnail_prepare(path, 0.0, width=640)
@@ -1452,301 +1577,6 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
     def _last_playable_sec(self) -> float:
         return self.sec_for_frame(self._last_playable_frame())
 
-    def set_subtitle_display_time(self, sec: float | None, refresh: bool = True):
-        if sec is None:
-            self._subtitle_display_time_sec = None
-        else:
-            self._subtitle_display_time_sec = self.snap_sec_to_frame(sec)
-        if refresh:
-            self._refresh_provider_for_subtitle_time()
-            self._refresh_subtitle_now()
-
-    def _subtitle_context_covers_time(self, sec: float) -> bool:
-        if int(getattr(self, "_subtitle_count", 0) or 0) <= 0:
-            return False
-        starts = getattr(self, "_subtitle_starts", []) or []
-        ends = getattr(self, "_subtitle_ends", []) or []
-        if not starts or not ends:
-            return False
-        try:
-            lookup = max(0.0, float(sec or 0.0))
-            return float(starts[0]) - 0.001 <= lookup <= float(ends[-1]) + 0.001
-        except Exception:
-            return False
-
-    def _refresh_provider_for_subtitle_time(self):
-        provider = getattr(self, "_subtitle_provider", None)
-        if not callable(provider):
-            return
-        lookup_time = self._subtitle_lookup_time()
-        now = time.monotonic()
-        if not self._subtitle_context_covers_time(lookup_time):
-            last_force = float(getattr(self, "_last_subtitle_context_miss_force_at", 0.0) or 0.0)
-            last_lookup = getattr(self, "_last_subtitle_context_miss_lookup", None)
-            try:
-                moved_far = last_lookup is None or abs(float(last_lookup) - lookup_time) >= 0.5
-            except Exception:
-                moved_far = True
-            if moved_far or (now - last_force) >= 0.75:
-                self._last_subtitle_context_miss_force_at = now
-                self._last_subtitle_context_miss_lookup = lookup_time
-                self._refresh_provider_segments(force=True)
-            return
-        self._refresh_provider_segments(force=False)
-        if self._find_subtitle_at(lookup_time):
-            return
-        last_force = float(getattr(self, "_last_empty_subtitle_provider_force_at", 0.0) or 0.0)
-        if (now - last_force) >= 0.75:
-            self._last_empty_subtitle_provider_force_at = now
-            self._refresh_provider_segments(force=True)
-
-    def _subtitle_overlay_needs_reapply(self, text: str) -> bool:
-        if not text:
-            return False
-        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
-        if quick_overlay is not None:
-            try:
-                if quick_overlay.text() != text:
-                    return True
-                return bool(quick_overlay.isHidden())
-            except Exception:
-                return False
-        item = self._scene_subtitle_item()
-        if item is not None:
-            try:
-                if item.text() != text:
-                    return True
-                return not bool(item.isVisible())
-            except Exception:
-                return False
-        label = getattr(self, "sub_label", None)
-        if label is not None:
-            try:
-                if label.text() != text:
-                    return True
-                return bool(label.isHidden())
-            except Exception:
-                return False
-        return False
-
-    def _refresh_subtitle_now(self):
-        cur_sub = self._find_subtitle_at(self._subtitle_lookup_time())
-        if cur_sub == self._last_sub and not self._subtitle_overlay_needs_reapply(cur_sub):
-            return
-        self._last_sub = cur_sub
-        self._set_subtitle_overlay_text(cur_sub)
-
-    @staticmethod
-    def _normalize_video_subtitle_segment(seg):
-        try:
-            return {
-                "start": float(seg.get("start", 0.0) or 0.0),
-                "end": float(seg.get("end", 0.0) or 0.0),
-                "text": str(seg.get("text", "") or ""),
-            }
-        except Exception:
-            return None
-
-    @staticmethod
-    def _update_subtitle_digest(digest, start: float, end: float, text: str, speaker: str) -> None:
-        digest.update(f"{start:.3f}\x1f{end:.3f}\x1f".encode("utf-8"))
-        digest.update(str(text or "").encode("utf-8", errors="replace"))
-        digest.update(b"\x1f")
-        digest.update(str(speaker or "").encode("utf-8", errors="replace"))
-        digest.update(b"\x1e")
-
-    def _segments_signature_fast(self, segments) -> str:
-        digest = hashlib.sha256()
-        count = 0
-        for seg in (() if segments is None else segments):
-            try:
-                start = float(seg.get("start", 0.0) or 0.0)
-                end = float(seg.get("end", 0.0) or 0.0)
-                text = str(seg.get("text", "") or "")
-                speaker = str(seg.get("speaker", seg.get("spk", "")) or "")
-            except Exception:
-                continue
-            self._update_subtitle_digest(digest, start, end, text, speaker)
-            count += 1
-        digest.update(f"count:{count}".encode("ascii"))
-        return digest.hexdigest()
-
-    def _normalized_segments_context(self, segments, *, signature_override: str | None = None):
-        cleaned = []
-        starts = []
-        ends = []
-        texts = []
-        digest = None if signature_override is not None else hashlib.sha256()
-        sorted_ok = True
-        prev_start = None
-        count = 0
-        source = () if segments is None else segments
-        for seg in source:
-            item = self._normalize_video_subtitle_segment(seg)
-            if item is None:
-                continue
-            start = float(item["start"])
-            end = float(item["end"])
-            if prev_start is not None and start < prev_start:
-                sorted_ok = False
-            prev_start = start
-            cleaned.append(item)
-            starts.append(start)
-            ends.append(end)
-            texts.append(item["text"])
-            count += 1
-            if digest is not None:
-                speaker = str(seg.get("speaker", seg.get("spk", "")) or "")
-                self._update_subtitle_digest(digest, start, end, item["text"], speaker)
-        signature = str(signature_override or "")
-        if digest is not None:
-            digest.update(f"count:{count}".encode("ascii"))
-            signature = digest.hexdigest()
-        return cleaned, signature, sorted_ok, starts, ends, texts
-
-    def _normalized_segments_and_signature(self, segments):
-        cleaned, signature, sorted_ok, _starts, _ends, _texts = self._normalized_segments_context(segments)
-        return cleaned, signature, sorted_ok
-
-    @staticmethod
-    def _adopt_list_buffer(values):
-        return values if isinstance(values, list) else list(values or [])
-
-    def _set_segments(
-        self,
-        segments,
-        *,
-        normalized=None,
-        signature: str | None = None,
-        sorted_ok: bool | None = None,
-        starts=None,
-        ends=None,
-        texts=None,
-    ):
-        if normalized is None or signature is None or sorted_ok is None:
-            existing_signature = str(getattr(self, "_context_segments_signature", "") or "")
-            if existing_signature:
-                signature = self._segments_signature_fast(segments or [])
-                if signature == existing_signature:
-                    self._context_segments_ref = segments
-                    return False
-                cleaned, signature, sorted_ok, starts, ends, texts = self._normalized_segments_context(
-                    segments or [],
-                    signature_override=signature,
-                )
-            else:
-                cleaned, signature, sorted_ok, starts, ends, texts = self._normalized_segments_context(segments or [])
-        else:
-            cleaned = self._adopt_list_buffer(normalized)
-        if signature and signature == getattr(self, "_context_segments_signature", ""):
-            self._context_segments_ref = segments
-            return False
-        self.segments = cleaned if sorted_ok else sorted(cleaned, key=lambda s: s["start"])
-        if sorted_ok and starts is not None and ends is not None and texts is not None:
-            self._subtitle_starts = self._adopt_list_buffer(starts)
-            self._subtitle_ends = self._adopt_list_buffer(ends)
-            self._subtitle_texts = self._adopt_list_buffer(texts)
-        else:
-            self._subtitle_starts = [s["start"] for s in self.segments]
-            self._subtitle_ends = [s["end"] for s in self.segments]
-            self._subtitle_texts = [s["text"] for s in self.segments]
-        self._subtitle_count = len(self._subtitle_starts)
-        self._subtitle_cache_idx = -1
-        self._context_segments_ref = segments
-        self._context_segments_signature = signature
-        return True
-
-    def set_subtitle_provider(self, provider):
-        self._subtitle_provider = provider
-        self._provider_refresh_requested = True
-        self._refresh_provider_segments(force=True)
-
-    def apply_export_subtitle_style(self, style: dict | None):
-        self._set_subtitle_overlay_style(style or {})
-        self._refresh_provider_segments(force=True)
-        self._refresh_subtitle_now()
-        try:
-            self.sub_label.update()
-        except Exception:
-            pass
-
-    def _refresh_provider_segments(self, force: bool = False):
-        provider = getattr(self, "_subtitle_provider", None)
-        if not callable(provider):
-            return
-        now = time.monotonic()
-        if not force and (now - float(getattr(self, "_last_provider_refresh_at", 0.0) or 0.0)) < 0.50:
-            return
-        self._last_provider_refresh_at = now
-        try:
-            segments = provider()
-        except Exception:
-            return
-        if segments is None:
-            return
-        if not force and getattr(self, "_subtitle_provider_signature", ""):
-            signature = self._segments_signature_fast(segments)
-            if signature == getattr(self, "_subtitle_provider_signature", ""):
-                self._subtitle_provider_segments_ref = segments
-                self._provider_refresh_requested = False
-                return
-        cleaned, signature, sorted_ok, starts, ends, texts = self._normalized_segments_context(
-            segments,
-            signature_override=signature if not force and signature else None,
-        )
-        if signature and signature == getattr(self, "_subtitle_provider_signature", ""):
-            self._subtitle_provider_segments_ref = segments
-            self._provider_refresh_requested = False
-            return
-        self._subtitle_provider_segments_ref = segments
-        self._subtitle_provider_signature = signature
-        self._set_segments(
-            segments,
-            normalized=cleaned,
-            signature=signature,
-            sorted_ok=sorted_ok,
-            starts=starts,
-            ends=ends,
-            texts=texts,
-        )
-        self._provider_refresh_requested = False
-        self._refresh_subtitle_now()
-
-    def _segments_signature(self, segments: list[dict]) -> str:
-        _cleaned, signature, _sorted_ok = self._normalized_segments_and_signature(segments or [])
-        return signature
-
-    def _find_subtitle_at(self, now: float) -> str:
-        idx = int(self._subtitle_cache_idx)
-        starts = self._subtitle_starts
-        ends = self._subtitle_ends
-        texts = self._subtitle_texts
-        count = int(self._subtitle_count)
-        if 0 <= idx < count:
-            if starts[idx] <= now < ends[idx]:
-                return texts[idx]
-            next_idx = idx + 1
-            if next_idx < count:
-                if starts[next_idx] <= now < ends[next_idx]:
-                    self._subtitle_cache_idx = idx + 1
-                    return texts[next_idx]
-
-        idx = bisect_right(starts, now) - 1
-        self._subtitle_cache_idx = idx
-        if 0 <= idx < count:
-            if starts[idx] <= now < ends[idx]:
-                return texts[idx]
-        return ""
-
-    def set_context_segments(self, segments: list[dict] | None = None):
-        self._set_segments(segments or [])
-        self._refresh_subtitle_now()
-
-    def refresh_subtitle_context(self, segments: list[dict] | None = None):
-        if segments is not None:
-            self._set_segments(segments)
-        self._refresh_subtitle_now()
-
     def load_clip_context(self, path, segments=None, seek_sec=0.0, autoplay=False, show_thumbnail=True):
         segments = list(segments or [])
         seek_sec = max(0.0, float(seek_sec))
@@ -1968,6 +1798,11 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
         self._last_sub = ""
         self._last_time_label_ms = -250
         self._last_frame_count_text = ""
+        self._current_source_path = ""
+        self._source_display_name = ""
+        self._source_media_info = {}
+        self._source_info_status_text = ""
+        self._source_preview_label = ""
         try:
             self.set_subtitle_display_time(None, refresh=False)
         except Exception:
@@ -1981,10 +1816,10 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, QWidget):
         except Exception:
             pass
         try:
-            self.info_label.setText("")
+            self._refresh_source_info_label()
             self.frame_count_label.setText("F 0 / 0")
             self.frame_count_label.show()
-            self.source_name_label.setText("")
+            self._refresh_source_name_label()
         except Exception:
             pass
 

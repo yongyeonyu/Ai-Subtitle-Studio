@@ -99,6 +99,33 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(clips[0]["source_duration"], 10.0)
         self.assertEqual(clips[1]["source_duration"], 10.0)
 
+    def test_create_project_externalize_reuses_seed_segments_without_project_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "video.mp4"
+            media_path.write_bytes(b"video")
+            srt_path = Path(tmp) / "video.srt"
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n", encoding="utf-8")
+
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 30.0},
+            ), patch(
+                "core.project.project_manager.project_segments_to_editor",
+                side_effect=AssertionError("create_project should reuse prebuilt editor segments"),
+            ):
+                project_path = Path(
+                    create_project(
+                        "seed_segment_reuse",
+                        media_paths=[str(media_path)],
+                        srt_path=str(srt_path),
+                        user_settings={},
+                    )
+                )
+                payload = read_project_file(str(project_path))
+
+        self.assertEqual(payload["subtitles"]["segment_count"], 1)
+        self.assertEqual(payload["editor_state"]["subtitles"]["segment_count"], 1)
+
     def test_create_project_archives_existing_base_json_inside_backup_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
             media_path = str(Path(tmp) / "video.mp4")
@@ -406,6 +433,24 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(vector_segment["time"]["timeline_frame_rate"], 24.0)
         self.assertEqual(vector_segment["time"]["start_frame"], 48)
         self.assertEqual(vector_segment["time"]["end_frame"], 72)
+
+    def test_build_editor_state_reuses_segment_signature_for_vector_canvas(self):
+        with patch("core.project.project_context.segment_signature", wraps=segment_signature) as signature_mock:
+            state = build_editor_state(
+                mode="single",
+                media_files=["/tmp/a.mp4"],
+                segments=[
+                    {"start": 0.0, "end": 1.0, "text": "첫 줄", "speaker": "00"},
+                    {"start": 1.0, "end": 2.0, "text": "둘째 줄", "speaker": "01"},
+                ],
+                primary_fps=30.0,
+            )
+
+        self.assertEqual(signature_mock.call_count, 1)
+        self.assertEqual(
+            state["subtitles"]["segment_signature"],
+            state["rendering"]["subtitle_canvas"]["segment_signature"],
+        )
 
     def test_project_io_roundtrip_preserves_stt_unicode_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -763,6 +808,52 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(len(project_roughcut_state(loaded)["candidates"]), 1)
         self.assertEqual(project_segments_to_editor(loaded)[0]["text"], "저장")
 
+    def test_save_project_externalize_reuses_editor_canvas_segments_without_second_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {
+                            "tracks": [
+                                {
+                                    "clips": [
+                                        {
+                                            "id": "clip_a",
+                                            "source_path": "/tmp/a.mp4",
+                                            "timeline_start": 0.0,
+                                            "timeline_end": 10.0,
+                                            "order": 0,
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        "media": [{"order": 0, "path": "/tmp/a.mp4"}],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            original = project_manager.project_segments_to_editor
+            calls = {"count": 0}
+
+            def _counting_segments(*args, **kwargs):
+                calls["count"] += 1
+                return original(*args, **kwargs)
+
+            with patch("core.project.project_manager.project_segments_to_editor", side_effect=_counting_segments):
+                save_project(
+                    str(path),
+                    segments=[{"start": 1.0, "end": 2.0, "text": "저장", "speaker": "01"}],
+                )
+
+        self.assertEqual(calls["count"], 1)
+
     def test_save_project_persists_model_settings_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"
@@ -899,6 +990,108 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(loaded["video"]["primary_fps"], 24.0)
         self.assertEqual(loaded["video"]["duration_sec"], 2.0)
         self.assertEqual(loaded["storage_schema"], PROJECT_STORAGE_SCHEMA)
+
+    def test_save_project_reuses_persisted_video_header_metadata_without_reprobe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"fake")
+            project = {
+                "video": {
+                    "schema": PROJECT_VIDEO_SCHEMA,
+                    "primary_path": str(media),
+                    "media_kind": "video",
+                    "duration_sec": 2.0,
+                    "primary_fps": 24.0,
+                    "frame_duration": 1.0 / 24.0,
+                    "total_frames": 48,
+                    "width": 1920,
+                    "height": 1080,
+                    "resolution": "1920x1080",
+                    "clip_count": 1,
+                    "clips": [
+                        {
+                            "id": "clip_a",
+                            "order": 0,
+                            "path": str(media),
+                            "type": "video",
+                            "duration_sec": 2.0,
+                            "fps": 24.0,
+                            "frame_count": 48,
+                            "width": 1920,
+                            "height": 1080,
+                            "timeline_start_sec": 0.0,
+                            "timeline_end_sec": 2.0,
+                            "timeline_start_frame": 0,
+                            "timeline_end_frame": 48,
+                        }
+                    ],
+                    "timebase": {
+                        "unit": "frame",
+                        "canonical_unit": "frame",
+                        "mode": "project_video_header",
+                        "primary_fps": 24.0,
+                        "frame_duration": 1.0 / 24.0,
+                        "timeline_start_frame": 0,
+                        "timeline_end_frame": 48,
+                        "total_frames": 48,
+                        "seconds_are_derived": True,
+                        "time_fields_are_compatibility": False,
+                    },
+                },
+                "app": "AI Subtitle Studio",
+                "version": "04.00.06",
+                "phase": "PHASE2",
+                "project_name": "header_fast_path",
+                "storage_schema": PROJECT_STORAGE_SCHEMA,
+                "timeline": {
+                    "total_duration": 2.0,
+                    "tracks": [
+                        {
+                            "id": "video_track_0",
+                            "type": "video",
+                            "clips": [
+                                {
+                                    "id": "clip_a",
+                                    "source_path": str(media),
+                                    "type": "video",
+                                    "timeline_start": 0.0,
+                                    "timeline_end": 2.0,
+                                    "order": 0,
+                                }
+                            ],
+                        }
+                    ],
+                },
+                "subtitles": {"storage": "vector_canvas", "segment_count": 0},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[str(media)],
+                    segments=[],
+                    primary_fps=24.0,
+                ),
+                "workspace": {},
+            }
+            path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            with patch(
+                "core.project.project_manager.probe_media",
+                side_effect=AssertionError("save_project should reuse stored video header metadata"),
+            ):
+                save_project(
+                    str(path),
+                    segments=[{"start": 0.0, "end": 0.5, "text": "헤더", "speaker": "00"}],
+                )
+            loaded = load_project(str(path))
+
+        clip = loaded["timeline"]["tracks"][0]["clips"][0]
+        self.assertEqual(clip["source_duration"], 2.0)
+        self.assertEqual(clip["fps"], 24.0)
+        self.assertEqual(clip["width"], 1920)
+        self.assertEqual(clip["height"], 1080)
+        self.assertEqual(loaded["video"]["primary_fps"], 24.0)
+        self.assertEqual(loaded["video"]["width"], 1920)
+        self.assertEqual(loaded["video"]["height"], 1080)
 
     def test_saved_project_writes_video_header_first_and_drops_legacy_runtime_duplicates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1168,6 +1361,65 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(preview["_clip_idx"], 1)
         self.assertEqual(preview["start_frame"], 240)
         self.assertEqual(preview["end_frame"], 264)
+
+    def test_add_media_to_project_reuses_existing_segments_for_externalize(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_a = Path(tmp) / "a.mp4"
+            media_b = Path(tmp) / "b.mp4"
+            media_a.write_bytes(b"a")
+            media_b.write_bytes(b"b")
+            srt_path = Path(tmp) / "a.srt"
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\n기존\n", encoding="utf-8")
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 24.0},
+            ):
+                project_path = create_project(
+                    "add_media_reuse",
+                    media_paths=[str(media_a)],
+                    srt_path=str(srt_path),
+                    user_settings={},
+                )
+            original = project_manager.project_segments_to_editor
+            calls = {"count": 0}
+
+            def _counting_segments(*args, **kwargs):
+                calls["count"] += 1
+                return original(*args, **kwargs)
+
+            with patch("core.project.project_manager.project_segments_to_editor", side_effect=_counting_segments), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 24.0},
+            ):
+                project_manager.add_media_to_project(str(project_path), [str(media_b)])
+
+        self.assertEqual(calls["count"], 1)
+
+    def test_merge_srt_to_project_reuses_seed_segments_without_project_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "video.mp4"
+            media_path.write_bytes(b"video")
+            srt_path = media_path.with_suffix(".srt")
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\n병합\n", encoding="utf-8")
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 24.0},
+            ):
+                project_path = create_project(
+                    "merge_srt_reuse",
+                    media_paths=[str(media_path)],
+                    user_settings={},
+                )
+            with patch(
+                "core.project.project_manager.project_segments_to_editor",
+                side_effect=AssertionError("merge_srt_to_project should reuse prebuilt editor segments"),
+            ), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 24.0},
+            ):
+                merged = project_manager.merge_srt_to_project(str(project_path))
+
+        self.assertEqual(merged, 1)
 
     def test_save_project_persists_subtitle_status_and_stt_score_colors(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2247,6 +2499,30 @@ class ProjectContextTests(unittest.TestCase):
 
         self.assertEqual([row["text"] for row in previews], ["external"])
         loader.assert_called_once_with(project)
+
+    def test_project_segments_to_editor_external_stt_candidates_do_not_mutate_source_rows(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "subtitles": {"storage": PROJECT_EXTERNAL_STORAGE},
+            "editor_state": {"subtitles": {"segments": []}},
+        }
+        external_segments = [{"start": 0.0, "end": 1.0, "text": "최종", "speaker": "00"}]
+        external_tracks = {
+            "STT1": [{"start": 0.0, "end": 1.0, "text": "후보", "speaker": "00"}]
+        }
+
+        with patch(
+            "core.project.project_context.load_external_subtitle_segments",
+            return_value=external_segments,
+        ), patch(
+            "core.project.project_context.load_external_stt_tracks",
+            return_value=external_tracks,
+        ):
+            segments = project_segments_to_editor(project)
+
+        self.assertEqual(segments[0]["stt_candidates"][0]["source"], "STT1")
+        self.assertNotIn("source", external_tracks["STT1"][0])
+        self.assertNotIn("stt_preview_source", external_tracks["STT1"][0])
 
     def test_externalize_project_text_assets_does_not_mutate_input_rows_or_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:

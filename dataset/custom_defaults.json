@@ -1,5 +1,8 @@
 {
     "settings_simplified_ui_enabled": true,
+    "codex_chat_one_line_default": true,
+    "codex_chat_show_code_only_on_request": true,
+    "codex_chat_token_saving_priority": "strict",
     "simple_operation_mode": "high",
     "selected_audio_ai": "clearvoice",
     "selected_vad": "silero",

@@ -315,7 +315,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             self.assertIn("#34C759", flash_style)
             self.assertNotIn("#007AFF", flash_style)
 
-            def editor_for(status, *, dirty=True, processing=True):
+            def editor_for(status, *, dirty=True, processing=True, stt_ensemble_enabled=True):
                 label = QLabel(status)
                 return SimpleNamespace(
                     status_lbl=label,
@@ -324,6 +324,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                     _is_ai_processing=processing,
                     _is_dirty=dirty,
                     _stt_mode_enabled=False,
+                    settings={"stt_ensemble_enabled": bool(stt_ensemble_enabled)},
                     _get_current_segments=lambda: [{"start": 0.0, "end": 1.0, "text": "테스트"}],
                 )
 
@@ -337,6 +338,10 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             }
             for status, expected in cases.items():
                 self.assertEqual(rail._stage_text(EDITOR_MODE, editor_for(status)), expected)
+            self.assertEqual(
+                rail._stage_text(EDITOR_MODE, editor_for("⏳ [STT] Whisper 중", stt_ensemble_enabled=False)),
+                "STT 1",
+            )
             rail.state_button.setText("에디터 | 검토")
             initial_hint = rail.sizeHint().width()
             rail.state_button.setText("자막 생성 | 매우 긴 처리 상태 텍스트")

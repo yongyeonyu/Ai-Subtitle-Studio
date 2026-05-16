@@ -28,6 +28,7 @@ from core.project.project_model_settings import store_project_model_settings_sna
 from core.project.project_assets import (
     copy_project_rows,
     externalize_project_text_assets,
+    load_external_stt_tracks,
 )
 from core.cut_boundary import cut_boundary_enabled, project_cut_boundaries, split_segments_by_cut_boundaries, sync_project_cut_boundaries
 from core.frame_time import normalize_fps
@@ -221,11 +222,14 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         ]
     _augment_project_frame_metadata(data)
     sync_project_cut_boundaries(data, settings=editor_settings or data.get('user_settings', {}))
+    rebuilt_stt_tracks = ((editor_state.get("stt", {}) or {}).get("candidate_tracks"))
+    if not isinstance(rebuilt_stt_tracks, dict) or not rebuilt_stt_tracks:
+        rebuilt_stt_tracks = load_external_stt_tracks(data)
     externalize_project_text_assets(
         project_path,
         data,
-        final_segments=project_segments_to_editor(data),
-        stt_tracks=((editor_state.get("stt", {}) or {}).get("candidate_tracks")),
+        final_segments=normalized_segments,
+        stt_tracks=rebuilt_stt_tracks,
     )
     _prune_project_payload_for_vector_storage(data)
     data["project_path"] = os.path.abspath(project_path)

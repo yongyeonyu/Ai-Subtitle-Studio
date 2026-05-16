@@ -40,7 +40,14 @@ from .renderer_skeleton import (
 from .render_executor import RenderExecutionResult, run_render_plan, write_concat_file
 from .scene_change_detector import FrameSample, SceneChange, detect_scene_changes
 from .subtitle_retimer import format_srt, retime_subtitles_for_edl, save_retimed_srt
-from .thumbnail_cache import ThumbnailCacheResult, default_thumbnail_cache_dir, ensure_thumbnail, thumbnail_cache_path
+from .thumbnail_cache import (
+    ThumbnailCacheResult,
+    default_thumbnail_cache_dir,
+    ensure_thumbnail,
+    prune_thumbnail_cache,
+    thumbnail_cache_budget_bytes,
+    thumbnail_cache_path,
+)
 from .models import (
     ChapterBoundaryCandidate,
     ChapterMetadata,
@@ -155,6 +162,7 @@ __all__ = [
     "map_edl_segments_to_clip_sources",
     "pack_transcript",
     "prepare_roughcut_llm_model_for_run",
+    "prune_thumbnail_cache",
     "render_from_edl",
     "refine_major_boundaries",
     "run_roughcut_pipeline",
@@ -169,6 +177,7 @@ __all__ = [
     "subtitle_from_dict",
     "subtitles_from_dicts",
     "topic_shift_score",
+    "thumbnail_cache_budget_bytes",
     "thumbnail_cache_path",
     "roughcut_llm_enabled",
     "retime_subtitles_for_edl",

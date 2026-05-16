@@ -210,6 +210,8 @@ class HomeUIMixin(HomeSidebarMixin):
             bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_exit)
         if not is_unified:
             layout.addLayout(bottom_bar)
+        if is_unified:
+            self._sync_project_info_button_height()
         self._ensure_watchdog_timer()
 
 
@@ -659,23 +661,42 @@ class HomeUIMixin(HomeSidebarMixin):
             layout.addWidget(btn)
         return row
 
+    def _project_info_button_height(self) -> int:
+        try:
+            profile = self._current_responsive_profile() if hasattr(self, "_current_responsive_profile") else None
+        except Exception:
+            profile = None
+        menu_bar_height = int(getattr(profile, "menu_bar_height", 0) or 0)
+        if menu_bar_height <= 0:
+            try:
+                from ui.menu_bar import MENU_BAR_HEIGHT as DEFAULT_MENU_BAR_HEIGHT
+                menu_bar_height = DEFAULT_MENU_BAR_HEIGHT
+            except Exception:
+                menu_bar_height = 48
+        bottom_inset = 0
+        try:
+            layout = self.home_page.layout() if hasattr(self, "home_page") else None
+            if layout is not None:
+                bottom_inset = int(layout.contentsMargins().bottom())
+        except Exception:
+            bottom_inset = 0
+        return max(38, menu_bar_height - max(0, bottom_inset))
+
+    def _sync_project_info_button_height(self):
+        button = getattr(self, "_project_info_button_card", None)
+        if button is None:
+            return
+        target_height = self._project_info_button_height()
+        if target_height > 0 and button.height() != target_height:
+            button.setFixedHeight(target_height)
+
     def _project_info_card(self, expanded=None, overlay=False):
         if expanded is None:
             expanded = bool(getattr(self, "_project_info_expanded", False))
         else:
             expanded = bool(expanded)
         if not expanded and not overlay:
-            try:
-                profile = self._current_responsive_profile() if hasattr(self, "_current_responsive_profile") else None
-                MENU_BUTTON_HEIGHT = int(getattr(profile, "menu_button_height", 0) or 0)
-            except Exception:
-                MENU_BUTTON_HEIGHT = 0
-            if MENU_BUTTON_HEIGHT <= 0:
-                try:
-                    from ui.menu_bar import MENU_BUTTON_HEIGHT as DEFAULT_MENU_BUTTON_HEIGHT
-                    MENU_BUTTON_HEIGHT = DEFAULT_MENU_BUTTON_HEIGHT
-                except Exception:
-                    MENU_BUTTON_HEIGHT = 38
+            target_height = self._project_info_button_height()
             btn = QToolButton()
             btn.setText("프로젝트 정보")
             btn.setIcon(line_icon("project", "#E8EEF5", 15))
@@ -683,7 +704,7 @@ class HomeUIMixin(HomeSidebarMixin):
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            btn.setFixedHeight(MENU_BUTTON_HEIGHT)
+            btn.setFixedHeight(target_height)
             btn.setStyleSheet(
                 "QToolButton { "
                 "background: #1B2429; color: #F5F7FA; "

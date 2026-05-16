@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QTableWidgetItem
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
+from core.pipeline_status import is_generation_stage_status
 from ui.queue.queue_formatting import (
     build_queue_sidebar_item,
     normalize_queue_header_payload,
@@ -902,11 +903,74 @@ class QueueMixin:
     def _queue_mark_row_started(self, idx: int, *, incoming_active: bool, now_ts: float | None = None) -> None:
         if not incoming_active or idx in self._file_start_times:
             return
+        status_text = self._queue_table_item_text(idx, 0)
+        if not self._queue_elapsed_tracking_active(status_text):
+            return
         try:
             started_at = float(now_ts if now_ts is not None else time.time())
         except Exception:
             started_at = time.time()
         self._file_start_times[idx] = started_at
+
+    def _queue_status_tracks_elapsed(self, status_text: str) -> bool:
+        text = str(status_text or "").strip()
+        if not text:
+            return False
+        if is_generation_stage_status(text):
+            return True
+        lowered = text.lower()
+        if "재시작 준비 중" in text or "시작 준비 중" in text:
+            return True
+        if "러프컷" in text and ("llm" in lowered or "후처리" in text):
+            return True
+        return False
+
+    def _queue_elapsed_tracking_active(self, status_text: str = "") -> bool:
+        if self._queue_status_tracks_elapsed(status_text):
+            return True
+
+        running_checker = getattr(self, "_is_subtitle_generation_running", None)
+        if callable(running_checker):
+            try:
+                if bool(running_checker()):
+                    return True
+            except Exception:
+                pass
+
+        editor = getattr(self, "_editor_widget", None)
+        if editor is not None:
+            if bool(getattr(editor, "_roughcut_draft_pending", False)):
+                return True
+            cleanup_pending = getattr(editor, "_roughcut_draft_cleanup_pending", None)
+            if callable(cleanup_pending):
+                try:
+                    if bool(cleanup_pending()):
+                        return True
+                except Exception:
+                    pass
+            state_manager = getattr(editor, "sm", None)
+            if state_manager is not None:
+                if str(getattr(state_manager, "state", "") or "") == "ST_PROC":
+                    return True
+                if bool(getattr(state_manager, "is_locked", False)):
+                    return True
+            if bool(getattr(editor, "_is_ai_processing", False)):
+                return True
+
+        for backend_name in ("backend_fast", "backend"):
+            backend = getattr(self, backend_name, None)
+            if backend is None:
+                continue
+            for attr in ("_active", "is_running", "running"):
+                value = getattr(backend, attr, False)
+                if callable(value):
+                    try:
+                        value = value()
+                    except Exception:
+                        value = False
+                if bool(value):
+                    return True
+        return False
 
     def _queue_record_completed_row(self, idx: int, *, now_ts: float | None = None) -> None:
         try:
@@ -1196,6 +1260,8 @@ class QueueMixin:
             now_value = float(now if now is not None else time.time())
             metrics = self.queue_row_metrics(active_row, now_ts=now_value)
             if bool(metrics["done"]) or not bool(metrics["status_active"]):
+                return False
+            if not self._queue_elapsed_tracking_active(str(metrics.get("status", "") or "")):
                 return False
             if active_row not in self._file_start_times:
                 self._file_start_times[active_row] = now_value

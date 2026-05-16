@@ -9,6 +9,10 @@ Rectangle {
 
     signal actionTriggered(string actionId)
 
+    radius: 7
+    clip: true
+    antialiasing: true
+
     function flashAction(actionId) {
         activeActionId = actionId || ""
         clickFlash.restart()

@@ -511,6 +511,14 @@ def _editor_seed_segments(rows) -> list[dict]:
     ]
 
 
+def _editor_canvas_segments(project: dict) -> list[dict] | None:
+    editor_state = project.get("editor_state", {}) if isinstance(project, dict) else {}
+    rendering = editor_state.get("rendering", {}) if isinstance(editor_state, dict) else {}
+    canvas = rendering.get("subtitle_canvas", {}) if isinstance(rendering, dict) else {}
+    segments = canvas.get("segments") if isinstance(canvas, dict) else None
+    return segments if isinstance(segments, list) else None
+
+
 def _editor_workspace_state(project: dict, workspace: dict | None = None) -> dict:
     return workspace if workspace is not None else (project.get("workspace", {}) or {})
 
@@ -1017,6 +1025,19 @@ def _project_stt_candidate_tracks(project: dict) -> dict[str, list[dict]]:
     return tracks if isinstance(tracks, dict) else {}
 
 
+def _segments_have_text(rows) -> bool:
+    for row in (() if rows is None else rows):
+        if isinstance(row, dict) and str(row.get("text", "") or "").strip():
+            return True
+    return False
+
+
+def _track_map_has_text(tracks: dict[str, list[dict]] | None) -> bool:
+    if not isinstance(tracks, dict):
+        return False
+    return any(_segments_have_text(track_rows) for track_rows in tracks.values())
+
+
 def _externalize_project_payload(
     filepath: str,
     project: dict,
@@ -1026,32 +1047,17 @@ def _externalize_project_payload(
 ) -> dict:
     if not _external_text_storage_enabled(project, user_settings):
         return project
-    rows = list(segments or [])
+    rows = segments if isinstance(segments, list) else list(segments or [])
     stt_tracks = _project_stt_candidate_tracks(project)
-    has_subtitles = any(str(row.get("text", "") or "").strip() for row in rows if isinstance(row, dict))
-    has_stt = any(
-        isinstance(track_rows, list) and any(str(row.get("text", "") or "").strip() for row in track_rows if isinstance(row, dict))
-        for track_rows in stt_tracks.values()
-    )
-    if not has_subtitles and not has_stt:
-        recovered_subtitles = load_external_subtitle_segments(project)
-        recovered_stt_tracks = load_external_stt_tracks(project)
-        recovered_has_subtitles = any(
-            str(row.get("text", "") or "").strip()
-            for row in list(recovered_subtitles or [])
-            if isinstance(row, dict)
-        )
-        recovered_has_stt = any(
-            isinstance(track_rows, list) and any(str(row.get("text", "") or "").strip() for row in track_rows if isinstance(row, dict))
-            for track_rows in recovered_stt_tracks.values()
-        )
-        if recovered_has_subtitles or recovered_has_stt:
-            return externalize_project_text_assets(
-                filepath,
-                project,
-                final_segments=recovered_subtitles,
-                stt_tracks=recovered_stt_tracks,
-            )
+    has_subtitles = _segments_have_text(rows)
+    has_stt = _track_map_has_text(stt_tracks)
+    recovered_subtitles = load_external_subtitle_segments(project) if not has_subtitles else []
+    recovered_stt_tracks = load_external_stt_tracks(project) if not has_stt else {}
+    recovered_has_subtitles = _segments_have_text(recovered_subtitles)
+    recovered_has_stt = _track_map_has_text(recovered_stt_tracks)
+    final_segments = recovered_subtitles if recovered_has_subtitles else rows
+    final_stt_tracks = recovered_stt_tracks if recovered_has_stt else stt_tracks
+    if not _segments_have_text(final_segments) and not _track_map_has_text(final_stt_tracks):
         project.pop("asset_storage", None)
         subtitles = project.setdefault("subtitles", {})
         subtitles.pop("external_track", None)
@@ -1074,8 +1080,8 @@ def _externalize_project_payload(
     return externalize_project_text_assets(
         filepath,
         project,
-        final_segments=rows,
-        stt_tracks=stt_tracks,
+        final_segments=final_segments,
+        stt_tracks=final_stt_tracks,
     )
 
 
@@ -1149,6 +1155,7 @@ def create_project(
                 "srt_synced": True,
                 "is_deleted": False
             })
+    editor_segments = _editor_seed_segments(segments)
 
     project = {
         "app": "AI Subtitle Studio",
@@ -1212,7 +1219,7 @@ def create_project(
     _store_project_editor_state(
         project,
         media_files=list(media_paths or []),
-        segments=_editor_seed_segments(segments),
+        segments=editor_segments,
         workspace={},
         clip_boundaries=_editor_clip_boundaries(clips),
         cut_boundaries=[],
@@ -1268,7 +1275,7 @@ def create_project(
     _externalize_project_payload(
         filepath,
         project,
-        segments=project_segments_to_editor(project),
+        segments=editor_segments,
         user_settings=persisted_user_settings,
     )
     _prune_project_payload_for_vector_storage(project)
@@ -1552,7 +1559,7 @@ def save_project(
     _externalize_project_payload(
         filepath,
         project,
-        segments=project_segments_to_editor(project),
+        segments=project_segment_rows,
         user_settings=effective_user_settings,
     )
     _prune_project_payload_for_vector_storage(project)
@@ -1564,14 +1571,14 @@ def _persist_project_analysis_artifacts(
     segments: list[dict] | None,
     settings: dict | None,
 ) -> None:
-    segment_rows = list(segments or [])
+    segment_rows = segments if isinstance(segments, list) else list(segments or [])
     primary_media_path = _project_primary_media_path(project)
 
     try:
         from core.engine.subtitle_accuracy_graph import persist_subtitle_accuracy_graph
 
         graph_result = persist_subtitle_accuracy_graph(
-            list(segment_rows),
+            segment_rows,
             settings,
             media_path=primary_media_path,
             project_path=filepath,
@@ -1591,7 +1598,7 @@ def _persist_project_analysis_artifacts(
         from core.audio.stt_lattice import persist_stt_lattice_artifact
 
         lattice_result = persist_stt_lattice_artifact(
-            list(segment_rows),
+            segment_rows,
             settings,
             media_path=primary_media_path,
             project_path=filepath,
@@ -1757,7 +1764,7 @@ def add_media_to_project(filepath: str, new_paths: list):
     _externalize_project_payload(
         filepath,
         project,
-        segments=project_segments_to_editor(project),
+        segments=existing_segments,
         user_settings=project_user_settings,
     )
     _prune_project_payload_for_vector_storage(project)
@@ -1810,10 +1817,11 @@ def merge_srt_to_project(filepath: str) -> int | None:
     project.setdefault("subtitles", {})
     project["subtitles"]["segments"] = all_segments
     primary_fps = project_primary_fps(project)
+    editor_segments = _editor_seed_segments(all_segments)
     _store_project_editor_state(
         project,
         media_files=_clip_source_paths(clips),
-        segments=_editor_seed_segments(all_segments),
+        segments=editor_segments,
         workspace=_editor_workspace_state(project),
         clip_boundaries=_editor_clip_boundaries(clips),
         cut_boundaries=project_cut_boundaries(project),
@@ -1828,7 +1836,7 @@ def merge_srt_to_project(filepath: str) -> int | None:
     _externalize_project_payload(
         filepath,
         project,
-        segments=project_segments_to_editor(project),
+        segments=editor_segments,
         user_settings=project_user_settings,
     )
     _prune_project_payload_for_vector_storage(project)

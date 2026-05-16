@@ -515,7 +515,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             if rect.isValid() and not rect.isEmpty():
                 self.update(rect)
                 return
-        except Exception:
+        except (RuntimeError, AttributeError, TypeError, ValueError):
             pass
         self.update()
 
@@ -706,10 +706,17 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             round(float(getattr(self, "total_duration", 0.0) or 0.0), 3),
         )
         if self._visible_voice_activity_cache_key != key:
+            visible_rows = visible_segments if isinstance(visible_segments, list) else list(visible_segments or [])
+            visible_vad_rows = (
+                visible_vad_segments if isinstance(visible_vad_segments, list) else list(visible_vad_segments or [])
+            )
+            visible_gap_rows = (
+                visible_gap_segments if isinstance(visible_gap_segments, list) else list(visible_gap_segments or [])
+            )
             markers = subtitle_detection_segments_for_editor(
-                list(visible_segments or []),
-                list(visible_vad_segments or []),
-                list(visible_gap_segments or []),
+                visible_rows,
+                visible_vad_rows,
+                visible_gap_rows,
                 float(getattr(self, "total_duration", 0.0) or 0.0),
             )
             self._visible_voice_activity_cache = self._linear_visible_items_for_paint(
@@ -718,7 +725,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 end_sec,
             )
             self._visible_voice_activity_cache_key = key
-        return list(self._visible_voice_activity_cache)
+        return self._visible_voice_activity_cache
 
     def _items_near_x_for_hit(self, items, cache_name: str, x: int | float, *, pad_px: int = 24) -> list:
         center_sec = self._sec_from_x(x)

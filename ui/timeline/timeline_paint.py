@@ -89,7 +89,7 @@ class TimelinePaintMixin:
             if callable(probe):
                 try:
                     return bool(probe())
-                except Exception:
+                except (RuntimeError, AttributeError, TypeError):
                     pass
             player = getattr(getattr(owner, "video_player", None), "media_player", None)
             if player is not None:
@@ -98,7 +98,7 @@ class TimelinePaintMixin:
                     playing_state = getattr(player.PlaybackState, "PlayingState", None)
                     if playing_state is not None:
                         return bool(state == playing_state)
-                except Exception:
+                except (RuntimeError, AttributeError, TypeError):
                     pass
             next_owner = None
             try:
@@ -349,7 +349,7 @@ class TimelinePaintMixin:
             if callable(provider):
                 try:
                     return provider()
-                except Exception:
+                except (RuntimeError, AttributeError, TypeError):
                     pass
             owner = self.parent()
             while owner and not hasattr(owner, "settings"):
@@ -403,7 +403,11 @@ class TimelinePaintMixin:
             lane_top = mid_y - 12
             lane_h = 24
             p.setPen(Qt.PenStyle.NoPen)
-            voice_segments = list(visible_voice_activity_segments or [])
+            voice_segments = (
+                visible_voice_activity_segments
+                if isinstance(visible_voice_activity_segments, list)
+                else list(visible_voice_activity_segments or [])
+            )
             if not voice_segments:
                 try:
                     if hasattr(self, "visible_voice_activity_segments_cached"):

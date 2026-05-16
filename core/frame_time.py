@@ -10,6 +10,12 @@ import math
 DEFAULT_FPS = 30.0
 
 
+def _iter_segments(segments):
+    if segments is None:
+        return ()
+    return segments
+
+
 def normalize_fps(value: float | int | str | None, default: float = DEFAULT_FPS) -> float:
     try:
         fps = float(value)
@@ -251,7 +257,11 @@ def normalize_segments_to_frame_grid(
     preserve_order: bool = False,
 ) -> list[dict]:
     normalized_fps = normalize_fps(fps)
-    rows = [normalize_segment_to_frame_grid(seg, normalized_fps, min_frames=min_frames) for seg in list(segments or []) if isinstance(seg, dict)]
+    rows = [
+        normalize_segment_to_frame_grid(seg, normalized_fps, min_frames=min_frames)
+        for seg in _iter_segments(segments)
+        if isinstance(seg, dict)
+    ]
     if not preserve_order:
         rows.sort(
             key=lambda seg: (

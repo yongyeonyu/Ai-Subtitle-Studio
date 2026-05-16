@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.00.06-codemap
+Document-Version: 04.00.07-codemap
 Last-Updated: 2026-05-16
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
@@ -21,10 +21,15 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `ui/main/app_command_bridge.py`: automation/appctl command execution inside the running app.
 - `tools/appctl.py`: external command-line entry point for remote app control.
 - `tools/remote_verify.py`: higher-level remote verification runner and artifact capture.
+- `tools/overnight_optimize.py`: compact baseline/check runner that writes long-run artifacts under `output/manual_verification/latest/`.
+- `tools/check_maintenance_budget.py`: changed-file guard for file/function length and broad silent-exception regressions.
+- `tools/verify_full_media_pipeline.py`: full-media verification runner with top-level performance/quality summary metrics.
 
 ## UI Areas
 
 - `ui/editor/editor_widget.py`: main editor composition root.
+- `ui/editor/video_player_widget.py`: video player composition and transport shell.
+- `ui/editor/video_player_subtitles.py`: subtitle overlay context/provider refresh and lookup logic for the video player.
 - `ui/editor/ux/`: editor interaction mixins.
   - `editor_timeline_video.py`: playback sync, playhead behavior, editor/timeline coordination.
   - `timeline_input.py`: timeline mouse/key input, scrubbing, drag entry points.
@@ -47,6 +52,8 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 ## Project And Persistence
 
 - `core/project/`: project JSON, snapshots, model settings, timeline metadata.
+- `core/project/project_assets.py`: external text-asset/SRT persistence, row-copy helpers, and STT candidate-track cache shaping.
+- `core/project/project_runtime_capture.py`: editor auxiliary project-state copy helpers plus lightweight status-count snapshots.
 - `ui/editor/editor_project_open_native.py`: SRT/project open flows and workspace restore.
 - `ui/editor/editor_save_manager.py`: save/export/project persistence actions.
 
@@ -56,22 +63,35 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `core/native_swift_*.py`: Python bridges into Swift/native functionality.
 - `core/runtime_eta.py`: queue/startup ETA estimation and history.
 - `core/performance.py`: runtime profiling and performance helpers.
+- `core/pipeline_status.py`: current-stage summary reduction and native/Python adaptive status parsing.
+- `core/runtime/logger.py`: staged runtime log buffer, recent-tail reads, and appctl/status log-summary hot path.
+- `core/media_info.py`: ffprobe normalization, media-probe cache keys, and copy-safe probe result helpers.
+- `core/native_swift_media_info.py`, `core/native_swift_pipeline_status.py`: native bridge entry points for media probe/status hot paths.
+- `core/runtime/memory_manager.py`: runtime RSS snapshots plus streaming disk-cache accounting/pruning.
 
 ## Hot Verification Map
 
 - Timeline/playhead/zoom/smart split:
   - `tests/test_timeline_playhead_fit.py`
   - `tests/test_timeline_hit_targets.py`
+  - `tests/test_timeline_render_cache.py`
   - `tests/test_editor_split_undo.py`
   - `tests/test_editor_open_layout.py`
 - App automation and remote control:
   - `tests/test_app_command_bridge.py`
   - `tests/test_app_command_protocol.py`
+- Media probe/cache performance:
+  - `tests/test_media_info_cache.py`
+- Full-media verification summaries:
+  - `tests/test_verify_full_media_pipeline.py`
 - Queue/progress/runtime ETA:
   - `tests/test_queue_dispatch.py`
   - `tests/test_pipeline_status.py`
+  - `tests/test_runtime_logger.py`
   - `tests/test_runtime_eta.py`
+  - `tests/test_runtime_memory_manager.py`
 - Project open/save/reload:
+  - `tests/test_project_assets.py`
   - `tests/test_project_context.py`
   - `tests/test_project_runtime_capture.py`
   - `tests/test_project_segment_reload.py`

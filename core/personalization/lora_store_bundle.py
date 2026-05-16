@@ -44,6 +44,7 @@ from core.personalization.lora_store_common import (
     write_json,
     write_jsonl,
 )
+from core.native_json import dumps_json_bytes
 
 
 LORA_ARCHIVE_COMPRESSION_NAME = "deflated_compact_patterns"
@@ -81,15 +82,60 @@ def _coerce_positive_int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else int(default)
 
 
+def _json_bytes(
+    payload: Any,
+    *,
+    indent: int | None = None,
+    sort_keys: bool = False,
+    compact: bool = False,
+) -> bytes:
+    return dumps_json_bytes(
+        payload,
+        indent=indent,
+        sort_keys=sort_keys,
+        compact=compact,
+    )
+
+
 def _serialized_json_size_bytes(payload: Any) -> int:
     try:
-        return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    except Exception:
+        return len(_json_bytes(payload, compact=True))
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
+def _iter_tree_file_paths(root: Path) -> list[str]:
+    if not root.exists():
+        return []
+    stack = [str(root)]
+    files: list[str] = []
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                            continue
+                        if entry.is_file(follow_symlinks=False):
+                            files.append(entry.path)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    files.sort()
+    return files
+
+
 def _bundle_budget_settings(paths: dict[str, Path], bucket: str) -> dict[str, int]:
-    policy = read_json(paths["retention_policy"], default_retention_policy())
+    return _bundle_budget_settings_from_policy(
+        read_json(paths["retention_policy"], default_retention_policy()),
+        bucket,
+    )
+
+
+def _bundle_budget_settings_from_policy(policy: dict[str, Any] | None, bucket: str) -> dict[str, int]:
     bundle_policy = dict((policy or {}).get("bundle_budgets") or {})
     soft_map = dict(bundle_policy.get("soft_max_bytes_by_bucket") or {})
     attachment_soft_map = dict(bundle_policy.get("attachment_soft_max_bytes_by_bucket") or {})
@@ -121,13 +167,7 @@ def _bundle_record_count(payload: dict[str, Any]) -> int:
 
 def _iter_lora_archive_attachment_files(paths: dict[str, Path]) -> list[Path]:
     root = paths["trained_adapters"]
-    if not root.exists():
-        return []
-    files: list[Path] = []
-    for item in root.rglob("*"):
-        if item.is_file():
-            files.append(item)
-    return sorted(files)
+    return [Path(path) for path in _iter_tree_file_paths(root)]
 
 
 def _attachment_total_bytes(paths: dict[str, Path]) -> int:
@@ -138,6 +178,17 @@ def _attachment_total_bytes(paths: dict[str, Path]) -> int:
         except OSError:
             continue
     return total
+
+
+def _attachment_scan(paths: dict[str, Path]) -> tuple[list[Path], int]:
+    files = _iter_lora_archive_attachment_files(paths)
+    total = 0
+    for item in files:
+        try:
+            total += int(item.stat().st_size)
+        except OSError:
+            continue
+    return files, total
 
 
 def _bucket_archive_path(paths: dict[str, Path], bucket: str | None = None) -> Path:
@@ -312,17 +363,24 @@ def _write_unified_lora_archive(
     *,
     bucket: str = LORA_BUCKET_HIGH,
     include_attachments: bool = False,
+    attachment_files: list[Path] | None = None,
+    attachment_bytes: int | None = None,
 ) -> None:
     with _UNIFIED_LORA_ARCHIVE_WRITE_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
         _cleanup_stale_unified_lora_temp_files(path)
-        attachment_files = _iter_lora_archive_attachment_files(paths) if include_attachments else []
-        attachment_bytes = 0
-        for item in attachment_files:
-            try:
-                attachment_bytes += int(item.stat().st_size)
-            except OSError:
-                continue
+        if include_attachments:
+            attachment_files = list(attachment_files or _iter_lora_archive_attachment_files(paths))
+            if attachment_bytes is None:
+                attachment_bytes = 0
+                for item in attachment_files:
+                    try:
+                        attachment_bytes += int(item.stat().st_size)
+                    except OSError:
+                        continue
+        else:
+            attachment_files = []
+            attachment_bytes = 0
         metadata = {
             "schema": "ai_subtitle_studio.lora_unified_data_archive_manifest.v1",
             "updated_at": iso_now(),
@@ -350,8 +408,10 @@ def _write_unified_lora_archive(
                 compression=zipfile.ZIP_DEFLATED,
                 compresslevel=LORA_ARCHIVE_COMPRESSION_LEVEL,
             ) as archive:
-                archive.writestr(UNIFIED_LORA_ARCHIVE_MANIFEST_NAME, json.dumps(metadata, ensure_ascii=False, indent=2))
-                archive.writestr(UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME, json.dumps(payload, ensure_ascii=False, indent=2))
+                metadata_bytes = _json_bytes(metadata, indent=2)
+                payload_bytes = _json_bytes(payload, indent=2)
+                archive.writestr(UNIFIED_LORA_ARCHIVE_MANIFEST_NAME, metadata_bytes)
+                archive.writestr(UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME, payload_bytes)
                 for item in attachment_files:
                     archive.write(item, f"attachments/{item.relative_to(paths['root']).as_posix()}")
             try:
@@ -371,14 +431,8 @@ def _write_unified_lora_archive(
                         compression=zipfile.ZIP_DEFLATED,
                         compresslevel=LORA_ARCHIVE_COMPRESSION_LEVEL,
                     ) as archive:
-                        archive.writestr(
-                            UNIFIED_LORA_ARCHIVE_MANIFEST_NAME,
-                            json.dumps(metadata, ensure_ascii=False, indent=2),
-                        )
-                        archive.writestr(
-                            UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME,
-                            json.dumps(payload, ensure_ascii=False, indent=2),
-                        )
+                        archive.writestr(UNIFIED_LORA_ARCHIVE_MANIFEST_NAME, metadata_bytes)
+                        archive.writestr(UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME, payload_bytes)
                         for item in attachment_files:
                             archive.write(item, f"attachments/{item.relative_to(paths['root']).as_posix()}")
                     retry_path.replace(path)
@@ -695,6 +749,65 @@ def _bundle_counts_from_cache(paths: dict[str, Path]) -> dict[str, int]:
     )
 
 
+def _load_unified_lora_bundle_sources(paths: dict[str, Path]) -> dict[str, Any]:
+    return {
+        "jsonl_sections": {
+            key: read_jsonl(paths[key])
+            for key in BUNDLE_JSONL_SECTION_KEYS
+        },
+        "json_sections": {
+            "training_queue": read_json(paths["training_queue"], default_queue()),
+            "learned_split_rules": read_json(
+                paths["learned_split_rules"],
+                default_learned_rules("ai_subtitle_studio.learned_split_rules.v1"),
+            ),
+            "learned_line_break_rules": read_json(
+                paths["learned_line_break_rules"],
+                default_learned_rules("ai_subtitle_studio.learned_line_break_rules.v1"),
+            ),
+            "best_settings": read_json(paths["best_settings"], default_best_settings()),
+            "retention_policy": read_json(paths["retention_policy"], default_retention_policy()),
+            "llm_review_request": read_json(paths["llm_review_request"], {}),
+            "llm_review_result": read_json(paths["llm_review_result"], {}),
+            "voice_lora_profile_manifest": read_json(paths["voice_lora_profile_manifest"], {}),
+            "voice_lora_training_plan": read_json(paths["voice_lora_training_plan"], {}),
+            "voice_lora_dataset_manifest": read_json(paths["voice_lora_dataset_manifest"], {}),
+            "stt1_whisper_adapter_dataset_manifest": read_json(paths["stt1_whisper_adapter_dataset_manifest"], {}),
+            "stt1_whisper_adapter_training_plan": read_json(paths["stt1_whisper_adapter_training_plan"], {}),
+            "stt1_whisper_adapter_runtime_manifest": read_json(paths["stt1_whisper_adapter_runtime_manifest"], {}),
+            "text_lora_manifest": read_json(paths["text_lora_manifest"], {}),
+            "text_lora_corpus_manifest": read_json(paths["text_lora_corpus_manifest"], {}),
+            "text_lora_training_plan": read_json(paths["text_lora_training_plan"], {}),
+            "lora_retrieval_index": read_json(paths["lora_retrieval_index"], {}),
+            "subtitle_pattern_index": read_json(paths["subtitle_pattern_index"], {}),
+        },
+    }
+
+
+def _bundle_counts_from_sources(sources: dict[str, Any]) -> dict[str, int]:
+    jsonl_sections = dict(sources.get("jsonl_sections") or {})
+    json_sections = dict(sources.get("json_sections") or {})
+    return _bundle_counts_from_rows(
+        truth_rows=list(jsonl_sections.get("truth_table") or []),
+        excluded_rows=list(jsonl_sections.get("excluded_parentheticals") or []),
+        setting_trials=list(jsonl_sections.get("setting_trials") or []),
+        prompt_trials=list(jsonl_sections.get("prompt_trials") or []),
+        retention_history=list(jsonl_sections.get("retention_history") or []),
+        voice_bridge_rows=list(jsonl_sections.get("voice_lora_bridge") or []),
+        stt1_whisper_adapter_dataset_rows=list(jsonl_sections.get("stt1_whisper_adapter_dataset") or []),
+        text_lora_dataset_rows=list(jsonl_sections.get("text_lora_dataset") or []),
+        text_lora_corpus_rows=list(jsonl_sections.get("text_lora_corpus") or []),
+        audio_preset_rows=list(jsonl_sections.get("audio_preset_lora") or []),
+        multimodal_context_rows=list(jsonl_sections.get("multimodal_lora_context") or []),
+        deep_policy_event_rows=list(jsonl_sections.get("deep_policy_events") or []),
+        voice_training_plan=dict(json_sections.get("voice_lora_training_plan") or {}),
+        stt1_whisper_adapter_plan=dict(json_sections.get("stt1_whisper_adapter_training_plan") or {}),
+        stt1_whisper_runtime_manifest=dict(json_sections.get("stt1_whisper_adapter_runtime_manifest") or {}),
+        retrieval_index=dict(json_sections.get("lora_retrieval_index") or {}),
+        subtitle_pattern_index=dict(json_sections.get("subtitle_pattern_index") or {}),
+    )
+
+
 def _filter_rows_for_bucket(kind: str, rows: list[dict[str, Any]], bucket: str | None) -> list[dict[str, Any]]:
     if not bucket:
         return ranked_lora_rows(kind, rows)
@@ -743,6 +856,7 @@ def _apply_bundle_size_budget(
     paths: dict[str, Path],
     *,
     bucket: str,
+    retention_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out = dict(payload or {})
     sections = dict(out.get("sections") or {})
@@ -750,7 +864,7 @@ def _apply_bundle_size_budget(
         key: [dict(row) for row in list(sections.get(key) or []) if isinstance(row, dict)]
         for key in BUNDLE_JSONL_SECTION_KEYS
     }
-    budget = _bundle_budget_settings(paths, bucket)
+    budget = _bundle_budget_settings_from_policy(retention_policy, bucket)
     skeleton = dict(out)
     skeleton_sections = dict(sections)
     for key in BUNDLE_JSONL_SECTION_KEYS:
@@ -825,43 +939,67 @@ def _apply_bundle_size_budget(
     return out
 
 
-def _build_unified_lora_data_bundle(paths: dict[str, Path], *, bucket: str | None = None) -> dict[str, Any]:
+def _build_unified_lora_data_bundle(
+    paths: dict[str, Path],
+    *,
+    bucket: str | None = None,
+    sources: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    loaded_sources = sources if isinstance(sources, dict) else _load_unified_lora_bundle_sources(paths)
+    raw_jsonl_sections = dict(loaded_sources.get("jsonl_sections") or {})
+    raw_json_sections = dict(loaded_sources.get("json_sections") or {})
     jsonl_sections = {
-        key: _filter_rows_for_bucket(key, read_jsonl(paths[key]), bucket)
+        key: _filter_rows_for_bucket(key, list(raw_jsonl_sections.get(key) or []), bucket)
         for key in BUNDLE_JSONL_SECTION_KEYS
     }
-    voice_training_plan = read_json(paths["voice_lora_training_plan"], {})
-    stt1_whisper_adapter_plan = read_json(paths["stt1_whisper_adapter_training_plan"], {})
-    stt1_whisper_runtime_manifest = read_json(paths["stt1_whisper_adapter_runtime_manifest"], {})
+    voice_training_plan = dict(raw_json_sections.get("voice_lora_training_plan") or {})
+    stt1_whisper_adapter_plan = dict(raw_json_sections.get("stt1_whisper_adapter_training_plan") or {})
+    stt1_whisper_runtime_manifest = dict(raw_json_sections.get("stt1_whisper_adapter_runtime_manifest") or {})
     retrieval_index = {}
-    subtitle_pattern_index = read_json(paths["subtitle_pattern_index"], {}) if bucket == LORA_BUCKET_HIGH else {}
+    subtitle_pattern_index = (
+        dict(raw_json_sections.get("subtitle_pattern_index") or {})
+        if bucket == LORA_BUCKET_HIGH
+        else {}
+    )
     records = _records_from_jsonl_sections(jsonl_sections)
     sections = {
         **jsonl_sections,
-        "training_queue": read_json(paths["training_queue"], default_queue()),
+        "training_queue": dict(raw_json_sections.get("training_queue") or default_queue()),
         "learned_split_rules": _filter_json_section_for_bucket(
             "learned_split_rules",
-            read_json(paths["learned_split_rules"], default_learned_rules("ai_subtitle_studio.learned_split_rules.v1")),
+            dict(
+                raw_json_sections.get("learned_split_rules")
+                or default_learned_rules("ai_subtitle_studio.learned_split_rules.v1")
+            ),
             bucket,
         ),
         "learned_line_break_rules": _filter_json_section_for_bucket(
             "learned_line_break_rules",
-            read_json(paths["learned_line_break_rules"], default_learned_rules("ai_subtitle_studio.learned_line_break_rules.v1")),
+            dict(
+                raw_json_sections.get("learned_line_break_rules")
+                or default_learned_rules("ai_subtitle_studio.learned_line_break_rules.v1")
+            ),
             bucket,
         ),
-        "best_settings": _filter_json_section_for_bucket("best_settings", read_json(paths["best_settings"], default_best_settings()), bucket),
-        "retention_policy": read_json(paths["retention_policy"], default_retention_policy()),
-        "llm_review_request": read_json(paths["llm_review_request"], {}),
-        "llm_review_result": read_json(paths["llm_review_result"], {}),
-        "voice_lora_profile_manifest": read_json(paths["voice_lora_profile_manifest"], {}),
+        "best_settings": _filter_json_section_for_bucket(
+            "best_settings",
+            dict(raw_json_sections.get("best_settings") or default_best_settings()),
+            bucket,
+        ),
+        "retention_policy": dict(raw_json_sections.get("retention_policy") or default_retention_policy()),
+        "llm_review_request": dict(raw_json_sections.get("llm_review_request") or {}),
+        "llm_review_result": dict(raw_json_sections.get("llm_review_result") or {}),
+        "voice_lora_profile_manifest": dict(raw_json_sections.get("voice_lora_profile_manifest") or {}),
         "voice_lora_training_plan": voice_training_plan,
-        "voice_lora_dataset_manifest": read_json(paths["voice_lora_dataset_manifest"], {}),
-        "stt1_whisper_adapter_dataset_manifest": read_json(paths["stt1_whisper_adapter_dataset_manifest"], {}),
+        "voice_lora_dataset_manifest": dict(raw_json_sections.get("voice_lora_dataset_manifest") or {}),
+        "stt1_whisper_adapter_dataset_manifest": dict(
+            raw_json_sections.get("stt1_whisper_adapter_dataset_manifest") or {}
+        ),
         "stt1_whisper_adapter_training_plan": stt1_whisper_adapter_plan,
         "stt1_whisper_adapter_runtime_manifest": stt1_whisper_runtime_manifest,
-        "text_lora_manifest": read_json(paths["text_lora_manifest"], {}),
-        "text_lora_corpus_manifest": read_json(paths["text_lora_corpus_manifest"], {}),
-        "text_lora_training_plan": read_json(paths["text_lora_training_plan"], {}),
+        "text_lora_manifest": dict(raw_json_sections.get("text_lora_manifest") or {}),
+        "text_lora_corpus_manifest": dict(raw_json_sections.get("text_lora_corpus_manifest") or {}),
+        "text_lora_training_plan": dict(raw_json_sections.get("text_lora_training_plan") or {}),
         "lora_retrieval_index": retrieval_index,
         "subtitle_pattern_index": subtitle_pattern_index,
     }
@@ -910,7 +1048,12 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path], *, bucket: str | Non
         ],
     }
     if bucket:
-        return _apply_bundle_size_budget(payload, paths, bucket=bucket)
+        return _apply_bundle_size_budget(
+            payload,
+            paths,
+            bucket=bucket,
+            retention_policy=dict(raw_json_sections.get("retention_policy") or default_retention_policy()),
+        )
     return payload
 
 
@@ -934,19 +1077,24 @@ def refresh_unified_lora_data_bundle(
         counts: dict[str, Any] = {}
         bucket_files: dict[str, Any] = {}
         if needs_refresh:
+            bundle_sources = _load_unified_lora_bundle_sources(paths)
+            attachment_files: list[Path] = []
+            attachment_total_bytes = 0
+            if paths["trained_adapters"].exists():
+                attachment_files, attachment_total_bytes = _attachment_scan(paths)
             for bucket, target in targets.items():
-                payload = _build_unified_lora_data_bundle(paths, bucket=bucket)
+                payload = _build_unified_lora_data_bundle(paths, bucket=bucket, sources=bundle_sources)
                 bundle_budget = dict(payload.get("bundle_budget") or {})
                 estimated_payload_bytes = int(bundle_budget.get("estimated_payload_bytes", 0) or 0)
-                attachment_total_bytes = _attachment_total_bytes(paths) if bucket == LORA_BUCKET_HIGH else 0
+                current_attachment_total_bytes = attachment_total_bytes if bucket == LORA_BUCKET_HIGH else 0
                 include_attachments = (
                     bucket == LORA_BUCKET_HIGH
-                    and attachment_total_bytes > 0
-                    and attachment_total_bytes <= int(bundle_budget.get("attachment_soft_max_bytes", 0) or 0)
-                    and estimated_payload_bytes + attachment_total_bytes <= int(bundle_budget.get("soft_max_bytes", 0) or 0)
-                    and estimated_payload_bytes + attachment_total_bytes <= int(bundle_budget.get("hard_max_bytes", 0) or 0)
+                    and current_attachment_total_bytes > 0
+                    and current_attachment_total_bytes <= int(bundle_budget.get("attachment_soft_max_bytes", 0) or 0)
+                    and estimated_payload_bytes + current_attachment_total_bytes <= int(bundle_budget.get("soft_max_bytes", 0) or 0)
+                    and estimated_payload_bytes + current_attachment_total_bytes <= int(bundle_budget.get("hard_max_bytes", 0) or 0)
                 )
-                if bucket == LORA_BUCKET_HIGH and attachment_total_bytes > 0 and not include_attachments:
+                if bucket == LORA_BUCKET_HIGH and current_attachment_total_bytes > 0 and not include_attachments:
                     notes = list(payload.get("notes") or [])
                     notes.append(
                         "Large trained-adapter attachments were excluded from the high bundle so runtime archive reads stay lightweight."
@@ -963,7 +1111,7 @@ def refresh_unified_lora_data_bundle(
                     "counts": bucket_counts,
                     "bundle_budget": bundle_budget,
                     "include_attachments": include_attachments,
-                    "attachment_candidate_bytes": attachment_total_bytes,
+                    "attachment_candidate_bytes": current_attachment_total_bytes,
                 }
                 _write_unified_lora_archive(
                     target,
@@ -971,9 +1119,11 @@ def refresh_unified_lora_data_bundle(
                     paths,
                     bucket=bucket,
                     include_attachments=include_attachments,
+                    attachment_files=attachment_files if bucket == LORA_BUCKET_HIGH else None,
+                    attachment_bytes=current_attachment_total_bytes if bucket == LORA_BUCKET_HIGH else None,
                 )
                 bucket_files[bucket].update(bundle_file_info(target))
-            counts = _bundle_counts_from_cache(paths)
+            counts = _bundle_counts_from_sources(bundle_sources)
             _remove_legacy_unified_lora_json(paths)
         if not bucket_files:
             bucket_files = {

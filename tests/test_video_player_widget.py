@@ -521,13 +521,76 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(label.toolTip(), os.path.basename(path))
             self.assertEqual(label.text(), os.path.basename(path))
             self.assertFalse(label.wordWrap())
-            self.assertIn("background: transparent", label.styleSheet())
-            self.assertIn("border: none", label.styleSheet())
-            self.assertIsNot(label.parentWidget(), widget.video_container)
+            self.assertIn("border-radius: 9px", label.styleSheet())
+            self.assertIs(label.parentWidget(), widget.status_info_container)
             self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
             control_layout = label.parentWidget().layout()
             self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
-            self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.frame_count_label))
+            self.assertEqual(control_layout.stretch(0), 1)
+            self.assertEqual(control_layout.stretch(1), 1)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_source_meta_badge_shows_probe_details_in_left_half(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".MP4") as f, \
+                 patch("core.media_info.probe_media", return_value={
+                     "duration": 24.0,
+                     "fps": 60000.0 / 1001.0,
+                     "width": 3840,
+                     "height": 2160,
+                     "bit_rate": 42100000,
+                     "pix_fmt": "yuv420p10le",
+                     "color_space": "bt709",
+                     "color_primaries": "bt709",
+                 }), \
+                 patch.object(widget, "_playback_path_for", return_value=f.name), \
+                 patch.object(widget, "_set_media_source_if_needed", return_value=False), \
+                 patch.object(widget, "_extract_and_show_thumbnail"):
+                widget.load(f.name, [])
+
+            info_text = widget.info_label.text()
+            self.assertIn("3840x2160", info_text)
+            self.assertIn("59.94fps", info_text)
+            self.assertIn("yuv420p10le", info_text)
+            self.assertIn("bt709", info_text)
+            self.assertIn("42.1Mbps", info_text)
+            self.assertEqual(widget.source_name_label.text(), os.path.basename(f.name))
+            state = widget._quick_control_bar_state()
+            self.assertEqual(state["infoText"], info_text)
+            self.assertEqual(state["sourceNameText"], os.path.basename(f.name))
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_deferred_probe_replaces_loading_text_with_source_metadata(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch.object(widget, "_playback_path_for", return_value=f.name), \
+                 patch.object(widget, "_set_media_source_if_needed", return_value=False), \
+                 patch.object(widget, "_schedule_initial_thumbnail_prepare"):
+                widget.load(f.name, [], defer_probe=True)
+
+                self.assertIn("불러오는 중", widget.info_label.text())
+
+                widget.apply_source_media_probe(f.name, {
+                    "duration": 12.0,
+                    "fps": 24.0,
+                    "width": 1920,
+                    "height": 1080,
+                    "bit_rate": 12000000,
+                    "pix_fmt": "yuv420p",
+                    "color_space": "bt709",
+                })
+
+            self.assertIn("1920x1080", widget.info_label.text())
+            self.assertIn("24fps", widget.info_label.text())
+            self.assertNotIn("불러오는 중", widget.info_label.text())
         finally:
             widget.close()
             widget.deleteLater()
@@ -545,7 +608,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertFalse(widget.frame_count_label.isHidden())
             self.assertEqual(widget.frame_count_label.text(), "F 50 / 250")
             self.assertGreater(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.time_label))
-            self.assertLess(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.info_label))
+            self.assertLess(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.status_info_container))
 
             widget._apply_seek_state(4.0)
 

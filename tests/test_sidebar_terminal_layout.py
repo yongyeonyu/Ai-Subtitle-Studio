@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QPoint, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QComboBox, QTableWidgetItem, QWidget, QMessageBox
 
 from ui.main.main_window import MainWindow
@@ -50,6 +50,28 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertLessEqual(window.log_text.document().blockCount(), 800)
             self.assertIn("line 899", window.log_text.toPlainText())
             self.assertNotIn("line 0\n", window.log_text.toPlainText())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_terminal_log_shows_user_friendly_progress_text(self):
+        window = MainWindow()
+        try:
+            window.append_log("설정 적용: LLM(exaone3.5:7.8b), 간격 설정은 최종 패스에서 적용")
+            window.append_log("[텍스트 LoRA] 자동 교정 허용: 교정 memory/오답 memory/사용자 단어/줄바꿈 규칙을 최종 LLM에 적용합니다.")
+            window.append_log("[정제-교정사전] 누적적용 8회: '하추핑' => '하츄핑'")
+
+            shown = window.log_text.toPlainText()
+            raw = window.log_text.raw_log_text()
+
+            self.assertIn("준비: 자막 품질 설정을 적용했어요.", shown)
+            self.assertIn("준비: 사용자 말투와 교정 기록을 반영할 준비를 했어요.", shown)
+            self.assertIn("진행: 자주 틀리는 표현을 자동으로 고치고 있어요.", shown)
+            self.assertNotIn("교정 memory/오답 memory/사용자 단어/줄바꿈 규칙", shown)
+            self.assertIn("설정 적용: LLM(exaone3.5:7.8b)", raw)
+            self.assertIn("[텍스트 LoRA] 자동 교정 허용", raw)
+            self.assertIn("[정제-교정사전] 누적적용 8회", raw)
         finally:
             window.close()
             window.deleteLater()
@@ -110,7 +132,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_project_info_button_matches_global_ai_button_height(self):
+    def test_project_info_button_aligns_with_global_menu_bar_top(self):
         window = MainWindow()
         try:
             window._unified_dashboard = True
@@ -120,9 +142,11 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             project_info_btn = getattr(window, "_project_info_button_card", None)
             ai_btn = window.global_menu_bar._tool_buttons[0]
             self.assertIsNotNone(project_info_btn)
-            self.assertEqual(project_info_btn.height(), ai_btn.height())
-            self.assertEqual(project_info_btn.minimumHeight(), ai_btn.minimumHeight())
-            self.assertEqual(project_info_btn.maximumHeight(), ai_btn.maximumHeight())
+            self.assertEqual(
+                project_info_btn.mapTo(window, QPoint(0, 0)).y(),
+                window.global_menu_bar.mapTo(window, QPoint(0, 0)).y(),
+            )
+            self.assertGreaterEqual(project_info_btn.height(), ai_btn.height())
         finally:
             window.close()
             window.deleteLater()
@@ -140,11 +164,14 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(window.right_layout.spacing(), 3)
             for widget in (
                 window.home_page,
+                window.stack,
                 window.bottom_work_panel,
                 window.global_menu_bar,
             ):
                 self.assertIn("border: 1px", widget.styleSheet())
-            self.assertIn("border: none", window.stack.styleSheet())
+            self.assertIn("border-radius: 7px", window.stack.styleSheet())
+            self.assertIn("border-radius: 7px", window.bottom_work_panel.styleSheet())
+            self.assertIn("border-radius: 7px", window.global_menu_bar.styleSheet())
         finally:
             window.close()
             window.deleteLater()
@@ -705,6 +732,80 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertNotIn("stt1", completed)
             self.assertNotIn("stt2", completed)
             self.assertNotIn("subtitle_llm", completed)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_pipeline_current_stage_prefers_queue_status_over_stale_log_history(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_PROC"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText(
+                "\n".join(
+                    [
+                        "⏳ [전처리] FFMPEG 오디오 추출 중",
+                        "⏳ [자막 LLM] 교정/분리 중",
+                    ]
+                )
+            )
+            window.queue_status_probe_parts = lambda _row=0, _columns=(0, 2, 4): ["[STT] STT1/STT2 병렬 인식 중"]
+
+            current = window._pipeline_current_stage_keys(
+                {
+                    "stt_ensemble_enabled": True,
+                    "selected_vad": "silero",
+                    "roughcut_llm_enabled": False,
+                }
+            )
+
+            self.assertEqual(current, {"stt1", "stt2"})
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_pipeline_current_stage_uses_recent_log_suffix_when_queue_status_is_missing(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_PROC"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            stale_lines = [f"⏳ [전처리] FFMPEG 오디오 추출 중 {idx}" for idx in range(30)]
+            window.log_text.setPlainText(
+                "\n".join(
+                    stale_lines
+                    + [
+                        "[STT2] Loading weights: 100%",
+                        "  ▶ [STT1] 진행 상황: 00분 22초 / 02분 59초 (13%)",
+                    ]
+                )
+            )
+
+            current = window._pipeline_current_stage_keys(
+                {
+                    "stt_ensemble_enabled": True,
+                    "selected_vad": "silero",
+                    "roughcut_llm_enabled": False,
+                }
+            )
+
+            self.assertEqual(current, {"stt1", "stt2"})
+            self.assertNotIn("preprocess", current)
         finally:
             window.close()
             window.deleteLater()
@@ -1295,8 +1396,6 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.app.processEvents()
 
     def test_project_info_button_stays_at_sidebar_bottom_and_opens_overlay(self):
-        from ui.menu_bar import MENU_BUTTON_HEIGHT
-
         window = MainWindow()
         try:
             window._unified_dashboard = True
@@ -1310,7 +1409,10 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIsNotNone(button)
             self.assertIsNotNone(terminal)
             self.assertGreater(button.y(), terminal.y())
-            self.assertEqual(button.height(), MENU_BUTTON_HEIGHT)
+            self.assertEqual(
+                button.mapTo(window, QPoint(0, 0)).y(),
+                window.global_menu_bar.mapTo(window, QPoint(0, 0)).y(),
+            )
 
             window._toggle_project_info_card()
             self.app.processEvents()
@@ -1326,7 +1428,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_global_menu_buttons_match_project_info_button_height(self):
+    def test_global_menu_buttons_keep_action_height_while_project_info_aligns_with_bar(self):
         from ui.menu_bar import MENU_BUTTON_HEIGHT
 
         window = MainWindow()
@@ -1337,7 +1439,11 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             button = getattr(window, "_project_info_button_card", None)
             self.assertIsNotNone(button)
-            self.assertEqual(button.height(), MENU_BUTTON_HEIGHT)
+            self.assertEqual(
+                button.mapTo(window, QPoint(0, 0)).y(),
+                window.global_menu_bar.mapTo(window, QPoint(0, 0)).y(),
+            )
+            self.assertGreaterEqual(button.height(), MENU_BUTTON_HEIGHT)
             for menu_button in window.global_menu_bar._tool_buttons:
                 self.assertEqual(menu_button.height(), MENU_BUTTON_HEIGHT)
                 self.assertLessEqual(menu_button.iconSize().height(), 18)
@@ -1928,6 +2034,53 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(events, [("schedule", expected_delay), ("pause", "앱 종료"), ("cleanup_async", expected_timeout)])
             quit_app.assert_called_once()
         finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_exit_runtime_detection_includes_busy_personalization_trainer(self):
+        window = MainWindow()
+
+        class _Trainer:
+            def is_busy(self):
+                return True
+
+        try:
+            window._editor_widget = None
+            window.backend = None
+            window.backend_fast = None
+            window._auto_processing_active = False
+            window._personalization_idle_trainer = _Trainer()
+
+            self.assertTrue(window._has_active_runtime_work_for_exit())
+        finally:
+            window._personalization_idle_trainer = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_about_to_quit_force_exit_is_scheduled_for_busy_personalization_trainer(self):
+        window = MainWindow()
+        calls = []
+
+        class _Trainer:
+            def is_busy(self):
+                return True
+
+        try:
+            window._editor_widget = None
+            window.backend = None
+            window.backend_fast = None
+            window._auto_processing_active = False
+            window._personalization_idle_trainer = _Trainer()
+            window._schedule_forced_process_exit = lambda *, delay_ms: calls.append(delay_ms)
+
+            scheduled = window._schedule_forced_exit_for_busy_about_to_quit()
+
+            self.assertTrue(scheduled)
+            self.assertEqual(calls, [180 if sys.platform == "darwin" else 320])
+        finally:
+            window._personalization_idle_trainer = None
             window.close()
             window.deleteLater()
             self.app.processEvents()

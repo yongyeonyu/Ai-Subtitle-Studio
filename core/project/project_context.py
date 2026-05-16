@@ -32,6 +32,7 @@ from core.project.project_assets import (
 )
 from core.project.project_analysis_store import normalize_project_voice_activity_segment
 from core.project.project_format import project_primary_fps, project_total_duration
+from core.native_json import dumps_json_bytes
 
 STT_SEGMENT_METADATA_KEYS = (
     "stt_candidates",
@@ -472,7 +473,15 @@ def project_segments_to_editor(
 
     boundaries = project_clip_boundaries(project)
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
+    ordered_clips = [
+        clip for clip in sorted(clips, key=lambda item: item.get("order", 0)) if isinstance(clip, dict)
+    ]
     clip_by_id = {str(clip.get("id", "")): clip for clip in clips if clip.get("id")}
+    clip_by_path = {
+        str(clip.get("source_path", "") or ""): clip
+        for clip in ordered_clips
+        if clip.get("source_path")
+    }
     boundary_rows = [
         (
             _safe_float(boundary.get("start")),
@@ -562,6 +571,14 @@ def project_segments_to_editor(
             "end": item.get("end_frame"),
             "timeline_frame_rate": segment_fps,
         }
+        clip = None
+        if clip_id in clip_by_id:
+            clip = clip_by_id[clip_id]
+        elif clip_file:
+            clip = clip_by_path.get(clip_file)
+        elif clip_idx is not None and 0 <= int(clip_idx) < len(ordered_clips):
+            clip = ordered_clips[int(clip_idx)]
+
         if clip_idx is not None:
             item["_clip_idx"] = int(clip_idx)
         if clip_file:
@@ -572,6 +589,19 @@ def project_segments_to_editor(
         for key in ("clip_local_start_frame", "clip_local_end_frame", "source_frame_rate"):
             if key in seg:
                 item[key] = seg.get(key)
+        if clip is not None:
+            source_fps = normalize_fps(clip.get("fps") or clip.get("source_frame_rate") or segment_fps)
+            item.setdefault("source_frame_rate", source_fps)
+            clip_offset = _safe_float(clip.get("timeline_start"), 0.0)
+            clip_local_start = max(0.0, start - clip_offset)
+            clip_local_end = max(clip_local_start, end - clip_offset)
+            item.setdefault("clip_local_start_frame", sec_to_frame(clip_local_start, source_fps))
+            item.setdefault("clip_local_end_frame", sec_to_frame(clip_local_end, source_fps))
+            frame_range = dict(item.get("frame_range") or {})
+            frame_range.setdefault("source_frame_rate", source_fps)
+            frame_range.setdefault("clip_local_start", item.get("clip_local_start_frame"))
+            frame_range.setdefault("clip_local_end", item.get("clip_local_end_frame"))
+            item["frame_range"] = frame_range
         for key in ("quality", "quality_history", "quality_candidates", "quality_stale"):
             if key in seg:
                 value = seg.get(key)
@@ -600,6 +630,19 @@ def _candidate_lookup_key(row: dict[str, Any], primary_fps: float) -> tuple[int,
     return _safe_int(start_frame), _safe_int(end_frame)
 
 
+def _candidate_rows_with_source_copy(rows: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for source, row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        source_text = str(source or row.get("source") or row.get("stt_preview_source") or "")
+        item["source"] = source_text
+        item["stt_preview_source"] = source_text
+        out.append(item)
+    return out
+
+
 def _attach_external_stt_candidates(segments: list[dict[str, Any]], tracks: dict[str, list[dict[str, Any]]]) -> None:
     if not tracks:
         return
@@ -613,21 +656,19 @@ def _attach_external_stt_candidates(segments: list[dict[str, Any]], tracks: dict
             30.0,
         )
     )
-    by_frame: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    by_frame: dict[tuple[int, int], list[tuple[str, dict[str, Any]]]] = {}
     for source, rows in tracks.items():
+        source_text = str(source or "")
         for row in rows or []:
             if not isinstance(row, dict):
                 continue
-            item = dict(row)
-            item["source"] = str(source)
-            item["stt_preview_source"] = str(source)
-            by_frame.setdefault(_candidate_lookup_key(item, primary_fps), []).append(item)
+            by_frame.setdefault(_candidate_lookup_key(row, primary_fps), []).append((source_text, row))
     for seg in segments:
         if not isinstance(seg, dict) or seg.get("stt_candidates"):
             continue
         candidates = by_frame.get(_candidate_lookup_key(seg, primary_fps), [])
         if candidates:
-            seg["stt_candidates"] = copy_project_rows(candidates)
+            seg["stt_candidates"] = _candidate_rows_with_source_copy(candidates)
 
 
 def _attach_lattice_candidates_from_artifact(segments: list[dict[str, Any]], project: dict[str, Any]) -> None:
@@ -706,7 +747,9 @@ def build_editor_state(
 ) -> dict[str, Any]:
     mode = "multiclip" if mode == "multiclip" or len(media_files) > 1 else "single"
     fps = normalize_fps(primary_fps or 30.0)
+    normalized_media_files = [os.path.abspath(path) for path in media_files if path]
     normalized_segments = _normalize_editor_segments(segments, primary_fps=fps)
+    segment_signature_value = segment_signature(normalized_segments)
     boundaries = [_normalize_boundary(item, idx) for idx, item in enumerate(clip_boundaries or [])]
     stt_preview = _normalize_stt_preview_segments(
         stt_preview_segments or [],
@@ -728,12 +771,12 @@ def build_editor_state(
     return {
         "schema": EDITOR_STATE_SCHEMA,
         "mode": mode,
-        "media_files": [os.path.abspath(path) for path in media_files if path],
+        "media_files": normalized_media_files,
         "single_clip": {
-            "source_path": os.path.abspath(media_files[0]) if media_files and mode == "single" else "",
+            "source_path": normalized_media_files[0] if normalized_media_files and mode == "single" else "",
         },
         "multiclip": {
-            "files": [os.path.abspath(path) for path in media_files if path] if mode == "multiclip" else [],
+            "files": normalized_media_files if mode == "multiclip" else [],
             "boundaries": boundaries if mode == "multiclip" else [],
             "cut_boundary_schema": CUT_BOUNDARY_SCHEMA,
             "cut_boundaries": cut_boundary_rows if mode == "multiclip" else [],
@@ -744,12 +787,13 @@ def build_editor_state(
             "storage": "vector_canvas",
             "segments": [],
             "segment_count": len(normalized_segments),
-            "segment_signature": segment_signature(normalized_segments),
+            "segment_signature": segment_signature_value,
         },
         "rendering": {
             "subtitle_canvas": build_subtitle_canvas_vector_state(
                 normalized_segments,
                 primary_fps=fps,
+                segment_signature_value=segment_signature_value,
             ),
         },
         "stt": {
@@ -930,8 +974,8 @@ def segment_signature(segments: list[dict[str, Any]]) -> str:
                 "speaker_list": list(seg.get("speaker_list", []) or []),
             }
         )
-    payload = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    payload = dumps_json_bytes(compact, sort_keys=True, compact=True)
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _vector_style_ref(seg: dict[str, Any]) -> str:
@@ -949,6 +993,7 @@ def build_subtitle_canvas_vector_state(
     segments: list[dict[str, Any]],
     *,
     primary_fps: float = 30.0,
+    segment_signature_value: str | None = None,
 ) -> dict[str, Any]:
     """Build a semantic vector layer for future GPU/scene-graph subtitle canvas rendering."""
     fps = normalize_fps(primary_fps or 30.0)
@@ -1030,7 +1075,11 @@ def build_subtitle_canvas_vector_state(
             "fallback": "",
         },
         "segments": objects,
-        "segment_signature": segment_signature(segments or []),
+        "segment_signature": (
+            str(segment_signature_value)
+            if segment_signature_value is not None
+            else segment_signature(segments or [])
+        ),
     }
 
 

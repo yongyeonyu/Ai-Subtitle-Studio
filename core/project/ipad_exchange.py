@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from core.media_fingerprint import media_file_fingerprint, media_fingerprint_digest
+from core.media_fingerprint import media_fingerprint_digest, media_fingerprint_snapshot
 
 IPAD_EXCHANGE_SCHEMA = "ai_subtitle_studio.ipad_exchange.v1"
 
@@ -47,14 +47,15 @@ def _portable_fingerprint_digest(path: str, *, sample_bytes: int = 1024 * 1024) 
 
 def _file_record(path: str, *, project_root: str = "") -> dict[str, Any]:
     abs_path = _abs(path)
-    exists = bool(abs_path and os.path.exists(abs_path))
-    try:
-        stat = os.stat(abs_path)
-        size = int(getattr(stat, "st_size", 0) or 0)
-        mtime_ns = int(getattr(stat, "st_mtime_ns", int(getattr(stat, "st_mtime", 0.0) * 1_000_000_000)))
-    except OSError:
-        size = 0
-        mtime_ns = 0
+    snapshot = media_fingerprint_snapshot(abs_path, missing_digest="") if abs_path else {
+        "path": "",
+        "exists": False,
+        "size": 0,
+        "mtime_ns": 0,
+        "fingerprint": "",
+        "fingerprint_digest": "",
+    }
+    exists = bool(snapshot.get("exists"))
     rel = ""
     if project_root:
         try:
@@ -67,11 +68,11 @@ def _file_record(path: str, *, project_root: str = "") -> dict[str, Any]:
         "name": os.path.basename(abs_path),
         "suffix": Path(abs_path).suffix.lower(),
         "exists": exists,
-        "size": size,
-        "mtime_ns": mtime_ns,
+        "size": int(snapshot.get("size", 0) or 0),
+        "mtime_ns": int(snapshot.get("mtime_ns", 0) or 0),
         "sync_provider": _sync_provider(abs_path),
-        "fingerprint": media_file_fingerprint(abs_path) if exists else "",
-        "fingerprint_digest": media_fingerprint_digest(abs_path) if exists else "",
+        "fingerprint": str(snapshot.get("fingerprint", "") or ""),
+        "fingerprint_digest": str(snapshot.get("fingerprint_digest", "") or ""),
         "portable_fingerprint_digest": _portable_fingerprint_digest(abs_path) if exists else "",
     }
 

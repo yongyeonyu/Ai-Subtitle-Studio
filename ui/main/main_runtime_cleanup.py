@@ -240,6 +240,19 @@ class MainRuntimeCleanupMixin:
             return True
         if bool(getattr(self, "_auto_processing_active", False)):
             return True
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        if trainer is not None:
+            try:
+                if bool(getattr(trainer, "is_busy", lambda: False)()) or bool(
+                    getattr(trainer, "_current_learning_mode", "")
+                ):
+                    return True
+            except Exception:
+                try:
+                    if bool(getattr(trainer, "_current_learning_mode", "")):
+                        return True
+                except Exception:
+                    pass
         for manager_name in ("_cloud_sync_manager", "_nas_sync_manager"):
             manager = getattr(self, manager_name, None)
             if manager is None:
@@ -250,6 +263,24 @@ class MainRuntimeCleanupMixin:
             except Exception:
                 pass
         return False
+
+    def _schedule_forced_exit_for_busy_about_to_quit(self) -> bool:
+        schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
+        if not callable(schedule_exit):
+            return False
+        try:
+            should_force = bool(self._has_active_runtime_work_for_exit())
+        except Exception:
+            should_force = False
+        if not should_force:
+            return False
+        delay_ms = 180 if getattr(config, "IS_MAC", False) else 320
+        _run_cleanup_step(
+            "app about-to-quit forced process exit",
+            lambda: schedule_exit(delay_ms=delay_ms),
+            default=None,
+        )
+        return True
 
     def _restore_normal_cursor(self, *widgets) -> None:
         app = QApplication.instance()

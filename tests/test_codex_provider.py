@@ -84,10 +84,74 @@ class CodexProviderTests(unittest.TestCase):
         self.assertIn("--output-schema", cmd)
         self.assertIn("--output-last-message", cmd)
         self.assertIn("--config", cmd)
-        self.assertEqual(cmd[cmd.index("--config") + 1], 'model_reasoning_effort="minimal"')
+        self.assertEqual(cmd[cmd.index("--config") + 1], 'model_reasoning_effort="low"')
         self.assertFalse(captured["kwargs"].get("shell"))
         self.assertEqual(captured["kwargs"]["timeout"], 7)
         self.assertIn("AI Subtitle Studio's subtitle segmentation engine", captured["kwargs"]["input"])
+
+    def test_split_text_retries_low_effort_when_minimal_conflicts_with_tools(self):
+        calls = []
+        codex_provider._MINIMAL_EFFORT_TOOL_CONFLICT_SEEN = False
+
+        class _Result:
+            def __init__(self, returncode=0, stdout="", stderr=""):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        def fake_run(cmd, **_kwargs):
+            if not cmd or "codex" not in str(cmd[0]):
+                return _Result(returncode=1)
+            calls.append(cmd)
+            effort = cmd[cmd.index("--config") + 1]
+            if 'model_reasoning_effort="minimal"' in effort:
+                return _Result(
+                    returncode=1,
+                    stderr="ERROR: The following tools cannot be used with reasoning.effort 'minimal': image_gen, web_search.",
+                )
+            output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps({"result": ["복구"]}), encoding="utf-8")
+            return _Result()
+
+        with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
+                patch.dict(os.environ, {"AI_SUBTITLE_CODEX_SPLIT_EFFORT": "minimal"}, clear=False), \
+                patch("core.runtime.subprocess_utils.subprocess.run", side_effect=fake_run):
+            result = codex_provider.split_text(DEFAULT_CODEX_LABEL, "split this", timeout=7)
+
+        self.assertEqual(result, ["복구"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][calls[0].index("--config") + 1], 'model_reasoning_effort="minimal"')
+        self.assertEqual(calls[1][calls[1].index("--config") + 1], 'model_reasoning_effort="low"')
+        self.assertTrue(codex_provider._MINIMAL_EFFORT_TOOL_CONFLICT_SEEN)
+
+    def test_split_text_skips_minimal_after_tool_conflict_seen(self):
+        calls = []
+        codex_provider._MINIMAL_EFFORT_TOOL_CONFLICT_SEEN = True
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **_kwargs):
+            if not cmd or "codex" not in str(cmd[0]):
+                return _Result()
+            calls.append(cmd)
+            output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps({"result": ["바로 low"]}), encoding="utf-8")
+            return _Result()
+
+        try:
+            with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
+                    patch.dict(os.environ, {"AI_SUBTITLE_CODEX_SPLIT_EFFORT": "minimal"}, clear=False), \
+                    patch("core.runtime.subprocess_utils.subprocess.run", side_effect=fake_run):
+                result = codex_provider.split_text(DEFAULT_CODEX_LABEL, "split this", timeout=7)
+        finally:
+            codex_provider._MINIMAL_EFFORT_TOOL_CONFLICT_SEEN = False
+
+        self.assertEqual(result, ["바로 low"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][calls[0].index("--config") + 1], 'model_reasoning_effort="low"')
 
     def test_split_text_raises_on_timeout(self):
         with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \

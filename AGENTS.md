@@ -1,6 +1,6 @@
 <!--
-Document-Version: 04.00.06-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_6_RELEASED
+Document-Version: 04.00.07-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_7_RELEASED
 Last-Updated: 2026-05-16
 Updated-By: Codex
 Purpose: Agent bootstrap, token-efficient navigation, and handoff rules only.
@@ -93,10 +93,10 @@ Required workflow:
 - Short-video test rule: use `/Users/u_mo_c/Downloads/마카오테스트` for quick smoke tests, short subtitle-generation regressions, and fast UI/runtime verification runs.
 - Long-video test rule: use `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4` for long-running pipeline checks, cache-reset/fresh-run validation, ETA/progress observation, and memory/performance validation on extended media.
 - New-chat rule: when handing off to a fresh chat, keep the user-facing handoff in Korean but compress it for token efficiency; prefer exact paths, commands, verified results, and next actions over narrative explanation.
-- Current app version in code: `04.00.06`
-- Current handoff document version: `04.00.06-mac-native`
-- Latest release checkpoint: `v04.00.06`
-- Current phase: `MAC_NATIVE_APPSTORE_V4_0_6_RELEASED`
+- Current app version in code: `04.00.07`
+- Current handoff document version: `04.00.07-mac-native`
+- Latest release checkpoint: `v04.00.07`
+- Current phase: `MAC_NATIVE_APPSTORE_V4_0_7_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
@@ -150,14 +150,16 @@ Required workflow:
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Refactor state: the longest subtitle/project/editor/runtime modules were split by responsibility into `core.audio.transcribe_worker_io`, `core.engine.subtitle_segment_filter`, `core.engine.subtitle_accuracy_utils`, `core.pipeline.cut_boundary_cache`, and `ui.editor.editor_segments_bulk_load` so future native migration work has smaller seams.
-- Verification state: `v04.00.06` release verification passed with the full Python suite, Swift package tests, `compileall`, `git diff --check`, local beta DMG build/validation, and refreshed release handoff files. Full release verification details are in `RELEASE_v04.00.06.md`.
-- Latest regression checkpoint: on 2026-05-16, `venv/bin/python -m pytest -q`, `venv/bin/python -m compileall -q main.py core ui tests`, `git diff --check -- .`, `swift test` in `native/macos/AIStudioNative`, and `packaging/macos/build_beta_dmg.sh` passed for `v04.00.06`.
+- Verification state: `v04.00.07` release verification passed with the full Python suite, offscreen `MainWindow` smoke, Swift package tests, `compileall`, `git diff --check`, local beta DMG build/validation, and refreshed release handoff files. Full release verification details are in `RELEASE_v04.00.07.md`.
+- Latest regression checkpoint: on 2026-05-16, `venv/bin/python -m pytest -q`, `QT_QPA_PLATFORM=offscreen venv/bin/python` `MainWindow` smoke, `venv/bin/python -m compileall -q main.py core ui tests`, `git diff --check -- .`, `swift test` in `native/macos/AIStudioNative`, and `packaging/macos/build_beta_dmg.sh` passed for `v04.00.07`.
 
 ## Collaboration Rules
 
 - Reply to the user in Korean unless they explicitly request another language.
 - Use formal, respectful Korean honorifics when replying to the user.
 - Keep repository documentation written in English unless the file is source data or user-visible Korean copy.
+- Unless the user explicitly asks for detail, keep user-facing replies to one short Korean line focused on outcome only.
+- Do not show code, long explanations, or file-by-file breakdowns unless the user explicitly asks for them.
 - Implement requested changes directly when the request is clear.
 - Preserve existing user changes. Do not revert unrelated dirty files.
 - Do not commit, push, or publish unless the user explicitly asks.
@@ -180,6 +182,8 @@ Required workflow:
   - a short Korean summary in chat;
   - the exact local file path for the full artifact; and
   - only the minimum quoted lines needed to identify the root cause or current state.
+- Default to strict token saving in chat: prefer a one-line completion summary unless the user explicitly asks for more detail.
+- During long optimization/verification runs, keep user-facing progress to one short Korean line per batch, write full logs/artifacts to `output/manual_verification/latest/`, and keep resumable state in `.codex_work/overnight_state.md`.
 - Store real-app verification artifacts under `output/manual_verification/latest/` by default. This includes compact reports, status snapshots, screenshots, and short notes for the most recent verification pass. If a task needs a permanent named archive too, keep `latest/` as the quick pointer and create the named sibling folder separately.
 - Final completion reports should default to four compact items only unless the user asks for more detail:
   - root cause or purpose;

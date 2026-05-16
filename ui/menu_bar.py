@@ -29,6 +29,7 @@ MENU_SMALL_ICON = 17
 MENU_WIDE_ICON = 16
 MENU_ACTION_ICON = 18
 MENU_TEXT_UNDER_ICON_PADDING = "5px 5px 2px 5px"
+MENU_PANEL_RADIUS = 7
 
 
 class StatusRail(QWidget):
@@ -339,7 +340,7 @@ class GlobalMenuBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
             "QWidget#GlobalMenuBar { "
-            "background: #151C20; border: 1px solid #2D3942; border-radius: 0px; "
+            f"background: #151C20; border: 1px solid #2D3942; border-radius: {MENU_PANEL_RADIUS}px; "
             "} "
             "QWidget#MenuBarGroup { background: transparent; border: none; }"
         )

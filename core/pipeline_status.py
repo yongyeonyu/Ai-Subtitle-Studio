@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from core.native_swift_pipeline_status import summarize_pipeline_status_via_swift
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 
 
@@ -188,6 +189,27 @@ def _status_stage_keys_cached(
     return all_keys if collect_all else latest_keys
 
 
+def _native_stage_summary(
+    blob: str,
+    *,
+    stt_ensemble_enabled: bool,
+) -> tuple[frozenset[str], frozenset[str], str] | None:
+    summary = summarize_pipeline_status_via_swift(
+        blob,
+        stt_ensemble_enabled=stt_ensemble_enabled,
+    )
+    if not isinstance(summary, dict):
+        return None
+    latest_keys = frozenset(str(key) for key in list(summary.get("keys") or []) if str(key) in STAGE_LABELS)
+    all_keys = frozenset(str(key) for key in list(summary.get("all_keys") or []) if str(key) in STAGE_LABELS)
+    label = str(summary.get("label", "") or "")
+    if not all_keys and latest_keys:
+        all_keys = latest_keys
+    if (latest_keys or all_keys) and not label:
+        label = _stage_label_from_keys(latest_keys or all_keys)
+    return latest_keys, all_keys, label
+
+
 @lru_cache(maxsize=256)
 def _stage_summary_cached(
     blob: str,
@@ -195,6 +217,12 @@ def _stage_summary_cached(
 ) -> tuple[frozenset[str], frozenset[str], str]:
     if not blob:
         return frozenset(), frozenset(), ""
+    native_summary = _native_stage_summary(
+        blob,
+        stt_ensemble_enabled=stt_ensemble_enabled,
+    )
+    if native_summary is not None:
+        return native_summary
     normalized, lines = _normalized_status_lines_cached(blob)
     latest_keys = frozenset(
         _blob_stage_keys(
@@ -265,7 +293,7 @@ def generation_stage_summary(status_text: object, *, stt_ensemble_enabled: bool 
 
 
 def generation_stage_label(status_text: object, *, stt_ensemble_enabled: bool = False) -> str:
-    return _generation_stage_label_cached(_status_blob(status_text), True)
+    return _generation_stage_label_cached(_status_blob(status_text), stt_ensemble_enabled)
 
 
 def is_generation_stage_status(status_text: object) -> bool:

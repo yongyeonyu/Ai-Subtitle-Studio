@@ -50,6 +50,37 @@ class RuntimeLoggerTests(unittest.TestCase):
         self.assertIn("subtitle-llm", printed_lines[1])
         self.assertEqual(logger.recent_lines(1), [raw_block])
 
+    def test_recent_lines_returns_tail_in_original_order(self):
+        logger = get_logger()
+        logger._terminal_stdout = io.StringIO()
+        for idx in range(20):
+            logger.log(f"line-{idx}")
+
+        self.assertEqual(logger.recent_lines(3), ["line-17", "line-18", "line-19"])
+        self.assertEqual(len(logger.recent_lines(200)), 20)
+
+    def test_recent_lines_and_filtered_returns_both_tails_from_one_scan(self):
+        logger = get_logger()
+        logger._terminal_stdout = io.StringIO()
+        for line in (
+            "plain-0",
+            "STT 진행 중",
+            "plain-1",
+            "자막 생성 완료",
+            "plain-2",
+        ):
+            logger.log(line)
+
+        recent, filtered = logger.recent_lines_and_filtered(
+            recent_limit=3,
+            filtered_scan_limit=5,
+            filtered_limit=2,
+            predicate=lambda line: ("stt" in str(line).lower()) or ("자막 생성 완료" in str(line)),
+        )
+
+        self.assertEqual(recent, ["plain-1", "자막 생성 완료", "plain-2"])
+        self.assertEqual(filtered, ["STT 진행 중", "자막 생성 완료"])
+
     def test_stream_capture_prefixes_direct_stdout_and_stderr_writes(self):
         logger = get_logger()
         stdout_buffer = io.StringIO()

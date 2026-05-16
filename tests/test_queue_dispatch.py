@@ -206,6 +206,45 @@ class QueueDispatchTests(unittest.TestCase):
         self.assertEqual(metrics["elapsed"], 25.0)
         self.assertEqual(metrics["expected_label"], "01:15")
 
+    def test_non_generation_active_status_does_not_start_elapsed_before_pipeline_runs(self):
+        class _DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._current_file_idx = 1
+                self._total_files = 1
+                self._real_pct = 0
+                self._expected_seconds = {}
+                self._file_start_times = {}
+                self._file_complete_times = {}
+                self._queue_row_cache = []
+                self._sidebar_queue_cache_items = []
+                self._sidebar_queue_cache_header = ""
+                self.backend = None
+                self.backend_fast = None
+                self._live_timer = type("_Timer", (), {"start": lambda _self, _interval: None, "stop": lambda _self: None})()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = _DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+
+        with patch("ui.queue_widget.time.time", return_value=100.0):
+            queue.update_queue_status(0, "검토 중", "01:15", "1920x1080", "01:15")
+
+        self.assertNotIn(0, queue._file_start_times)
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "01:15")
+
+        with patch("ui.queue_widget.time.time", return_value=130.0):
+            queue._update_live_queue_header()
+
+        self.assertNotIn(0, queue._file_start_times)
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "01:15")
+
     def test_queue_progress_metrics_exposes_completion_counts(self):
         class _DummyQueue(QueueMixin):
             def __init__(self):

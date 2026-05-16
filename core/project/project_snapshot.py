@@ -172,9 +172,11 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
     editor = _editor_from_owner(owner)
     segment_rows = segments if isinstance(segments, list) else list(segments or [])
     srt_abs = os.path.abspath(srt_path) if srt_path else None
+    multiclip_files = list(getattr(owner, '_multiclip_files', []) or [])
+    multiclip_boundaries = list(getattr(owner, '_multiclip_boundaries', []) or [])
     media_files = []
-    if getattr(owner, '_multiclip_files', None):
-        media_files = [os.path.abspath(p) for p in list(getattr(owner, '_multiclip_files', []))]
+    if multiclip_files:
+        media_files = [os.path.abspath(p) for p in multiclip_files]
     elif editor is not None and getattr(editor, 'media_path', None):
         media_files = [os.path.abspath(editor.media_path)]
     mode = 'multiclip' if len(media_files) > 1 else 'single'
@@ -196,7 +198,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
     cut_boundaries = sanitize_cut_boundary_rows(
         [
             row if isinstance(row, dict) else {"timeline_sec": row, "time": row, "status": "verified"}
-            for row in list(getattr(owner, '_project_boundary_times', []) or [])
+            for row in (getattr(owner, '_project_boundary_times', []) or [])
         ],
         primary_fps=primary_fps,
     )
@@ -205,7 +207,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         media_files=media_files,
         segments=segment_rows,
         workspace=_ui_state(editor) if editor is not None else {},
-        clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
+        clip_boundaries=multiclip_boundaries,
         stt_preview_segments=stt_preview_segments,
         cut_boundaries=cut_boundaries,
         provisional_cut_boundaries=provisional_cut_boundaries,
@@ -230,8 +232,8 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         'editor_state': editor_state,
         'project_meta': {
             'project_boundary_times': list(cut_boundaries),
-            'multiclip_boundaries': list(getattr(owner, '_multiclip_boundaries', []) or []),
-            'sorted_files': list(getattr(owner, '_multiclip_files', []) or []),
+            'multiclip_boundaries': multiclip_boundaries,
+            'sorted_files': multiclip_files,
         },
     }
     if voice_activity_segments:

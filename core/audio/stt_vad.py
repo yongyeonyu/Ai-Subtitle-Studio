@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import time
 
-from core.media_fingerprint import media_file_fingerprint, media_fingerprint_digest
+from core.media_fingerprint import media_fingerprint_snapshot
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -29,11 +29,15 @@ _STT_VAD_CACHE_VERSION = 3
 def _stt_vad_cache_identity(media_path: str) -> dict:
     try:
         source = os.path.abspath(str(media_path or ""))
-        stat = os.stat(source)
-        source_size = int(stat.st_size)
-        source_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
-        source_fingerprint = media_file_fingerprint(source, sample_bytes=512 * 1024, include_samples=True)
-        source_digest = media_fingerprint_digest(source, sample_bytes=512 * 1024, include_samples=True)
+        snapshot = media_fingerprint_snapshot(
+            source,
+            sample_bytes=512 * 1024,
+            include_samples=True,
+        )
+        source_size = int(snapshot.get("size", 0) or 0)
+        source_mtime_ns = int(snapshot.get("mtime_ns", 0) or 0)
+        source_fingerprint = str(snapshot.get("fingerprint", source) or source)
+        source_digest = str(snapshot.get("fingerprint_digest", "") or "")
     except Exception:
         source = os.path.abspath(str(media_path or ""))
         source_size = 0

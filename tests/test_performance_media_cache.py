@@ -185,6 +185,86 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertEqual(result["info_txt"], "오디오 파일")
         self.assertEqual(result["len_txt"], "01:01")
 
+    def test_probe_media_prefers_swift_normalizer_when_available(self):
+        payload = {
+            "format": {"duration": "8.4", "bit_rate": "42100000"},
+            "streams": [{
+                "duration": "8.4",
+                "width": 3840,
+                "height": 2160,
+                "r_frame_rate": "60000/1001",
+            }],
+        }
+        native_result = {
+            "duration": 8.4,
+            "width": 3840,
+            "height": 2160,
+            "fps": 59.94005994,
+            "bit_rate": 42100000,
+            "pix_fmt": "",
+            "color_space": "",
+            "color_transfer": "",
+            "color_primaries": "",
+            "codec_name": "",
+            "profile": "",
+            "bits_per_raw_sample": 0,
+            "info_txt": "3840x2160 (59.94fps)",
+            "len_txt": "00:08",
+        }
+        with patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+             patch("core.media_info.normalize_probe_json_via_swift", return_value=native_result) as native_mock, \
+             patch("core.media_info.loads_json_output", side_effect=AssertionError("swift path should skip python json decoding")), \
+             patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))):
+            result = media_info.probe_media("sample.mp4", use_cache=False)
+
+        native_mock.assert_called_once()
+        self.assertEqual(result["width"], 3840)
+        self.assertEqual(result["len_txt"], "00:08")
+
+    def test_probe_media_falls_back_to_python_normalizer_when_swift_is_unavailable(self):
+        payload = {
+            "format": {"duration": "8.4"},
+            "streams": [{"duration": "8.4", "width": 1280, "height": 720, "r_frame_rate": "24000/1001"}],
+        }
+        with patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+             patch("core.media_info.normalize_probe_json_via_swift", return_value=None), \
+             patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))):
+            result = media_info.probe_media("sample.mp4", use_cache=False)
+
+        self.assertEqual(result["width"], 1280)
+        self.assertAlmostEqual(result["fps"], 23.976023976, places=6)
+
+    def test_probe_media_exposes_video_color_and_bitrate_fields(self):
+        payload = {
+            "format": {"duration": "8.4", "bit_rate": "42100000"},
+            "streams": [{
+                "duration": "8.4",
+                "width": 3840,
+                "height": 2160,
+                "r_frame_rate": "60000/1001",
+                "bit_rate": "42100000",
+                "pix_fmt": "yuv420p10le",
+                "color_space": "bt709",
+                "color_transfer": "bt709",
+                "color_primaries": "bt709",
+                "codec_name": "hevc",
+                "profile": "Main 10",
+                "bits_per_raw_sample": "10",
+            }],
+        }
+        with patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+             patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))):
+            result = media_info.probe_media("sample.mp4", use_cache=False)
+
+        self.assertEqual(result["bit_rate"], 42100000)
+        self.assertEqual(result["pix_fmt"], "yuv420p10le")
+        self.assertEqual(result["color_space"], "bt709")
+        self.assertEqual(result["color_transfer"], "bt709")
+        self.assertEqual(result["color_primaries"], "bt709")
+        self.assertEqual(result["codec_name"], "hevc")
+        self.assertEqual(result["profile"], "Main 10")
+        self.assertEqual(result["bits_per_raw_sample"], 10)
+
     def test_probe_media_uses_stream_duration_when_format_duration_is_missing(self):
         payload = {
             "format": {},

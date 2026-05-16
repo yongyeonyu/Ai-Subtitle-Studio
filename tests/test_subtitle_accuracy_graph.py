@@ -52,6 +52,14 @@ class SubtitleAccuracyGraphTests(unittest.TestCase):
             self.assertEqual(payload["schema"], SUBTITLE_ACCURACY_GRAPH_SCHEMA)
             self.assertEqual(payload["segments"][0]["segment_id"], "seg-1")
 
+    def test_build_graph_does_not_mutate_input_segment(self):
+        segment = self._segment()
+        original = json.loads(json.dumps(segment, ensure_ascii=False))
+
+        build_subtitle_accuracy_graph([segment], {"sub_max_cps": 12})
+
+        self.assertEqual(segment, original)
+
     def test_save_project_links_persisted_accuracy_graph_in_analysis(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             from core.project import project_manager
