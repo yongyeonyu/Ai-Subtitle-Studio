@@ -51,6 +51,36 @@ class SinglePipelineMixin:
         self._ui_emit("_sig_update_queue", queue_index, text, "", "", "")
         self._ui_emit("_sig_editor_processing_stage", text)
 
+    def _emit_generation_completion_ready(
+        self,
+        queue_index: int,
+        *,
+        reason: str = "backend_done",
+        allow_inactive_fallback: bool = False,
+    ) -> bool:
+        if bool(getattr(self, "_stop_requested", False)):
+            return False
+        if not bool(getattr(self, "_active", False)):
+            if not bool(allow_inactive_fallback):
+                return False
+            try:
+                get_logger().log("⚠️ 생성 완료 안전장치: active 플래그가 먼저 내려가도 완료 확정을 이어갑니다.")
+            except Exception:
+                pass
+        emitted = False
+        try:
+            emitted = bool(self._ui_emit("_sig_finalize_generation_complete", str(reason or "backend_done")))
+        except Exception as exc:
+            try:
+                get_logger().log(f"⚠️ 생성 완료 시그널 emit 실패: {exc}")
+            except Exception:
+                pass
+        try:
+            self._ui_emit("_sig_update_queue", queue_index, "저장 준비 중", "", "", "")
+        except Exception:
+            pass
+        return emitted
+
     def _emit_processing_preview_segments(
         self,
         stage: str,
@@ -1062,10 +1092,17 @@ class SinglePipelineMixin:
 
             # ✅ STT 완료 → 큐 즉시 업데이트
             if not self._active:
+                self._emit_generation_completion_ready(
+                    queue_index,
+                    reason="stt_optimizer_threads_done",
+                    allow_inactive_fallback=bool(auto_collected_segs),
+                )
                 return
 
-            self._ui_emit("_sig_finalize_generation_complete", "stt_optimizer_threads_done")
-            self._ui_emit("_sig_update_queue", queue_index, "저장 준비 중", "", "", "")
+            self._emit_generation_completion_ready(
+                queue_index,
+                reason="stt_optimizer_threads_done",
+            )
 
             try:
                 s = load_settings()

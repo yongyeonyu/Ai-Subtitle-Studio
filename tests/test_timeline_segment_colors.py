@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from core.audio.stt_candidate_scorer import stt_score_to_color
+from core.project.subtitle_status import subtitle_detection_score
 from ui.timeline.timeline_paint import (
     SEGMENT_TEXT_KIND_STYLES,
     official_boundary_marker_visual,
@@ -158,7 +159,7 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(by_line[0]["borderWidth"], 2)
         self.assertEqual(by_line[1]["borderWidth"], 1)
 
-    def test_scenegraph_stacks_overlapping_stt_preview_candidates_per_source(self):
+    def test_scenegraph_keeps_overlapping_stt_preview_candidates_on_single_row_per_source(self):
         objects = build_scenegraph_subtitle_segments(
             [
                 {
@@ -191,13 +192,13 @@ class TimelineSegmentColorTests(unittest.TestCase):
         first = by_text["STT1 첫 후보"]
         second = by_text["STT1 둘 후보"]
         self.assertEqual(first["y"], STT1_TOP + STT_PREVIEW_VERTICAL_INSET)
-        self.assertGreater(second["y"], first["y"])
-        self.assertLessEqual(first["y"] + first["h"], second["y"])
-        self.assertGreaterEqual(first["h"], ((STT1_BOT - STT1_TOP) - (STT_PREVIEW_VERTICAL_INSET * 2) - 1) // 2)
+        self.assertEqual(second["y"], first["y"])
+        self.assertEqual(first["h"], (STT1_BOT - STT1_TOP) - (STT_PREVIEW_VERTICAL_INSET * 2))
+        self.assertEqual(second["h"], first["h"])
         self.assertEqual(first["fill"], "#FF453A")
         self.assertEqual(second["fill"], "#34C759")
 
-    def test_stt_preview_lane_assignment_caps_visible_split_count_to_three_rows(self):
+    def test_stt_preview_lane_assignment_caps_visible_split_count_to_one_row(self):
         segments = [
             {"start": 1.0, "end": 2.0, "text": "a"},
             {"start": 1.0, "end": 2.0, "text": "b"},
@@ -208,14 +209,14 @@ class TimelineSegmentColorTests(unittest.TestCase):
         lane_map, lane_count = assign_stt_preview_lanes(segments)
 
         self.assertEqual(lane_count, MAX_STT_PREVIEW_SUBLANES)
-        self.assertEqual({lane_map[id(seg)] for seg in segments}, {0, 1, 2})
+        self.assertEqual({lane_map[id(seg)] for seg in segments}, {0})
 
         slot_heights = {
             stt_preview_lane_geometry(STT1_TOP, STT1_BOT, lane_map[id(seg)], lane_count, inset=STT_PREVIEW_VERTICAL_INSET)[1]
             for seg in segments
         }
         self.assertEqual(len(slot_heights), 1)
-        self.assertGreaterEqual(next(iter(slot_heights)), 24)
+        self.assertEqual(next(iter(slot_heights)), (STT1_BOT - STT1_TOP) - (STT_PREVIEW_VERTICAL_INSET * 2))
 
     def test_manual_confirmed_subtitle_keeps_green_border_under_filters(self):
         seg = {
@@ -267,6 +268,23 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(style["fill"], COLORS["warning_surface"])
         self.assertEqual(style["border"], COLORS["warning"])
 
+    def test_fractional_quality_confidence_score_does_not_force_recheck(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "비율 점수 자막",
+            "quality": {"confidence_label": "green", "confidence_score": 0.96},
+            "stt_ensemble_llm_selected_source": "STT1",
+            "stt_candidates": [{"source": "STT1", "score": 0.96}],
+        }
+
+        style = subtitle_segment_visual_style(seg, active=False, hover=False, quality_filter="all")
+
+        self.assertEqual(subtitle_detection_score(seg), 96.0)
+        self.assertEqual(subtitle_review_state(seg), "pending")
+        self.assertEqual(style["fill"], COLORS["warning_surface"])
+        self.assertEqual(style["border"], COLORS["warning"])
+
     def test_low_score_subtitle_is_recheck_red(self):
         seg = {
             "start": 0.0,
@@ -282,6 +300,19 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(subtitle_review_state(seg), "recheck")
         self.assertEqual(style["fill"], "#4A1F24")
         self.assertEqual(style["border"], "#FF453A")
+
+    def test_fractional_low_quality_confidence_score_stays_recheck(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "낮은 비율 점수",
+            "quality": {"confidence_label": "yellow", "confidence_score": 0.52},
+            "stt_ensemble_llm_selected_source": "STT1",
+            "stt_candidates": [{"source": "STT1", "score": 0.52}],
+        }
+
+        self.assertEqual(subtitle_detection_score(seg), 52.0)
+        self.assertEqual(subtitle_review_state(seg), "recheck")
 
     def test_unresolved_stt_conflict_subtitle_is_gray(self):
         seg = {

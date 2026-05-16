@@ -36,6 +36,21 @@ def _is_preflight_local_ollama_model(model: str) -> bool:
 class SignalHandlersMixin:
     """MainWindow 시그널 핸들러 모음."""
 
+    def _resolve_active_editor_for_signal(self):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is not None:
+            return editor
+        stack = getattr(self, "stack", None)
+        current_widget = getattr(stack, "currentWidget", None)
+        if callable(current_widget):
+            try:
+                candidate = current_widget()
+            except Exception:
+                candidate = None
+            if candidate is not None:
+                return candidate
+        return None
+
     def request_show_home(self):
         self._sig_show_home.emit()
 
@@ -97,6 +112,9 @@ class SignalHandlersMixin:
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum()
         )
+        sync_terminal_height = getattr(self, "_sync_sidebar_terminal_panel_height", None)
+        if callable(sync_terminal_height):
+            QTimer.singleShot(0, sync_terminal_height)
         tracker = getattr(self, "_automation_track_log_line", None)
         if callable(tracker):
             tracker(str(msg or ""))
@@ -112,7 +130,7 @@ class SignalHandlersMixin:
             QTimer.singleShot(80, _refresh)
 
     def _do_append_segments(self, segments, *, flush: bool = False):
-        editor = getattr(self, "_editor_widget", None)
+        editor = self._resolve_active_editor_for_signal()
         if editor is None:
             return
         call_nonfatal_ui_step("메인 시그널", editor, "append_segments", segments, step="에디터 세그먼트 append")
@@ -132,11 +150,12 @@ class SignalHandlersMixin:
                 run_nonfatal_ui_step("메인 시그널", "append ready event set", ready_event.set, default=None)
 
     def _do_preview_stt_segments(self, segments):
-        if self._editor_widget and hasattr(self._editor_widget, "preview_stt_segments"):
-            self._editor_widget.preview_stt_segments(segments)
+        editor = self._resolve_active_editor_for_signal()
+        if editor is not None and hasattr(editor, "preview_stt_segments"):
+            editor.preview_stt_segments(segments)
 
     def _do_preview_processing_segments(self, payload):
-        editor = getattr(self, "_editor_widget", None)
+        editor = self._resolve_active_editor_for_signal()
         if editor is None or not hasattr(editor, "preview_processing_segments"):
             return
         try:
@@ -145,7 +164,7 @@ class SignalHandlersMixin:
             return
 
     def _do_set_llm_review_segment(self, payload):
-        editor = getattr(self, "_editor_widget", None)
+        editor = self._resolve_active_editor_for_signal()
         if editor is not None and hasattr(editor, "set_live_processing_stage"):
             data = dict(payload or {})
             if data.get("active"):
@@ -169,7 +188,7 @@ class SignalHandlersMixin:
             setter(dict(payload or {}))
 
     def _do_editor_processing_stage(self, text):
-        editor = getattr(self, "_editor_widget", None)
+        editor = self._resolve_active_editor_for_signal()
         setter = getattr(editor, "set_live_processing_stage", None) if editor is not None else None
         stage_text = str(text or "")
         if callable(setter):
@@ -184,7 +203,7 @@ class SignalHandlersMixin:
         if hasattr(self, "_clear_editor_for_full_restart"):
             call_nonfatal_ui_step("메인 시그널", self, "_clear_editor_for_full_restart", step="풀 리스타트용 에디터 clear")
             return
-        ed = getattr(self, '_editor_widget', None)
+        ed = self._resolve_active_editor_for_signal()
         if not ed:
             return
         queue_timer = getattr(ed, "_queue_timer", None)
@@ -233,12 +252,12 @@ class SignalHandlersMixin:
         )
 
     def _do_update_status(self, c_idx, t_total):
-        if self._editor_widget:
-            if hasattr(self._editor_widget, "update_progress"):
-                self._editor_widget.update_progress(c_idx, t_total)
+        editor = self._resolve_active_editor_for_signal()
+        if editor is not None and hasattr(editor, "update_progress"):
+            editor.update_progress(c_idx, t_total)
 
     def _do_finalize_generation_complete(self, reason: str = "backend_done"):
-        editor = getattr(self, "_editor_widget", None)
+        editor = self._resolve_active_editor_for_signal()
         if editor is None:
             return
         finalizer = getattr(editor, "_finalize_generation_from_backend", None)

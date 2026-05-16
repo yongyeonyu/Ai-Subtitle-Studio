@@ -47,6 +47,7 @@ from core.audio.whisperkit_empty_fallback import (
     whisperkit_empty_fallback_overrides,
     whisperkit_empty_result_fallback_model,
 )
+from core.engine.subtitle_text_policy import strip_stt_control_tokens
 from core.platform_compat import ffmpeg_binary
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -58,6 +59,23 @@ from core.subtitle_quality.vad_alignment_checker import annotate_segment_vad_ali
 
 
 _parse_worker_json_line = parse_worker_json_line
+
+
+def _clean_whisper_word_text(text: str) -> str:
+    cleaned = strip_stt_control_tokens(str(text or ""))
+    cleaned = re.sub(r"\s+", " ", cleaned, flags=re.UNICODE).strip()
+    return cleaned
+
+
+def _join_clean_word_texts(words: list[dict]) -> str:
+    parts = []
+    for word in list(words or []):
+        if not isinstance(word, dict):
+            continue
+        cleaned = _clean_whisper_word_text(str(word.get("word", "") or ""))
+        if cleaned:
+            parts.append(cleaned)
+    return " ".join(parts).strip()
 
 
 class VideoProcessorTranscribeMixin:
@@ -1894,11 +1912,13 @@ class VideoProcessorTranscribeMixin:
             exact_start = seg["start"] + offset
             exact_end = seg["end"] + offset
             offset_words = []
+            cleaned_segment_text = _clean_whisper_word_text(seg.get("text", ""))
 
             if words:
                 valid_words = [
-                    w for w in words
-                    if "start" in w and "end" in w and w.get("word", "").strip()
+                    {**w, "word": _clean_whisper_word_text(w.get("word", ""))}
+                    for w in words
+                    if "start" in w and "end" in w and _clean_whisper_word_text(w.get("word", ""))
                 ]
 
                 word_filter_vad = [v for v in vad_strict if v.get("vad_word_filter", True)]
@@ -1921,28 +1941,35 @@ class VideoProcessorTranscribeMixin:
                     exact_end = valid_words[-1]["end"] + offset
                     for w in valid_words:
                         word_item = {
-                            "word": w.get("word", ""),
+                            "word": _clean_whisper_word_text(w.get("word", "")),
                             "start": w["start"] + offset,
                             "end": w["end"] + offset
                         }
                         for conf_key in ("confidence", "probability", "score"):
                             if conf_key in w:
                                 word_item[conf_key] = w.get(conf_key)
-                        offset_words.append(word_item)
+                        if word_item["word"]:
+                            offset_words.append(word_item)
 
             if words and not offset_words:
                 continue
+            if offset_words:
+                rebuilt_text = _join_clean_word_texts(offset_words)
+                if rebuilt_text:
+                    cleaned_segment_text = rebuilt_text
 
             if is_single and target_end_sec is not None:
                 if exact_start >= target_end_sec:
                     continue
                 if exact_end > target_end_sec:
                     exact_end = target_end_sec
+            if not cleaned_segment_text:
+                continue
 
             segment = {
                 "start": exact_start,
                 "end": exact_end,
-                "text": seg.get("text", "").strip(),
+                "text": cleaned_segment_text,
                 "words": offset_words,
             }
             for key in (
@@ -1998,7 +2025,7 @@ class VideoProcessorTranscribeMixin:
                 trimmed["start"] = float(words[0].get("start", seg.get("start", previous_end)) or previous_end)
                 trimmed["end"] = float(words[-1].get("end", seg.get("end", previous_end)) or previous_end)
                 if words and words != seg.get("words"):
-                    text = " ".join(str(w.get("word", "") or "").strip() for w in words).strip()
+                    text = _join_clean_word_texts(words)
                     if text:
                         trimmed["text"] = text
                     trimmed = attach_asr_metadata(trimmed, backend=(trimmed.get("asr_metadata") or {}).get("backend"))

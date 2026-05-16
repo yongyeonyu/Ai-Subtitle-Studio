@@ -461,6 +461,15 @@ class TimelinePaintMixin:
                 vs for vs in list(voice_segments or [])
                 if str(vs.get("kind", "") or "").strip().lower() not in SUBTITLE_SCORE_DETECTION_KINDS
             ]
+            voice_segments = [
+                vs for vs in voice_segments
+                if str(vs.get("kind", "") or "").strip().lower() not in {
+                    "llm_selected",
+                    "manual_selected",
+                    "pending",
+                    "subtitle_score",
+                }
+            ]
             if not voice_segments:
                 return
 
@@ -1118,7 +1127,7 @@ class TimelinePaintMixin:
             if not sublane_map:
                 sublane_map, sublane_count = assign_stt_preview_lanes(preview_segments)
             preview_font = self._stt_preview_font() if hasattr(self, "_stt_preview_font") else QFont(config.FONT, 10)
-            if sublane_count >= MAX_STT_PREVIEW_SUBLANES:
+            if sublane_count > 1:
                 preview_font = QFont(preview_font)
                 preview_font.setPointSize(max(8, preview_font.pointSize() - 1))
             p.setFont(preview_font)

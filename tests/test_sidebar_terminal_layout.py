@@ -68,7 +68,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             self.assertIn("준비: 자막 품질 설정을 적용했어요.", shown)
             self.assertIn("준비: 사용자 말투와 교정 기록을 반영할 준비를 했어요.", shown)
-            self.assertIn("진행: 자주 틀리는 표현을 자동으로 고치고 있어요.", shown)
+            self.assertIn("진행: 교정 · 사전 8회", shown)
             self.assertNotIn("교정 memory/오답 memory/사용자 단어/줄바꿈 규칙", shown)
             self.assertIn("설정 적용: LLM(exaone3.5:7.8b)", raw)
             self.assertIn("[텍스트 LoRA] 자동 교정 허용", raw)
@@ -92,8 +92,63 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             lines = [line for line in window.log_text.toPlainText().splitlines() if line.strip()]
             self.assertGreaterEqual(len(lines), 1)
-            self.assertEqual(lines[0], "진행: STT 1 · 37%")
-            self.assertIn("진행: 음성을 자막 초안으로 바꾸고 있어요.", "\n".join(lines[1:]))
+            self.assertEqual(lines[0], "진행: STT1 37% · 1차 인식")
+            self.assertIn("진행: STT", "\n".join(lines[1:]))
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_terminal_log_compacts_subtitle_stt1_stt2_progress_into_short_lines(self):
+        window = MainWindow()
+        try:
+            window._generation_progress_snapshot = lambda: {
+                "running": True,
+                "title": "자막 생성 | [자막 전체 생성] 대기중",
+                "progressText": "39%",
+                "percent": 39,
+                "percentValue": 39.0,
+            }
+            window.append_log("🔥 [STT1] macOS STT persistent worker 유지: 다음 STT 재사용 92%")
+            window.append_log("🔥 [STT2] macOS STT persistent worker 유지: 다음 STT 재사용 95%")
+            window.append_log("[자막 LLM] 자동교정 33%")
+
+            lines = [line for line in window.log_text.toPlainText().splitlines() if line.strip()]
+            self.assertGreaterEqual(len(lines), 3)
+            self.assertEqual(lines[0], "진행: 자막 39% · 자동교정")
+            self.assertIn("진행: STT1 92% · 재사용", lines)
+            self.assertIn("진행: STT2 95% · 재사용", lines)
+            self.assertNotIn("진행: 자막 33%", "\n".join(lines))
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_terminal_log_shows_detailed_stt_and_roughcut_completion_lines(self):
+        window = MainWindow()
+        try:
+            window.append_log("  ▶ [STT1] 진행 상황: 00분 22초 / 02분 59초 (13%)")
+            window.append_log("↩️ [러프컷 LLM] chunk 5/7 로컬 규칙으로 대체 (71%)")
+            window.append_log("✅ 러프컷 후처리 완료: LLM 초안 · 중분류 10개")
+
+            lines = [line for line in window.log_text.toPlainText().splitlines() if line.strip()]
+            self.assertIn("진행: STT1 13% · 00:22/02:59", lines)
+            self.assertIn("진행: 러프컷 71% · 5/7chunk, 로컬 대체", lines)
+            self.assertIn("완료: 러프컷 · LLM, 중분류 10개", lines)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_terminal_log_adds_short_default_explanations(self):
+        window = MainWindow()
+        try:
+            window.append_log("[lora] 48%")
+            window.append_log("word_timestamp 61%")
+
+            shown = window.log_text.toPlainText()
+            self.assertIn("진행: LoRA 48% · 말투 반영", shown)
+            self.assertIn("진행: 타이밍 61% · 시간 정렬", shown)
         finally:
             window.close()
             window.deleteLater()
@@ -159,6 +214,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
         try:
             window._unified_dashboard = True
             window._build_home_content()
+            window.resize(460, 760)
+            window.show()
             self.app.processEvents()
 
             project_info_btn = getattr(window, "_project_info_button_card", None)
@@ -239,6 +296,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
         try:
             window._unified_dashboard = True
             window._build_home_content()
+            window.resize(460, 760)
+            window.show()
+            window._sync_sidebar_terminal_panel_height()
             self.app.processEvents()
 
             labels = window.home_page.findChildren(QWidget)
@@ -262,7 +322,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(queue_panel.sizePolicy().verticalPolicy(), QSizePolicy.Policy.Expanding)
             self.assertGreater(queue_panel.maximumHeight(), 10000)
             left_layout = queue_panel.parentWidget().layout()
-            self.assertEqual(left_layout.stretch(left_layout.indexOf(queue_panel)), 7)
+            self.assertEqual(left_layout.stretch(left_layout.indexOf(queue_panel)), 9)
             nav_buttons = []
             for label in window.home_page.findChildren(QLabel):
                 if label.text() in {"홈", "에디터", "러프컷", "숏폼"}:
@@ -290,7 +350,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High", "STT"]
             ]
             self.assertGreaterEqual(len(quality_combos), 3)
-            self.assertGreaterEqual(window.sidebar_terminal_panel.maximumHeight(), 180)
+            self.assertGreaterEqual(window.sidebar_terminal_panel.maximumHeight(), 116)
+            self.assertLessEqual(window.sidebar_terminal_panel.maximumHeight(), 188)
         finally:
             window.close()
             window.deleteLater()
@@ -1509,9 +1570,11 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             terminal = getattr(window, "sidebar_terminal_panel", None)
             status_card = getattr(window, "_sidebar_status_card_widget", None)
             slot = getattr(window, "_project_info_button_slot", None)
+            queue_panel = getattr(window, "sidebar_queue_panel", None)
             self.assertIsNotNone(terminal)
             self.assertIsNotNone(status_card)
             self.assertIsNotNone(slot)
+            self.assertIsNotNone(queue_panel)
 
             status_bottom = status_card.mapTo(window, QPoint(0, status_card.height())).y()
             terminal_top = terminal.mapTo(window, QPoint(0, 0)).y()
@@ -1520,7 +1583,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             self.assertEqual(terminal_top - status_bottom, APP_PANEL_GAP)
             self.assertEqual(slot_top - terminal_bottom, APP_PANEL_GAP)
-            self.assertGreater(terminal.height(), 190)
+            self.assertGreaterEqual(terminal.height(), 128)
+            self.assertLessEqual(terminal.height(), 188)
+            self.assertGreater(queue_panel.height(), terminal.height())
         finally:
             window.close()
             window.deleteLater()

@@ -1246,6 +1246,14 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         except Exception:
             return False
 
+    def clear_active_visual(self) -> None:
+        if getattr(self, "active_seg_start", None) is None and getattr(self, "active_seg_line", None) is None:
+            return
+        old_rect = self._active_segment_repaint_rect(playback_focus=False)
+        self.active_seg_start = None
+        self.active_seg_line = None
+        self._update_dirty_rect(old_rect)
+
     def set_vad_segments(self, vad_segs):
         self.vad_segments = vad_segs
         self._speech_mask = None      # 마스크 재계산 트리거

@@ -26,6 +26,15 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             for marker in markers:
                 self.assertIn(marker, text)
 
+    def test_home_sidebar_progress_badge_is_centered(self):
+        root = Path(__file__).resolve().parents[1]
+        qml_path = root / "ui/qml/home_sidebar_nav.qml"
+        text = qml_path.read_text(encoding="utf-8")
+        self.assertIn("id: progressBadge", text)
+        self.assertIn("id: progressBody", text)
+        self.assertIn("anchors.verticalCenter: parent.verticalCenter", text)
+        self.assertIn("height: Math.max(progressBadge.height, progressBody.implicitHeight)", text)
+
     def test_opengl_widgets_are_default_off(self):
         from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled
 

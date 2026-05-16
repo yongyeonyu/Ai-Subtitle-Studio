@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-MAX_STT_PREVIEW_SUBLANES = 3
+# Keep each STT source on a single visual row so the timeline never expands
+# into per-source sub-stacks beyond the fixed STT1/STT2 pair.
+MAX_STT_PREVIEW_SUBLANES = 1
 
 
 def _safe_time(row: dict, key: str, default: float = 0.0) -> float:

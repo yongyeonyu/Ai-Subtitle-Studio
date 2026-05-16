@@ -170,6 +170,34 @@ class EditorTimelineDragReleaseTests(unittest.TestCase):
         finally:
             editor.close()
 
+    def test_right_handle_full_merge_can_delete_next_segment_via_menu_choice(self):
+        editor = self._make_editor([
+            {"start": 0.0, "end": 1.0, "text": "메인 자막", "speaker": "00"},
+            {"start": 1.0, "end": 2.0, "text": "삭제될 자막", "speaker": "00"},
+        ])
+        editor._diamond_merge_action_override = lambda *_args: "delete"
+        try:
+            canvas = editor.timeline.canvas
+            canvas.set_active(0.0)
+            self.app.processEvents()
+            handle_y = SEG_TOP + 32
+            self._drag(
+                editor,
+                QPoint(canvas._x(1.0), handle_y),
+                QPoint(canvas._x(2.0), handle_y),
+            )
+
+            self.assertEqual(
+                self._current_rows(editor),
+                [(0.0, 2.0, "메인 자막")],
+            )
+            self.assertEqual(
+                [(float(seg["start"]), float(seg["end"]), str(seg["text"])) for seg in canvas.segments],
+                [(0.0, 2.0, "메인 자막")],
+            )
+        finally:
+            editor.close()
+
 
 if __name__ == "__main__":
     unittest.main()

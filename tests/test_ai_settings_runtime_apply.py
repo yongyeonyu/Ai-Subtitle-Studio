@@ -3,7 +3,8 @@
 
 import os
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -21,6 +22,7 @@ class _DummyEditor(QWidget):
         self.settings = {}
         self.selected_model = "old"
         self.engine_lbl = QLabel("", self)
+        self.video_player = SimpleNamespace(refresh_audio_output_routing=Mock())
 
     def _update_engine_label_text(self):
         self.engine_lbl.setText(
@@ -57,6 +59,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
         self.assertIn("자막 LLM", window.sidebar_settings_label.text())
         self.assertIn("gemma3:4b", window.sidebar_settings_label.text())
         self.assertIn("MLX Whisper Large V3", window.sidebar_settings_label.text())
+        editor.video_player.refresh_audio_output_routing.assert_called_once()
         window.close()
         editor.close()
 
@@ -75,6 +78,17 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
         self.assertEqual(editor.settings["selected_whisper_model"], "large-v3")
         self.assertEqual(editor.selected_model, "사용 안함 (Whisper 단독 진행)")
         self.assertIn("[STT] : large-v3", editor.engine_lbl.text())
+        editor.video_player.refresh_audio_output_routing.assert_called_once()
+        dialog.close()
+        editor.close()
+
+    def test_settings_dialog_ok_refreshes_editor_video_player_audio(self):
+        editor = _DummyEditor()
+        dialog = SettingsDialog({}, editor)
+        with patch.object(dialog, "_collect_settings", return_value={"selected_audio_ai": "none"}):
+            dialog._on_ok()
+
+        editor.video_player.refresh_audio_output_routing.assert_called_once()
         dialog.close()
         editor.close()
 

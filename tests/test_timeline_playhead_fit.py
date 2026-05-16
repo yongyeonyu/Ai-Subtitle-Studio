@@ -1235,6 +1235,63 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_diamond_merge_menu_offers_merge_and_delete(self):
+        editor = _ResizeTimelineEditor()
+
+        items = editor._segment_merge_menu_items(0, 1)
+
+        self.assertEqual(
+            [(item.get("id"), item.get("label")) for item in items],
+            [("merge", "합치기"), ("delete", "지우기")],
+        )
+
+    def test_diamond_delete_extends_left_segment_to_right_end_without_appending_text(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n삭제될 자막")
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.5))
+
+            editor._on_diamond_delete(0, 1)
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [(0.0, 2.5, "앞 자막")])
+        finally:
+            editor.text_edit.close()
+
+    def test_diamond_merge_request_can_choose_delete_action(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n삭제될 자막")
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._diamond_merge_action_override = lambda *_args: "delete"
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.5))
+
+            editor._on_diamond_merge_requested(0, 1)
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [(0.0, 2.5, "앞 자막")])
+        finally:
+            editor.text_edit.close()
+
     def test_timestamp_metadata_restore_does_not_revert_recent_timing_edit(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0
@@ -2246,14 +2303,15 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             PlaybackState=SimpleNamespace(PlayingState=playing_state),
             playbackState=Mock(return_value=playing_state),
         )
-        canvas = SimpleNamespace(playhead_sec=4.8, set_active=Mock())
+        canvas = SimpleNamespace(playhead_sec=4.8, set_active=Mock(), clear_active_visual=Mock())
         editor.video_player = SimpleNamespace(media_player=player)
         editor.timeline = SimpleNamespace(canvas=canvas, set_active=Mock(), set_playhead=Mock())
         editor._highlighter = SimpleNamespace(set_current_line=Mock())
 
         editor._sync_cursor_to_seg({"start": 4.0, "end": 6.0, "line": 3}, ensure_visible=False, move_cursor=False)
 
-        canvas.set_active.assert_called_once_with(4.0)
+        canvas.clear_active_visual.assert_called_once_with()
+        canvas.set_active.assert_not_called()
         editor.timeline.set_active.assert_not_called()
         editor.timeline.set_playhead.assert_not_called()
 
@@ -2320,7 +2378,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             set_subtitle_display_time=Mock(),
         )
         editor.timeline = SimpleNamespace(
-            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock(), clear_active_visual=Mock()),
             follow_playhead=Mock(),
             set_active=Mock(),
             set_playhead=Mock(),
@@ -2338,7 +2396,9 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 1)
             editor._highlighter.set_current_line.assert_called_once_with(1)
-            editor.timeline.canvas.set_active.assert_called_once_with(2.0)
+            editor.timeline.canvas.clear_active_visual.assert_called_once_with()
+            editor.timeline.canvas.set_active.assert_not_called()
+            editor.timeline.set_active.assert_not_called()
             editor.video_player.set_subtitle_display_time.assert_called_once_with(2.1)
             editor.video_player.refresh_subtitle_context.assert_not_called()
             self.assertGreater(float(getattr(editor, "_last_editor_autoscroll_at", 0.0)), 0.0)
@@ -2360,7 +2420,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             set_subtitle_display_time=Mock(),
         )
         editor.timeline = SimpleNamespace(
-            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock(), clear_active_visual=Mock()),
             follow_playhead=Mock(),
             set_active=Mock(),
             set_playhead=Mock(),
@@ -2380,7 +2440,9 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 2)
             editor._highlighter.set_current_line.assert_called_once_with(2)
-            editor.timeline.canvas.set_active.assert_called_once_with(4.0)
+            editor.timeline.canvas.clear_active_visual.assert_called_once_with()
+            editor.timeline.canvas.set_active.assert_not_called()
+            editor.timeline.set_active.assert_not_called()
         finally:
             editor.text_edit.close()
 
@@ -2399,7 +2461,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             set_subtitle_display_time=Mock(),
         )
         editor.timeline = SimpleNamespace(
-            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock(), clear_active_visual=Mock()),
             follow_playhead=Mock(),
             set_active=Mock(),
             set_playhead=Mock(),
@@ -2422,7 +2484,9 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertTrue(editor.text_edit.textCursor().hasSelection())
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
             editor._highlighter.set_current_line.assert_called_once_with(2)
-            editor.timeline.canvas.set_active.assert_called_once_with(4.0)
+            editor.timeline.canvas.clear_active_visual.assert_called_once_with()
+            editor.timeline.canvas.set_active.assert_not_called()
+            editor.timeline.set_active.assert_not_called()
         finally:
             editor.text_edit.close()
 
@@ -2441,7 +2505,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             set_subtitle_display_time=Mock(),
         )
         editor.timeline = SimpleNamespace(
-            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock(), clear_active_visual=Mock()),
             follow_playhead=Mock(),
             set_active=Mock(),
             set_playhead=Mock(),
@@ -2461,7 +2525,9 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
             editor._highlighter.set_current_line.assert_called_once_with(2)
-            editor.timeline.canvas.set_active.assert_called_once_with(4.0)
+            editor.timeline.canvas.clear_active_visual.assert_called_once_with()
+            editor.timeline.canvas.set_active.assert_not_called()
+            editor.timeline.set_active.assert_not_called()
         finally:
             editor.text_edit.close()
 
@@ -2480,7 +2546,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             set_subtitle_display_time=Mock(),
         )
         editor.timeline = SimpleNamespace(
-            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock(), clear_active_visual=Mock()),
             follow_playhead=Mock(),
             set_active=Mock(),
             set_playhead=Mock(),
@@ -2503,7 +2569,9 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             editor._get_current_segments.assert_not_called()
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 2)
-            editor.timeline.canvas.set_active.assert_called_once_with(4.0)
+            editor.timeline.canvas.clear_active_visual.assert_called_once_with()
+            editor.timeline.canvas.set_active.assert_not_called()
+            editor.timeline.set_active.assert_not_called()
         finally:
             editor.text_edit.close()
 

@@ -11,7 +11,7 @@ class _SignalWindow(SignalHandlersMixin):
         self.backend = None
         self._roughcut_widget = None
         self._editor_roughcut_result = None
-        self.stack = SimpleNamespace(addWidget=Mock())
+        self.stack = SimpleNamespace(addWidget=Mock(), currentWidget=Mock(return_value=None))
 
 
 class _Event:
@@ -82,6 +82,16 @@ class MainNonfatalSignalsTests(unittest.TestCase):
         video_player.seek.assert_called_once_with(0.0)
         self.assertEqual(editor._cached_segs, [])
         self.assertEqual(editor._active_seg_start, 0.0)
+
+    def test_finalize_generation_complete_falls_back_to_current_stack_editor(self):
+        finalizer = Mock()
+        visible_editor = SimpleNamespace(_finalize_generation_from_backend=finalizer)
+        window = _SignalWindow(editor=None)
+        window.stack.currentWidget = Mock(return_value=visible_editor)
+
+        window._do_finalize_generation_complete("stt_optimizer_threads_done")
+
+        finalizer.assert_called_once_with(reason="stt_optimizer_threads_done")
 
 
 if __name__ == "__main__":

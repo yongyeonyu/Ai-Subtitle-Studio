@@ -941,6 +941,21 @@ def _apply_lora_card_packaging(
         if not text:
             rows.append(row)
             continue
+        allow_multiline = _segment_has_multi_speaker_linebreak_permission(row)
+        if not allow_multiline:
+            single_line_text = " ".join(_subtitle_text_lines(text))
+            if single_line_text and single_line_text != text:
+                row["text"] = single_line_text
+                row["_lora_packaging_policy"] = {
+                    "task": "lora_card_packaging",
+                    "stage": stage,
+                    "mode": mode,
+                    "strategy": "single_line_enforced",
+                    "reason": "single_speaker_no_line_break",
+                }
+                changed += 1
+            rows.append(row)
+            continue
         row_settings = {**dict(settings or {}), **dict(row.get("_lora_segment_settings") or {})}
         if row.get("_lora_generation_profile"):
             row_settings["_lora_generation_profile"] = row.get("_lora_generation_profile")
@@ -1004,18 +1019,20 @@ def _apply_lora_card_packaging(
     return rows
 
 
-def _is_speaker_split_multiline_segment(row: dict) -> bool:
-    lines = _subtitle_text_lines(str(row.get("text", "") or ""))
-    if len(lines) <= 1:
-        return False
+def _segment_has_multi_speaker_linebreak_permission(row: dict) -> bool:
     speakers = [
         str(item).strip()
         for item in list(row.get("speaker_list") or [])
         if str(item).strip()
     ]
-    if len(set(speakers)) >= 2:
-        return True
-    return all(str(line).lstrip().startswith(("-", "–", "—")) for line in lines)
+    return len(set(speakers)) >= 2
+
+
+def _is_speaker_split_multiline_segment(row: dict) -> bool:
+    lines = _subtitle_text_lines(str(row.get("text", "") or ""))
+    if len(lines) <= 1:
+        return False
+    return _segment_has_multi_speaker_linebreak_permission(row)
 
 
 def _clear_split_timing_projection_fields(row: dict) -> None:
@@ -1130,7 +1147,7 @@ def _expand_non_speaker_multiline_segments(
     settings: dict | None = None,
 ) -> list[dict]:
     rows: list[dict] = []
-    split_segments = 0
+    flattened_segments = 0
     for seg in list(segments or []):
         if not isinstance(seg, dict):
             continue
@@ -1140,59 +1157,22 @@ def _expand_non_speaker_multiline_segments(
             row["text"] = "\n".join(lines) if lines else str(row.get("text", "") or "").strip()
             rows.append(row)
             continue
-
-        try:
-            start = max(0.0, float(row.get("start", 0.0) or 0.0))
-            end = max(start, float(row.get("end", start) or start))
-        except Exception:
-            rows.append(row)
-            continue
-
-        min_duration = 0.05
-        if end - start < min_duration * len(lines):
-            row["text"] = " ".join(lines)
-            row.pop("words", None)
-            rows.append(row)
-            continue
-
-        groups = _multiline_word_groups_for_lines(row, lines)
-        boundaries = (
-            _multiline_split_boundaries_from_groups(start, end, groups)
-            if groups is not None
-            else None
+        row["text"] = " ".join(lines)
+        row.pop("words", None)
+        policy = dict(row.get("_lora_packaging_policy") or {})
+        policy.update(
+            {
+                "task": "lora_card_packaging",
+                "output_mode": "single_line_flatten",
+                "reason": "single_speaker_no_line_break",
+            }
         )
-        if boundaries is None:
-            boundaries = _multiline_split_boundaries_from_weights(start, end, lines)
-            groups = None
+        row["_lora_packaging_policy"] = policy
+        rows.append(row)
+        flattened_segments += 1
 
-        prev_boundary = start
-        for idx, line in enumerate(lines):
-            next_boundary = end if idx == len(lines) - 1 else boundaries[idx]
-            piece = dict(row)
-            piece["text"] = line
-            piece["start"] = round(prev_boundary, 3)
-            piece["end"] = round(max(prev_boundary + min_duration, next_boundary), 3)
-            if groups is not None:
-                piece["words"] = [dict(word) for word in groups[idx]]
-            else:
-                piece.pop("words", None)
-            policy = dict(piece.get("_lora_packaging_policy") or {})
-            policy.update(
-                {
-                    "task": "lora_card_packaging",
-                    "output_mode": "segment_split",
-                    "split_index": idx,
-                    "split_count": len(lines),
-                }
-            )
-            piece["_lora_packaging_policy"] = policy
-            _clear_split_timing_projection_fields(piece)
-            rows.append(piece)
-            prev_boundary = next_boundary
-        split_segments += 1
-
-    if split_segments > 0:
-        get_logger().log(f"[자막줄분리] 일반 줄바꿈 자막 {split_segments}개를 연속 세그먼트로 분할")
+    if flattened_segments > 0:
+        get_logger().log(f"[자막줄정리] 일반 줄바꿈 자막 {flattened_segments}개를 한 줄로 정리")
     return rows
 
 
@@ -2448,6 +2428,10 @@ def _emit_processing_preview(
         text = str(seg.get("text", "") or "").strip()
         if not text:
             continue
+        if "\n" in text and not _segment_has_multi_speaker_linebreak_permission(seg):
+            text = " ".join(_subtitle_text_lines(text))
+            if not text:
+                continue
         try:
             start = float(seg.get("start", 0.0) or 0.0)
             end = float(seg.get("end", start) or start)

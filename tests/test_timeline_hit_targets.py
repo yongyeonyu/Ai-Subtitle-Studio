@@ -1957,7 +1957,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertIsNotNone(editor)
             self.assertTrue(editor.isVisible())
             self.assertEqual(canvas._subtitle_segment_font().pointSize(), 13)
-            self.assertEqual(canvas._stt_preview_font().pointSize(), 9)
+            self.assertEqual(canvas._stt_preview_font().pointSize(), 13)
 
             start_cursor = editor.textCursor()
             start_cursor.setPosition(0)

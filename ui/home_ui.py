@@ -154,7 +154,7 @@ class HomeUIMixin(HomeSidebarMixin):
             left_col.addWidget(self._ensure_sidebar_nav_menu())
             left_col.addWidget(self._icloud_btn("☁ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
             left_col.addWidget(self._icloud_btn("▣ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
-            left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=7)
+            left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=9)
         else:
             left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
             left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
@@ -272,10 +272,27 @@ class HomeUIMixin(HomeSidebarMixin):
         minimum_height = 116
         if bottom <= top:
             return
-        target_height = max(minimum_height, bottom - top)
+        available_height = max(0, bottom - top)
+        preferred_height = available_height
+        preferred_getter = getattr(terminal, "preferred_panel_height", None)
+        if callable(preferred_getter):
+            try:
+                preferred_height = int(
+                    preferred_getter(min_height=128, max_height=min(188, available_height)) or available_height
+                )
+            except Exception:
+                preferred_height = available_height
+        target_height = min(available_height, max(minimum_height, preferred_height))
         if terminal.height() == target_height and terminal.minimumHeight() == target_height and terminal.maximumHeight() == target_height:
             return
         terminal.setFixedHeight(target_height)
+        try:
+            terminal.updateGeometry()
+            layout.invalidate()
+            layout.activate()
+            home_page.updateGeometry()
+        except Exception:
+            pass
     def _toggle_sidebar_stt_mode(self):
         self._current_work_mode = EDITOR_MODE
         editor = getattr(self, "_editor_widget", None)

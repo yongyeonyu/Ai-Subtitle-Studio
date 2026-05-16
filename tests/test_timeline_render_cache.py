@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QApplication, QScrollArea
 
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
 from ui.timeline.timeline_canvas import TimelineCanvas
-from ui.timeline.timeline_constants import DIAMOND_Y, SCORE_H, SCORE_TOP, STT2_TOP, STT_PREVIEW_VERTICAL_INSET, SUBTITLE_BOT, SUBTITLE_TOP
+from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, SCORE_H, SCORE_TOP, SEG_TOP, STT2_TOP, STT_PREVIEW_VERTICAL_INSET, SUBTITLE_BOT, SUBTITLE_TOP
 from ui.timeline.timeline_widget import TimelineWidget
 
 
@@ -150,6 +150,28 @@ class TimelineRenderCacheTests(unittest.TestCase):
 
             self.assertEqual(rect.top(), max(0, SUBTITLE_TOP - 2))
             self.assertLessEqual(rect.bottom(), SUBTITLE_BOT + 3)
+        finally:
+            canvas.close()
+
+    def test_clear_active_visual_repaints_full_segment_band_and_resets_active_keys(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(1600, canvas.height())
+            canvas.segments = [
+                {"start": 1.0, "end": 2.0, "text": "final", "line": 0},
+                {"start": 2.0, "end": 3.0, "text": "next", "line": 1},
+            ]
+            canvas.set_active(1.0)
+
+            with patch.object(canvas, "update") as update:
+                canvas.clear_active_visual()
+
+            self.assertIsNone(canvas.active_seg_start)
+            self.assertIsNone(canvas.active_seg_line)
+            update.assert_called_once()
+            rect = update.call_args.args[0]
+            self.assertLessEqual(rect.top(), SEG_TOP - 18)
+            self.assertGreaterEqual(rect.bottom(), CANVAS_H - 1)
         finally:
             canvas.close()
 

@@ -1,7 +1,7 @@
 <!--
 Document-Version: 04.00.07-mac-native
 Phase: MAC_NATIVE_APPSTORE_V4_0_7_RELEASED
-Last-Updated: 2026-05-16
+Last-Updated: 2026-05-17
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -72,6 +72,12 @@ review_method:
   Why: this file is 3,651 lines, 98 functions, and currently owns too many unrelated editor behaviors.
   Progress: live preview ingest/seam helpers, STT candidate selection helpers, manual STT selection flow/timeline preview redraw, queue append/flush flow, current document-to-segment serialization, bulk-load row normalization, queue post-flush/autoseek policy, bulk-load document apply/finalize steps, text search/replace, popup-trigger, line-edit mutation helpers, shared segment reload flow, manual edit/split handlers, timeline redraw/context/drag lifecycle, low-level block surgery helpers, and dirty/runtime activity/cache invalidation helpers are now extracted into `ui/editor/editor_segments_live_preview.py`, `ui/editor/editor_segments_stt_candidates.py`, `ui/editor/editor_segments_stt_selection_flow.py`, `ui/editor/editor_segments_queue_flush.py`, `ui/editor/editor_segments_current_state.py`, `ui/editor/editor_segments_bulk_prepare.py`, `ui/editor/editor_segments_text_ops.py`, `ui/editor/editor_segments_reload.py`, `ui/editor/editor_segments_manual_edits.py`, `ui/editor/editor_segments_timeline_context.py`, `ui/editor/editor_segments_block_surgery.py`, and `ui/editor/editor_segments_runtime_cache.py`.
   Remaining targets: `editor_multiclip` stack의 남은 orchestration polish와 owner synchronization 예외 정리입니다. owner/runtime state access는 `ui/editor/editor_multiclip_owner_bridge.py`와 `ui/editor/editor_multiclip_runtime_state.py`로 이미 상당 부분 축소됐습니다.
+
+- [ ] Keep extracting newly added runtime/editor features into dedicated feature files instead of growing owner modules.
+  Goal: treat recent live-preview, generation-completion safety, queue/sidebar progress reflection, terminal-progress compaction, and project/runtime bridge work as separate feature surfaces with their own modules.
+  Why: the current hotfix cadence is still landing cross-cutting behavior into owner files such as `ui/editor/editor_pipeline_cleanup.py`, `ui/main/main_signals.py`, `ui/home_sidebar.py`, `ui/log/terminal_log_widget.py`, `core/pipeline/single_pipeline.py`, and `core/project/project_manager.py`, which makes regressions harder to isolate.
+  First targets: extract completion-finalization transport/safety from editor pipeline owners, move sidebar/queue progress synthesis into a shared helper, split terminal progress formatting from the widget shell, and continue pushing save/load/runtime bridge helpers out of `project_manager.py`.
+  Success condition: new features default to dedicated `*_feature.py` / `*_helpers.py` modules with thin owner wiring, and release hotfixes no longer require editing several unrelated monoliths for one behavior change.
 
 - [ ] Split `ui/editor/video_player_widget.py` into overlay, transport, and provider adapters.
   Goal: move playback controls, subtitle overlay state, frame sync, and provider-specific rendering into separate units.

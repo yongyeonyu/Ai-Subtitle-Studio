@@ -16,6 +16,7 @@ class _DummyBackend(SinglePipelineMixin):
     def __init__(self, ui):
         self.ui = ui
         self._active = True
+        self._stop_requested = False
 
 
 class _Signal:
@@ -33,6 +34,7 @@ class _LiveUi(QObject):
         super().__init__()
         self.sig = _Signal()
         self._sig_preview_processing_segments = _Signal()
+        self._sig_finalize_generation_complete = _Signal()
         self._sig_update_queue = _Signal()
         self._sig_update_queue_payload = _Signal()
         self._sig_update_queue_header = _Signal()
@@ -95,6 +97,44 @@ class SinglePipelineUiGuardTests(unittest.TestCase):
         self.assertTrue(backend._ui_emit("_sig_preview_processing_segments", payload))
         self.assertEqual(ui._sig_preview_processing_segments.args[0]["stage"], "context_review")
         self.assertEqual(ui._sig_preview_processing_segments.args[0]["segments"][0]["text"], "초안")
+
+    def test_emit_generation_completion_ready_emits_finalize_and_queue_update(self):
+        ui = _LiveUi()
+        backend = _DummyBackend(ui)
+
+        self.assertTrue(backend._emit_generation_completion_ready(0, reason="stt_optimizer_threads_done"))
+        self.assertEqual(ui._sig_finalize_generation_complete.args, ("stt_optimizer_threads_done",))
+        payload = normalize_queue_status_payload(ui._sig_update_queue_payload.emissions[-1][0])
+        self.assertEqual(payload["status"], "저장 준비 중")
+
+    def test_emit_generation_completion_ready_allows_inactive_fallback_when_not_stopped(self):
+        ui = _LiveUi()
+        backend = _DummyBackend(ui)
+        backend._active = False
+
+        self.assertTrue(
+            backend._emit_generation_completion_ready(
+                1,
+                reason="stt_optimizer_threads_done",
+                allow_inactive_fallback=True,
+            )
+        )
+        self.assertEqual(ui._sig_finalize_generation_complete.args, ("stt_optimizer_threads_done",))
+
+    def test_emit_generation_completion_ready_skips_when_stopped(self):
+        ui = _LiveUi()
+        backend = _DummyBackend(ui)
+        backend._active = False
+        backend._stop_requested = True
+
+        self.assertFalse(
+            backend._emit_generation_completion_ready(
+                1,
+                reason="stt_optimizer_threads_done",
+                allow_inactive_fallback=True,
+            )
+        )
+        self.assertIsNone(ui._sig_finalize_generation_complete.args)
 
 
 if __name__ == "__main__":

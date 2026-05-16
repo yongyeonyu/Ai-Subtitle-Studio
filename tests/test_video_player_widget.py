@@ -150,6 +150,70 @@ class _ExternalLikePlayer(QObject):
         return
 
 
+class _QtAudioLikePlayer(QObject):
+    durationChanged = pyqtSignal(int)
+    mediaStatusChanged = pyqtSignal(object)
+    playbackStateChanged = pyqtSignal(object)
+
+    backend_name = "qt-audio-like"
+    uses_qt_audio = True
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._source = QUrl()
+        self._state = QMediaPlayer.PlaybackState.PausedState
+        self._position_ms = 0
+        self.audio_outputs = []
+        self.pause_calls = 0
+        self.play_calls = 0
+        self.set_position_calls = []
+
+    def setVideoOutput(self, _output):
+        return
+
+    def setAudioOutput(self, output):
+        self.audio_outputs.append(output)
+
+    def source(self):
+        return self._source
+
+    def setSource(self, source=None):
+        self._source = source if isinstance(source, QUrl) else QUrl()
+
+    def playbackState(self):
+        return self._state
+
+    def position(self):
+        return self._position_ms
+
+    def play(self):
+        self.play_calls += 1
+        self._state = QMediaPlayer.PlaybackState.PlayingState
+
+    def pause(self):
+        self.pause_calls += 1
+        self._state = QMediaPlayer.PlaybackState.PausedState
+
+    def stop(self):
+        self._state = QMediaPlayer.PlaybackState.StoppedState
+
+    def setPosition(self, position_ms):
+        self._position_ms = int(position_ms or 0)
+        self.set_position_calls.append(self._position_ms)
+
+
+class _FakeAudioOutput:
+    def __init__(self, _parent=None):
+        self.deleted = False
+        self.volume_calls = []
+
+    def setVolume(self, value):
+        self.volume_calls.append(float(value))
+
+    def deleteLater(self):
+        self.deleted = True
+
+
 class VideoPlayerWidgetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1065,6 +1129,47 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.close()
             widget.deleteLater()
             self.app.processEvents()
+
+    def test_refresh_audio_output_routing_recreates_outputs_and_restores_playback(self):
+        backend = _QtAudioLikePlayer()
+        vocal = _QtAudioLikePlayer()
+        with patch("ui.editor.video_player_widget.create_video_backend", return_value=backend), \
+             patch("ui.editor.video_player_widget.QAudioOutput", _FakeAudioOutput):
+            widget = VideoPlayerWidget()
+            try:
+                widget.has_vocal_track = True
+                widget.vocal_player = vocal
+                with patch.object(widget, "_ensure_vocal_player", return_value=vocal):
+                    widget._ensure_audio_outputs()
+                    first_main_output = widget.audio_output
+                    first_vocal_output = widget.vocal_audio_output
+                    backend._state = QMediaPlayer.PlaybackState.PlayingState
+                    vocal._state = QMediaPlayer.PlaybackState.PlayingState
+                    backend._position_ms = 1337
+                    vocal._position_ms = 1337
+
+                    widget.refresh_audio_output_routing(reason="test")
+
+                self.assertIsNot(widget.audio_output, first_main_output)
+                self.assertIsNot(widget.vocal_audio_output, first_vocal_output)
+                self.assertIn(None, backend.audio_outputs)
+                self.assertIn(None, vocal.audio_outputs)
+                self.assertIs(backend.audio_outputs[-1], widget.audio_output)
+                self.assertIs(vocal.audio_outputs[-1], widget.vocal_audio_output)
+                self.assertEqual(backend.pause_calls, 1)
+                self.assertEqual(vocal.pause_calls, 1)
+                self.assertEqual(backend.play_calls, 1)
+                self.assertEqual(vocal.play_calls, 1)
+                self.assertEqual(backend.set_position_calls[-1], 1337)
+                self.assertEqual(vocal.set_position_calls[-1], 1337)
+                self.assertEqual(widget.audio_output.volume_calls[-1], 1.0)
+                self.assertEqual(widget.vocal_audio_output.volume_calls[-1], 1.0)
+            finally:
+                widget.close()
+                widget.deleteLater()
+                backend.deleteLater()
+                vocal.deleteLater()
+                self.app.processEvents()
 
     def test_seek_direct_uses_frame_position_mapping(self):
         widget = VideoPlayerWidget()

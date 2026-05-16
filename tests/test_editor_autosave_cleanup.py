@@ -451,6 +451,48 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertTrue(editor._process_completed_finalized)
         self.assertEqual(editor._segment_state[0]["text"], "복구된 자막")
 
+    def test_recover_generation_segments_from_backend_fast_backup_when_backend_exists(self):
+        editor = _CompletionEditor()
+        editor._segment_state = []
+        editor._window.backend._last_generation_final_media_path = editor.media_path
+        editor._window.backend._last_generation_final_segments = []
+        editor._window.backend_fast = SimpleNamespace(
+            _last_generation_final_media_path=editor.media_path,
+            _last_generation_final_segments=[
+                {"start": 0.0, "end": 1.0, "text": "fast 복구 자막"},
+            ],
+            _cut_boundary_prescan_thread=None,
+            _cut_boundary_follower_thread=None,
+        )
+
+        recovered = editor._recover_generation_segments_from_backend_backup()
+
+        self.assertTrue(recovered)
+        editor.append_segments.assert_called_once()
+        self.assertEqual(editor._segment_state[0]["text"], "fast 복구 자막")
+        self.assertEqual(editor._window.backend_fast._last_generation_final_segments, [])
+
+    def test_recover_generation_segments_from_backend_backup_accepts_samefile_path_variants(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            media_path = os.path.join(tmpdir, "clip.mp4")
+            with open(media_path, "wb") as handle:
+                handle.write(b"data")
+            alias_path = os.path.join(tmpdir, "alias.mp4")
+            os.symlink(media_path, alias_path)
+
+            editor = _CompletionEditor()
+            editor._segment_state = []
+            editor.media_path = media_path
+            editor._window.backend._last_generation_final_media_path = alias_path
+            editor._window.backend._last_generation_final_segments = [
+                {"start": 0.0, "end": 1.0, "text": "samefile 복구 자막"},
+            ]
+
+            recovered = editor._recover_generation_segments_from_backend_backup()
+
+            self.assertTrue(recovered)
+            self.assertEqual(editor._segment_state[0]["text"], "samefile 복구 자막")
+
     def test_set_process_completed_clears_stale_cut_boundary_preview_when_backend_idle(self):
         editor = _CompletionEditor()
 

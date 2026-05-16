@@ -43,6 +43,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self.min_speakers = 1
         self.max_speakers = 1
         self._active = False
+        self._stop_requested = False
         self._speaker_map = []
         get_logger().set_ui_callback(main_window.append_log)
         self.video_processor = VideoProcessor()
@@ -182,6 +183,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         pause_lora = getattr(self.ui, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
             pause_lora("pipeline_start")
+        self._stop_requested = False
         self._active = True
         set_runtime_settings_override(getattr(self.ui, "_runtime_settings_override", None))
         try:
@@ -272,6 +274,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
 
     # ─── 정지 ────────────────────────────────────────────
     def stop(self, *, log_context: str = "파이프라인 중단", unload_llm: bool = True):
+        self._stop_requested = True
         self._active = False
 
         try:

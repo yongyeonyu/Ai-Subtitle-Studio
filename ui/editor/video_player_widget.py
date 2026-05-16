@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt, QTimer, QUrl, QEvent, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QColor
 
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
 from core.runtime import config
 from core.frame_time import build_frame_time_map, normalize_fps, sec_to_floor_frame, snap_sec_to_frame
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
@@ -195,6 +195,8 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
         self._proxy_build_dst: str = ""
         self._scan_cut_active_direction: int = 0
         self._shutdown_in_progress = False
+        self._audio_rebind_in_progress = False
+        self._media_devices = None
 
         self.media_player = create_video_backend(self)
         self.audio_output = None
@@ -213,6 +215,7 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
         except Exception:
             pass
         self.initial_thumbnail_ready.connect(self._on_initial_thumbnail_ready)
+        self._connect_audio_device_signals()
 
         _pretendard = "/Library/Fonts/Pretendard-Regular.ttf"
         if os.path.exists(_pretendard):
@@ -243,18 +246,135 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
     def _ensure_audio_outputs(self) -> None:
         """Create Qt audio outputs lazily to avoid startup crashes on some macOS audio setups."""
         try:
-            if bool(getattr(self.media_player, "uses_qt_audio", False)) and self.audio_output is None:
-                self.audio_output = QAudioOutput(self)
+            if bool(getattr(self.media_player, "uses_qt_audio", False)):
+                if self.audio_output is None:
+                    self.audio_output = QAudioOutput(self)
                 self.media_player.setAudioOutput(self.audio_output)
-            if self.has_vocal_track and self.vocal_audio_output is None:
+            if self.has_vocal_track:
                 vocal_player = self._ensure_vocal_player()
-                self.vocal_audio_output = QAudioOutput(self)
+                if self.vocal_audio_output is None:
+                    self.vocal_audio_output = QAudioOutput(self)
                 vocal_player.setAudioOutput(self.vocal_audio_output)
         except Exception:
             # Keep silent fallback instead of crashing the whole app when the local
             # audio device/backend is unstable or reports unsupported channels.
             self.audio_output = None
             self.vocal_audio_output = None
+
+    def _connect_audio_device_signals(self) -> None:
+        try:
+            self._media_devices = QMediaDevices(self)
+            self._media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
+        except Exception:
+            self._media_devices = None
+
+    def _on_audio_outputs_changed(self) -> None:
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
+        QTimer.singleShot(0, lambda: self.refresh_audio_output_routing(reason="audio_outputs_changed"))
+
+    def refresh_audio_output_routing(self, *, reason: str = "") -> None:
+        del reason
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
+        if bool(getattr(self, "_audio_rebind_in_progress", False)):
+            return
+
+        main_player = getattr(self, "media_player", None)
+        uses_main_qt_audio = bool(getattr(main_player, "uses_qt_audio", False))
+        vocal_player = getattr(self, "vocal_player", None) if getattr(self, "has_vocal_track", False) else None
+        uses_vocal_qt_audio = vocal_player is not None and hasattr(vocal_player, "setAudioOutput")
+        if not uses_main_qt_audio and not uses_vocal_qt_audio:
+            return
+
+        self._audio_rebind_in_progress = True
+        try:
+            main_was_playing = bool(
+                uses_main_qt_audio
+                and hasattr(main_player, "playbackState")
+                and main_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            )
+            vocal_was_playing = bool(
+                uses_vocal_qt_audio
+                and hasattr(vocal_player, "playbackState")
+                and vocal_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            )
+            main_position_ms = int(main_player.position() or 0) if uses_main_qt_audio and hasattr(main_player, "position") else 0
+            vocal_position_ms = (
+                int(vocal_player.position() or main_position_ms)
+                if uses_vocal_qt_audio and hasattr(vocal_player, "position")
+                else main_position_ms
+            )
+
+            if main_was_playing and hasattr(main_player, "pause"):
+                try:
+                    main_player.pause()
+                except Exception:
+                    pass
+            if vocal_was_playing and hasattr(vocal_player, "pause"):
+                try:
+                    vocal_player.pause()
+                except Exception:
+                    pass
+
+            bindings = (
+                (main_player, getattr(self, "audio_output", None)),
+                (vocal_player, getattr(self, "vocal_audio_output", None)),
+            )
+            for player, output in bindings:
+                if player is None or output is None or not hasattr(player, "setAudioOutput"):
+                    continue
+                try:
+                    player.setAudioOutput(None)
+                except Exception:
+                    pass
+
+            for output_name in ("audio_output", "vocal_audio_output"):
+                output = getattr(self, output_name, None)
+                if output is None:
+                    continue
+                try:
+                    output.deleteLater()
+                except Exception:
+                    pass
+                setattr(self, output_name, None)
+
+            self._ensure_audio_outputs()
+
+            if self.audio_output is not None:
+                try:
+                    self.audio_output.setVolume(1.0)
+                except Exception:
+                    pass
+            if self.vocal_audio_output is not None:
+                try:
+                    self.vocal_audio_output.setVolume(1.0)
+                except Exception:
+                    pass
+
+            if uses_main_qt_audio and hasattr(main_player, "setPosition"):
+                try:
+                    main_player.setPosition(main_position_ms)
+                except Exception:
+                    pass
+            if uses_vocal_qt_audio and vocal_player is not None and hasattr(vocal_player, "setPosition"):
+                try:
+                    vocal_player.setPosition(vocal_position_ms)
+                except Exception:
+                    pass
+
+            if main_was_playing and hasattr(main_player, "play"):
+                try:
+                    main_player.play()
+                except Exception:
+                    pass
+            if vocal_was_playing and hasattr(vocal_player, "play"):
+                try:
+                    vocal_player.play()
+                except Exception:
+                    pass
+        finally:
+            self._audio_rebind_in_progress = False
 
     def _ensure_vocal_player(self) -> QMediaPlayer:
         player = getattr(self, "vocal_player", None)

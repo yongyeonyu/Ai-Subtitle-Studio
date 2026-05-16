@@ -280,6 +280,63 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertEqual(parsed[0]["asr_metadata"]["vad_alignment"]["vad_aligned"], True)
         self.assertEqual(parsed[0]["quality"]["vad_alignment_score"], 100.0)
 
+    def test_parse_whisper_payload_rebuilds_text_from_filtered_words(self):
+        payload = {
+            "backend": "unit-test",
+            "segments": [
+                {
+                    "start": 0.0,
+                    "end": 1.3,
+                    "text": "어 오늘은 여기 고향",
+                    "words": [
+                        {"word": "어", "start": 0.0, "end": 0.18},
+                        {"word": "오늘은", "start": 0.82, "end": 1.1},
+                    ],
+                }
+            ],
+        }
+
+        parsed = self.processor._parse_whisper_payload(
+            payload,
+            {"input_path": "/tmp/chunk.wav", "ov_start_offset": 10.0},
+            vad_strict=[{"start": 10.0, "end": 10.3, "vad_word_filter": True}],
+        )
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["text"], "어")
+        self.assertEqual(parsed[0]["start"], 10.0)
+        self.assertEqual(parsed[0]["end"], 10.18)
+        self.assertEqual([word["word"] for word in parsed[0]["words"]], ["어"])
+
+    def test_parse_whisper_payload_strips_control_tokens_from_words_and_text(self):
+        payload = {
+            "backend": "unit-test",
+            "segments": [
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "어 오늘은 여기 고향",
+                    "words": [
+                        {"word": "<|4.00|>", "start": 0.0, "end": 0.2},
+                        {"word": "2026<|6.00|>", "start": 0.2, "end": 1.0, "confidence": 0.9},
+                    ],
+                }
+            ],
+        }
+
+        parsed = self.processor._parse_whisper_payload(
+            payload,
+            {"input_path": "/tmp/chunk.wav", "ov_start_offset": 4.0},
+            vad_strict=[],
+        )
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["text"], "2026")
+        self.assertEqual(parsed[0]["start"], 4.2)
+        self.assertEqual(parsed[0]["end"], 5.0)
+        self.assertEqual([word["word"] for word in parsed[0]["words"]], ["2026"])
+        self.assertEqual(parsed[0]["asr_metadata"]["words"][0]["word"], "2026")
+
     def test_post_stt_vad_does_not_filter_words_before_alignment(self):
         payload = {
             "backend": "unit-test",

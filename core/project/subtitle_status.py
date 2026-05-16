@@ -54,7 +54,7 @@ def subtitle_detection_score(seg: dict, source: str = "") -> float | None:
     quality = dict(seg.get("quality") or {})
     score = _as_float(quality.get("confidence_score"))
     if score is not None:
-        return max(0.0, min(100.0, score))
+        return _normalize_score_100(score)
 
     target_source = str(source or _selected_stt_source(seg) or _stt_source_for_segment(seg)).strip().upper()
     for candidate in list(seg.get("stt_candidates") or []):

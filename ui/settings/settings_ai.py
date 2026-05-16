@@ -1235,6 +1235,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             return
         if hasattr(parent, "_apply_ai_settings"):
             parent._apply_ai_settings(self.result_settings)
+            self._refresh_connected_video_player_audio()
             return
         try:
             if hasattr(parent, "settings"):
@@ -1263,11 +1264,46 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 main_w._start_configured_watchers()
             if hasattr(main_w, "_refresh_work_mode_ui"):
                 main_w._refresh_work_mode_ui()
+            self._refresh_connected_video_player_audio()
         except Exception:
             pass
 
+    def _refresh_connected_video_player_audio(self):
+        parent = self.parent()
+        visited: set[int] = set()
+        owners = []
+        if parent is not None:
+            owners.append(parent)
+            try:
+                main_w = parent.window() if hasattr(parent, "window") else None
+            except Exception:
+                main_w = None
+            if main_w is not None:
+                owners.append(main_w)
+                active_editor = getattr(main_w, "_active_editor", None)
+                if callable(active_editor):
+                    try:
+                        owner = active_editor()
+                        if owner is not None:
+                            owners.append(owner)
+                    except Exception:
+                        pass
+        for owner in owners:
+            if owner is None or id(owner) in visited:
+                continue
+            visited.add(id(owner))
+            video_player = getattr(owner, "video_player", None)
+            refresh = getattr(video_player, "refresh_audio_output_routing", None)
+            if callable(refresh):
+                try:
+                    refresh(reason="settings_changed")
+                    return
+                except Exception:
+                    pass
+
     def _on_ok(self):
         self.result_settings = self._collect_settings()
+        self._refresh_connected_video_player_audio()
         self.accept()
 
     def _on_save(self):

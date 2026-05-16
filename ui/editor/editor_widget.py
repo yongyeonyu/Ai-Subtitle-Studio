@@ -660,7 +660,7 @@ class EditorWidget(
         if hasattr(self.timeline, 'repeat_chk'):       self.timeline.repeat_chk.toggled.connect(self._on_repeat_segment_toggled)
         if hasattr(self.timeline, 'subtitle_magnet_requested'): self.timeline.subtitle_magnet_requested.connect(self._on_subtitle_magnet_requested)
         if hasattr(self.timeline, 'tab_timing_requested'): self.timeline.tab_timing_requested.connect(self._trigger_magnet)
-        if hasattr(self.timeline, 'diamond_merge'):    self.timeline.diamond_merge.connect(self._on_diamond_merge)
+        if hasattr(self.timeline, 'diamond_merge'):    self.timeline.diamond_merge.connect(self._on_diamond_merge_requested)
         if hasattr(self.timeline, 'sig_inline_text_changed'): self.timeline.sig_inline_text_changed.connect(self._on_inline_text_changed)
         if hasattr(self.timeline, 'sig_editing_mode'):        self.timeline.sig_editing_mode.connect(self._on_seg_editing_mode)
         if hasattr(self.timeline, 'playhead_menu_requested'): self.timeline.playhead_menu_requested.connect(self._show_playhead_menu)

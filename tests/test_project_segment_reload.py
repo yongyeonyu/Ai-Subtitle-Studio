@@ -1367,6 +1367,42 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_live_stt_preview_renders_editor_draft_when_generation_stage_label_is_visible(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": False, "state": "ST_IDLE"})()
+        editor.status_lbl = type("Status", (), {"text": lambda _self: "⏳ [STT] Whisper 중"})()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "실시간 자막", "stt_preview_source": "STT1"}
+            ])
+
+            self.assertIn("실시간 자막", editor.text_edit.toPlainText())
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+            self.assertEqual(editor._live_editor_preview_segments[0]["text"], "실시간 자막")
+        finally:
+            editor.text_edit.close()
+
+    def test_identical_live_editor_preview_flush_skips_full_editor_rebuild(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "실시간 자막", "stt_preview_source": "STT1"}
+            ])
+            initial_text = editor.text_edit.toPlainText()
+            current_drafts = [dict(seg) for seg in editor._live_editor_preview_segments]
+
+            with patch.object(editor, "_clear_live_editor_preview_blocks", wraps=editor._clear_live_editor_preview_blocks) as clearer:
+                editor._live_editor_preview_queue = [dict(seg) for seg in current_drafts]
+                editor._live_editor_preview_pending = True
+                editor._flush_live_editor_preview_queue()
+
+            self.assertEqual(clearer.call_count, 0)
+            self.assertEqual(editor.text_edit.toPlainText(), initial_text)
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+        finally:
+            editor.text_edit.close()
+
     def test_generation_completion_cleanup_rebuilds_editor_without_live_preview_rows(self):
         editor = _ActualSelectionEditor()
         try:

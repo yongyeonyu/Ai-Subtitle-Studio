@@ -457,6 +457,44 @@ class HomeSidebarMixin:
             return bool(getattr(state_manager, "is_dirty", False))
         return bool(getattr(editor, "_is_dirty", False))
 
+    def _sidebar_queue_generation_running(self) -> bool:
+        active_row = self._sidebar_generation_active_row()
+        if active_row < 0:
+            return False
+        status_text = self._sidebar_generation_row_status(active_row)
+        flagger = getattr(self, "_queue_status_flags", None)
+        if callable(flagger):
+            try:
+                row_done, row_error, row_active = flagger(status_text)
+            except Exception:
+                row_done = row_error = False
+                row_active = bool(str(status_text or "").strip())
+        else:
+            text = str(status_text or "").strip()
+            row_done = "완료" in text
+            row_error = any(token in text for token in ("오류", "실패", "중단"))
+            row_active = bool(text) and not row_done and not row_error and "대기" not in text
+        if row_done or row_error or not row_active:
+            return False
+
+        execution_started = getattr(self, "_queue_execution_started", None)
+        if callable(execution_started):
+            try:
+                if bool(execution_started()):
+                    return True
+            except Exception:
+                pass
+
+        try:
+            start_times = dict(getattr(self, "_file_start_times", {}) or {})
+            complete_times = dict(getattr(self, "_file_complete_times", {}) or {})
+            started_at = float(start_times.get(int(active_row), 0.0) or 0.0)
+            completed_at = float(complete_times.get(int(active_row), 0.0) or 0.0)
+        except Exception:
+            started_at = 0.0
+            completed_at = 0.0
+        return started_at > 0.0 and completed_at <= 0.0
+
     def _is_subtitle_generation_running(self) -> bool:
         editor = self._active_editor()
         if editor is not None:
@@ -477,17 +515,22 @@ class HomeSidebarMixin:
                     return True
             if bool(getattr(editor, "_is_ai_processing", False)):
                 return True
-        backend = getattr(self, "backend", None)
-        for attr in ("_active", "is_running", "running"):
-            value = getattr(backend, attr, False)
-            if callable(value):
-                try:
-                    value = value()
-                except Exception:
-                    value = False
-            if bool(value):
-                return True
-        return bool(getattr(self, "_auto_processing_active", False))
+        for backend_name in ("backend_fast", "backend"):
+            backend = getattr(self, backend_name, None)
+            if backend is None:
+                continue
+            for attr in ("_active", "is_running", "running"):
+                value = getattr(backend, attr, False)
+                if callable(value):
+                    try:
+                        value = value()
+                    except Exception:
+                        value = False
+                if bool(value):
+                    return True
+        if bool(getattr(self, "_auto_processing_active", False)):
+            return True
+        return self._sidebar_queue_generation_running()
 
     def _subtitle_status_text(self) -> str:
         if self._is_subtitle_generation_running():
@@ -1828,6 +1871,10 @@ class HomeSidebarMixin:
             try:
                 editor.settings = dict(settings)
                 editor.selected_model = settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
+                video_player = getattr(editor, "video_player", None)
+                refresh_audio = getattr(video_player, "refresh_audio_output_routing", None)
+                if callable(refresh_audio):
+                    refresh_audio(reason="ai_settings_applied")
                 if hasattr(editor, "_update_engine_label_text"):
                     editor._update_engine_label_text()
                     engine_label = getattr(editor, "engine_lbl", None)

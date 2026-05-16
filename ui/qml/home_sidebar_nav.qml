@@ -104,15 +104,14 @@ Rectangle {
                     visible: !!modelData.progressVisible
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
+                    anchors.verticalCenter: parent.verticalCenter
                     anchors.leftMargin: 10
                     anchors.rightMargin: 10
-                    anchors.topMargin: 2
-                    anchors.bottomMargin: 2
+                    height: Math.max(progressBadge.height, progressBody.implicitHeight)
                     spacing: 7
 
                     Rectangle {
+                        id: progressBadge
                         width: 16
                         height: 16
                         radius: 4
@@ -130,6 +129,7 @@ Rectangle {
                     }
 
                     Column {
+                        id: progressBody
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width - 23
                         spacing: 0

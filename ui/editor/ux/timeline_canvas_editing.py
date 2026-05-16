@@ -23,7 +23,7 @@ from ui.timeline.timeline_constants import HANDLE_R, SUBTITLE_BOT, SUBTITLE_TOP
 
 NEW_SUBTITLE_PLACEHOLDER = "새자막"
 SUBTITLE_SEGMENT_FONT_PT = 13
-STT_PREVIEW_FONT_PT = 9
+STT_PREVIEW_FONT_PT = SUBTITLE_SEGMENT_FONT_PT
 
 
 class _TimelineInlineTextEdit(QPlainTextEdit):

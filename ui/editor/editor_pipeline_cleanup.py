@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+import unicodedata
 
 from PyQt6.QtCore import QTimer
 
@@ -12,6 +13,23 @@ from ui.editor.editor_pipeline_safety import EditorPipelineSafetyMixin
 
 
 class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
+    @staticmethod
+    def _generation_media_paths_match(left_path: str, right_path: str) -> bool:
+        left = str(left_path or "").strip()
+        right = str(right_path or "").strip()
+        if not left or not right:
+            return False
+        left_nfc = unicodedata.normalize("NFC", left)
+        right_nfc = unicodedata.normalize("NFC", right)
+        if os.path.normcase(os.path.normpath(left_nfc)) == os.path.normcase(os.path.normpath(right_nfc)):
+            return True
+        try:
+            if os.path.exists(left_nfc) and os.path.exists(right_nfc) and os.path.samefile(left_nfc, right_nfc):
+                return True
+        except Exception:
+            pass
+        return False
+
     def _clear_processing_indicators(self):
         self._last_live_processing_stage = ""
         self._next_live_processing_stage_at = 0.0
@@ -157,28 +175,34 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
         main_w = self._pipeline_window()
         if main_w is None:
             return False
-        backend = getattr(main_w, "backend", None)
-        if backend is None:
-            backend = getattr(main_w, "backend_fast", None)
-        if backend is None:
-            return False
-        backup_media = str(getattr(backend, "_last_generation_final_media_path", "") or "")
         editor_media = str(getattr(self, "media_path", "") or "")
-        if backup_media and editor_media and os.path.normpath(backup_media) != os.path.normpath(editor_media):
-            return False
-        backup_segments = [
-            dict(seg)
-            for seg in list(getattr(backend, "_last_generation_final_segments", []) or [])
-            if isinstance(seg, dict)
-        ]
-        if not backup_segments:
-            return False
-        backup_segments = [
-            dict(seg)
-            for seg in backup_segments
-            if not bool(seg.get("is_gap")) and str(seg.get("text", "") or "").strip()
-        ]
-        if not backup_segments:
+        backend = None
+        backup_segments: list[dict] = []
+        for candidate in (
+            getattr(main_w, "backend_fast", None),
+            getattr(main_w, "backend", None),
+        ):
+            if candidate is None:
+                continue
+            backup_media = str(getattr(candidate, "_last_generation_final_media_path", "") or "")
+            if backup_media and editor_media and not self._generation_media_paths_match(backup_media, editor_media):
+                continue
+            candidate_segments = [
+                dict(seg)
+                for seg in list(getattr(candidate, "_last_generation_final_segments", []) or [])
+                if isinstance(seg, dict)
+            ]
+            candidate_segments = [
+                dict(seg)
+                for seg in candidate_segments
+                if not bool(seg.get("is_gap")) and str(seg.get("text", "") or "").strip()
+            ]
+            if not candidate_segments:
+                continue
+            backend = candidate
+            backup_segments = candidate_segments
+            break
+        if backend is None or not backup_segments:
             return False
         get_logger().log("⚠️ 에디터 최종 자막 누락 감지: 백엔드 결과로 즉시 복구합니다.")
         appender = getattr(self, "append_segments", None)

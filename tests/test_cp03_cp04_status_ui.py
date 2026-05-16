@@ -168,6 +168,57 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertEqual(snapshot["meta"], "CPU 18% · PROC 56% · RAM 0.23GB")
         self.assertIn("STT 1/2", snapshot["title"])
 
+    def test_generation_progress_snapshot_treats_backend_fast_as_running(self):
+        state_manager = SimpleNamespace(state="ST_IDLE", is_locked=False, is_dirty=False)
+        status_lbl = QLabel("⏳ [STT] Whisper 중")
+        editor = SimpleNamespace(sm=state_manager, _is_ai_processing=False, status_lbl=status_lbl, settings={})
+        home = _DummyHome(editor)
+        home.backend_fast = SimpleNamespace(_active=True)
+        home.backend = None
+        home._current_file_idx = 1
+        home._total_files = 1
+        home._real_pct = 0
+        home._expected_seconds = {0: 600.0}
+        home._file_start_times = {0: 1000.0}
+        home._file_complete_times = {}
+        home.queue_table = QTableWidget(1, 5)
+        home.queue_table.setItem(0, 0, QTableWidgetItem("자막 생성 중"))
+        home.queue_table.setItem(0, 4, QTableWidgetItem("00:00 / 10:00"))
+
+        with patch("ui.home_sidebar.time.time", return_value=1120.0):
+            snapshot = home._generation_progress_snapshot()
+
+        self.assertTrue(snapshot["running"])
+        self.assertEqual(snapshot["percent"], 20)
+        self.assertEqual(snapshot["progressText"], "20%")
+        self.assertEqual(snapshot["subtitle"], "02:00 / 10:00")
+
+    def test_generation_progress_snapshot_keeps_running_for_active_queue_row_after_backend_flags_drop(self):
+        state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
+        status_lbl = QLabel("⏳ [자막 메모리] 강제 정리 중")
+        editor = SimpleNamespace(sm=state_manager, _is_ai_processing=False, status_lbl=status_lbl, settings={})
+        home = _DummyHome(editor)
+        home.backend_fast = None
+        home.backend = None
+        home._queue_execution_started_at = 1000.0
+        home._current_file_idx = 1
+        home._total_files = 1
+        home._real_pct = 0
+        home._expected_seconds = {0: 840.0}
+        home._file_start_times = {0: 1000.0}
+        home._file_complete_times = {}
+        home.queue_table = QTableWidget(1, 5)
+        home.queue_table.setItem(0, 0, QTableWidgetItem("자막 생성 중"))
+        home.queue_table.setItem(0, 4, QTableWidgetItem("00:00 / 14:00"))
+
+        with patch("ui.home_sidebar.time.time", return_value=1336.0):
+            snapshot = home._generation_progress_snapshot()
+
+        self.assertTrue(snapshot["running"])
+        self.assertEqual(snapshot["percent"], 40)
+        self.assertEqual(snapshot["progressText"], "40%")
+        self.assertEqual(snapshot["subtitle"], "05:36 / 14:00")
+
     def test_generation_progress_snapshot_caps_running_progress_below_100_until_done(self):
         state_manager = SimpleNamespace(state="ST_PROC", is_locked=True, is_dirty=False)
         status_lbl = QLabel("⏳ [자막 LLM] 최적화 중")

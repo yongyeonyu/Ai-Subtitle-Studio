@@ -7,6 +7,7 @@ Item {
     property real fps: 30
     property real viewportX: 0
     property string fontFamily: "Arial"
+    property int segmentFontPixelSize: 14
 
     Repeater {
         model: root.segments
@@ -95,7 +96,7 @@ Item {
             text: modelData.text
             color: modelData.textColor
             font.family: root.fontFamily
-            font.pixelSize: modelData.preview ? 10 : 14
+            font.pixelSize: root.segmentFontPixelSize
             elide: parent.width < 164 ? Text.ElideRight : Text.ElideNone
             wrapMode: parent.width < 164 ? Text.NoWrap : Text.WordWrap
             verticalAlignment: parent.width < 164 ? Text.AlignVCenter : Text.AlignTop

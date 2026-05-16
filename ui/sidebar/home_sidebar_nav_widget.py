@@ -179,7 +179,7 @@ class HomeSidebarNavWidget(QWidget):
                 "font-size: 8px; font-weight: 700; "
                 "background: #182126; border: 1px solid #243139; border-radius: 4px;"
             )
-            row.addWidget(badge)
+            row.addWidget(badge, alignment=Qt.AlignmentFlag.AlignVCenter)
             if progress_visible:
                 body = QWidget(button)
                 body_layout = QVBoxLayout(body)
@@ -213,7 +213,7 @@ class HomeSidebarNavWidget(QWidget):
                         "color: #7F919D; font-size: 8px; font-weight: 600; background: transparent; border: none;"
                     )
                     body_layout.addWidget(meta)
-                row.addWidget(body, stretch=1)
+                row.addWidget(body, stretch=1, alignment=Qt.AlignmentFlag.AlignVCenter)
             else:
                 title = QLabel(str(item.get("title", "") or ""), button)
                 title.setStyleSheet(

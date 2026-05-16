@@ -19,6 +19,7 @@ from PyQt6.QtMultimedia import QMediaPlayer
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 from core.native_swift_timeline import plan_subtitle_timing_edit_via_swift
 from ui.editor.timeline_scan_cut_patches import install_scan_cut_patches
+from ui.editor.ux.editor_timeline_segment_merge import EditorTimelineSegmentMergeMixin
 from ui.editor.ux.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
 from ui.editor.editor_helpers import (
@@ -30,7 +31,7 @@ from ui.editor.editor_helpers import (
 
 
 
-class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
+class EditorTimelineVideoMixin(EditorTimelineSegmentMergeMixin, EditorScanCutCoreMixin):
     """타임라인/비디오 동기화 / 화자 관리 / 단축키 액션"""
 
     def _timeline_lock_edit_enabled(self) -> bool:
@@ -156,11 +157,13 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
     def _sync_cursor_to_seg(self, seg, ensure_visible=True, move_cursor=True, *, sync_playhead=True):
         """커서↔블록 동기화: active/하이라이트 + (옵션) 커서 이동"""
         self._active_seg_start = seg["start"]
-        # 재생 중에는 set_active()가 내부 smooth scroll을 유발하므로 canvas만 직접 갱신
+        # 재생 중 타임라인 active 강조는 그래픽 잔상/깨짐을 유발할 수 있어 비활성화한다.
         player = getattr(getattr(self, 'video_player', None), 'media_player', None)
         is_playing = self._is_player_playing(player)
         if is_playing and hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
-            self.timeline.canvas.set_active(seg["start"])
+            clear_active_visual = getattr(self.timeline.canvas, "clear_active_visual", None)
+            if callable(clear_active_visual):
+                clear_active_visual()
         else:
             self.timeline.set_active(seg["start"])
         if sync_playhead and (not is_playing) and hasattr(self, 'timeline') and hasattr(self.timeline, 'set_playhead'):
@@ -1535,53 +1538,6 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             self.text_edit.update_margins()
         if hasattr(self.text_edit, "timestampArea"):
             self.text_edit.timestampArea.update()
-        self._finalize_edit()
-
-    def _on_diamond_merge(self, left_line: int, right_line: int):
-        """다이아몬드 더블클릭: 좌우 자막 세그먼트 1쌍만 병합"""
-        self._undo_mgr.push_immediate()
-        doc = self.text_edit.document()
-
-        left_block = doc.findBlockByNumber(left_line)
-        right_block = doc.findBlockByNumber(right_line)
-        if not left_block.isValid() or not right_block.isValid(): return
-
-        left_ud = left_block.userData()
-        right_ud = right_block.userData()
-        if not isinstance(left_ud, SubtitleBlockData) or not isinstance(right_ud, SubtitleBlockData): return
-        if left_ud.is_gap or right_ud.is_gap: return
-        right_end_sec = float(getattr(right_ud, "end_sec", left_ud.end_sec if getattr(left_ud, "end_sec", None) is not None else left_ud.start_sec) or left_ud.start_sec)
-
-        left_last = get_sub_block_indices(doc, left_line, left_ud.start_sec)[-1]
-        right_last = get_sub_block_indices(doc, right_line, right_ud.start_sec)[-1]
-
-        right_texts = []
-        for i in range(right_line, right_last + 1):
-            t = doc.findBlockByNumber(i).text()
-            if t.strip(): right_texts.append(t)
-        if not right_texts: return
-
-        cur = QTextCursor(doc)
-        cur.beginEditBlock()
-
-        left_last_block = doc.findBlockByNumber(left_last)
-        right_last_block = doc.findBlockByNumber(right_last)
-
-        cur.setPosition(left_last_block.position())
-        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-        right_end = QTextCursor(right_last_block)
-        right_end.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-        cur.setPosition(right_end.position(), QTextCursor.MoveMode.KeepAnchor)
-
-        cur.insertText(" " + " ".join(right_texts))
-        for idx in get_sub_block_indices(doc, left_line, left_ud.start_sec):
-            block_ref = doc.findBlockByNumber(idx)
-            block_ud = block_ref.userData()
-            if isinstance(block_ud, SubtitleBlockData):
-                block_ud.end_sec = right_end_sec
-        cur.endEditBlock()
-
-        self._mark_dirty()
         self._finalize_edit()
 
     def _on_smart_split(self, line_num: int, split_sec: float, new_on_left: bool):
