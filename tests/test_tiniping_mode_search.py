@@ -2,8 +2,14 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
-from tools.benchmark_tiniping_mode_search import _load_manual_seeds
+from tools.benchmark_tiniping_mode_search import (
+    _adaptive_audio_profiles,
+    _load_manual_seeds,
+    _selected_modes,
+)
+from tools.subtitle_regression_pack import _extract_json_tail, _parse_regression_fixtures, _segment_artifact_summary
 
 
 class TinipingModeSearchTests(unittest.TestCase):
@@ -48,6 +54,63 @@ class TinipingModeSearchTests(unittest.TestCase):
         self.assertEqual(loaded["fast"][0].primary_model, "stt1-fast")
         self.assertEqual(loaded["auto"][0].method, "selective_ensemble")
         self.assertTrue(loaded["high"][0].run_llm)
+
+    def test_parse_regression_fixtures_dedupes_in_order(self):
+        fixtures = _parse_regression_fixtures("x5, macau, x5, tinyping_short")
+        self.assertEqual(fixtures, ["x5", "macau", "tinyping_short"])
+
+    def test_selected_modes_normalizes_and_dedupes(self):
+        self.assertEqual(_selected_modes("high, precise, auto, high"), ["high", "auto"])
+
+    def test_high_mode_audio_profiles_include_high_detail_route(self):
+        names = [profile.name for profile in _adaptive_audio_profiles({"mode": "high"})]
+        self.assertIn("adaptive_voice_change_high_detail", names)
+        non_high_names = [profile.name for profile in _adaptive_audio_profiles({"mode": "fast"})]
+        self.assertNotIn("adaptive_voice_change_high_detail", non_high_names)
+
+    def test_extract_json_tail_ignores_leading_logs(self):
+        payload = _extract_json_tail('[bench] running\n{\n  "json": "/tmp/out.json",\n  "ok": true\n}\n')
+        self.assertEqual(payload["json"], "/tmp/out.json")
+        self.assertTrue(payload["ok"])
+
+    def test_segment_artifact_summary_persists_selected_source_and_anchor_in_saved_project(self):
+        raw_rows = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "원본 자막",
+                "stt_selected_source": "STT2",
+                "stt_score_label": "red",
+            }
+        ]
+        output_rows = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "최종 자막",
+                "speaker": "00",
+                "stt_selected_source": "STT2",
+                "_stt_original_candidate_start": 0.8,
+                "_stt_original_candidate_end": 2.2,
+                "stt_score_label": "red",
+            }
+        ]
+        with TemporaryDirectory() as tmpdir:
+            media_path = Path(tmpdir) / "fixture.mp4"
+            media_path.write_bytes(b"")
+            output_dir = Path(tmpdir) / "artifacts"
+            with mock.patch("tools.subtitle_regression_pack.probe_media", return_value={"fps": 30.0}):
+                summary = _segment_artifact_summary(
+                    media=media_path,
+                    raw_rows=raw_rows,
+                    output_rows=output_rows,
+                    output_dir=output_dir,
+                    project_name="roundtrip_check",
+                )
+
+        self.assertEqual(summary["final_selected_source_counts"], {"STT2": 1})
+        self.assertEqual(summary["saved_project_state"]["reloaded_segment_count"], 1)
+        self.assertEqual(summary["saved_project_state"]["preserved_anchor_segments"], 1)
 
 
 if __name__ == "__main__":

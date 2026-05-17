@@ -22,7 +22,9 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/appctl.py`: external command-line entry point for remote app control.
 - `tools/remote_verify.py`: higher-level remote verification runner and artifact capture.
 - `tools/overnight_optimize.py`: compact baseline/check runner that writes long-run artifacts under `output/manual_verification/latest/`.
-- `tools/benchmark_tiniping_mode_search.py`: Tiniping 3-minute sweep plus 11-minute final benchmark orchestrator for Fast/Auto/High mode winners.
+- `tools/benchmark_tiniping_mode_search.py`: CLI entry point for Tiniping mode search and regression-pack generation.
+- `tools/tiniping_mode_search_phases.py`: phase-by-phase Tiniping search orchestration for primary/pair/audio/method/cached/long validation passes.
+- `tools/subtitle_regression_pack.py`: repeatable subtitle regression-pack builder for X5, Macau, and Tinyping artifacts under `output/manual_verification/latest/`.
 - `tools/check_maintenance_budget.py`: changed-file guard for file/function length and broad silent-exception regressions.
 - `tools/verify_full_media_pipeline.py`: full-media verification runner with top-level performance/quality summary metrics.
 

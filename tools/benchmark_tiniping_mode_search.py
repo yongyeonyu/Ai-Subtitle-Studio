@@ -15,6 +15,8 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if __name__ == "__main__":
+    sys.modules.setdefault("tools.benchmark_tiniping_mode_search", sys.modules[__name__])
 
 from core.audio.media_processor import VideoProcessor  # noqa: E402
 from core.performance import hardware_profile  # noqa: E402
@@ -32,6 +34,12 @@ from tools.benchmark_subtitle_pipeline_variants import (  # noqa: E402
     benchmark_audio_profiles,
     clip_reference,
     parse_srt,
+)
+from tools.subtitle_regression_pack import (  # noqa: E402
+    DEFAULT_REGRESSION_PACK_DIR,
+    REGRESSION_FIXTURE_KEYS,
+    _build_regression_pack,
+    _parse_regression_fixtures,
 )
 
 
@@ -181,6 +189,21 @@ def _normalized_mode(mode: str) -> str:
     return "fast"
 
 
+def _selected_modes(raw: str | Iterable[str] | None) -> list[str]:
+    if raw is None:
+        return ["fast", "auto", "high"]
+    if isinstance(raw, str):
+        parts = [item.strip() for item in raw.split(",") if item.strip()]
+    else:
+        parts = [str(item or "").strip() for item in raw if str(item or "").strip()]
+    chosen: list[str] = []
+    for item in parts:
+        normalized = _normalized_mode(item)
+        if normalized not in chosen:
+            chosen.append(normalized)
+    return chosen or ["fast", "auto", "high"]
+
+
 def _mode_preset_key(mode: str) -> str:
     normalized = _normalized_mode(mode)
     return {"fast": "fast", "auto": "balanced", "high": "precise"}[normalized]
@@ -317,7 +340,7 @@ def _adaptive_audio_profiles(base_settings: dict[str, Any]) -> list[AudioProfile
         "review_vad_before_stt_enabled": True,
         "vad_post_stt_align_enabled": True,
     }
-    return [
+    profiles = [
         AudioProfile(
             name="adaptive_voice_change_balanced",
             description="음성 변화 구간마다 오디오/VAD를 가변 적용하는 균형형 경로입니다.",
@@ -383,6 +406,50 @@ def _adaptive_audio_profiles(base_settings: dict[str, Any]) -> list[AudioProfile
             },
         ),
     ]
+    if _normalized_mode(
+        base_settings.get("mode")
+        or base_settings.get("subtitle_mode")
+        or base_settings.get("user_facing_mode")
+        or base_settings.get("simple_operation_mode")
+        or base_settings.get("stt_quality_preset")
+        or "fast"
+    ) == "high":
+        profiles.append(
+            AudioProfile(
+                name="adaptive_voice_change_high_detail",
+                description="High 전용: 선발대 음성/장면 경계를 더 촘촘히 보고 구간별 오디오/VAD를 세밀하게 바꿉니다.",
+                overrides={
+                    **fresh,
+                    "selected_audio_ai": "deepfilter",
+                    "selected_vad": "silero",
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": True,
+                    "audio_chunk_profile_sec": 10.0,
+                    "scan_cut_audio_gain_enabled": True,
+                    "scan_cut_audio_gain_window_sec": 0.60,
+                    "scan_cut_audio_gain_threshold_db": 7.5,
+                    "scan_cut_audio_gain_context_windows": 4,
+                    "scan_cut_audio_gain_min_gap_sec": 0.16,
+                    "scan_cut_ffmpeg_scene_prepass_enabled": True,
+                    "scan_cut_ffmpeg_scene_replace_opencv_enabled": False,
+                    "scan_cut_ffmpeg_scene_threshold": 0.28,
+                    "scan_cut_ffmpeg_scene_timeout_sec": 18.0,
+                    "scan_cut_ffmpeg_scene_max_candidates": 420,
+                    "scan_cut_pioneer_worker_overlap_steps": 2,
+                    "scan_cut_pioneer_packet_bucket_sec": 0.16,
+                    "scan_cut_pioneer_packet_min_gap_sec": 0.14,
+                    "scan_cut_pioneer_packet_scout_raw_candidates": 280,
+                    "scan_cut_pioneer_packet_delta_threshold": 1.18,
+                    "scan_cut_pioneer_packet_mad_multiplier": 2.4,
+                    "scan_cut_pioneer_min_gap_sec": 0.32,
+                    "vad_threshold": 0.38,
+                    "review_vad_speech_pad_sec": 0.24,
+                    "review_vad_min_silence_sec": 0.52,
+                },
+            )
+        )
+    return profiles
 
 
 def _run_extract(
@@ -521,530 +588,6 @@ def _variant_row(
     )
 
 
-def _primary_scan(
-    *,
-    media: Path,
-    reference: list[dict[str, Any]],
-    models: list[str],
-    run_dir: Path,
-    base_settings: dict[str, Any],
-    start_sec: float,
-    end_sec: float,
-    span_sec: float,
-) -> dict[str, list[dict[str, Any]]]:
-    results_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode in ("fast", "auto", "high"):
-        mode_settings = _mode_base_settings(base_settings, mode)
-        extract_name = f"phase1_primary_{mode}"
-        chunk_source, extract_meta = _run_extract(
-            media=media,
-            settings=mode_settings,
-            start_sec=start_sec,
-            end_sec=end_sec,
-            work_dir=run_dir,
-            name=extract_name,
-        )
-        if mode == "fast":
-            method = "stt1_only"
-        else:
-            method = "stt1_word_precision"
-        for primary_model in models:
-            settings = _set_pair(mode_settings, primary_model, primary_model)
-            settings = _apply_method_overrides(settings, method)
-            row = _variant_row(
-                name=f"{mode}__primary__{Path(primary_model).name.replace(':', '_')}",
-                phase="phase1_primary",
-                description=f"{mode} primary model scan",
-                method=method,
-                settings=settings,
-                run_llm=bool(mode == "high" and str(settings.get("selected_model") or "").strip() and "사용 안함" not in str(settings.get("selected_model") or "")),
-                chunk_source=chunk_source,
-                work_dir=run_dir / "phase1_primary" / mode,
-                reference=reference,
-                span_sec=span_sec,
-            )
-            row["mode"] = mode
-            row["scan_kind"] = "primary"
-            row["primary_model"] = primary_model
-            row["secondary_model"] = primary_model
-            row["audio_profile"] = "mode_default"
-            row["audio_profile_description"] = "모드 기본 오디오/VAD"
-            row["audio_extract_elapsed_sec"] = extract_meta["elapsed_sec"]
-            results_by_mode[mode].append(_row_with_effective_settings(row, settings))
-        _log(f"phase1 primary {mode}: {len(results_by_mode[mode])} candidates")
-    return results_by_mode
-
-
-def _pair_scan(
-    *,
-    media: Path,
-    reference: list[dict[str, Any]],
-    models: list[str],
-    run_dir: Path,
-    base_settings: dict[str, Any],
-    start_sec: float,
-    end_sec: float,
-    span_sec: float,
-) -> dict[str, list[dict[str, Any]]]:
-    results_by_mode: dict[str, list[dict[str, Any]]] = {"auto": [], "high": []}
-    for mode in ("auto", "high"):
-        mode_settings = _mode_base_settings(base_settings, mode)
-        method = "selective_ensemble"
-        chunk_source, extract_meta = _run_extract(
-            media=media,
-            settings=mode_settings,
-            start_sec=start_sec,
-            end_sec=end_sec,
-            work_dir=run_dir,
-            name=f"phase1_pairs_{mode}",
-        )
-        for primary_model in models:
-            for secondary_model in models:
-                settings = _set_pair(mode_settings, primary_model, secondary_model)
-                settings = _apply_method_overrides(settings, method)
-                row = _variant_row(
-                    name=(
-                        f"{mode}__pair__{Path(primary_model).name.replace(':', '_')}"
-                        f"__{Path(secondary_model).name.replace(':', '_')}"
-                    ),
-                    phase="phase1_pairs",
-                    description=f"{mode} STT1/STT2 pair scan",
-                    method=method,
-                    settings=settings,
-                    run_llm=bool(mode == "high" and str(settings.get("selected_model") or "").strip() and "사용 안함" not in str(settings.get("selected_model") or "")),
-                    chunk_source=chunk_source,
-                    work_dir=run_dir / "phase1_pairs" / mode,
-                    reference=reference,
-                    span_sec=span_sec,
-                )
-                row["mode"] = mode
-                row["scan_kind"] = "pair"
-                row["primary_model"] = primary_model
-                row["secondary_model"] = secondary_model
-                row["audio_profile"] = "mode_default"
-                row["audio_profile_description"] = "모드 기본 오디오/VAD"
-                row["audio_extract_elapsed_sec"] = extract_meta["elapsed_sec"]
-                results_by_mode[mode].append(_row_with_effective_settings(row, settings))
-        _log(f"phase1 pair {mode}: {len(results_by_mode[mode])} candidates")
-    return results_by_mode
-
-
-def _seed_from_row(row: dict[str, Any]) -> BenchmarkSeed:
-    settings = dict(row.get("effective_settings") or row.get("settings_snapshot") or row.get("settings") or {})
-    return BenchmarkSeed(
-        mode=str(row.get("mode") or "fast"),
-        primary_model=str(row.get("primary_model") or settings.get("selected_whisper_model") or ""),
-        secondary_model=str(row.get("secondary_model") or settings.get("selected_whisper_model_secondary") or ""),
-        method=str(row.get("method") or ""),
-        run_llm=bool(row.get("run_llm")),
-        audio_profile=str(row.get("audio_profile") or "mode_default"),
-        audio_profile_description=str(row.get("audio_profile_description") or "모드 기본 오디오/VAD"),
-        settings=settings,
-        objective_reason=str(row.get("mode_objective_reason") or ""),
-    )
-
-
-def _row_with_effective_settings(row: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    item = dict(row)
-    item["effective_settings"] = dict(settings)
-    return item
-
-
-def _collect_phase1_seeds(primary_rows: dict[str, list[dict[str, Any]]], pair_rows: dict[str, list[dict[str, Any]]]) -> dict[str, list[BenchmarkSeed]]:
-    seeds_by_mode: dict[str, list[BenchmarkSeed]] = {"fast": [], "auto": [], "high": []}
-    fast_top = _objective_rank(primary_rows["fast"], "fast", 2)
-    seeds_by_mode["fast"] = [_seed_from_row(row) for row in fast_top]
-    auto_pool = list(primary_rows["auto"]) + list(pair_rows["auto"])
-    auto_top = _objective_rank(auto_pool, "auto", 2)
-    seeds_by_mode["auto"] = [_seed_from_row(row) for row in auto_top]
-    high_pool = list(primary_rows["high"]) + list(pair_rows["high"])
-    high_top = _objective_rank(high_pool, "high", 2)
-    seeds_by_mode["high"] = [_seed_from_row(row) for row in high_top]
-    return seeds_by_mode
-
-
-def _audio_profile_catalog(base_settings: dict[str, Any]) -> list[AudioProfile]:
-    profiles = benchmark_audio_profiles(base_settings)
-    profiles.extend(_adaptive_audio_profiles(base_settings))
-    deduped: list[AudioProfile] = []
-    seen: set[str] = set()
-    for profile in profiles:
-        if profile.name in seen:
-            continue
-        seen.add(profile.name)
-        deduped.append(profile)
-    return deduped
-
-
-def _audio_scan(
-    *,
-    media: Path,
-    reference: list[dict[str, Any]],
-    seeds_by_mode: dict[str, list[BenchmarkSeed]],
-    run_dir: Path,
-    base_settings: dict[str, Any],
-    start_sec: float,
-    end_sec: float,
-    span_sec: float,
-) -> dict[str, list[dict[str, Any]]]:
-    rows_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode, seeds in seeds_by_mode.items():
-        mode_base = _mode_base_settings(base_settings, mode)
-        profiles = _audio_profile_catalog(mode_base)
-        extracts: dict[str, tuple[Path, dict[str, Any], AudioProfile]] = {}
-        for profile in profiles:
-            profile_settings = {**mode_base, **profile.overrides}
-            chunk_source, extract_meta = _run_extract(
-                media=media,
-                settings=profile_settings,
-                start_sec=start_sec,
-                end_sec=end_sec,
-                work_dir=run_dir,
-                name=f"phase2_audio_{mode}_{profile.name}",
-            )
-            extracts[profile.name] = (chunk_source, extract_meta, profile)
-        for seed in seeds:
-            for profile_name, (chunk_source, extract_meta, profile) in extracts.items():
-                settings = {**mode_base, **profile.overrides}
-                settings = _set_pair(settings, seed.primary_model, seed.secondary_model)
-                settings = _apply_method_overrides(settings, seed.method)
-                row = _variant_row(
-                    name=f"{_seed_name(seed)}__{profile_name}",
-                    phase="phase2_audio",
-                    description=f"{mode} audio sweep",
-                    method=seed.method,
-                    settings=settings,
-                    run_llm=seed.run_llm,
-                    chunk_source=chunk_source,
-                    work_dir=run_dir / "phase2_audio" / mode / profile_name,
-                    reference=reference,
-                    span_sec=span_sec,
-                )
-                row["mode"] = mode
-                row["primary_model"] = seed.primary_model
-                row["secondary_model"] = seed.secondary_model
-                row["audio_profile"] = profile_name
-                row["audio_profile_description"] = profile.description
-                row["audio_extract_elapsed_sec"] = extract_meta["elapsed_sec"]
-                rows_by_mode[mode].append(_row_with_effective_settings(row, settings))
-        _log(f"phase2 audio {mode}: {len(rows_by_mode[mode])} candidates")
-    return rows_by_mode
-
-
-def _collect_audio_seeds(audio_rows: dict[str, list[dict[str, Any]]]) -> dict[str, list[BenchmarkSeed]]:
-    seeds_by_mode: dict[str, list[BenchmarkSeed]] = {"fast": [], "auto": [], "high": []}
-    for mode, rows in audio_rows.items():
-        seeds_by_mode[mode] = [_seed_from_row(row) for row in _objective_rank(rows, mode, 1)]
-    return seeds_by_mode
-
-
-def _method_candidates_for_mode(mode: str) -> list[str]:
-    normalized = _normalized_mode(mode)
-    if normalized == "fast":
-        return ["stt1_only", "selective_ensemble"]
-    if normalized == "auto":
-        return ["stt1_word_precision", "selective_ensemble", "parallel_ensemble"]
-    return ["stt1_word_precision", "selective_ensemble", "parallel_ensemble", "proposed_lora_deep_gate"]
-
-
-def _method_scan(
-    *,
-    media: Path,
-    reference: list[dict[str, Any]],
-    seeds_by_mode: dict[str, list[BenchmarkSeed]],
-    run_dir: Path,
-    base_settings: dict[str, Any],
-    start_sec: float,
-    end_sec: float,
-    span_sec: float,
-) -> dict[str, list[dict[str, Any]]]:
-    rows_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    profile_lookup: dict[str, AudioProfile] = {}
-    for mode in ("fast", "auto", "high"):
-        mode_base = _mode_base_settings(base_settings, mode)
-        for profile in _audio_profile_catalog(mode_base):
-            profile_lookup[f"{mode}:{profile.name}"] = profile
-    for mode, seeds in seeds_by_mode.items():
-        mode_base = _mode_base_settings(base_settings, mode)
-        for seed in seeds[:2]:
-            profile = profile_lookup.get(f"{mode}:{seed.audio_profile}")
-            profile_overrides = dict(profile.overrides if profile else {})
-            extract_settings = {**mode_base, **profile_overrides}
-            chunk_source, _extract_meta = _run_extract(
-                media=media,
-                settings=extract_settings,
-                start_sec=start_sec,
-                end_sec=end_sec,
-                work_dir=run_dir,
-                name=f"phase3_method_{_seed_name(seed)}",
-            )
-            for method in _method_candidates_for_mode(mode):
-                settings = {**mode_base, **profile_overrides}
-                settings = _set_pair(settings, seed.primary_model, seed.secondary_model)
-                settings = _apply_method_overrides(settings, method)
-                run_llm = bool(method == "proposed_lora_deep_gate" or seed.run_llm)
-                row = _variant_row(
-                    name=f"{_seed_name(seed)}__{method}",
-                    phase="phase3_method",
-                    description=f"{mode} method sweep",
-                    method=method,
-                    settings=settings,
-                    run_llm=run_llm,
-                    chunk_source=chunk_source,
-                    work_dir=run_dir / "phase3_method" / mode,
-                    reference=reference,
-                    span_sec=span_sec,
-                )
-                row["mode"] = mode
-                row["primary_model"] = seed.primary_model
-                row["secondary_model"] = seed.secondary_model
-                row["audio_profile"] = seed.audio_profile
-                row["audio_profile_description"] = seed.audio_profile_description
-                rows_by_mode[mode].append(_row_with_effective_settings(row, settings))
-        _log(f"phase3 method {mode}: {len(rows_by_mode[mode])} candidates")
-    return rows_by_mode
-
-
-def _cached_variant_definitions(mode: str) -> list[tuple[str, dict[str, Any]]]:
-    normalized = _normalized_mode(mode)
-    base_timing = {
-        "vad_post_stt_align_enabled": True,
-        "vad_post_stt_edge_pad_sec": 0.04,
-        "subtitle_cut_boundary_guard_enabled": normalized != "fast",
-        "subtitle_bundle_use_confirmed_cuts": normalized != "fast",
-        "subtitle_bundle_use_provisional_cuts": False,
-    }
-    return [
-        ("baseline_keep", {}),
-        ("lora_off", {"editor_lora_runtime_enabled": False, "subtitle_lora_quality_buckets": [], "subtitle_lora_micro_merge_enabled": False, "subtitle_lora_packaging_enabled": False}),
-        ("lora_high", {"editor_lora_runtime_enabled": True, "subtitle_lora_quality_buckets": ["high"]}),
-        ("lora_high_medium", {"editor_lora_runtime_enabled": True, "subtitle_lora_quality_buckets": ["high", "medium"]}),
-        ("lora_high_medium_low", {"editor_lora_runtime_enabled": True, "subtitle_lora_quality_buckets": ["high", "medium", "low"]}),
-        ("deep_off", {"deep_subtitle_policy_enabled": False, "deep_segment_setting_policy_enabled": False, "deep_stt_candidate_selector_enabled": False, "deep_timing_adjustment_enabled": False, "subtitle_output_selector_enabled": False}),
-        ("deep_selector_only", {"deep_subtitle_policy_enabled": True, "deep_segment_setting_policy_enabled": False, "deep_stt_candidate_selector_enabled": True, "deep_timing_adjustment_enabled": False, "subtitle_output_selector_enabled": True}),
-        ("deep_timing_only", {"deep_subtitle_policy_enabled": False, "deep_segment_setting_policy_enabled": False, "deep_stt_candidate_selector_enabled": False, "deep_timing_adjustment_enabled": True, "subtitle_output_selector_enabled": False}),
-        ("deep_full", {"deep_subtitle_policy_enabled": True, "deep_segment_setting_policy_enabled": True, "deep_stt_candidate_selector_enabled": True, "deep_timing_adjustment_enabled": True, "subtitle_output_selector_enabled": True}),
-        ("packaging_off", {"subtitle_lora_packaging_enabled": False}),
-        ("packaging_full", {"subtitle_lora_packaging_enabled": True, "subtitle_lora_packaging_mode": "full"}),
-        ("packaging_selective", {"subtitle_lora_packaging_enabled": True, "subtitle_lora_packaging_mode": "readability_selective"}),
-        ("timing_edge004", dict(base_timing)),
-        ("timing_edge008", {**base_timing, "vad_post_stt_edge_pad_sec": 0.08, "subtitle_cut_boundary_guard_enabled": True, "subtitle_bundle_use_confirmed_cuts": True}),
-        ("timing_edge012", {**base_timing, "vad_post_stt_edge_pad_sec": 0.12, "subtitle_cut_boundary_guard_enabled": True, "subtitle_bundle_use_confirmed_cuts": True}),
-        ("timing_provisional008", {**base_timing, "vad_post_stt_edge_pad_sec": 0.08, "subtitle_cut_boundary_guard_enabled": True, "subtitle_bundle_use_confirmed_cuts": True, "subtitle_bundle_use_provisional_cuts": True}),
-        (
-            "blend_conservative",
-            {
-                "editor_lora_runtime_enabled": True,
-                "subtitle_lora_quality_buckets": ["high"],
-                "deep_subtitle_policy_enabled": True,
-                "deep_segment_setting_policy_enabled": False,
-                "deep_stt_candidate_selector_enabled": True,
-                "deep_timing_adjustment_enabled": False,
-                "subtitle_output_selector_enabled": True,
-                "subtitle_lora_packaging_enabled": True,
-                "subtitle_lora_packaging_mode": "readability_selective",
-                **base_timing,
-            },
-        ),
-        (
-            "blend_balanced",
-            {
-                "editor_lora_runtime_enabled": True,
-                "subtitle_lora_quality_buckets": ["high", "medium"],
-                "deep_subtitle_policy_enabled": True,
-                "deep_segment_setting_policy_enabled": True,
-                "deep_stt_candidate_selector_enabled": True,
-                "deep_timing_adjustment_enabled": True,
-                "subtitle_output_selector_enabled": True,
-                "subtitle_lora_packaging_enabled": True,
-                "subtitle_lora_packaging_mode": "readability_selective",
-                **base_timing,
-            },
-        ),
-        (
-            "blend_quality_max",
-            {
-                "editor_lora_runtime_enabled": True,
-                "subtitle_lora_quality_buckets": ["high", "medium", "low"],
-                "deep_subtitle_policy_enabled": True,
-                "deep_segment_setting_policy_enabled": True,
-                "deep_stt_candidate_selector_enabled": True,
-                "deep_timing_adjustment_enabled": True,
-                "subtitle_output_selector_enabled": True,
-                "subtitle_lora_packaging_enabled": True,
-                "subtitle_lora_packaging_mode": "full",
-                "vad_post_stt_align_enabled": True,
-                "vad_post_stt_edge_pad_sec": 0.08,
-                "subtitle_cut_boundary_guard_enabled": True,
-                "subtitle_bundle_use_confirmed_cuts": True,
-                "subtitle_bundle_use_provisional_cuts": True,
-            },
-        ),
-    ]
-
-
-def _cached_postprocess_scan(
-    *,
-    media: Path,
-    reference: list[dict[str, Any]],
-    method_rows: dict[str, list[dict[str, Any]]],
-    run_dir: Path,
-    base_settings: dict[str, Any],
-    start_sec: float,
-    end_sec: float,
-    span_sec: float,
-) -> dict[str, list[dict[str, Any]]]:
-    rows_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode, rows in method_rows.items():
-        shortlisted = _objective_rank(rows, mode, 1)
-        for index, baseline_row in enumerate(shortlisted, start=1):
-            baseline_settings = dict(baseline_row.get("effective_settings") or {})
-            profile_name = str(baseline_row.get("audio_profile") or "mode_default")
-            mode_base = _mode_base_settings(base_settings, mode)
-            profile = next((item for item in _audio_profile_catalog(mode_base) if item.name == profile_name), None)
-            extract_settings = {**mode_base, **(profile.overrides if profile else {})}
-            chunk_source, _extract_meta = _run_extract(
-                media=media,
-                settings=extract_settings,
-                start_sec=start_sec,
-                end_sec=end_sec,
-                work_dir=run_dir,
-                name=f"phase4_cached_{mode}_{index}",
-            )
-            baseline_variant = _variant_row(
-                name=f"{mode}__cached_seed_{index}",
-                phase="phase4_cached_seed",
-                description=f"{mode} cached seed baseline",
-                method=str(baseline_row.get("method") or ""),
-                settings=baseline_settings,
-                run_llm=bool(baseline_row.get("run_llm")),
-                chunk_source=chunk_source,
-                work_dir=run_dir / "phase4_cached" / mode / f"seed_{index}",
-                reference=reference,
-                span_sec=span_sec,
-            )
-            raw_path = run_dir / "phase4_cached" / mode / f"seed_{index}" / f"{baseline_variant['name']}" / "raw_segments.json"
-            if not raw_path.exists():
-                raw_path = run_dir / "phase4_cached" / mode / f"seed_{index}" / "raw_segments.json"
-            for name, overrides in _cached_variant_definitions(mode):
-                settings = dict(baseline_settings)
-                settings.update(overrides)
-                settings["_benchmark_cached_raw_segments_path"] = str(raw_path)
-                row = _variant_row(
-                    name=f"{baseline_variant['name']}__{name}",
-                    phase="phase4_cached_postprocess",
-                    description=f"{mode} cached postprocess sweep",
-                    method="cached_raw",
-                    settings=settings,
-                    run_llm=bool(baseline_row.get("run_llm")),
-                    chunk_source=chunk_source,
-                    work_dir=run_dir / "phase4_cached" / mode / f"seed_{index}",
-                    reference=reference,
-                    span_sec=span_sec,
-                )
-                row["mode"] = mode
-                row["primary_model"] = str(baseline_row.get("primary_model") or "")
-                row["secondary_model"] = str(baseline_row.get("secondary_model") or "")
-                row["audio_profile"] = profile_name
-                row["audio_profile_description"] = str(baseline_row.get("audio_profile_description") or "")
-                rows_by_mode[mode].append(_row_with_effective_settings(row, settings))
-        _log(f"phase4 cached {mode}: {len(rows_by_mode[mode])} candidates")
-    return rows_by_mode
-
-
-def _finalists_from_cached(rows_by_mode: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
-    finalists: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode, rows in rows_by_mode.items():
-        finalists[mode] = _objective_rank(rows, mode, 3)
-    return finalists
-
-
-def _long_run_validation(
-    *,
-    media: Path,
-    reference: list[dict[str, Any]],
-    finalists: dict[str, list[dict[str, Any]]],
-    run_dir: Path,
-    base_settings: dict[str, Any],
-    start_sec: float,
-    end_sec: float,
-    span_sec: float,
-) -> dict[str, list[dict[str, Any]]]:
-    rows_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode, rows in finalists.items():
-        mode_base = _mode_base_settings(base_settings, mode)
-        profiles = {profile.name: profile for profile in _audio_profile_catalog(mode_base)}
-        for row in rows:
-            settings = dict(row.get("effective_settings") or {})
-            profile_name = str(row.get("audio_profile") or "mode_default")
-            profile = profiles.get(profile_name)
-            extract_settings = {**mode_base, **(profile.overrides if profile else {})}
-            chunk_source, extract_meta = _run_extract(
-                media=media,
-                settings=extract_settings,
-                start_sec=start_sec,
-                end_sec=end_sec,
-                work_dir=run_dir,
-                name=f"phase5_long_{mode}_{Path(str(row.get('name') or 'row')).name}",
-            )
-            long_row = _variant_row(
-                name=f"long__{row.get('name')}",
-                phase="phase5_long",
-                description=f"{mode} 11-minute validation",
-                method=str(row.get("method") or ""),
-                settings=settings,
-                run_llm=bool(row.get("run_llm")),
-                chunk_source=chunk_source,
-                work_dir=run_dir / "phase5_long" / mode,
-                reference=reference,
-                span_sec=span_sec,
-            )
-            long_row["mode"] = mode
-            long_row["primary_model"] = str(row.get("primary_model") or "")
-            long_row["secondary_model"] = str(row.get("secondary_model") or "")
-            long_row["audio_profile"] = profile_name
-            long_row["audio_profile_description"] = str(row.get("audio_profile_description") or "")
-            long_row["audio_extract_elapsed_sec"] = extract_meta["elapsed_sec"]
-            rows_by_mode[mode].append(_row_with_effective_settings(long_row, settings))
-        _log(f"phase5 long {mode}: {len(rows_by_mode[mode])} candidates")
-    return rows_by_mode
-
-
-def _winner_rows(long_rows: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
-    winners: dict[str, dict[str, Any]] = {}
-    for mode, rows in long_rows.items():
-        picked = _objective_rank(rows, mode, 1)
-        winners[mode] = dict(picked[0]) if picked else {}
-    return winners
-
-
-def _mode_ui_tag(mode: str) -> str:
-    return {"fast": "Fast", "auto": "Auto", "high": "High"}[_normalized_mode(mode)]
-
-
-def _mode_key_for_code(mode: str) -> str:
-    return {"fast": "fast", "auto": "balanced", "high": "precise"}[_normalized_mode(mode)]
-
-
-def _winner_summary(winner: dict[str, Any]) -> dict[str, Any]:
-    settings = dict(winner.get("effective_settings") or {})
-    quality = dict(winner.get("quality") or {})
-    readability = dict(winner.get("readability") or {})
-    return {
-        "primary_model": str(winner.get("primary_model") or settings.get("selected_whisper_model") or ""),
-        "secondary_model": str(winner.get("secondary_model") or settings.get("selected_whisper_model_secondary") or ""),
-        "method": str(winner.get("method") or ""),
-        "audio_profile": str(winner.get("audio_profile") or ""),
-        "quality_score": float(quality.get("quality_score", 0.0) or 0.0),
-        "timing_score": float(quality.get("timing_score", 0.0) or 0.0),
-        "local_text_score": float(quality.get("local_text_score", 0.0) or 0.0),
-        "readability_score": float(readability.get("readability_score", 0.0) or 0.0),
-        "speed_score": float(winner.get("speed_score", 0.0) or 0.0),
-        "elapsed_sec": float(winner.get("elapsed_sec", 0.0) or 0.0),
-        "settings": settings,
-    }
-
-
 def _load_manual_seeds(path: Path) -> dict[str, list[BenchmarkSeed]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     source = payload.get("seeds") if isinstance(payload, dict) and isinstance(payload.get("seeds"), dict) else payload
@@ -1061,150 +604,28 @@ def _load_manual_seeds(path: Path) -> dict[str, list[BenchmarkSeed]]:
     return seeds_by_mode
 
 
-def _recommendations_payload(
-    *,
-    media: Path,
-    reference_srt: Path,
-    short_rows: dict[str, list[dict[str, Any]]],
-    long_rows: dict[str, list[dict[str, Any]]],
-    winners: dict[str, dict[str, Any]],
-    models: list[str],
-    run_dir: Path,
-) -> dict[str, Any]:
-    return {
-        "schema": "ai_subtitle_studio.tiniping_mode_search.v1",
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "media": str(media),
-        "reference_srt": str(reference_srt),
-        "run_dir": str(run_dir),
-        "hardware": hardware_profile(),
-        "models_tested": models,
-        "short_phase_top3": {
-            mode: [
-                {
-                    "name": row.get("name"),
-                    "primary_model": row.get("primary_model"),
-                    "secondary_model": row.get("secondary_model"),
-                    "method": row.get("method"),
-                    "audio_profile": row.get("audio_profile"),
-                    "quality_score": _row_quality(row),
-                    "speed_score": _row_speed(row),
-                    "elapsed_sec": float(row.get("elapsed_sec", 0.0) or 0.0),
-                }
-                for row in rows[:3]
-            ]
-            for mode, rows in short_rows.items()
-        },
-        "long_phase_top3": {
-            mode: [
-                {
-                    "name": row.get("name"),
-                    "primary_model": row.get("primary_model"),
-                    "secondary_model": row.get("secondary_model"),
-                    "method": row.get("method"),
-                    "audio_profile": row.get("audio_profile"),
-                    "quality_score": _row_quality(row),
-                    "speed_score": _row_speed(row),
-                    "elapsed_sec": float(row.get("elapsed_sec", 0.0) or 0.0),
-                }
-                for row in rows[:3]
-            ]
-            for mode, rows in long_rows.items()
-        },
-        "winners": {mode: _winner_summary(winner) for mode, winner in winners.items()},
-    }
-
-
-def _write_manual_summary(
-    *,
-    summary_path: Path,
-    payload: dict[str, Any],
-) -> None:
-    lines = [
-        "# Tiniping Mode Benchmark Summary",
-        "",
-        f"- Media: `{payload['media']}`",
-        f"- Reference: `{payload['reference_srt']}`",
-        f"- Run dir: `{payload['run_dir']}`",
-        "",
-        "## Final winners",
-        "",
-        "| Mode | STT1 | STT2 | Method | Audio/VAD | Quality | Speed | Time(s) |",
-        "|---|---|---|---|---|---:|---:|---:|",
-    ]
-    for mode in ("fast", "auto", "high"):
-        winner = dict(payload.get("winners", {}).get(mode) or {})
-        lines.append(
-            "| {mode} | `{stt1}` | `{stt2}` | `{method}` | `{audio}` | {quality:.3f} | {speed:.3f} | {elapsed:.3f} |".format(
-                mode=_mode_ui_tag(mode),
-                stt1=winner.get("primary_model", ""),
-                stt2=winner.get("secondary_model", ""),
-                method=winner.get("method", ""),
-                audio=winner.get("audio_profile", ""),
-                quality=float(winner.get("quality_score", 0.0) or 0.0),
-                speed=float(winner.get("speed_score", 0.0) or 0.0),
-                elapsed=float(winner.get("elapsed_sec", 0.0) or 0.0),
-            )
-        )
-    lines.extend(["", "## UI recommendation tags", ""])
-    model_tags: dict[str, list[str]] = {}
-    for mode, winner in dict(payload.get("winners") or {}).items():
-        tag = _mode_ui_tag(mode)
-        stt1 = str(winner.get("primary_model") or "")
-        stt2 = str(winner.get("secondary_model") or "")
-        for model in (stt1, stt2):
-            if not model:
-                continue
-            model_tags.setdefault(model, [])
-            if tag not in model_tags[model]:
-                model_tags[model].append(tag)
-    for model, tags in sorted(model_tags.items()):
-        lines.append(f"- `{model}` -> [{' / '.join(tags)}]")
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def _cleanup_chunks(run_dir: Path) -> None:
     for path in run_dir.glob("**/chunks"):
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Tiered Fast/Auto/High Tiniping benchmark and recommendation builder.")
-    parser.add_argument("--media", default=str(DEFAULT_MEDIA))
-    parser.add_argument("--reference-srt", default=str(DEFAULT_REFERENCE))
-    parser.add_argument("--start-sec", type=float, default=0.0)
-    parser.add_argument("--short-sec", type=float, default=DEFAULT_SHORT_SEC)
-    parser.add_argument("--long-sec", type=float, default=DEFAULT_LONG_SEC)
-    parser.add_argument("--manual-seeds-json", default="", help="Skip phase1 exhaustive STT scan and resume from a manual seed JSON.")
-    parser.add_argument("--keep-artifacts", action="store_true")
-    args = parser.parse_args()
-
-    media = Path(args.media).expanduser()
-    reference_srt = Path(args.reference_srt).expanduser()
-    if not media.exists():
-        raise FileNotFoundError(media)
-    if not reference_srt.exists():
-        raise FileNotFoundError(reference_srt)
-
-    short_sec = max(30.0, float(args.short_sec))
-    long_sec = max(short_sec, float(args.long_sec))
-    start_sec = max(0.0, float(args.start_sec))
-    short_end = start_sec + short_sec
-    long_end = start_sec + long_sec
-    created = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = ROOT / ".codex_work" / "benchmarks" / "tiniping_mode_search" / created
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    base_settings = _base_benchmark_settings("current")
-    models = _discover_whisper_models()
-    _json_dump(run_dir / "models_tested.json", {"models": models, "labels": {model: _model_label(model) for model in models}})
-    _log(f"models discovered: {len(models)}")
-
-    short_reference = clip_reference(parse_srt(reference_srt), start_sec, short_end)
-    long_reference = clip_reference(parse_srt(reference_srt), start_sec, long_end)
-
+def _prepare_phase1(
+    *,
+    args: argparse.Namespace,
+    media: Path,
+    short_reference: list[dict[str, Any]],
+    models: list[str],
+    run_dir: Path,
+    base_settings: dict[str, Any],
+    start_sec: float,
+    short_end: float,
+    short_sec: float,
+    selected_modes: list[str],
+    primary_scan: Any,
+    pair_scan: Any,
+    collect_phase1_seeds: Any,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]], dict[str, list[BenchmarkSeed]]]:
     manual_seed_path = Path(str(args.manual_seeds_json or "").strip()).expanduser() if str(args.manual_seeds_json or "").strip() else None
     if manual_seed_path:
         if not manual_seed_path.exists():
@@ -1216,103 +637,53 @@ def main() -> int:
         _json_dump(run_dir / "phase1_primary.json", primary_rows)
         _json_dump(run_dir / "phase1_pairs.json", pair_rows)
         _log(f"manual seeds loaded: fast={len(phase1_seeds['fast'])}, auto={len(phase1_seeds['auto'])}, high={len(phase1_seeds['high'])}")
-    else:
-        primary_rows = _primary_scan(
-            media=media,
-            reference=short_reference,
-            models=models,
-            run_dir=run_dir,
-            base_settings=base_settings,
-            start_sec=start_sec,
-            end_sec=short_end,
-            span_sec=short_sec,
-        )
-        pair_rows = _pair_scan(
-            media=media,
-            reference=short_reference,
-            models=models,
-            run_dir=run_dir,
-            base_settings=base_settings,
-            start_sec=start_sec,
-            end_sec=short_end,
-            span_sec=short_sec,
-        )
-        _json_dump(run_dir / "phase1_primary.json", primary_rows)
-        _json_dump(run_dir / "phase1_pairs.json", pair_rows)
-        phase1_seeds = _collect_phase1_seeds(primary_rows, pair_rows)
-    _json_dump(run_dir / "phase1_seeds.json", {mode: [_seed_to_payload(seed) for seed in seeds] for mode, seeds in phase1_seeds.items()})
-
-    audio_rows = _audio_scan(
+        return primary_rows, pair_rows, phase1_seeds
+    primary_rows = primary_scan(
         media=media,
         reference=short_reference,
-        seeds_by_mode=phase1_seeds,
-        run_dir=run_dir,
-        base_settings=base_settings,
-        start_sec=start_sec,
-        end_sec=short_end,
-        span_sec=short_sec,
-    )
-    _json_dump(run_dir / "phase2_audio.json", audio_rows)
-    audio_seeds = _collect_audio_seeds(audio_rows)
-    _json_dump(run_dir / "phase2_seeds.json", {mode: [asdict(seed) for seed in seeds] for mode, seeds in audio_seeds.items()})
-
-    method_rows = _method_scan(
-        media=media,
-        reference=short_reference,
-        seeds_by_mode=audio_seeds,
-        run_dir=run_dir,
-        base_settings=base_settings,
-        start_sec=start_sec,
-        end_sec=short_end,
-        span_sec=short_sec,
-    )
-    _json_dump(run_dir / "phase3_method.json", method_rows)
-
-    cached_rows = _cached_postprocess_scan(
-        media=media,
-        reference=short_reference,
-        method_rows=method_rows,
-        run_dir=run_dir,
-        base_settings=base_settings,
-        start_sec=start_sec,
-        end_sec=short_end,
-        span_sec=short_sec,
-    )
-    _json_dump(run_dir / "phase4_cached.json", cached_rows)
-    short_top3 = _finalists_from_cached(cached_rows)
-    _json_dump(run_dir / "short_top3.json", short_top3)
-
-    long_rows = _long_run_validation(
-        media=media,
-        reference=long_reference,
-        finalists=short_top3,
-        run_dir=run_dir,
-        base_settings=base_settings,
-        start_sec=start_sec,
-        end_sec=long_end,
-        span_sec=long_sec,
-    )
-    _json_dump(run_dir / "phase5_long.json", long_rows)
-    long_top3 = {mode: _objective_rank(rows, mode, 3) for mode, rows in long_rows.items()}
-    winners = _winner_rows(long_rows)
-    recommendations = _recommendations_payload(
-        media=media,
-        reference_srt=reference_srt,
-        short_rows=short_top3,
-        long_rows=long_top3,
-        winners=winners,
         models=models,
         run_dir=run_dir,
+        base_settings=base_settings,
+        start_sec=start_sec,
+        end_sec=short_end,
+        span_sec=short_sec,
+        modes=selected_modes,
     )
-    _json_dump(run_dir / "tiniping_recommendations.json", recommendations)
+    pair_rows = pair_scan(
+        media=media,
+        reference=short_reference,
+        models=models,
+        run_dir=run_dir,
+        base_settings=base_settings,
+        start_sec=start_sec,
+        end_sec=short_end,
+        span_sec=short_sec,
+        modes=selected_modes,
+    )
+    _json_dump(run_dir / "phase1_primary.json", primary_rows)
+    _json_dump(run_dir / "phase1_pairs.json", pair_rows)
+    phase1_seeds = collect_phase1_seeds(primary_rows, pair_rows, selected_modes)
+    return primary_rows, pair_rows, phase1_seeds
 
-    summary_path = ROOT / "output" / "manual_verification" / "latest" / "tiniping_benchmark_summary.md"
-    _write_manual_summary(summary_path=summary_path, payload=recommendations)
 
-    # Write a benchmark-style markdown table for the final 11-minute rows.
+def _finalize_mode_search(
+    *,
+    args: argparse.Namespace,
+    run_dir: Path,
+    media: Path,
+    reference_srt: Path,
+    start_sec: float,
+    long_end: float,
+    long_sec: float,
+    long_rows: dict[str, list[dict[str, Any]]],
+    selected_modes: list[str],
+    summary_path: Path,
+    recommendations: dict[str, Any],
+    pack_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
     final_flat_rows = [row for rows in long_rows.values() for row in rows]
     final_ranked = []
-    for mode in ("fast", "auto", "high"):
+    for mode in selected_modes:
         final_ranked.extend(_objective_rank(long_rows[mode], mode, 3))
     payload = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -1327,22 +698,199 @@ def main() -> int:
         "ranked_results": final_ranked,
     }
     _write_markdown(payload, run_dir / "final_long_results.md")
-
     if not args.keep_artifacts:
         _cleanup_chunks(run_dir)
+    return {
+        "run_dir": str(run_dir),
+        "summary_md": str(summary_path),
+        "recommendations_json": str(run_dir / "tiniping_recommendations.json"),
+        "regression_pack_json": str(Path(args.regression_pack_dir).expanduser() / "subtitle_regression_pack.json")
+        if pack_payload
+        else "",
+        "winners": recommendations["winners"],
+    }
 
-    print(
-        json.dumps(
-            {
-                "run_dir": str(run_dir),
-                "summary_md": str(summary_path),
-                "recommendations_json": str(run_dir / "tiniping_recommendations.json"),
-                "winners": recommendations["winners"],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+
+def _run_search(args: argparse.Namespace) -> dict[str, Any]:
+    from tools.tiniping_mode_search_phases import (
+        _audio_scan,
+        _cached_postprocess_scan,
+        _collect_audio_seeds,
+        _collect_phase1_seeds,
+        _finalists_from_cached,
+        _long_run_validation,
+        _method_scan,
+        _pair_scan,
+        _primary_scan,
+        _recommendations_payload,
+        _winner_rows,
+        _write_manual_summary,
     )
+
+    media = Path(args.media).expanduser()
+    reference_srt = Path(args.reference_srt).expanduser()
+    if not media.exists():
+        raise FileNotFoundError(media)
+    if not reference_srt.exists():
+        raise FileNotFoundError(reference_srt)
+
+    short_sec = max(30.0, float(args.short_sec))
+    long_sec = max(short_sec, float(args.long_sec))
+    start_sec = max(0.0, float(args.start_sec))
+    selected_modes = _selected_modes(args.modes)
+    short_end = start_sec + short_sec
+    long_end = start_sec + long_sec
+    created = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = ROOT / ".codex_work" / "benchmarks" / "tiniping_mode_search" / created
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    base_settings = _base_benchmark_settings("current")
+    models = _discover_whisper_models()
+    _json_dump(run_dir / "models_tested.json", {"models": models, "labels": {model: _model_label(model) for model in models}})
+    _log(f"models discovered: {len(models)}")
+
+    short_reference = clip_reference(parse_srt(reference_srt), start_sec, short_end)
+    long_reference = clip_reference(parse_srt(reference_srt), start_sec, long_end)
+
+    primary_rows, pair_rows, phase1_seeds = _prepare_phase1(
+        args=args,
+        media=media,
+        short_reference=short_reference,
+        models=models,
+        run_dir=run_dir,
+        base_settings=base_settings,
+        start_sec=start_sec,
+        short_end=short_end,
+        short_sec=short_sec,
+        selected_modes=selected_modes,
+        primary_scan=_primary_scan,
+        pair_scan=_pair_scan,
+        collect_phase1_seeds=_collect_phase1_seeds,
+    )
+    _json_dump(run_dir / "phase1_seeds.json", {mode: [_seed_to_payload(seed) for seed in seeds] for mode, seeds in phase1_seeds.items()})
+
+    audio_rows = _audio_scan(
+        media=media,
+        reference=short_reference,
+        seeds_by_mode=phase1_seeds,
+        run_dir=run_dir,
+        base_settings=base_settings,
+        start_sec=start_sec,
+        end_sec=short_end,
+        span_sec=short_sec,
+        modes=selected_modes,
+    )
+    _json_dump(run_dir / "phase2_audio.json", audio_rows)
+    audio_seeds = _collect_audio_seeds(audio_rows)
+    _json_dump(run_dir / "phase2_seeds.json", {mode: [asdict(seed) for seed in seeds] for mode, seeds in audio_seeds.items()})
+
+    method_rows = _method_scan(
+        media=media,
+        reference=short_reference,
+        seeds_by_mode=audio_seeds,
+        run_dir=run_dir,
+        base_settings=base_settings,
+        start_sec=start_sec,
+        end_sec=short_end,
+        span_sec=short_sec,
+        modes=selected_modes,
+    )
+    _json_dump(run_dir / "phase3_method.json", method_rows)
+
+    cached_rows = _cached_postprocess_scan(
+        media=media,
+        reference=short_reference,
+        method_rows=method_rows,
+        run_dir=run_dir,
+        base_settings=base_settings,
+        start_sec=start_sec,
+        end_sec=short_end,
+        span_sec=short_sec,
+        modes=selected_modes,
+    )
+    _json_dump(run_dir / "phase4_cached.json", cached_rows)
+    short_top3 = _finalists_from_cached(cached_rows)
+    _json_dump(run_dir / "short_top3.json", short_top3)
+
+    long_rows = _long_run_validation(
+        media=media,
+        reference=long_reference,
+        finalists=short_top3,
+        run_dir=run_dir,
+        base_settings=base_settings,
+        start_sec=start_sec,
+        end_sec=long_end,
+        span_sec=long_sec,
+        modes=selected_modes,
+    )
+    _json_dump(run_dir / "phase5_long.json", long_rows)
+    long_top3 = {mode: _objective_rank(rows, mode, 3) for mode, rows in long_rows.items()}
+    winners = _winner_rows(long_rows)
+    recommendations = _recommendations_payload(
+        media=media,
+        reference_srt=reference_srt,
+        short_rows=short_top3,
+        long_rows=long_top3,
+        winners=winners,
+        models=models,
+        run_dir=run_dir,
+        modes=selected_modes,
+    )
+    _json_dump(run_dir / "tiniping_recommendations.json", recommendations)
+
+    summary_path = ROOT / "output" / "manual_verification" / "latest" / "tiniping_benchmark_summary.md"
+    _write_manual_summary(summary_path=summary_path, payload=recommendations)
+    pack_payload = None
+    if args.build_regression_pack:
+        pack_payload = _build_regression_pack(
+            source_run_dir=run_dir,
+            tiniping_summary_md=summary_path,
+            fixtures=_parse_regression_fixtures(args.regression_pack_fixtures),
+            pack_dir=Path(args.regression_pack_dir).expanduser(),
+            x5_duration_sec=max(30.0, float(args.x5_duration_sec)),
+            full_verify_mode=str(args.regression_pack_full_mode or "high").strip().lower(),
+        )
+    return _finalize_mode_search(
+        args=args,
+        run_dir=run_dir,
+        media=media,
+        reference_srt=reference_srt,
+        start_sec=start_sec,
+        long_end=long_end,
+        long_sec=long_sec,
+        long_rows=long_rows,
+        selected_modes=selected_modes,
+        summary_path=summary_path,
+        recommendations=recommendations,
+        pack_payload=pack_payload,
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Tiered Fast/Auto/High Tiniping benchmark and recommendation builder.")
+    parser.add_argument("--media", default=str(DEFAULT_MEDIA))
+    parser.add_argument("--reference-srt", default=str(DEFAULT_REFERENCE))
+    parser.add_argument("--start-sec", type=float, default=0.0)
+    parser.add_argument("--short-sec", type=float, default=DEFAULT_SHORT_SEC)
+    parser.add_argument("--long-sec", type=float, default=DEFAULT_LONG_SEC)
+    parser.add_argument("--manual-seeds-json", default="", help="Skip phase1 exhaustive STT scan and resume from a manual seed JSON.")
+    parser.add_argument("--build-regression-pack", action="store_true")
+    parser.add_argument("--regression-pack-dir", default=str(DEFAULT_REGRESSION_PACK_DIR))
+    parser.add_argument(
+        "--regression-pack-fixtures",
+        default=",".join(REGRESSION_FIXTURE_KEYS),
+        help="Comma-separated fixtures: x5, macau, tinyping_short, tinyping_full",
+    )
+    parser.add_argument("--x5-duration-sec", type=float, default=180.0)
+    parser.add_argument("--regression-pack-full-mode", default="high", choices=["fast", "auto", "high", "stt"])
+    parser.add_argument("--keep-artifacts", action="store_true")
+    parser.add_argument(
+        "--modes",
+        default="fast,auto,high",
+        help="Comma-separated modes to benchmark: fast, auto, high",
+    )
+    result = _run_search(parser.parse_args())
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 

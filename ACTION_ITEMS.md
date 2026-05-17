@@ -23,7 +23,7 @@ app_version: "04.00.09"
 document_version: "04.00.09-mac-native"
 phase: "MAC_NATIVE_APPSTORE_V4_0_9_RELEASED"
 next_phase: null
-active_item_count: 19
+active_item_count: 18
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
 native_plan: "NATIVE_LIB_PLAN.md"
@@ -48,11 +48,6 @@ native_plan: "NATIVE_LIB_PLAN.md"
 ## Active Work
 
 ### P0 - Subtitle Quality And Behavioral Safety
-
-- [ ] 2. Expand the real-media subtitle-quality regression pack.
-  Scope: extend `tools/benchmark_tiniping_mode_search.py` and the artifacts under `output/manual_verification/latest/` so X5 slice accuracy, Macau smoke, and Tinyping long-flow checks can be rerun from one repeatable flow.
-  Success: future fixes can compare STT1, STT2, final subtitle, line-break policy, quality labels, and saved project state without relying on screenshots only.
-  Verification: X5 slice plus Tinyping first minute.
 
 - [ ] 3. Finish progress and completion visibility hardening.
   Scope: keep top progress card, queue card, terminal widget, roughcut completion lines, and editor save completion consistent.
