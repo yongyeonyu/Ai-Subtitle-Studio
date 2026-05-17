@@ -23,7 +23,7 @@ app_version: "04.00.09"
 document_version: "04.00.09-mac-native"
 phase: "MAC_NATIVE_APPSTORE_V4_0_9_RELEASED"
 next_phase: null
-active_item_count: 18
+active_item_count: 17
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
 native_plan: "NATIVE_LIB_PLAN.md"
@@ -46,13 +46,6 @@ native_plan: "NATIVE_LIB_PLAN.md"
 - If the owner says "run N items" or "do 5 items", execute the first N unchecked active items in order unless a blocker or owner-decision item is reached.
 
 ## Active Work
-
-### P0 - Subtitle Quality And Behavioral Safety
-
-- [ ] 3. Finish progress and completion visibility hardening.
-  Scope: keep top progress card, queue card, terminal widget, roughcut completion lines, and editor save completion consistent.
-  Success: roughcut completion is visible in terminal/in-app logs, percent does not stall, and completion is not inferred from STT progress alone.
-  Verification: Macau smoke for UI/log behavior, Tinyping for roughcut/full-flow behavior.
 
 ### P0 - UX And Editor Refactor Boundaries
 

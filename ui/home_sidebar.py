@@ -1275,12 +1275,15 @@ class HomeSidebarMixin:
         return ""
 
     def _pipeline_queue_probe_parts(self) -> list[str]:
+        probe_row = self._sidebar_generation_active_row()
+        if probe_row < 0:
+            probe_row = 0
         queue_probe = getattr(self, "queue_status_probe_parts", None)
         if callable(queue_probe):
             try:
                 return [
                     str(part or "")
-                    for part in list(queue_probe(0, (0, 2, 4)) or [])
+                    for part in list(queue_probe(probe_row, (0, 2, 4)) or [])
                     if str(part or "")
                 ]
             except Exception:
@@ -1288,7 +1291,10 @@ class HomeSidebarMixin:
         cache = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
         if not cache:
             return []
-        item = dict(cache[0] or {})
+        if 0 <= probe_row < len(cache):
+            item = dict(cache[probe_row] or {})
+        else:
+            item = dict(cache[0] or {})
         parts: list[str] = []
         for key in ("statusRaw", "infoRaw", "etaRaw"):
             value = str(item.get(key, "") or "")

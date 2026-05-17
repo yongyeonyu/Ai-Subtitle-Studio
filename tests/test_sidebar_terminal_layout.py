@@ -908,6 +908,46 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_pipeline_current_stage_uses_active_queue_row_in_multiclip_runs(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_IDLE"),
+                status_lbl=QLabel(""),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText("")
+            window.queue_header_lbl.setText("큐 리스트 : (2/2) - 50% 완료")
+            window.queue_table.setRowCount(2)
+            window.queue_table.setItem(0, 0, QTableWidgetItem("✅ 완료"))
+            window.queue_table.setItem(0, 2, QTableWidgetItem("saved"))
+            window.queue_table.setItem(0, 4, QTableWidgetItem("01:00 / 01:00"))
+            window.queue_table.setItem(1, 0, QTableWidgetItem("[STT] STT1/STT2 병렬 인식 중"))
+            window.queue_table.setItem(1, 2, QTableWidgetItem("active"))
+            window.queue_table.setItem(1, 4, QTableWidgetItem("00:20 / 02:00"))
+            window._current_file_idx = 2
+            window._total_files = 2
+            window._real_pct = 50
+
+            current = window._pipeline_current_stage_keys(
+                {
+                    "stt_ensemble_enabled": True,
+                    "selected_vad": "silero",
+                    "roughcut_llm_enabled": False,
+                }
+            )
+
+            self.assertEqual(current, {"stt1", "stt2"})
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_pipeline_current_stage_uses_recent_log_suffix_when_queue_status_is_missing(self):
         window = MainWindow()
         try:
