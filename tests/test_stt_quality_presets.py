@@ -24,18 +24,19 @@ class STTQualityPresetTests(unittest.TestCase):
         applied = apply_stt_quality_preset(settings, "fast")
 
         self.assertEqual(applied["stt_quality_preset"], "fast")
-        self.assertEqual(applied["selected_model"], "사용 안함 (Whisper 단독 진행)")
+        self.assertEqual(applied["selected_whisper_model"], "youngouk/whisper-medium-komixv2-mlx")
         self.assertNotIn("audio_preset", applied)
-        self.assertEqual(applied["selected_audio_ai"], "rnnoise")
-        self.assertEqual(applied["selected_vad"], "silero")
-        self.assertAlmostEqual(applied["vad_threshold"], 0.40)
+        self.assertEqual(applied["selected_audio_ai"], "clearvoice")
+        self.assertEqual(applied["selected_vad"], "ten_vad")
+        self.assertAlmostEqual(applied["vad_threshold"], 0.50)
         self.assertEqual(applied["cut_boundary_level"], "off")
         self.assertFalse(applied["cut_boundary_detection_enabled"])
         self.assertTrue(applied["stt_candidate_scoring_enabled"])
-        self.assertFalse(applied["stt_ensemble_selective_enabled"])
-        self.assertFalse(applied["stt_selective_secondary_recheck_enabled"])
+        self.assertTrue(applied["stt_ensemble_enabled"])
+        self.assertTrue(applied["stt_ensemble_selective_enabled"])
+        self.assertTrue(applied["stt_selective_secondary_recheck_enabled"])
         self.assertFalse(applied["stt_word_timestamps_precision_enabled"])
-        self.assertEqual(applied["stt_word_timestamps_mode"], "off")
+        self.assertEqual(applied["stt_word_timestamps_mode"], "selective")
         self.assertLess(applied["w_beam_size"], settings["w_beam_size"])
         self.assertEqual(applied["w_none_temp_max"], 0.0)
 
@@ -45,7 +46,7 @@ class STTQualityPresetTests(unittest.TestCase):
 
         self.assertGreater(precise["w_beam_size"], balanced["w_beam_size"])
         self.assertLess(precise["w_df_no_speech"], balanced["w_df_no_speech"])
-        self.assertEqual(precise["selected_model"], "exaone3.5:2.4b")
+        self.assertEqual(precise["selected_model"], "exaone3.5:7.8b")
         self.assertNotIn("audio_preset", balanced)
         self.assertEqual(balanced["selected_audio_ai"], "none")
         self.assertEqual(balanced["selected_vad"], "ten_vad")
@@ -53,15 +54,18 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertTrue(balanced["cut_boundary_detection_enabled"])
         self.assertTrue(balanced["stt_candidate_scoring_enabled"])
         self.assertNotIn("audio_preset", precise)
-        self.assertEqual(precise["selected_audio_ai"], "deepfilter")
+        self.assertEqual(precise["selected_audio_ai"], "none")
         self.assertEqual(precise["selected_vad"], "silero")
         self.assertEqual(precise["cut_boundary_level"], "medium")
         self.assertTrue(precise["cut_boundary_detection_enabled"])
-        self.assertFalse(precise["stt_ensemble_enabled"])
+        self.assertTrue(balanced["stt_ensemble_enabled"])
+        self.assertTrue(balanced["stt_ensemble_selective_enabled"])
+        self.assertFalse(balanced["stt_word_timestamps_precision_enabled"])
+        self.assertTrue(precise["stt_ensemble_enabled"])
         self.assertTrue(precise["stt_candidate_scoring_enabled"])
-        self.assertFalse(precise["stt_ensemble_llm_judge_enabled"])
-        self.assertFalse(precise["stt_selective_secondary_recheck_enabled"])
-        self.assertTrue(precise["stt_word_timestamps_precision_enabled"])
+        self.assertTrue(precise["stt_ensemble_llm_judge_enabled"])
+        self.assertTrue(precise["stt_selective_secondary_recheck_enabled"])
+        self.assertFalse(precise["stt_word_timestamps_precision_enabled"])
         self.assertEqual(precise["stt_word_timestamps_precision_max_segments"], 32)
         self.assertEqual(precise["ff_chunk"], 35)
         self.assertEqual(precise["whisper_chunk_overlap_sec"], 3.0)
@@ -200,15 +204,16 @@ class STTQualityPresetTests(unittest.TestCase):
 
         applied = apply_recommended_stt_quality_defaults(settings, "precise")
 
-        self.assertEqual(applied["selected_audio_ai"], "deepfilter")
+        self.assertEqual(applied["selected_audio_ai"], "none")
         self.assertEqual(applied["selected_vad"], "silero")
         self.assertEqual(applied["selected_whisper_model"], "user-stt1")
         self.assertEqual(applied["selected_whisper_model_secondary"], "user-stt2")
         self.assertEqual(applied["selected_model"], "user-subtitle-llm")
-        self.assertFalse(applied["stt_ensemble_enabled"])
+        self.assertTrue(applied["stt_ensemble_enabled"])
         self.assertEqual(applied["stt_word_timestamps_precision_max_segments"], 32)
+        self.assertFalse(applied["stt_word_timestamps_precision_enabled"])
 
-    def test_user_selected_stt2_enable_no_longer_survives_recommended_defaults(self):
+    def test_recommended_defaults_own_stt2_policy_even_when_user_toggle_exists(self):
         settings = {
             "selected_whisper_model": "user-stt1",
             "selected_whisper_model_secondary": "user-stt2",
@@ -227,7 +232,7 @@ class STTQualityPresetTests(unittest.TestCase):
         applied = apply_recommended_stt_quality_defaults(settings, "precise")
 
         self.assertEqual(applied["selected_whisper_model_secondary"], "user-stt2")
-        self.assertFalse(applied["stt_ensemble_enabled"])
+        self.assertTrue(applied["stt_ensemble_enabled"])
         self.assertNotIn("stt_ensemble_user_selected", applied)
 
 

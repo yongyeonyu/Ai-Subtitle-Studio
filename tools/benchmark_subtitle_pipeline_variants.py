@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import time
+import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -1052,7 +1053,11 @@ def clip_reference(rows: list[dict[str, Any]], start_sec: float, end_sec: float)
 
 
 def _compact_text(value: Any) -> str:
-    return re.sub(r"[\s\W_]+", "", str(value or ""), flags=re.UNICODE).lower()
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = re.sub(r"\s+", "", text, flags=re.UNICODE)
+    for bracket in ("(", ")", "（", "）"):
+        text = text.replace(bracket, "")
+    return text.casefold()
 
 
 def _joined_text(rows: Iterable[dict[str, Any]]) -> str:

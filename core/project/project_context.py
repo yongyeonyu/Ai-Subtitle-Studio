@@ -163,6 +163,54 @@ def _project_segment_status_payload(seg: dict[str, Any], *, threshold: float | N
     }
 
 
+def _restore_original_candidate_timing(
+    item: dict[str, Any],
+    source: dict[str, Any],
+    *,
+    default_fps: float,
+) -> None:
+    raw_start_frame = item.get("_stt_original_candidate_start_frame")
+    raw_end_frame = item.get("_stt_original_candidate_end_frame")
+    has_raw_candidate_timing = (
+        raw_start_frame is not None
+        or raw_end_frame is not None
+        or "_stt_original_candidate_start" in source
+        or "_stt_original_candidate_end" in source
+        or "original_start" in source
+        or "original_end" in source
+    )
+    if not has_raw_candidate_timing:
+        return
+    raw_frame_rate = normalize_fps(
+        source.get("timeline_frame_rate")
+        or source.get("frame_rate")
+        or default_fps
+    )
+    raw_start = _safe_float(
+        source.get(
+            "_stt_original_candidate_start",
+            source.get("original_start", item.get("start", 0.0)),
+        )
+    )
+    raw_end = _safe_float(
+        source.get(
+            "_stt_original_candidate_end",
+            source.get("original_end", item.get("end", raw_start)),
+        ),
+        raw_start,
+    )
+    if raw_start_frame is None:
+        raw_start_frame = sec_to_nearest_frame(raw_start, raw_frame_rate)
+    if raw_end_frame is None:
+        raw_end_frame = sec_to_nearest_frame(raw_end, raw_frame_rate)
+    raw_start_frame = _safe_int(raw_start_frame)
+    raw_end_frame = max(raw_start_frame, _safe_int(raw_end_frame, raw_start_frame))
+    item["_stt_original_candidate_start_frame"] = raw_start_frame
+    item["_stt_original_candidate_end_frame"] = raw_end_frame
+    item["_stt_original_candidate_start"] = frame_to_sec(raw_start_frame, raw_frame_rate)
+    item["_stt_original_candidate_end"] = frame_to_sec(raw_end_frame, raw_frame_rate)
+
+
 def project_media_files(project: dict[str, Any]) -> list[str]:
     editor_state = project.get("editor_state", {}) or {}
     media_files = editor_state.get("media_files")
@@ -629,6 +677,7 @@ def project_segments_to_editor(
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg:
                 item[key] = seg.get(key)
+        _restore_original_candidate_timing(item, seg, default_fps=segment_fps)
         if not bool(item.get("is_gap")):
             item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
@@ -1293,6 +1342,7 @@ def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: f
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg:
                 item[key] = seg.get(key)
+        _restore_original_candidate_timing(item, seg, default_fps=fps)
         item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
     return out

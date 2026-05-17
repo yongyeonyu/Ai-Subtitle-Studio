@@ -96,6 +96,52 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertEqual(editor.cancel_reasons, ["편집 시작"])
         self.assertGreater(getattr(editor, "_last_editor_foreground_activity_at", 0.0), 0.0)
 
+    def test_manual_global_roughcut_saves_then_schedules_llm(self):
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self.calls = []
+                self._roughcut_draft_thread = None
+                self._roughcut_llm_cooldown_until = 99.0
+
+            def _on_save(self, **kwargs):
+                self.calls.append(("save", kwargs))
+                return True
+
+            def _cancel_post_generation_roughcut_draft(self, *, reason: str = ""):
+                self.calls.append(("cancel", reason))
+                return True
+
+            def _schedule_post_generation_roughcut_draft(self, force=False, *, require_autorun=True, settings_override=None):
+                self.calls.append(("schedule", force, require_autorun, dict(settings_override or {})))
+
+        editor = _Editor()
+
+        editor._run_manual_roughcut_llm_from_global_canvas()
+
+        self.assertEqual([call[0] for call in editor.calls], ["save", "cancel", "schedule"])
+        self.assertTrue(editor.calls[0][1]["schedule_analysis_refresh"] is False)
+        self.assertTrue(editor.calls[0][1]["queue_learning"] is False)
+        self.assertTrue(editor.calls[2][1])
+        self.assertFalse(editor.calls[2][2])
+        self.assertTrue(editor.calls[2][3]["roughcut_llm_enabled"])
+        self.assertEqual(editor._roughcut_llm_cooldown_until, 0.0)
+        self.assertTrue(editor._roughcut_draft_manual_run_requested)
+
+    def test_roughcut_middle_rows_sort_chronologically_before_apply(self):
+        class _Editor(EditorRoughcutDraftMixin):
+            pass
+
+        editor = _Editor()
+        rows = [
+            {"major_id": "C", "start": 12.0, "end": 20.0},
+            {"major_id": "A", "start": 0.0, "end": 5.0},
+            {"major_id": "B", "start": 5.0, "end": 12.0},
+        ]
+
+        sorted_rows = editor._sorted_roughcut_middle_rows(rows)
+
+        self.assertEqual([row["major_id"] for row in sorted_rows], ["A", "B", "C"])
+
     def test_post_generation_autorun_ignores_legacy_false_when_roughcut_llm_is_enabled(self):
         class _Editor(EditorRoughcutDraftMixin):
             def __init__(self):

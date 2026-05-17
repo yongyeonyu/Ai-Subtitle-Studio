@@ -309,6 +309,7 @@ class TimelineWidget(QWidget):
     waveform_ready = pyqtSignal(str, float)
     subtitle_magnet_requested = pyqtSignal()
     tab_timing_requested = pyqtSignal()
+    roughcut_llm_run_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -429,6 +430,7 @@ class TimelineWidget(QWidget):
         self.canvas.step_frame.connect(self.step_frame)
 
         self.global_canvas.seek_frac.connect(self._on_global_seek)
+        self.global_canvas.roughcut_llm_run_requested.connect(self.roughcut_llm_run_requested.emit)
 
         self._wf_worker = None
         self._mc_worker = None

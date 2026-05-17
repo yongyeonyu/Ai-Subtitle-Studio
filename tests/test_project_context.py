@@ -2165,6 +2165,54 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual([candidate["source"] for candidate in segment["stt_candidates"]], ["STT1", "STT2"])
         self.assertEqual([row["text"] for row in previews], ["후보 하나", "후보 둘"])
 
+    def test_externalized_final_subtitles_restore_selected_stt_anchor_from_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.aissproj"
+            project = {
+                "project_name": "selected-stt-anchor",
+                "project_path": str(path),
+                "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[],
+                    primary_fps=30.0,
+                ),
+            }
+
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=[
+                    {
+                        "id": "seg-1",
+                        "start": 1.0,
+                        "end": 2.0,
+                        "text": "최종 자막",
+                        "speaker": "00",
+                        "stt_selected_source": "STT2",
+                        "_stt_original_candidate_start": 0.8,
+                        "_stt_original_candidate_end": 2.2,
+                    }
+                ],
+                stt_tracks={},
+            )
+            write_project_file(str(path), project)
+
+            loaded = load_project(str(path), hydrate_text_assets=False)
+            segment = project_segments_to_editor(loaded, include_analysis_candidates=False)[0]
+
+        self.assertEqual(segment["stt_selected_source"], "STT2")
+        self.assertAlmostEqual(segment["_stt_original_candidate_start"], 0.8, places=3)
+        self.assertAlmostEqual(segment["_stt_original_candidate_end"], 2.2, places=3)
+        self.assertEqual(
+            (
+                segment["_stt_original_candidate_start_frame"],
+                segment["_stt_original_candidate_end_frame"],
+            ),
+            (24, 66),
+        )
+
     def test_external_stt_assets_preserve_distinct_overlapping_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"

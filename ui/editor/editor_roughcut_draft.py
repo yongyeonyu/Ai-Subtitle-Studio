@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from dataclasses import replace
 
 from PyQt6.QtCore import QTimer
 
@@ -266,7 +267,100 @@ class EditorRoughcutDraftMixin:
             except Exception:
                 pass
 
+    def _sorted_roughcut_middle_rows(self, rows: list[dict] | tuple | None) -> list[dict]:
+        def _num(value, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except Exception:
+                return default
+
+        cleaned = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+        return sorted(
+            cleaned,
+            key=lambda row: (
+                _num(row.get("start", 0.0)),
+                _num(row.get("end", 0.0)),
+                str(row.get("major_id") or row.get("segment_id") or row.get("id") or ""),
+            ),
+        )
+
+    def _sorted_roughcut_result(self, result):
+        try:
+            original_segments = tuple(getattr(result, "segments", ()) or ())
+            segments = tuple(
+                sorted(
+                    original_segments,
+                    key=lambda seg: (
+                        float(getattr(seg, "start", 0.0) or 0.0),
+                        float(getattr(seg, "end", 0.0) or 0.0),
+                        str(getattr(seg, "segment_id", "") or ""),
+                    ),
+                )
+            )
+            if segments == original_segments:
+                return result
+            return replace(result, segments=segments)
+        except Exception:
+            return result
+
+    def _roughcut_thread_alive(self) -> bool:
+        thread = getattr(self, "_roughcut_draft_thread", None)
+        try:
+            return bool(thread is not None and thread.is_alive())
+        except Exception:
+            return False
+
+    def _save_current_subtitles_for_manual_roughcut(self) -> bool:
+        save = getattr(self, "_on_save", None)
+        if not callable(save):
+            return True
+        try:
+            return bool(
+                save(
+                    skip_auto_next=True,
+                    write_backup=True,
+                    schedule_analysis_refresh=False,
+                    queue_learning=False,
+                    allow_project_create=True,
+                    auto_export=False,
+                )
+            )
+        except TypeError:
+            return bool(save())
+        except Exception as exc:
+            get_logger().log(f"⚠️ 러프컷 LLM 수동 실행 전 자막 저장 실패: {exc}")
+            return False
+
+    def _run_manual_roughcut_llm_from_global_canvas(self) -> None:
+        if self._roughcut_thread_alive():
+            get_logger().log("⏳ 러프컷 LLM 수동 실행 생략: 이미 러프컷 LLM이 실행 중입니다.")
+            self._mark_roughcut_queue_active("⏳ [러프컷 LLM] 이미 실행 중")
+            return
+        get_logger().log("💾 러프컷 LLM 수동 실행: 현재 자막을 먼저 저장합니다.")
+        if not self._save_current_subtitles_for_manual_roughcut():
+            self._set_roughcut_draft_status("failed")
+            self._mark_roughcut_queue_done(note="자막 저장 실패")
+            return
+        cancel_roughcut = getattr(self, "_cancel_post_generation_roughcut_draft", None)
+        if callable(cancel_roughcut):
+            try:
+                cancel_roughcut(reason="러프컷 LLM 수동 실행")
+            except Exception:
+                pass
+        self._roughcut_draft_manual_run_requested = True
+        self._roughcut_llm_cooldown_until = 0.0
+        self._schedule_post_generation_roughcut_draft(
+            force=True,
+            require_autorun=False,
+            settings_override={
+                "roughcut_llm_enabled": True,
+                "roughcut_run_after_subtitle_generation": True,
+            },
+        )
+
     def _post_generation_local_llm_release_requested(self, settings: dict, segments: list[dict]) -> bool:
+        if bool(getattr(self, "_roughcut_draft_manual_run_requested", False)):
+            return False
         if not bool(getattr(self, "_post_generation_models_release_requested", False)) and not bool(
             getattr(self, "_post_generation_models_released", False)
         ):
@@ -335,6 +429,8 @@ class EditorRoughcutDraftMixin:
         return settings
 
     def _roughcut_draft_runtime_enabled(self) -> bool:
+        if bool(getattr(self, "_roughcut_draft_manual_run_requested", False)):
+            return True
         try:
             from core.roughcut import editor_roughcut_draft_enabled
 
@@ -569,6 +665,7 @@ class EditorRoughcutDraftMixin:
             self._set_roughcut_draft_status("disabled")
             if isinstance(settings_override, dict):
                 self._roughcut_draft_settings_override = None
+            self._roughcut_draft_manual_run_requested = False
             get_logger().log("⏭️ 러프컷 자동 실행 생략: 컷 경계/러프컷 런타임이 비활성화되어 있습니다.")
             return
         timer = getattr(self, "_roughcut_draft_timer", None)
@@ -576,12 +673,17 @@ class EditorRoughcutDraftMixin:
             self._roughcut_draft_pending = False
             if isinstance(settings_override, dict):
                 self._roughcut_draft_settings_override = None
+            self._roughcut_draft_manual_run_requested = False
             return
         if force or not timer.isActive():
             self._roughcut_draft_pending = True
             self._set_roughcut_draft_status("queued")
-            self._mark_roughcut_queue_active("⏳ [러프컷 LLM] 후처리 대기")
-            if require_autorun:
+            manual_run = bool(getattr(self, "_roughcut_draft_manual_run_requested", False))
+            queue_text = "⏳ [러프컷 LLM] 수동 실행 대기" if manual_run else "⏳ [러프컷 LLM] 후처리 대기"
+            self._mark_roughcut_queue_active(queue_text)
+            if manual_run:
+                get_logger().log("⏳ 러프컷 LLM 수동 실행 예약: 현재 저장된 자막 기준으로 중분류를 다시 만듭니다.")
+            elif require_autorun:
                 get_logger().log("⏳ 러프컷 LLM 후처리 예약: 자막 생성 완료 직후 중분류 초안을 이어서 만듭니다.")
             else:
                 get_logger().log("⏳ 러프컷 LLM 후처리 예약: 부분 재인식 완료 후 중분류 초안을 갱신합니다.")
@@ -592,6 +694,7 @@ class EditorRoughcutDraftMixin:
             self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("disabled")
             self._roughcut_draft_settings_override = None
+            self._roughcut_draft_manual_run_requested = False
             return
         if not self._cut_boundary_runtime_settled_for_roughcut():
             timer = getattr(self, "_roughcut_draft_timer", None)
@@ -621,6 +724,7 @@ class EditorRoughcutDraftMixin:
             self._set_roughcut_draft_status("idle")
             self._mark_roughcut_queue_done()
             self._roughcut_draft_settings_override = None
+            self._roughcut_draft_manual_run_requested = False
             return
         self._roughcut_draft_pending = True
         self._set_roughcut_draft_status("running")
@@ -649,6 +753,7 @@ class EditorRoughcutDraftMixin:
         reviewed_cut_boundaries = self._draft_reviewed_cut_boundaries()
         self._roughcut_draft_generation += 1
         generation = int(self._roughcut_draft_generation)
+        manual_run = bool(getattr(self, "_roughcut_draft_manual_run_requested", False))
 
         try:
             from core.roughcut.editor_draft import (
@@ -668,12 +773,14 @@ class EditorRoughcutDraftMixin:
             roughcut_chunk_count = 1
             roughcut_eta_sec = 0.0
         eta_label = f" · 예상 {roughcut_eta_sec:.0f}s" if roughcut_eta_sec > 0.0 else ""
+        queue_label = "수동 실행 중" if manual_run else "후처리 중"
+        log_label = "수동 실행" if manual_run else "후처리"
         self._mark_roughcut_queue_active(
-            f"🤖 [러프컷 LLM] 후처리 중 · {roughcut_chunk_count}chunk{eta_label}",
+            f"🤖 [러프컷 LLM] {queue_label} · {roughcut_chunk_count}chunk{eta_label}",
             expected_seconds=roughcut_eta_sec if roughcut_eta_sec > 0.0 else None,
         )
         get_logger().log(
-            "🤖 러프컷 LLM 후처리 시작: "
+            f"🤖 러프컷 LLM {log_label} 시작: "
             f"자막 row {len(segments)}개 · chunk {roughcut_chunk_count}개{eta_label}"
         )
 
@@ -717,7 +824,18 @@ class EditorRoughcutDraftMixin:
         except Exception:
             roughcut_model = str(settings.get("selected_model", "") or "").strip()
             roughcut_llm_ready = bool(roughcut_model and "사용 안함" not in roughcut_model)
-        if len(segments) < min_count or not roughcut_llm_ready:
+        if not roughcut_llm_ready:
+            if manual_run:
+                self.sig_roughcut_draft_ready.emit(None, [], {"_generation": generation, "refinement_source": "failed"})
+                get_logger().log("⚠️ 러프컷 LLM 수동 실행 실패: 사용할 LLM 모델 설정이 없습니다.")
+                return
+            try:
+                emit_candidate(None, "local_after_generation")
+            except Exception as exc:
+                self._set_roughcut_draft_status("failed")
+                get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
+            return
+        if len(segments) < min_count and not manual_run:
             try:
                 emit_candidate(None, "local_after_generation")
             except Exception as exc:
@@ -765,19 +883,33 @@ class EditorRoughcutDraftMixin:
                     "⏩ 긴 영상 러프컷: 자막 row가 "
                     f"{len(segments)}개라 자동 문맥 정책({max_rows}개 제한)으로 LLM 초안을 건너뛰고 로컬 세그먼트를 즉시 생성합니다."
                 )
+                if manual_run:
+                    self.sig_roughcut_draft_ready.emit(
+                        None,
+                        [],
+                        {"_generation": generation, "refinement_source": "failed"},
+                    )
+                    return
                 emit_candidate(None, "local_after_generation_long_video")
                 return
         except Exception as exc:
+            if manual_run:
+                self.sig_roughcut_draft_ready.emit(None, [], {"_generation": generation, "refinement_source": "failed"})
+                get_logger().log(f"⚠️ 러프컷 LLM 수동 실행 길이 판단 실패: {exc}")
+                return
             get_logger().log(f"⚠️ 러프컷 LLM 길이 판단 실패, 로컬 초안으로 진행: {exc}")
             emit_candidate(None, "local_after_generation_length_guard")
             return
         if time.time() < float(getattr(self, "_roughcut_llm_cooldown_until", 0.0) or 0.0):
-            try:
-                emit_candidate(None, "local_after_generation")
-            except Exception as exc:
-                self._set_roughcut_draft_status("failed")
-                get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
-            return
+            if manual_run:
+                self._roughcut_llm_cooldown_until = 0.0
+            else:
+                try:
+                    emit_candidate(None, "local_after_generation")
+                except Exception as exc:
+                    self._set_roughcut_draft_status("failed")
+                    get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
+                return
 
         def worker():
             try:
@@ -793,6 +925,14 @@ class EditorRoughcutDraftMixin:
                 )
                 if llm_payload is None:
                     self._roughcut_llm_cooldown_until = time.time() + 10.0
+                    if manual_run:
+                        get_logger().log("⚠️ 러프컷 LLM 수동 실행 결과 없음: 기존 중분류를 유지합니다.")
+                        self.sig_roughcut_draft_ready.emit(
+                            None,
+                            [],
+                            {"_generation": generation, "refinement_source": "failed"},
+                        )
+                        return
                     get_logger().log("↩️ 러프컷 LLM 후처리 결과 없음: 로컬 규칙 초안으로 마무리합니다.")
                     emit_candidate(None, "local_after_generation_fallback")
                 else:
@@ -811,6 +951,7 @@ class EditorRoughcutDraftMixin:
         self._roughcut_draft_thread.start()
 
     def _apply_post_generation_roughcut_draft(self, result, segments: list, candidate: dict):
+        candidate = dict(candidate or {})
         refinement_source = str(candidate.get("refinement_source") or "")
         try:
             if int(candidate.get("_generation", -1)) != int(getattr(self, "_roughcut_draft_generation", 0)):
@@ -822,11 +963,13 @@ class EditorRoughcutDraftMixin:
             self._roughcut_draft_pending = False
             self._roughcut_draft_thread = None
             self._roughcut_draft_settings_override = None
+            self._roughcut_draft_manual_run_requested = False
             self._mark_roughcut_queue_done(note="러프컷 미적용")
             self._schedule_post_roughcut_model_release()
             return
         self._set_roughcut_draft_status("saving")
         self._mark_roughcut_queue_active("💾 [러프컷 LLM] 저장 중")
+        result = self._sorted_roughcut_result(result)
         try:
             major_count = len(getattr(result, "segments", ()) or ())
             max_major = int(self._draft_settings_snapshot().get("editor_roughcut_draft_max_major_segments", 10) or 10)
@@ -860,6 +1003,8 @@ class EditorRoughcutDraftMixin:
                 candidate["refinement_source"] = refinement_source or "local_capped"
         except Exception:
             pass
+        result = self._sorted_roughcut_result(result)
+        candidate["segments"] = self._sorted_roughcut_middle_rows(candidate.get("segments", []))
         main_w = self.window()
         project_path = str(getattr(main_w, "_current_project_path", "") or "")
         if not project_path:
@@ -889,6 +1034,7 @@ class EditorRoughcutDraftMixin:
             self._set_roughcut_draft_status("failed")
             self._mark_roughcut_queue_done(note="러프컷 미적용")
             self._roughcut_draft_settings_override = None
+            self._roughcut_draft_manual_run_requested = False
             self._schedule_post_roughcut_model_release()
             return
         try:
@@ -961,5 +1107,6 @@ class EditorRoughcutDraftMixin:
                 pass
             self._schedule_post_roughcut_model_release()
             self._roughcut_draft_settings_override = None
+            self._roughcut_draft_manual_run_requested = False
             if refinement_source in {"llm_refined", "local_after_generation_fallback"}:
                 self._roughcut_draft_thread = None

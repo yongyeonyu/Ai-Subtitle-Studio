@@ -17,6 +17,7 @@ from ui.timeline.timeline_analysis import (
     roughcut_major_markers_for_widget,
     topicless_major_markers_for_widget,
 )
+from ui.dialogs.qml_popup import show_context_menu
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 from ui.ux.apple_black_palette import APPLE_BLACK_MINIMAP
 
@@ -43,6 +44,7 @@ MINIMAP_HEIGHT = 72
 
 class GlobalCanvas(GlobalCanvasBase):
     seek_frac = pyqtSignal(float)
+    roughcut_llm_run_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -563,8 +565,32 @@ class GlobalCanvas(GlobalCanvasBase):
 
         ev.ignore()
 
+    def _event_global_pos(self, event):
+        try:
+            return event.globalPosition().toPoint()
+        except Exception:
+            return event.globalPos()
+
+    def _show_context_menu(self, event) -> bool:
+        items = [
+            {
+                "id": "roughcut_llm",
+                "label": "러프컷 LLM 실행",
+                "accent": "#5AC8FA",
+            },
+        ]
+        chosen = show_context_menu(self, self._event_global_pos(event), items)
+        if chosen == "roughcut_llm":
+            self.roughcut_llm_run_requested.emit()
+            return True
+        return False
+
     def mousePressEvent(self, e):
         self.setFocus()
+        if e.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu(e)
+            e.accept()
+            return
         frac = max(0.0, min(1.0, e.pos().x() / max(1, self.width())))
         self.seek_frac.emit(frac)
 

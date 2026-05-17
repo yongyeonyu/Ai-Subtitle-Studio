@@ -71,6 +71,22 @@ class WhisperModelCatalogTest(unittest.TestCase):
             "KomixV2 MLX · 한국어 특화",
         )
 
+    def test_native_model_labels_can_include_benchmark_recommendations(self):
+        self.assertEqual(
+            whisper_model_display_name(
+                "whisperkit-persistent:large-v3-v20240930_626MB",
+                include_recommendations=True,
+            ),
+            "WhisperKit Large V3 · 정밀 [Fast] [Auto] [High]",
+        )
+        self.assertEqual(
+            whisper_model_display_name(
+                "youngouk/whisper-medium-komixv2-mlx",
+                include_recommendations=True,
+            ),
+            "KomixV2 MLX · 한국어 특화 [Fast]",
+        )
+
     def test_unused_models_are_not_in_default_settings(self):
         defaults = json.loads((ROOT / "dataset" / "custom_defaults.json").read_text(encoding="utf-8"))
         models = set(defaults.get("whisper_models", []))

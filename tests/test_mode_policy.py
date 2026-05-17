@@ -30,42 +30,54 @@ class ModePolicyTests(unittest.TestCase):
 
         self.assertEqual(fast["stt_quality_preset"], "fast")
         self.assertEqual(fast["cut_boundary_level"], "off")
-        self.assertFalse(fast["stt_ensemble_enabled"])
-        self.assertFalse(fast["stt_selective_secondary_recheck_enabled"])
+        self.assertTrue(fast["stt_ensemble_enabled"])
+        self.assertTrue(fast["stt_ensemble_selective_enabled"])
+        self.assertTrue(fast["stt_selective_secondary_recheck_enabled"])
         self.assertEqual(fast["stt_low_score_recheck_max_segments"], 0)
-        self.assertEqual(fast["stt_word_timestamps_mode"], "off")
+        self.assertEqual(fast["stt_word_timestamps_mode"], "selective")
         self.assertFalse(fast["stt_word_timestamps_precision_enabled"])
         self.assertIn("사용 안함", fast["selected_model"])
         self.assertEqual(fast["selected_llm_provider"], "none")
         self.assertEqual(fast["subtitle_tool_stack_tools"], ["lora"])
         self.assertTrue(fast["editor_lora_runtime_enabled"])
-        self.assertTrue(fast["deep_subtitle_policy_enabled"])
+        self.assertFalse(fast["deep_subtitle_policy_enabled"])
+        self.assertTrue(fast["deep_timing_adjustment_enabled"])
         self.assertFalse(fast["subtitle_llm_macro_chunk_enabled"])
+        self.assertEqual(fast["subtitle_lora_quality_buckets"], ["high"])
 
         self.assertEqual(auto["stt_quality_preset"], "balanced")
         self.assertEqual(auto["cut_boundary_level"], "low")
-        self.assertFalse(auto["stt_ensemble_enabled"])
+        self.assertTrue(auto["stt_ensemble_enabled"])
+        self.assertTrue(auto["stt_ensemble_selective_enabled"])
         self.assertFalse(auto["stt_ensemble_llm_judge_enabled"])
-        self.assertTrue(auto["stt_word_timestamps_precision_enabled"])
+        self.assertTrue(auto["stt_selective_secondary_recheck_enabled"])
+        self.assertFalse(auto["stt_word_timestamps_precision_enabled"])
         self.assertEqual(auto["stt_word_timestamps_precision_max_segments"], 16)
         self.assertIn("사용 안함", auto["selected_model"])
         self.assertEqual(auto["selected_llm_provider"], "none")
         self.assertEqual(auto["subtitle_tool_stack_tools"], ["lora", "deep_learning"])
-        self.assertFalse(auto["deep_subtitle_policy_enabled"])
-        self.assertFalse(auto["deep_stt_candidate_selector_enabled"])
+        self.assertTrue(auto["deep_subtitle_policy_enabled"])
+        self.assertTrue(auto["deep_stt_candidate_selector_enabled"])
+        self.assertTrue(auto["subtitle_output_selector_enabled"])
         self.assertFalse(auto["subtitle_llm_macro_chunk_enabled"])
+        self.assertEqual(auto["subtitle_lora_quality_buckets"], ["high"])
 
         self.assertEqual(high["stt_quality_preset"], "precise")
         self.assertEqual(high["cut_boundary_level"], "medium")
         self.assertTrue(high["stt_ensemble_enabled"])
         self.assertTrue(high["stt_ensemble_llm_judge_enabled"])
         self.assertTrue(high["stt_ensemble_llm_judge_local_only"])
-        self.assertFalse(high["stt_selective_secondary_recheck_enabled"])
+        self.assertTrue(high["stt_ensemble_selective_enabled"])
+        self.assertTrue(high["stt_selective_secondary_recheck_enabled"])
         self.assertEqual(high["stt_word_timestamps_precision_max_segments"], 32)
+        self.assertFalse(high["stt_word_timestamps_precision_enabled"])
         self.assertTrue(high["vad_dual_model_enabled"])
         self.assertEqual(high["subtitle_tool_stack_tools"], ["lora", "deep_learning", "llm"])
-        self.assertFalse(high["deep_subtitle_policy_enabled"])
+        self.assertTrue(high["deep_subtitle_policy_enabled"])
+        self.assertTrue(high["deep_stt_candidate_selector_enabled"])
+        self.assertTrue(high["subtitle_output_selector_enabled"])
         self.assertTrue(high["subtitle_llm_macro_chunk_enabled"])
+        self.assertEqual(high["subtitle_lora_quality_buckets"], ["high"])
 
     def test_mode_tool_stack_overrides_subtitle_llm_by_quality_mode(self):
         fast = apply_mode_runtime_settings(
@@ -154,7 +166,7 @@ class ModePolicyTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(settings["selected_audio_ai"], "deepfilter")
+        self.assertEqual(settings["selected_audio_ai"], "none")
         self.assertEqual(settings["selected_vad"], "silero")
         self.assertEqual(settings["selected_whisper_model"], "current-stt1")
         self.assertEqual(settings["selected_whisper_model_secondary"], "current-stt2")
@@ -174,7 +186,7 @@ class ModePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(settings["selected_whisper_model_secondary"], "current-stt2")
-        self.assertFalse(settings["stt_ensemble_enabled"])
+        self.assertTrue(settings["stt_ensemble_enabled"])
         self.assertFalse(settings["stt_ensemble_user_selected"])
 
     def test_simple_mode_switch_preserves_stt2_model_but_not_manual_enable(self):
@@ -189,7 +201,7 @@ class ModePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(settings["selected_whisper_model_secondary"], "user-stt2")
-        self.assertFalse(settings["stt_ensemble_enabled"])
+        self.assertTrue(settings["stt_ensemble_enabled"])
         self.assertFalse(settings["stt_ensemble_user_selected"])
 
     def test_selected_llm_is_effective_only_in_high_mode(self):

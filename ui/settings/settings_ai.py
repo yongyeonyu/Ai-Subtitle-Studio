@@ -387,7 +387,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_whisper.setUpdatesEnabled(False)
         self.combo_whisper.blockSignals(True)
         for model_name in stt1_models:
-            label = whisper_model_display_name(model_name)
+            label = whisper_model_display_name(model_name, include_recommendations=True)
             if is_experimental_whisper_model(model_name):
                 label = f"{label} (실험)"
             self.combo_whisper.addItem(label, model_name)
@@ -402,7 +402,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_whisper_secondary.setUpdatesEnabled(False)
         self.combo_whisper_secondary.blockSignals(True)
         for model_name in stt2_models:
-            label = whisper_model_display_name(model_name)
+            label = whisper_model_display_name(model_name, include_recommendations=True)
             if is_experimental_whisper_model(model_name):
                 label = f"{label} (실험)"
             self.combo_whisper_secondary.addItem(label, model_name)

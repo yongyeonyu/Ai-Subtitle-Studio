@@ -913,6 +913,30 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(clicked, [])
         self.assertEqual(scrubbed, [])
 
+    def test_global_canvas_right_click_requests_roughcut_llm_without_seeking(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(640, timeline.sizeHint().height())
+            timeline.global_canvas.resize(640, timeline.global_canvas.height())
+            emitted = []
+            seeked = []
+            timeline.roughcut_llm_run_requested.connect(lambda: emitted.append(True))
+            timeline.global_canvas.seek_frac.connect(lambda frac: seeked.append(frac))
+
+            with patch("ui.timeline.timeline_global.show_context_menu", return_value="roughcut_llm") as menu:
+                QTest.mouseClick(
+                    timeline.global_canvas,
+                    Qt.MouseButton.RightButton,
+                    Qt.KeyboardModifier.NoModifier,
+                    QPoint(80, 12),
+                )
+
+            self.assertEqual(emitted, [True])
+            self.assertEqual(seeked, [])
+            self.assertEqual(menu.call_args[0][2][0]["label"], "러프컷 LLM 실행")
+        finally:
+            timeline.deleteLater()
+
     def test_single_gesture_center_drag_starts_without_prior_selection(self):
         canvas = TimelineCanvas()
         try:

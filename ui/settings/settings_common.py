@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QPushButton
 )
 from core.runtime import config
+from core.audio.stt_quality_presets import recommended_mode_tags_for_model
 from ui.settings.qml_panel import create_qml_action_bar
 from ui.style import line_icon, settings_button_style
 
@@ -104,21 +105,33 @@ def is_experimental_whisper_model(model: str) -> bool:
     return str(model or "").strip() in EXPERIMENTAL_WHISPER_MODELS
 
 
-def whisper_model_display_name(model: str) -> str:
-    value = str(model or "").strip()
-    if not value:
+def whisper_model_display_name(model: str, *, include_recommendations: bool = False) -> str:
+    raw_value = str(model or "").strip()
+    if not raw_value:
         return "미사용"
+    value = raw_value
     if value in WHISPER_MODEL_DISPLAY_NAMES:
-        return WHISPER_MODEL_DISPLAY_NAMES[value]
+        display = WHISPER_MODEL_DISPLAY_NAMES[value]
+        if include_recommendations:
+            tags = recommended_mode_tags_for_model(raw_value)
+            if tags:
+                display = f"{display} {' '.join(f'[{tag}]' for tag in tags)}"
+        return display
     lowered = value.lower()
     if lowered.startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:")):
         selector = value.split(":", 1)[1].strip() if ":" in value else "default"
-        return f"whisper.cpp {selector or 'default'}"
-    for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
-        if value.startswith(prefix):
-            value = value[len(prefix):]
-            break
-    return value.replace("-mlx", "")
+        display = f"whisper.cpp {selector or 'default'}"
+    else:
+        for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
+            if value.startswith(prefix):
+                value = value[len(prefix):]
+                break
+        display = value.replace("-mlx", "")
+    if include_recommendations:
+        tags = recommended_mode_tags_for_model(raw_value)
+        if tags:
+            display = f"{display} {' '.join(f'[{tag}]' for tag in tags)}"
+    return display
 
 
 DEFAULT_WHISPER_MODELS = filter_available_whisper_models(

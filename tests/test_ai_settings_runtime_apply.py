@@ -258,13 +258,13 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             save_mock.assert_called_once()
             default_mock.assert_called_once()
             saved = save_mock.call_args.args[0]
-            self.assertEqual(saved["selected_audio_ai"], "deepfilter")
+            self.assertEqual(saved["selected_audio_ai"], "none")
             self.assertEqual(saved["selected_vad"], "silero")
             self.assertEqual(saved["selected_whisper_model"], "user-stt1")
             self.assertEqual(saved["selected_whisper_model_secondary"], "user-stt2")
             self.assertEqual(saved["selected_model"], "custom-llm")
             self.assertTrue(saved["stt_ensemble_enabled"])
-            self.assertFalse(saved["stt_selective_secondary_recheck_enabled"])
+            self.assertTrue(saved["stt_selective_secondary_recheck_enabled"])
             self.assertEqual(saved["stt_word_timestamps_precision_max_segments"], 32)
             user_preset = saved["stt_quality_user_presets"]["precise"]["settings"]
             self.assertNotIn("stt_ensemble_enabled", user_preset)

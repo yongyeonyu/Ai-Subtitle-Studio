@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.08-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_8_RELEASED
-Last-Updated: 2026-05-17
+Document-Version: 04.00.09-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_9_RELEASED
+Last-Updated: 2026-05-18
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.08"
-document_version: "04.00.08-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_8_RELEASED"
+app_version: "04.00.09"
+document_version: "04.00.09-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_9_RELEASED"
 next_phase: null
 active_item_count: 20
 commit_policy: "Commit only when the user explicitly asks."
@@ -54,8 +54,8 @@ native_plan: "NATIVE_LIB_PLAN.md"
   Success: final subtitles do not diverge from both STT1/STT2 when they agree; arbitrary line breaks are not introduced except approved two-speaker cases.
   Verification: X5 accuracy slice first, then Tinyping first-minute regression.
 
-- [ ] 2. Build a real-media subtitle-quality regression pack.
-  Scope: create repeatable commands/artifacts under `output/manual_verification/latest/` for X5 slice accuracy, Macau smoke, and Tinyping long-flow checks.
+- [ ] 2. Expand the real-media subtitle-quality regression pack.
+  Scope: extend `tools/benchmark_tiniping_mode_search.py` and the artifacts under `output/manual_verification/latest/` so X5 slice accuracy, Macau smoke, and Tinyping long-flow checks can be rerun from one repeatable flow.
   Success: future fixes can compare STT1, STT2, final subtitle, line-break policy, quality labels, and saved project state without relying on screenshots only.
   Verification: X5 slice plus Tinyping first minute.
 

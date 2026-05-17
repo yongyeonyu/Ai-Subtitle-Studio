@@ -1,6 +1,6 @@
 <!--
-Document-Version: 04.00.08-codemap
-Last-Updated: 2026-05-17
+Document-Version: 04.00.09-codemap
+Last-Updated: 2026-05-18
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
 -->
@@ -22,6 +22,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/appctl.py`: external command-line entry point for remote app control.
 - `tools/remote_verify.py`: higher-level remote verification runner and artifact capture.
 - `tools/overnight_optimize.py`: compact baseline/check runner that writes long-run artifacts under `output/manual_verification/latest/`.
+- `tools/benchmark_tiniping_mode_search.py`: Tiniping 3-minute sweep plus 11-minute final benchmark orchestrator for Fast/Auto/High mode winners.
 - `tools/check_maintenance_budget.py`: changed-file guard for file/function length and broad silent-exception regressions.
 - `tools/verify_full_media_pipeline.py`: full-media verification runner with top-level performance/quality summary metrics.
 
@@ -57,6 +58,8 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `core/project/project_assets.py`: external text-asset/SRT persistence, row-copy helpers, and STT candidate-track cache shaping.
 - `core/project/project_runtime_capture.py`: editor auxiliary project-state copy helpers plus lightweight status-count snapshots.
 - `core/mode_manager.py`: central Fast/Auto/High/STT mode ownership and user-selectable model snapshot policy.
+- `core/audio/stt_quality_presets.py`: benchmark-locked Fast/Auto/High defaults, VAD lock notes, and STT recommendation tags.
+- `core/mode_policy.py`: runtime mode enforcement layer that applies benchmark-locked mode settings on top of persisted user model routes.
 - `ui/editor/editor_project_open_native.py`: SRT/project open flows and workspace restore.
 - `ui/editor/editor_save_manager.py`: save/export/project persistence actions.
 
@@ -102,6 +105,10 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - Roughcut:
   - `tests/test_editor_roughcut_draft.py`
   - `tests/test_roughcut_*.py`
+- Mode defaults / benchmark locks:
+  - `tests/test_stt_quality_presets.py`
+  - `tests/test_mode_policy.py`
+  - `tests/test_benchmark_mode_profiles.py`
 
 ## Real Media Fixtures
 

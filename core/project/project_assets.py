@@ -758,6 +758,17 @@ def _merge_srt_metadata(
         if source:
             item["source"] = source
             item["stt_preview_source"] = source
+        if source or any(
+            key in item
+            for key in (
+                "_stt_original_candidate_start_frame",
+                "_stt_original_candidate_end_frame",
+                "_stt_original_candidate_start",
+                "_stt_original_candidate_end",
+                "original_start",
+                "original_end",
+            )
+        ):
             item.update(
                 _original_candidate_frame_payload(
                     item,

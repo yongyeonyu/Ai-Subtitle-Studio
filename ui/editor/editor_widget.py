@@ -710,6 +710,7 @@ class EditorWidget(
         if hasattr(self.timeline, 'playhead_menu_requested'): self.timeline.playhead_menu_requested.connect(self._show_playhead_menu)
         if hasattr(self.timeline, 'provisional_cut_boundary_requested'): self.timeline.provisional_cut_boundary_requested.connect(self._on_provisional_cut_boundary_requested)
         if hasattr(self.timeline, 'provisional_cut_boundary_delete_requested'): self.timeline.provisional_cut_boundary_delete_requested.connect(self._on_provisional_cut_boundary_delete_requested)
+        if hasattr(self.timeline, 'roughcut_llm_run_requested'): self.timeline.roughcut_llm_run_requested.connect(self._run_manual_roughcut_llm_from_global_canvas)
         if hasattr(self.timeline, 'sig_smart_split'):         self.timeline.sig_smart_split.connect(self._on_smart_split)
             
         timeline_height = max(1, self.timeline.minimumSizeHint().height(), self.timeline.sizeHint().height())

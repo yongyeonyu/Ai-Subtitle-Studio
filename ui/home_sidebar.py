@@ -1042,13 +1042,13 @@ class HomeSidebarMixin:
         lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
         return "\n".join(lines)
 
-    def _short_model_name(self, model: str) -> str:
+    def _short_model_name(self, model: str, *, include_recommendations: bool = False) -> str:
         text = str(model or "").strip()
         if not text:
             return "미사용"
         if "사용 안함" in text:
             return "미사용"
-        display_name = whisper_model_display_name(text)
+        display_name = whisper_model_display_name(text, include_recommendations=include_recommendations)
         if display_name and display_name != text:
             return display_name
         lowered = text.lower()
@@ -2231,7 +2231,7 @@ class HomeSidebarMixin:
             current2 = settings.get("selected_whisper_model_secondary", "")
             models = self._stt1_model_items() if key in {"stt", "stt1"} else self._stt2_model_items()
             for idx, model in enumerate(models):
-                label = self._short_model_name(model)
+                label = self._short_model_name(model, include_recommendations=True)
                 if key in {"stt", "stt1"}:
                     _push_item(
                         f"stt1:model:{idx}",

@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 
 from tools.benchmark_subtitle_pipeline_variants import (
     _copy_chunk_dir,
+    _compact_text,
     _rank_rows,
     _base_benchmark_settings,
     benchmark_mode_lora_deep_profiles,
@@ -22,50 +23,54 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(set(by_name), {"mode_fast", "mode_auto", "mode_high"})
 
         fast = by_name["mode_fast"]
-        self.assertEqual(fast.method, "stt1_only")
+        self.assertEqual(fast.method, "selective_ensemble")
         self.assertFalse(fast.run_llm)
         self.assertEqual(fast.overrides.get("subtitle_mode"), "fast")
-        self.assertEqual(fast.overrides.get("stt_word_timestamps_mode"), "off")
+        self.assertEqual(fast.overrides.get("stt_word_timestamps_mode"), "selective")
         self.assertFalse(bool(fast.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertFalse(bool(fast.overrides.get("subtitle_lora_packaging_enabled")))
-        self.assertTrue(bool(fast.overrides.get("subtitle_output_selector_enabled")))
+        self.assertFalse(bool(fast.overrides.get("subtitle_output_selector_enabled")))
         self.assertTrue(bool(fast.overrides.get("deep_timing_adjustment_enabled")))
         self.assertEqual(fast.overrides.get("subtitle_timing_anchor_max_start_lag_sec"), 0.06)
         self.assertEqual(fast.overrides.get("subtitle_timing_anchor_max_end_lag_sec"), 0.12)
         self.assertFalse(bool(fast.overrides.get("subtitle_cut_boundary_guard_enabled")))
         self.assertFalse(bool(fast.overrides.get("subtitle_bundle_use_confirmed_cuts")))
         self.assertFalse(bool(fast.overrides.get("subtitle_bundle_use_provisional_cuts")))
+        self.assertTrue(bool(fast.overrides.get("stt_ensemble_enabled")))
+        self.assertTrue(bool(fast.overrides.get("stt_ensemble_selective_enabled")))
 
         auto = by_name["mode_auto"]
-        self.assertEqual(auto.method, "stt1_word_precision")
+        self.assertEqual(auto.method, "selective_ensemble")
         self.assertFalse(auto.run_llm)
         self.assertEqual(auto.overrides.get("subtitle_mode"), "auto")
-        self.assertTrue(bool(auto.overrides.get("stt_word_timestamps_precision_enabled")))
+        self.assertFalse(bool(auto.overrides.get("stt_word_timestamps_precision_enabled")))
         self.assertEqual(auto.overrides.get("cut_boundary_level"), "low")
         self.assertEqual(auto.overrides.get("stt_word_timestamps_precision_min_similarity"), 0.30)
         self.assertEqual(auto.overrides.get("stt_word_timestamps_precision_max_timing_shift_sec"), 0.35)
         self.assertEqual(auto.overrides.get("subtitle_timing_anchor_max_start_lag_sec"), 0.08)
         self.assertEqual(auto.overrides.get("subtitle_timing_anchor_max_end_lag_sec"), 0.14)
-        self.assertFalse(bool(auto.overrides.get("subtitle_output_selector_enabled")))
+        self.assertTrue(bool(auto.overrides.get("subtitle_output_selector_enabled")))
         self.assertFalse(bool(auto.overrides.get("subtitle_lora_micro_merge_enabled")))
-        self.assertFalse(bool(auto.overrides.get("subtitle_lora_packaging_enabled")))
+        self.assertTrue(bool(auto.overrides.get("subtitle_lora_packaging_enabled")))
         self.assertFalse(bool(auto.overrides.get("deep_timing_adjustment_enabled")))
+        self.assertTrue(bool(auto.overrides.get("deep_subtitle_policy_enabled")))
         self.assertFalse(bool(auto.overrides.get("subtitle_bundle_use_provisional_cuts")))
 
         high = by_name["mode_high"]
-        self.assertEqual(high.method, "stt1_word_precision")
+        self.assertEqual(high.method, "selective_ensemble")
         self.assertEqual(high.overrides.get("subtitle_mode"), "high")
-        self.assertTrue(bool(high.overrides.get("stt_word_timestamps_precision_enabled")))
+        self.assertFalse(bool(high.overrides.get("stt_word_timestamps_precision_enabled")))
         self.assertEqual(high.overrides.get("cut_boundary_level"), "medium")
         self.assertEqual(high.overrides.get("stt_word_timestamps_precision_min_similarity"), 0.36)
         self.assertEqual(high.overrides.get("stt_word_timestamps_precision_max_timing_shift_sec"), 0.28)
         self.assertEqual(high.overrides.get("subtitle_timing_anchor_max_start_lag_sec"), 0.06)
         self.assertEqual(high.overrides.get("subtitle_timing_anchor_max_end_lag_sec"), 0.12)
-        self.assertFalse(bool(high.overrides.get("subtitle_output_selector_enabled")))
+        self.assertTrue(bool(high.overrides.get("subtitle_output_selector_enabled")))
         self.assertFalse(bool(high.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertTrue(bool(high.overrides.get("subtitle_lora_packaging_enabled")))
         self.assertEqual(high.overrides.get("subtitle_lora_packaging_mode"), "readability_selective")
         self.assertFalse(bool(high.overrides.get("deep_timing_adjustment_enabled")))
+        self.assertTrue(bool(high.overrides.get("deep_subtitle_policy_enabled")))
         self.assertFalse(bool(high.overrides.get("subtitle_bundle_use_provisional_cuts")))
 
     def test_high_mode_can_enable_llm_when_explicit_model_is_supplied(self):
@@ -103,18 +108,18 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         )
 
         fast_deep_on = by_name["mode_fast_deep_on"]
-        self.assertEqual(fast_deep_on.method, "stt1_only")
+        self.assertEqual(fast_deep_on.method, "selective_ensemble")
         self.assertTrue(bool(fast_deep_on.overrides.get("deep_subtitle_policy_enabled")))
         self.assertTrue(bool(fast_deep_on.overrides.get("subtitle_output_selector_enabled")))
 
         auto_deep_off = by_name["mode_auto_deep_off"]
-        self.assertEqual(auto_deep_off.method, "stt1_word_precision")
+        self.assertEqual(auto_deep_off.method, "selective_ensemble")
         self.assertFalse(bool(auto_deep_off.overrides.get("deep_subtitle_policy_enabled")))
         self.assertFalse(bool(auto_deep_off.overrides.get("deep_timing_adjustment_enabled")))
         self.assertFalse(bool(auto_deep_off.overrides.get("subtitle_output_selector_enabled")))
 
         high_lora_deep_off = by_name["mode_high_lora_deep_off"]
-        self.assertEqual(high_lora_deep_off.method, "stt1_word_precision")
+        self.assertEqual(high_lora_deep_off.method, "selective_ensemble")
         self.assertFalse(bool(high_lora_deep_off.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertFalse(bool(high_lora_deep_off.overrides.get("deep_segment_setting_policy_enabled")))
 
@@ -138,17 +143,17 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         )
 
         fast_selective = by_name["mode_fast_lora_selective"]
-        self.assertEqual(fast_selective.method, "stt1_only")
+        self.assertEqual(fast_selective.method, "selective_ensemble")
         self.assertTrue(bool(fast_selective.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertEqual(fast_selective.overrides.get("subtitle_lora_micro_merge_mode"), "readability_selective")
 
         auto_full = by_name["mode_auto_lora_full"]
-        self.assertEqual(auto_full.method, "stt1_word_precision")
+        self.assertEqual(auto_full.method, "selective_ensemble")
         self.assertTrue(bool(auto_full.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertEqual(auto_full.overrides.get("subtitle_lora_micro_merge_mode"), "full")
 
         high_selective = by_name["mode_high_lora_selective"]
-        self.assertEqual(high_selective.method, "stt1_word_precision")
+        self.assertEqual(high_selective.method, "selective_ensemble")
         self.assertTrue(bool(high_selective.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertEqual(high_selective.overrides.get("subtitle_lora_micro_merge_mode"), "readability_selective")
 
@@ -172,18 +177,18 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         )
 
         fast_full = by_name["mode_fast_packaging_full"]
-        self.assertEqual(fast_full.method, "stt1_only")
+        self.assertEqual(fast_full.method, "selective_ensemble")
         self.assertFalse(bool(fast_full.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertTrue(bool(fast_full.overrides.get("subtitle_lora_packaging_enabled")))
         self.assertEqual(fast_full.overrides.get("subtitle_lora_packaging_mode"), "full")
 
         auto_selective = by_name["mode_auto_packaging_selective"]
-        self.assertEqual(auto_selective.method, "stt1_word_precision")
+        self.assertEqual(auto_selective.method, "selective_ensemble")
         self.assertTrue(bool(auto_selective.overrides.get("subtitle_lora_packaging_enabled")))
         self.assertEqual(auto_selective.overrides.get("subtitle_lora_packaging_mode"), "readability_selective")
 
         high_full = by_name["mode_high_packaging_full"]
-        self.assertEqual(high_full.method, "stt1_word_precision")
+        self.assertEqual(high_full.method, "selective_ensemble")
         self.assertFalse(bool(high_full.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertTrue(bool(high_full.overrides.get("subtitle_lora_packaging_enabled")))
 
@@ -284,6 +289,10 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
 
         self.assertEqual(ranked[0]["name"], "slower_better")
         self.assertEqual(ranked[0]["ranking_policy"], "primary_first")
+
+    def test_reference_text_compaction_keeps_punctuation_but_ignores_parentheses(self):
+        self.assertEqual(_compact_text("안녕(하세요)!..~"), "안녕하세요!..~")
+        self.assertEqual(_compact_text("안녕 （하세요） !"), "안녕하세요!")
 
 
 if __name__ == "__main__":
