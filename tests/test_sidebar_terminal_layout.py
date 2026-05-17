@@ -9,7 +9,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QTimer
-from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QComboBox, QTableWidgetItem, QWidget, QMessageBox
+from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QCheckBox, QComboBox, QTableWidgetItem, QWidget, QMessageBox, QPushButton
 
 from ui.main.main_window import MainWindow
 from ui.style import APP_PANEL_GAP, COLORS
@@ -345,11 +345,37 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertGreaterEqual(window.sidebar_settings_label.minimumHeight(), 88)
             self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 122)
             self.assertFalse(window.sidebar_runtime_label.isVisible())
-            quality_combos = [
-                combo for combo in window.home_page.findChildren(QComboBox)
-                if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High", "STT"]
+            quality_combos = list(window.home_page.findChildren(QComboBox))
+            workspace_combos = [
+                combo for combo in quality_combos
+                if str(combo.property("subtitleQualityScope") or "workspace") == "workspace"
             ]
-            self.assertGreaterEqual(len(quality_combos), 3)
+            auto_scope_combos = [
+                combo for combo in quality_combos
+                if str(combo.property("subtitleQualityScope") or "workspace") in {"icloud", "nas"}
+            ]
+            self.assertTrue(workspace_combos)
+            self.assertEqual([workspace_combos[0].itemText(i) for i in range(workspace_combos[0].count())], ["Fast", "Auto", "High", "STT"])
+            self.assertEqual(len(auto_scope_combos), 2)
+            for combo in auto_scope_combos:
+                self.assertEqual([combo.itemText(i) for i in range(combo.count())], ["Fast", "Auto", "High"])
+            auto_toggles = {
+                checkbox.objectName(): checkbox
+                for checkbox in window.home_page.findChildren(QCheckBox)
+                if checkbox.objectName() in {"icloudAutoToggle", "nasAutoToggle"}
+            }
+            self.assertEqual(set(auto_toggles), {"icloudAutoToggle", "nasAutoToggle"})
+            self.assertTrue(all((checkbox.text() or "") == "" for checkbox in auto_toggles.values()))
+            icloud_card_labels = [label.text() for label in auto_toggles["icloudAutoToggle"].parentWidget().findChildren(QLabel)]
+            nas_card_labels = [label.text() for label in auto_toggles["nasAutoToggle"].parentWidget().findChildren(QLabel)]
+            self.assertIn("iCloud 자동", icloud_card_labels)
+            self.assertIn("NAS 자동", nas_card_labels)
+            settings_buttons = {
+                button.objectName(): button
+                for button in window.home_page.findChildren(QPushButton)
+                if button.objectName() in {"icloudAutoSettingsButton", "nasAutoSettingsButton"}
+            }
+            self.assertEqual(set(settings_buttons), {"icloudAutoSettingsButton", "nasAutoSettingsButton"})
             self.assertGreaterEqual(window.sidebar_terminal_panel.maximumHeight(), 116)
             self.assertLessEqual(window.sidebar_terminal_panel.maximumHeight(), 188)
         finally:
@@ -432,16 +458,16 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                     "selected_roughcut_llm_model": "사용 안함",
                 }
             )
-            self.assertIn("color:#00D46A; padding:0 8px 0 0; font-weight:400;", progress_html)
+            self.assertIn("color:#34C759; padding:0 8px 0 0; font-weight:400;", progress_html)
             self.assertIn("color:#FFD60A; padding:0 8px 0 0; font-weight:400;", progress_html)
-            self.assertIn("color:#00D46A; padding:0; font-family:Menlo", progress_html)
+            self.assertIn("color:#34C759; padding:0; font-family:Menlo", progress_html)
             self.assertIn("style='color:#FFD60A; text-decoration:none;", progress_html)
         finally:
             window.close()
             window.deleteLater()
             self.app.processEvents()
 
-    def test_subtitle_quality_combos_keep_independent_scopes(self):
+    def test_subtitle_quality_combos_keep_scope_specific_auto_modes(self):
         path_settings = {
             "icloud_stt_quality_preset": "fast",
             "nas_stt_quality_preset": "balanced",
@@ -454,7 +480,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             path_settings.update(settings)
 
         with mock.patch("ui.home_sidebar._path_load_settings", side_effect=_load_path_settings), \
-                mock.patch("ui.home_sidebar._path_save_settings", side_effect=_save_path_settings):
+                mock.patch("ui.home_sidebar._path_save_settings", side_effect=_save_path_settings), \
+                mock.patch("ui.home_sidebar._runtime_load_settings", return_value={"stt_quality_preset": "balanced"}):
             window = MainWindow()
             try:
                 window._unified_dashboard = True
@@ -464,8 +491,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 combos = {
                     str(combo.property("subtitleQualityScope") or "workspace"): combo
                     for combo in window.home_page.findChildren(QComboBox)
-                    if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High", "STT"]
+                    if str(combo.property("subtitleQualityScope") or "workspace") in {"icloud", "nas"}
                 }
+                self.assertEqual([combos["icloud"].itemText(i) for i in range(combos["icloud"].count())], ["Fast", "Auto", "High"])
                 self.assertEqual(combos["icloud"].currentData(), "fast")
                 self.assertEqual(combos["nas"].currentData(), "balanced")
                 for scope in ("icloud", "nas"):
@@ -551,7 +579,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIn(">7</td>", html)
             self.assertIn(">8</td>", html)
             self.assertIn("러프컷 LLM", html)
-            self.assertIn("style='color:#00D46A; text-decoration:none;", html)
+            self.assertIn("style='color:#34C759; text-decoration:none;", html)
         finally:
             window.close()
             window.deleteLater()
@@ -622,7 +650,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_cut_boundary_sidebar_menu_is_usage_toggle(self):
+    def test_cut_boundary_sidebar_menu_is_mode_owned(self):
         window = MainWindow()
         captured = []
         try:
@@ -630,22 +658,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                  mock.patch("ui.home_sidebar.show_context_menu", side_effect=lambda _parent, _pos, items: captured.extend(items) or None):
                 window._on_sidebar_model_link("model:cut_boundary")
 
-            labels = [item.get("label") for item in captured if not item.get("separator")]
-            self.assertEqual(labels, ["미사용", "사용"])
-            checked = [item.get("label") for item in captured if item.get("checked")]
-            self.assertEqual(checked, ["사용"])
+            self.assertEqual(captured, [])
             self.assertEqual(window._cut_boundary_sidebar_label({"cut_boundary_level": "low"}), "사용")
             self.assertEqual(window._cut_boundary_sidebar_label({"cut_boundary_level": "medium"}), "사용")
-
-            applied = []
-            window._apply_sidebar_model_selection = lambda updates: applied.append(dict(updates))
-            with mock.patch("ui.home_sidebar._runtime_load_settings", return_value={"cut_boundary_level": "medium"}), \
-                 mock.patch("ui.home_sidebar.show_context_menu", return_value="cut_boundary:auto"):
-                window._on_sidebar_model_link("model:cut_boundary")
-
-            self.assertEqual(applied[-1]["cut_boundary_level"], "auto")
-            self.assertEqual(applied[-1]["scan_cut_boundary_level"], "auto")
-            self.assertTrue(applied[-1]["cut_boundary_adaptive_level_enabled"])
         finally:
             window.close()
             window.deleteLater()

@@ -8,7 +8,7 @@ import json
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QMessageBox,
+    QScrollArea, QMessageBox, QCheckBox,
     QToolButton, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
@@ -19,16 +19,113 @@ from core.path_manager import (
     get_icloud_path,
     get_nas_path, get_local_path,
     ensure_nas_mounted,
-    get_nas_excluded_folders
+    get_nas_excluded_folders,
+    get_icloud_auto_detect,
+    get_nas_auto_detect,
+    load_settings as load_path_settings,
+    save_settings as save_path_settings,
 )
 from core.settings import load_settings, save_settings
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE
+from ui.home.ux.auto_source_settings_dialog import (
+    AutoSourceSettingsDialog,
+    auto_source_icon_button_stylesheet,
+    normalize_auto_source_quality_key,
+)
 from ui.home_sidebar import HomeSidebarMixin
 from ui.sidebar.home_sidebar_nav_widget import HomeSidebarNavWidget
-from ui.style import APP_PANEL_GAP, button_style, label_style, line_icon, tool_button_style
+from ui.main.main_nonfatal import run_nonfatal_ui_step
+from ui.style import APP_PANEL_GAP, COLORS, button_style, label_style, line_icon, tool_button_style
 
 
 class HomeUIMixin(HomeSidebarMixin):
+    def _auto_source_scope_title(self, scope: str) -> str:
+        return "NAS" if str(scope or "").strip().lower() == "nas" else "iCloud"
+
+    def _auto_source_path_key(self, scope: str) -> str:
+        return "nas_path" if str(scope or "").strip().lower() == "nas" else "icloud_path"
+
+    def _auto_source_detect_key(self, scope: str) -> str:
+        return "nas_auto_detect" if str(scope or "").strip().lower() == "nas" else "icloud_auto_detect"
+
+    def _auto_source_quality_key(self, scope: str) -> str:
+        return "nas_stt_quality_preset" if str(scope or "").strip().lower() == "nas" else "icloud_stt_quality_preset"
+
+    def _sync_auto_source_runtime_flags(self, path_settings: dict | None = None) -> dict:
+        state = dict(path_settings or load_path_settings() or {})
+        self._is_icloud_auto_mode = bool(state.get("icloud_auto_detect", get_icloud_auto_detect()))
+        self._is_nas_auto_mode = bool(state.get("nas_auto_detect", get_nas_auto_detect()))
+        self._auto_start_on = bool(self._is_icloud_auto_mode or self._is_nas_auto_mode)
+        state["auto_start_enabled"] = bool(self._auto_start_on)
+        return state
+
+    def _current_auto_source_state(self, scope: str) -> dict:
+        scope = str(scope or "icloud").strip().lower()
+        path_settings = self._sync_auto_source_runtime_flags()
+        return {
+            "path": str(path_settings.get(self._auto_source_path_key(scope), "") or ""),
+            "auto_enabled": bool(path_settings.get(self._auto_source_detect_key(scope), False)),
+            "mode_key": normalize_auto_source_quality_key(
+                path_settings.get(self._auto_source_quality_key(scope), path_settings.get("auto_start_mode", "balanced"))
+            ),
+        }
+
+    def _stop_auto_watchers(self) -> None:
+        if hasattr(self, "_cloud_sync_manager"):
+            self._cloud_sync_manager.stop()
+        if hasattr(self, "_nas_sync_manager"):
+            self._nas_sync_manager.stop()
+
+    def _refresh_auto_source_ui(self, *, reset_scope_cache: str | list[str] | tuple[str, ...] | None = None) -> None:
+        if reset_scope_cache:
+            cache = dict(getattr(self, "_home_auto_source_cache", {}) or {})
+            scopes = reset_scope_cache if isinstance(reset_scope_cache, (list, tuple, set)) else [reset_scope_cache]
+            for scope in scopes:
+                cache.pop(str(scope or ""), None)
+            self._home_auto_source_cache = cache
+        self._refresh_after_auto_start_toggle()
+        for combo_scope in ("workspace", "icloud", "nas"):
+            if hasattr(self, "_sync_subtitle_quality_combos_for_scope"):
+                self._sync_subtitle_quality_combos_for_scope(combo_scope)
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.refresh()
+
+    def _apply_auto_source_settings_payload(self, path_settings: dict, *, reset_scope_cache: str | None = None) -> dict:
+        state = self._sync_auto_source_runtime_flags(path_settings)
+        save_path_settings(state)
+        self._sync_auto_source_runtime_flags(state)
+        if self._auto_start_on:
+            self._icloud_watchdog_left = self._watchdog_interval_for(False)
+            self._nas_watchdog_left = self._watchdog_interval_for(True)
+            self._start_configured_watchers()
+        else:
+            self._stop_auto_watchers()
+        self._refresh_auto_source_ui(reset_scope_cache=reset_scope_cache)
+        return state
+
+    def _toggle_auto_source_enabled(self, scope: str, checked: bool | None = None) -> None:
+        scope = str(scope or "icloud").strip().lower()
+        state = dict(load_path_settings() or {})
+        detect_key = self._auto_source_detect_key(scope)
+        enabled = bool(state.get(detect_key, False)) if checked is None else bool(checked)
+        if checked is None:
+            enabled = not enabled
+        state[detect_key] = enabled
+        self._apply_auto_source_settings_payload(state, reset_scope_cache=scope)
+
+    def _open_auto_source_settings(self, scope: str) -> None:
+        scope = str(scope or "icloud").strip().lower()
+        dialog = AutoSourceSettingsDialog(scope, self._current_auto_source_state(scope), getattr(self, "home_page", None) or self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        payload = dialog.result_payload()
+        state = dict(load_path_settings() or {})
+        state[self._auto_source_path_key(scope)] = str(payload.get("path", "") or "")
+        state[self._auto_source_detect_key(scope)] = bool(payload.get("auto_enabled", False))
+        state[self._auto_source_quality_key(scope)] = normalize_auto_source_quality_key(payload.get("mode_key"))
+        state["auto_start_mode"] = normalize_auto_source_quality_key(payload.get("mode_key"))
+        self._apply_auto_source_settings_payload(state, reset_scope_cache=scope)
+
     def _sidebar_nav_signature(self, items: list[dict] | None) -> str:
         try:
             return json.dumps(list(items or []), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -53,7 +150,12 @@ class HomeUIMixin(HomeSidebarMixin):
         self._watchdog_labels = []
         self._subtitle_quality_combos = []
         refresh_sources = getattr(self, "_start_initial_home_auto_source_refresh", None)
-        if callable(refresh_sources) and bool(getattr(self, "_initial_home_scan_deferred", False)):
+        if (
+            callable(refresh_sources)
+            and bool(getattr(self, "_initial_home_scan_deferred", False))
+            and not bool(getattr(self, "_pending_initial_home_auto_source_refresh", False))
+            and not bool(getattr(self, "_home_auto_source_refresh_inflight", False))
+        ):
             refresh_sources(delay_ms=0)
         overlay = getattr(self, "_project_info_overlay", None)
         if overlay is not None:
@@ -152,8 +254,8 @@ class HomeUIMixin(HomeSidebarMixin):
         left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(unified_gap if is_unified else 4)
         if is_unified:
             left_col.addWidget(self._ensure_sidebar_nav_menu())
-            left_col.addWidget(self._icloud_btn("☁ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
-            left_col.addWidget(self._icloud_btn("▣ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
+            left_col.addWidget(self._icloud_btn("iCloud 자동", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
+            left_col.addWidget(self._icloud_btn("NAS 자동", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
             left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=9)
         else:
             left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
@@ -166,9 +268,9 @@ class HomeUIMixin(HomeSidebarMixin):
             left_col.addStretch()
         right_widget = QWidget(); right_col = QVBoxLayout(right_widget); right_col.setContentsMargins(0, 0, 0, 0); right_col.setSpacing(8)
         if not is_unified:
-            right_col.addWidget(self._icloud_btn("☁️ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
+            right_col.addWidget(self._icloud_btn("iCloud 자동", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
         if not is_unified:
-            right_col.addWidget(self._icloud_btn("🗄️ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
+            right_col.addWidget(self._icloud_btn("NAS 자동", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
         if not is_unified:
             right_col.addStretch()
         columns.addWidget(left_widget, stretch=1)
@@ -220,7 +322,7 @@ class HomeUIMixin(HomeSidebarMixin):
     def _sidebar_status_card(self):
         card = QWidget()
         card.setMinimumHeight(122)
-        card.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;")
+        card.setStyleSheet(f"background: {COLORS['surface_alt']}; border: 1px solid {COLORS['separator']}; border-radius: 7px;")
         self._sidebar_status_card_widget = card
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 6, 10, 5)
@@ -252,47 +354,48 @@ class HomeUIMixin(HomeSidebarMixin):
         return card
 
     def _sync_sidebar_terminal_panel_height(self):
-        if not bool(getattr(self, "_unified_dashboard", False)):
-            return
-        home_page = getattr(self, "home_page", None)
-        terminal = getattr(self, "sidebar_terminal_panel", None)
-        status_card = getattr(self, "_sidebar_status_card_widget", None)
-        project_slot = getattr(self, "_project_info_button_slot", None) or getattr(self, "_project_info_button_card", None)
-        if home_page is None or terminal is None or status_card is None or project_slot is None:
-            return
-        layout = home_page.layout()
-        if layout is None:
-            return
-        try:
+        def _sync():
+            if not bool(getattr(self, "_unified_dashboard", False)):
+                return
+            home_page = getattr(self, "home_page", None)
+            terminal = getattr(self, "sidebar_terminal_panel", None)
+            status_card = getattr(self, "_sidebar_status_card_widget", None)
+            project_slot = getattr(self, "_project_info_button_slot", None) or getattr(self, "_project_info_button_card", None)
+            if home_page is None or terminal is None or status_card is None or project_slot is None:
+                return
+            layout = home_page.layout()
+            if layout is None:
+                return
             spacing = max(0, int(layout.spacing()))
             top = int(status_card.geometry().bottom()) + 1 + spacing
             bottom = int(project_slot.geometry().top()) - spacing
-        except RuntimeError:
-            return
-        minimum_height = 116
-        if bottom <= top:
-            return
-        available_height = max(0, bottom - top)
-        preferred_height = available_height
-        preferred_getter = getattr(terminal, "preferred_panel_height", None)
-        if callable(preferred_getter):
-            try:
-                preferred_height = int(
-                    preferred_getter(min_height=128, max_height=min(188, available_height)) or available_height
-                )
-            except Exception:
-                preferred_height = available_height
-        target_height = min(available_height, max(minimum_height, preferred_height))
-        if terminal.height() == target_height and terminal.minimumHeight() == target_height and terminal.maximumHeight() == target_height:
-            return
-        terminal.setFixedHeight(target_height)
-        try:
+            minimum_height = 116
+            if bottom <= top:
+                return
+            available_height = max(0, bottom - top)
+            preferred_height = available_height
+            preferred_getter = getattr(terminal, "preferred_panel_height", None)
+            if callable(preferred_getter):
+                try:
+                    preferred_height = int(
+                        preferred_getter(min_height=128, max_height=min(188, available_height)) or available_height
+                    )
+                except Exception:
+                    preferred_height = available_height
+            target_height = min(available_height, max(minimum_height, preferred_height))
+            if (
+                terminal.height() == target_height
+                and terminal.minimumHeight() == target_height
+                and terminal.maximumHeight() == target_height
+            ):
+                return
+            terminal.setFixedHeight(target_height)
             terminal.updateGeometry()
             layout.invalidate()
             layout.activate()
             home_page.updateGeometry()
-        except Exception:
-            pass
+
+        run_nonfatal_ui_step("사이드바 터미널 패널", "height sync", _sync)
     def _toggle_sidebar_stt_mode(self):
         self._current_work_mode = EDITOR_MODE
         editor = getattr(self, "_editor_widget", None)
@@ -313,7 +416,8 @@ class HomeUIMixin(HomeSidebarMixin):
         if not hasattr(self, "_home_watchdog_timer"):
             self._home_watchdog_timer = QTimer(self)
             self._home_watchdog_timer.timeout.connect(self._tick_home_watchdog_labels)
-        if self._watchdog_labels and self._is_auto_start_enabled():
+        has_enabled_scope = bool(getattr(self, "_is_icloud_auto_mode", False) or getattr(self, "_is_nas_auto_mode", False))
+        if self._watchdog_labels and self._is_auto_start_enabled() and has_enabled_scope:
             if not self._home_watchdog_timer.isActive():
                 self._home_watchdog_timer.start(1000)
             self._tick_home_watchdog_labels()
@@ -330,9 +434,10 @@ class HomeUIMixin(HomeSidebarMixin):
         if not getattr(self, "_watchdog_labels", None):
             return
         for label, is_nas in list(self._watchdog_labels):
+            scope_enabled = bool(getattr(self, "_is_nas_auto_mode", False)) if is_nas else bool(getattr(self, "_is_icloud_auto_mode", False))
             if bool(getattr(self, "_auto_processing_active", False)):
                 label.setText("대기중")
-                label.setVisible(self._is_auto_start_enabled())
+                label.setVisible(self._is_auto_start_enabled() and scope_enabled)
                 continue
             interval = self._watchdog_interval_for(is_nas)
             key = "_nas_watchdog_left" if is_nas else "_icloud_watchdog_left"
@@ -340,26 +445,14 @@ class HomeUIMixin(HomeSidebarMixin):
             left = interval if left <= 1 else left - 1
             setattr(self, key, left)
             label.setText(f"WD {left:02d}s")
-            label.setVisible(self._is_auto_start_enabled())
+            label.setVisible(self._is_auto_start_enabled() and scope_enabled)
 
     def _toggle_auto_start_enabled(self):
-        settings = load_settings()
-        enabled = not bool(settings.get("auto_start_enabled", True))
-        settings["auto_start_enabled"] = enabled
-        self._auto_start_on = enabled
-        save_settings(settings)
-        if enabled:
-            self._icloud_watchdog_left = self._watchdog_interval_for(False)
-            self._nas_watchdog_left = self._watchdog_interval_for(True)
-            self._start_configured_watchers()
-        else:
-            if hasattr(self, "_cloud_sync_manager"):
-                self._cloud_sync_manager.stop()
-            if hasattr(self, "_nas_sync_manager"):
-                self._nas_sync_manager.stop()
-        self._refresh_after_auto_start_toggle()
-        if hasattr(self, "global_menu_bar"):
-            self.global_menu_bar.refresh()
+        path_settings = dict(load_path_settings() or {})
+        enabled = not bool(path_settings.get("icloud_auto_detect", False) or path_settings.get("nas_auto_detect", False))
+        path_settings["icloud_auto_detect"] = enabled
+        path_settings["nas_auto_detect"] = enabled
+        self._apply_auto_source_settings_payload(path_settings, reset_scope_cache=("icloud", "nas"))
 
     def _refresh_after_auto_start_toggle(self):
         try:
@@ -377,6 +470,7 @@ class HomeUIMixin(HomeSidebarMixin):
 
     def _start_configured_watchers(self):
         if not self._is_auto_start_enabled():
+            self._stop_auto_watchers()
             return
         if hasattr(self, "_cloud_sync_manager"):
             if getattr(self, "_is_icloud_auto_mode", False):
@@ -385,9 +479,7 @@ class HomeUIMixin(HomeSidebarMixin):
             else:
                 self._cloud_sync_manager.stop()
         if hasattr(self, "_nas_sync_manager"):
-            if getattr(self, "_is_icloud_auto_mode", False):
-                self._nas_sync_manager.stop()
-            elif getattr(self, "_is_nas_auto_mode", False) and ensure_nas_mounted(get_nas_path()):
+            if getattr(self, "_is_nas_auto_mode", False) and ensure_nas_mounted(get_nas_path()):
                 self._nas_sync_manager.dropzone_path = get_local_path(get_nas_path())
                 self._nas_sync_manager.configure(mode="nas", scan_interval=60, stable_seconds=300, exclude_callback=get_nas_excluded_folders)
                 self._nas_sync_manager.start()
@@ -400,9 +492,14 @@ class HomeUIMixin(HomeSidebarMixin):
             for child in self.home_page.findChildren(QWidget, "MenuButton"):
                 if hasattr(child, "_normal_ss"):
                     child.setStyleSheet(child._normal_ss)
-            widget.unsetCursor()
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
+                if hasattr(child, "update"):
+                    child.update()
+            if widget is not None and hasattr(widget, "unsetCursor"):
+                widget.unsetCursor()
+            if widget is not None and hasattr(widget, "update"):
+                widget.update()
+            if hasattr(self.home_page, "update"):
+                self.home_page.update()
         except Exception:
             pass
         QTimer.singleShot(100, action)
@@ -500,9 +597,27 @@ class HomeUIMixin(HomeSidebarMixin):
         layout.setSpacing(2 if is_unified else 6)
         active = getattr(self, '_is_nas_auto_mode', False) if is_nas else getattr(self, '_is_icloud_auto_mode', False)
         text_color = "#FFFFFF" if is_unified else ("#1D1D1F" if active else "#6E6E73")
+        scope = "nas" if is_nas else "icloud"
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.setSpacing(4 if is_unified else 6)
+        header_row.setSpacing(4 if is_unified else 8)
+        auto_toggle = QCheckBox(w)
+        auto_toggle.setObjectName(f"{scope}AutoToggle")
+        auto_toggle.setChecked(bool(getattr(self, "_is_nas_auto_mode", False) if is_nas else getattr(self, "_is_icloud_auto_mode", False)))
+        auto_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        auto_toggle.setToolTip(f"{self._auto_source_scope_title(scope)} 자동 처리 사용")
+        auto_toggle.setFixedSize(16 if is_unified else 18, 16 if is_unified else 18)
+        auto_toggle.setStyleSheet(
+            "QCheckBox { background: transparent; border: none; padding: 0; spacing: 0; } "
+            "QCheckBox::indicator { "
+            "width: 13px; height: 13px; border-radius: 3px; border: 1px solid #465663; background: transparent; "
+            "} "
+            "QCheckBox::indicator:hover { border-color: #3F8CFF; background: #151F24; } "
+            "QCheckBox::indicator:checked { background: #34C759; border-color: #34C759; }"
+        )
+        auto_toggle.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation, True)
+        auto_toggle.clicked.connect(lambda checked, current_scope=scope: self._toggle_auto_source_enabled(current_scope, checked))
+        header_row.addWidget(auto_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
         header = QLabel()
         header.setText(text)
         header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -524,15 +639,27 @@ class HomeUIMixin(HomeSidebarMixin):
         )
         wd_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         wd_lbl.setVisible(False)
+
+        settings_btn = QPushButton(w)
+        settings_btn.setObjectName(f"{scope}AutoSettingsButton")
+        settings_btn.setIcon(line_icon("settings", "#E6EDF3", 14 if is_unified else 15))
+        settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        settings_btn.setToolTip(f"{self._auto_source_scope_title(scope)} 자동 처리 설정")
+        settings_btn.setFixedSize(22 if is_unified else 24, 20 if is_unified else 24)
+        settings_btn.setStyleSheet(auto_source_icon_button_stylesheet())
+        settings_btn.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation, True)
+        settings_btn.clicked.connect(lambda _checked=False, current_scope=scope: self._open_auto_source_settings(current_scope))
+        header_row.addWidget(settings_btn)
+
         if hasattr(self, "_make_subtitle_quality_combo"):
             quality_combo = self._make_subtitle_quality_combo(
                 w,
                 width=68 if is_unified else 94,
                 height=20 if is_unified else 24,
-                scope="nas" if is_nas else "icloud",
+                scope=scope,
             )
             quality_combo.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation, True)
-            quality_combo.setToolTip("Mode")
+            quality_combo.setToolTip("처리 모드")
             header_row.addWidget(quality_combo)
         header_row.addWidget(wd_lbl)
         layout.addLayout(header_row)
@@ -540,7 +667,7 @@ class HomeUIMixin(HomeSidebarMixin):
         status_box = QWidget()
         status_box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         status_layout = QVBoxLayout(status_box)
-        status_layout.setContentsMargins(8 if is_unified else 18, 0, 0, 0)
+        status_layout.setContentsMargins(24 if is_unified else 18, 0, 0, 0)
         status_layout.setSpacing(0 if is_unified else 2)
 
         def add_status_label(value, color, size=None):
@@ -726,23 +853,26 @@ class HomeUIMixin(HomeSidebarMixin):
         return 0
 
     def _sync_project_info_button_height(self):
-        button = getattr(self, "_project_info_button_card", None)
-        if button is None:
-            return
-        target_height = self._project_info_button_height()
-        if target_height > 0 and button.height() != target_height:
-            button.setFixedHeight(target_height)
-        slot = getattr(self, "_project_info_button_slot", None)
-        slot_height = max(target_height, self._project_info_button_slot_height())
-        if slot is not None and slot.height() != slot_height:
-            slot.setFixedHeight(slot_height)
-        slot_layout = getattr(self, "_project_info_button_slot_layout", None)
-        if slot_layout is not None:
-            top_inset = min(max(0, slot_height - target_height), self._project_info_button_top_inset())
-            bottom_inset = max(0, slot_height - target_height - top_inset)
-            margins = slot_layout.contentsMargins()
-            if margins.top() != top_inset or margins.bottom() != bottom_inset:
-                slot_layout.setContentsMargins(0, top_inset, 0, bottom_inset)
+        def _sync():
+            button = getattr(self, "_project_info_button_card", None)
+            if button is None:
+                return
+            target_height = self._project_info_button_height()
+            if target_height > 0 and button.height() != target_height:
+                button.setFixedHeight(target_height)
+            slot = getattr(self, "_project_info_button_slot", None)
+            slot_height = max(target_height, self._project_info_button_slot_height())
+            if slot is not None and slot.height() != slot_height:
+                slot.setFixedHeight(slot_height)
+            slot_layout = getattr(self, "_project_info_button_slot_layout", None)
+            if slot_layout is not None:
+                top_inset = min(max(0, slot_height - target_height), self._project_info_button_top_inset())
+                bottom_inset = max(0, slot_height - target_height - top_inset)
+                margins = slot_layout.contentsMargins()
+                if margins.top() != top_inset or margins.bottom() != bottom_inset:
+                    slot_layout.setContentsMargins(0, top_inset, 0, bottom_inset)
+
+        run_nonfatal_ui_step("프로젝트 정보 버튼", "height sync", _sync)
 
     def _project_info_card(self, expanded=None, overlay=False):
         if expanded is None:
@@ -762,12 +892,12 @@ class HomeUIMixin(HomeSidebarMixin):
             btn.setFixedHeight(target_height)
             btn.setStyleSheet(
                 "QToolButton { "
-                "background: #1B2429; color: #F5F7FA; "
-                "border: 1px solid #2D3942; border-radius: 7px; "
+                f"background: {COLORS['surface_alt']}; color: {COLORS['text']}; "
+                f"border: 1px solid {COLORS['separator']}; border-radius: 7px; "
                 "padding: 0 12px; font-size: 12px; font-weight: 700; "
                 "text-align: left; "
                 "} "
-                "QToolButton:hover { background: #202A31; border-color: #465663; }"
+                f"QToolButton:hover {{ background: {COLORS['control']}; border-color: #51606D; }}"
                 "QToolButton::menu-indicator { image: none; }"
             )
             btn.clicked.connect(self._toggle_project_info_card)
@@ -788,9 +918,9 @@ class HomeUIMixin(HomeSidebarMixin):
 
         card = QWidget()
         card.setStyleSheet(
-            "background: #1B2429; border: 1px solid #3A4650; border-radius: 7px;"
+            f"background: {COLORS['surface_alt']}; border: 1px solid #3A4650; border-radius: 7px;"
             if overlay else
-            "background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;"
+            f"background: {COLORS['surface_alt']}; border: 1px solid {COLORS['separator']}; border-radius: 7px;"
         )
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 8, 10, 8)
@@ -1012,6 +1142,10 @@ class HomeUIMixin(HomeSidebarMixin):
         self._refresh_work_mode_ui()
 
     def _restore_editor_video_after_navigation(self, editor):
+        restore_editor = getattr(editor, "leave_home_compact_mode", None)
+        if callable(restore_editor):
+            restore_editor()
+            return
         video_player = getattr(editor, "video_player", None)
         if video_player is None:
             return
@@ -1041,6 +1175,10 @@ class HomeUIMixin(HomeSidebarMixin):
             page = RoughcutWidget(owner=self, parent=self)
             self._roughcut_widget = page
             self.stack.addWidget(page)
+        editor = self._active_editor()
+        restore_editor = getattr(editor, "leave_home_compact_mode", None) if editor is not None else None
+        if callable(restore_editor):
+            restore_editor()
         if hasattr(self, "_set_roughcut_bottom_widget"):
             self._set_roughcut_bottom_widget(getattr(page, "bottom_panel", None))
         elif hasattr(self, "_show_bottom_roughcut_table"):

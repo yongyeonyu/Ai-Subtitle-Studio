@@ -26,7 +26,6 @@ from core.audio import audio_presets as _audio_presets
 from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
 from core.personalization.runtime_personalization import personalization_settings_override_for_media
 from core.audio.stt_quality_presets import (
-    STT_QUALITY_PRESET_ORDER,
     VAD_MODE_AUTOMATION_NOTE,
     load_stt_quality_presets,
     normalize_stt_quality_key,
@@ -34,7 +33,8 @@ from core.audio.stt_quality_presets import (
     stt_quality_label,
 )
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
-from core.mode_policy import mode_to_stt_quality, selected_mode_from_settings
+from core.mode_manager import mode_to_stt_quality, selected_mode_from_settings
+from core.mode_policy import mode_stt_support_flags
 from core.settings_profiles import sanitize_persisted_settings
 from core.settings_simplifier import (
     apply_simple_operation_mode,
@@ -398,9 +398,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             self.combo_whisper.setCurrentIndex(0)
         self.combo_whisper.blockSignals(False)
         self.combo_whisper.setUpdatesEnabled(True)
-        self.chk_stt_ensemble = QCheckBox("STT2 병렬 인식 사용 (STT1 우선, STT2는 누락 보강용)")
-        self.chk_stt_ensemble.setChecked(bool(settings.get("stt_ensemble_enabled", False)))
-
         self.combo_whisper_secondary = QComboBox()
         self.combo_whisper_secondary.setUpdatesEnabled(False)
         self.combo_whisper_secondary.blockSignals(True)
@@ -417,48 +414,28 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_whisper_secondary.blockSignals(False)
         self.combo_whisper_secondary.setUpdatesEnabled(True)
 
-        self.chk_stt_ensemble_llm = QCheckBox("LLM 후보 판정 사용")
-        self.chk_stt_ensemble_llm.setChecked(bool(settings.get("stt_ensemble_llm_judge_enabled", True)))
         stt_card, stt_card_layout = self._make_section_card(
             "STT 보조",
-            "STT1/STT2 조합과 후보 판정 방식을 이 영역에서 관리합니다.",
+            "STT2 사용과 후보 판정은 Mode에 따라 자동 적용됩니다. 여기서는 사용할 모델만 선택합니다.",
         )
         stt_form = self._make_card_form()
         stt_form.addRow("STT1 음성 모델:", self.combo_whisper)
-        stt_form.addRow("STT2 사용:", self.chk_stt_ensemble)
         stt_form.addRow("STT2 음성 모델:", self.combo_whisper_secondary)
-        stt_form.addRow("STT 후보 판정:", self.chk_stt_ensemble_llm)
         stt_card_layout.addLayout(stt_form)
         form.addRow(stt_card)
 
     def _build_audio_vad_section(self, form: QFormLayout, settings: dict):
-        # 5. 음성 처리 AI
-        self.combo_audio = QComboBox()
-        self.audio_map = {
-            "DeepFilterNet (AI 노이즈 제거)": "deepfilter",
-            "RNNoise (빠른 노이즈 제거/실험)": "rnnoise",
-            "Resemble Enhance (음성 향상/실험)": "resemble_enhance",
-            "ClearVoice MossFormer2 (음성 향상/실험)": "clearvoice",
-            "사용 안함": "none",
-        }
-        for k in self.audio_map:
-            self.combo_audio.addItem(k)
-        curr_audio = settings.get("selected_audio_ai", "deepfilter")
-        for k, v in self.audio_map.items():
-            if v == curr_audio:
-                self.combo_audio.setCurrentText(k)
-                break
-        self._fit_model_combo(self.combo_audio)
+        self.combo_audio = None
+        self.audio_map = {}
         audio_card, audio_card_layout = self._make_section_card(
-            "음성 처리",
+            "음성/VAD 자동 처리",
             VAD_MODE_AUTOMATION_NOTE,
         )
         audio_form = self._make_card_form()
-        audio_form.addRow("음성 처리 모델:", self.combo_audio)
-        vad_note = QLabel("VAD는 Fast/Auto/High 모드에 맞춰 자동 적용됩니다.")
-        vad_note.setWordWrap(True)
-        vad_note.setStyleSheet(label_style("muted", 11))
-        audio_form.addRow("VAD:", vad_note)
+        audio_note = QLabel("음성 필터와 VAD는 Fast/Auto/High Mode 기준 벤치 프로필로 자동 적용됩니다.")
+        audio_note.setWordWrap(True)
+        audio_note.setStyleSheet(label_style("muted", 11))
+        audio_form.addRow("음성/VAD:", audio_note)
         audio_card_layout.addLayout(audio_form)
         form.addRow(audio_card)
 
@@ -832,45 +809,26 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
 
     def _build_auto_settings_section(self, form: QFormLayout, settings: dict):
         path_settings = load_path_settings()
-
-        section = QLabel("자동 처리")
-        section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
-        form.addRow("", section)
-
         self.input_auto_nas_path = QLineEdit()
-        self.input_auto_nas_path.setPlaceholderText("NAS 루트 경로 또는 smb:// 경로")
-        self.input_auto_nas_path.setText(get_nas_path())
-        form.addRow("NAS 루트 경로:", self.input_auto_nas_path)
-
         self.input_auto_icloud_path = QLineEdit()
-        self.input_auto_icloud_path.setPlaceholderText("iCloud 동기화 경로")
-        self.input_auto_icloud_path.setText(get_icloud_path())
-        form.addRow("iCloud 경로:", self.input_auto_icloud_path)
-
         self.chk_auto_icloud_detect = QCheckBox("iCloud 자동감지 및 처리 활성화")
-        self.chk_auto_icloud_detect.setChecked(get_icloud_auto_detect())
-        form.addRow("iCloud 자동 처리:", self.chk_auto_icloud_detect)
-
         self.chk_auto_nas_detect = QCheckBox("NAS 자동감지 및 처리 활성화")
-        self.chk_auto_nas_detect.setChecked(get_nas_auto_detect())
-        form.addRow("NAS 자동 처리:", self.chk_auto_nas_detect)
-
-        self.combo_auto_start_mode = QComboBox()
-        for key in STT_QUALITY_PRESET_ORDER:
-            self.combo_auto_start_mode.addItem(stt_quality_label(key), key)
         current_mode = normalize_stt_quality_key(
-            path_settings.get("auto_start_mode")
-            or path_settings.get("nas_stt_quality_preset")
-            or path_settings.get("icloud_stt_quality_preset")
-            or settings.get("auto_start_mode")
-            or "precise"
+            path_settings.get("auto_start_mode", mode_to_stt_quality(selected_mode_from_settings(settings)))
         )
-        self._set_combo_data(self.combo_auto_start_mode, current_mode)
-        form.addRow("자동 처리 모드:", self.combo_auto_start_mode)
-
+        self.combo_auto_start_mode = QComboBox()
         self.chk_auto_start_enabled = QCheckBox("자동시작 사용")
-        self.chk_auto_start_enabled.setChecked(bool(path_settings.get("auto_start_enabled", settings.get("auto_start_enabled", True))))
-        form.addRow("자동시작:", self.chk_auto_start_enabled)
+        self.input_auto_nas_path.setText(str(path_settings.get("nas_path", get_nas_path()) or ""))
+        self.input_auto_icloud_path.setText(str(path_settings.get("icloud_path", get_icloud_path()) or ""))
+        self.chk_auto_icloud_detect.setChecked(bool(path_settings.get("icloud_auto_detect", get_icloud_auto_detect())))
+        self.chk_auto_nas_detect.setChecked(bool(path_settings.get("nas_auto_detect", get_nas_auto_detect())))
+        self.chk_auto_start_enabled.setChecked(bool(path_settings.get("icloud_auto_detect", False) or path_settings.get("nas_auto_detect", False)))
+        for key in ("fast", "balanced", "precise", "stt"):
+            self.combo_auto_start_mode.addItem(stt_quality_label(key), key)
+        for idx in range(self.combo_auto_start_mode.count()):
+            if self.combo_auto_start_mode.itemData(idx) == current_mode:
+                self.combo_auto_start_mode.setCurrentIndex(idx)
+                break
 
         lora_gap_row = QWidget()
         lora_gap_layout = QHBoxLayout(lora_gap_row)
@@ -972,7 +930,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             decision = auto_classify_media_presets(media_path, settings=self._collect_settings())
             self.result_settings = apply_auto_classified_presets(self.result_settings, decision)
             self._sync_audio_preset_combo(self.result_settings.get("audio_preset", ""))
-            self._set_combo_by_data_value(self.combo_audio, self.result_settings.get("selected_audio_ai"), self.audio_map)
             self._update_model_info()
             self._sync_auto_preset_button_state()
             QMessageBox.information(
@@ -1135,6 +1092,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         return ""
     def _collect_settings(self):
         res = dict(self.result_settings)
+        path_settings = dict(load_path_settings() or {})
         m_data = self.combo_llm.currentData() or {}
         provider = (m_data.get('details', {}) or {}).get('provider', 'ollama')
         selected_llm_name = m_data.get('name') or self.combo_llm.currentText()
@@ -1146,10 +1104,18 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         google_key_saved = set_api_key("google", self.input_api_key.text().strip())
         openai_key_saved = set_api_key("openai", self.input_openai_api_key.text().strip())
         huggingface_token_saved = set_api_key("huggingface", self.input_huggingface_token.text().strip())
-        auto_start_mode = normalize_stt_quality_key(self.combo_auto_start_mode.currentData() or "precise")
-        auto_start_enabled = bool(self.chk_auto_start_enabled.isChecked())
-        auto_correct_enabled = bool(self.chk_subtitle_quality_auto_correct.isChecked())
         simple_mode = normalize_simple_operation_mode(self.combo_stt_quality_preset.currentData() or "auto")
+        auto_start_mode = normalize_stt_quality_key(path_settings.get("auto_start_mode", mode_to_stt_quality(simple_mode)))
+        icloud_auto_detect = bool(path_settings.get("icloud_auto_detect", get_icloud_auto_detect()))
+        nas_auto_detect = bool(path_settings.get("nas_auto_detect", get_nas_auto_detect()))
+        auto_start_enabled = bool(icloud_auto_detect or nas_auto_detect)
+        nas_path = str(path_settings.get("nas_path", get_nas_path()) or "")
+        icloud_path = str(path_settings.get("icloud_path", get_icloud_path()) or "")
+        icloud_preset = normalize_stt_quality_key(path_settings.get("icloud_stt_quality_preset", auto_start_mode))
+        nas_preset = normalize_stt_quality_key(path_settings.get("nas_stt_quality_preset", auto_start_mode))
+        multiclip_preset = normalize_stt_quality_key(path_settings.get("multiclip_stt_quality_preset", auto_start_mode))
+        auto_correct_enabled = bool(self.chk_subtitle_quality_auto_correct.isChecked())
+        stt_support_flags = mode_stt_support_flags(simple_mode)
         chunk_time_limit = 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value()
         if bool(res.get("subtitle_bundle_autopilot_enabled", True)):
             chunk_time_limit = int(res.get("subtitle_bundle_target_sec", res.get("chunk_time_limit", 180)) or 180)
@@ -1162,13 +1128,11 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 self.combo_whisper.currentData()
                 or self.combo_whisper.currentText().replace(" (실험)", "")
             ),
-            "stt_ensemble_enabled": bool(self.chk_stt_ensemble.isChecked()),
             "selected_whisper_model_secondary": str(
                 self.combo_whisper_secondary.currentData()
                 or self.combo_whisper_secondary.currentText().replace(" (실험)", "")
             ),
-            "stt_ensemble_llm_judge_enabled": bool(self.chk_stt_ensemble_llm.isChecked()),
-            "selected_audio_ai": self.audio_map[self.combo_audio.currentText()],
+            **stt_support_flags,
             "google_api_key_saved": bool(google_key_saved),
             "openai_api_key_saved": bool(openai_key_saved),
             "huggingface_token_saved": bool(huggingface_token_saved),
@@ -1179,7 +1143,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "editor_roughcut_draft_prompt": "",
             "llm_threads_auto_enabled": True,
             "llm_workers_auto_enabled": True,
-            "audio_preset": "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or ""),
             "stt_quality_preset": mode_to_stt_quality(simple_mode),
             "stt_candidate_scoring_enabled": True,
             "stt_low_score_recheck_enabled": bool(self.chk_stt_low_score_recheck.isChecked()),
@@ -1198,12 +1161,13 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             **self._collect_roughcut_llm_settings(),
             "auto_start_mode": auto_start_mode,
             "auto_start_enabled": auto_start_enabled,
-            "nas_path": self.input_auto_nas_path.text().strip(),
-            "icloud_path": self.input_auto_icloud_path.text().strip(),
-            "icloud_auto_detect": bool(self.chk_auto_icloud_detect.isChecked()),
-            "nas_auto_detect": bool(self.chk_auto_nas_detect.isChecked()),
-            "icloud_stt_quality_preset": auto_start_mode,
-            "nas_stt_quality_preset": auto_start_mode,
+            "nas_path": nas_path,
+            "icloud_path": icloud_path,
+            "icloud_auto_detect": icloud_auto_detect,
+            "nas_auto_detect": nas_auto_detect,
+            "icloud_stt_quality_preset": icloud_preset,
+            "nas_stt_quality_preset": nas_preset,
+            "multiclip_stt_quality_preset": multiclip_preset,
         })
         selected_stt_model = str(res.get("selected_whisper_model") or "").strip()
         selected_stt2_model = str(res.get("selected_whisper_model_secondary") or "").strip()
@@ -1215,16 +1179,16 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             res["selected_whisper_model_secondary"] = selected_stt2_model
         res = save_stt_quality_user_preset(res, mode_to_stt_quality(simple_mode))
         auto_start_mode = normalize_stt_quality_key(res.get("auto_start_mode", auto_start_mode) or auto_start_mode)
-        path_settings = load_path_settings()
         path_settings.update({
-            "nas_path": self.input_auto_nas_path.text().strip(),
-            "icloud_path": self.input_auto_icloud_path.text().strip(),
-            "icloud_auto_detect": bool(self.chk_auto_icloud_detect.isChecked()),
-            "nas_auto_detect": bool(self.chk_auto_nas_detect.isChecked()),
+            "nas_path": nas_path,
+            "icloud_path": icloud_path,
+            "icloud_auto_detect": icloud_auto_detect,
+            "nas_auto_detect": nas_auto_detect,
             "auto_start_mode": auto_start_mode,
             "auto_start_enabled": auto_start_enabled,
-            "icloud_stt_quality_preset": auto_start_mode,
-            "nas_stt_quality_preset": auto_start_mode,
+            "icloud_stt_quality_preset": icloud_preset,
+            "nas_stt_quality_preset": nas_preset,
+            "multiclip_stt_quality_preset": multiclip_preset,
         })
         save_path_settings(path_settings)
         return sanitize_persisted_settings(res)

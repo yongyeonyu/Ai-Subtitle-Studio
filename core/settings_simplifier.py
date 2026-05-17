@@ -3,14 +3,17 @@ from __future__ import annotations
 from typing import Any
 
 from core.autopilot_policy import apply_autopilot_runtime_policy, autopilot_runtime_defaults
-from core.audio.stt_quality_presets import USER_SELECTED_ROUTE_KEYS
-from core.mode_policy import (
+from core.mode_manager import (
     MODE_LABELS,
     MODE_ORDER,
-    apply_mode_runtime_settings,
+    apply_mode_scope_quality,
     mode_label,
-    mode_to_stt_quality,
+    mode_model_snapshot,
     normalize_mode,
+    strip_mode_managed_user_routes,
+)
+from core.mode_policy import (
+    apply_mode_runtime_settings,
 )
 
 
@@ -116,6 +119,7 @@ SIMPLE_OPERATION_MODES: dict[str, dict[str, Any]] = {
             "stt_mode_project_compat_enabled": True,
             "selected_model": "사용 안함 (STT 모드)",
             "selected_llm_provider": "none",
+            "selected_audio_ai": "none",
             "roughcut_llm_enabled": False,
             "roughcut_llm_use_override": False,
             "roughcut_llm_provider": "none",
@@ -178,22 +182,15 @@ def simple_operation_mode_summary(mode: Any) -> str:
 
 
 def apply_simple_operation_mode(settings: dict[str, Any] | None, mode: Any = None) -> dict[str, Any]:
-    out = dict(settings or {})
-    user_routes = {
-        key: out[key]
-        for key in USER_SELECTED_ROUTE_KEYS
-        if key in out and out.get(key) not in (None, "")
-    }
+    user_models = mode_model_snapshot(settings)
+    out = strip_mode_managed_user_routes(settings)
     selected_mode = normalize_simple_operation_mode(mode if mode is not None else out.get("simple_operation_mode", "auto"))
-    out["simple_operation_mode"] = selected_mode
-    out["subtitle_mode"] = selected_mode
+    out = apply_mode_scope_quality(out, selected_mode)
     out.update(_ALWAYS_AUTOMATED_SETTINGS)
     out.update(dict(SIMPLE_OPERATION_MODES[selected_mode]["settings"]))
     if selected_mode != "stt":
-        out.update(user_routes)
-    quality_preset = mode_to_stt_quality(selected_mode)
-    out["stt_quality_preset"] = quality_preset
-    out["auto_start_mode"] = quality_preset
+        out.update(user_models)
+    out = apply_mode_scope_quality(out, selected_mode)
     target = int(float(out.get("subtitle_bundle_target_sec", 180) or 180))
     out["chunk_time_limit"] = target
     out["roughcut_llm_prompt"] = ""

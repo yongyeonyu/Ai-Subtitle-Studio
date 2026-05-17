@@ -2,6 +2,7 @@ import QtQuick 2.15
 
 Rectangle {
     id: root
+    property int gap: 6
     property string timeText: "00:00 / 00:00"
     property string infoText: ""
     property string frameText: ""
@@ -44,13 +45,19 @@ Rectangle {
         text: root.frameText
     }
 
+    TextMetrics {
+        id: infoTextMetrics
+        font: infoTextItem.font
+        text: (root.infoText || "").replace(/\n/g, " | ")
+    }
+
     Row {
         id: controlRow
         anchors.left: parent.left
         anchors.leftMargin: 8
         anchors.verticalCenter: parent.verticalCenter
         height: parent.height - 16
-        spacing: 6
+        spacing: root.gap
 
         Rectangle {
             width: 44
@@ -193,7 +200,7 @@ Rectangle {
     Item {
         id: statusRow
         anchors.left: controlRow.right
-        anchors.leftMargin: 12
+        anchors.leftMargin: root.gap
         anchors.right: parent.right
         anchors.rightMargin: 8
         anchors.verticalCenter: parent.verticalCenter
@@ -203,7 +210,13 @@ Rectangle {
             id: infoBadge
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            width: Math.max(0, Math.floor((parent.width - 6) / 2))
+            width: Math.max(
+                210,
+                Math.min(
+                    Math.ceil(infoTextMetrics.boundingRect.width) + 28,
+                    Math.max(210, Math.floor(parent.width * 0.34))
+                )
+            )
             height: 32
             radius: 9
             color: "#1A2127"
@@ -230,7 +243,7 @@ Rectangle {
         Rectangle {
             id: sourceBadge
             anchors.left: infoBadge.right
-            anchors.leftMargin: 6
+            anchors.leftMargin: root.gap
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             height: 32

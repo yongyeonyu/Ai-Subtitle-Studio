@@ -7,7 +7,7 @@ class EditorTabTimingMixin:
     """Apply the two Tab timing actions requested for subtitle segment editing."""
 
     _TAB_DIAMOND_TOLERANCE_SEC = 0.05
-    _TAB_DIAMOND_SEARCH_SEC = 2.0
+    _TAB_DIAMOND_SEARCH_SEC = 0.75
 
     def _tab_timing_playhead_sec(self) -> float:
         canvas = getattr(getattr(self, "timeline", None), "canvas", None)
@@ -111,20 +111,6 @@ class EditorTabTimingMixin:
         chosen = matches[0]
         return int(chosen[3]), chosen[4]
 
-    def _tab_timing_attached_pair(self, rows: list[dict], row_idx: int, side: str) -> tuple[int, int] | None:
-        tolerance = float(self._TAB_DIAMOND_TOLERANCE_SEC)
-        if side == "left" and row_idx > 0:
-            left = rows[row_idx - 1]
-            right = rows[row_idx]
-            if abs(float(left.get("end", 0.0) or 0.0) - float(right.get("start", 0.0) or 0.0)) <= tolerance:
-                return row_idx - 1, row_idx
-        if side == "right" and row_idx + 1 < len(rows):
-            left = rows[row_idx]
-            right = rows[row_idx + 1]
-            if abs(float(left.get("end", 0.0) or 0.0) - float(right.get("start", 0.0) or 0.0)) <= tolerance:
-                return row_idx, row_idx + 1
-        return None
-
     def _tab_timing_containing_candidate(
         self,
         rows: list[dict],
@@ -137,14 +123,13 @@ class EditorTabTimingMixin:
         row_idx, row = selected
         start = float(row.get("start", 0.0) or 0.0)
         end = float(row.get("end", start) or start)
-        candidates: list[tuple[float, int, str, tuple[int, int] | None, dict, float, float]] = []
+        candidates: list[tuple[float, int, str, dict, float, float]] = []
         if end - sec >= min_span:
             candidates.append(
                 (
                     sec - start,
                     0,
                     "square_left",
-                    self._tab_timing_attached_pair(rows, row_idx, "left"),
                     row,
                     max(0.0, sec),
                     end,
@@ -156,7 +141,6 @@ class EditorTabTimingMixin:
                     end - sec,
                     1,
                     "square_right",
-                    self._tab_timing_attached_pair(rows, row_idx, "right"),
                     row,
                     start,
                     sec,
@@ -165,9 +149,7 @@ class EditorTabTimingMixin:
         if not candidates:
             return None
         candidates.sort(key=lambda item: item[:2])
-        _dist, _side_order, edge_type, pair, chosen_row, new_start, new_end = candidates[0]
-        if pair is not None:
-            return "diamond", pair, None, None, None
+        _dist, _side_order, edge_type, chosen_row, new_start, new_end = candidates[0]
         return "segment", chosen_row, new_start, new_end, edge_type
 
     def _tab_timing_extension_candidate(
@@ -254,18 +236,16 @@ class EditorTabTimingMixin:
         if callable(snap):
             sec = float(snap(sec))
 
-        containing_candidate = self._tab_timing_containing_candidate(rows, sec, min_span)
-        if containing_candidate is not None:
-            mode, payload, new_start, new_end, edge_type = containing_candidate
-            if mode == "diamond":
-                return self._tab_timing_apply_diamond(rows, payload, sec, min_span, handler)
-            self._tab_timing_push_undo()
-            handler(int(payload.get("line", 0) or 0), new_start, new_end, edge_type)
-            return True
-
         diamond_pair = self._tab_timing_closest_diamond_pair(rows, sec)
         if diamond_pair is not None:
             return self._tab_timing_apply_diamond(rows, diamond_pair, sec, min_span, handler)
+
+        containing_candidate = self._tab_timing_containing_candidate(rows, sec, min_span)
+        if containing_candidate is not None:
+            mode, payload, new_start, new_end, edge_type = containing_candidate
+            self._tab_timing_push_undo()
+            handler(int(payload.get("line", 0) or 0), new_start, new_end, edge_type)
+            return True
 
         candidate = self._tab_timing_extension_candidate(rows, sec, min_span)
         if candidate is None:

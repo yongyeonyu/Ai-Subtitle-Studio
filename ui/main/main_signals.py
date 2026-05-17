@@ -6,6 +6,7 @@ SignalHandlersMixin — Qt 시그널 핸들러 (세그먼트 전달 · VAD · re
 """
 import os
 import threading
+import time
 
 from PyQt6.QtCore import QThread, QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -383,12 +384,20 @@ class SignalHandlersMixin:
     def _do_open_editor(
         self, target_file, on_save, on_start, on_prev, on_exit, is_batch=False
     ):
+        started = time.perf_counter()
         self._on_save_cb = on_save
         self._on_start_cb = on_start
         self._on_prev_cb = on_prev
         self._on_exit_cb = on_exit
         self._target_file = target_file
         self._init_editor(target_file, is_batch)
+        get_logger().log_perf(
+            "editor.open_request",
+            event="ready",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            batch=bool(is_batch),
+            file=os.path.basename(str(target_file or "")),
+        )
 
     def _do_open_editor_ready(
         self, target_file, on_save, on_start, on_prev, on_exit, is_batch=False, ready_event=None
@@ -565,6 +574,7 @@ class SignalHandlersMixin:
     def _warmup_local_llm_models(self):
         import threading
         def _scan():
+            started = time.perf_counter()
             try:
                 from core.model_manager import get_local_llm_models
                 models = get_local_llm_models()
@@ -578,14 +588,23 @@ class SignalHandlersMixin:
                 self._local_llm_models = [{
                     "name": getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"),
                     "size": 0, "details": {},
-                }]
+                    }]
                 get_logger().log(f"⚠️ 로컬 LLM 자동 스캔 실패: {e}")
+            finally:
+                get_logger().log_perf(
+                    "startup.llm_warmup",
+                    event="done",
+                    elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                    models=len(list(getattr(self, "_local_llm_models", []) or [])),
+                )
         threading.Thread(target=_scan, daemon=True, name="llm-warmup").start()
 
     def _preflight_selected_local_llm_models(self):
         import threading
 
         def _run():
+            started = time.perf_counter()
+            probed = 0
             try:
                 from core.settings import load_settings
                 from core.llm.ollama_provider import ollama_probe_timeout, resolve_ollama_model_for_request
@@ -602,6 +621,7 @@ class SignalHandlersMixin:
                     if not _is_preflight_local_ollama_model(name) or name in seen:
                         continue
                     seen.add(name)
+                    probe_started = time.perf_counter()
                     resolve_ollama_model_for_request(
                         name,
                         logger=get_logger(),
@@ -609,27 +629,61 @@ class SignalHandlersMixin:
                         timeout=ollama_probe_timeout(name, 12.0),
                         allow_fallback=False,
                     )
+                    probed += 1
+                    get_logger().log_perf(
+                        "startup.llm_preflight",
+                        event="probe_done",
+                        elapsed_ms=(time.perf_counter() - probe_started) * 1000.0,
+                        context=context,
+                        model=name,
+                    )
             except Exception as exc:
                 get_logger().log(f"⚠️ 시작 시 Ollama 모델 점검 실패: {exc}")
+            finally:
+                get_logger().log_perf(
+                    "startup.llm_preflight",
+                    event="done",
+                    elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                    probed=probed,
+                )
 
         threading.Thread(target=_run, daemon=True, name="llm-preflight").start()
 
     def _check_required_models_on_startup(self):
         if getattr(self, "_required_model_check_done", False):
             return
+        started = time.perf_counter()
         self._required_model_check_done = True
         try:
             from core.model_manager import get_current_os, get_required_models
             missing = get_required_models()
         except Exception as e:
             get_logger().log(f"⚠️ 필수 AI 모델 확인 실패: {e}")
+            get_logger().log_perf(
+                "startup.required_models",
+                event="failed",
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                error=type(e).__name__,
+            )
             return
         if not missing:
             get_logger().log("✅ 필수 AI 모델 확인 완료")
+            get_logger().log_perf(
+                "startup.required_models",
+                event="done",
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                missing=0,
+            )
             return
 
         names = [m.get("name", m.get("id", "unknown")) for m in missing]
         get_logger().log("⚠️ 필수 AI 모델 미설치: " + ", ".join(names))
+        get_logger().log_perf(
+            "startup.required_models",
+            event="done",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            missing=len(names),
+        )
         if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
             return
 

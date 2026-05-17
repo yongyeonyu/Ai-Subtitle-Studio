@@ -20,7 +20,7 @@ class VideoPlayerOverlayMixin:
             target_w = bw
             target_h = int(round(target_w / aspect))
             x = 0
-            y = int((bh - target_h) / 2)
+            y = 0
         return QRectF(x, y, max(1, target_w), max(1, target_h)).toRect()
 
     def _source_video_rect(self, bounds):
@@ -37,7 +37,7 @@ class VideoPlayerOverlayMixin:
             w = bw
             h = int(w / aspect)
             x = 0
-            y = int((bh - h) / 2)
+            y = 0
         return QRectF(x, y, max(1, w), max(1, h)).toRect()
 
     def _scene_subtitle_item(self):

@@ -1,71 +1,70 @@
 # Native Library Plan
 
-This branch already has a safe native migration path:
+This file contains only the remaining native-library work and migration rules.
+Completed native modules are intentionally omitted from the active queue.
 
-1. Move deterministic, side-effect-light logic into `native/macos/AIStudioNative/Sources/AIStudioCore/`
-2. Expose it through `AIStudioNativeCLI` JSON commands or the `core-jsonl-worker`
-3. Keep a Python fallback until tests and real-media benchmarks prove parity
+## Migration Rules
 
-This is safer than pushing large Python orchestration files directly into a `dylib`.
-The current app depends on Python runtime state, Qt object lifetime, subprocess workers,
-and packaging constraints, so direct "compile the whole file" conversion is not a good
-default for most modules.
+- Migrate by function family, not by whole orchestration files.
+- Keep Python fallback until parity, performance, and real-media behavior are proven.
+- Prefer Swift for Apple-platform reusable core logic and C++ for narrow numeric kernels already adjacent to existing C++ paths.
+- Use `.js` only when the runtime boundary is already JavaScript/QML-oriented and the measured result is equal or faster.
+- Do not migrate live Qt widgets, mutable editor state, subprocess orchestration, model-worker ownership, or UI callbacks.
+- Do not change UI, UX, subtitle quality, or existing behavior as part of native migration unless the owner explicitly approves it.
+- Promote native code only when the native path is equal or faster than the current cached Python path on real fixtures.
 
-## Already Good Native/Library Targets
+## Graduation Checklist
 
-These are already in the right shape for library ownership:
+A Python function family may move into native library form only when all items are true:
 
-- `native/macos/AIStudioNative/Sources/AIStudioCore/SRTCodec.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/SubtitleSegment.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/ProjectJSON.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/WaveformPeaks.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/TimelineColumns.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/TimelineEditing.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/SubtitleQualityScorer.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/CommonSplitPlanner.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/MemoryPressure.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/InputActivity.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/RuntimeETAEstimator.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/StartupDiagnostics.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/CutBoundaryCachePlanner.swift`
-- `native/macos/AIStudioNative/Sources/AIStudioCore/PipelineStatus.swift`
-
-These files are stable because they are mostly:
-
-- pure data transforms
-- deterministic scoring or layout logic
-- JSON-in / JSON-out helpers
-- low Qt coupling
-- already covered by focused tests
+- The behavior is deterministic for the same input.
+- It can be expressed as JSON-in / JSON-out or typed value-in / value-out.
+- It does not depend on live Qt objects.
+- It does not own long-running model processes.
+- It already has focused tests for the Python behavior.
+- The interface is stable enough to justify compile/build overhead.
+- A Python fallback exists and stays covered by tests.
+- Benchmarks include a real fixture, not only synthetic payloads.
 
 ## Active Native Queue
 
-These are the remaining Python/native seams worth considering next:
+- [ ] 1. Benchmark native media-info normalization against the current cached Python path.
+  Scope: probe-result normalization, media-info copy/presence helpers, cache-key shaping, and ffprobe-result payload shaping only.
+  Keep in Python: ffprobe subprocess orchestration, file stat/fingerprint collection, project-session ownership, and UI status display.
+  Promote only if: Swift normalization beats or matches the cached Python path on project open/save benchmarks without changing serialized media metadata.
+  Verification: Macau project smoke plus project open/save benchmark; use Tinyping only if long-media project metadata is affected.
 
-- `core/media_info.py`
-  - Only the probe-result normalization layer, not the full orchestration.
-  - Cache key + ffprobe result shaping can move first.
-  - Python-side fingerprint/stat caching is now lighter, so native migration should only graduate if parity benchmarks beat the cached Python path.
+- [ ] 2. Prepare cut-boundary scoring and alignment loops for Swift/C++.
+  Scope: deterministic color/gray/delta/alignment scoring loops, dense frame comparison kernels, and boundary-candidate numeric reduction.
+  Prerequisite: split helper-builder functions in `core/pipeline/cut_boundary_helpers.py`, `core/cut_boundary_auto_scan.py`, and `core/cut_boundary_auto_verify.py` into stable Python interfaces first.
+  Keep in Python: UI helper-line policy, project mutation, logging, worker orchestration, media probing, and fallback routing.
+  Verification: cut-boundary unit tests plus Macau visual smoke.
 
-- cut-boundary scoring and alignment families
-  - Only after the Python helper-builder split lands and the interfaces stop moving.
-  - Promote only the numerically heavy loops, not the surrounding orchestration.
+- [ ] 3. Prepare subtitle candidate scoring and sequence smoothing for native acceleration.
+  Scope: `core/audio/stt_candidate_scorer.py`, `core/audio/stt_lattice.py`, `core/engine/subtitle_accuracy_pipeline.py`, `core/engine/subtitle_timing.py`, and `core/engine/word_resegmenter.py` hot loops.
+  Prerequisite: isolate scorer/planner interfaces and preserve original STT evidence ranges before native promotion.
+  Promote only if: final subtitle text/timing accuracy is equal or higher on X5 and Tinyping checks.
+  Verification: X5 accuracy slice plus targeted unit tests.
 
-- subtitle candidate scoring and sequence smoothing
-  - Only after the current Python scoring pipeline is split into stable scorer/planner seams.
-  - Prefer Swift/C++ only where repeated large-batch transforms beat the bridge cost.
+- [ ] 4. Split oversized Swift core files before expanding native features.
+  Scope:
+  `TimelineEditing.swift` -> geometry, magnet, undo, and serialization files.
+  `NativePolicyEngine.swift` -> scoring, retrieval, and decision files.
+  `RuntimeETAEstimator.swift` -> persistence and prediction files.
+  Promote only if: Swift tests stay green and Python bridge contracts do not change.
+  Verification: `swift test` in `native/macos/AIStudioNative`.
+
+- [ ] 5. Measure native bridge payload sizes before adding new bridge calls.
+  Scope: `core/native_swift_policy.py`, `core/native_swift_subtitle.py`, `core/native_swift_timeline.py`, `core/native_json.py`, and the persistent `core-jsonl-worker`.
+  Success: large-batch native calls are preferred only when serialization/bridge cost does not erase the native win.
+  Keep in Python: small payloads where cached Python work is cheaper than bridge setup.
+  Verification: JSON payload size logs plus targeted benchmark artifacts under `output/manual_verification/latest/`.
 
 ## Parked Or Rejected For Now
 
 - `core/project/project_model_settings.py`
-  - Keep this Python-side for now.
-  - The payload is small, deterministic Python reads are already cheap, and bridge/parity cost is higher than the likely gain.
-  - Revisit only if project-open/save benchmarks show this path becoming materially larger.
-
-## Do Not Migrate Yet
-
-These are too orchestration-heavy right now and would likely make the project harder,
-not lighter, if forced into native code too early:
+  Decision: keep Python-side.
+  Reason: payload is small, deterministic Python reads are cheap, and bridge/parity cost is higher than the likely gain.
 
 - `core/audio/media_processor_transcribe.py`
 - `core/audio/media_processor_audio.py`
@@ -75,100 +74,11 @@ not lighter, if forced into native code too early:
 - most `ui/editor/*`
 - most `ui/timeline/*` widgets with Qt object state
 - live automation/status snapshot assembly in `ui/main/app_command_bridge.py`
+  Decision: do not migrate as whole modules.
+  Reason: these paths own Qt lifecycle, subprocesses, dynamic settings, model routing, mutable project state, live logger state, or UI callbacks.
 
-Reasons:
+## Practical Target
 
-- Qt lifecycle coupling
-- thread/event ordering
-- subprocess management
-- dynamic settings overrides
-- fallback-heavy AI/runtime routing
-- project state mutation across many layers
-- live logger/owner state where Python-side cache/count helpers beat native bridge overhead
-- live log-tail and stage-inference hot paths where `deque` tail slicing plus cached string patterns avoid native bridge serialization entirely
-- viewport-scoped Qt render caches where Python can reuse existing list objects without crossing a native bridge
-- filesystem cache accounting/pruning where streaming `os.scandir` avoids Python object churn without paying native bridge payload cost
+Native code should own stable algorithmic hot paths, repeated large-batch transforms, deterministic layout/scoring/planning, and canonical serialization/normalization rules.
 
-## Graduation Checklist
-
-A Python module or function should move into native library form only when all are true:
-
-- The behavior is deterministic for the same input.
-- It can be expressed as JSON-in / JSON-out or typed value-in / value-out.
-- It does not depend on live Qt objects.
-- It does not own long-running model processes.
-- It already has focused tests that describe expected behavior.
-- The logic changes rarely enough to justify compile/build overhead.
-- A Python fallback exists until parity is proven.
-
-## Recommended Migration Rule
-
-Prefer migrating by **function family**, not by whole file.
-
-Good:
-
-- one planner
-- one scorer
-- one layout engine
-- one cache-key builder
-
-Bad:
-
-- a whole pipeline file
-- a mixed UI/runtime/orchestration module
-- a file with live callbacks and mutable editor state
-
-## Practical Goal
-
-The project gets meaningfully lighter when native code owns:
-
-- stable algorithmic hot paths
-- repeated large-batch transforms
-- layout/scoring/planning code
-- canonical serialization/normalization rules
-
-The project does **not** get lighter just because source lines move out of Python.
-If the migrated code still has to mirror Qt state or runtime orchestration, complexity
-usually increases.
-
-Small payloads should stay in Python when the native bridge cost is higher than the savings.
-
-## Current Status
-
-1st bundle complete:
-
-- `core/pipeline/startup_diagnostics.py`
-  - Native library now owns diagnostic build, ETA attach, and log formatting.
-  - Python keeps media/audio probing and fallback behavior.
-
-- `core/pipeline/cut_boundary_cache.py`
-  - Native library now owns canonical settings payload, base payload shaping, and cache-path planning.
-  - Python still owns file stat and media fingerprint collection to preserve current cache parity.
-
-- `core/pipeline_status.py`
-  - Native library now owns the optional stage-summary reduction path through `PipelineStatus.swift` and the persistent `core-jsonl-worker`.
-  - Python keeps the small-blob parser/cache plus fallback path so bridge cost is reserved for larger multiline payloads where it helps more.
-
-Python-side hot-path prep complete:
-
-- `core/media_info.py`
-  - Repeated media fingerprint reads are cached by resolved path, mtime, and size before the ffprobe cache path is selected.
-  - Probe-result normalization remains isolated as the safe native seam, but the current cached Python path is the baseline to beat.
-
-- `core/project/project_model_settings.py`
-  - Summary/snapshot accessors and restore helpers are now isolated and cheaper on the Python side.
-  - This is deliberately parked as a non-native path unless future measurements show a larger real payload than today.
-
-- `core/project/project_assets.py` / `ui/editor/editor_canvas_state.py`
-  - Row-copy, SRT-write, canvas-FPS hydration, and runtime-capture boundary copies now avoid extra temporary list materialization for streaming row inputs.
-  - Keep these Python-side unless a future native text-asset writer beats the current alias-safe copy path on real project open/save benchmarks.
-
-- `ui/timeline/timeline_canvas.py` / `ui/timeline/timeline_paint.py`
-  - Voice-activity paint now reuses cached visible marker lists instead of copying the cached list per paint.
-  - Keep this Python/Qt-side for now: the measured win comes from avoiding object churn in existing widget state, while a native bridge would add serialization/lifetime overhead.
-
-- `core/runtime/memory_manager.py`
-  - Runtime disk-cache usage and prune now share a streaming `os.scandir` walker with string paths instead of materializing recursive `Path.rglob("*")` / per-file `Path` objects.
-  - Under-budget prune now takes a total-only fast path and skips deletion-candidate list/sort work in the common healthy-cache case.
-  - Root-level cache indexes now update on file create/delete events, preview-cache usage is included in the runtime budget, and thumbnail/proxy caches prune against hard local budgets without a native bridge.
-  - Keep this Python-side for now because filesystem traversal already happens at the OS boundary and the current streaming/fast-path design avoids the largest allocation without JSON bridge overhead.
+Native code should not be used just to reduce Python line count. If a migration mirrors live UI/runtime state or adds bridge overhead without a measured win, leave it in Python and refactor the Python boundary instead.

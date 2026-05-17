@@ -160,18 +160,22 @@ def project_sidecar_candidates_for_srt(srt_path: str, media_path: str | None = N
         srt_dir = os.path.dirname(srt_abs)
         srt_stem = os.path.splitext(os.path.basename(srt_abs))[0]
         _add(project_file_path_for_name(srt_stem))
+        _add(os.path.join(PROJECTS_DIR, f"{srt_stem}.json"))
 
         if os.path.basename(srt_dir) == "subtitles":
             asset_dir = os.path.dirname(srt_dir)
             asset_name = os.path.basename(asset_dir)
             if asset_name.endswith(".assets"):
                 project_name = asset_name[: -len(".assets")]
-                _add(project_file_path_for_name(project_name, folder=os.path.dirname(asset_dir)))
+                project_folder = os.path.dirname(asset_dir)
+                _add(project_file_path_for_name(project_name, folder=project_folder))
+                _add(os.path.join(project_folder, f"{project_name}.json"))
 
     media_abs = normalized_open_path(media_path)
     if media_abs and media_abs != srt_abs:
         media_stem = os.path.splitext(os.path.basename(media_abs))[0]
         _add(project_file_path_for_name(media_stem))
+        _add(os.path.join(PROJECTS_DIR, f"{media_stem}.json"))
 
     try:
         for name in os.listdir(PROJECTS_DIR):
@@ -254,7 +258,11 @@ def find_project_for_srt_open(srt_path: str, media_path: str | None = None) -> t
                 asset_name.removesuffix(".assets"),
                 folder=os.path.dirname(asset_dir),
             )
-            if normalized_open_path(project_path) == normalized_open_path(expected):
+            expected_json = os.path.splitext(expected)[0] + ".json"
+            if normalized_open_path(project_path) in {
+                normalized_open_path(expected),
+                normalized_open_path(expected_json),
+            }:
                 return project_path, project
     return "", None
 

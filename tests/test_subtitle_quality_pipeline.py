@@ -46,6 +46,60 @@ class SubtitleQualityPipelineTests(unittest.TestCase):
         self.assertIn("metadata_missing", metrics.flags)
         self.assertIn("word_timestamps_missing", metrics.flags)
 
+    def test_evaluate_subtitle_confidence_numeric_token_is_not_over_penalized(self):
+        metrics = evaluate_subtitle_confidence(
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "2026",
+                "asr_metadata": {
+                    "avg_logprob": -0.2,
+                    "compression_ratio": 1.0,
+                    "no_speech_prob": 0.05,
+                    "word_confidence": 0.90,
+                },
+            },
+            settings={"sub_min_duration": 0.2, "sub_max_cps": 12},
+        )
+
+        self.assertEqual(metrics.confidence_label, "green")
+        self.assertGreaterEqual(metrics.confidence_score, 85.0)
+        self.assertNotIn("text_has_no_language_chars", metrics.flags)
+
+    def test_evaluate_subtitle_confidence_short_interjection_can_score_green(self):
+        metrics = evaluate_subtitle_confidence(
+            {
+                "start": 0.0,
+                "end": 0.6,
+                "text": "어",
+                "asr_metadata": {
+                    "avg_logprob": -0.2,
+                    "compression_ratio": 1.0,
+                    "no_speech_prob": 0.05,
+                    "word_confidence": 0.90,
+                },
+            },
+            settings={"sub_min_duration": 0.2, "sub_max_cps": 12},
+        )
+
+        self.assertEqual(metrics.confidence_label, "green")
+        self.assertGreaterEqual(metrics.confidence_score, 85.0)
+        self.assertIn("very_short_text", metrics.flags)
+
+    def test_evaluate_subtitle_confidence_plausible_text_without_metadata_is_not_forced_gray(self):
+        metrics = evaluate_subtitle_confidence(
+            {
+                "start": 0.0,
+                "end": 1.3,
+                "text": "유스 어드벤처 2026",
+            },
+            settings={"sub_min_duration": 0.2, "sub_max_cps": 12},
+        )
+
+        self.assertNotEqual(metrics.confidence_label, "gray")
+        self.assertGreaterEqual(metrics.confidence_score, 72.0)
+        self.assertIn("metadata_missing", metrics.flags)
+
     def test_quality_pipeline_adds_segment_quality_and_summary(self):
         result = run_subtitle_quality_pipeline(
             [

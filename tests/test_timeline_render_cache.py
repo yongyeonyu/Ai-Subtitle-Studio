@@ -8,12 +8,13 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QRect
+from PyQt6.QtCore import QPoint, QRect
+from PyQt6.QtGui import QImage, QPainter, QRegion
 from PyQt6.QtWidgets import QApplication, QScrollArea
 
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
 from ui.timeline.timeline_canvas import TimelineCanvas
-from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, SCORE_H, SCORE_TOP, SEG_TOP, STT2_TOP, STT_PREVIEW_VERTICAL_INSET, SUBTITLE_BOT, SUBTITLE_TOP
+from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, RULER_H, SCORE_H, SCORE_TOP, SEG_TOP, STT2_TOP, STT_PREVIEW_VERTICAL_INSET, SUBTITLE_BOT, SUBTITLE_TOP, WAVE_H
 from ui.timeline.timeline_widget import TimelineWidget
 
 
@@ -135,6 +136,77 @@ class TimelineRenderCacheTests(unittest.TestCase):
         finally:
             canvas.close()
 
+    def test_project_loaded_overlapping_stt_preview_candidates_split_to_two_sublanes(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.segments = [
+                {"start": 0.0, "end": 2.0, "text": "final", "line": 0},
+                {
+                    "start": 0.0,
+                    "end": 2.0,
+                    "text": "STT1 A",
+                    "line": 10,
+                    "stt_pending": True,
+                    "_live_stt_preview": True,
+                    "stt_preview_source": "STT1",
+                },
+                {
+                    "start": 0.5,
+                    "end": 2.2,
+                    "text": "STT1 B",
+                    "line": 11,
+                    "stt_pending": True,
+                    "_live_stt_preview": True,
+                    "stt_preview_source": "STT1",
+                },
+                {
+                    "start": 2.3,
+                    "end": 3.0,
+                    "text": "STT1 C",
+                    "line": 12,
+                    "stt_pending": True,
+                    "_live_stt_preview": True,
+                    "stt_preview_source": "STT1",
+                },
+                {
+                    "start": 0.0,
+                    "end": 2.0,
+                    "text": "STT2 A",
+                    "line": 20,
+                    "stt_pending": True,
+                    "_live_stt_preview": True,
+                    "stt_preview_source": "STT2",
+                },
+                {
+                    "start": 0.4,
+                    "end": 1.6,
+                    "text": "STT2 B",
+                    "line": 21,
+                    "stt_pending": True,
+                    "_live_stt_preview": True,
+                    "stt_preview_source": "STT2",
+                },
+            ]
+            visible = canvas.visible_segments_for_time_window(0.0, 4.0, pad_sec=0.0)
+
+            lane_data = canvas.visible_segment_lanes_cached(visible)
+
+            self.assertEqual(lane_data["stt1_lane_count"], 2)
+            self.assertEqual(lane_data["stt2_lane_count"], 2)
+            stt1_lanes = {
+                lane_data["stt1_lane_map"][id(seg)]
+                for seg in lane_data["stt1_preview_segments"][:2]
+            }
+            stt2_lanes = {
+                lane_data["stt2_lane_map"][id(seg)]
+                for seg in lane_data["stt2_preview_segments"][:2]
+            }
+            self.assertEqual(stt1_lanes, {0, 1})
+            self.assertEqual(stt2_lanes, {0, 1})
+            self.assertIn(lane_data["stt1_lane_map"][id(lane_data["stt1_preview_segments"][2])], {0, 1})
+        finally:
+            canvas.close()
+
     def test_active_segment_repaint_rect_during_playback_stays_in_subtitle_band(self):
         canvas = TimelineCanvas()
         try:
@@ -175,6 +247,127 @@ class TimelineRenderCacheTests(unittest.TestCase):
         finally:
             canvas.close()
 
+    def test_playback_state_does_not_change_timeline_body_pixels_with_overlay_playhead(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(1200, CANVAS_H)
+            canvas.setFixedWidth(1200)
+            canvas.total_duration = 8.0
+            canvas.pps = 140.0
+            canvas._external_playhead_overlay = True
+            canvas.playhead_sec = 2.0
+            canvas.segments = [
+                {"start": 0.8, "end": 2.6, "text": "마카오 영상 테스트", "line": 0},
+                {"start": 2.8, "end": 4.4, "text": "잔상 확인 구간", "line": 1},
+                {"start": 0.8, "end": 2.6, "text": "마카오 영상 테스트", "line": 10, "stt_pending": True},
+            ]
+            canvas._invalidate_render_cache()
+
+            def _render_body(playback_active: bool) -> bytes:
+                canvas._timeline_playback_active = lambda: bool(playback_active)
+                image = QImage(canvas.size(), QImage.Format.Format_ARGB32_Premultiplied)
+                image.fill(0)
+                canvas.render(image)
+                return bytes(image.bits().asstring(image.sizeInBytes()))
+
+            self.assertEqual(_render_body(False), _render_body(True))
+        finally:
+            canvas.close()
+
+    def test_roughcut_lane_playback_render_stays_stable_with_dense_markers(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(1200, CANVAS_H)
+            canvas.setFixedWidth(1200)
+            canvas.total_duration = 8.0
+            canvas.pps = 140.0
+            canvas._external_playhead_overlay = True
+            canvas.playhead_sec = 2.0
+            canvas.segments = [
+                {"start": 0.8, "end": 2.6, "text": "마카오 영상 테스트", "line": 0},
+            ]
+            dense_markers = [
+                {
+                    "kind": "roughcut_major",
+                    "label": "A",
+                    "display_label": "A",
+                    "title": "A",
+                    "status": "confirmed",
+                    "color": "#34C759",
+                    "start": i * 0.08,
+                    "end": i * 0.08 + 0.08,
+                }
+                for i in range(60)
+            ]
+            canvas.roughcut_major_markers_cached = lambda: list(dense_markers)
+            canvas._invalidate_render_cache()
+
+            def _render_body(playback_active: bool) -> bytes:
+                canvas._timeline_playback_active = lambda: bool(playback_active)
+                image = QImage(canvas.size(), QImage.Format.Format_ARGB32_Premultiplied)
+                image.fill(0)
+                canvas.render(image)
+                return bytes(image.bits().asstring(image.sizeInBytes()))
+
+            self.assertEqual(_render_body(False), _render_body(True))
+        finally:
+            canvas.close()
+
+    def test_roughcut_lane_partial_strip_repaint_keeps_long_marker_continuous(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(1200, CANVAS_H)
+            canvas.setFixedWidth(1200)
+            canvas.total_duration = 8.0
+            canvas.pps = 140.0
+            canvas._external_playhead_overlay = True
+            canvas.playhead_sec = 2.0
+            canvas.segments = [
+                {"start": 0.8, "end": 2.6, "text": "마카오 영상 테스트", "line": 0},
+            ]
+            canvas.roughcut_major_markers_cached = lambda: [
+                {
+                    "kind": "roughcut_major",
+                    "label": "A",
+                    "display_label": "A - test",
+                    "title": "A",
+                    "status": "confirmed",
+                    "color": "#34C759",
+                    "start": 0.0,
+                    "end": 7.0,
+                }
+            ]
+            canvas._invalidate_render_cache()
+            canvas.show()
+            self.app.processEvents()
+
+            strip = QImage(canvas.size(), QImage.Format.Format_ARGB32_Premultiplied)
+            strip.fill(0)
+            painter = QPainter(strip)
+            for x in range(0, canvas.width(), 24):
+                src = QRect(x, 0, min(24, canvas.width() - x), canvas.height())
+                canvas.render(painter, QPoint(x, 0), QRegion(src))
+            painter.end()
+
+            lane_top = RULER_H + WAVE_H + 5
+            lane_h = max(18, SEG_TOP - lane_top - 7)
+            box_top = lane_top + 3
+            box_h = max(12, lane_h - 6)
+            sample_y = box_top + (box_h // 2)
+            background_pixel = strip.pixel(int(canvas._x(7.6)), sample_y)
+
+            marker_start_x = int(canvas._x(0.0)) + 8
+            marker_end_x = int(canvas._x(7.0)) - 8
+            self.assertGreater(marker_end_x, marker_start_x)
+            interior_background_hits = sum(
+                1
+                for x in range(marker_start_x, marker_end_x)
+                if strip.pixel(x, sample_y) == background_pixel
+            )
+            self.assertEqual(interior_background_hits, 0)
+        finally:
+            canvas.close()
+
     def test_viewport_paint_clip_limits_full_canvas_resize_repaint(self):
         scroll = QScrollArea()
         canvas = TimelineCanvas()
@@ -196,6 +389,70 @@ class TimelineRenderCacheTests(unittest.TestCase):
         finally:
             scroll.close()
             canvas.close()
+
+    def test_canvas_height_bonus_keeps_viewport_timeline_pixels_visible(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(1400, 720)
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.update_segments(
+                [
+                    {"start": 0.4, "end": 2.8, "text": "roughcut", "line": 0},
+                    {"start": 3.0, "end": 5.2, "text": "final", "line": 1},
+                    {
+                        "start": 3.0,
+                        "end": 5.2,
+                        "text": "stt1",
+                        "line": 10,
+                        "stt_pending": True,
+                        "_live_stt_preview": True,
+                        "stt_preview_source": "STT1",
+                    },
+                    {
+                        "start": 3.0,
+                        "end": 5.2,
+                        "text": "stt2",
+                        "line": 11,
+                        "stt_pending": True,
+                        "_live_stt_preview": True,
+                        "stt_preview_source": "STT2",
+                    },
+                ],
+                active_sec=0.0,
+                total_dur=8.0,
+            )
+            waveform = np.zeros(800, dtype=np.float32)
+            waveform[40:180] = 0.5
+            waveform[300:520] = 0.8
+            waveform[600:720] = 0.4
+            timeline.canvas.set_waveform(waveform)
+            self.app.processEvents()
+
+            def _render_viewport_image():
+                viewport = timeline.scroll.viewport()
+                image = QImage(viewport.size(), QImage.Format.Format_ARGB32_Premultiplied)
+                image.fill(0)
+                viewport.render(image)
+                return image
+
+            before = _render_viewport_image()
+            timeline.set_canvas_height_bonus(140)
+            self.app.processEvents()
+            after = _render_viewport_image()
+            overlap = after.copy(0, 0, before.width(), before.height())
+
+            before_bits = before.bits()
+            before_bits.setsize(before.sizeInBytes())
+            overlap_bits = overlap.bits()
+            overlap_bits.setsize(overlap.sizeInBytes())
+
+            self.assertEqual(bytes(before_bits), bytes(overlap_bits))
+            self.assertTrue(timeline._playhead_overlay.isHidden())
+            self.assertFalse(getattr(timeline.canvas, "_external_playhead_overlay", True))
+        finally:
+            timeline.close()
 
     def test_update_segments_invalidates_render_cache(self):
         canvas = TimelineCanvas()

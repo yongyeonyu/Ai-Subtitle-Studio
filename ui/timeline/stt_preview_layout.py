@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-# Keep each STT source on a single visual row so the timeline never expands
-# into per-source sub-stacks beyond the fixed STT1/STT2 pair.
-MAX_STT_PREVIEW_SUBLANES = 1
+# Allow each STT source to split into at most two visual rows when restored
+# project candidates overlap. This avoids text overdraw while keeping the
+# fixed STT1/STT2 lane pair compact.
+MAX_STT_PREVIEW_SUBLANES = 2
 
 
 def _safe_time(row: dict, key: str, default: float = 0.0) -> float:

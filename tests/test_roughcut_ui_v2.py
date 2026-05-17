@@ -232,7 +232,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
                 self.assertFalse(collected["operation_mode_choices_visible"])
                 saved = save_mock.call_args.args[0]
                 self.assertEqual(saved["auto_start_mode"], "balanced")
-                self.assertEqual(saved["icloud_stt_quality_preset"], "balanced")
+                self.assertEqual(saved["icloud_stt_quality_preset"], "fast")
                 self.assertEqual(saved["nas_stt_quality_preset"], "balanced")
             finally:
                 dialog.close()

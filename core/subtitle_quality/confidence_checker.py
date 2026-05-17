@@ -12,6 +12,7 @@ from .models import SubtitleQualityMetrics
 from .hallucination_detector import estimate_hallucination_risk
 
 _TIMECODE_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?(?:[,.]\d{1,3})?")
+_VALID_NON_LANGUAGE_TOKEN_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z%+./#:_-]*$")
 
 
 def _as_float(value: Any, default: float | None = None) -> float | None:
@@ -29,6 +30,25 @@ def _duration(segment: dict[str, Any]) -> float:
 
 def _compact_text(text: Any) -> str:
     return re.sub(r"\s+", "", str(text or "")).strip()
+
+
+def _contains_language_chars(text: Any) -> bool:
+    return bool(re.search(r"[가-힣a-zA-Z]", str(text or "")))
+
+
+def _looks_valid_non_language_token(text: Any) -> bool:
+    compact = _compact_text(text)
+    if not compact:
+        return False
+    if re.fullmatch(r"\d{2,6}", compact):
+        return True
+    if any(ch.isdigit() for ch in compact) and _VALID_NON_LANGUAGE_TOKEN_RE.fullmatch(compact):
+        return True
+    return False
+
+
+def _looks_structurally_valid_text(text: Any) -> bool:
+    return _contains_language_chars(text) or _looks_valid_non_language_token(text)
 
 
 def _label_for_score(score: float | None) -> str:
@@ -52,9 +72,14 @@ def _add_flag(flags: list[str], flag: str) -> None:
         flags.append(flag)
 
 
-def _asr_metadata_score(metadata: dict[str, Any], flags: list[str]) -> float:
+def _asr_metadata_score(segment: dict[str, Any], metadata: dict[str, Any], flags: list[str]) -> float:
     if not metadata:
         _add_flag(flags, "metadata_missing")
+        text = segment.get("text")
+        duration = _duration(segment)
+        compact = _compact_text(text)
+        if compact and duration >= 0.35 and len(compact) <= 18 and _looks_structurally_valid_text(text):
+            return 52.0
         return 30.0
 
     score = 78.0
@@ -119,6 +144,11 @@ def _word_timestamp_score(segment: dict[str, Any], flags: list[str]) -> float:
         words = [dict(item) for item in metadata_words if isinstance(item, dict)]
     if not words:
         _add_flag(flags, "word_timestamps_missing")
+        text = segment.get("text")
+        duration = _duration(segment)
+        compact = _compact_text(text)
+        if compact and duration >= 0.35 and len(compact) <= 18 and _looks_structurally_valid_text(text):
+            return 60.0
         return 35.0
 
     valid = 0
@@ -174,7 +204,7 @@ def _timing_score(segment: dict[str, Any], flags: list[str], settings: dict[str,
 def _repetition_score(segment: dict[str, Any], previous_texts: list[str] | tuple[str, ...] | None, flags: list[str]) -> float:
     text = _compact_text(segment.get("text"))
     if len(text) < 5:
-        return 80.0
+        return 92.0
     for previous in reversed(list(previous_texts or ())[-40:]):
         prev = _compact_text(previous)
         if len(prev) < 5:
@@ -198,13 +228,46 @@ def _context_score(segment: dict[str, Any], flags: list[str]) -> float:
     if _TIMECODE_RE.search(text):
         score -= 50.0
         _add_flag(flags, "timecode_in_text")
-    if not re.search(r"[가-힣a-zA-Z]", text):
-        score -= 45.0
-        _add_flag(flags, "text_has_no_language_chars")
+    if not _contains_language_chars(text):
+        if _looks_valid_non_language_token(text):
+            score -= 6.0
+        else:
+            score -= 45.0
+            _add_flag(flags, "text_has_no_language_chars")
     if len(text) <= 1:
-        score -= 20.0
+        score -= 8.0
         _add_flag(flags, "very_short_text")
     return _clip_score(score)
+
+
+def _should_force_gray_for_missing_evidence(
+    segment: dict[str, Any],
+    flags: list[str],
+    *,
+    word_score: float,
+    timing_score: float,
+    context_score: float,
+) -> bool:
+    if "metadata_missing" not in flags or word_score > 35.0:
+        return False
+    if not _looks_structurally_valid_text(segment.get("text")):
+        return True
+    if timing_score < 55.0 or context_score < 65.0:
+        return True
+    if any(
+        flag in flags
+        for flag in (
+            "invalid_timing",
+            "too_short_duration",
+            "high_cps",
+            "timecode_in_text",
+            "high_no_speech_prob",
+            "non_speech_hallucination_risk",
+            "known_hallucination_phrase",
+        )
+    ):
+        return True
+    return False
 
 
 def _memory_score(segment: dict[str, Any], flags: list[str]) -> float:
@@ -259,7 +322,7 @@ def evaluate_subtitle_confidence(
     settings = settings or {}
     flags = list((dict(segment.get("quality") or {}).get("flags") or ()))
 
-    asr_score = _asr_metadata_score(metadata, flags)
+    asr_score = _asr_metadata_score(segment, metadata, flags)
     vad_score = _vad_score(segment, flags)
     word_score = _word_timestamp_score(segment, flags)
     timing_score = _timing_score(segment, flags, settings)
@@ -298,7 +361,13 @@ def evaluate_subtitle_confidence(
 
     score, rewrite_confidence = _apply_llm_rewrite_penalty(segment, score, flags)
     label = _label_for_score(score)
-    if score is None or "metadata_missing" in flags and word_score <= 35.0:
+    if score is None or _should_force_gray_for_missing_evidence(
+        segment,
+        flags,
+        word_score=word_score,
+        timing_score=timing_score,
+        context_score=context_score,
+    ):
         label = "gray"
     elif rewrite_confidence == "medium":
         score = _clip_score(min(float(score if score is not None else 72.0), 72.0))

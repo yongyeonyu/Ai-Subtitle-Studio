@@ -416,6 +416,102 @@ def _pick_best(candidates: list[tuple[str, dict]]) -> tuple[str, dict]:
     return max(candidates, key=lambda item: _candidate_score_100(item[1]))
 
 
+def _duration(segment: dict) -> float:
+    return max(0.0, _as_float(segment.get("end")) - _as_float(segment.get("start")))
+
+
+def _is_near_duplicate_segment(left: dict, right: dict) -> bool:
+    left_dur = _duration(left)
+    right_dur = _duration(right)
+    shorter = min(left_dur, right_dur)
+    longer = max(left_dur, right_dur)
+    if shorter < 0.28:
+        return False
+    overlap = max(0.0, min(_as_float(left.get("end")), _as_float(right.get("end"))) - max(_as_float(left.get("start")), _as_float(right.get("start"))))
+    if overlap / max(0.05, shorter) < 0.78:
+        return False
+    if longer / max(0.05, shorter) > 1.45:
+        return False
+    return text_similarity(left.get("text", ""), right.get("text", "")) >= 0.52
+
+
+def _prefer_duplicate_candidate(candidate: dict, existing: dict) -> bool:
+    cand_score = _candidate_score_100(candidate)
+    existing_score = _candidate_score_100(existing)
+    cand_quality_depth = _candidate_quality_depth(candidate)
+    existing_quality_depth = _candidate_quality_depth(existing)
+    if cand_quality_depth > existing_quality_depth and cand_score >= existing_score - 3.0:
+        return True
+    if existing_quality_depth > cand_quality_depth and existing_score >= cand_score - 3.0:
+        return False
+    if cand_score > existing_score + 0.5:
+        return True
+    if existing_score > cand_score + 0.5:
+        return False
+    cand_dur = _duration(candidate)
+    existing_dur = _duration(existing)
+    if cand_dur > existing_dur + 0.08:
+        return True
+    if existing_dur > cand_dur + 0.08:
+        return False
+    return _as_float(candidate.get("start")) < _as_float(existing.get("start"))
+
+
+def _candidate_quality_depth(segment: dict) -> int:
+    quality = segment.get("quality")
+    depth = 0
+    if isinstance(quality, dict):
+        depth += len([key for key, value in quality.items() if value not in (None, "", [], {})])
+        for key in ("asr_metadata_score", "correction_memory_score", "word_timestamp_score", "confidence_score"):
+            if quality.get(key) not in (None, ""):
+                depth += 2
+    if segment.get("avg_logprob") is not None:
+        depth += 1
+    if segment.get("no_speech_prob") is not None:
+        depth += 1
+    if segment.get("words"):
+        depth += 2
+    return depth
+
+
+def _dedupe_near_duplicate_source_items(items: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+    """Collapse same-source near-duplicate rows before cross-STT matching.
+
+    Some persisted STT tracks include both raw and refined rows for the same
+    utterance. If both are treated as primary, overlap resolution can trim one
+    into a tiny tail and later stages may attach the wrong text to a full slot.
+    """
+    kept: list[tuple[str, dict]] = []
+    for source, segment in sorted(items, key=lambda item: (_as_float(item[1].get("start")), _as_float(item[1].get("end")))):
+        duplicate_idx = None
+        for idx, (_kept_source, kept_segment) in enumerate(kept):
+            if _is_near_duplicate_segment(segment, kept_segment):
+                duplicate_idx = idx
+                break
+        if duplicate_idx is None:
+            kept.append((source, segment))
+            continue
+        if _prefer_duplicate_candidate(segment, kept[duplicate_idx][1]):
+            kept[duplicate_idx] = (source, segment)
+    return sorted(kept, key=lambda item: (_as_float(item[1].get("start")), _as_float(item[1].get("end"))))
+
+
+def _covered_primary_duplicate(prev: dict, item: dict) -> bool:
+    prev_start = _as_float(prev.get("start"))
+    prev_end = _as_float(prev.get("end"))
+    item_start = _as_float(item.get("start"))
+    item_end = _as_float(item.get("end"))
+    item_dur = max(0.05, item_end - item_start)
+    overlap = max(0.0, min(prev_end, item_end) - max(prev_start, item_start))
+    if overlap / item_dur < 0.65:
+        return False
+    prev_text = compact_text(prev.get("text", ""))
+    item_text = compact_text(item.get("text", ""))
+    if not prev_text or not item_text:
+        return False
+    return item_text in prev_text or prev_text in item_text or text_similarity(prev_text, item_text) >= 0.62
+
+
 def _merge_group(candidates: list[tuple[str, dict]]) -> dict:
     source, selected = _pick_best(candidates)
     group_segments = [seg for _, seg in candidates]
@@ -591,7 +687,10 @@ def _resolve_overlaps_preserving_primary(segments: list[dict], primary_items: li
                 or prev.get("stt_ensemble_source") == "STT1"
             )
             if prev_is_primary and is_primary:
-                item["start"] = max(_as_float(item.get("start")), _as_float(prev.get("end")) + 0.01)
+                new_start = max(_as_float(item.get("start")), _as_float(prev.get("end")) + 0.01)
+                if _as_float(item.get("end")) - new_start < 0.28 and _covered_primary_duplicate(prev, item):
+                    continue
+                item["start"] = new_start
             elif prev_is_primary:
                 item["start"] = max(_as_float(item.get("start")), _as_float(prev.get("end")) + 0.01)
             elif is_primary:
@@ -619,8 +718,8 @@ def merge_stt_outputs(primary: list[dict], secondary: list[dict]) -> list[dict]:
     low-confidence STT1 words with stronger STT2 words. STT2-only regions that
     STT1 appears to have missed are still inserted as additional subtitles.
     """
-    primary_items = [("STT1", dict(seg)) for seg in primary if _candidate_usable(seg)]
-    secondary_items = [("STT2", dict(seg)) for seg in secondary if _candidate_usable(seg)]
+    primary_items = _dedupe_near_duplicate_source_items([("STT1", dict(seg)) for seg in primary if _candidate_usable(seg)])
+    secondary_items = _dedupe_near_duplicate_source_items([("STT2", dict(seg)) for seg in secondary if _candidate_usable(seg)])
     if not primary_items:
         return [_merge_group([item]) for item in secondary_items]
     if not secondary_items:

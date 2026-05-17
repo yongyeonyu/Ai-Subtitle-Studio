@@ -5,7 +5,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from ui.main.main_window import MainWindow
 
@@ -60,6 +60,168 @@ class MainWindowNonfatalTests(unittest.TestCase):
             window._start_auto_watchers_after_launch()
 
             cloud_manager.start.assert_called_once()
+        finally:
+            self._cleanup_window(window)
+
+    def test_optional_startup_tasks_defer_while_editor_is_active(self):
+        window = self._make_window()
+        try:
+            window._offscreen_test = False
+            window._editor_widget = object()
+            window._startup_warmup_pending = True
+            window._startup_required_model_check_pending = True
+            window._startup_llm_preflight_pending = True
+            window._startup_auto_watchers_pending = True
+            window._pending_initial_home_auto_source_refresh = True
+            window._start_initial_home_auto_source_refresh = mock.Mock()
+            window._warmup_local_llm_models = mock.Mock()
+            window._check_required_models_on_startup = mock.Mock()
+            window._preflight_selected_local_llm_models = mock.Mock()
+            window._start_auto_watchers_after_launch = mock.Mock()
+            window._schedule_optional_startup_tasks = mock.Mock()
+
+            window._run_optional_startup_tasks()
+
+            window._schedule_optional_startup_tasks.assert_called_once()
+            window._start_initial_home_auto_source_refresh.assert_not_called()
+            window._warmup_local_llm_models.assert_not_called()
+            window._check_required_models_on_startup.assert_not_called()
+            window._preflight_selected_local_llm_models.assert_not_called()
+            window._start_auto_watchers_after_launch.assert_not_called()
+            self.assertTrue(window._startup_warmup_pending)
+            self.assertTrue(window._pending_initial_home_auto_source_refresh)
+        finally:
+            self._cleanup_window(window)
+
+    def test_optional_startup_tasks_run_when_home_is_ready(self):
+        window = self._make_window()
+        try:
+            window._offscreen_test = False
+            window._editor_widget = None
+            window.stack.setCurrentIndex(0)
+            window._auto_processing_active = False
+            window._startup_warmup_pending = True
+            window._startup_required_model_check_pending = True
+            window._startup_llm_preflight_pending = True
+            window._startup_auto_watchers_pending = True
+            window._pending_initial_home_auto_source_refresh = True
+            window._start_initial_home_auto_source_refresh = mock.Mock()
+            window._warmup_local_llm_models = mock.Mock()
+            window._check_required_models_on_startup = mock.Mock()
+            window._preflight_selected_local_llm_models = mock.Mock()
+            window._start_auto_watchers_after_launch = mock.Mock()
+
+            window._run_optional_startup_tasks()
+
+            window._start_initial_home_auto_source_refresh.assert_called_once_with(delay_ms=0)
+            window._warmup_local_llm_models.assert_called_once()
+            window._check_required_models_on_startup.assert_called_once()
+            window._preflight_selected_local_llm_models.assert_called_once()
+            window._start_auto_watchers_after_launch.assert_called_once()
+            self.assertFalse(window._startup_warmup_pending)
+            self.assertFalse(window._startup_required_model_check_pending)
+            self.assertFalse(window._startup_llm_preflight_pending)
+            self.assertFalse(window._startup_auto_watchers_pending)
+            self.assertFalse(window._pending_initial_home_auto_source_refresh)
+        finally:
+            self._cleanup_window(window)
+
+    def test_show_home_compacts_hidden_workspace_widgets_when_idle(self):
+        window = self._make_window()
+        try:
+            editor = SimpleNamespace(enter_home_compact_mode=mock.Mock())
+            roughcut = SimpleNamespace(compact_for_home_navigation=mock.Mock())
+            window._editor_widget = editor
+            window._roughcut_widget = roughcut
+            window._is_editor_ai_busy = mock.Mock(return_value=False)
+            window._is_backend_ai_busy = mock.Mock(return_value=False)
+            window._cleanup_runtime_for_navigation = mock.Mock()
+            window._build_home_content = mock.Mock()
+            window._schedule_optional_startup_tasks = mock.Mock()
+            window._stop_post_completion_idle_timer = mock.Mock()
+            window._reset_transient_multiclip_state = mock.Mock()
+            window._dock_global_menu_to_workspace = mock.Mock()
+            window._show_bottom_queue_table = mock.Mock()
+
+            window.show_home()
+
+            editor.enter_home_compact_mode.assert_called_once()
+            roughcut.compact_for_home_navigation.assert_called_once()
+        finally:
+            self._cleanup_window(window)
+
+    def test_show_home_skips_compaction_while_active_work(self):
+        window = self._make_window()
+        try:
+            editor = SimpleNamespace(enter_home_compact_mode=mock.Mock())
+            roughcut = SimpleNamespace(compact_for_home_navigation=mock.Mock())
+            window._editor_widget = editor
+            window._roughcut_widget = roughcut
+            window._is_editor_ai_busy = mock.Mock(return_value=True)
+            window._is_backend_ai_busy = mock.Mock(return_value=False)
+            window._cleanup_runtime_for_navigation = mock.Mock()
+            window._build_home_content = mock.Mock()
+            window._schedule_optional_startup_tasks = mock.Mock()
+            window._stop_post_completion_idle_timer = mock.Mock()
+            window._reset_transient_multiclip_state = mock.Mock()
+            window._dock_global_menu_to_workspace = mock.Mock()
+            window._show_bottom_queue_table = mock.Mock()
+
+            window.show_home()
+
+            editor.enter_home_compact_mode.assert_not_called()
+            roughcut.compact_for_home_navigation.assert_not_called()
+        finally:
+            self._cleanup_window(window)
+
+    def test_defer_home_action_does_not_reenter_qt_event_loop(self):
+        window = self._make_window()
+        try:
+            widget = QWidget(window.home_page)
+            widget.setObjectName("MenuButton")
+            widget._normal_ss = "QWidget#MenuButton { background: #000; }"
+            widget.setStyleSheet("QWidget#MenuButton { background: #fff; }")
+            action = mock.Mock()
+
+            with mock.patch("PyQt6.QtWidgets.QApplication.processEvents", side_effect=AssertionError("should not run")):
+                with mock.patch("ui.home_ui.QTimer.singleShot") as single_shot:
+                    window._defer_home_action(widget, action)
+
+            single_shot.assert_called_once_with(100, action)
+            self.assertIn("#000", widget.styleSheet())
+        finally:
+            self._cleanup_window(window)
+
+    def test_restore_editor_video_after_navigation_prefers_editor_restore_hook(self):
+        window = self._make_window()
+        try:
+            restore_editor = mock.Mock()
+            restore_video = mock.Mock()
+            editor = SimpleNamespace(
+                leave_home_compact_mode=restore_editor,
+                video_player=SimpleNamespace(restore_after_navigation=restore_video),
+            )
+
+            window._restore_editor_video_after_navigation(editor)
+
+            restore_editor.assert_called_once()
+            restore_video.assert_not_called()
+        finally:
+            self._cleanup_window(window)
+
+    def test_initial_home_auto_source_refresh_defers_until_home_ready(self):
+        window = self._make_window()
+        try:
+            window._offscreen_test = False
+            window._initial_home_scan_deferred = True
+            window._editor_widget = object()
+            window._schedule_optional_startup_tasks = mock.Mock()
+
+            window._start_initial_home_auto_source_refresh(delay_ms=123)
+
+            self.assertTrue(window._pending_initial_home_auto_source_refresh)
+            self.assertFalse(window._home_auto_source_refresh_inflight)
+            window._schedule_optional_startup_tasks.assert_called_once_with(delay_ms=123)
         finally:
             self._cleanup_window(window)
 

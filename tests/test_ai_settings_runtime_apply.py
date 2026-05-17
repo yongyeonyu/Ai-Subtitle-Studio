@@ -116,18 +116,20 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             self.assertNotIn("러프컷 분석에서 LLM 사용", widget_texts)
             self.assertFalse(any("API Key / 온도" in text for text in label_texts))
             self.assertTrue(any("Hugging Face Token:" in text for text in label_texts))
+            self.assertFalse(any("STT2 사용:" in text for text in label_texts))
+            self.assertFalse(any("STT 후보 판정:" in text for text in label_texts))
             self.assertIsNone(getattr(window, "sidebar_preset_panel", None))
             self.assertFalse(hasattr(window, "sidebar_stt_quality_combo"))
             self.assertFalse(hasattr(window, "sidebar_audio_preset_combo"))
             self.assertFalse(hasattr(window, "sidebar_auto_preset_btn"))
-            audio_values = set(dialog.audio_map.values())
-            self.assertIn("rnnoise", audio_values)
-            self.assertIn("deepfilter", audio_values)
-            self.assertIn("resemble_enhance", audio_values)
-            self.assertIn("clearvoice", audio_values)
-            self.assertNotIn("demucs", audio_values)
+            self.assertEqual(dialog.audio_map, {})
+            self.assertIsNone(dialog.combo_audio)
             self.assertFalse(hasattr(dialog, "combo_vad"))
             self.assertFalse(hasattr(dialog, "vad_map"))
+            self.assertFalse(hasattr(dialog, "chk_stt_ensemble"))
+            self.assertFalse(hasattr(dialog, "chk_stt_ensemble_llm"))
+            self.assertFalse(any("STT2 병렬 인식 사용" in text for text in widget_texts))
+            self.assertFalse(any("LLM 후보 판정 사용" in text for text in widget_texts))
             self.assertIn(VAD_MODE_AUTOMATION_NOTE, "\n".join(label_texts))
 
         finally:
@@ -157,6 +159,8 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             self.assertEqual(inherited_name, "미사용")
 
             base = {
+                "subtitle_mode": "high",
+                "stt_quality_preset": "precise",
                 "roughcut_llm_enabled": True,
                 "roughcut_llm_use_override": True,
                 "roughcut_llm_provider": "ollama",
@@ -200,7 +204,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             saved = save_mock.call_args.args[0]
             self.assertEqual(saved["selected_model"], "gemma3:4b")
             self.assertEqual(saved["selected_llm_provider"], "ollama")
-            self.assertEqual(saved["audio_preset"], "실외-마이크유")
+            self.assertNotIn("audio_preset", saved)
             self.assertEqual(saved["stt_quality_preset"], "precise")
             user_preset = saved["stt_quality_user_presets"]["precise"]["settings"]
             self.assertEqual(user_preset["selected_model"], "gemma3:4b")
@@ -254,24 +258,24 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             save_mock.assert_called_once()
             default_mock.assert_called_once()
             saved = save_mock.call_args.args[0]
-            self.assertEqual(saved["selected_audio_ai"], "clearvoice")
+            self.assertEqual(saved["selected_audio_ai"], "deepfilter")
             self.assertEqual(saved["selected_vad"], "silero")
             self.assertEqual(saved["selected_whisper_model"], "user-stt1")
             self.assertEqual(saved["selected_whisper_model_secondary"], "user-stt2")
             self.assertEqual(saved["selected_model"], "custom-llm")
-            self.assertFalse(saved["stt_ensemble_enabled"])
+            self.assertTrue(saved["stt_ensemble_enabled"])
             self.assertFalse(saved["stt_selective_secondary_recheck_enabled"])
             self.assertEqual(saved["stt_word_timestamps_precision_max_segments"], 32)
             user_preset = saved["stt_quality_user_presets"]["precise"]["settings"]
-            self.assertFalse(user_preset["stt_ensemble_enabled"])
-            self.assertEqual(user_preset["stt_word_timestamps_precision_max_segments"], 32)
+            self.assertNotIn("stt_ensemble_enabled", user_preset)
+            self.assertNotIn("stt_word_timestamps_precision_max_segments", user_preset)
             row.deleteLater()
         finally:
             window.close()
             window.deleteLater()
             self.app.processEvents()
 
-    def test_sidebar_stt2_model_selection_marks_user_route(self):
+    def test_sidebar_stt2_model_selection_keeps_mode_owned_enable_flag(self):
         window = MainWindow()
         base = {
             "subtitle_mode": "high",
@@ -293,10 +297,13 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             saved = save_mock.call_args.args[0]
             self.assertEqual(saved["selected_whisper_model_secondary"], "new-stt2")
             self.assertTrue(saved["stt_ensemble_enabled"])
-            self.assertTrue(saved["stt_ensemble_user_selected"])
+            self.assertTrue(saved["stt_ensemble_llm_judge_enabled"])
+            self.assertFalse(saved["stt_ensemble_user_selected"])
             user_preset = saved["stt_quality_user_presets"]["precise"]["settings"]
-            self.assertTrue(user_preset["stt_ensemble_enabled"])
-            self.assertTrue(user_preset["stt_ensemble_user_selected"])
+            self.assertEqual(user_preset["selected_whisper_model_secondary"], "new-stt2")
+            self.assertNotIn("stt_ensemble_enabled", user_preset)
+            self.assertNotIn("stt_ensemble_llm_judge_enabled", user_preset)
+            self.assertNotIn("stt_ensemble_user_selected", user_preset)
         finally:
             window.close()
             window.deleteLater()

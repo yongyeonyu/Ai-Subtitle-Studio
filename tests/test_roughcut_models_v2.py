@@ -312,6 +312,8 @@ class RoughCutModelsV2Tests(unittest.TestCase):
             self.assertEqual(major["topic_level"], "middle_category")
             self.assertEqual(major["candidate_topic_hint"], "촬영 장비 세팅")
             self.assertIn("중분류 주제", payload["task_instruction"])
+            self.assertIn("14~30자", payload["task_instruction"])
+            self.assertIn("더 일반적인 표현으로 축약하지 말고", payload["task_instruction"])
             self.assertIn("tags도 반드시 함께 작성", payload["task_instruction"])
             self.assertIn("tags", captured["prompt"]["output_contract"]["schema"]["item_recommended"])
             return {
@@ -412,7 +414,7 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         )
 
         self.assertNotEqual(labeled[0].title, first_text)
-        self.assertEqual(labeled[0].title, "외관 디자인 특징")
+        self.assertEqual(labeled[0].title, "BMW 차량 외장 디자인 점검")
 
     def test_major_topic_labels_replace_generic_llm_topic_with_middle_category(self):
         captured = {}
@@ -445,7 +447,7 @@ class RoughCutModelsV2Tests(unittest.TestCase):
             llm_client=llm_client,
         )
 
-        self.assertEqual(labeled[0].title, "주행 연비 평가")
+        self.assertEqual(labeled[0].title, "차량 고속 주행 연비 확인")
 
     def test_major_topic_labels_fall_back_to_subtitle_topics_when_llm_disabled(self):
         segments = (
@@ -470,8 +472,34 @@ class RoughCutModelsV2Tests(unittest.TestCase):
             settings={"roughcut_llm_enabled": False},
         )
 
-        self.assertEqual(labeled[0].title, "실내 편의 사양")
+        self.assertEqual(labeled[0].title, "BMW X5 실내 버튼 구성과 수납 공간 점검")
         self.assertIn("실내", labeled[0].summary)
+
+    def test_major_topic_labels_keep_specific_existing_title_when_llm_phrase_is_broader(self):
+        segments = (
+            RoughCutSegment(
+                segment_id="A",
+                major_id="A",
+                start=0.0,
+                end=7.0,
+                subtitle_ids=(0, 1, 2),
+                title="현대모토 스튜디오 넥소 전시 공개",
+            ),
+        )
+        subtitles = (
+            SubtitleSegment(0.0, 2.0, "현대모토 스튜디오에 도착해서 올해 전시를 보러 왔습니다", subtitle_id=0),
+            SubtitleSegment(2.2, 4.5, "이번에는 넥소 전시가 메인이라 바로 공개 구역으로 이동합니다", subtitle_id=1),
+            SubtitleSegment(5.0, 6.5, "넥소 공개 포인트와 전시장 동선을 먼저 살펴봅니다", subtitle_id=2),
+        )
+
+        labeled = apply_major_topic_labels(
+            segments,
+            subtitles,
+            settings={"roughcut_llm_enabled": True},
+            llm_client=lambda _prompt: {"topics": [{"major_id": "A", "topic": "전시 소개"}]},
+        )
+
+        self.assertEqual(labeled[0].title, "현대모토 스튜디오 넥소 전시 공개")
 
 
 if __name__ == "__main__":

@@ -555,6 +555,30 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_preview_display_rect_top_aligns_vertical_letterbox(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._display_aspect = 16 / 9
+            rect = widget._displayed_video_rect(SimpleNamespace(width=lambda: 1920, height=lambda: 1200))
+            self.assertEqual(rect.width(), 1920)
+            self.assertEqual(rect.height(), 1080)
+            self.assertEqual(rect.top(), 0)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_player_surface_menu_is_tucked_under_video(self):
+        widget = VideoPlayerWidget()
+        try:
+            layout = widget.layout()
+            self.assertEqual(layout.spacing(), 0)
+            self.assertEqual(layout.contentsMargins().bottom(), 0)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_video_surface_uses_contain_aspect_ratio_to_avoid_preview_crop(self):
         view = VideoSurfaceView()
         try:
@@ -609,8 +633,10 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
             control_layout = label.parentWidget().layout()
             self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
-            self.assertEqual(control_layout.stretch(0), 1)
+            self.assertEqual(control_layout.stretch(0), 0)
             self.assertEqual(control_layout.stretch(1), 1)
+            self.assertEqual(control_layout.spacing(), 6)
+            self.assertEqual(widget.info_label.maximumWidth(), 330)
         finally:
             widget.close()
             widget.deleteLater()
@@ -726,6 +752,25 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(widget.frame_count_label.text(), "F 100 / 250")
             state = widget._quick_control_bar_state()
             self.assertEqual(state["frameText"], "F 100 / 250")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_restore_after_navigation_reshows_hidden_quick_control_bar(self):
+        widget = VideoPlayerWidget()
+        try:
+            fake_quick = QWidget(widget)
+            fake_quick.hide()
+            fake_quick.setUpdatesEnabled(False)
+            widget._quick_control_bar = fake_quick
+
+            with patch.object(widget, "_sync_quick_control_bar") as sync_mock:
+                widget.restore_after_navigation()
+
+            self.assertFalse(fake_quick.isHidden())
+            self.assertTrue(fake_quick.updatesEnabled())
+            self.assertGreaterEqual(sync_mock.call_count, 1)
         finally:
             widget.close()
             widget.deleteLater()

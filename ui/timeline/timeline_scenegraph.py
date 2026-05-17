@@ -169,7 +169,7 @@ def build_scenegraph_subtitle_segments(
                 visual = stt_preview_visual_style(
                     seg,
                     selection_state=stt_candidate_selection_state(seg, final_rows, final_selection_index),
-                    fill_hex="#1A3148",
+                    fill_hex="#17303B",
                     border_hex="#64D2FF",
                     text_hex="#BDEBFF",
                 )
@@ -184,7 +184,7 @@ def build_scenegraph_subtitle_segments(
                 visual = stt_preview_visual_style(
                     seg,
                     selection_state=stt_candidate_selection_state(seg, final_rows, final_selection_index),
-                    fill_hex="#173524",
+                    fill_hex="#163223",
                     border_hex="#34C759",
                     text_hex="#D7FFE4",
                 )

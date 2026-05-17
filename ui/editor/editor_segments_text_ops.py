@@ -7,7 +7,21 @@ from bisect import bisect_left, bisect_right
 from PyQt6.QtGui import QTextCursor
 
 from ui.editor.editor_helpers import build_segment_lookup
-from ui.editor.subtitle_text_edit import SubtitleBlockData
+from ui.editor.subtitle_text_edit import (
+    SubtitleBlockData,
+    subtitle_block_data_from_meta,
+    subtitle_block_data_to_meta,
+)
+
+
+_EDIT_CONFIRM_CLEAR_FLAGS = {
+    "non_speech_hallucination_risk",
+    "high_no_speech_prob",
+    "outside_vad_speech",
+    "high_cps",
+    "quality_stale",
+    "manual_temporary",
+}
 
 
 class EditorSegmentsTextOpsMixin:
@@ -101,6 +115,72 @@ class EditorSegmentsTextOpsMixin:
             pass
         return changed or not found
 
+    def _manual_confirmed_quality_for_user_edit(
+        self,
+        quality: dict | None,
+        *,
+        reason: str = "user_edit_confirmed",
+    ) -> tuple[dict, bool]:
+        previous = dict(quality or {})
+        flags: list[str] = []
+        for raw_flag in list(previous.get("flags") or []):
+            flag = str(raw_flag or "").strip()
+            if not flag or flag in _EDIT_CONFIRM_CLEAR_FLAGS:
+                continue
+            if flag not in flags:
+                flags.append(flag)
+        if "manual_confirmed" not in flags:
+            flags.append("manual_confirmed")
+        updated = dict(previous)
+        updated["flags"] = flags
+        updated["confidence_label"] = "green"
+        updated["confidence_reason"] = str(reason or "user_edit_confirmed")
+        updated["manual_confirmed"] = True
+        updated.pop("manual_temporary", None)
+        return updated, updated != previous
+
+    def _update_subtitle_memory_line_quality(
+        self,
+        line_num: int,
+        quality: dict,
+        *,
+        quality_history: list[dict] | None = None,
+        quality_signature: str | None = None,
+    ) -> bool:
+        found = False
+        try:
+            line_key = int(line_num)
+        except Exception:
+            return False
+        next_quality = dict(quality or {})
+
+        cached_line_map = getattr(self, "_cached_line_map", None)
+        if not isinstance(cached_line_map, dict):
+            cached_line_map = self._refresh_cached_line_map()
+        seg = cached_line_map.get(line_key)
+        if isinstance(seg, dict):
+            found = True
+            seg["quality"] = dict(next_quality)
+            if quality_history is not None:
+                seg["quality_history"] = list(quality_history or [])
+            if quality_signature is not None:
+                seg["quality_signature"] = str(quality_signature or "")
+            seg.pop("quality_stale", None)
+
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        if isinstance(cache, dict):
+            lookup_seg = (cache.get("line_map") or {}).get(line_key)
+            if isinstance(lookup_seg, dict):
+                found = True
+                lookup_seg["quality"] = dict(next_quality)
+                if quality_history is not None:
+                    lookup_seg["quality_history"] = list(quality_history or [])
+                if quality_signature is not None:
+                    lookup_seg["quality_signature"] = str(quality_signature or "")
+                lookup_seg.pop("quality_stale", None)
+        self._segment_cache_valid = bool(found)
+        return found
+
     def _update_timeline_segment_text_line(self, line_num: int, text: str) -> bool:
         timeline = getattr(self, "timeline", None)
         canvas = getattr(timeline, "canvas", None)
@@ -146,6 +226,130 @@ class EditorSegmentsTextOpsMixin:
                 canvas.update()
         except Exception:
             pass
+        return True
+
+    def _update_timeline_segment_quality_line(
+        self,
+        line_num: int,
+        quality: dict,
+        *,
+        quality_signature: str | None = None,
+    ) -> bool:
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None)
+        if canvas is None:
+            return False
+        try:
+            line_key = int(line_num)
+        except Exception:
+            return False
+        try:
+            seg = canvas._segment_for_line(line_key) if hasattr(canvas, "_segment_for_line") else None
+        except Exception:
+            seg = None
+        if not isinstance(seg, dict):
+            for item in list(getattr(canvas, "segments", []) or []):
+                try:
+                    if int(item.get("line", -999999)) == line_key:
+                        seg = item
+                        break
+                except Exception:
+                    continue
+        if not isinstance(seg, dict):
+            return False
+        next_quality = dict(quality or {})
+        next_signature = None if quality_signature is None else str(quality_signature or "")
+        current_signature = str(seg.get("quality_signature", "") or "")
+        if dict(seg.get("quality") or {}) == next_quality and next_signature == current_signature and not seg.get("quality_stale"):
+            return False
+        try:
+            dirty = canvas._segment_repaint_rect(seg, margin=72) if hasattr(canvas, "_segment_repaint_rect") else None
+        except Exception:
+            dirty = None
+        seg["quality"] = dict(next_quality)
+        if quality_signature is not None:
+            seg["quality_signature"] = next_signature
+        seg.pop("quality_stale", None)
+        if hasattr(canvas, "_segment_visual_style_cache"):
+            try:
+                canvas._segment_visual_style_cache = {}
+            except Exception:
+                pass
+        try:
+            if dirty is not None and hasattr(canvas, "_update_dirty_rect"):
+                canvas._update_dirty_rect(dirty)
+            else:
+                canvas.update()
+        except Exception:
+            pass
+        return True
+
+    def _apply_manual_confirmed_quality_to_line(
+        self,
+        line_num: int,
+        *,
+        reason: str = "user_edit_confirmed",
+    ) -> bool:
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None:
+            return False
+        block = text_edit.document().findBlockByNumber(int(line_num))
+        if not block.isValid():
+            return False
+        data = block.userData()
+        if not isinstance(data, SubtitleBlockData) or bool(getattr(data, "is_gap", False)):
+            return False
+
+        meta = subtitle_block_data_to_meta(data)
+        previous_quality = dict(meta.get("quality") or {})
+        next_quality, changed = self._manual_confirmed_quality_for_user_edit(previous_quality, reason=reason)
+
+        line_text = block.text().replace("\u2028", "\n")
+        current_seg = self._segment_for_line(int(line_num)) if hasattr(self, "_segment_for_line") else None
+        end_sec = meta.get("end_sec")
+        if end_sec is None and isinstance(current_seg, dict):
+            end_sec = current_seg.get("end", meta.get("start_sec"))
+        signature = str(meta.get("quality_signature", "") or "")
+        if hasattr(self, "_segment_quality_signature"):
+            signature = self._segment_quality_signature(
+                {
+                    "start": meta.get("start_sec", getattr(data, "start_sec", 0.0)),
+                    "end": end_sec if end_sec is not None else meta.get("start_sec", getattr(data, "start_sec", 0.0)),
+                    "text": line_text,
+                    "speaker": meta.get("spk_id", getattr(data, "spk_id", "")),
+                }
+            )
+
+        if not changed and signature == str(meta.get("quality_signature", "") or ""):
+            return False
+
+        history = list(meta.get("quality_history") or [])
+        if changed and previous_quality and previous_quality != next_quality:
+            history.append(dict(previous_quality))
+        meta["quality"] = dict(next_quality)
+        meta["quality_history"] = history
+        meta["quality_signature"] = signature
+        if end_sec is not None:
+            meta["end_sec"] = end_sec
+        block.setUserData(subtitle_block_data_from_meta(meta))
+
+        self._update_subtitle_memory_line_quality(
+            int(line_num),
+            next_quality,
+            quality_history=history,
+            quality_signature=signature,
+        )
+        self._update_timeline_segment_quality_line(
+            int(line_num),
+            next_quality,
+            quality_signature=signature,
+        )
+        refresher = getattr(self, "_refresh_visible_quality_map", None)
+        if callable(refresher):
+            try:
+                refresher()
+            except Exception:
+                pass
         return True
 
     def _trigger_editor_popup(self, word, anchor, end_c, gpos):

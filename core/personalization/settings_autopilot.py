@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.mode_manager import MODE_MANAGED_ROUTE_KEYS, USER_SELECTABLE_MODEL_KEYS
 from core.personalization.lora_models import iso_now
 from core.personalization.lora_store_common import read_json, write_json
 from core.runtime import config
@@ -131,6 +132,9 @@ def apply_lora_user_settings_autopilot(
     skipped: dict[str, str] = {}
     for key, learned_value in dict(learned_config or {}).items():
         if key not in LORA_AUTO_MANAGED_SETTING_KEYS:
+            continue
+        if key in MODE_MANAGED_ROUTE_KEYS and key not in USER_SELECTABLE_MODEL_KEYS:
+            skipped[key] = "mode_managed"
             continue
         should_apply, merged_value, mode = _merge_setting_value(
             next_settings.get(key),

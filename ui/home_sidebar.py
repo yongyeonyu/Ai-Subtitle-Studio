@@ -27,9 +27,15 @@ from core.audio.stt_quality_presets import (
     save_stt_quality_user_preset,
     stt_quality_label,
 )
-from core.mode_policy import stt_quality_to_mode
+from core.mode_manager import selected_mode_from_settings, stt_quality_to_mode
+from core.mode_policy import mode_stt_support_flags
 from core.roughcut.model_capability import roughcut_llm_is_capable, roughcut_llm_parameter_b
 from core.settings_simplifier import apply_simple_operation_mode
+from ui.home.ux.auto_source_settings_dialog import (
+    AUTO_SOURCE_QUALITY_KEYS,
+    auto_source_quality_items,
+    normalize_auto_source_quality_key,
+)
 from ui.home_sidebar_presets import sync_sidebar_preset_panel
 from ui.dialogs.qml_popup import show_context_menu
 from ui.queue.queue_formatting import (
@@ -65,7 +71,9 @@ class SidebarComboBox(QComboBox):
 
 class HomeSidebarMixin:
     def _is_auto_start_enabled(self):
-        return bool(_runtime_load_settings().get("auto_start_enabled", True))
+        settings = dict(_runtime_load_settings() or {})
+        scope_enabled = bool(settings.get("icloud_auto_detect", False) or settings.get("nas_auto_detect", False))
+        return bool(settings.get("auto_start_enabled", scope_enabled)) and scope_enabled
 
     def _current_status_time_text(self) -> str:
         text = QDateTime.currentDateTime().toString("AP h:mm")
@@ -136,13 +144,13 @@ class HomeSidebarMixin:
 
     def _sidebar_preset_combo_style(self) -> str:
         return (
-            "QComboBox { background:#11181C; color:#F5F7FA; border:1px solid #2D3942; "
+            f"QComboBox {{ background:{COLORS['sidebar']}; color:{COLORS['text']}; border:1px solid {COLORS['separator']}; "
             "border-radius:5px; padding:1px 5px; font-size:9px; font-weight:700; "
-            "min-height:18px; max-height:18px; } "
-            "QComboBox:hover { border-color:#465663; background:#151C20; } "
+            "min-height:18px; max-height:18px; }} "
+            f"QComboBox:hover {{ border-color:#51606D; background:{COLORS['surface']}; }} "
             "QComboBox::drop-down { width:16px; border:none; } "
-            "QComboBox QAbstractItemView { background:#151C20; color:#F5F7FA; "
-            "selection-background-color:#0B84FF; border:1px solid #2D3942; }"
+            f"QComboBox QAbstractItemView {{ background:{COLORS['surface']}; color:{COLORS['text']}; "
+            f"selection-background-color:{COLORS['primary']}; border:1px solid {COLORS['separator']}; }}"
         )
 
     def _ensure_sidebar_preset_panel(self):
@@ -167,16 +175,18 @@ class HomeSidebarMixin:
 
     def _sidebar_subtitle_quality_combo_style(self) -> str:
         return (
-            "QComboBox { background:#0E1A20; color:#F5F7FA; border:1px solid #2D3942; "
+            f"QComboBox {{ background:{COLORS['sidebar']}; color:{COLORS['text']}; border:1px solid {COLORS['separator']}; "
             "border-radius:4px; padding:1px 17px 1px 9px; font-size:10px; font-weight:700; } "
-            "QComboBox:hover { border-color:#3F8CFF; background:#14242B; } "
+            f"QComboBox:hover {{ border-color:{COLORS['primary']}; background:{COLORS['surface_alt']}; }} "
             "QComboBox::drop-down { border:none; width:16px; } "
-            "QAbstractItemView { background:#11181C; color:#F5F7FA; selection-background-color:#1A84FF; "
-            "selection-color:#FFFFFF; border:1px solid #2D3942; padding:4px; outline:0; } "
+            f"QAbstractItemView {{ background:{COLORS['sidebar']}; color:{COLORS['text']}; selection-background-color:{COLORS['primary']}; "
+            f"selection-color:#FFFFFF; border:1px solid {COLORS['separator']}; padding:4px; outline:0; }} "
             "QAbstractItemView::item { min-height:22px; padding:3px 16px 3px 16px; }"
         )
 
-    def _subtitle_quality_preset_items(self) -> list[tuple[str, str]]:
+    def _subtitle_quality_preset_items(self, *, include_stt: bool = True) -> list[tuple[str, str]]:
+        if not include_stt:
+            return auto_source_quality_items()
         presets = load_stt_quality_presets()
         return [
             (str(presets.get(key, {}).get("label") or stt_quality_label(key)), key)
@@ -202,30 +212,35 @@ class HomeSidebarMixin:
         return "stt_quality_preset"
 
     def _subtitle_quality_scope_default(self, scope: str | None) -> str:
-        scope = str(scope or "workspace").strip().lower()
-        if scope == "icloud":
-            return "fast"
-        if scope == "nas":
+        if str(scope or "").strip().lower() in {"icloud", "nas"}:
             return "balanced"
         return "balanced"
 
     def _subtitle_quality_key_for_scope(self, scope: str | None = None) -> str:
-        scope = str(scope or "workspace").strip().lower()
-        default = self._subtitle_quality_scope_default(scope)
-        if scope in {"icloud", "nas"}:
-            try:
-                return normalize_stt_quality_key(_path_load_settings().get(self._subtitle_quality_scope_key(scope), default))
-            except Exception:
-                return normalize_stt_quality_key(default)
+        normalized_scope = str(scope or "workspace").strip().lower()
+        default = self._subtitle_quality_scope_default(normalized_scope)
+        if normalized_scope in {"icloud", "nas"}:
+            path_settings = dict(_path_load_settings() or {})
+            value = path_settings.get(self._subtitle_quality_scope_key(normalized_scope), path_settings.get("auto_start_mode", default))
+            return normalize_auto_source_quality_key(value)
         return normalize_stt_quality_key(_runtime_load_settings().get("stt_quality_preset", default))
 
     def _save_subtitle_quality_key_for_scope(self, scope: str | None, preset_key: str | None):
         scope = str(scope or "workspace").strip().lower()
-        key = normalize_stt_quality_key(preset_key or self._subtitle_quality_scope_default(scope))
+        key = (
+            normalize_auto_source_quality_key(preset_key or self._subtitle_quality_scope_default(scope))
+            if scope in {"icloud", "nas"}
+            else normalize_stt_quality_key(preset_key or self._subtitle_quality_scope_default(scope))
+        )
         if scope in {"icloud", "nas"}:
-            settings = _path_load_settings()
-            settings[self._subtitle_quality_scope_key(scope)] = key
-            _path_save_settings(settings)
+            path_settings = _path_load_settings()
+            path_settings.update(
+                {
+                    "auto_start_mode": key,
+                    self._subtitle_quality_scope_key(scope): key,
+                }
+            )
+            _path_save_settings(path_settings)
             self._sync_subtitle_quality_combos_for_scope(scope, key)
             return key
         self._apply_subtitle_quality_preset(key)
@@ -243,10 +258,14 @@ class HomeSidebarMixin:
                     continue
                 combo.blockSignals(True)
                 combo_key = key if combo_scope == requested_scope else self._subtitle_quality_key_for_scope(combo_scope)
+                matched = False
                 for idx in range(combo.count()):
                     if combo.itemData(idx) == combo_key:
                         combo.setCurrentIndex(idx)
+                        matched = True
                         break
+                if not matched and combo.count() > 0:
+                    combo.setCurrentIndex(0)
                 combo.blockSignals(False)
                 alive.append(combo)
             except RuntimeError:
@@ -257,7 +276,9 @@ class HomeSidebarMixin:
         combo = SidebarComboBox(parent)
         scope = str(scope or "workspace").strip().lower()
         combo.setProperty("subtitleQualityScope", scope)
-        for label, key in self._subtitle_quality_preset_items():
+        include_stt = scope not in {"icloud", "nas"}
+        combo.setProperty("subtitleQualityIncludeStt", bool(include_stt))
+        for label, key in self._subtitle_quality_preset_items(include_stt=include_stt):
             combo.addItem(label, key)
         combo.setFixedHeight(height)
         combo.setMinimumContentsLength(5)
@@ -279,7 +300,8 @@ class HomeSidebarMixin:
         key = normalize_stt_quality_key(preset_key)
         settings = apply_simple_operation_mode(_runtime_load_settings(), stt_quality_to_mode(key))
         self._apply_ai_settings(settings)
-        self._sync_subtitle_quality_combos_for_scope("workspace", key)
+        for combo_scope in ("workspace", "icloud", "nas"):
+            self._sync_subtitle_quality_combos_for_scope(combo_scope, key)
         if announce:
             try:
                 from core.runtime.logger import get_logger
@@ -303,7 +325,8 @@ class HomeSidebarMixin:
         )
         settings = save_stt_quality_user_preset(_runtime_load_settings(), key)
         self._apply_ai_settings(settings)
-        self._sync_subtitle_quality_combos_for_scope("workspace", key)
+        for combo_scope in ("workspace", "icloud", "nas"):
+            self._sync_subtitle_quality_combos_for_scope(combo_scope, key)
         try:
             from core.runtime.logger import get_logger
 
@@ -329,7 +352,8 @@ class HomeSidebarMixin:
             save_default_settings(settings)
         except Exception:
             pass
-        self._sync_subtitle_quality_combos_for_scope("workspace", key)
+        for combo_scope in ("workspace", "icloud", "nas"):
+            self._sync_subtitle_quality_combos_for_scope(combo_scope, key)
         try:
             from core.runtime.logger import get_logger
 
@@ -1657,8 +1681,8 @@ class HomeSidebarMixin:
         return completed
 
     def _pipeline_model_link(self, key: str, text: str, *, current: bool = False, completed: bool = False) -> str:
-        color = "#00D46A" if completed else (COLORS["warning"] if current else "#F5F7FA")
-        dropdown_icon = " ▾" if key in {"cut_boundary", "stt1", "stt2", "subtitle_llm", "roughcut_llm"} else ""
+        color = COLORS["accent"] if completed else (COLORS["warning"] if current else COLORS["text"])
+        dropdown_icon = " ▾" if key in {"stt1", "stt2", "subtitle_llm", "roughcut_llm"} else ""
         return (
             f"<a href='model:{escape(key)}' "
             f"style='color:{color}; text-decoration:none; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;'>"
@@ -1675,7 +1699,6 @@ class HomeSidebarMixin:
     def _pipeline_info_html(self, settings: dict) -> str:
         rows = []
         model_links = {
-            "컷 경계": "cut_boundary",
             "STT 1": "stt1",
             "STT 2": "stt2",
             "자막 LLM": "subtitle_llm",
@@ -1687,9 +1710,9 @@ class HomeSidebarMixin:
             completed = key in completed_keys
             current = key in current_keys and not completed
             bg_style = " background-color:#12362A;" if current else ""
-            num_color = "#00D46A" if completed else (COLORS["warning"] if current else "#F5F7FA")
-            stage_color = num_color if (completed or current) else "#F5F7FA"
-            model_color = num_color if (completed or current) else "#F5F7FA"
+            num_color = COLORS["accent"] if completed else (COLORS["warning"] if current else COLORS["text"])
+            stage_color = num_color if (completed or current) else COLORS["text"]
+            model_color = num_color if (completed or current) else COLORS["text"]
             model_html = (
                 self._pipeline_model_link(model_links[stage], model, current=current, completed=completed)
                 if stage in model_links
@@ -2067,13 +2090,13 @@ class HomeSidebarMixin:
         settings = dict(_runtime_load_settings())
         if updates:
             settings.update(updates)
-        if "selected_whisper_model_secondary" in updates or "stt_ensemble_enabled" in updates:
-            settings["stt_ensemble_user_selected"] = True
+        settings.update(mode_stt_support_flags(selected_mode_from_settings(settings)))
         if "selected_model" in updates or "selected_llm_provider" in updates:
             model = str(settings.get("selected_model") or "").strip()
             provider = str(settings.get("selected_llm_provider") or "").strip().lower()
             settings["subtitle_llm_user_selected"] = bool(model and "사용 안함" not in model and provider != "none")
         key = normalize_stt_quality_key(settings.get("stt_quality_preset") or "precise")
+        settings = apply_simple_operation_mode(settings, stt_quality_to_mode(key))
         settings = save_stt_quality_user_preset(settings, key)
         self._apply_ai_settings(settings)
         self._sync_sidebar_preset_panel(settings)
@@ -2091,6 +2114,8 @@ class HomeSidebarMixin:
             self._open_sidebar_prompt_dialog(str(href or "").replace("prompt:", "", 1))
             return
         key = str(href or "").replace("model:", "", 1)
+        if key not in {"stt", "stt1", "stt2", "subtitle_llm", "roughcut_llm"}:
+            return
         settings = _runtime_load_settings()
         items: list[dict] = []
         updates_by_id: dict[str, dict] = {}
@@ -2202,18 +2227,8 @@ class HomeSidebarMixin:
                 )
 
         elif key in {"stt", "stt1", "stt2"}:
-            ensemble = bool(settings.get("stt_ensemble_enabled", False))
             current1 = settings.get("selected_whisper_model", "")
             current2 = settings.get("selected_whisper_model_secondary", "")
-            if key == "stt2":
-                _push_item(
-                    "stt2:ensemble",
-                    "STT2 앙상블 사용",
-                    {"stt_ensemble_enabled": not ensemble, "stt_ensemble_user_selected": True},
-                    checked=ensemble,
-                    accent="#34C759",
-                )
-                items.append({"separator": True})
             models = self._stt1_model_items() if key in {"stt", "stt1"} else self._stt2_model_items()
             for idx, model in enumerate(models):
                 label = self._short_model_name(model)
@@ -2229,11 +2244,7 @@ class HomeSidebarMixin:
                 _push_item(
                     f"stt2:model:{idx}",
                     label,
-                    {
-                        "selected_whisper_model_secondary": model,
-                        "stt_ensemble_enabled": True,
-                        "stt_ensemble_user_selected": True,
-                    },
+                    {"selected_whisper_model_secondary": model},
                     checked=model == current2,
                     accent="#5AC8FA",
                 )

@@ -474,6 +474,13 @@ class MainRuntimeCleanupMixin:
             timeline = getattr(target_editor, "timeline", None)
             if timeline is not None:
                 widgets.append(timeline)
+                canvas = getattr(timeline, "canvas", None)
+                if canvas is not None:
+                    try:
+                        canvas._editor_processing_input_locked = False
+                        canvas.setProperty("editor_processing_input_locked", False)
+                    except Exception:
+                        pass
                 try:
                     timeline.set_playhead_busy(False)
                 except Exception:

@@ -5,6 +5,7 @@ ui/editor_lifecycle.py
 MainWindow 에디터 열기/저장/닫기 Mixin
 """
 import os
+import time
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import QTimer
 
@@ -131,6 +132,7 @@ class EditorLifecycleMixin:
         self._schedule_opened_editor_runtime_refresh(editor)
 
     def _open_srt_in_editor(self, srt_path):
+        started = time.perf_counter()
         from core.srt_parser import parse_srt
         from core.subtitle_existing import backup_existing_srt, find_media_for_srt, validate_srt_duration
         from core.project.project_context import (
@@ -237,6 +239,14 @@ class EditorLifecycleMixin:
             QTimer.singleShot(0, self._refresh_work_mode_ui)
         if hasattr(self, "_release_ai_models_for_editor_mode"):
             QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
+        get_logger().log_perf(
+            "editor.open_srt",
+            event="ready",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            linked_project=bool(linked_project),
+            segments=len(list(segments or [])),
+            media_found=bool(media_path and media_path != srt_path),
+        )
 
     def _finalize_reuse_completion(self, editor):
         """기존자막 reuse 완료 후 상태 전환"""
@@ -251,6 +261,7 @@ class EditorLifecycleMixin:
             get_logger().log(f'⚠️ reuse 완료 상태 전환 실패: {e}')
 
     def _init_editor(self, target_file, is_batch=False):
+        started = time.perf_counter()
         from ui.editor.editor_widget import EditorWidget
         self._current_work_mode = "editor"
         vname = os.path.basename(target_file); self._remove_old_editor()
@@ -261,6 +272,12 @@ class EditorLifecycleMixin:
             parent=self,
             defer_media_load=True,
             hydrate_existing_srt_on_empty=False,
+        )
+        get_logger().log_perf(
+            "editor.init",
+            event="widget_created",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            file=vname,
         )
         editor.is_auto_start = is_batch; self._editor_widget = editor
         editor._queue_mode_fit_view = bool(is_batch)
@@ -457,6 +474,14 @@ class EditorLifecycleMixin:
             )
         else:
             self._schedule_native_open_editor_media(editor, target_file)
+        get_logger().log_perf(
+            "editor.init",
+            event="ready",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            batch=bool(is_batch),
+            multiclip=bool(hasattr(self, "_multiclip_boundaries") and self._multiclip_boundaries),
+            project_clips=len(list(getattr(editor, "_project_clips", []) or [])),
+        )
 
     def _remove_old_editor(self):
         old = getattr(self, "_editor_widget", None)

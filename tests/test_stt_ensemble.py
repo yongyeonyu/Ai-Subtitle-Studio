@@ -61,6 +61,44 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertAlmostEqual(merged[0]["end"], 1.2)
         self.assertGreater(merged[0]["stt_ensemble_similarity"], 0.8)
 
+    def test_merge_collapses_same_source_duplicate_candidates_before_overlap_resolution(self):
+        primary = [
+            {
+                "start": 6.974,
+                "end": 8.959,
+                "text": "네 안녕하세요 소설기유모씨입니다",
+                "score": 80.52,
+                "quality": {"asr_metadata_score": 78, "correction_memory_score": 75, "confidence_score": 92.0},
+            },
+            {"start": 7.007, "end": 8.992, "text": "네 안녕하세요 소설과 유무시입니다", "score": 81.58},
+        ]
+        secondary = [
+            {"start": 6.957, "end": 9.276, "text": "네 안녕하세요 소설기유모씨입니다", "score": 83.49},
+            {"start": 7.007, "end": 8.992, "text": "네 안녕하세요 소설과 유무시입니다", "score": 83.95},
+        ]
+
+        merged = merge_stt_outputs(primary, secondary)
+
+        self.assertEqual(len(merged), 1)
+        self.assertGreaterEqual(merged[0]["end"] - merged[0]["start"], 1.8)
+        self.assertEqual(merged[0]["text"], "네 안녕하세요 소설기유모씨입니다")
+        self.assertEqual(len(merged[0]["stt_candidates"]), 2)
+
+    def test_merge_drops_primary_tail_when_long_row_covers_split_duplicate(self):
+        primary = [
+            {"start": 8.976, "end": 13.964, "text": "오늘은 여기 고향 현대모토 스튜디오에 나왔는데", "score": 80.52},
+            {"start": 9.009, "end": 11.995, "text": "오늘은 여기 고향", "score": 81.52},
+            {"start": 12.012, "end": 13.997, "text": "현대모토 스튜디오에 나왔는데", "score": 80.85},
+        ]
+        secondary = [
+            {"start": 9.293, "end": 14.431, "text": "오늘은 여기 고향 현대모토스튜디오에 나왔는데", "score": 83.49},
+        ]
+
+        merged = merge_stt_outputs(primary, secondary)
+
+        self.assertEqual([row["text"] for row in merged], ["오늘은 여기 고향 현대모토 스튜디오에 나왔는데"])
+        self.assertTrue(all((row["end"] - row["start"]) >= 0.28 for row in merged))
+
     def test_merge_preserves_secondary_only_segments(self):
         merged = merge_stt_outputs(
             [{"start": 0.0, "end": 1.0, "text": "첫 문장"}],

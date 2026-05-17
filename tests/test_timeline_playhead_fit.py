@@ -121,8 +121,12 @@ class _ClickEditor(EditorTimelineVideoMixin):
         return self._segments
 
 
-class _InlineEditEditor:
+class _InlineEditEditor(EditorSegmentsMixin):
     _on_inline_text_changed = EditorWidget._on_inline_text_changed
+
+
+class _TextEditedEditor(EditorSegmentsMixin):
+    _on_text_edited = EditorWidget._on_text_edited
 
 
 class _PipelineFitEditor(EditorPipelineMixin):
@@ -296,6 +300,109 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor._segments = [
             {"line": 0, "start": 1.0, "end": 4.0, "text": "앞 자막"},
             {"line": 1, "start": 4.0, "end": 6.0, "text": "붙은 자막"},
+        ]
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=1, active_seg_start=4.0, playhead_sec=4.5))
+        editor.video_player = SimpleNamespace(current_time=0.0)
+
+        try:
+            editor._trigger_magnet()
+
+            editor._undo_mgr.push_immediate.assert_called_once()
+            self.assertEqual(
+                editor._on_seg_time_changed.call_args_list,
+                [
+                    call(0, 1.0, 4.5, "diamond"),
+                    call(1, 4.5, 6.0, "diamond"),
+                ],
+            )
+        finally:
+            editor.text_edit.close()
+
+    def test_tab_prefers_gap_extension_over_unrelated_nearby_diamond_pair(self):
+        editor = _TabTimingEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._on_seg_time_changed = Mock()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("붙은 앞 자막\n현재 자막\n다음 자막")
+        first_block = editor.text_edit.document().findBlockByNumber(0)
+        first_block.setUserData(SubtitleBlockData("00", 1.0, end_sec=3.0))
+        second_block = editor.text_edit.document().findBlockByNumber(1)
+        second_block.setUserData(SubtitleBlockData("00", 3.0, end_sec=4.0))
+        third_block = editor.text_edit.document().findBlockByNumber(2)
+        third_block.setUserData(SubtitleBlockData("00", 6.0, end_sec=7.0))
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 3.0, "text": "붙은 앞 자막"},
+            {"line": 1, "start": 3.0, "end": 4.0, "text": "현재 자막"},
+            {"line": 2, "start": 6.0, "end": 7.0, "text": "다음 자막"},
+        ]
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=1, active_seg_start=3.0, playhead_sec=4.5))
+        editor.video_player = SimpleNamespace(current_time=0.0)
+        editor._subtitle_magnet_policy = lambda allow_sync_override=True: {
+            "continuous_threshold_sec": 1.0,
+            "lora_micro_merge_gap_sec": 0.3,
+            "deep_bridge_gap_sec": 0.3,
+            "lora_micro_merge_min_duration": 0.8,
+            "split_length_threshold": 20,
+        }
+
+        try:
+            editor._trigger_magnet()
+
+            editor._undo_mgr.push_immediate.assert_called_once()
+            editor._on_seg_time_changed.assert_called_once_with(1, 3.0, 4.5, "square_right")
+        finally:
+            editor.text_edit.close()
+
+    def test_tab_extends_single_nearest_edge_for_detached_gap(self):
+        editor = _TabTimingEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._on_seg_time_changed = Mock()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("짧다\n다음 자막")
+        first_block = editor.text_edit.document().findBlockByNumber(0)
+        first_block.setUserData(SubtitleBlockData("00", 1.0, end_sec=2.0))
+        second_block = editor.text_edit.document().findBlockByNumber(1)
+        second_block.setUserData(SubtitleBlockData("00", 3.0, end_sec=4.0))
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 2.0, "text": "짧다", "spk": "00"},
+            {"line": 1, "start": 3.0, "end": 4.0, "text": "다음 자막", "spk": "00"},
+        ]
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(
+                active_seg_line=0,
+                active_seg_start=1.0,
+                playhead_sec=2.5,
+            )
+        )
+        editor.video_player = SimpleNamespace(current_time=0.0)
+
+        try:
+            editor._trigger_magnet()
+
+            editor._undo_mgr.push_immediate.assert_called_once()
+            editor._on_seg_time_changed.assert_called_once_with(0, 1.0, 2.5, "square_right")
+        finally:
+            editor.text_edit.close()
+
+    def test_tab_moves_nearby_existing_diamond_before_extending_other_edges(self):
+        editor = _TabTimingEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._on_seg_time_changed = Mock()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("붙은 앞 자막\n붙은 뒤 자막\n멀리 떨어진 자막")
+        first_block = editor.text_edit.document().findBlockByNumber(0)
+        first_block.setUserData(SubtitleBlockData("00", 1.0, end_sec=4.0))
+        second_block = editor.text_edit.document().findBlockByNumber(1)
+        second_block.setUserData(SubtitleBlockData("00", 4.0, end_sec=6.0))
+        third_block = editor.text_edit.document().findBlockByNumber(2)
+        third_block.setUserData(SubtitleBlockData("00", 8.0, end_sec=9.0))
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 4.0, "text": "붙은 앞 자막"},
+            {"line": 1, "start": 4.0, "end": 6.0, "text": "붙은 뒤 자막"},
+            {"line": 2, "start": 8.0, "end": 9.0, "text": "멀리 떨어진 자막"},
         ]
         editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=1, active_seg_start=4.0, playhead_sec=4.5))
         editor.video_player = SimpleNamespace(current_time=0.0)
@@ -1382,11 +1489,31 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor.text_edit = QTextEdit()
         editor.text_edit.setPlainText("원본")
         block = editor.text_edit.document().findBlockByNumber(0)
-        block.setUserData(SubtitleBlockData("", 0.0, False))
+        block.setUserData(
+            SubtitleBlockData(
+                "",
+                0.0,
+                False,
+                end_sec=1.0,
+                quality={"confidence_label": "yellow", "flags": ["quality_stale"]},
+                quality_signature="old",
+                stt_selected_source="STT1",
+            )
+        )
         editor.timeline = SimpleNamespace(
             canvas=SimpleNamespace(_edit_active=True, _inline_commit_in_progress=False)
         )
-        editor._cached_segs = [{"line": 0, "start": 0.0, "end": 1.0, "text": "원본"}]
+        editor._cached_segs = [
+            {
+                "line": 0,
+                "start": 0.0,
+                "end": 1.0,
+                "text": "원본",
+                "quality": {"confidence_label": "yellow", "flags": ["quality_stale"]},
+            }
+        ]
+        editor._cached_line_map = {0: editor._cached_segs[0]}
+        editor._subtitle_memory_cache = build_segment_lookup(editor._cached_segs)
         editor._refresh_video_subtitle_context = Mock()
         editor._schedule_video_context_refresh = Mock()
 
@@ -1403,8 +1530,68 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertEqual(editor.text_edit.document().findBlockByNumber(0).text(), "최종")
             self.assertEqual(editor._cached_segs[0]["text"], "최종")
+            quality = editor.text_edit.document().findBlockByNumber(0).userData().quality
+            self.assertEqual(quality["confidence_label"], "green")
+            self.assertTrue(quality["manual_confirmed"])
+            self.assertIn("manual_confirmed", quality["flags"])
+            self.assertNotIn("quality_stale", quality["flags"])
             editor._refresh_video_subtitle_context.assert_not_called()
             editor._schedule_video_context_refresh.assert_called_once_with(24)
+        finally:
+            editor.text_edit.close()
+
+    def test_editor_text_edit_marks_segment_manual_confirmed_green(self):
+        editor = _TextEditedEditor()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("수정본")
+        block = editor.text_edit.document().findBlockByNumber(0)
+        block.setUserData(
+            SubtitleBlockData(
+                "00",
+                1.0,
+                False,
+                end_sec=2.0,
+                quality={"confidence_label": "red", "flags": ["high_cps"]},
+                quality_signature="old",
+            )
+        )
+        editor._cached_segs = [
+            {
+                "line": 0,
+                "start": 1.0,
+                "end": 2.0,
+                "text": "원본",
+                "quality": {"confidence_label": "red", "flags": ["high_cps"]},
+                "quality_signature": "old",
+            }
+        ]
+        editor._cached_line_map = {0: editor._cached_segs[0]}
+        editor._subtitle_memory_cache = build_segment_lookup(editor._cached_segs)
+        editor._segment_cache_valid = True
+        editor._last_segment_cache_block_count = 1
+        editor._sync_lock = False
+        editor._inline_updating = False
+        editor._subtitle_text_visibility_changed = False
+        editor._app_start_time = time.time() - 5.0
+        editor.sm = SimpleNamespace(is_locked=False, is_dirty=False, start_editing=Mock())
+        editor._schedule_video_context_refresh = Mock()
+        editor._schedule_timeline = Mock()
+        editor._note_editor_foreground_activity = Mock()
+
+        try:
+            cursor = editor.text_edit.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            editor.text_edit.setTextCursor(cursor)
+
+            editor._on_text_edited()
+
+            data = editor.text_edit.document().findBlockByNumber(0).userData()
+            self.assertEqual(data.quality["confidence_label"], "green")
+            self.assertTrue(data.quality["manual_confirmed"])
+            self.assertIn("manual_confirmed", data.quality["flags"])
+            self.assertNotIn("high_cps", data.quality["flags"])
+            self.assertEqual(editor._cached_segs[0]["quality"]["confidence_label"], "green")
+            self.assertTrue(editor._cached_segs[0]["quality"]["manual_confirmed"])
         finally:
             editor.text_edit.close()
 
@@ -1665,7 +1852,8 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             timeline.close()
 
     def test_ten_second_edit_window_button_order_and_active_segment_centering(self):
-        timeline = TimelineWidget()
+        with patch("ui.timeline.timeline_widget.load_settings", return_value={}):
+            timeline = TimelineWidget()
         try:
             timeline.resize(900, timeline.height())
             timeline.show()
@@ -1692,6 +1880,153 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertAlmostEqual(visible_center, 62.0, delta=0.4)
             self.assertFalse(timeline._fit_to_view_locked)
             self.assertTrue(timeline._manual_zoom_since_fit)
+        finally:
+            timeline.close()
+
+    def test_time_window_dialog_prefills_current_visible_seconds(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 180.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+            timeline.show_time_window_seconds(15.0, center_sec=40.0)
+
+            with patch("ui.timeline.timeline_widget.QInputDialog") as dialog_cls:
+                dialog = dialog_cls.return_value
+                dialog.exec.return_value = False
+                timeline._show_time_window_seconds_dialog()
+
+            dialog.setIntValue.assert_called_once_with(15)
+            label_text = dialog.setLabelText.call_args.args[0]
+            self.assertIn("현재 표시 시간: 15초", label_text)
+            self.assertIn("1초 단위", label_text)
+        finally:
+            timeline.close()
+
+    def test_time_window_dialog_applies_selected_seconds_around_current_center(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 240.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+            timeline.show_time_window_seconds(10.0, center_sec=82.0)
+
+            before_center = timeline.scroll.horizontalScrollBar().value() / max(0.001, timeline.canvas.pps)
+            before_center += timeline._current_visible_seconds() / 2.0
+
+            with patch("ui.timeline.timeline_widget.QInputDialog") as dialog_cls:
+                dialog = dialog_cls.return_value
+                dialog.exec.return_value = True
+                dialog.intValue.return_value = 20
+                timeline._show_time_window_seconds_dialog()
+
+            visible_seconds = timeline.scroll.viewport().width() / max(0.001, float(timeline.canvas.pps))
+            visible_start = timeline.scroll.horizontalScrollBar().value() / max(0.001, float(timeline.canvas.pps))
+            visible_center = visible_start + (visible_seconds / 2.0)
+            self.assertAlmostEqual(visible_seconds, 20.0, delta=0.4)
+            self.assertAlmostEqual(visible_center, before_center, delta=0.4)
+            self.assertTrue(timeline._manual_zoom_since_fit)
+            self.assertFalse(timeline._fit_to_view_locked)
+        finally:
+            timeline.close()
+
+    def test_time_window_dialog_saves_selected_seconds_to_user_settings(self):
+        with patch("ui.timeline.timeline_widget.load_settings", return_value={"selected_model": "exaone"}):
+            timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 240.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+            timeline.show_time_window_seconds(10.0, center_sec=82.0)
+
+            with patch("ui.timeline.timeline_widget.QInputDialog") as dialog_cls, \
+                 patch("ui.timeline.timeline_widget.load_settings", return_value={"selected_model": "exaone"}), \
+                 patch("ui.timeline.timeline_widget.save_settings") as save_mock:
+                dialog = dialog_cls.return_value
+                dialog.exec.return_value = True
+                dialog.intValue.return_value = 17
+                timeline._show_time_window_seconds_dialog()
+
+            saved = save_mock.call_args.args[0]
+            self.assertEqual(saved["selected_model"], "exaone")
+            self.assertEqual(saved["timeline_edit_window_seconds"], 17)
+            self.assertEqual(timeline._preferred_edit_window_seconds, 17.0)
+            self.assertIn("17초", timeline.time_window_btn.toolTip())
+        finally:
+            timeline.close()
+
+    def test_time_window_dialog_persists_default_value_when_reapplied(self):
+        with patch("ui.timeline.timeline_widget.load_settings", return_value={"selected_model": "exaone"}):
+            timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 240.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+            timeline.show_time_window_seconds(10.0, center_sec=82.0)
+
+            with patch("ui.timeline.timeline_widget.QInputDialog") as dialog_cls, \
+                 patch("ui.timeline.timeline_widget.load_settings", return_value={"selected_model": "exaone"}), \
+                 patch("ui.timeline.timeline_widget.save_settings") as save_mock:
+                dialog = dialog_cls.return_value
+                dialog.exec.return_value = True
+                dialog.intValue.return_value = 10
+                timeline._show_time_window_seconds_dialog()
+
+            save_mock.assert_called_once()
+            saved = save_mock.call_args.args[0]
+            self.assertEqual(saved["selected_model"], "exaone")
+            self.assertEqual(saved["timeline_edit_window_seconds"], 10)
+            self.assertEqual(timeline._preferred_edit_window_seconds, 10.0)
+            self.assertIn("10초", timeline.time_window_btn.toolTip())
+        finally:
+            timeline.close()
+
+    def test_show_ten_second_edit_window_uses_saved_user_preference(self):
+        with patch("ui.timeline.timeline_widget.load_settings", return_value={"timeline_edit_window_seconds": 20}):
+            timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 180.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.segments = [
+                {"start": 60.0, "end": 64.0, "text": "편집 중", "line": 0},
+            ]
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+            timeline.canvas.set_active(60.0)
+
+            timeline.show_ten_second_edit_window()
+
+            viewport_w = max(1, timeline.scroll.viewport().width())
+            visible_seconds = viewport_w / max(0.001, timeline.canvas.pps)
+            visible_start = timeline.scroll.horizontalScrollBar().value() / max(0.001, timeline.canvas.pps)
+            visible_center = visible_start + (visible_seconds / 2.0)
+            self.assertAlmostEqual(visible_seconds, 20.0, delta=0.4)
+            self.assertAlmostEqual(visible_center, 62.0, delta=0.4)
+            self.assertIn("20초", timeline.time_window_btn.toolTip())
         finally:
             timeline.close()
 
@@ -1971,7 +2306,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         self.assertFalse(editor._auto_fit_timeline_if_user_view_allows(timeline))
         timeline.auto_fit_to_view.assert_not_called()
 
-    def test_playhead_uses_overlay_without_canvas_body_repaint(self):
+    def test_playhead_uses_canvas_repaint_when_overlay_is_disabled_for_visibility(self):
         timeline = TimelineWidget()
         try:
             timeline.resize(900, timeline.height())
@@ -1983,12 +2318,13 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             timeline.set_playhead(2.5)
             self.app.processEvents()
 
-            self.assertTrue(getattr(timeline.canvas, "_external_playhead_overlay", False))
+            self.assertFalse(getattr(timeline.canvas, "_external_playhead_overlay", True))
             self.assertEqual(timeline.canvas.playhead_sec, 2.5)
             self.assertEqual(timeline.canvas._last_playhead_px, timeline.canvas._x(2.5))
-            timeline.canvas.update.assert_not_called()
+            timeline.canvas.update.assert_called_once()
             self.assertEqual(timeline._playhead_overlay._sec, 2.5)
             self.assertIs(timeline._playhead_overlay.parent(), timeline.scroll.viewport())
+            self.assertTrue(timeline._playhead_overlay.isHidden())
         finally:
             timeline.close()
 
@@ -2913,12 +3249,14 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
-    def test_playhead_overlay_stays_qwidget_to_keep_canvas_visible(self):
+    def test_playhead_overlay_stays_hidden_to_keep_canvas_visible(self):
         timeline = TimelineWidget()
         try:
             self.assertIsNone(getattr(timeline._playhead_overlay, "_quick", None))
             self.assertTrue(timeline._playhead_overlay.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
             self.assertIs(timeline._playhead_overlay.parent(), timeline.scroll.viewport())
+            self.assertTrue(timeline._playhead_overlay.isHidden())
+            self.assertFalse(getattr(timeline.canvas, "_external_playhead_overlay", True))
         finally:
             timeline.close()
 

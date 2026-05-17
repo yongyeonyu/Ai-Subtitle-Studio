@@ -71,6 +71,9 @@ class _GapGenerateEditor(EditorTimelineVideoMixin, EditorSegmentsMixin):
     def _finalize_edit(self):
         self.finalized = True
 
+    def _mark_dirty(self):
+        self.dirty = True
+
 
 class _ReviewEditor(EditorVideoControlsMixin, EditorSegmentsMixin):
     def __init__(self):
@@ -2508,6 +2511,40 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertTrue(data.quality["manual_confirmed"])
             self.assertIn("manual_confirmed", data.quality["flags"])
             self.assertNotIn("quality_stale", data.quality["flags"])
+        finally:
+            editor.text_edit.close()
+
+    def test_segment_timing_edit_marks_segment_manual_confirmed_green(self):
+        editor = _GapGenerateEditor()
+        editor._undo_mgr = _Undo()
+        editor.video_player = None
+        editor.video_fps = 30.0
+        editor.timeline = None
+        editor.text_edit = _TimelineTextEdit()
+        editor.dirty = False
+        try:
+            editor.text_edit.setPlainText("길이 수정")
+            doc = editor.text_edit.document()
+            doc.findBlockByNumber(0).setUserData(
+                SubtitleBlockData(
+                    "00",
+                    1.0,
+                    is_gap=False,
+                    end_sec=2.0,
+                    quality={"confidence_label": "yellow", "flags": ["quality_stale"]},
+                    quality_signature="old",
+                )
+            )
+
+            editor._on_seg_time_changed(0, 1.0, 2.4, "square_right")
+
+            data = doc.findBlockByNumber(0).userData()
+            self.assertAlmostEqual(data.end_sec, 2.4, places=3)
+            self.assertEqual(data.quality["confidence_label"], "green")
+            self.assertTrue(data.quality["manual_confirmed"])
+            self.assertIn("manual_confirmed", data.quality["flags"])
+            self.assertNotIn("quality_stale", data.quality["flags"])
+            self.assertTrue(editor.dirty)
         finally:
             editor.text_edit.close()
 

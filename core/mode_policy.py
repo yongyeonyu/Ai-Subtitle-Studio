@@ -11,6 +11,18 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from core.mode_manager import (
+    MODE_LABELS,
+    MODE_ORDER,
+    MODE_TO_STT_QUALITY,
+    apply_mode_scope_quality,
+    mode_items,
+    mode_label,
+    mode_to_stt_quality,
+    normalize_mode,
+    selected_mode_from_settings,
+    stt_quality_to_mode,
+)
 from core.native_macos_acceleration import mac_native_runtime_overrides
 from core.audio.stt_quality_presets import mode_locked_vad_settings
 
@@ -19,26 +31,6 @@ MODE_POLICY_SCHEMA = "ai_subtitle_studio.mode_policy.v1"
 MODE_DASHBOARD_SCHEMA = "ai_subtitle_studio.engine_dashboard.v1"
 MODE_PREFLIGHT_SCHEMA = "ai_subtitle_studio.mode_preflight.v1"
 MODE_TOOL_STACK_SCHEMA = "ai_subtitle_studio.subtitle_tool_stack.v1"
-
-MODE_ORDER = ("fast", "auto", "high", "stt")
-MODE_LABELS = {
-    "fast": "Fast",
-    "auto": "Auto",
-    "high": "High",
-    "stt": "STT 모드",
-}
-MODE_TO_STT_QUALITY = {
-    "fast": "fast",
-    "auto": "balanced",
-    "high": "precise",
-    "stt": "stt",
-}
-STT_QUALITY_TO_MODE = {
-    "fast": "fast",
-    "balanced": "auto",
-    "precise": "high",
-    "stt": "stt",
-}
 
 ENGINE_DASHBOARD_STEPS = (
     ("cut_boundary", "컷 경계"),
@@ -114,17 +106,19 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
-def _restore_user_selected_stt2_route(out: dict[str, Any], base: dict[str, Any]) -> None:
-    secondary_model = str(base.get("selected_whisper_model_secondary") or "").strip()
-    if not secondary_model:
-        return
-    user_selected = _safe_bool(base.get("stt_ensemble_user_selected"), False)
-    explicit_enabled_setting = "stt_ensemble_enabled" in base
-    if not user_selected and not explicit_enabled_setting:
-        return
-    out["selected_whisper_model_secondary"] = secondary_model
-    out["stt_ensemble_enabled"] = _safe_bool(base.get("stt_ensemble_enabled"), False)
-    out["stt_ensemble_user_selected"] = True
+def mode_stt_support_flags(mode: Any) -> dict[str, bool]:
+    """Return STT2/candidate-judge switches owned by the user-facing Mode."""
+    key = normalize_mode(mode)
+    high_quality = key == "high"
+    return {
+        "stt_ensemble_enabled": high_quality,
+        "stt_ensemble_llm_judge_enabled": high_quality,
+        "stt_ensemble_user_selected": False,
+    }
+
+
+def _apply_mode_stt_support_flags(out: dict[str, Any], mode: Any) -> None:
+    out.update(mode_stt_support_flags(mode))
 
 
 def _short_model_name(value: Any) -> str:
@@ -176,87 +170,6 @@ def _disable_subtitle_llm_settings(
     )
 
 
-def normalize_mode(value: Any, *, default: str = "auto") -> str:
-    text = str(value or "").strip().lower()
-    aliases = {
-        "fast": "fast",
-        "speed": "fast",
-        "quick": "fast",
-        "빠름": "fast",
-        "빠른": "fast",
-        "빠른 인식": "fast",
-        "빠른인식": "fast",
-        "auto": "auto",
-        "automatic": "auto",
-        "autopilot": "auto",
-        "default": "auto",
-        "normal": "auto",
-        "balanced": "auto",
-        "balance": "auto",
-        "보통": "auto",
-        "균형": "auto",
-        "자동": "auto",
-        "high": "high",
-        "precise": "high",
-        "quality": "high",
-        "accuracy": "high",
-        "정밀": "high",
-        "정확도 우선": "high",
-        "정밀 인식": "high",
-        "정밀인식": "high",
-        "높음": "high",
-        "stt": "stt",
-        "stt mode": "stt",
-        "stt 모드": "stt",
-        "수동 stt": "stt",
-        "수동": "stt",
-        "받아쓰기": "stt",
-    }
-    if not text:
-        return normalize_mode(default, default="auto") if default != "" else "auto"
-    return aliases.get(text, normalize_mode(default, default="auto") if text not in MODE_ORDER else text)
-
-
-def mode_to_stt_quality(mode: Any) -> str:
-    return MODE_TO_STT_QUALITY[normalize_mode(mode)]
-
-
-def stt_quality_to_mode(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    if text in STT_QUALITY_TO_MODE:
-        return STT_QUALITY_TO_MODE[text]
-    return normalize_mode(text)
-
-
-def mode_label(mode: Any) -> str:
-    key = normalize_mode(mode)
-    return MODE_LABELS[key]
-
-
-def mode_items() -> list[tuple[str, str]]:
-    return [(key, MODE_LABELS[key]) for key in MODE_ORDER]
-
-
-def selected_mode_from_settings(settings: dict[str, Any] | None) -> str:
-    data = dict(settings or {})
-    for key in ("subtitle_mode", "mode", "user_facing_mode"):
-        value = data.get(key)
-        if str(value or "").strip():
-            return normalize_mode(value)
-    legacy_mode = str(data.get("simple_operation_mode") or "").strip()
-    quality_value = data.get("stt_quality_preset") or data.get("auto_start_mode")
-    quality_mode = stt_quality_to_mode(quality_value) if str(quality_value or "").strip() else ""
-    if legacy_mode:
-        normalized = normalize_mode(legacy_mode)
-        # Older settings often stored simple_operation_mode=auto while the real
-        # user quality choice lived in stt_quality_preset. Keep that choice when
-        # no new subtitle_mode has been written yet.
-        if normalized == "auto" and quality_mode in {"fast", "high"}:
-            return quality_mode
-        return normalized
-    return stt_quality_to_mode(data.get("stt_quality_preset") or data.get("auto_start_mode") or "balanced")
-
-
 def _llm_enabled(settings: dict[str, Any], *, prefix: str = "subtitle") -> bool:
     if prefix == "roughcut":
         if not _safe_bool(settings.get("roughcut_llm_enabled"), False):
@@ -274,7 +187,7 @@ def _llm_enabled(settings: dict[str, Any], *, prefix: str = "subtitle") -> bool:
 def _audio_value(settings: dict[str, Any], mode: str) -> tuple[str, str, str]:
     selected = str(settings.get("selected_audio_ai", "") or "").strip()
     if selected:
-        return selected, "user-selected", f"사용자가 음성 모델 {selected}을 선택했습니다."
+        return selected, "mode-selected", f"{mode_label(mode)} mode applies benchmarked audio filter {selected}."
     if mode == "fast":
         return "none", "mode-selected", "Fast mode uses the lightest usable audio path."
     if mode == "stt":
@@ -287,7 +200,7 @@ def _audio_value(settings: dict[str, Any], mode: str) -> tuple[str, str, str]:
 def _vad_value(settings: dict[str, Any], mode: str) -> tuple[str, str, str]:
     selected = str(settings.get("selected_vad", "") or "").strip()
     if selected:
-        return selected, "user-selected", f"사용자가 VAD 모델 {selected}을 선택했습니다."
+        return selected, "mode-selected", f"{mode_label(mode)} mode applies benchmarked VAD model {selected}."
     if mode == "fast":
         return "silero-lite", "mode-selected", "Fast mode uses one lightweight VAD model."
     if mode == "stt":
@@ -473,10 +386,10 @@ def resolve_mode_policy(
             "vad": {"selected": vad_value, "state": vad_state, "dual": True, "reason": vad_reason},
             "stt": {
                 "stt1_profile": "high",
-                "stt2_enabled": False,
+                "stt2_enabled": True,
                 "speaker_diarization": False,
                 "decoder": "precise",
-                "reason": "High mode uses STT1 plus low-score word timestamps; STT2 rescue stays off unless explicitly benchmarked.",
+                "reason": "High mode runs STT2 as an automatic missing-span/quality backstop.",
             },
             "llm": {
                 "subtitle_enabled": bool(subtitle_llm_enabled),
@@ -716,10 +629,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
         )
     )
     out.pop("_ignore_saved_quality_preset_once", None)
-    out["subtitle_mode"] = mode
-    out["simple_operation_mode"] = mode
-    out["stt_quality_preset"] = quality_key
-    out["auto_start_mode"] = quality_key
+    out = apply_mode_scope_quality(out, mode)
     out.update(mode_locked_vad_settings(quality_key))
     if mode == "high" and explicit_subtitle_llm and base_has_subtitle_llm:
         out["selected_model"] = base_model
@@ -744,6 +654,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "automatic_whisper_pipeline": False,
                 "selected_model": "사용 안함 (STT 모드)",
                 "selected_llm_provider": "none",
+                "selected_audio_ai": "none",
                 "subtitle_llm_user_selected": False,
                 "subtitle_llm_runtime_enabled": False,
                 "subtitle_llm_mode_disabled": True,
@@ -865,7 +776,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "scan_cut_level": "medium",
                 "scan_cut_boundary_level": "medium",
                 "scan_cut_audio_gain_enabled": True,
-                "stt_ensemble_enabled": False,
+                "stt_ensemble_enabled": True,
                 "stt_ensemble_llm_judge_enabled": True,
                 "stt_ensemble_llm_judge_require_risk": True,
                 "stt_ensemble_llm_judge_local_only": True,
@@ -942,6 +853,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "runtime_scheduler_ramp_up_enabled": False,
             }
         )
+        _apply_mode_stt_support_flags(out, mode)
         out["subtitle_llm_effective_model"] = str(out.get("selected_model", "") or "")
         out["subtitle_llm_runtime_enabled"] = bool(
             out["subtitle_llm_effective_model"] and "사용 안함" not in out["subtitle_llm_effective_model"]
@@ -1010,6 +922,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "runtime_scheduler_ramp_step_sec": 60.0,
             }
         )
+        _apply_mode_stt_support_flags(out, mode)
         _disable_subtitle_llm_settings(
             out,
             mode=mode,
@@ -1041,7 +954,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
         }
     )
     out.update(mac_native_runtime_overrides(out))
-    _restore_user_selected_stt2_route(out, base)
+    _apply_mode_stt_support_flags(out, mode)
 
     policy = resolve_mode_policy(out)
     out["mode_policy_snapshot"] = {
@@ -1130,6 +1043,7 @@ __all__ = [
     "dashboard_plain_lines",
     "mode_items",
     "mode_label",
+    "mode_stt_support_flags",
     "mode_to_stt_quality",
     "normalize_mode",
     "preflight_mode_decision",

@@ -3,6 +3,7 @@
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from core.roughcut import (
@@ -929,6 +930,7 @@ class EditorRoughcutDraftTests(unittest.TestCase):
                 self._roughcut_widget = None
                 self._editor_roughcut_result = None
                 self._multiclip_boundaries = []
+                self._auto_processing_active = True
 
         class _Editor(EditorRoughcutDraftMixin):
             def __init__(self, main):
@@ -941,6 +943,15 @@ class EditorRoughcutDraftTests(unittest.TestCase):
                 self.media_path = "/tmp/source.mp4"
                 self.release_calls = 0
                 self.redraw_calls = 0
+                self.sm = SimpleNamespace(is_locked=True, state="ST_PROC", complete_ai=mock.Mock())
+                self.timeline = SimpleNamespace(
+                    canvas=SimpleNamespace(
+                        _editor_processing_input_locked=True,
+                        setProperty=mock.Mock(),
+                    ),
+                    set_playhead_busy=mock.Mock(),
+                    set_playback_center_lock=mock.Mock(),
+                )
 
             def window(self):
                 return self._main
@@ -978,19 +989,26 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         editor = _Editor(main)
 
         with mock.patch("ui.editor.editor_roughcut_draft.QTimer.singleShot", side_effect=lambda _delay, callback: callback()), \
-             mock.patch("core.project.project_manager.save_project") as save_project, \
+             mock.patch("core.project.project_manager.save_project_roughcut_state") as save_project_roughcut_state, \
              mock.patch("core.project.project_io.read_project_file", return_value={"roughcut_state": {}}), \
              mock.patch("ui.editor.editor_roughcut_draft.os.path.exists", return_value=False):
             editor._apply_post_generation_roughcut_draft(result, segments, candidate)
 
-        save_project.assert_called_once()
+        save_project_roughcut_state.assert_called_once()
         self.assertEqual(
-            save_project.call_args.kwargs.get("preliminary_middle_segments"),
+            save_project_roughcut_state.call_args.kwargs.get("preliminary_middle_segments"),
             list(candidate.get("segments", []) or []),
         )
+        self.assertNotIn("segments", save_project_roughcut_state.call_args.kwargs)
         self.assertEqual(editor._roughcut_draft_status, "done")
         self.assertEqual(editor.release_calls, 1)
         self.assertEqual(editor.redraw_calls, 1)
+        editor.sm.complete_ai.assert_called_once()
+        self.assertFalse(editor.timeline.canvas._editor_processing_input_locked)
+        editor.timeline.canvas.setProperty.assert_any_call("editor_processing_input_locked", False)
+        editor.timeline.set_playhead_busy.assert_called_with(False)
+        editor.timeline.set_playback_center_lock.assert_called_with(False)
+        self.assertFalse(main._auto_processing_active)
         self.assertIs(main._editor_roughcut_result, result)
         self.assertIsNone(editor._roughcut_draft_thread)
         self.assertEqual(

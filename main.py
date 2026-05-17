@@ -6,6 +6,7 @@ import os
 import socket
 import faulthandler
 import threading
+import time
 import warnings
 import traceback
 
@@ -303,11 +304,22 @@ def _cleanup_stale_preview_proxy_processes_for_app_launch_async() -> None:
 
 
 def main():
+    launch_started = time.perf_counter()
+    logger = get_logger()
+    logger.log_perf(
+        "app.main",
+        event="enter",
+        stage="runtime",
+        offscreen=str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen",
+        argv=len(sys.argv),
+    )
     global _PREV_QT_MESSAGE_HANDLER
     app = QApplication(sys.argv)
+    logger.log_perf("app.main", event="qapplication_ready", elapsed_ms=(time.perf_counter() - launch_started) * 1000.0)
     install_qmessagebox_hooks()
     _PREV_QT_MESSAGE_HANDLER = qInstallMessageHandler(_qt_message_handler)
     configure_qt_runtime()
+    logger.log_perf("app.main", event="qt_runtime_ready", elapsed_ms=(time.perf_counter() - launch_started) * 1000.0)
     _cleanup_stale_preview_proxy_processes_for_app_launch_async()
     try:
         profile = _NATIVE_RUNTIME_META.get("profile", "balanced")
@@ -349,6 +361,7 @@ def main():
     install_button_click_feedback(app)
 
     win = MainWindow()
+    logger.log_perf("app.main", event="main_window_ready", elapsed_ms=(time.perf_counter() - launch_started) * 1000.0)
     if _instance_command_server is not None:
         _instance_command_server.set_handler(
             lambda payload: win.dispatch_external_app_command(payload, timeout_sec=15.0)
@@ -400,6 +413,7 @@ def main():
     from core.pipeline.backend_core import CoreBackend
     backend = CoreBackend(win)
     win.backend = backend
+    logger.log_perf("app.main", event="backend_ready", elapsed_ms=(time.perf_counter() - launch_started) * 1000.0)
 
     # 데이터 채우기
     win.recent_folders = get_recent_folders()
@@ -407,7 +421,15 @@ def main():
 
     # 화면을 먼저 띄우고, 무거운 시작 작업은 MainWindow.showEvent 이후로 넘긴다.
     win.showMaximized()
-    QTimer.singleShot(700 if getattr(config, "IS_MAC", False) else 0, _start_ollama_runtime_for_app_launch)
+    ollama_delay_ms = 700 if getattr(config, "IS_MAC", False) else 0
+    logger.log_perf("app.main", event="window_shown", elapsed_ms=(time.perf_counter() - launch_started) * 1000.0)
+    QTimer.singleShot(ollama_delay_ms, _start_ollama_runtime_for_app_launch)
+    logger.log_perf(
+        "app.main",
+        event="event_loop_enter",
+        elapsed_ms=(time.perf_counter() - launch_started) * 1000.0,
+        ollama_delay_ms=ollama_delay_ms,
+    )
 
     sys.exit(app.exec())
 

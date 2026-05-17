@@ -17,7 +17,7 @@ from core.pipeline_status import generation_stage_label, process_mode_label
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 from ui.gpu_rendering import scenegraph_enabled
 from ui.responsive_profile import responsive_profile_for_size
-from ui.style import label_style, line_icon, tool_button_style
+from ui.style import COLORS, label_style, line_icon, tool_button_style
 
 MENU_BAR_HEIGHT = 48
 MENU_BUTTON_HEIGHT = 38
@@ -58,7 +58,7 @@ class StatusRail(QWidget):
         self._quick_mode_text = "에디터"
         self._quick_stage_text = "검토"
         self._quick_icon_text = "ED"
-        self._quick_color = "#34C759"
+        self._quick_color = COLORS["accent"]
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setHorizontalSpacing(0)
@@ -72,7 +72,7 @@ class StatusRail(QWidget):
     def _rail_button(self, text, icon):
         btn = QToolButton()
         btn.setText(text)
-        btn.setIcon(line_icon(icon, "#A9B0B7", 20))
+        btn.setIcon(line_icon(icon, COLORS["muted"], 20))
         btn.setIconSize(QSize(15, 15))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         btn.setFixedHeight(26)
@@ -106,14 +106,14 @@ class StatusRail(QWidget):
             stt_mode_enabled=bool(getattr(editor, "_stt_mode_enabled", False)) if editor is not None else False,
         )
         meta = {
-            "에디터": ("에디터", "edit", "#34C759"),
-            "러프컷": ("러프컷", "roughcut", "#FF9500"),
-            "숏폼": ("숏폼", "shortform", "#A678F4"),
-            "STT": ("STT", "mic", "#FF453A"),
-            "자동 처리": ("자동 처리", "ai", "#34C759"),
-            "구간 생성": ("구간 생성", "timeline", "#579DFF"),
-            "이후 생성": ("이후 생성", "timeline", "#579DFF"),
-            "자막 생성": ("자막 생성", "ai", "#34C759"),
+            "에디터": ("에디터", "edit", COLORS["accent"]),
+            "러프컷": ("러프컷", "roughcut", "#FF9F0A"),
+            "숏폼": ("숏폼", "shortform", COLORS["purple"]),
+            "STT": ("STT", "mic", COLORS["danger"]),
+            "자동 처리": ("자동 처리", "ai", COLORS["accent"]),
+            "구간 생성": ("구간 생성", "timeline", COLORS["info"]),
+            "이후 생성": ("이후 생성", "timeline", COLORS["info"]),
+            "자막 생성": ("자막 생성", "ai", COLORS["accent"]),
         }
         return meta.get(label, meta["에디터"])
 
@@ -247,19 +247,19 @@ class StatusRail(QWidget):
             "ai": "AI",
             "timeline": "CUT",
         }.get(str(icon or ""), "AI")
-        self._quick_color = str(color or "#34C759")
+        self._quick_color = str(color or COLORS["accent"])
         self._sync_quick_shell()
 
     def _state_style(self, flash=False):
-        bg = "#173D28" if flash else "#15331F"
+        bg = COLORS["accent_surface_hover"] if flash else COLORS["accent_surface"]
         return (
             "QToolButton { "
-            f"background: {bg}; color: #D9FFE3; border: 1px solid #34C759; "
+            f"background: {bg}; color: #D9FFE3; border: 1px solid {COLORS['accent']}; "
             "border-radius: 7px; padding: 3px 8px; font-size: 11px; font-weight: 700; "
             "text-align: left; "
             "} "
             "QToolButton:hover { "
-            f"background: {bg}; color: #D9FFE3; border: 1px solid #34C759; "
+            f"background: {bg}; color: #D9FFE3; border: 1px solid {COLORS['accent']}; "
             "} "
             "QToolButton::menu-indicator { image: none; }"
         )
@@ -321,7 +321,7 @@ class StatusRail(QWidget):
             root.setProperty("modeText", str(getattr(self, "_quick_mode_text", "에디터") or "에디터"))
             root.setProperty("stageText", str(getattr(self, "_quick_stage_text", "대기") or "대기"))
             root.setProperty("iconText", str(getattr(self, "_quick_icon_text", "AI") or "AI"))
-            root.setProperty("accentColor", QColor(str(getattr(self, "_quick_color", "#34C759") or "#34C759")))
+            root.setProperty("accentColor", QColor(str(getattr(self, "_quick_color", COLORS["accent"]) or COLORS["accent"])))
             root.setProperty("flashOn", bool(getattr(self, "_flash_on", False)))
         except Exception:
             pass
@@ -352,7 +352,7 @@ class GlobalMenuBar(QWidget):
         self.setStyleSheet(
             "QWidget#GlobalMenuBar { background: transparent; border: none; } "
             "QWidget#GlobalMenuBarShell { "
-            f"background: #151C20; border: 1px solid #2D3942; border-radius: {MENU_PANEL_RADIUS}px; "
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['separator']}; border-radius: {MENU_PANEL_RADIUS}px; "
             "} "
             "QWidget#MenuBarGroup { background: transparent; border: none; }"
         )
@@ -378,12 +378,12 @@ class GlobalMenuBar(QWidget):
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(5)
         for text, icon, slot, color in [
-            ("설정", "settings", self._open_ai, "#34C759"),
-            *([("개인화", "ai", self._open_personalization, "#34C759")] if config.IS_MAC else []),
-            ("화자", "speaker", self._open_speaker, "#A678F4"),
-            ("비디오", "video", self._toggle_video, "#579DFF"),
-            ("자막", "export", self._open_export, "#34C759"),
-            ("음성", "mic", self._toggle_stt_mode, "#FF453A"),
+            ("설정", "settings", self._open_ai, COLORS["accent"]),
+            *([("개인화", "ai", self._open_personalization, COLORS["accent"])] if config.IS_MAC else []),
+            ("화자", "speaker", self._open_speaker, COLORS["purple"]),
+            ("비디오", "video", self._toggle_video, COLORS["info"]),
+            ("자막", "export", self._open_export, COLORS["accent"]),
+            ("음성", "mic", self._toggle_stt_mode, COLORS["danger"]),
         ]:
             btn = self._small_button(text, icon, slot, color)
             self._register_qml_button(
@@ -407,10 +407,10 @@ class GlobalMenuBar(QWidget):
         self.btn_undo = self._action_button("실행취소", "undo", self._click_undo)
         self.btn_redo = self._action_button("다시실행", "redo", self._click_redo)
         self.btn_save = self._action_button("저장", "save", self._click_save)
-        self._register_qml_button(self.btn_start, action_id="center_start", badge="", accent="#34C759", section="center", kind="primary")
-        self._register_qml_button(self.btn_undo, action_id="center_undo", badge="", accent="#579DFF", section="center")
-        self._register_qml_button(self.btn_redo, action_id="center_redo", badge="", accent="#579DFF", section="center")
-        self._register_qml_button(self.btn_save, action_id="center_save", badge="", accent="#34C759", section="center")
+        self._register_qml_button(self.btn_start, action_id="center_start", badge="", accent=COLORS["accent"], section="center", kind="primary")
+        self._register_qml_button(self.btn_undo, action_id="center_undo", badge="", accent=COLORS["info"], section="center")
+        self._register_qml_button(self.btn_redo, action_id="center_redo", badge="", accent=COLORS["info"], section="center")
+        self._register_qml_button(self.btn_save, action_id="center_save", badge="", accent=COLORS["accent"], section="center")
         for btn in (self.btn_start, self.btn_undo, self.btn_redo, self.btn_save):
             center.addWidget(btn)
         root.addWidget(self.center_group, stretch=0, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -424,10 +424,10 @@ class GlobalMenuBar(QWidget):
         self.btn_help = self._wide_button("도움말", "help", self._open_help)
         self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=MENU_CACHE_WIDTH)
         self.btn_quit = self._wide_button("종료", "power", self._quit, kind="danger")
-        self._register_qml_button(self.btn_cache_clear, action_id="right_cache", badge="", accent="#FF9500", section="right")
-        self._register_qml_button(self.btn_auto_start, action_id="right_auto", badge="", accent="#34C759", section="right")
-        self._register_qml_button(self.btn_help, action_id="right_help", badge="", accent="#579DFF", section="right")
-        self._register_qml_button(self.btn_quit, action_id="right_quit", badge="", accent="#FF453A", section="right", kind="danger")
+        self._register_qml_button(self.btn_cache_clear, action_id="right_cache", badge="", accent="#FF9F0A", section="right")
+        self._register_qml_button(self.btn_auto_start, action_id="right_auto", badge="", accent=COLORS["accent"], section="right")
+        self._register_qml_button(self.btn_help, action_id="right_help", badge="", accent=COLORS["info"], section="right")
+        self._register_qml_button(self.btn_quit, action_id="right_quit", badge="", accent=COLORS["danger"], section="right", kind="danger")
         right.addWidget(self.btn_cache_clear)
         right.addWidget(self.btn_auto_start)
         right.addWidget(self.btn_help)
@@ -443,10 +443,10 @@ class GlobalMenuBar(QWidget):
 
         self.refresh()
 
-    def _small_button(self, text, icon_name, slot, color="#A9B0B7"):
+    def _small_button(self, text, icon_name, slot, color=None):
         btn = QToolButton()
         btn.setText(text)
-        btn.setIcon(line_icon(icon_name, color, 22))
+        btn.setIcon(line_icon(icon_name, str(color or COLORS["muted"]), 22))
         btn.setIconSize(QSize(MENU_SMALL_ICON, MENU_SMALL_ICON))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
@@ -558,7 +558,7 @@ class GlobalMenuBar(QWidget):
         self._sync_quick_shell()
         stt_on = bool(getattr(editor, "_stt_mode_enabled", False)) if editor is not None else False
         if hasattr(self, "btn_stt_mode"):
-            stt_color = "#FF453A" if stt_on else "#8B949E"
+            stt_color = COLORS["danger"] if stt_on else COLORS["neutral"]
             self.btn_stt_mode.setText("음성")
             self.btn_stt_mode.setIcon(line_icon("mic", stt_color, 22))
             self.btn_stt_mode.setToolTip("STT 모드 ON" if stt_on else "STT 모드 OFF")
@@ -566,10 +566,10 @@ class GlobalMenuBar(QWidget):
         main = self.main_window
         auto_on = bool(getattr(main, "_auto_start_on", True))
         self.btn_auto_start.setText("자동")
-        auto_color = "#34C759" if auto_on else "#8B949E"
+        auto_color = COLORS["accent"] if auto_on else COLORS["neutral"]
         self.btn_auto_start.setIcon(line_icon("auto", auto_color, 22))
         self.btn_auto_start.setStyleSheet(tool_button_style("toolbar", checked=auto_on, padding=MENU_TEXT_UNDER_ICON_PADDING))
-        self.btn_auto_start.setToolTip("자동시작 ON" if auto_on else "자동시작 OFF")
+        self.btn_auto_start.setToolTip("NAS/iCloud 자동시작 ON" if auto_on else "NAS/iCloud 자동시작 OFF")
 
         compact = self._should_icon_only()
         for btn in self._tool_buttons:

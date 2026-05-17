@@ -13,6 +13,7 @@ from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QInputDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -25,7 +26,8 @@ from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker, patch_waveform_buffer
 from ui.responsive_profile import responsive_profile_for_size
-from ui.style import COLORS, button_style
+from ui.style import COLORS, button_style, settings_dialog_stylesheet
+from core.settings import load_settings, save_settings
 from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 
 
@@ -93,6 +95,25 @@ def _compact_toolbar_button_style(*, font_size: str = "11px", padding: str = "2p
         "} "
         f"QPushButton:hover {{ background: {COLORS['control_hover']}; }} "
         f"QPushButton:pressed {{ background: #182026; border-color: {COLORS['primary']}; }}"
+    )
+
+
+def _compact_toolbar_checkbox_style(*, font_size: str = "11px", padding: str = "2px 8px") -> str:
+    return (
+        "QCheckBox { "
+        f"background: {COLORS['control']}; color: {COLORS['text']}; border: 1px solid {COLORS['separator']}; "
+        f"padding: {padding}; font-size: {font_size}; font-weight: 700; border-radius: 7px; min-width: 64px; "
+        "spacing: 5px; "
+        "} "
+        f"QCheckBox:hover {{ background: {COLORS['control_hover']}; }} "
+        f"QCheckBox:pressed {{ background: #182026; border-color: {COLORS['primary']}; }} "
+        f"QCheckBox:checked {{ border-color: {COLORS['primary']}; }} "
+        "QCheckBox::indicator { "
+        "width: 13px; height: 13px; border-radius: 3px; "
+        f"border: 1px solid {COLORS['separator']}; background: transparent; "
+        "} "
+        f"QCheckBox::indicator:hover {{ border-color: {COLORS['primary']}; }} "
+        f"QCheckBox::indicator:checked {{ background: {COLORS['primary']}; border-color: {COLORS['primary']}; }}"
     )
 
 
@@ -231,6 +252,12 @@ class TimelinePlayheadOverlay(QWidget):
         painter = QPainter(self)
         if not painter.isActive():
             return
+        try:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            painter.fillRect(event.rect(), Qt.GlobalColor.transparent)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        except Exception:
+            pass
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         if shadow_visible:
             shadow_color = QColor(255, 214, 10, 170)
@@ -254,6 +281,7 @@ class TimelinePlayheadOverlay(QWidget):
 
 
 class TimelineWidget(QWidget):
+    EDIT_WINDOW_SETTINGS_KEY = "timeline_edit_window_seconds"
     seg_clicked = pyqtSignal(int, float)
     seg_right_clicked = pyqtSignal(float, QPoint)
     stt_candidate_selected = pyqtSignal(dict)
@@ -283,8 +311,12 @@ class TimelineWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._preferred_edit_window_seconds = self._load_preferred_edit_window_seconds()
 
-        self.setMinimumHeight(CANVAS_H + 55)
+        self._base_canvas_height = CANVAS_H
+        self._canvas_height_bonus = 0
+        self._base_widget_height = CANVAS_H + 55
+        self.setMinimumHeight(self._base_widget_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -293,35 +325,19 @@ class TimelineWidget(QWidget):
         lay.setContentsMargins(10, 4, 10, 1)
         lay.setSpacing(0)
 
-        toolbar_checkbox_style = """
-            QCheckBox {
-                color: %s;
-                font-size: 12px;
-                font-weight: bold;
-                background: transparent;
-            }
-            QCheckBox::indicator {
-                width: 14px;
-                height: 14px;
-                border: 1.5px solid %s;
-                background: transparent;
-                border-radius: 2px;
-            }
-            QCheckBox::indicator:checked {
-                background: %s;
-                border: 1.5px solid %s;
-            }
-        """ % (COLORS["warning"], COLORS["warning"], COLORS["warning"], COLORS["warning"])
+        toolbar_checkbox_style = _compact_toolbar_checkbox_style()
         self.lock_chk = QCheckBox("Lock Edit")
         self.lock_chk.setStyleSheet(toolbar_checkbox_style)
+        self.lock_chk.setFixedHeight(24)
+        self.lock_chk.setCursor(Qt.CursorShape.PointingHandCursor)
 
         lock_row = QHBoxLayout()
         lock_row.setContentsMargins(0, 0, 0, 0)
         lock_row.addWidget(self.lock_chk)
         self.repeat_chk = QCheckBox("반복재생")
         self.repeat_chk.setStyleSheet(toolbar_checkbox_style)
-        self.repeat_chk.setMinimumHeight(24)
-        self.repeat_chk.setMaximumHeight(24)
+        self.repeat_chk.setFixedHeight(24)
+        self.repeat_chk.setCursor(Qt.CursorShape.PointingHandCursor)
         lock_row.addWidget(self.repeat_chk)
         lock_row.addStretch()
         self.magnet_btn = QPushButton("자막자석")
@@ -333,7 +349,7 @@ class TimelineWidget(QWidget):
         for text, tip, slot in (
             ("+", "캔버스 확대", self.zoom_in),
             ("-", "캔버스 축소", self.zoom_out),
-            ("O", "캔버스 10초 편집 창", self.show_ten_second_edit_window),
+            ("O", "", self.show_ten_second_edit_window),
             ("ㅁ", "캔버스 화면 너비에 맞춤", self.fit_to_view),
         ):
             btn = QPushButton(text)
@@ -341,6 +357,11 @@ class TimelineWidget(QWidget):
             btn.setToolTip(tip)
             btn.setStyleSheet(button_style("toolbar", font_size="11px", padding="2px 6px"))
             btn.clicked.connect(slot)
+            if text == "O":
+                btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                btn.customContextMenuRequested.connect(self._show_time_window_seconds_dialog)
+                self.time_window_btn = btn
+                self._refresh_time_window_button_tooltip()
             self._zoom_buttons.append(btn)
             lock_row.addWidget(btn)
         lay.addLayout(lock_row)
@@ -352,14 +373,15 @@ class TimelineWidget(QWidget):
         self.scroll.setWidgetResizable(False)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setFixedHeight(CANVAS_H)
+        self.scroll.setFixedHeight(self._base_canvas_height)
         self.scroll.setStyleSheet("QScrollArea{border:none;}")
 
         lay.addWidget(self.scroll)
         self._playhead_overlay = self._create_playhead_overlay()
-        self._playhead_overlay.setGeometry(self.scroll.viewport().rect())
-        self._playhead_overlay.raise_()
-        self.canvas._external_playhead_overlay = True
+        if self._playhead_overlay is not None:
+            self._playhead_overlay.setGeometry(self.scroll.viewport().rect())
+            self._playhead_overlay.hide()
+        self.canvas._external_playhead_overlay = False
         self._scenegraph_layer = self._create_scenegraph_layer()
         self._apply_responsive_touch_targets()
 
@@ -416,6 +438,8 @@ class TimelineWidget(QWidget):
         self._selected_clip_label = ""
         self._multiclip_fit_done = False
         self._multiclip_waveform_buffer: np.ndarray | None = None
+        self._home_compact_mode = False
+        self._home_compact_state: dict[str, object] = {}
 
         self._vp = QTimer(self)
         self._vp.setSingleShot(True)
@@ -469,6 +493,28 @@ class TimelineWidget(QWidget):
             self.canvas._speaker_settings_provider = self._timeline_speaker_settings
         except Exception:
             pass
+
+    def canvas_height_bonus(self) -> int:
+        return int(getattr(self, "_canvas_height_bonus", 0) or 0)
+
+    def set_canvas_height_bonus(self, bonus_px: int) -> None:
+        bonus = max(0, int(bonus_px or 0))
+        if bonus == self.canvas_height_bonus():
+            return
+        self._canvas_height_bonus = bonus
+        canvas_height = self._base_canvas_height + bonus
+        widget_height = self._base_widget_height + bonus
+        self.canvas.setMinimumHeight(canvas_height)
+        self.scroll.setFixedHeight(canvas_height)
+        self.setMinimumHeight(widget_height)
+        try:
+            self.resize(self.width(), widget_height)
+        except Exception:
+            pass
+        self.updateGeometry()
+        self._sync_focus_border()
+        self._sync_playhead_overlay()
+        self._sync_scenegraph_layer()
 
     def _reset_single_media_context(self, *, clear_duration: bool) -> None:
         self._waveform_mode = "single"
@@ -550,6 +596,59 @@ class TimelineWidget(QWidget):
                 pass
             finally:
                 setattr(self, attr, None)
+
+    def compact_for_home_navigation(self) -> None:
+        if bool(getattr(self, "_home_compact_mode", False)):
+            return
+        self._home_compact_mode = True
+        self._home_compact_state = {
+            "waveform_mode": str(getattr(self, "_waveform_mode", "single") or "single"),
+            "waveform_path": str(getattr(self, "_waveform_path", "") or ""),
+        }
+        self.stop_waveform_workers()
+        self._multiclip_waveform_buffer = None
+        self._speaker_settings_cache = {}
+        self._speaker_settings_cache_at = 0.0
+        try:
+            self.canvas.set_waveform(None)
+            self.global_canvas.set_waveform(None)
+        except Exception:
+            pass
+        try:
+            self.clear_shadow_playhead()
+        except Exception:
+            pass
+        try:
+            self._refresh_canvas_playhead_cache()
+            self.update()
+        except Exception:
+            pass
+
+    def restore_after_home_navigation(
+        self,
+        *,
+        waveform_path: str = "",
+        multiclip_boundaries=None,
+    ) -> None:
+        state = dict(getattr(self, "_home_compact_state", {}) or {})
+        if not bool(getattr(self, "_home_compact_mode", False)) and not state:
+            return
+        self._home_compact_mode = False
+        self._home_compact_state = {}
+        mode = str(state.get("waveform_mode", getattr(self, "_waveform_mode", "single")) or "single")
+        path = str(waveform_path or state.get("waveform_path", "") or "")
+        if mode == "multi" and list(multiclip_boundaries or []):
+            self.load_multiclip_waveform(list(multiclip_boundaries or []))
+            return
+        if path:
+            self.load_waveform(path, force=True)
+            return
+        try:
+            self._sync_scenegraph_layer()
+            self._sync_playhead_overlay()
+            self.update()
+        except Exception:
+            pass
 
     def closeEvent(self, event):
         self._shutdown_in_progress = True
@@ -664,7 +763,6 @@ class TimelineWidget(QWidget):
             canvas._scenegraph_subtitle_rendering = True
             layer.set_visible(True)
             layer.raise_()
-            self._playhead_overlay.raise_()
         except RuntimeError:
             pass
 
@@ -692,9 +790,65 @@ class TimelineWidget(QWidget):
         frame = int(round(float(scroll_x or 0.0) / max(0.001, self._pixels_per_frame())))
         return self._sec_for_frame(frame)
 
+    def _current_visible_seconds(self) -> float:
+        viewport_w = max(1, int(self.scroll.viewport().width()))
+        pps = max(0.001, float(getattr(self.canvas, "pps", 1.0) or 1.0))
+        return max(1.0, float(viewport_w) / pps)
+
+    def _current_visible_center_sec(self) -> float:
+        pps = max(0.001, float(getattr(self.canvas, "pps", 1.0) or 1.0))
+        visible_start = float(self.scroll.horizontalScrollBar().value()) / pps
+        return max(0.0, visible_start + (self._current_visible_seconds() / 2.0))
+
+    def _apply_edit_window_seconds(
+        self,
+        seconds: float,
+        *,
+        center_sec: float | None = None,
+    ) -> None:
+        try:
+            window_seconds = max(1.0, float(seconds or 10.0))
+        except Exception:
+            window_seconds = 10.0
+        anchor_sec = self._editing_window_anchor_sec() if center_sec is None else float(center_sec or 0.0)
+        self.show_time_window_seconds(window_seconds, center_sec=anchor_sec)
+        self._fit_to_view_locked = False
+        self._fit_after_resize_pending = False
+        self._manual_zoom_since_fit = True
+        self._begin_manual_scroll(hold_sec=1.2)
+
+    def _show_time_window_seconds_dialog(self, _pos: QPoint | None = None) -> None:
+        current_seconds = self._current_visible_seconds()
+        current_seconds_rounded = max(1, int(round(current_seconds)))
+        current_seconds_label = (
+            f"{current_seconds:.1f}초"
+            if abs(current_seconds - current_seconds_rounded) >= 0.05
+            else f"{current_seconds_rounded}초"
+        )
+        center_sec = self._current_visible_center_sec()
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("편집 창 시간")
+        dialog.setInputMode(QInputDialog.InputMode.IntInput)
+        dialog.setLabelText(
+            f"현재 표시 시간: {current_seconds_label}\n"
+            "표시할 편집 창 시간을 1초 단위로 조정하세요."
+        )
+        dialog.setIntRange(1, 600)
+        dialog.setIntStep(1)
+        dialog.setIntValue(current_seconds_rounded)
+        dialog.setOkButtonText("적용")
+        dialog.setCancelButtonText("취소")
+        dialog.setStyleSheet(settings_dialog_stylesheet())
+        if dialog.exec():
+            selected_seconds = float(dialog.intValue())
+            self._apply_edit_window_seconds(selected_seconds, center_sec=center_sec)
+            self._save_preferred_edit_window_seconds(selected_seconds)
+
     def _create_playhead_overlay(self):
-        # Keep the playhead isolated from the heavy timeline body without using
-        # a full-size QQuickWidget that can cover the classic canvas.
+        # Keep the lightweight overlay object for playhead state bookkeeping,
+        # but leave it hidden and render the visible playhead on the canvas.
+        # On macOS, showing this full-viewport overlay can composite as an
+        # opaque layer after height changes and hide the waveform/canvas body.
         return TimelinePlayheadOverlay(self, self.scroll.viewport())
 
     def _refresh_canvas_playhead_cache(self) -> None:
@@ -1822,11 +1976,37 @@ class TimelineWidget(QWidget):
 
     def show_ten_second_edit_window(self) -> None:
         anchor_sec = self._editing_window_anchor_sec()
-        self.show_time_window_seconds(10.0, center_sec=anchor_sec)
-        self._fit_to_view_locked = False
-        self._fit_after_resize_pending = False
-        self._manual_zoom_since_fit = True
-        self._begin_manual_scroll(hold_sec=1.2)
+        self._apply_edit_window_seconds(self._preferred_edit_window_seconds, center_sec=anchor_sec)
+
+    def _load_preferred_edit_window_seconds(self) -> float:
+        try:
+            settings = dict(load_settings() or {})
+            value = float(settings.get(self.EDIT_WINDOW_SETTINGS_KEY, 10.0) or 10.0)
+        except Exception:
+            value = 10.0
+        return max(1.0, min(600.0, value))
+
+    def _save_preferred_edit_window_seconds(self, seconds: float) -> None:
+        try:
+            normalized = max(1.0, min(600.0, float(seconds or 10.0)))
+        except Exception:
+            normalized = 10.0
+        rounded_value = int(round(normalized))
+        self._preferred_edit_window_seconds = float(rounded_value)
+        self._refresh_time_window_button_tooltip()
+        try:
+            settings = dict(load_settings() or {})
+            settings[self.EDIT_WINDOW_SETTINGS_KEY] = rounded_value
+            save_settings(settings)
+        except Exception:
+            pass
+
+    def _refresh_time_window_button_tooltip(self) -> None:
+        button = getattr(self, "time_window_btn", None)
+        if button is None:
+            return
+        seconds = int(round(float(getattr(self, "_preferred_edit_window_seconds", 10.0) or 10.0)))
+        button.setToolTip(f"캔버스 {seconds}초 편집 창\n우클릭: 현재 시간창 조정")
 
     def schedule_initial_open_view(
         self,

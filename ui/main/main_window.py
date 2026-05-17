@@ -100,6 +100,8 @@ class MainWindow(
 
     def __init__(self):
         super().__init__()
+        _perf_started = time.perf_counter()
+        _logger = get_logger()
         self.setWindowTitle("🎬 AI Subtitle Studio")
         icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "assets", "icons", "app_icon.svg")
         if os.path.exists(icon_path):
@@ -150,9 +152,9 @@ class MainWindow(
         self._guided_snapshot_run = None
 
         settings = load_settings()
-        self._auto_start_on = settings.get("auto_start_enabled", True)
         self._is_icloud_auto_mode = get_icloud_auto_detect()
         self._is_nas_auto_mode = get_nas_auto_detect()
+        self._auto_start_on = bool(self._is_icloud_auto_mode or self._is_nas_auto_mode)
         self._offscreen_test = str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen"
         self._initial_home_built = False
 
@@ -175,20 +177,36 @@ class MainWindow(
         self._post_show_startup_started = False
         self._initial_home_build_requested = False
         self._initial_home_scan_deferred = not self._offscreen_test
+        self._pending_initial_home_auto_source_refresh = False
         self._home_auto_source_cache = {}
         self._home_auto_source_refresh_token = 0
         self._home_auto_source_refresh_inflight = False
+        self._optional_startup_timer = QTimer(self)
+        self._optional_startup_timer.setSingleShot(True)
+        self._optional_startup_timer.timeout.connect(self._run_optional_startup_tasks)
+        self._startup_warmup_pending = not self._offscreen_test
+        self._startup_required_model_check_pending = not self._offscreen_test
+        self._startup_llm_preflight_pending = not self._offscreen_test
+        self._startup_auto_watchers_pending = False
 
         self._build_ui()
+        _logger.log_perf(
+            "main_window.init",
+            event="build_ui_done",
+            elapsed_ms=(time.perf_counter() - _perf_started) * 1000.0,
+            unified_dashboard=bool(getattr(self, "_unified_dashboard", False)),
+        )
         self._connect_signals()
         self._personalization_idle_trainer = PersonalizationIdleTrainer(self, recover_on_init=False)
         self._attach_app_event_filter()
         self._initialize_runtime_memory_manager(settings)
         self._initialize_runtime_resource_coordinator(settings)
-        if not self._offscreen_test:
-            QTimer.singleShot(450 if getattr(config, "IS_MAC", False) else 0, self._warmup_local_llm_models)
-            QTimer.singleShot(1400 if getattr(config, "IS_MAC", False) else 900, self._check_required_models_on_startup)
-            QTimer.singleShot(1800 if getattr(config, "IS_MAC", False) else 1200, self._preflight_selected_local_llm_models)
+        _logger.log_perf(
+            "main_window.init",
+            event="runtime_services_ready",
+            elapsed_ms=(time.perf_counter() - _perf_started) * 1000.0,
+            offscreen=bool(self._offscreen_test),
+        )
 
         self._cloud_sync_manager = CloudSyncManager(
             get_icloud_path(), self._on_files_detected, self._is_app_busy
@@ -197,11 +215,32 @@ class MainWindow(
             get_local_path(get_nas_path()), self._on_files_detected, self._is_app_busy,
             mode="nas", scan_interval=60, stable_seconds=300, exclude_callback=get_nas_excluded_folders
         )
-        if self._auto_start_on and (getattr(self, "_is_icloud_auto_mode", False) or getattr(self, "_is_nas_auto_mode", False)):
-            if self._offscreen_test:
-                self._start_auto_watchers_after_launch()
-            else:
-                QTimer.singleShot(1600 if getattr(config, "IS_MAC", False) else 0, self._start_auto_watchers_after_launch)
+        if (
+            not self._offscreen_test
+            and self._auto_start_on
+            and (getattr(self, "_is_icloud_auto_mode", False) or getattr(self, "_is_nas_auto_mode", False))
+        ):
+            self._startup_auto_watchers_pending = True
+        if not self._offscreen_test:
+            self._schedule_optional_startup_tasks(
+                delay_ms=1600 if getattr(config, "IS_MAC", False) else 900
+            )
+        _logger.log_perf(
+            "main_window.init",
+            event="ready",
+            elapsed_ms=(time.perf_counter() - _perf_started) * 1000.0,
+            auto_start=bool(self._auto_start_on),
+            icloud_auto=bool(getattr(self, "_is_icloud_auto_mode", False)),
+            nas_auto=bool(getattr(self, "_is_nas_auto_mode", False)),
+            optional_startup_pending=any(
+                (
+                    bool(getattr(self, "_startup_warmup_pending", False)),
+                    bool(getattr(self, "_startup_required_model_check_pending", False)),
+                    bool(getattr(self, "_startup_llm_preflight_pending", False)),
+                    bool(getattr(self, "_startup_auto_watchers_pending", False)),
+                )
+            ),
+        )
 
     def showEvent(self, event):  # noqa: N802 - Qt override
         super().showEvent(event)
@@ -220,11 +259,91 @@ class MainWindow(
     def _ensure_initial_home_ready(self):
         if bool(getattr(self, "_initial_home_built", False)):
             return
+        started = time.perf_counter()
         self._initial_home_build_requested = False
         self._initial_home_built = True
         self.show_home()
-        self._start_initial_home_auto_source_refresh(
-            delay_ms=120 if getattr(config, "IS_MAC", False) else 0,
+        if bool(getattr(self, "_initial_home_scan_deferred", False)):
+            self._pending_initial_home_auto_source_refresh = True
+            self._schedule_optional_startup_tasks(
+                delay_ms=120 if getattr(config, "IS_MAC", False) else 0,
+            )
+        get_logger().log_perf(
+            "home.initial_ready",
+            event="done",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            scan_deferred=bool(getattr(self, "_initial_home_scan_deferred", False)),
+        )
+
+    def _optional_startup_home_ready(self) -> bool:
+        if bool(getattr(self, "_offscreen_test", False)):
+            return False
+        if getattr(self, "_editor_widget", None) is not None:
+            return False
+        stack = getattr(self, "stack", None)
+        if stack is not None:
+            try:
+                if int(stack.currentIndex()) != 0:
+                    return False
+            except Exception:
+                return False
+        if bool(getattr(self, "_auto_processing_active", False)):
+            return False
+        try:
+            if self._is_backend_ai_busy():
+                return False
+        except Exception:
+            pass
+        return True
+
+    def _schedule_optional_startup_tasks(self, *, delay_ms: int = 0) -> None:
+        if bool(getattr(self, "_offscreen_test", False)):
+            return
+        timer = getattr(self, "_optional_startup_timer", None)
+        if timer is None:
+            return
+        timer.start(max(0, int(delay_ms or 0)))
+
+    def _run_optional_startup_tasks(self) -> None:
+        if bool(getattr(self, "_offscreen_test", False)):
+            return
+        pending = any(
+            (
+                bool(getattr(self, "_startup_warmup_pending", False)),
+                bool(getattr(self, "_startup_required_model_check_pending", False)),
+                bool(getattr(self, "_startup_llm_preflight_pending", False)),
+                bool(getattr(self, "_startup_auto_watchers_pending", False)),
+                bool(getattr(self, "_pending_initial_home_auto_source_refresh", False)),
+            )
+        )
+        if not pending:
+            return
+        started = time.perf_counter()
+        if not self._optional_startup_home_ready():
+            self._schedule_optional_startup_tasks(
+                delay_ms=1800 if getattr(config, "IS_MAC", False) else 1200
+            )
+            return
+        if bool(getattr(self, "_pending_initial_home_auto_source_refresh", False)):
+            self._pending_initial_home_auto_source_refresh = False
+            self._start_initial_home_auto_source_refresh(delay_ms=0)
+        if bool(getattr(self, "_startup_warmup_pending", False)):
+            self._startup_warmup_pending = False
+            self._warmup_local_llm_models()
+        if bool(getattr(self, "_startup_required_model_check_pending", False)):
+            self._startup_required_model_check_pending = False
+            self._check_required_models_on_startup()
+        if bool(getattr(self, "_startup_llm_preflight_pending", False)):
+            self._startup_llm_preflight_pending = False
+            self._preflight_selected_local_llm_models()
+        if bool(getattr(self, "_startup_auto_watchers_pending", False)):
+            self._startup_auto_watchers_pending = False
+            self._start_auto_watchers_after_launch()
+        get_logger().log_perf(
+            "startup.optional_tasks",
+            event="done",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            pending_home_refresh=bool(getattr(self, "_pending_initial_home_auto_source_refresh", False)),
         )
 
     def _start_post_show_startup_tasks(self):
@@ -242,6 +361,7 @@ class MainWindow(
         )
 
     def _start_auto_watchers_after_launch(self):
+        started = time.perf_counter()
         if self._auto_start_on and getattr(self, "_is_icloud_auto_mode", False):
             call_nonfatal_ui_step(
                 "자동 감시 시작",
@@ -249,7 +369,13 @@ class MainWindow(
                 "start",
                 step="icloud watcher start",
             )
-        elif self._auto_start_on and getattr(self, "_is_nas_auto_mode", False):
+            get_logger().log_perf(
+                "startup.auto_watchers",
+                event="icloud_start_requested",
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            )
+        if self._auto_start_on and getattr(self, "_is_nas_auto_mode", False):
+            nas_started = time.perf_counter()
             nas_path = run_nonfatal_ui_step(
                 "자동 감시 시작",
                 "get_nas_path",
@@ -263,6 +389,12 @@ class MainWindow(
                 "ensure_nas_mounted",
                 lambda: ensure_nas_mounted(nas_path),
                 default=False,
+            )
+            get_logger().log_perf(
+                "startup.auto_watchers",
+                event="nas_mount_checked",
+                elapsed_ms=(time.perf_counter() - nas_started) * 1000.0,
+                mounted=bool(mounted),
             )
             if not mounted:
                 return
@@ -286,6 +418,18 @@ class MainWindow(
                 "start",
                 step="nas watcher start",
             )
+            get_logger().log_perf(
+                "startup.auto_watchers",
+                event="nas_start_requested",
+                elapsed_ms=(time.perf_counter() - nas_started) * 1000.0,
+                local_path_ready=bool(local_path),
+            )
+        get_logger().log_perf(
+            "startup.auto_watchers",
+            event="done",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            auto_start=bool(self._auto_start_on),
+        )
 
     # ── UI 빌드 ──────────────────────────────────────────
     def _build_ui(self):
@@ -402,27 +546,37 @@ class MainWindow(
     def _start_initial_home_auto_source_refresh(self, *, delay_ms: int = 0) -> None:
         if not bool(getattr(self, "_initial_home_scan_deferred", False)):
             return
+        if not self._optional_startup_home_ready():
+            self._pending_initial_home_auto_source_refresh = True
+            self._schedule_optional_startup_tasks(delay_ms=max(0, int(delay_ms or 0)))
+            return
         if bool(getattr(self, "_home_auto_source_refresh_inflight", False)):
             return
         self._home_auto_source_refresh_inflight = True
         token = int(getattr(self, "_home_auto_source_refresh_token", 0) or 0) + 1
         self._home_auto_source_refresh_token = token
+        refresh_started = time.perf_counter()
 
         def launch() -> None:
             def worker() -> None:
-                payload = {"token": token}
+                payload = {"token": token, "perf_started_at": refresh_started}
+                icloud_started = time.perf_counter()
                 payload["icloud"] = run_nonfatal_ui_step(
                     "홈 자동 소스 갱신",
                     "get_icloud_files",
                     self._get_icloud_files,
                     default=([], "오류", ""),
                 )
+                payload["icloud_elapsed_ms"] = (time.perf_counter() - icloud_started) * 1000.0
+                nas_started = time.perf_counter()
                 payload["nas"] = run_nonfatal_ui_step(
                     "홈 자동 소스 갱신",
                     "get_nas_folders",
                     self._get_nas_folders,
                     default=([], "오류", ""),
                 )
+                payload["nas_elapsed_ms"] = (time.perf_counter() - nas_started) * 1000.0
+                payload["total_elapsed_ms"] = (time.perf_counter() - refresh_started) * 1000.0
                 run_nonfatal_ui_step(
                     "홈 자동 소스 갱신",
                     "emit home_auto_sources_ready",
@@ -454,6 +608,23 @@ class MainWindow(
         self._home_auto_source_cache = cache
         self._initial_home_scan_deferred = False
         self._home_auto_source_refresh_inflight = False
+        try:
+            icloud_rows = len(list(cache.get("icloud", ([], "", ""))[0] or []))
+        except Exception:
+            icloud_rows = 0
+        try:
+            nas_rows = len(list(cache.get("nas", ([], "", ""))[0] or []))
+        except Exception:
+            nas_rows = 0
+        get_logger().log_perf(
+            "home.auto_source_refresh",
+            event="done",
+            elapsed_ms=float((payload or {}).get("total_elapsed_ms", 0.0) or 0.0),
+            icloud_ms=round(float((payload or {}).get("icloud_elapsed_ms", 0.0) or 0.0), 1),
+            nas_ms=round(float((payload or {}).get("nas_elapsed_ms", 0.0) or 0.0), 1),
+            icloud_rows=icloud_rows,
+            nas_rows=nas_rows,
+        )
         if int(getattr(self, "stack", None).currentIndex() if getattr(self, "stack", None) is not None else -1) == 0:
             run_nonfatal_ui_step(
                 "홈 자동 소스 갱신",
@@ -569,7 +740,12 @@ class MainWindow(
         if splitter is None or sidebar is None:
             return
         profile = self._current_responsive_profile()
-        handle_w = int(splitter.handleWidth() or 0)
+        handle_w = run_nonfatal_ui_step(
+            "반응형 레이아웃",
+            "read splitter handle width",
+            lambda: int(splitter.handleWidth() or 0),
+            default=0,
+        )
         total = max(1, int(self.width() or 0) - (MAIN_PANEL_GAP * 2) - handle_w)
         if not bool(getattr(self, "_log_visible", True)):
             run_nonfatal_ui_step(
@@ -1593,6 +1769,7 @@ class MainWindow(
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self, allow_home_idle_learning: bool = False):
+        started = time.perf_counter()
         active_work = self._is_editor_ai_busy(getattr(self, "_editor_widget", None)) or self._is_backend_ai_busy()
         self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5, stop_active=False)
         self._stop_post_completion_idle_timer()
@@ -1608,7 +1785,12 @@ class MainWindow(
             if len(self._trash_bin) > 3:
                 self._trash_bin.pop(0)
             self._editor_widget = None
+        if not active_work:
+            self._compact_hidden_workspace_widgets_for_home()
         self._build_home_content()
+        self._schedule_optional_startup_tasks(
+            delay_ms=300 if getattr(config, "IS_MAC", False) else 0
+        )
         trainer = getattr(self, "_personalization_idle_trainer", None)
         resume_for_home_idle = getattr(trainer, "resume_for_home_idle", None) if trainer is not None else None
         if callable(resume_for_home_idle):
@@ -1617,6 +1799,30 @@ class MainWindow(
                     preserve_idle_age=bool(allow_home_idle_learning),
                     start_if_ready=bool(allow_home_idle_learning),
                 )
+            except Exception:
+                pass
+        get_logger().log_perf(
+            "workspace.show_home",
+            event="done",
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            active_work=bool(active_work),
+            compacted=not bool(active_work),
+            editor_present=bool(getattr(self, "_editor_widget", None)),
+        )
+
+    def _compact_hidden_workspace_widgets_for_home(self) -> None:
+        editor = getattr(self, "_editor_widget", None)
+        compact_editor = getattr(editor, "enter_home_compact_mode", None) if editor is not None else None
+        if callable(compact_editor):
+            try:
+                compact_editor()
+            except Exception:
+                pass
+        roughcut = getattr(self, "_roughcut_widget", None)
+        compact_roughcut = getattr(roughcut, "compact_for_home_navigation", None) if roughcut is not None else None
+        if callable(compact_roughcut):
+            try:
+                compact_roughcut()
             except Exception:
                 pass
 

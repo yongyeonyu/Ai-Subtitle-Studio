@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QDialog,
+    QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -30,15 +31,31 @@ from PyQt6.QtWidgets import (
 from ui.settings.settings_common import DATASET_DIR, _create_bottom_buttons
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import COLORS, button_style, label_style, settings_dialog_stylesheet
+from ui.ux.apple_popup_theme import (
+    apple_popup_color_button_style,
+    apple_popup_dialog_stylesheet,
+)
+
+
+def _speaker_dialog_stylesheet() -> str:
+    return (
+        "#speakerDialogRow { background: transparent; } "
+        f"#speakerDialogIdLabel, #speakerDialogColorLabel {{ color: {COLORS['muted']}; font-size: 12px; font-weight: 700; }}"
+    )
 
 
 class SpeakerDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("화자 설정")
+        self.setObjectName("speakerDialog")
         self.setMinimumWidth(760)
         apply_tablet_dialog_profile(self)
-        self.setStyleSheet(settings_dialog_stylesheet())
+        self.setStyleSheet(
+            settings_dialog_stylesheet()
+            + apple_popup_dialog_stylesheet("speakerDialog", accent=COLORS["purple"])
+            + _speaker_dialog_stylesheet()
+        )
 
         self.result = dict(settings)
         os.makedirs(config.VOICE_DATA_DIR, exist_ok=True)
@@ -55,13 +72,49 @@ class SpeakerDialog(QDialog):
         self._preview.playingChanged.connect(self._on_preview_playing_changed)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 16)
+        layout.setSpacing(12)
+
+        hero_card = QFrame(self)
+        hero_card.setObjectName("applePopupHeroCard")
+        hero_layout = QVBoxLayout(hero_card)
+        hero_layout.setContentsMargins(18, 16, 18, 16)
+        hero_layout.setSpacing(8)
+        hero_eyebrow = QLabel("SPEAKER SETUP")
+        hero_eyebrow.setObjectName("applePopupHeroEyebrow")
+        hero_layout.addWidget(hero_eyebrow)
+        hero_title = QLabel("화자 설정")
+        hero_title.setObjectName("applePopupHeroTitle")
+        hero_layout.addWidget(hero_title)
+        hero_subtitle = QLabel("화자 ID, 표시 색상, 학습된 목소리 데이터를 한 화면에서 관리합니다.")
+        hero_subtitle.setObjectName("applePopupHeroSubtitle")
+        hero_subtitle.setWordWrap(True)
+        hero_layout.addWidget(hero_subtitle)
+        layout.addWidget(hero_card)
+
+        content_card = QFrame(self)
+        content_card.setObjectName("applePopupSectionCard")
+        content_layout = QVBoxLayout(content_card)
+        content_layout.setContentsMargins(16, 16, 16, 16)
+        content_layout.setSpacing(12)
+
+        section_title = QLabel("화자별 설정")
+        section_title.setObjectName("applePopupSectionTitle")
+        content_layout.addWidget(section_title)
+
+        section_hint = QLabel("이름, ID, 색상, 음성 학습 데이터 상태를 각 화자별로 조정합니다.")
+        section_hint.setObjectName("applePopupSectionHint")
+        section_hint.setWordWrap(True)
+        content_layout.addWidget(section_hint)
+
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(0)
-        form.setVerticalSpacing(6)
+        form.setVerticalSpacing(8)
 
         def create_row(idx, default_id, default_color, show_chk=True):
             row_w = QWidget()
+            row_w.setObjectName("speakerDialogRow")
             row_w.setStyleSheet("background-color: transparent;")
             h = QHBoxLayout(row_w)
             h.setContentsMargins(0, 0, 0, 0)
@@ -79,9 +132,7 @@ class SpeakerDialog(QDialog):
 
             btn_color = QPushButton()
             color_val = self.result.get(f"spk{idx}_color", default_color)
-            btn_color.setStyleSheet(
-                f"background-color: {color_val}; border: 1px solid #777; border-radius: 4px;"
-            )
+            btn_color.setStyleSheet(apple_popup_color_button_style(color_val))
             btn_color.setFixedSize(28, 28)
             btn_color.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -90,9 +141,7 @@ class SpeakerDialog(QDialog):
                 if color.isValid():
                     hex_color = color.name()
                     self.result[key] = hex_color
-                    btn.setStyleSheet(
-                        f"background-color: {hex_color}; border: 1px solid #777; border-radius: 4px;"
-                    )
+                    btn.setStyleSheet(apple_popup_color_button_style(hex_color))
                 else:
                     self.result.setdefault(key, fallback)
 
@@ -101,9 +150,13 @@ class SpeakerDialog(QDialog):
             )
 
             h.addWidget(btn_name)
-            h.addWidget(QLabel("ID"))
+            id_label = QLabel("ID")
+            id_label.setObjectName("speakerDialogIdLabel")
+            h.addWidget(id_label)
             h.addWidget(txt_id)
-            h.addWidget(QLabel("색상"))
+            color_label = QLabel("색상")
+            color_label.setObjectName("speakerDialogColorLabel")
+            h.addWidget(color_label)
             h.addWidget(btn_color)
 
             btn_voice = QPushButton("목소리학습")
@@ -179,12 +232,11 @@ class SpeakerDialog(QDialog):
             "[X] 버튼은 파일을 삭제하지 않고 앱에서만 사용 해제합니다."
         )
         note.setWordWrap(True)
-        note.setStyleSheet(
-            label_style("muted", 11) + "margin-top: 10px;"
-        )
+        note.setObjectName("applePopupNote")
         form.addRow("", note)
 
-        layout.addLayout(form)
+        content_layout.addLayout(form)
+        layout.addWidget(content_card)
         layout.addLayout(_create_bottom_buttons(self, self._on_ok))
 
         self._refresh_voice_row(1)

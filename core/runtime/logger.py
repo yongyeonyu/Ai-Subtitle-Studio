@@ -283,6 +283,36 @@ class AppLogger:
     def warning(self, msg: str):
         self.log(msg, level="WARN")
 
+    def terminal_debug(self, msg: str, *, stage: str | None = None) -> None:
+        self._emit_terminal(str(msg or ""), level="DEBUG", stage=stage or "runtime")
+
+    def log_perf(
+        self,
+        label: str,
+        *,
+        event: str | None = None,
+        elapsed_ms: float | None = None,
+        stage: str | None = None,
+        **fields,
+    ) -> None:
+        parts = [f"⏱️ [perf] {str(label or '').strip() or 'event'}"]
+        event_text = str(event or "").strip()
+        if event_text:
+            parts.append(event_text)
+        if elapsed_ms is not None:
+            try:
+                parts.append(f"{float(elapsed_ms):.1f}ms")
+            except Exception:
+                parts.append(f"{elapsed_ms}ms")
+        for key, value in fields.items():
+            if value is None:
+                continue
+            value_text = str(value).strip() if isinstance(value, str) else str(value)
+            if not value_text:
+                continue
+            parts.append(f"{key}={value_text}")
+        self._emit_terminal(" · ".join(parts), level="DEBUG", stage=stage or "runtime")
+
 
 def get_logger() -> AppLogger:
     return AppLogger()

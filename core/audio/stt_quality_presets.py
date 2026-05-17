@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from core.runtime import config
+from core.mode_manager import MODE_MANAGED_ROUTE_KEYS, USER_SELECTABLE_MODEL_KEYS
 
 
 STT_QUALITY_PRESET_ORDER = ("fast", "balanced", "precise", "stt")
@@ -20,110 +21,9 @@ USER_SELECTED_STT_MODEL_KEYS = (
     "selected_whisper_model",
     "selected_whisper_model_secondary",
 )
-USER_SELECTED_ROUTE_KEYS = (
-    "selected_audio_ai",
-    "audio_preset",
-    "selected_whisper_model",
-    "selected_whisper_model_secondary",
-    "selected_model",
-    "selected_llm_provider",
-    "subtitle_llm_user_selected",
-    "roughcut_llm_enabled",
-    "roughcut_llm_use_override",
-    "roughcut_llm_provider",
-    "roughcut_llm_model",
-    "selected_roughcut_llm_provider",
-    "selected_roughcut_llm_model",
-)
-BENCHMARK_RUNTIME_ROUTE_KEYS = {
-    "selected_whisper_model",
-    "selected_whisper_model_secondary",
-    "selected_model",
-    "selected_llm_provider",
-    "subtitle_llm_user_selected",
-    "roughcut_llm_enabled",
-    "roughcut_llm_use_override",
-    "roughcut_llm_provider",
-    "roughcut_llm_model",
-}
-STT_QUALITY_SAVED_SETTING_KEYS = {
-    "selected_whisper_model",
-    "selected_whisper_model_secondary",
-    "stt_ensemble_user_selected",
-    "stt_ensemble_enabled",
-    "stt_ensemble_llm_judge_enabled",
-    "stt_ensemble_selective_enabled",
-    "stt_ensemble_parallel_enabled",
-    "stt_selective_secondary_recheck_enabled",
-    "stt_candidate_scoring_enabled",
-    "stt_low_score_recheck_enabled",
-    "stt_low_score_recheck_threshold",
-    "stt_low_score_recheck_padding_sec",
-    "stt_low_score_recheck_max_segments",
-    "stt_low_score_recheck_max_audio_sec",
-    "stt_word_timestamps_mode",
-    "stt_word_timestamps_default_enabled",
-    "stt_word_timestamps_precision_enabled",
-    "stt_word_timestamps_precision_threshold",
-    "stt_word_timestamps_precision_max_segments",
-    "stt_word_timestamps_precision_max_audio_sec",
-    "stt_word_timestamps_precision_keep_text",
-    "stt_word_timestamps_precision_min_similarity",
-    "stt_word_timestamps_precision_max_timing_shift_sec",
-    "stt_word_timestamps_precision_min_duration_ratio",
-    "stt_word_timestamps_precision_max_duration_ratio",
-    "vad_post_stt_align_enabled",
-    "vad_post_stt_edge_pad_sec",
-    "selected_model",
-    "selected_llm_provider",
-    "subtitle_llm_user_selected",
-    "scan_cut_boundary_level",
-    "cut_boundary_level",
-    "scan_cut_level",
-    "cut_boundary_detection_enabled",
-    "scan_cut_enabled",
-    "scan_cut_auto_enabled",
-    "cut_boundary_enabled",
-    "scan_cut_boundary_label",
-    "scan_cut_grid_mask",
-    "ff_chunk",
-    "whisper_chunk_overlap_sec",
-    "stt_parallel_level",
-    "roughcut_llm_enabled",
-    "roughcut_llm_use_override",
-    "roughcut_llm_provider",
-    "roughcut_llm_model",
-    "w_beam_size",
-    "w_patience",
-    "w_length_penalty",
-    "w_dm_no_speech",
-    "w_dm_logprob",
-    "w_dm_comp",
-    "w_dm_temp_max",
-    "w_df_no_speech",
-    "w_df_logprob",
-    "w_df_comp",
-    "w_df_temp_max",
-    "w_none_no_speech",
-    "w_none_logprob",
-    "w_none_comp",
-    "w_none_temp_max",
-    "stt_mode_enabled",
-    "stt_mode_text_input_provider",
-    "stt_mode_vad_models",
-    "stt_mode_vad_ensemble_enabled",
-    "stt_mode_lora_resegment_enabled",
-    "stt_mode_rolling_window_size",
-    "stt_mode_allow_os_dictation",
-    "stt_mode_allow_desktop_mic_optional",
-    "stt_mode_require_whisper",
-    "stt_mode_use_whisper_for_dictation",
-    "stt_mode_use_llm",
-    "stt_lora_bundle_auto_export_enabled",
-    "stt_lora_bundle_size_tier",
-    "stt_lora_style_learning_enabled",
-    "stt_lora_protected_terms",
-}
+USER_SELECTED_ROUTE_KEYS = USER_SELECTABLE_MODEL_KEYS
+BENCHMARK_RUNTIME_ROUTE_KEYS = set(USER_SELECTABLE_MODEL_KEYS)
+STT_QUALITY_SAVED_SETTING_KEYS = set(USER_SELECTABLE_MODEL_KEYS)
 VAD_MODE_AUTOMATION_NOTE = (
     "VAD는 Fast/Auto/High 모드별 벤치 고정값으로 자동 적용됩니다. "
     "test video/X5_시승기_후반.MP4의 대사 밀도 높은 120~180초 구간과 "
@@ -348,6 +248,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_whisper_model": quality_model,
                 "selected_whisper_model_secondary": secondary_model,
                 "selected_model": "사용 안함 (Whisper 단독 진행)",
+                "selected_audio_ai": "rnnoise",
                 "stt_candidate_scoring_enabled": True,
                 **_mode_locked_vad_mapping("fast"),
                 **_pipeline_mapping(30, 0.5, 4),
@@ -367,6 +268,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
             "settings": {
                 "selected_whisper_model": quality_model,
                 "selected_model": "exaone3.5:2.4b",
+                "selected_audio_ai": "none",
                 "stt_candidate_scoring_enabled": True,
                 **_mode_locked_vad_mapping("balanced"),
                 **_pipeline_mapping(25, 1.5, 3),
@@ -388,6 +290,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_model": "exaone3.5:2.4b",
                 "stt_candidate_scoring_enabled": True,
                 "selected_whisper_model_secondary": secondary_model,
+                "selected_audio_ai": "deepfilter",
                 **_mode_locked_vad_mapping("precise"),
                 **_pipeline_mapping(35, 3.0, 2),
                 **_cut_boundary_mapping("medium"),
@@ -411,6 +314,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_model": "사용 안함 (STT 모드)",
                 "selected_llm_provider": "none",
                 "subtitle_llm_user_selected": False,
+                "selected_audio_ai": "none",
                 "stt_ensemble_enabled": False,
                 "stt_ensemble_llm_judge_enabled": False,
                 "stt_ensemble_llm_judge_require_risk": True,
@@ -478,15 +382,15 @@ def _user_selected_route_snapshot(settings: dict | None) -> dict:
         for key in USER_SELECTED_ROUTE_KEYS
         if key in data and data.get(key) not in (None, "")
     }
-    user_selected_stt2 = bool(data.get(STT_ENSEMBLE_USER_SELECTED_KEY))
-    legacy_enabled_stt2 = bool(data.get("stt_ensemble_enabled")) and bool(
-        str(data.get("selected_whisper_model_secondary") or "").strip()
-    )
-    if user_selected_stt2 or legacy_enabled_stt2:
-        snapshot[STT_ENSEMBLE_USER_SELECTED_KEY] = bool(user_selected_stt2 or legacy_enabled_stt2)
-        if "stt_ensemble_enabled" in data:
-            snapshot["stt_ensemble_enabled"] = bool(data.get("stt_ensemble_enabled"))
     return snapshot
+
+
+def _strip_mode_managed_routes(settings: dict | None) -> dict:
+    out = dict(settings or {})
+    for route_key in MODE_MANAGED_ROUTE_KEYS:
+        if route_key not in USER_SELECTABLE_MODEL_KEYS:
+            out.pop(route_key, None)
+    return out
 
 
 def apply_stt_quality_preset(
@@ -511,7 +415,7 @@ def apply_stt_quality_preset(
         for route_key in BENCHMARK_RUNTIME_ROUTE_KEYS
         if benchmark_profile and route_key in settings
     }
-    out = dict(settings)
+    out = _strip_mode_managed_routes(settings)
     out.update(deepcopy(preset.get("settings", {})))
     user_presets = dict(out.get(STT_QUALITY_USER_PRESET_KEY) or {})
     user_preset = user_presets.get(key)
@@ -519,7 +423,13 @@ def apply_stt_quality_preset(
     if use_saved_user_preset and isinstance(user_preset, dict):
         user_settings = user_preset.get("settings", {})
         if isinstance(user_settings, dict):
-            out.update(deepcopy(user_settings))
+            out.update(
+                {
+                    setting_key: deepcopy(user_settings[setting_key])
+                    for setting_key in USER_SELECTABLE_MODEL_KEYS
+                    if setting_key in user_settings and user_settings.get(setting_key) not in (None, "")
+                }
+            )
             user_preset_applied = True
     if user_route_snapshot:
         out.update(user_route_snapshot)
@@ -529,6 +439,7 @@ def apply_stt_quality_preset(
         out.update(incoming_user_stt_models)
     if benchmark_routes:
         out.update(benchmark_routes)
+    out.pop(STT_ENSEMBLE_USER_SELECTED_KEY, None)
     out["stt_quality_preset"] = key
     return out
 

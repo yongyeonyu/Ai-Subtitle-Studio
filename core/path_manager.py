@@ -27,6 +27,8 @@ DEFAULT_SETTINGS = {
     "nas_excluded_folders": [],
     "auto_start_mode": "precise",
     "auto_start_enabled": True,
+    "icloud_auto_detect": False,
+    "nas_auto_detect": False,
     "icloud_stt_quality_preset": "fast",
     "nas_stt_quality_preset": "balanced",
 }

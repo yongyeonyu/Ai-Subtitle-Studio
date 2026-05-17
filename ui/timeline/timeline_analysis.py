@@ -12,40 +12,41 @@ from core.project.subtitle_status import (
     subtitle_detection_score,
 )
 from ui.style import COLORS
+from ui.ux.apple_black_palette import APPLE_BLACK_MAJOR_COLORS
 
 
 SAFETY_COLORS = {
-    "ideal": "#34C759",
+    "ideal": COLORS["accent"],
     "acceptable": COLORS["warning"],
-    "risky": "#FF453A",
+    "risky": COLORS["danger"],
 }
 
 ACTION_COLORS = {
-    "keep": "#34C759",
-    "trim": "#FF9500",
-    "remove": "#FF453A",
-    "highlight": "#5AC8FA",
-    "move": "#A678F4",
+    "keep": COLORS["accent"],
+    "trim": "#FF9F0A",
+    "remove": COLORS["danger"],
+    "highlight": COLORS["info"],
+    "move": COLORS["purple"],
 }
 
 QUALITY_COLORS = {
-    "green": "#34C759",
+    "green": COLORS["accent"],
     "yellow": COLORS["warning"],
-    "red": "#FF453A",
-    "gray": "#8E8E93",
+    "red": COLORS["danger"],
+    "gray": COLORS["neutral"],
 }
 
 VOICE_ACTIVITY_STYLES = {
-    "speech": ("음성", "#34C759", 40, 128),
-    "silence": ("무음", "#FF9500", 50, 112),
-    "noise": ("노이즈", "#FF453A", 90, 158),
-    "stt_pending": ("STT대기", "#64D2FF", 70, 148),
-    "outside_vad": ("VAD외", "#BF5AF2", 80, 148),
-    "uncertain": ("확인", "#8E8E93", 60, 126),
+    "speech": ("음성", COLORS["accent"], 40, 128),
+    "silence": ("무음", "#FF9F0A", 50, 112),
+    "noise": ("노이즈", COLORS["danger"], 90, 158),
+    "stt_pending": ("STT대기", COLORS["info"], 70, 148),
+    "outside_vad": ("VAD외", COLORS["purple"], 80, 148),
+    "uncertain": ("확인", COLORS["neutral"], 60, 126),
 }
 
-SUBTITLE_DETECTION_NEEDS_SELECTION_COLOR = "#8E8E93"
-SUBTITLE_DETECTION_IDLE_COLOR = "#2D3942"
+SUBTITLE_DETECTION_NEEDS_SELECTION_COLOR = COLORS["neutral"]
+SUBTITLE_DETECTION_IDLE_COLOR = COLORS["separator"]
 SUBTITLE_SCORE_DETECTION_KINDS = {
     "conflict",
     "llm_selected",
@@ -54,34 +55,7 @@ SUBTITLE_SCORE_DETECTION_KINDS = {
     "recheck",
     "subtitle_score",
 }
-MAJOR_SEGMENT_COLORS = (
-    "#00E676",  # A
-    "#FF453A",  # B
-    "#FFD60A",  # C
-    "#76FF03",  # D
-    "#00B8D4",  # E
-    "#FF9F0A",  # F
-    "#BF5AF2",  # G
-    "#64D2FF",  # H
-    "#FF2D55",  # I
-    "#30D158",  # J
-    "#0A84FF",  # K
-    "#FF6B00",  # L
-    "#D0FF00",  # M
-    "#5E5CE6",  # N
-    "#00F5D4",  # O
-    "#FFB3C7",  # P
-    "#9DFF00",  # Q
-    "#FF375F",  # R
-    "#40C8E0",  # S
-    "#FFCC66",  # T
-    "#32D74B",  # U
-    "#DA8FFF",  # V
-    "#66D4CF",  # W
-    "#FF7A90",  # X
-    "#A1A1FF",  # Y
-    "#C6FF3D",  # Z
-)
+MAJOR_SEGMENT_COLORS = APPLE_BLACK_MAJOR_COLORS
 
 _RECHECK_THRESHOLD_CACHE: dict[str, float] = {"value": 60.0, "until": 0.0}
 

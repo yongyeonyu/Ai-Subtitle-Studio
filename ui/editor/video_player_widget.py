@@ -120,6 +120,8 @@ class _WorkerProxy:
         if getattr(self.parent_widget, 'has_vocal_track', False):
             self.parent_widget._ensure_vocal_player().stop()
 
+    def wait(self, _timeout_ms=None):
+        return True
 
     def seek(self, sec):
         parent = self.parent_widget
@@ -195,6 +197,7 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
         self._proxy_build_dst: str = ""
         self._scan_cut_active_direction: int = 0
         self._shutdown_in_progress = False
+        self._home_compact_mode = False
         self._audio_rebind_in_progress = False
         self._media_devices = None
 
@@ -608,11 +611,12 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
 
     def _build_control_bar(self) -> QWidget:
         ctrl = QWidget()
-        ctrl.setFixedHeight(48)
+        ctrl.setFixedHeight(44)
         ctrl.setStyleSheet("background: transparent; border: none;")
+        uniform_gap = 6
         ctrl_layout = QHBoxLayout(ctrl)
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
-        ctrl_layout.setSpacing(8)
+        ctrl_layout.setSpacing(uniform_gap)
 
         self.btn_scan_prev_cut = self._create_transport_button(
             "<<",
@@ -683,22 +687,22 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
         )
         ctrl_layout.addWidget(self.frame_count_label)
 
-        ctrl_layout.addSpacing(12)
-
         self.status_info_container = QWidget(ctrl)
         self.status_info_container.setObjectName("VideoStatusInfoContainer")
         self.status_info_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.status_info_container.setFixedHeight(32)
+        self.status_info_container.setFixedHeight(30)
         status_layout = QHBoxLayout(self.status_info_container)
         status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(6)
+        status_layout.setSpacing(uniform_gap)
 
         self.info_label = _MirrorLabel("영상 정보를 불러오는 중...")
         self.info_label.setObjectName("VideoSourceMetaLabel")
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.info_label.setWordWrap(True)
-        self.info_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.info_label.setMinimumHeight(32)
+        self.info_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.info_label.setMinimumWidth(210)
+        self.info_label.setMaximumWidth(330)
+        self.info_label.setMinimumHeight(30)
         self.info_label.setStyleSheet(
             "QLabel#VideoSourceMetaLabel {"
             " color: #A9B0B7;"
@@ -706,10 +710,10 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
             " border: 1px solid #2D3942;"
             " border-radius: 9px;"
             " padding: 1px 12px 0 12px;"
-            " font-size: 9px;"
-            "}"
+                " font-size: 9px;"
+                "}"
         )
-        status_layout.addWidget(self.info_label, 1)
+        status_layout.addWidget(self.info_label, 0)
 
         self.source_name_label = _MirrorLabel("")
         self.source_name_label.setObjectName("VideoSourceNameLabel")
@@ -717,7 +721,7 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
         self.source_name_label.setWordWrap(False)
         self.source_name_label.setMinimumWidth(0)
         self.source_name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.source_name_label.setMinimumHeight(32)
+        self.source_name_label.setMinimumHeight(30)
         self.source_name_label.setStyleSheet(
             "QLabel#VideoSourceNameLabel {"
             " color: #EAF2F8;"
@@ -725,19 +729,21 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
             " border: 1px solid #2F4852;"
             " border-radius: 9px;"
             " padding: 0 12px;"
-            " font-size: 10px;"
-            " font-weight: 700;"
-            "}"
+                " font-size: 10px;"
+                " font-weight: 700;"
+                "}"
         )
         status_layout.addWidget(self.source_name_label, 1)
+        status_layout.setStretch(0, 0)
+        status_layout.setStretch(1, 1)
 
         ctrl_layout.addWidget(self.status_info_container, 1)
         return ctrl
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 0, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(0)
         self._build_video_surface_stack()
 
         layout.addWidget(self.video_container, stretch=1)
@@ -1901,9 +1907,56 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
         except Exception:
             pass
 
+    def compact_for_home_navigation(self) -> None:
+        if bool(getattr(self, "_home_compact_mode", False)):
+            return
+        self._home_compact_mode = True
+        try:
+            self.pause_video()
+        except Exception:
+            pass
+        for attr in ("_ui_timer", "_frame_step_hold_timer", "_frame_step_hold_start_timer"):
+            timer = getattr(self, attr, None)
+            try:
+                if timer is not None:
+                    timer.stop()
+            except Exception:
+                pass
+        try:
+            self.setUpdatesEnabled(False)
+        except Exception:
+            pass
+        for widget_name in ("quick_subtitle_overlay", "_quick_control_bar", "sub_label", "thumb_label", "video_stack"):
+            widget = getattr(self, widget_name, None)
+            try:
+                if widget is not None:
+                    widget.hide()
+                    widget.setUpdatesEnabled(False)
+            except Exception:
+                pass
+        try:
+            if hasattr(self.media_player, "setVideoOutput"):
+                self.media_player.setVideoOutput(None)
+        except Exception:
+            pass
+        for output_name in ("audio_output", "vocal_audio_output"):
+            output = getattr(self, output_name, None)
+            if output is None:
+                continue
+            try:
+                output.deleteLater()
+            except Exception:
+                pass
+            setattr(self, output_name, None)
+        try:
+            self.thumb_label.clear_pixmap()
+        except Exception:
+            pass
+
     def restore_after_navigation(self) -> None:
         """Reattach the visible video surface after returning from Home to Editor."""
         was_shutdown = bool(getattr(self, "_shutdown_in_progress", False))
+        self._home_compact_mode = False
         self._shutdown_in_progress = False
         for widget_name in ("video_stack", "thumb_label", "sub_label", "quick_subtitle_overlay"):
             widget = getattr(self, widget_name, None)
@@ -1914,6 +1967,13 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
                         widget.show()
             except Exception:
                 pass
+        quick_bar = getattr(self, "_quick_control_bar", None)
+        try:
+            if quick_bar is not None:
+                quick_bar.setUpdatesEnabled(True)
+                quick_bar.show()
+        except Exception:
+            pass
         try:
             self.setUpdatesEnabled(True)
             self.show()
@@ -1936,6 +1996,10 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
         try:
             if not self._ui_timer.isActive():
                 self._ui_timer.start()
+        except Exception:
+            pass
+        try:
+            self._ensure_audio_outputs()
         except Exception:
             pass
         try:
@@ -1962,6 +2026,7 @@ class VideoPlayerWidget(VideoPlayerOverlayMixin, VideoPlayerSubtitleMixin, QWidg
             self._refresh_source_info_label()
             self._refresh_source_name_label()
             self._update_frame_count_label(force=True)
+            self._sync_quick_control_bar()
             self.resizeEvent(None)
             self.update()
         except Exception:

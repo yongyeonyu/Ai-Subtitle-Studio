@@ -54,6 +54,87 @@ final class SubtitleQualityScorerTests: XCTestCase {
         XCTAssertTrue(metric.flags.contains("word_timestamps_missing"))
     }
 
+    func testNumericTokenIsNotOverPenalized() throws {
+        let request = try decodeRequest(
+            """
+            {
+              "segments": [
+                {
+                  "start": 0.0,
+                  "end": 1.0,
+                  "text": "2026",
+                  "asr_metadata": {
+                    "avg_logprob": -0.2,
+                    "compression_ratio": 1.0,
+                    "no_speech_prob": 0.05,
+                    "word_confidence": 0.90
+                  }
+                }
+              ],
+              "settings": {"sub_min_duration": 0.2, "sub_max_cps": 12}
+            }
+            """
+        )
+
+        let response = SubtitleQualityScorer.score(request)
+        let metric = try XCTUnwrap(response.metrics.first)
+        XCTAssertEqual(metric.confidenceLabel, "green")
+        XCTAssertGreaterThanOrEqual(metric.confidenceScore ?? 0, 85.0)
+        XCTAssertFalse(metric.flags.contains("text_has_no_language_chars"))
+    }
+
+    func testShortInterjectionCanScoreGreen() throws {
+        let request = try decodeRequest(
+            """
+            {
+              "segments": [
+                {
+                  "start": 0.0,
+                  "end": 0.6,
+                  "text": "어",
+                  "asr_metadata": {
+                    "avg_logprob": -0.2,
+                    "compression_ratio": 1.0,
+                    "no_speech_prob": 0.05,
+                    "word_confidence": 0.90
+                  }
+                }
+              ],
+              "settings": {"sub_min_duration": 0.2, "sub_max_cps": 12}
+            }
+            """
+        )
+
+        let response = SubtitleQualityScorer.score(request)
+        let metric = try XCTUnwrap(response.metrics.first)
+        XCTAssertEqual(metric.confidenceLabel, "green")
+        XCTAssertGreaterThanOrEqual(metric.confidenceScore ?? 0, 85.0)
+        XCTAssertTrue(metric.flags.contains("very_short_text"))
+    }
+
+    func testPlausibleTextWithoutMetadataIsNotForcedGray() throws {
+        let request = try decodeRequest(
+            """
+            {
+              "segments": [
+                {
+                  "start": 0.0,
+                  "end": 1.3,
+                  "text": "유스 어드벤처 2026"
+                }
+              ],
+              "settings": {"sub_min_duration": 0.2, "sub_max_cps": 12}
+            }
+            """
+        )
+
+        let response = SubtitleQualityScorer.score(request)
+        let metric = try XCTUnwrap(response.metrics.first)
+        XCTAssertNotEqual(metric.confidenceLabel, "gray")
+        XCTAssertGreaterThanOrEqual(metric.confidenceScore ?? 0, 72.0)
+        XCTAssertTrue(metric.flags.contains("metadata_missing"))
+    }
+
     func testUncertainLLMRewriteIsYellow() throws {
         let request = try decodeRequest(
             """

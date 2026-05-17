@@ -96,6 +96,27 @@ def _finalize_subtitle_text(text: str) -> str:
     return normalize_subtitle_text_lines(strip_forbidden_sentence_periods(text))
 
 
+def _multi_speaker_linebreak_allowed(item: dict[str, Any]) -> bool:
+    speakers = [
+        str(speaker).strip()
+        for speaker in list(item.get("speaker_list") or [])
+        if str(speaker).strip()
+    ]
+    return len(set(speakers)) >= 2
+
+
+def _enforce_linebreak_policy(text: str, item: dict[str, Any]) -> str:
+    if "\n" not in str(text or ""):
+        return text
+    if _multi_speaker_linebreak_allowed(item):
+        return text
+    return " ".join(
+        line.strip()
+        for line in str(text or "").splitlines()
+        if line.strip()
+    )
+
+
 def _apply_corrections_with_tracking(text: str, corrections: dict | None = None) -> tuple[str, list[tuple[str, str]]]:
     if not corrections or not text:
         return text, []
@@ -216,6 +237,7 @@ def enforce_final_subtitle_text_policy(
     result: list[dict[str, Any]] = []
     for item, text, applied_pairs in zip(staged_items, staged_texts, applied_batches):
         text = _finalize_subtitle_text(text)
+        text = _enforce_linebreak_policy(text, item)
         if text:
             item["text"] = text
             result.append(item)

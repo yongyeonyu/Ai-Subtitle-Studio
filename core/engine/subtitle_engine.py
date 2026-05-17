@@ -316,6 +316,7 @@ def _append_accuracy_decision_for_settings(lora_meta: dict | None, decision: dic
 def _deep_rerank_chunks(text: str, chunks: list[str] | None, settings: dict | None, lora_meta: dict | None) -> tuple[list[str] | None, dict]:
     if not chunks:
         return chunks, dict(lora_meta or {})
+    original_chunks = list(chunks)
     candidates = [list(chunks)]
     compact_original = re.sub(r"\s+", "", str(text or ""))
     compact_chunks = re.sub(r"\s+", "", "".join(str(chunk or "") for chunk in chunks))
@@ -325,7 +326,51 @@ def _deep_rerank_chunks(text: str, chunks: list[str] | None, settings: dict | No
     out_meta = dict(lora_meta or {})
     if meta:
         out_meta["_deep_rerank_policy"] = meta
-    return ranked or chunks, out_meta
+    if not ranked:
+        return original_chunks, out_meta
+
+    guard_settings = {
+        **dict(settings or {}),
+        "llm_verifier_enabled": True,
+        "llm_verifier_block_added_content_tokens": True,
+        "llm_verifier_preserve_numbers": True,
+        "llm_verifier_preserve_interjections": True,
+        "llm_verifier_min_similarity": max(
+            0.9,
+            _setting_float(settings or {}, "llm_verifier_min_similarity", 0.86),
+        ),
+        "llm_verifier_max_length_delta_ratio": min(
+            0.10,
+            _setting_float(settings or {}, "llm_verifier_max_length_delta_ratio", 0.16),
+        ),
+    }
+    verified, decision = verify_llm_chunks_for_subtitle(
+        text,
+        ranked,
+        guard_settings,
+        _profile_from_settings(settings),
+    )
+    out_meta = _append_accuracy_decision_for_settings(out_meta, decision, settings)
+    out_meta["_deep_rerank_verifier_policy"] = decision
+    if verified is None:
+        rollback = rollback_decision(str(decision.get("reason") or "deep_rerank_integrity_rejected"), fallback="pre_verified_chunks")
+        out_meta = _append_accuracy_decision_for_settings(out_meta, rollback, settings)
+        out_meta["_deep_rerank_rollback_policy"] = rollback
+        rerank_policy = dict(out_meta.get("_deep_rerank_policy") or {})
+        rerank_policy.update(
+            {
+                "accepted": False,
+                "reason": str(decision.get("reason") or "deep_rerank_integrity_rejected"),
+                "fallback": "pre_verified_chunks",
+            }
+        )
+        out_meta["_deep_rerank_policy"] = rerank_policy
+        get_logger().log(
+            "[딥러닝-재정렬차단] 검증 이후 청크가 STT 원문을 벗어나 이전 안전 청크로 복구 "
+            f"({describe_llm_verifier_decision(decision)}): '{_short_log_text_preview(text)}...'"
+        )
+        return original_chunks, out_meta
+    return verified, out_meta
 
 
 def _apply_llm_confidence_gate(
@@ -1206,6 +1251,115 @@ def _source_output_variant(segments: list[dict], vad_segments: list[dict] | None
     source = _apply_lora_style_micro_merge(source, vad_segments or [], settings or {}, stage="source")
     source = _self_review_subtitle_quality(source, vad_segments or [], settings or {})
     return _annotate_context_consistency(source, settings or {})
+
+
+def _sequence_text_for_integrity(segments: list[dict] | None) -> str:
+    return " ".join(
+        " ".join(_subtitle_text_lines(str(seg.get("text", "") or "")))
+        for seg in list(segments or [])
+        if isinstance(seg, dict) and str(seg.get("text", "") or "").strip() and not seg.get("is_gap")
+    ).strip()
+
+
+def _safe_source_integrity_variant(source_segments: list[dict], settings: dict | None) -> list[dict]:
+    rows = [
+        dict(seg)
+        for seg in list(source_segments or [])
+        if isinstance(seg, dict) and str(seg.get("text", "") or "").strip() and not seg.get("is_gap")
+    ]
+    if not rows:
+        return []
+    rows = adjust_timing(rows)
+    rows = apply_final_gap_settings(rows, settings or {}, force=True)
+    rows = align_stt_candidates_to_subtitle_segments(rows)
+    raw_corr = get_local_dataset_corrections()
+    corrections: dict = raw_corr if isinstance(raw_corr, dict) else {}
+    rows = _enforce_final_subtitle_text_policy(rows, corrections)
+    return _expand_non_speaker_multiline_segments(rows, settings or {})
+
+
+def _attach_final_integrity_policy(rows: list[dict], policy: dict) -> list[dict]:
+    if not rows:
+        return rows
+    out = [dict(row) for row in rows]
+    out[0]["_final_transcript_integrity_policy"] = dict(policy)
+    return out
+
+
+def _final_transcript_integrity_guard(
+    optimized: list[dict],
+    source_segments: list[dict],
+    vad_segments: list[dict] | None,
+    settings: dict | None,
+) -> list[dict]:
+    del vad_segments
+    settings = dict(settings or {})
+    if not _bool_setting(settings, "subtitle_final_integrity_guard_enabled", True):
+        return optimized
+    if not optimized or not source_segments:
+        return optimized
+    source_text = _sequence_text_for_integrity(source_segments)
+    final_text = _sequence_text_for_integrity(optimized)
+    if not source_text or not final_text:
+        return optimized
+
+    guard_settings = {
+        **settings,
+        "llm_verifier_enabled": True,
+        "llm_verifier_block_added_content_tokens": True,
+        "llm_verifier_preserve_numbers": True,
+        "llm_verifier_preserve_interjections": True,
+        "llm_verifier_min_similarity": max(
+            0.9,
+            _setting_float(settings, "subtitle_final_integrity_min_similarity", 0.9),
+            _setting_float(settings, "llm_verifier_min_similarity", 0.86),
+        ),
+        "llm_verifier_max_length_delta_ratio": min(
+            0.12,
+            _setting_float(settings, "subtitle_final_integrity_max_length_delta_ratio", 0.12),
+            _setting_float(settings, "llm_verifier_max_length_delta_ratio", 0.16),
+        ),
+        "llm_verifier_max_chunks": max(1, _setting_int(settings, "llm_verifier_max_chunks", 8)),
+    }
+    verified, decision = verify_llm_chunks_for_subtitle(
+        source_text,
+        [final_text],
+        guard_settings,
+        _profile_from_settings(settings),
+    )
+    policy = {
+        "task": "final_transcript_integrity_guard",
+        "accepted": bool(verified),
+        "reason": str(decision.get("reason") or "ok"),
+        "source_segments": len([seg for seg in list(source_segments or []) if isinstance(seg, dict) and str(seg.get("text", "") or "").strip()]),
+        "final_segments": len([seg for seg in list(optimized or []) if isinstance(seg, dict) and str(seg.get("text", "") or "").strip()]),
+        "source_compact_len": decision.get("source_compact_len"),
+        "candidate_compact_len": decision.get("candidate_compact_len"),
+        "similarity": decision.get("similarity"),
+        "length_delta_ratio": decision.get("length_delta_ratio"),
+    }
+    if verified is not None:
+        return _attach_final_integrity_policy(optimized, policy)
+
+    fallback = _safe_source_integrity_variant(source_segments, settings)
+    if not fallback:
+        get_logger().log(
+            "[자막무결성-경고] 최종 자막이 STT 원문과 불일치하지만 복구할 STT 원문 세그먼트가 없습니다 "
+            f"({describe_llm_verifier_decision(decision)})"
+        )
+        return _attach_final_integrity_policy(optimized, {**policy, "fallback": "unavailable"})
+    get_logger().log(
+        "[자막무결성-롤백] 최종 자막이 STT1/2 원문 흐름과 불일치하여 STT 원문 기반 결과로 복구 "
+        f"({describe_llm_verifier_decision(decision)})"
+    )
+    return _attach_final_integrity_policy(
+        fallback,
+        {
+            **policy,
+            "fallback": "source_stt_segments",
+            "accepted": False,
+        },
+    )
 
 
 def _apply_output_variant_selector(
@@ -2945,10 +3099,11 @@ def optimize_segments(
     optimized = _annotate_completion_report(optimized, loaded_settings)
     optimized = _enforce_final_subtitle_text_policy(optimized, None)
     optimized = _expand_non_speaker_multiline_segments(optimized, loaded_settings)
+    optimized = _final_transcript_integrity_guard(optimized, original_segments, vad_segments or [], loaded_settings)
     _emit_processing_preview(
         stage_segments_callback,
-        stage="line_break_split",
-        stage_label="일반 줄바꿈 세그먼트 분리",
+        stage="final_integrity_guard",
+        stage_label="최종 자막/STT 원문 무결성 확인",
         segments=optimized,
     )
     _log_accuracy_metrics(optimized, loaded_settings)

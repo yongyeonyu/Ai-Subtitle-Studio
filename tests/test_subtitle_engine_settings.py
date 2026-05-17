@@ -611,6 +611,75 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertTrue(any("누락=문장인데" in message for message in messages))
         self.assertTrue(any("허용=0.13" in message for message in messages))
 
+    def test_deep_rerank_chunks_rolls_back_when_post_rerank_changes_text(self):
+        source = "어 유스 어드벤처 2026 네 안녕하세요"
+        preverified = ["어 유스 어드벤처", "2026 네 안녕하세요"]
+        settings = {
+            "accuracy_decision_graph_enabled": True,
+            "deep_subtitle_policy_enabled": True,
+            "deep_subtitle_reranker_enabled": True,
+            "llm_verifier_enabled": True,
+        }
+
+        with unittest.mock.patch(
+            "core.engine.subtitle_engine.rerank_subtitle_candidates",
+            return_value=(
+                ["현대모토 스튜디오에 나왔는데"],
+                {"task": "subtitle_rerank", "chosen_index": 1},
+            ),
+        ):
+            ranked, meta = subtitle_engine._deep_rerank_chunks(source, preverified, settings, {})
+
+        self.assertEqual(ranked, preverified)
+        self.assertFalse(meta["_deep_rerank_policy"]["accepted"])
+        self.assertEqual(meta["_deep_rerank_policy"]["fallback"], "pre_verified_chunks")
+        self.assertEqual(meta["_deep_rerank_rollback_policy"]["fallback"], "pre_verified_chunks")
+
+    def test_final_transcript_integrity_guard_restores_stt_source_when_output_drifts(self):
+        source = [
+            {"start": 0.0, "end": 3.0, "text": "어 유스 어드벤처", "speaker": "SPEAKER_00"},
+            {"start": 3.2, "end": 6.0, "text": "2026", "speaker": "SPEAKER_00"},
+            {"start": 7.0, "end": 9.0, "text": "네 안녕하세요 소설기유모씨입니다", "speaker": "SPEAKER_00"},
+        ]
+        drifted = [
+            {"start": 4.0, "end": 6.0, "text": "어\n오늘은 여기 고향", "speaker": "SPEAKER_00"},
+            {"start": 7.0, "end": 9.0, "text": "현대모토 스튜디오에 나왔는데", "speaker": "SPEAKER_00"},
+        ]
+
+        with unittest.mock.patch("core.engine.subtitle_engine.get_local_dataset_corrections", return_value={}):
+            restored = subtitle_engine._final_transcript_integrity_guard(
+                drifted,
+                source,
+                [],
+                {"subtitle_final_integrity_guard_enabled": True},
+            )
+
+        self.assertEqual([row["text"] for row in restored], [row["text"] for row in source])
+        self.assertEqual(restored[0]["_final_transcript_integrity_policy"]["fallback"], "source_stt_segments")
+        self.assertFalse(restored[0]["_final_transcript_integrity_policy"]["accepted"])
+
+    def test_final_transcript_integrity_guard_applies_corrections_when_restoring_stt_source(self):
+        source = [
+            {"start": 7.0, "end": 9.0, "text": "네 안녕하세요 소설과 유무시입니다", "speaker": "SPEAKER_00"},
+        ]
+        drifted = [
+            {"start": 7.0, "end": 9.0, "text": "현대모토 스튜디오에 나왔는데", "speaker": "SPEAKER_00"},
+        ]
+
+        with unittest.mock.patch(
+            "core.engine.subtitle_engine.get_local_dataset_corrections",
+            return_value={"소설과 유무시입니다": "소설가유모씨입니다"},
+        ):
+            restored = subtitle_engine._final_transcript_integrity_guard(
+                drifted,
+                source,
+                [],
+                {"subtitle_final_integrity_guard_enabled": True},
+            )
+
+        self.assertEqual(restored[0]["text"], "네 안녕하세요 소설가유모씨입니다")
+        self.assertEqual(restored[0]["_final_transcript_integrity_policy"]["fallback"], "source_stt_segments")
+
     def test_setting_int_uses_fallback_and_default_for_invalid_values(self):
         self.assertEqual(
             subtitle_engine._setting_int(

@@ -57,7 +57,7 @@ class ModePolicyTests(unittest.TestCase):
 
         self.assertEqual(high["stt_quality_preset"], "precise")
         self.assertEqual(high["cut_boundary_level"], "medium")
-        self.assertFalse(high["stt_ensemble_enabled"])
+        self.assertTrue(high["stt_ensemble_enabled"])
         self.assertTrue(high["stt_ensemble_llm_judge_enabled"])
         self.assertTrue(high["stt_ensemble_llm_judge_local_only"])
         self.assertFalse(high["stt_selective_secondary_recheck_enabled"])
@@ -119,7 +119,7 @@ class ModePolicyTests(unittest.TestCase):
             "auto",
         )
 
-        self.assertEqual(settings["selected_audio_ai"], "clearvoice")
+        self.assertEqual(settings["selected_audio_ai"], "none")
         self.assertEqual(settings["selected_vad"], "ten_vad")
         self.assertEqual(settings["selected_whisper_model"], "user-stt1")
         self.assertEqual(settings["selected_whisper_model_secondary"], "user-stt2")
@@ -154,18 +154,18 @@ class ModePolicyTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(settings["selected_audio_ai"], "current-audio")
+        self.assertEqual(settings["selected_audio_ai"], "deepfilter")
         self.assertEqual(settings["selected_vad"], "silero")
         self.assertEqual(settings["selected_whisper_model"], "current-stt1")
         self.assertEqual(settings["selected_whisper_model_secondary"], "current-stt2")
         self.assertEqual(settings["selected_model"], "current-llm")
-        self.assertFalse(settings["stt_ensemble_enabled"])
+        self.assertTrue(settings["stt_ensemble_enabled"])
 
-    def test_current_user_stt2_enable_overrides_mode_defaults(self):
+    def test_current_user_stt2_enable_no_longer_overrides_mode_defaults(self):
         settings = apply_mode_runtime_settings(
             {
-                "subtitle_mode": "high",
-                "stt_quality_preset": "precise",
+                "subtitle_mode": "auto",
+                "stt_quality_preset": "balanced",
                 "selected_whisper_model": "current-stt1",
                 "selected_whisper_model_secondary": "current-stt2",
                 "stt_ensemble_enabled": True,
@@ -174,10 +174,10 @@ class ModePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(settings["selected_whisper_model_secondary"], "current-stt2")
-        self.assertTrue(settings["stt_ensemble_enabled"])
-        self.assertTrue(settings["stt_ensemble_user_selected"])
+        self.assertFalse(settings["stt_ensemble_enabled"])
+        self.assertFalse(settings["stt_ensemble_user_selected"])
 
-    def test_simple_mode_switch_preserves_user_selected_stt2_enable(self):
+    def test_simple_mode_switch_preserves_stt2_model_but_not_manual_enable(self):
         settings = apply_simple_operation_mode(
             {
                 "selected_whisper_model": "user-stt1",
@@ -189,8 +189,8 @@ class ModePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(settings["selected_whisper_model_secondary"], "user-stt2")
-        self.assertTrue(settings["stt_ensemble_enabled"])
-        self.assertTrue(settings["stt_ensemble_user_selected"])
+        self.assertFalse(settings["stt_ensemble_enabled"])
+        self.assertFalse(settings["stt_ensemble_user_selected"])
 
     def test_selected_llm_is_effective_only_in_high_mode(self):
         from core.engine import subtitle_settings

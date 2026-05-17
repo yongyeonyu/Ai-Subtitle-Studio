@@ -75,6 +75,26 @@ class RoughcutWidget(
         self.setStyleSheet(f"background: {COLORS['bg']}; color: {COLORS['text']};")
         self._build_ui()
 
+    def compact_for_home_navigation(self) -> None:
+        stop_preview = getattr(self, "_stop_preview", None)
+        if callable(stop_preview):
+            try:
+                stop_preview()
+            except Exception:
+                pass
+        try:
+            self._preview_timer.stop()
+        except Exception:
+            pass
+        if getattr(self, "_render_thread", None) is not None:
+            return
+        self._result = None
+        self._source_signature = ""
+        try:
+            self._set_empty_state()
+        except Exception:
+            pass
+
     def run_main_action(self) -> None:
         """Route the global Start button to roughcut analysis while this page is active."""
         if self._subtitle_generation_active():
@@ -495,11 +515,11 @@ class RoughcutWidget(
         table.setAlternatingRowColors(True)
         table.setWordWrap(True)
         table.setStyleSheet(
-            "QTableWidget { background: #11181C; color: #F5F7FA; border: 1px solid #2D3942; "
-            "gridline-color: #2D3942; font-size: 11px; alternate-background-color: #151C20; } "
-            "QHeaderView::section { background: #1B2429; color: #A9B0B7; border: 1px solid #2D3942; "
+            f"QTableWidget {{ background: {COLORS['sidebar']}; color: {COLORS['text']}; border: 1px solid {COLORS['separator']}; "
+            f"gridline-color: {COLORS['separator']}; font-size: 11px; alternate-background-color: {COLORS['surface']}; }} "
+            f"QHeaderView::section {{ background: {COLORS['surface_alt']}; color: {COLORS['muted']}; border: 1px solid {COLORS['separator']}; "
             "padding: 6px; font-weight: bold; } "
-            "QTableWidget::item { border-bottom: 1px solid #2D3942; padding: 4px; } "
+            f"QTableWidget::item {{ border-bottom: 1px solid {COLORS['separator']}; padding: 4px; }} "
             "QTableWidget::item:selected { background: #1F3A56; color: #FFFFFF; }"
         )
         header = table.horizontalHeader()

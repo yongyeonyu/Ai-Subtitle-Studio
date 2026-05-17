@@ -21,7 +21,11 @@ from core.runtime import config
 from core.engine.subtitle_engine import save_srt
 from core.runtime.logger import get_logger
 from ui.settings.qml_panel import attach_qml_tab_bar
-from ui.style import button_style, settings_button_style, settings_dialog_stylesheet
+from ui.style import COLORS, button_style, settings_button_style, settings_dialog_stylesheet
+from ui.ux.apple_popup_theme import (
+    apple_popup_color_button_style,
+    apple_popup_dialog_stylesheet,
+)
 
 # ── 설정 저장 로직 ──
 _SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
@@ -53,6 +57,16 @@ def _save_es(d:dict, key: str = _EXPORT_SETTINGS_KEY):
             json.dump(all_s,f,ensure_ascii=False,indent=2)
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         get_logger().log(f"⚠️ export dialog 설정 저장 실패: {exc}")
+
+
+def _export_dialog_stylesheet() -> str:
+    return (
+        "#subtitleExportDialogTabs { background: transparent; } "
+        f"#subtitleExportPreviewGroup {{ color: {COLORS['text']}; }} "
+        f"#subtitleExportLineModeLabel {{ color: {COLORS['muted']}; font-size: 12px; font-weight: 700; }} "
+        f"#subtitleExportPreviewLabel {{ background: {COLORS['sidebar']}; border: 1px solid {COLORS['separator']}; border-radius: 12px; }} "
+        f"#subtitleExportIcloudCheck {{ color: {COLORS['accent']}; font-weight: 800; padding-top: 8px; }}"
+    )
 
 # ── 한글 지원 글꼴 ──
 _KOREAN_FONTS = {
@@ -300,7 +314,9 @@ def _combo_pm(values:list, default, step:int=1):
     combo.setEditable(True) 
     combo.addItems([str(v) for v in values])
     combo.setCurrentText(str(default))
-    combo.setStyleSheet(f"background:{config.BG3};color:{config.FG};padding:3px;")
+    combo.setStyleSheet(
+        f"background:{COLORS['sidebar']};color:{COLORS['text']};padding:4px 8px;border:1px solid {COLORS['separator']};border-radius:8px;"
+    )
     combo.setFixedWidth(85)
 
     def go(delta):
@@ -310,7 +326,7 @@ def _combo_pm(values:list, default, step:int=1):
         except ValueError:
             pass
 
-    btn_s=f"background:{config.BG3};color:{config.FG};padding:2px 8px;font-weight:bold;border-radius:2px;"
+    btn_s = button_style("toolbar", font_size="12px", padding="2px 8px")
     m=QPushButton("−"); m.setFixedWidth(28); m.setStyleSheet(btn_s)
     p2=QPushButton("+"); p2.setFixedWidth(28); p2.setStyleSheet(btn_s)
     
@@ -325,21 +341,25 @@ class ExportDialog(QDialog):
     def __init__(self, segments, video_name, parent=None):
         super().__init__(parent)
         self.segments=segments; self.video_name=video_name
+        self.setObjectName("subtitleExportDialog")
         self._srt_dir=os.path.expanduser("~")
         if parent and hasattr(parent,"media_path"):
             d=os.path.dirname(parent.media_path)
             if d and os.path.exists(d): self._srt_dir=d
         self._txt_c=QColor(config.ACCENT); self._bdr_c=QColor("#FFFFFF"); self._shd_c=QColor("#000000"); self._bg_c=QColor("#000000")
         self._fonts=_avail_fonts()
-        self.setWindowTitle("자막 동영상 출력"); self.setMinimumWidth(860); self.setStyleSheet(settings_dialog_stylesheet())
+        self.setWindowTitle("자막 동영상 출력"); self.setMinimumWidth(860)
+        self.setStyleSheet(
+            settings_dialog_stylesheet()
+            + apple_popup_dialog_stylesheet("subtitleExportDialog", accent=COLORS["accent"])
+            + _export_dialog_stylesheet()
+        )
         self._build_ui(); self._load(); self._refresh_preview()
 
     def _build_ui(self):
         root=QVBoxLayout(self); root.setSpacing(8)
         self.tabs=QTabWidget()
-        self.tabs.setStyleSheet(
-            "QTabBar::tab { min-height: 34px; max-height: 34px; padding: 0 14px; }"
-        )
+        self.tabs.setObjectName("subtitleExportDialogTabs")
 
         def lrow(lbl,w,lw=130):
             h=QHBoxLayout(); lb=QLabel(lbl); lb.setFixedWidth(lw); h.addWidget(lb)
@@ -354,7 +374,7 @@ class ExportDialog(QDialog):
         
         # 💡 iCloud 자동 업로드 체크박스 추가
         self.icloud_chk = QCheckBox("렌더링 완료 후 iCloud로 자동 복사")
-        self.icloud_chk.setStyleSheet("font-weight: bold; color: #34C759; padding-top: 8px;")
+        self.icloud_chk.setObjectName("subtitleExportIcloudCheck")
         l1.addWidget(self.icloud_chk)
         if not getattr(config, "IS_MAC", False):
             self.icloud_chk.setVisible(False)
@@ -403,21 +423,27 @@ class ExportDialog(QDialog):
         l4.addStretch()
 
         # ── 미리보기 ──
-        grp=QGroupBox("미리보기 (회색 체커보드 = 투명 영역)"); gv=QVBoxLayout(grp); gv.setSpacing(6)
+        grp=QGroupBox("미리보기 (회색 체커보드 = 투명 영역)"); grp.setObjectName("subtitleExportPreviewGroup"); gv=QVBoxLayout(grp); gv.setSpacing(6)
         
         line_row=QHBoxLayout()
-        line_row.addWidget(QLabel("미리보기 모드:")); 
+        line_mode_lbl = QLabel("미리보기 모드:")
+        line_mode_lbl.setObjectName("subtitleExportLineModeLabel")
+        line_row.addWidget(line_mode_lbl)
         self.prev_1_btn=QPushButton("1줄"); self.prev_2_btn=QPushButton("2줄")
         for b in [self.prev_1_btn, self.prev_2_btn]:
             b.setCheckable(True); b.setFixedWidth(60)
-            b.setStyleSheet(button_style("toolbar", font_size="12px", padding="4px 8px") + " QPushButton:checked { background: #1F3A56; border-color: #007AFF; color: #D7EBFF; }")
+            b.setStyleSheet(
+                button_style("toolbar", font_size="12px", padding="4px 8px")
+                + f" QPushButton:checked {{ background: {COLORS['surface_alt']}; border-color: {COLORS['primary']}; color: #D7EBFF; }}"
+            )
         self.prev_1_btn.setChecked(True)
         self.prev_1_btn.clicked.connect(self._on_prev1); self.prev_2_btn.clicked.connect(self._on_prev2)
         line_row.addWidget(self.prev_1_btn); line_row.addWidget(self.prev_2_btn); line_row.addStretch()
         gv.addLayout(line_row)
 
         self.prev_lbl=QLabel(); self.prev_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.prev_lbl.setMinimumHeight(120); self.prev_lbl.setStyleSheet("background:#151C20;border:1px solid #2D3942;border-radius:7px;"); gv.addWidget(self.prev_lbl)
+        self.prev_lbl.setObjectName("subtitleExportPreviewLabel")
+        self.prev_lbl.setMinimumHeight(120); gv.addWidget(self.prev_lbl)
         root.addWidget(grp)
 
         br = QHBoxLayout()
@@ -474,7 +500,9 @@ class ExportDialog(QDialog):
     def _on_prev1(self): self.prev_2_btn.setChecked(False); self.prev_1_btn.setChecked(True); self._refresh_preview()
     def _on_prev2(self): self.prev_1_btn.setChecked(False); self.prev_2_btn.setChecked(True); self._refresh_preview()
 
-    def _cb(self,btn,c): btn.setStyleSheet(f"background:{c.name()};color:{'#000' if c.lightness()>128 else '#fff'};padding:5px;border:1px solid #555;"); btn.setText(c.name().upper())
+    def _cb(self,btn,c):
+        btn.setStyleSheet(apple_popup_color_button_style(c.name()))
+        btn.setText(c.name().upper())
     
     def _pick(self,w):
         cur={"txt":self._txt_c,"bdr":self._bdr_c,"shd":self._shd_c,"bg":self._bg_c}[w]

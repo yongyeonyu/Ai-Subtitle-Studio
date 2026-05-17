@@ -43,11 +43,13 @@ class LoraSettingsAutopilotTests(unittest.TestCase):
             saved = json.loads(user_settings.read_text(encoding="utf-8"))
 
             self.assertEqual(result["status"], "applied")
-            self.assertEqual(saved["selected_audio_ai"], "clearvoice")
+            self.assertEqual(saved["selected_audio_ai"], "none")
             self.assertEqual(saved["continuous_threshold"], 2.5)
             self.assertEqual(saved["split_length_threshold"], 17)
             self.assertEqual(saved["user_prompt"], "")
             self.assertIn("continuous_threshold", saved[AUTOPILOT_METADATA_KEY]["applied_keys"])
+            self.assertNotIn("selected_audio_ai", saved[AUTOPILOT_METADATA_KEY]["applied_keys"])
+            self.assertEqual(saved[AUTOPILOT_METADATA_KEY]["skipped_keys"]["selected_audio_ai"], "mode_managed")
             self.assertNotIn("user_prompt", saved[AUTOPILOT_METADATA_KEY]["applied_keys"])
 
     def test_optimizer_records_exploration_and_updates_user_settings(self):

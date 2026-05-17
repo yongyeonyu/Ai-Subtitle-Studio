@@ -16,8 +16,6 @@ _SEGMENT_TOP_LEVEL_DROP_KEYS = {
     "end",
     "timeline_start",
     "timeline_end",
-    "timeline_start_frame",
-    "timeline_end_frame",
     "frame_rate",
 }
 _CHAPTER_DROP_KEYS = {

@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QHeaderView, QTableWidget, QVBoxLayout, QWidget
 
 from ui.queue.queue_formatting import DEFAULT_QUEUE_HEADER
-from ui.style import label_style, named_panel_style
+from ui.style import COLORS, label_style, named_panel_style
 
 
 class QueuePanelWidget(QWidget):
@@ -56,11 +56,11 @@ class QueuePanelWidget(QWidget):
         self.queue_table.setShowGrid(True)
         self.queue_table.setGridStyle(Qt.PenStyle.SolidLine)
         self.queue_table.setStyleSheet(
-            "QTableWidget { background: #151C20; color: #F5F7FA; "
-            "border: 1px solid #2D3942; border-radius: 6px; font-size: 11px; gridline-color: #3A4650; } "
+            f"QTableWidget {{ background: {COLORS['surface']}; color: {COLORS['text']}; "
+            f"border: 1px solid {COLORS['separator']}; border-radius: 6px; font-size: 11px; gridline-color: #3A4650; }} "
             "QTableWidget::item { padding: 2px 8px; } "
-            "QHeaderView::section { background: #1B2429; color: #A9B0B7; "
+            f"QHeaderView::section {{ background: {COLORS['surface_alt']}; color: {COLORS['muted']}; "
             "border: none; border-right: 1px solid #3A4650; "
-            "border-bottom: 1px solid #3A4650; padding: 3px 8px; }"
+            "border-bottom: 1px solid #3A4650; padding: 3px 8px; }}"
         )
         layout.addWidget(self.queue_table)

@@ -17,33 +17,12 @@ try:
 except Exception:
     QSvgRenderer = None
 
+from ui.ux.apple_black_palette import APPLE_BLACK_COLORS
 
 
 # Canonical app palette. Keep visual-semantic colors here so Python and QML
 # surfaces can converge on the same accents instead of drifting by feature.
-COLORS = {
-    "bg": "#0F1518",
-    "sidebar": "#11181C",
-    "surface": "#151C20",
-    "surface_alt": "#1B2429",
-    "control": "#202A31",
-    "control_hover": "#2A363F",
-    "primary": "#007AFF",
-    "primary_hover": "#0066D6",
-    "text": "#F5F7FA",
-    "muted": "#A9B0B7",
-    "danger": "#FF3B30",
-    "warning": "#FFD60A",
-    "warning_surface": "#3B341D",
-    "warning_surface_alt": "#17242C",
-    "warning_surface_alt_soft": "#15212A",
-    "warning_badge": "#5A4600",
-    "warning_border": "#6A4B18",
-    "warning_text_soft": "#FFF2A8",
-    "info": "#5AC8FA",
-    "accent": "#34C759",
-    "separator": "#2D3942",
-}
+COLORS = dict(APPLE_BLACK_COLORS)
 
 # Shared gutter used by the main shell and the home sidebar so visible panel
 # gaps stay aligned instead of drifting by surface.

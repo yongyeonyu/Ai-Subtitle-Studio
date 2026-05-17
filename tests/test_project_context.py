@@ -10,7 +10,14 @@ from unittest.mock import patch
 import core.project.project_io as project_io
 import core.project.project_manager as project_manager
 from core.project.project_io import clear_project_file_cache, read_project_file, write_project_file
-from core.project.project_manager import create_project, extract_model_settings, load_project, merge_project_model_settings, save_project
+from core.project.project_manager import (
+    create_project,
+    extract_model_settings,
+    load_project,
+    merge_project_model_settings,
+    save_project,
+    save_project_roughcut_state,
+)
 from core.project.project_phase1b import enrich_existing_project_file
 from core.project.project_context import (
     SUBTITLE_CANVAS_VECTOR_SCHEMA,
@@ -855,6 +862,76 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")
         self.assertEqual(len(project_roughcut_state(loaded)["candidates"]), 1)
         self.assertEqual(project_segments_to_editor(loaded)[0]["text"], "저장")
+
+    def test_save_project_roughcut_state_preserves_existing_subtitle_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.aissproj"
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {
+                            "tracks": [
+                                {
+                                    "clips": [
+                                        {
+                                            "id": "clip_a",
+                                            "source_path": "/tmp/a.mp4",
+                                            "timeline_start": 0.0,
+                                            "timeline_end": 10.0,
+                                            "timeline_start_frame": 0,
+                                            "timeline_end_frame": 300,
+                                            "source_frame_rate": 30.0,
+                                            "fps": 30.0,
+                                            "order": 0,
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        "media": [{"order": 0, "path": "/tmp/a.mp4", "fps": 30.0}],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            save_project(
+                str(path),
+                segments=[{"start": 1.0, "end": 2.0, "text": "기존 자막", "speaker": "01"}],
+            )
+            middle_rows = [
+                {
+                    "major_id": "A",
+                    "title": "도입",
+                    "summary": "도입부 요약",
+                    "start": 1.0,
+                    "end": 4.0,
+                    "status": "confirmed",
+                }
+            ]
+            roughcut_state = {
+                "selected_candidate_id": "candidate_a",
+                "candidates": [{"candidate_id": "candidate_a", "segments": list(middle_rows)}],
+            }
+            with patch("core.project.project_manager._externalize_project_payload") as externalize:
+                save_project_roughcut_state(
+                    str(path),
+                    middle_segments=middle_rows,
+                    roughcut_result={"segments": list(middle_rows)},
+                    roughcut_state=roughcut_state,
+                    preliminary_middle_segments=[],
+                    active_work_mode="editor",
+                )
+            loaded = load_project(str(path))
+
+        externalize.assert_not_called()
+        self.assertEqual(project_segments_to_editor(loaded)[0]["text"], "기존 자막")
+        self.assertEqual(project_active_work_mode(loaded), "editor")
+        self.assertEqual(loaded["middle_segments"][0]["title"], "도입")
+        self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")
 
     def test_save_project_compacts_roughcut_middle_segments_to_frame_storage(self):
         with tempfile.TemporaryDirectory() as tmp:

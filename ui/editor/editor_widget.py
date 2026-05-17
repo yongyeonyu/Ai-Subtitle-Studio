@@ -35,7 +35,13 @@ from ui.style import COLORS, button_style, label_style, line_icon, tool_button_s
 from ui.editor.ux.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.stable_render_frame import StableRenderFrame
-from ui.editor.ux.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
+from ui.editor.ux.subtitle_text_edit import (
+    SubtitleTextEdit,
+    SubtitleHighlighter,
+    SubtitleBlockData,
+    subtitle_block_data_from_meta,
+    subtitle_block_data_to_meta,
+)
 from ui.editor.editor_automation import EditorAutomationMixin
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_actions import EditorActionsMixin
@@ -121,6 +127,8 @@ class EditorWidget(
         self._auto_quality_review_defer_logged = False
         self._snapshot_undo_revision = None
         self._snapshot_redo_revision = None
+        self._home_compact_mode = False
+        self._home_compact_timer_state: dict[str, object] = {}
         self.selected_model = self.settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
         self._autosave_requires_manual_save = False
 
@@ -385,6 +393,11 @@ class EditorWidget(
                 if block.isValid() and isinstance(data, SubtitleBlockData):
                     edited_line_num = int(block.blockNumber())
                     text_changed = bool(self._update_subtitle_memory_line_text(edited_line_num, block.text()))
+                    if text_changed and hasattr(self, "_apply_manual_confirmed_quality_to_line"):
+                        self._apply_manual_confirmed_quality_to_line(
+                            edited_line_num,
+                            reason="manual_text_edit",
+                        )
                     text_only_cache_refresh = bool(getattr(self, "_segment_cache_valid", False))
                 else:
                     self._segment_cache_valid = False
@@ -669,6 +682,9 @@ class EditorWidget(
         if hasattr(self.timeline, 'sig_smart_split'):         self.timeline.sig_smart_split.connect(self._on_smart_split)
             
         timeline_height = max(1, self.timeline.minimumSizeHint().height(), self.timeline.sizeHint().height())
+        self._timeline_base_height = timeline_height
+        self._timeline_height_bonus = 0
+        self._vertical_rebalance_scheduled = False
         self.timeline_frame = StableRenderFrame(
             "EditorTimelineFrame",
             render_feature="timeline",
@@ -679,6 +695,7 @@ class EditorWidget(
         self.timeline_frame.setStyleSheet("QFrame#EditorTimelineFrame { background: transparent; border: none; }")
         self.timeline_frame.add_content(self.timeline)
         root.addWidget(self.timeline_frame)
+        QTimer.singleShot(0, self._schedule_vertical_rebalance)
         self._internal_button_bar = self._build_buttons()
         self._internal_button_bar.setFixedHeight(0)
         self._internal_button_bar.setVisible(False)
@@ -798,14 +815,28 @@ class EditorWidget(
         cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
         cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
         cur.insertText(new_text)
-        cur.block().setUserData(
-            SubtitleBlockData(
-                ud.spk_id,
-                ud.start_sec,
-                ud.is_gap,
-                end_sec=getattr(ud, "end_sec", None),
-            )
+        meta = subtitle_block_data_to_meta(ud)
+        previous_quality = dict(meta.get("quality") or {})
+        next_quality, quality_changed = self._manual_confirmed_quality_for_user_edit(
+            previous_quality,
+            reason="manual_text_edit",
         )
+        history = list(meta.get("quality_history") or [])
+        if quality_changed and previous_quality and previous_quality != next_quality:
+            history.append(dict(previous_quality))
+        meta["quality"] = next_quality
+        meta["quality_history"] = history
+        if hasattr(self, "_segment_quality_signature"):
+            current_seg = self._segment_for_line(int(line_num)) if hasattr(self, "_segment_for_line") else {}
+            meta["quality_signature"] = self._segment_quality_signature(
+                {
+                    "start": meta.get("start_sec", getattr(ud, "start_sec", 0.0)),
+                    "end": meta.get("end_sec", (current_seg or {}).get("end", getattr(ud, "start_sec", 0.0))),
+                    "text": str(new_text or "").replace("\u2028", "\n"),
+                    "speaker": meta.get("spk_id", getattr(ud, "spk_id", "")),
+                }
+            )
+        cur.block().setUserData(subtitle_block_data_from_meta(meta))
         cur.endEditBlock()
         if old_text.count("\u2028") != str(new_text or "").count("\u2028"):
             self.text_edit.update_margins()
@@ -813,14 +844,29 @@ class EditorWidget(
         self._inline_updating = False
         if hasattr(self, "_update_subtitle_memory_line_text"):
             self._update_subtitle_memory_line_text(line_num, new_text)
+            if hasattr(self, "_update_subtitle_memory_line_quality"):
+                self._update_subtitle_memory_line_quality(
+                    line_num,
+                    meta.get("quality") or {},
+                    quality_history=meta.get("quality_history") or [],
+                    quality_signature=meta.get("quality_signature"),
+                )
+            if hasattr(self, "_update_timeline_segment_quality_line"):
+                self._update_timeline_segment_quality_line(
+                    line_num,
+                    meta.get("quality") or {},
+                    quality_signature=meta.get("quality_signature"),
+                )
         else:
             cached = getattr(self, "_cached_segs", None)
             visible_text = str(new_text or "").replace("\u2028", "\n")
             if cached is not None:
                 for seg in cached:
-                    if int(seg.get("line", -999999)) == int(line_num):
-                        seg["text"] = visible_text
-                        break
+                        if int(seg.get("line", -999999)) == int(line_num):
+                            seg["text"] = visible_text
+                            break
+        if hasattr(self, "_refresh_visible_quality_map"):
+            self._refresh_visible_quality_map()
         self._schedule_video_context_refresh(24)
 
     def _on_lock_changed(self, locked: bool):
@@ -908,7 +954,7 @@ class EditorWidget(
         header = QWidget()
         header.setObjectName("subtitleTableHeader")
         header.setFixedHeight(30)
-        header.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 6px;")
+        header.setStyleSheet(f"background: {COLORS['surface_alt']}; border: 1px solid {COLORS['separator']}; border-radius: 6px;")
         row = QHBoxLayout(header)
         row.setContentsMargins(10, 0, 10, 0)
         row.setSpacing(0)
@@ -922,7 +968,7 @@ class EditorWidget(
         for text, width in cols:
             lbl = QLabel(text)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter if text != "자막" else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            lbl.setStyleSheet("color: #A9B0B7; font-size: 11px; font-weight: 600; background: transparent; border-right: 1px solid #2D3942;")
+            lbl.setStyleSheet(f"color: {COLORS['muted']}; font-size: 11px; font-weight: 600; background: transparent; border-right: 1px solid {COLORS['separator']};")
             if width:
                 lbl.setFixedWidth(width)
                 row.addWidget(lbl)
@@ -935,7 +981,7 @@ class EditorWidget(
         bar.setObjectName("subtitleEditorModeBar")
         bar.setVisible(False)
         bar.setFixedHeight(0)
-        bar.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
+        bar.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['separator']}; border-radius: 7px;")
         row = QHBoxLayout(bar)
         row.setContentsMargins(8, 5, 8, 5)
         row.setSpacing(6)
@@ -1334,11 +1380,19 @@ class EditorWidget(
         cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
         cur.insertText(text)
         quality = dict(getattr(data, "quality", {}) or {})
+        previous_quality = dict(quality)
         flags = list(quality.get("flags") or [])
         if "candidate_applied" not in flags:
             flags.append("candidate_applied")
         quality["flags"] = flags
         quality["candidate_applied_reason"] = str((candidate or {}).get("reason", "") or "")
+        quality, quality_changed = self._manual_confirmed_quality_for_user_edit(
+            quality,
+            reason="manual_text_edit",
+        )
+        history = list(getattr(data, "quality_history", []) or [])
+        if quality_changed and previous_quality and previous_quality != quality:
+            history.append(dict(previous_quality))
         cur.block().setUserData(
             SubtitleBlockData(
                 data.spk_id,
@@ -1349,7 +1403,7 @@ class EditorWidget(
                 original_text=getattr(data, "original_text", ""),
                 dictated_text=getattr(data, "dictated_text", ""),
                 quality=quality,
-                quality_history=list(getattr(data, "quality_history", []) or []),
+                quality_history=history,
                 quality_candidates=list(getattr(data, "quality_candidates", []) or []),
                 quality_signature=self._segment_quality_signature({
                     "start": data.start_sec,
@@ -1589,6 +1643,7 @@ class EditorWidget(
         super().resizeEvent(event)
         QTimer.singleShot(0, self._position_video_expand_button)
         QTimer.singleShot(0, self._sync_editor_focus_border)
+        QTimer.singleShot(0, self._schedule_vertical_rebalance)
         self._apply_footer_menu_button_styles()
 
     def _position_video_expand_button(self):
@@ -1602,6 +1657,62 @@ class EditorWidget(
             return max(1, self.video_player.video_container.height())
         except Exception:
             return max(1, self.video_player.height() - 56)
+
+    def _schedule_vertical_rebalance(self):
+        if bool(getattr(self, "_vertical_rebalance_scheduled", False)):
+            return
+        self._vertical_rebalance_scheduled = True
+        QTimer.singleShot(0, self._rebalance_video_timeline_heights)
+
+    def _rebalance_video_timeline_heights(self):
+        self._vertical_rebalance_scheduled = False
+        followups = max(0, int(getattr(self, "_vertical_rebalance_followups", 0) or 0))
+        timeline = getattr(self, "timeline", None)
+        timeline_frame = getattr(self, "timeline_frame", None)
+        video_player = getattr(self, "video_player", None)
+        if timeline is None or timeline_frame is None or video_player is None:
+            self._vertical_rebalance_followups = 0
+            return
+        try:
+            container_rect = video_player.video_container.rect()
+        except Exception:
+            self._vertical_rebalance_followups = 0
+            return
+        if container_rect.width() <= 0 or container_rect.height() <= 0:
+            self._vertical_rebalance_followups = 0
+            return
+        try:
+            display_rect = video_player._displayed_video_rect(container_rect)
+        except Exception:
+            self._vertical_rebalance_followups = 0
+            return
+        current_gap = max(0, int(container_rect.height() - display_rect.height()))
+        current_bonus = max(0, int(getattr(self, "_timeline_height_bonus", 0) or 0))
+        base_gap_estimate = current_gap + current_bonus
+        target_gap = 6
+        max_bonus = max(0, min(160, int(self.height() * 0.22)))
+        desired_bonus = min(max_bonus, max(0, base_gap_estimate - target_gap))
+        if desired_bonus == current_bonus:
+            self._vertical_rebalance_followups = 0
+            return
+        self._timeline_height_bonus = desired_bonus
+        timeline.set_canvas_height_bonus(desired_bonus)
+        target_height = max(
+            int(getattr(self, "_timeline_base_height", timeline.minimumHeight()) or 0),
+            int(timeline.minimumHeight() or 0),
+        )
+        try:
+            timeline_frame.setFixedHeight(target_height)
+        except Exception:
+            pass
+        timeline.updateGeometry()
+        timeline_frame.updateGeometry()
+        self.updateGeometry()
+        if followups < 3:
+            self._vertical_rebalance_followups = followups + 1
+            QTimer.singleShot(0, self._rebalance_video_timeline_heights)
+        else:
+            self._vertical_rebalance_followups = 0
 
     # ---------------------------------------------------------
     # Helpers
@@ -1629,6 +1740,84 @@ class EditorWidget(
             timeline.schedule_fit_to_view((0, 120, 260))
 
     def _force_ui_log(self, msg: str): get_logger().log(msg)
+
+    def enter_home_compact_mode(self) -> None:
+        if bool(getattr(self, "_home_compact_mode", False)):
+            return
+        self._home_compact_mode = True
+        self._home_compact_timer_state = {
+            "auto_save_active": bool(getattr(self._auto_save_timer, "isActive", lambda: False)()),
+            "status_anim_active": bool(getattr(self._status_anim_timer, "isActive", lambda: False)()),
+            "playhead_active": bool(getattr(self._playhead_timer, "isActive", lambda: False)()),
+            "video_context_refresh_active": bool(getattr(self._video_context_refresh_timer, "isActive", lambda: False)()),
+        }
+        for attr in (
+            "_playhead_timer",
+            "_queue_timer",
+            "_timeline_timer",
+            "_spinner_timer",
+            "_nav_timer",
+            "_auto_save_timer",
+            "_status_anim_timer",
+            "_video_context_refresh_timer",
+            "_live_editor_preview_timer",
+            "_cursor_video_seek_timer",
+            "_roughcut_draft_timer",
+        ):
+            timer = getattr(self, attr, None)
+            try:
+                if timer is not None:
+                    timer.stop()
+            except Exception:
+                pass
+        timeline = getattr(self, "timeline", None)
+        compact_timeline = getattr(timeline, "compact_for_home_navigation", None) if timeline is not None else None
+        if callable(compact_timeline):
+            compact_timeline()
+        video_player = getattr(self, "video_player", None)
+        compact_video = getattr(video_player, "compact_for_home_navigation", None) if video_player is not None else None
+        if callable(compact_video):
+            compact_video()
+
+    def leave_home_compact_mode(self) -> None:
+        state = dict(getattr(self, "_home_compact_timer_state", {}) or {})
+        if not bool(getattr(self, "_home_compact_mode", False)) and not state:
+            return
+        self._home_compact_mode = False
+        self._home_compact_timer_state = {}
+        owner = self.window()
+        multiclip_boundaries = list(getattr(owner, "_multiclip_boundaries", []) or []) if owner is not None else []
+        timeline = getattr(self, "timeline", None)
+        restore_timeline = getattr(timeline, "restore_after_home_navigation", None) if timeline is not None else None
+        if callable(restore_timeline):
+            restore_timeline(
+                waveform_path=str(getattr(self, "media_path", "") or ""),
+                multiclip_boundaries=multiclip_boundaries,
+            )
+        video_player = getattr(self, "video_player", None)
+        restore_video = getattr(video_player, "restore_after_navigation", None) if video_player is not None else None
+        if callable(restore_video):
+            restore_video()
+        try:
+            if bool(state.get("auto_save_active", False)):
+                self._auto_save_timer.start(self._auto_save_interval_ms())
+        except Exception:
+            pass
+        try:
+            if bool(state.get("status_anim_active", False)):
+                self._status_anim_timer.start(400)
+        except Exception:
+            pass
+        try:
+            if bool(state.get("playhead_active", False)):
+                self._playhead_timer.start(self._playhead_active_interval_ms())
+        except Exception:
+            pass
+        try:
+            if bool(state.get("video_context_refresh_active", False)):
+                self._video_context_refresh_timer.start(0)
+        except Exception:
+            pass
 
     def _update_engine_label_text(self):
         short_w = self.settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "")).replace("mlx-community/", "").replace("-mlx", "") or "기본"

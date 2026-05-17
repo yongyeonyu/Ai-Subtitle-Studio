@@ -313,7 +313,7 @@ public enum SubtitleQualityScorer {
     ) -> SubtitleQualityMetric {
         var flags = segment.quality.flags
 
-        let asrScore = asrMetadataScore(segment.asrMetadata, flags: &flags)
+        let asrScore = asrMetadataScore(segment, metadata: segment.asrMetadata, flags: &flags)
         let vad = vadScore(segment, flags: &flags)
         let wordScore = wordTimestampScore(segment, flags: &flags)
         let timing = timingScore(segment, flags: &flags, settings: settings)
@@ -352,7 +352,7 @@ public enum SubtitleQualityScorer {
 
         let rewriteConfidence = applyLLMRewritePenalty(segment, score: &score, flags: &flags)
         var label = labelForScore(score)
-        if score == nil || (flags.contains("metadata_missing") && wordScore <= 35.0) {
+        if score == nil || shouldForceGrayForMissingEvidence(segment, flags: flags, wordScore: wordScore, timingScore: timing, contextScore: context) {
             label = "gray"
         } else if rewriteConfidence == "medium" {
             score = clipScore(min(score ?? 72.0, 72.0))
@@ -379,7 +379,7 @@ public enum SubtitleQualityScorer {
         )
     }
 
-    private static func asrMetadataScore(_ metadata: QualityASRMetadata, flags: inout [String]) -> Double {
+    private static func asrMetadataScore(_ segment: QualityScoreSegment, metadata: QualityASRMetadata, flags: inout [String]) -> Double {
         let missing = metadata.noSpeechProb == nil
             && metadata.avgLogprob == nil
             && metadata.compressionRatio == nil
@@ -388,6 +388,10 @@ public enum SubtitleQualityScorer {
             && metadata.words.isEmpty
         if missing {
             addFlag(&flags, "metadata_missing")
+            let compact = compactText(segment.text)
+            if !compact.isEmpty && duration(segment) >= 0.35 && compact.count <= 18 && looksStructurallyValidText(segment.text) {
+                return 52.0
+            }
             return 30.0
         }
 
@@ -450,6 +454,10 @@ public enum SubtitleQualityScorer {
         let words = segment.words.isEmpty ? segment.asrMetadata.words : segment.words
         if words.isEmpty {
             addFlag(&flags, "word_timestamps_missing")
+            let compact = compactText(segment.text)
+            if !compact.isEmpty && duration(segment) >= 0.35 && compact.count <= 18 && looksStructurallyValidText(segment.text) {
+                return 60.0
+            }
             return 35.0
         }
 
@@ -513,7 +521,7 @@ public enum SubtitleQualityScorer {
     private static func repetitionScore(_ segment: QualityScoreSegment, previousTexts: [String], flags: inout [String]) -> Double {
         let text = compactText(segment.text)
         if text.count < 5 {
-            return 80.0
+            return 92.0
         }
         for previous in previousTexts.suffix(40).reversed() {
             let prev = compactText(previous)
@@ -545,11 +553,15 @@ public enum SubtitleQualityScorer {
             addFlag(&flags, "timecode_in_text")
         }
         if !containsLanguageCharacter(text) {
-            score -= 45.0
-            addFlag(&flags, "text_has_no_language_chars")
+            if looksValidNonLanguageToken(text) {
+                score -= 6.0
+            } else {
+                score -= 45.0
+                addFlag(&flags, "text_has_no_language_chars")
+            }
         }
         if text.count <= 1 {
-            score -= 20.0
+            score -= 8.0
             addFlag(&flags, "very_short_text")
         }
         return clipScore(score)
@@ -642,6 +654,49 @@ public enum SubtitleQualityScorer {
             }
         }
         return false
+    }
+
+    private static func looksValidNonLanguageToken(_ text: String) -> Bool {
+        let compact = compactText(text)
+        guard !compact.isEmpty else { return false }
+        if compact.range(of: #"^\d{2,6}$"#, options: .regularExpression) != nil {
+            return true
+        }
+        let hasDigit = compact.unicodeScalars.contains { CharacterSet.decimalDigits.contains($0) }
+        guard hasDigit else { return false }
+        return compact.range(of: #"^[0-9A-Za-z][0-9A-Za-z%+./#:_-]*$"#, options: .regularExpression) != nil
+    }
+
+    private static func looksStructurallyValidText(_ text: String) -> Bool {
+        containsLanguageCharacter(text) || looksValidNonLanguageToken(text)
+    }
+
+    private static func shouldForceGrayForMissingEvidence(
+        _ segment: QualityScoreSegment,
+        flags: [String],
+        wordScore: Double,
+        timingScore: Double,
+        contextScore: Double
+    ) -> Bool {
+        guard flags.contains("metadata_missing"), wordScore <= 35.0 else {
+            return false
+        }
+        guard looksStructurallyValidText(segment.text) else {
+            return true
+        }
+        if timingScore < 55.0 || contextScore < 65.0 {
+            return true
+        }
+        let blocking: Set<String> = [
+            "invalid_timing",
+            "too_short_duration",
+            "high_cps",
+            "timecode_in_text",
+            "high_no_speech_prob",
+            "non_speech_hallucination_risk",
+            "known_hallucination_phrase",
+        ]
+        return !blocking.isDisjoint(with: Set(flags))
     }
 
     private static func longestCommonSubstringLength(_ left: String, _ right: String) -> Int {

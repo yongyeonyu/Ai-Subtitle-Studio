@@ -4,10 +4,10 @@ import os
 from copy import deepcopy
 from typing import Any
 
-from core.audio.stt_quality_presets import normalize_stt_quality_key
 from core.autopilot_policy import apply_autopilot_runtime_policy, autopilot_runtime_defaults
 from core.json_file import read_json_file
-from core.mode_policy import apply_mode_runtime_settings, mode_to_stt_quality, selected_mode_from_settings
+from core.mode_manager import apply_mode_scope_quality, selected_mode_from_settings
+from core.mode_policy import apply_mode_runtime_settings
 from core.runtime import config
 
 
@@ -498,8 +498,9 @@ PATH_SETTING_DEFAULTS: dict[str, Any] = {
     "nas_excluded_folders": [],
     "auto_start_mode": "balanced",
     "auto_start_enabled": True,
-    "icloud_stt_quality_preset": "fast",
+    "icloud_stt_quality_preset": "balanced",
     "nas_stt_quality_preset": "balanced",
+    "multiclip_stt_quality_preset": "balanced",
     "icloud_auto_detect": False,
     "nas_auto_detect": False,
 }
@@ -1150,21 +1151,11 @@ def materialize_user_settings(
     out["_settings_storage"] = "dataset/user_settings.json"
     out["_auto_managed_by_lora"] = sorted(LORA_AUTO_MANAGED_SETTING_KEYS)
     simple_mode = selected_mode_from_settings(out)
+    out = apply_mode_scope_quality(out, simple_mode)
     if simple_mode == "auto":
-        quality_preset = normalize_stt_quality_key(out.get("stt_quality_preset") or out.get("auto_start_mode") or "balanced")
-        auto_start_mode = normalize_stt_quality_key(out.get("auto_start_mode") or quality_preset)
-        out["simple_operation_mode"] = "auto"
-        out["subtitle_mode"] = "auto"
         out.update(deepcopy(SPEED_SAFE_AUTO_DEFAULTS))
-        out["stt_quality_preset"] = quality_preset
-        out["auto_start_mode"] = auto_start_mode
+        out = apply_mode_scope_quality(out, "auto")
         out["_speed_safe_auto_profile"] = SPEED_SAFE_AUTO_PROFILE_VERSION
-    else:
-        quality_preset = mode_to_stt_quality(simple_mode)
-        out["simple_operation_mode"] = simple_mode
-        out["subtitle_mode"] = simple_mode
-        out["stt_quality_preset"] = quality_preset
-        out["auto_start_mode"] = quality_preset
     return apply_mode_runtime_settings(apply_autopilot_runtime_policy(out))
 
 

@@ -101,6 +101,27 @@ class RuntimeLoggerTests(unittest.TestCase):
         self.assertIn("#", stdout_line)
         self.assertIn("#", stderr_line)
 
+    def test_terminal_perf_logs_only_to_console_without_recent_buffer_noise(self):
+        logger = get_logger()
+        buffer = io.StringIO()
+        logger._terminal_stdout = buffer
+
+        logger.log_perf(
+            "startup.main_window",
+            event="ready",
+            elapsed_ms=842.3,
+            stage="runtime",
+            home_deferred=True,
+            auto_start=False,
+        )
+
+        printed_line = buffer.getvalue().strip()
+        self.assertIn("DEBUG", printed_line)
+        self.assertIn("[perf] startup.main_window", printed_line)
+        self.assertIn("842.3ms", printed_line)
+        self.assertIn("home_deferred=True", printed_line)
+        self.assertEqual(logger.recent_lines(10), [])
+
 
 if __name__ == "__main__":
     unittest.main()

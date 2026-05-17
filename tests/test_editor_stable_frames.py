@@ -55,6 +55,37 @@ class EditorStableFrameTests(unittest.TestCase):
             editor.deleteLater()
             self.app.processEvents()
 
+    def test_editor_rebalances_video_gap_into_timeline_height(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        with patch("ui.editor.editor_widget._dm_load_settings", return_value={}), \
+             patch("ui.editor.editor_widget._dm_load_corrections", return_value={}), \
+             patch("ui.editor.editor_widget._dm_load_rules", return_value={}):
+            editor = EditorWidget("unit.mp4", [], media_path=None, defer_media_load=True)
+        try:
+            editor.resize(1680, 1050)
+            editor.show()
+            for _ in range(6):
+                self.app.processEvents()
+            editor._rebalance_video_timeline_heights()
+            for _ in range(4):
+                self.app.processEvents()
+
+            video_rect = editor.video_player.video_container.rect()
+            displayed_rect = editor.video_player._displayed_video_rect(video_rect)
+            bottom_gap = max(0, video_rect.height() - displayed_rect.height())
+
+            self.assertGreater(editor.timeline.canvas_height_bonus(), 0)
+            self.assertLessEqual(bottom_gap, 8)
+            self.assertEqual(
+                editor.timeline_frame.height(),
+                editor.timeline.minimumHeight(),
+            )
+        finally:
+            editor.close()
+            editor.deleteLater()
+            self.app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()

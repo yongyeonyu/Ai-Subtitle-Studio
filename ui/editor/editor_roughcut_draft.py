@@ -347,6 +347,45 @@ class EditorRoughcutDraftMixin:
         except Exception:
             pass
 
+    def _ensure_post_generation_editor_interactive(self) -> None:
+        try:
+            self._is_ai_processing = False
+        except Exception:
+            pass
+        try:
+            state_manager = getattr(self, "sm", None)
+            if state_manager is not None and (
+                bool(getattr(state_manager, "is_locked", False))
+                or str(getattr(state_manager, "state", "") or "") == "ST_PROC"
+            ):
+                state_manager.complete_ai()
+        except Exception:
+            pass
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if canvas is not None:
+            try:
+                canvas._editor_processing_input_locked = False
+                canvas.setProperty("editor_processing_input_locked", False)
+            except Exception:
+                pass
+        if timeline is not None:
+            for method_name, arg in (
+                ("set_playhead_busy", False),
+                ("set_playback_center_lock", False),
+            ):
+                method = getattr(timeline, method_name, None)
+                if callable(method):
+                    try:
+                        method(arg)
+                    except Exception:
+                        pass
+        try:
+            main_w = self.window()
+            setattr(main_w, "_auto_processing_active", False)
+        except Exception:
+            pass
+
     def _roughcut_queue_row(self) -> int | None:
         try:
             main_w = self.window()
@@ -794,7 +833,7 @@ class EditorRoughcutDraftMixin:
             self._schedule_post_roughcut_model_release()
             return
         try:
-            from core.project.project_manager import save_project
+            from core.project.project_manager import save_project_roughcut_state
             from core.project.project_io import read_project_file
             from core.roughcut import EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID, merge_editor_roughcut_draft_state
             from core.work_mode import EDITOR_MODE
@@ -807,9 +846,8 @@ class EditorRoughcutDraftMixin:
                     existing_state = {}
             candidate.pop("_generation", None)
             roughcut_state = merge_editor_roughcut_draft_state(existing_state, candidate)
-            save_project(
+            save_project_roughcut_state(
                 project_path,
-                segments=segments,
                 middle_segments=list(candidate.get("segments", []) or []),
                 roughcut_result=candidate,
                 preliminary_middle_segments=(
@@ -817,10 +855,8 @@ class EditorRoughcutDraftMixin:
                     if refinement_source == "llm_refined"
                     else []
                 ),
-                user_settings=dict(getattr(self, "settings", {}) or {}),
                 roughcut_state=roughcut_state,
                 active_work_mode=EDITOR_MODE,
-                persist_analysis_artifacts=False,
             )
             self._pending_preliminary_middle_segments = (
                 list(candidate.get("segments", []) or [])
@@ -859,6 +895,7 @@ class EditorRoughcutDraftMixin:
             get_logger().log(f"⚠️ 러프컷 초안 저장 실패: {exc}")
         finally:
             self._roughcut_draft_pending = False
+            self._ensure_post_generation_editor_interactive()
             try:
                 self._pending_preliminary_middle_segments = []
             except Exception:

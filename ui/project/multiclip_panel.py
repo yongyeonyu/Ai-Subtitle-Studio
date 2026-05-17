@@ -27,7 +27,7 @@ from core.audio.stt_quality_presets import (
     normalize_stt_quality_key,
     stt_quality_label,
 )
-from core.mode_policy import stt_quality_to_mode
+from core.mode_manager import stt_quality_to_mode
 from core.settings_simplifier import apply_simple_operation_mode
 from ui.project.multiclip_cards import AddCard, ClipCard, ClipContainer
 

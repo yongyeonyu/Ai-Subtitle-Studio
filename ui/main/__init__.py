@@ -5,7 +5,17 @@
 """
 ui/main/__init__.py
 Main 패키지 — MainWindow 재수출
+
+Keep the package export lazy so importing leaf mixins like ``ui.home_ui`` does
+not immediately loop back into ``ui.main.main_window`` during test collection.
 """
-from ui.main.main_window import MainWindow  # noqa: F401
 
 __all__ = ["MainWindow"]
+
+
+def __getattr__(name):
+    if name == "MainWindow":
+        from ui.main.main_window import MainWindow
+
+        return MainWindow
+    raise AttributeError(name)

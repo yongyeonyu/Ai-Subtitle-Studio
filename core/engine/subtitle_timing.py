@@ -574,6 +574,7 @@ def _clamp_segment_to_selected_stt_window(
     start: float,
     end: float,
     min_duration: float,
+    settings: dict | None = None,
 ) -> tuple[float, float]:
     if bool(seg.get("manual_stt_candidate_locked")):
         return start, end
@@ -588,16 +589,22 @@ def _clamp_segment_to_selected_stt_window(
 
     old_start = start
     old_end = end
+    s = dict(settings or {})
+    max_end_lag = (
+        max(0.0, _setting_float(s, "subtitle_timing_anchor_max_end_lag_sec", 0.0))
+        if "subtitle_timing_anchor_max_end_lag_sec" in s
+        else 0.0
+    )
     start = max(float(start), window_start)
-    end = min(float(end), window_end)
+    end = min(float(end), window_end + max_end_lag)
 
     required = max(0.05, float(min_duration))
     if end < start + required:
         if old_start < window_start:
             start = window_start
-            end = min(window_end, start + required)
-        elif old_end > window_end:
-            end = window_end
+            end = min(window_end + max_end_lag, start + required)
+        elif old_end > window_end + max_end_lag:
+            end = window_end + max_end_lag
             start = max(window_start, end - required)
         else:
             start = window_start
@@ -1620,6 +1627,7 @@ def apply_final_gap_settings(
             float(cur["start"]),
             float(cur["end"]),
             min_duration,
+            cur_settings,
         )
         _update_frame_fields(cur, float(cur["start"]), float(cur["end"]))
         cur["_final_gap_settings_applied"] = True

@@ -1140,6 +1140,14 @@ class EditorTimelineVideoMixin(EditorTimelineSegmentMergeMixin, EditorScanCutCor
                 cache_rebuilt = False
         if not cache_rebuilt and hasattr(self, "_invalidate_segment_cache"):
             self._invalidate_segment_cache()
+        if hasattr(self, "_apply_manual_confirmed_quality_to_line"):
+            try:
+                self._apply_manual_confirmed_quality_to_line(
+                    int(line_num),
+                    reason="manual_timing_edit",
+                )
+            except Exception:
+                pass
         snapshot_refresher = getattr(self.text_edit, "_refresh_timestamp_meta_snapshot", None)
         if callable(snapshot_refresher):
             try:

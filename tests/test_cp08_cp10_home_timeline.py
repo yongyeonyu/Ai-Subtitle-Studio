@@ -257,11 +257,37 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         try:
             window.stack.setCurrentWidget(window.editor_page)
             before = window.stack.currentWidget()
-            with patch("ui.home_ui.load_settings", return_value={"auto_start_enabled": True}), \
-                 patch("ui.home_ui.save_settings"), \
+            with patch(
+                "ui.home_ui.load_path_settings",
+                return_value={"icloud_auto_detect": True, "nas_auto_detect": True, "auto_start_enabled": True},
+            ), \
+                 patch("ui.home_ui.save_path_settings"), \
                  patch.object(window, "_start_configured_watchers"):
                 window._toggle_auto_start_enabled()
             self.assertIs(window.stack.currentWidget(), before)
+        finally:
+            self._cleanup_window(window)
+
+    def test_auto_toggle_button_turns_off_both_auto_scopes_together(self):
+        saved = {}
+
+        def _save_path_settings(settings):
+            saved.update(settings)
+
+        window = MainWindow()
+        try:
+            with patch(
+                "ui.home_ui.load_path_settings",
+                return_value={"icloud_auto_detect": True, "nas_auto_detect": True, "auto_start_enabled": True},
+            ), \
+                 patch("ui.home_ui.save_path_settings", side_effect=_save_path_settings), \
+                 patch.object(window, "_refresh_after_auto_start_toggle"), \
+                 patch.object(window, "_stop_auto_watchers"):
+                window._toggle_auto_start_enabled()
+
+            self.assertFalse(saved["icloud_auto_detect"])
+            self.assertFalse(saved["nas_auto_detect"])
+            self.assertFalse(saved["auto_start_enabled"])
         finally:
             self._cleanup_window(window)
 

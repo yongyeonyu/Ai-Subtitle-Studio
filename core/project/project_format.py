@@ -9,7 +9,7 @@ from core.project.project_roughcut_store import (
     hydrate_project_roughcut_payload,
 )
 
-PROJECT_SCHEMA_VERSION = "04.00.07"
+PROJECT_SCHEMA_VERSION = "04.00.08"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v5"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 

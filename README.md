@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.07-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.07-30D158?style=for-the-badge)](RELEASE_v04.00.07.md)
+[![App Version](https://img.shields.io/badge/app-04.00.08-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.08-30D158?style=for-the-badge)](RELEASE_v04.00.08.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -26,6 +26,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Multiclip editing when explicitly selected from multiclip flows.
 - iCloud and NAS background processing.
 - Fast/Auto/High Mode policy shared across single-file, multiclip, folder queue, iCloud, and NAS workflows.
+- `core/mode_manager.py` now owns the single user-facing Fast/Auto/High/STT abstraction, while per-mode persistence keeps only user-selected STT1/STT2 and subtitle/roughcut LLM model identities.
 - Subtitle tool stack policy: Fast = LoRA, Auto = LoRA + Deep Learning, High = LoRA + Deep Learning + LLM, STT Mode = VAD + human input + LoRA/Deep/rules.
 - STT Mode portable project state: `stt_mode_state` keeps VAD work segments, raw dictation, rolling windows, and final subtitle mirrors separate from the normal vector subtitle canvas.
 - STT Mode iPad compatibility scope is intentionally limited to project state and STT LoRA/runtime policy bundles; this repository does not implement an iPad app.
@@ -57,6 +58,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Live STT previews now stay in timeline/STT preview lanes only; the editor text pane and playback subtitle overlay remain reserved for committed subtitle segments.
 - Cut-boundary helper rows can still be saved into project metadata for verification and timing work, but follower-checked provisional lines and terminal helper boundaries are hidden from the normal editor UI after confirmation.
 - Roughcut Codex CLI calls now use wider context and longer timeouts, then fall back to local-rule draft generation if the Codex CLI times out.
+- Post-generation roughcut save now persists only the roughcut draft/state first, then explicitly returns the editor to an interactive state before heavier follow-up cleanup continues.
 - Process-level project JSON caching plus safe atomic project and settings writes.
 - Export-dialog settings, diarization caches, VAD strict metadata, and editor teardown now use typed/logged cleanup paths instead of broad silent exception swallowing, so save/export/cleanup failures stay diagnosable.
 - Project save/load uses frame-quantized subtitle/STT timing, external SRT assets, and project-path-aware hydration so STT1/STT2 and final subtitle lanes reload without tail segments beyond the real video duration.
@@ -151,10 +153,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.07` |
-| Latest release checkpoint | `v04.00.07` |
-| Handoff document version | `04.00.07-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_7_RELEASED` |
+| App version in code | `04.00.08` |
+| Latest release checkpoint | `v04.00.08` |
+| Handoff document version | `04.00.08-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_8_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -185,7 +187,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.07.md`](RELEASE_v04.00.07.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.08.md`](RELEASE_v04.00.08.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

@@ -18,24 +18,25 @@ from ui.timeline.timeline_analysis import (
     topicless_major_markers_for_widget,
 )
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
+from ui.ux.apple_black_palette import APPLE_BLACK_MINIMAP
 
 GlobalCanvasBase = accelerated_widget_base("timeline")
 
-MINIMAP_BG = "#11181C"
-MINIMAP_TOP_LANE_BG = "#141D21"
-MINIMAP_BOTTOM_LANE_BG = "#0F1518"
-MINIMAP_DIVIDER = QColor("#2D3942")
-MINIMAP_MAJOR_BORDER = QColor("#FFFFFF")
-MINIMAP_PRELIMINARY_LANE_BG = "#122229"
-MINIMAP_REFERENCE_LANE_BG = "#101A1E"
-MINIMAP_SUBTITLE_LANE_BG = "#11202B"
-MINIMAP_SILENCE_LANE_BG = "#22160F"
-MINIMAP_SUBTITLE_FILL = QColor(24, 110, 214, 176)
-MINIMAP_SUBTITLE_BORDER = QColor("#64D2FF")
-MINIMAP_PENDING_FILL = QColor(118, 92, 255, 190)
-MINIMAP_PENDING_BORDER = QColor("#C3B6FF")
-MINIMAP_SILENCE_FILL = QColor(255, 159, 10, 152)
-MINIMAP_SILENCE_BORDER = QColor("#FFD27A")
+MINIMAP_BG = APPLE_BLACK_MINIMAP["bg"]
+MINIMAP_TOP_LANE_BG = APPLE_BLACK_MINIMAP["top_lane_bg"]
+MINIMAP_BOTTOM_LANE_BG = APPLE_BLACK_MINIMAP["bottom_lane_bg"]
+MINIMAP_DIVIDER = QColor(APPLE_BLACK_MINIMAP["divider"])
+MINIMAP_MAJOR_BORDER = QColor(APPLE_BLACK_MINIMAP["major_border"])
+MINIMAP_PRELIMINARY_LANE_BG = APPLE_BLACK_MINIMAP["preliminary_lane_bg"]
+MINIMAP_REFERENCE_LANE_BG = APPLE_BLACK_MINIMAP["reference_lane_bg"]
+MINIMAP_SUBTITLE_LANE_BG = APPLE_BLACK_MINIMAP["subtitle_lane_bg"]
+MINIMAP_SILENCE_LANE_BG = APPLE_BLACK_MINIMAP["silence_lane_bg"]
+MINIMAP_SUBTITLE_FILL = QColor(*APPLE_BLACK_MINIMAP["subtitle_fill_rgba"])
+MINIMAP_SUBTITLE_BORDER = QColor(APPLE_BLACK_MINIMAP["subtitle_border"])
+MINIMAP_PENDING_FILL = QColor(*APPLE_BLACK_MINIMAP["pending_fill_rgba"])
+MINIMAP_PENDING_BORDER = QColor(APPLE_BLACK_MINIMAP["pending_border"])
+MINIMAP_SILENCE_FILL = QColor(*APPLE_BLACK_MINIMAP["silence_fill_rgba"])
+MINIMAP_SILENCE_BORDER = QColor(APPLE_BLACK_MINIMAP["silence_border"])
 MINIMAP_SUBTITLE_MERGE_GAP_PX = 4
 MINIMAP_HEIGHT = 72
 
@@ -401,11 +402,6 @@ class GlobalCanvas(GlobalCanvasBase):
                 rounded = QRectF(rect.adjusted(0, 0, -1, -1))
                 radius = max(1.5, min(4.0, rounded.height() / 2.3))
                 p.drawRoundedRect(rounded, radius, radius)
-            if w >= 90:
-                p.setPen(QColor("#9FB2BC"))
-                p.setFont(QFont(config.FONT, 7))
-                p.drawText(preview_lane.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "예비")
-                p.drawText(reference_lane.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "임시")
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         elif total > 0 and major_markers:
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)

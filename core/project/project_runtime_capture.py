@@ -135,6 +135,31 @@ def _first_row_list_from_sources(sources: list[Any], attrs: tuple[str, ...]) -> 
     return []
 
 
+def _first_row_count_from_sources(sources: list[Any], attrs: tuple[str, ...]) -> int:
+    for source in sources:
+        for attr in attrs:
+            rows = getattr(source, attr, None)
+            if _has_rows(rows):
+                return _row_count(rows)
+    return 0
+
+
+def _roughcut_result_segment_count_from_sources(sources: list[Any]) -> int:
+    for source in sources:
+        for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
+            value = getattr(source, attr, None)
+            if isinstance(value, dict):
+                count = _row_count(value.get("segments"))
+            else:
+                try:
+                    count = _row_count(getattr(value, "segments", None))
+                except Exception:
+                    count = 0
+            if count > 0:
+                return count
+    return 0
+
+
 def _copy_roughcut_result_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return deepcopy(value)
@@ -239,8 +264,6 @@ def count_editor_project_aux_state(editor: Any, *, refresh: bool = True) -> dict
             "stt_preview_segment_count": 0,
             "voice_activity_segment_count": 0,
             "provisional_cut_boundary_count": 0,
-            "middle_segment_count": 0,
-            "preliminary_middle_segment_count": 0,
         }
     canvas = _editor_timeline_canvas(editor)
     if refresh and canvas is not None and hasattr(canvas, "_refresh_voice_activity_segments"):
@@ -263,14 +286,36 @@ def count_editor_project_aux_state(editor: Any, *, refresh: bool = True) -> dict
     if not _has_rows(provisional):
         provisional = getattr(editor, "_auto_cut_boundary_scan_lines", [])
 
-    return {
+    counts = {
         "stt_preview_segment_count": _row_count(getattr(editor, "_live_stt_preview_segments", [])),
         "voice_activity_segment_count": _row_count(
             getattr(canvas, "voice_activity_segments", []) if canvas is not None else []
         ),
         "provisional_cut_boundary_count": _row_count(provisional),
-        "middle_segment_count": _row_count(collect_editor_roughcut_project_state(editor).get("middle_segments")),
-        "preliminary_middle_segment_count": _row_count(
-            collect_editor_roughcut_project_state(editor).get("preliminary_middle_segments")
-        ),
     }
+    sources = _editor_runtime_sources(editor)
+    middle_count = _first_row_count_from_sources(
+        sources,
+        (
+            "_middle_segments",
+            "middle_segments",
+            "_roughcut_segments",
+            "roughcut_segments",
+            "_chapter_segments",
+            "chapter_segments",
+            "_roughcut_draft_segments",
+            "_cut_boundary_topicless_middle_segments",
+            "cut_boundary_topicless_middle_segments",
+        ),
+    )
+    if middle_count <= 0:
+        middle_count = _roughcut_result_segment_count_from_sources(sources)
+    preliminary_count = _first_row_count_from_sources(
+        sources,
+        ("_preliminary_middle_segments", "preliminary_middle_segments"),
+    )
+    if middle_count > 0:
+        counts["middle_segment_count"] = middle_count
+    if preliminary_count > 0:
+        counts["preliminary_middle_segment_count"] = preliminary_count
+    return counts

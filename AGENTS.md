@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.07-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_7_RELEASED
-Last-Updated: 2026-05-16
+Document-Version: 04.00.08-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_8_RELEASED
+Last-Updated: 2026-05-17
 Updated-By: Codex
 Purpose: Agent bootstrap, token-efficient navigation, and handoff rules only.
 -->
@@ -93,15 +93,16 @@ Required workflow:
 - Short-video test rule: use `/Users/u_mo_c/Downloads/마카오테스트` for quick smoke tests, short subtitle-generation regressions, and fast UI/runtime verification runs.
 - Long-video test rule: use `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4` for long-running pipeline checks, cache-reset/fresh-run validation, ETA/progress observation, and memory/performance validation on extended media.
 - New-chat rule: when handing off to a fresh chat, keep the user-facing handoff in Korean but compress it for token efficiency; prefer exact paths, commands, verified results, and next actions over narrative explanation.
-- Current app version in code: `04.00.07`
-- Current handoff document version: `04.00.07-mac-native`
-- Latest release checkpoint: `v04.00.07`
-- Current phase: `MAC_NATIVE_APPSTORE_V4_0_7_RELEASED`
+- Current app version in code: `04.00.08`
+- Current handoff document version: `04.00.08-mac-native`
+- Latest release checkpoint: `v04.00.08`
+- Current phase: `MAC_NATIVE_APPSTORE_V4_0_8_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - Platform rule: this branch is macOS-only and Apple Silicon first. Do not add Windows/Linux fallback work unless the user explicitly asks to restart cross-platform development. However, most reusable business logic should be shaped as Apple-platform Swift core code that can later move to iPadOS with minimal changes.
 - Release state: Fast, Auto, and High are now the single user-facing Mode controls. Fast runs LoRA-only subtitle post-processing, Auto runs LoRA + Deep, and High runs LoRA + Deep + chunked LLM. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
+- Mode-manager state: `core/mode_manager.py` is now the central owner for Fast/Auto/High/STT mode policy. Mode-managed routes such as audio preset, VAD, and ensemble gates should not be re-persisted by LoRA autopilot; only user-selectable model identities should flow back into per-mode defaults.
 - Completion state: subtitle generation, editor save, quality review, and cleanup paths clear foreground busy UI before deferred learning starts; editor-save truth/text LoRA work is queued for Home-idle processing.
 - Completion score state: when subtitle generation finishes, the Home sidebar progress card appends the final subtitle self-review score next to elapsed/expected time, rounded to two decimals, so queue review can see quality without reopening the editor.
 - Generation completion state: the editor does not mark subtitle generation complete from STT progress alone. Backend finalization waits until saveable subtitle segments exist, retries completion autosave when the timeline is still being populated, and prevents empty-segment auto-save failures.
@@ -115,6 +116,8 @@ Required workflow:
 - Fast quality state: Fast mode stays lightweight but selectively rechecks low-score STT1 spans with the secondary STT model when configured, preserving minimum quality without rerunning the full High stack.
 - Playback state: post-generation quality review, roughcut draft work, prefetch, cleanup, and model release are deferred or throttled while video playback is active.
 - Playback subtitle state: final subtitle text remains visible in the segment lanes during playback, and the video subtitle overlay now refreshes/reapplies hidden context even when the current subtitle string did not change.
+- Roughcut completion state: post-generation roughcut draft persistence now uses `save_project_roughcut_state(...)` for draft metadata plus an explicit editor unlock path, so segment-edge edits, diamond edits, save, and quit do not stay blocked behind a full project re-save.
+- Layout convergence state: editor video/timeline vertical rebalancing can schedule a few follow-up passes after resize/open so the remaining video-gap converges instead of stopping one pass too early.
 - Runtime stability state: user, folder, custom-default, and project JSON writes use safe atomic replacement; settings load can recover from `.bak` backups after partial-write JSON errors. Project writes now default to the canonical ordered JSON writer so the top-level `video` header remains first for frame-based reloads; Swift project read/validation remains available and Swift project write is opt-in through `AI_SUBTITLE_STUDIO_SWIFT_PROJECT_WRITE`.
 - Exception hygiene state: editor teardown, export-dialog settings/SRT scratch cleanup, diarization cache I/O, VAD strict metadata persistence, and watch-folder/project data helpers now prefer typed exception handling with logging over silent `except: pass`, so release regressions are diagnosable instead of disappearing during cleanup.
 - Dashboard runtime state: automatic audio-filter and VAD choices selected for the current file are surfaced in the sidebar pipeline dashboard with an auto marker and tooltip context.
@@ -150,8 +153,8 @@ Required workflow:
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Refactor state: the longest subtitle/project/editor/runtime modules were split by responsibility into `core.audio.transcribe_worker_io`, `core.engine.subtitle_segment_filter`, `core.engine.subtitle_accuracy_utils`, `core.pipeline.cut_boundary_cache`, and `ui.editor.editor_segments_bulk_load` so future native migration work has smaller seams.
-- Verification state: `v04.00.07` release verification passed with the full Python suite, offscreen `MainWindow` smoke, Swift package tests, `compileall`, `git diff --check`, local beta DMG build/validation, and refreshed release handoff files. Full release verification details are in `RELEASE_v04.00.07.md`.
-- Latest regression checkpoint: on 2026-05-16, `venv/bin/python -m pytest -q`, `QT_QPA_PLATFORM=offscreen venv/bin/python` `MainWindow` smoke, `venv/bin/python -m compileall -q main.py core ui tests`, `git diff --check -- .`, `swift test` in `native/macos/AIStudioNative`, and `packaging/macos/build_beta_dmg.sh` passed for `v04.00.07`.
+- Verification state: `v04.00.08` release verification passed with the full Python suite, offscreen `MainWindow` smoke, Swift package tests, `compileall`, `git diff --check`, and refreshed release handoff files. Full release verification details are in `RELEASE_v04.00.08.md`.
+- Latest regression checkpoint: on 2026-05-17, `venv/bin/python -m pytest -q`, `QT_QPA_PLATFORM=offscreen venv/bin/python` `MainWindow` smoke, `venv/bin/python -m compileall -q main.py core ui tests`, `git diff --check -- .`, and `swift test` in `native/macos/AIStudioNative` passed for `v04.00.08`. A new guided real-media automation pass was not completed in this batch because the pre-existing live app instance did not answer `tools/appctl.py ping` within timeout.
 
 ## Collaboration Rules
 
@@ -166,6 +169,23 @@ Required workflow:
 - Use `rg` for search whenever possible.
 - Use `apply_patch` for manual file edits.
 - Keep edits scoped to the request and follow existing project patterns.
+
+## Action Item Execution Rules
+
+- Treat each unchecked row in `ACTION_ITEMS.md` under **Active Work** as one countable executable item.
+- When the owner asks how many action items remain, answer with the number of countable active items that can be executed sequentially in one pass.
+- When the owner asks to run a number of items, such as "5개 수행해", execute the first N unchecked active items in order unless a blocker or owner-decision item is reached.
+- Refactor code when it can be done inside the approved scope without changing behavior.
+- After modifying code, perform a code-review pass, fix the review findings, and only then report completion.
+- Prefer implementations that improve launch/runtime speed or reduce memory, CPU, disk, or bridge overhead.
+- Do not change existing UI, UX, or behavior as part of generic action-item work. If a change appears necessary, leave it as an owner-decision item and ask for approval first.
+- When a function-level path can be equal or faster with `.cpp`, `.swift`, `.js`, or another native/runtime language, implement that path with parity tests and a safe Python fallback.
+- Store UX-related behavior in separate files under an appropriate `ux/` folder whenever possible so UX scenarios are not accidentally deleted from owner widgets.
+- Use real fixtures for action-item verification when execution is required:
+  - Macau fixture: `/Users/u_mo_c/Downloads/마카오테스트` for quick UI, UX, playback, restart, and generation smoke checks.
+  - Tinyping fixture: `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4` for long generation, roughcut, ETA, queue, memory, and full-flow checks.
+  - Test-video fixture: `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video` for benchmark and regression checks.
+  - X5 subtitle fixture: `test video/X5_시승기_후반.MP4` plus its sibling `.srt` for subtitle-accuracy verification slices.
 
 ## Token Efficiency Rules
 

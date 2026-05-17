@@ -11,36 +11,36 @@ from ui.timeline.timeline_analysis import SUBTITLE_STATUS_COLORS, subtitle_revie
 
 SEGMENT_TEXT_KIND_STYLES = {
     "speech": {
-        "fill": "#123A24",
-        "border": "#34C759",
+        "fill": COLORS["accent_surface"],
+        "border": COLORS["accent"],
         "text": "#E8FFF0",
     },
     "silence": {
-        "fill": "#3B2A13",
-        "border": "#FF9500",
+        "fill": "#342713",
+        "border": "#FF9F0A",
         "text": "#FFF1D6",
     },
 }
 
 QUALITY_SEGMENT_COLORS = {
-    "green": ("#203A2A", "#34C759"),
+    "green": ("#1B2C22", COLORS["accent"]),
     "yellow": (COLORS["warning_surface"], COLORS["warning"]),
-    "red": ("#4A1F24", "#FF453A"),
-    "gray": ("#2F343A", "#8E8E93"),
+    "red": (COLORS["danger_surface"], COLORS["danger"]),
+    "gray": (COLORS["neutral_soft"], COLORS["neutral"]),
 }
 
 SUBTITLE_STATE_SEGMENT_COLORS = {
-    "confirmed": ("#203A2A", SUBTITLE_STATUS_COLORS["confirmed"]),
+    "confirmed": ("#1B2C22", SUBTITLE_STATUS_COLORS["confirmed"]),
     "pending": (COLORS["warning_surface"], COLORS["warning"]),
-    "recheck": ("#4A1F24", SUBTITLE_STATUS_COLORS["recheck"]),
-    "conflict": ("#2F343A", SUBTITLE_STATUS_COLORS["conflict"]),
+    "recheck": (COLORS["danger_surface"], SUBTITLE_STATUS_COLORS["recheck"]),
+    "conflict": (COLORS["neutral_soft"], SUBTITLE_STATUS_COLORS["conflict"]),
 }
 
 STAGE_CONFIDENCE_COLORS = {
-    "green": "#34C759",
+    "green": COLORS["accent"],
     "yellow": COLORS["warning"],
-    "red": "#FF453A",
-    "gray": "#8E8E93",
+    "red": COLORS["danger"],
+    "gray": COLORS["neutral"],
 }
 
 _HIDDEN_BOUNDARY_MARKER_STYLE = {"visible": False}
@@ -413,14 +413,14 @@ def subtitle_segment_visual_style(
         fill, border = QUALITY_SEGMENT_COLORS[q_label]
         text = ""
     else:
-        base_fill = "#222A31" if hover else "#242A30"
-        fill = "#4A1F24" if is_stt_pending else ("#1D3D76" if active else base_fill)
-        border = "#FF453A" if is_stt_pending else ("#8AB8FF" if active else "#3A4650")
+        base_fill = "#20262E" if hover else COLORS["neutral_soft"]
+        fill = COLORS["danger_surface"] if is_stt_pending else ("#1D3D76" if active else base_fill)
+        border = COLORS["danger"] if is_stt_pending else ("#8AB8FF" if active else "#3A4650")
         text = ""
 
     if muted_by_filter:
-        fill = "#1A2025"
-        border = "#2D3942"
+        fill = "#171C22"
+        border = COLORS["separator"]
 
     accentable_idle = (
         not kind_style
@@ -475,7 +475,7 @@ def stt_preview_visual_style(
     seg: dict,
     *,
     selection_state: str = "",
-    fill_hex: str = "#173524",
+    fill_hex: str = "#163223",
     border_hex: str = "#34C759",
     text_hex: str = "#D7FFE4",
 ) -> dict:

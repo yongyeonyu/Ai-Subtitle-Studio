@@ -68,6 +68,7 @@ from ui.settings.personalization_learning_info import (
 )
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import COLORS, settings_button_style, settings_dialog_stylesheet
+from ui.ux.apple_popup_theme import apple_popup_dialog_stylesheet
 
 
 def _compact_button_style(kind: str = "toolbar") -> str:
@@ -89,24 +90,24 @@ def _learning_dialog_stylesheet() -> str:
     return (
         f"#personalizationLearningDialog {{ background: {COLORS['bg']}; }}"
         "#personalizationHeroCard {"
-        "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #122028, stop:1 #0F171B);"
+        f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {surface_alt}, stop:1 #10161C);"
         f"border: 1px solid {separator}; border-radius: 16px;"
         "}"
         "#personalizationHeroEyebrow {"
-        f"color: {accent}; font-size: 11px; font-weight: 800; letter-spacing: 1px;"
+        f"color: {accent}; font-size: 11px; font-weight: 800;"
         "}"
         "#personalizationHeroTitle {"
         f"color: {text}; font-size: 28px; font-weight: 900;"
         "}"
         "#personalizationHeroSubtitle {"
-        f"color: #D7E1E8; font-size: 14px; font-weight: 600;"
+        "color: #D3DBE4; font-size: 14px; font-weight: 600;"
         "}"
         "#personalizationRuleHint {"
-        f"color: #AFC1CD; font-size: 12px; font-weight: 700;"
+        "color: #AAB6C2; font-size: 12px; font-weight: 700;"
         "}"
         "#personalizationInfoPill {"
-        "background: rgba(52, 199, 89, 0.12);"
-        f"border: 1px solid rgba(52, 199, 89, 0.45); color: #DDF9E5;"
+        "background: rgba(100, 210, 255, 26);"
+        "border: 1px solid rgba(100, 210, 255, 71); color: #D8EEFA;"
         "border-radius: 10px; padding: 7px 12px; font-size: 12px; font-weight: 800;"
         "}"
         "#personalizationSectionCard, #personalizationStatusCard, #personalizationManageCard {"
@@ -119,30 +120,30 @@ def _learning_dialog_stylesheet() -> str:
         f"color: {muted}; font-size: 12px; font-weight: 700;"
         "}"
         "#personalizationDropZone {"
-        f"background: {surface_alt}; border: 1px dashed #4E6675; border-radius: 16px;"
+        f"background: {surface_alt}; border: 1px dashed #4B5B69; border-radius: 16px;"
         "}"
         "#personalizationDropZone QLabel { background: transparent; }"
         "#personalizationDropTitle {"
         f"color: {text}; font-size: 17px; font-weight: 900;"
         "}"
         "#personalizationDropHint {"
-        f"color: #AFC1CD; font-size: 13px; font-weight: 700;"
+        "color: #AAB6C2; font-size: 13px; font-weight: 700;"
         "}"
         "#personalizationPairList {"
-        f"background: #0E1519; border: 1px solid #27353E; border-radius: 14px;"
-        "padding: 8px; outline: 0;"
+        f"background: {COLORS['sidebar']}; border: 1px solid {separator}; border-radius: 14px;"
+        "padding: 8px;"
         "}"
         "#personalizationPairList::item {"
         "padding: 8px 10px; border-radius: 10px; margin: 2px 0;"
         f"color: {text};"
         "}"
         "#personalizationPairList::item:selected {"
-        "background: rgba(0, 122, 255, 0.16);"
+        "background: rgba(10, 132, 255, 41);"
         f"border: 1px solid {primary};"
         "}"
         "#personalizationQueueLabel {"
-        "background: rgba(0, 122, 255, 0.10);"
-        f"border: 1px solid rgba(0, 122, 255, 0.32); color: #DCEBFF;"
+        "background: rgba(10, 132, 255, 26);"
+        "border: 1px solid rgba(10, 132, 255, 71); color: #DCEBFF;"
         "border-radius: 12px; padding: 12px 14px; font-size: 13px; font-weight: 700;"
         "}"
         "#personalizationSummaryLabel {"
@@ -195,7 +196,11 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self.setMinimumWidth(760)
         self.setMinimumHeight(620)
         apply_tablet_dialog_profile(self)
-        self.setStyleSheet(settings_dialog_stylesheet() + _learning_dialog_stylesheet())
+        self.setStyleSheet(
+            settings_dialog_stylesheet()
+            + apple_popup_dialog_stylesheet("personalizationLearningDialog", accent=COLORS["accent"])
+            + _learning_dialog_stylesheet()
+        )
         self.setAcceptDrops(True)
         self._staged_inputs: list[str] = []
         self._paired_assets: list[dict] = []

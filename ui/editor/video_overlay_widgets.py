@@ -55,6 +55,7 @@ class ThumbnailLabel(QLabel):
             painter = QPainter(self)
             if not painter.isActive():
                 return
+            painter.fillRect(self.rect(), QColor("#000000"))
             cache_size = (self.width(), self.height(), self._pixmap.cacheKey())
             if self._scaled_cache is None or self._scaled_cache_size != cache_size:
                 self._scaled_cache = self._pixmap.scaled(
@@ -65,7 +66,7 @@ class ThumbnailLabel(QLabel):
                 self._scaled_cache_size = cache_size
             scaled = self._scaled_cache
             x = (self.width() - scaled.width()) // 2
-            y = (self.height() - scaled.height()) // 2
+            y = 0
             painter.drawPixmap(x, y, scaled)
         else:
             super().paintEvent(event)

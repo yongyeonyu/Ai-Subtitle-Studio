@@ -30,7 +30,7 @@ from core.audio.stt_quality_presets import (
     load_stt_quality_presets,
     normalize_stt_quality_key,
 )
-from core.mode_policy import stt_quality_to_mode
+from core.mode_manager import stt_quality_to_mode
 from core.settings_simplifier import apply_simple_operation_mode
 
 

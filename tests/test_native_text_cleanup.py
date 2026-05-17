@@ -52,6 +52,36 @@ class NativeTextCleanupTests(unittest.TestCase):
 
         self.assertEqual([row["text"] for row in result], expected)
 
+    def test_final_policy_flattens_non_speaker_linebreaks(self):
+        result = enforce_final_subtitle_text_policy(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "어\n유스 어드벤처 2026",
+                    "speaker_list": ["00"],
+                }
+            ],
+            None,
+        )
+
+        self.assertEqual(result[0]["text"], "어 유스 어드벤처 2026")
+
+    def test_final_policy_preserves_two_speaker_linebreaks(self):
+        result = enforce_final_subtitle_text_policy(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "안녕하세요\n반갑습니다",
+                    "speaker_list": ["00", "01"],
+                }
+            ],
+            None,
+        )
+
+        self.assertEqual(result[0]["text"], "안녕하세요\n반갑습니다")
+
     def test_native_indexed_batch_keeps_matches_introduced_inside_replacement_text(self):
         corrections = {
             "ab": "pqx",

@@ -119,6 +119,7 @@ __all__ = [
     "project_file_path_for_name",
     "restore_project_model_settings",
     "save_project",
+    "save_project_roughcut_state",
     "is_project_file_path",
 ]
 
@@ -1507,6 +1508,43 @@ def save_project(
     )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
+
+
+def save_project_roughcut_state(
+    filepath: str,
+    *,
+    middle_segments: Optional[List[dict]] = None,
+    roughcut_result: Optional[dict] = None,
+    roughcut_state: Optional[dict] = None,
+    preliminary_middle_segments: Optional[List[dict]] = None,
+    active_work_mode: Optional[str] = None,
+) -> None:
+    """Persist only roughcut metadata without rebuilding subtitle tracks.
+
+    Post-generation roughcut runs happen while the editor should already be
+    interactive. Reusing the full project save path here rewrites every subtitle
+    row and external text asset, which can visibly freeze the timeline.
+    """
+    if not os.path.exists(filepath):
+        return
+    project = read_project_file(filepath)
+    project["version"] = PROJECT_SCHEMA_VERSION
+    project["phase"] = "PHASE2"
+    project["updated_at"] = datetime.now().isoformat()
+    if active_work_mode:
+        _store_project_active_work_mode(project, active_work_mode)
+    _store_project_roughcut_payload(
+        project,
+        roughcut_state=roughcut_state,
+        middle_segments=middle_segments,
+        preliminary_middle_segments=preliminary_middle_segments,
+        roughcut_result=roughcut_result,
+    )
+    _sanitize_project_workspace_fields(project)
+    _prune_project_payload_for_vector_storage(project)
+    write_project_file(filepath, project)
+
+
 def _persist_project_analysis_artifacts(
     filepath: str,
     project: dict,

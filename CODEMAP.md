@@ -1,6 +1,6 @@
 <!--
-Document-Version: 04.00.07-codemap
-Last-Updated: 2026-05-16
+Document-Version: 04.00.08-codemap
+Last-Updated: 2026-05-17
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
 -->
@@ -30,6 +30,8 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `ui/editor/editor_widget.py`: main editor composition root.
 - `ui/editor/video_player_widget.py`: video player composition and transport shell.
 - `ui/editor/video_player_subtitles.py`: subtitle overlay context/provider refresh and lookup logic for the video player.
+- `ui/home/ux/auto_source_settings_dialog.py`: dedicated NAS/iCloud auto-source settings popup flow and shared sidebar state bridge.
+- `ui/ux/`: reusable Apple-black popup palette/theme helpers and shared UX color tables.
 - `ui/editor/ux/`: editor interaction mixins.
   - `editor_timeline_video.py`: playback sync, playhead behavior, editor/timeline coordination.
   - `timeline_input.py`: timeline mouse/key input, scrubbing, drag entry points.
@@ -54,6 +56,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `core/project/`: project JSON, snapshots, model settings, timeline metadata.
 - `core/project/project_assets.py`: external text-asset/SRT persistence, row-copy helpers, and STT candidate-track cache shaping.
 - `core/project/project_runtime_capture.py`: editor auxiliary project-state copy helpers plus lightweight status-count snapshots.
+- `core/mode_manager.py`: central Fast/Auto/High/STT mode ownership and user-selectable model snapshot policy.
 - `ui/editor/editor_project_open_native.py`: SRT/project open flows and workspace restore.
 - `ui/editor/editor_save_manager.py`: save/export/project persistence actions.
 
@@ -112,7 +115,17 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 
 ## Current Hot Paths
 
+- Mode/preset ownership and persistence:
+  - `core/mode_manager.py`
+  - `core/settings_profiles.py`
+  - `core/personalization/settings_autopilot.py`
+- Sidebar auto-source UX and popup styling:
+  - `ui/home/ux/auto_source_settings_dialog.py`
+  - `ui/ux/apple_black_palette.py`
+  - `ui/ux/apple_popup_theme.py`
 - Restart/completed-state recovery:
+  - `ui/editor/editor_roughcut_draft.py`
+  - `ui/main/main_runtime_cleanup.py`
   - `ui/editor/editor_pipeline.py`
   - `ui/editor/editor_pipeline_completion.py`
   - `ui/editor/editor_pipeline_startup.py`
@@ -122,6 +135,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
   - `tools/appctl.py`
   - `tools/remote_verify.py`
 - Timeline editing UX:
+  - `ui/timeline/timeline_roughcut_paint.py`
   - `ui/editor/ux/timeline_input.py`
   - `ui/editor/ux/timeline_subtitle_segment_editing.py`
   - `ui/timeline/timeline_widget.py`
