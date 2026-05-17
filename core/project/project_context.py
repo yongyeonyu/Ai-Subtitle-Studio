@@ -84,6 +84,8 @@ STT_SEGMENT_METADATA_KEYS = (
     "subtitle_confidence_score",
     "subtitle_confidence_summary",
     "subtitle_completion_report",
+    "_stt_original_candidate_start",
+    "_stt_original_candidate_end",
     "_stt_original_candidate_start_frame",
     "_stt_original_candidate_end_frame",
     "_stt_lattice_policy",

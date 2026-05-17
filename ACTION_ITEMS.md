@@ -23,7 +23,7 @@ app_version: "04.00.09"
 document_version: "04.00.09-mac-native"
 phase: "MAC_NATIVE_APPSTORE_V4_0_9_RELEASED"
 next_phase: null
-active_item_count: 20
+active_item_count: 19
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
 native_plan: "NATIVE_LIB_PLAN.md"
@@ -48,11 +48,6 @@ native_plan: "NATIVE_LIB_PLAN.md"
 ## Active Work
 
 ### P0 - Subtitle Quality And Behavioral Safety
-
-- [ ] 1. Lock final subtitle text/timing to the selected STT1/STT2 evidence path.
-  Scope: verify the full path from STT candidate selection through LLM cleanup, rerank, timing cleanup, editor load, save, and project reopen.
-  Success: final subtitles do not diverge from both STT1/STT2 when they agree; arbitrary line breaks are not introduced except approved two-speaker cases.
-  Verification: X5 accuracy slice first, then Tinyping first-minute regression.
 
 - [ ] 2. Expand the real-media subtitle-quality regression pack.
   Scope: extend `tools/benchmark_tiniping_mode_search.py` and the artifacts under `output/manual_verification/latest/` so X5 slice accuracy, Macau smoke, and Tinyping long-flow checks can be rerun from one repeatable flow.

@@ -2198,6 +2198,7 @@ class ProjectContextTests(unittest.TestCase):
                 stt_tracks={},
             )
             write_project_file(str(path), project)
+            clear_project_file_cache(str(path))
 
             loaded = load_project(str(path), hydrate_text_assets=False)
             segment = project_segments_to_editor(loaded, include_analysis_candidates=False)[0]
