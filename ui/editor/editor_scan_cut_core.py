@@ -611,7 +611,7 @@ class EditorScanCutCoreMixin:
 
     def _set_auto_cut_boundary_scan_active(self, active: bool) -> None:
         self._auto_cut_boundary_scan_active = bool(active)
-        self._scan_set_timeline_input_locked(bool(active))
+        self._scan_set_timeline_input_locked(bool(getattr(self, "_scan_cut_state", None)))
         try:
             if hasattr(self, "timeline") and hasattr(self.timeline, "set_playback_center_lock"):
                 self.timeline.set_playback_center_lock(False)

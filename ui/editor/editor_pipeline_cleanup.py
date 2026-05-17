@@ -263,56 +263,12 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
         return True
 
     def _schedule_generation_completion_autosave(self, *, delay_ms: int = 650, attempt: int = 0) -> None:
-        if bool(getattr(self, "_generation_completion_autosave_done", False)):
-            return
-        if bool(getattr(self, "is_auto_start", False)):
-            return
-        self._generation_completion_autosave_pending = True
-        QTimer.singleShot(max(0, int(delay_ms)), lambda a=int(attempt): self._run_generation_completion_autosave(a))
+        self._generation_completion_autosave_pending = False
+        return
 
     def _run_generation_completion_autosave(self, attempt: int = 0) -> None:
-        if bool(getattr(self, "_generation_completion_autosave_done", False)):
-            return
-        try:
-            if getattr(self, "_segment_queue", None) and hasattr(self, "_flush_pending_segment_queue_now"):
-                self._flush_pending_segment_queue_now()
-        except Exception:
-            pass
-        if not self._has_saveable_generation_segments():
-            if int(attempt) < 60:
-                if int(attempt) in {0, 5, 15, 30}:
-                    get_logger().log("⏳ 생성 완료 자동 저장 대기: 최종 자막 반영 중")
-                self._schedule_generation_completion_autosave(delay_ms=500, attempt=int(attempt) + 1)
-                return
-            get_logger().log("⚠️ 생성 완료 자동 저장 보류: 최종 자막 세그먼트를 아직 찾지 못했습니다.")
-            self._generation_completion_autosave_pending = False
-            return
-        quality_busy = any(
-            bool(getattr(self, attr, False))
-            for attr in (
-                "_auto_quality_review_pending",
-                "_auto_quality_review_scheduled",
-                "_quality_review_running",
-            )
-        )
-        if quality_busy and int(attempt) < 30:
-            self._schedule_generation_completion_autosave(delay_ms=500, attempt=int(attempt) + 1)
-            return
-        save = getattr(self, "_on_save", None)
-        if not callable(save):
-            self._generation_completion_autosave_pending = False
-            return
-        try:
-            ok = bool(save(skip_auto_next=True))
-        except Exception as exc:
-            get_logger().log(f"⚠️ 생성 완료 자동 저장 실패: {exc}")
-            ok = False
         self._generation_completion_autosave_pending = False
-        if ok:
-            self._generation_completion_autosave_done = True
-            get_logger().log("💾 생성 완료 자동 저장 완료")
-        else:
-            get_logger().log("⚠️ 생성 완료 자동 저장을 완료하지 못했습니다. 수동 저장을 확인해 주세요.")
+        return
 
     def _schedule_post_generation_model_release(self):
         """자막 생성 완료 후 남아 있는 AI/STT/LLM 모델 언로드를 예약한다."""

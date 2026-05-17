@@ -1101,6 +1101,31 @@ class SubtitleTextEdit(QTextEdit):
         if not e.isAutoRepeat(): self._key_press_time.pop(e.key(), None)
         super().keyReleaseEvent(e)
 
+    def _pause_parent_playback_for_keyboard_edit(self) -> None:
+        parent = getattr(self, "_parent_widget", None)
+        pause_handler = getattr(parent, "_pause_playback_for_keyboard_edit", None)
+        if callable(pause_handler):
+            try:
+                pause_handler()
+            except Exception:
+                pass
+
+    def _should_pause_playback_for_keypress(self, e: QKeyEvent) -> bool:
+        key = e.key()
+        if key in (
+            Qt.Key.Key_Shift,
+            Qt.Key.Key_Control,
+            Qt.Key.Key_Alt,
+            Qt.Key.Key_Meta,
+            Qt.Key.Key_AltGr,
+            Qt.Key.Key_CapsLock,
+            Qt.Key.Key_NumLock,
+            Qt.Key.Key_ScrollLock,
+            Qt.Key.Key_Escape,
+        ):
+            return False
+        return True
+
     def keyPressEvent(self, e: QKeyEvent):
         if self._selection_locked:
             e.accept()
@@ -1131,6 +1156,9 @@ class SubtitleTextEdit(QTextEdit):
                 toggle()
                 e.accept()
                 return
+
+        if self._should_pause_playback_for_keypress(e):
+            self._pause_parent_playback_for_keyboard_edit()
 
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             parent = getattr(self, "_parent_widget", None)

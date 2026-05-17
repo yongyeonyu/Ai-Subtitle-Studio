@@ -199,16 +199,22 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             canvas.deleteLater()
 
-    def test_waveform_right_arrow_emits_forward_frame_step(self):
+    def test_waveform_right_arrow_jumps_to_next_segment(self):
         canvas = TimelineCanvas()
         try:
             canvas.focus_mode = "waveform"
+            canvas.total_duration = 4.0
+            canvas.segments = [
+                {"start": 0.0, "end": 0.8, "text": "앞", "line": 0},
+                {"start": 1.2, "end": 2.0, "text": "다음", "line": 1},
+            ]
+            canvas.set_playhead(0.2)
             emitted = []
-            canvas.step_frame.connect(emitted.append)
+            canvas.scrub_sec.connect(emitted.append)
 
             QTest.keyClick(canvas, Qt.Key.Key_Right)
 
-            self.assertEqual(emitted, [1])
+            self.assertEqual(emitted, [1.2])
         finally:
             canvas.deleteLater()
 
@@ -325,6 +331,33 @@ class TimelineHitTargetTests(unittest.TestCase):
             holder._toggle_video_play.assert_called_once_with()
             self.assertEqual(inline_editor.toPlainText(), "캔버스 자막")
             self.assertTrue(event.isAccepted())
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+            holder.deleteLater()
+
+    def test_canvas_inline_editor_typing_pauses_video_playback(self):
+        holder = QWidget()
+        holder._pause_playback_for_keyboard_edit = Mock()
+        canvas = TimelineCanvas(holder)
+        try:
+            canvas.pps = 100.0
+            canvas.total_duration = 4.0
+            canvas.segments = [
+                {"start": 1.0, "end": 2.5, "text": "캔버스 자막", "line": 0},
+            ]
+            canvas.start_inline_edit(0, 1.0)
+            inline_editor = canvas._ensure_inline_editor()
+
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_A,
+                Qt.KeyboardModifier.NoModifier,
+                "a",
+            )
+            inline_editor.keyPressEvent(event)
+
+            holder._pause_playback_for_keyboard_edit.assert_called_once_with()
         finally:
             canvas.close()
             canvas.deleteLater()
@@ -990,6 +1023,75 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertAlmostEqual(doc.findBlockByNumber(1).userData().start_sec, 4.1)
             self.assertEqual(editor._live_stt_preview_segments, [])
             self.assertEqual(editor.timeline.canvas.voice_activity_segments, [])
+            self.assertTrue(editor.finalized)
+        finally:
+            editor.text_edit.close()
+
+    def test_gap_plus_inserts_auto_gap_subtitle_in_chronological_position(self):
+        editor = _GapGenerateEditor()
+        editor.finalized = False
+        editor._undo_mgr = _Undo()
+        editor.timeline = None
+        editor.video_player = None
+        editor.video_fps = 30.0
+        editor.text_edit = _TimelineTextEdit()
+        try:
+            unrelated_text = "일단 홈페이지 가입하시면 뭐 뭐가 됐든 커피도 주고"
+            editor.text_edit.setPlainText(f"앞 자막\n뭐야 이 안에\n{unrelated_text}")
+            doc = editor.text_edit.document()
+            doc.findBlockByNumber(0).setUserData(SubtitleBlockData("00", 0.0, end_sec=2.0))
+            doc.findBlockByNumber(1).setUserData(SubtitleBlockData("00", 5.0, end_sec=6.0))
+            doc.findBlockByNumber(2).setUserData(SubtitleBlockData("00", 100.0, end_sec=101.0))
+
+            editor._on_gap_activated(2.0, 5.0)
+
+            self.assertEqual(
+                editor.text_edit.toPlainText().splitlines(),
+                ["앞 자막", "새 자막", "뭐야 이 안에", unrelated_text],
+            )
+            inserted = doc.findBlockByNumber(1)
+            inserted_ud = inserted.userData()
+            self.assertIsInstance(inserted_ud, SubtitleBlockData)
+            self.assertFalse(inserted_ud.is_gap)
+            self.assertAlmostEqual(inserted_ud.start_sec, 2.0)
+            self.assertAlmostEqual(inserted_ud.end_sec, 5.0)
+            current = editor._get_current_segments(force_rebuild=True)
+            added = next(seg for seg in current if abs(seg["start"] - 2.0) < 0.05)
+            self.assertEqual(added["text"], "새 자막")
+            self.assertNotIn(unrelated_text, added["text"])
+            self.assertTrue(editor.finalized)
+        finally:
+            editor.text_edit.close()
+
+    def test_gap_plus_replaces_explicit_gap_without_merging_next_subtitle(self):
+        editor = _GapGenerateEditor()
+        editor.finalized = False
+        editor._undo_mgr = _Undo()
+        editor.timeline = None
+        editor.video_player = None
+        editor.video_fps = 30.0
+        editor.text_edit = _TimelineTextEdit()
+        try:
+            next_text = "일단 홈페이지 가입하시면 뭐 뭐가 됐든 커피도 주고"
+            editor.text_edit.setPlainText(f"앞 자막\n\n{next_text}")
+            doc = editor.text_edit.document()
+            doc.findBlockByNumber(0).setUserData(SubtitleBlockData("00", 0.0, end_sec=2.0))
+            doc.findBlockByNumber(1).setUserData(make_gap_ud(2.0))
+            doc.findBlockByNumber(2).setUserData(SubtitleBlockData("00", 5.0, end_sec=6.0))
+
+            editor._on_gap_activated(2.0, 5.0)
+
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막", "새 자막", next_text])
+            inserted = doc.findBlockByNumber(1)
+            inserted_ud = inserted.userData()
+            self.assertIsInstance(inserted_ud, SubtitleBlockData)
+            self.assertFalse(inserted_ud.is_gap)
+            self.assertAlmostEqual(inserted_ud.start_sec, 2.0)
+            self.assertAlmostEqual(inserted_ud.end_sec, 5.0)
+            current = editor._get_current_segments(force_rebuild=True)
+            added = next(seg for seg in current if abs(seg["start"] - 2.0) < 0.05)
+            self.assertEqual(added["text"], "새 자막")
+            self.assertNotIn(next_text, added["text"])
             self.assertTrue(editor.finalized)
         finally:
             editor.text_edit.close()
@@ -2374,6 +2476,67 @@ class TimelineHitTargetTests(unittest.TestCase):
 
             self.assertTrue(bool(emitted))
             self.assertAlmostEqual(emitted[-1], 2.2)
+        finally:
+            canvas.deleteLater()
+
+    def test_diamond_drag_uses_live_cut_snap_candidate(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas.total_duration = 4.0
+            canvas._drag_edge = "diamond"
+            canvas._drag_diamond_pair = (0, 1)
+            canvas._drag_diamond_orig = 2.0
+            canvas._drag_snap_candidates_cache = []
+            canvas._drag_live_cut_snap_candidates = Mock(
+                return_value=[{"time": 2.11, "kind": "cut_live", "source": {"score": 32.0}}]
+            )
+
+            canvas._apply_drag(0.05)
+
+            canvas._drag_live_cut_snap_candidates.assert_called_once()
+            self.assertAlmostEqual(canvas.segments[0]["end"], 2.11)
+            self.assertAlmostEqual(canvas.segments[1]["start"], 2.11)
+            self.assertEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "cut_live")
+        finally:
+            canvas.deleteLater()
+
+    def test_live_cut_snap_candidate_resolves_global_context(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas._resolve_active_context = Mock(
+                return_value={
+                    "clip_file": __file__,
+                    "local_sec": 1.19,
+                    "clip_start": 1.0,
+                    "fps": 100.0,
+                }
+            )
+            canvas._detect_live_cut_boundary_record = Mock(
+                return_value={"local_sec": 1.23, "frame": 123, "score": 40.0}
+            )
+
+            candidates = canvas._drag_live_cut_snap_candidates(2.19, edge="diamond")
+
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(candidates[0]["kind"], "cut_live")
+            self.assertAlmostEqual(candidates[0]["time"], 2.23)
+            canvas._detect_live_cut_boundary_record.assert_called_once_with(__file__, 1.19, 100.0)
+        finally:
+            canvas.deleteLater()
+
+    def test_live_cut_snap_has_stronger_magnet_threshold(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 60.0
+            canvas.pps = 200.0
+            base = canvas._drag_snap_threshold_sec()
+
+            threshold = canvas._snap_candidate_threshold_sec({"kind": "cut_live"}, base)
+
+            self.assertGreaterEqual(threshold, 6.0 / 60.0)
+            self.assertGreater(threshold, base)
         finally:
             canvas.deleteLater()
 

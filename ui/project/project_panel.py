@@ -259,8 +259,15 @@ class ProjectUIMixin:
     def _sorted_project_media(self, project: dict) -> list:
         return sorted_project_media_paths(project)
 
-    def _open_project_segments_in_editor(self, filepath: str, project: dict, media: list[str], segments: list[dict]):
-        return native_open_project_segments_in_editor(self, filepath, project, media, segments)
+    def _open_project_segments_in_editor(
+        self,
+        filepath: str,
+        project: dict,
+        media: list[str],
+        segments: list[dict],
+        **kwargs,
+    ):
+        return native_open_project_segments_in_editor(self, filepath, project, media, segments, **kwargs)
 
     def _create_project(self):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
@@ -329,6 +336,8 @@ class ProjectUIMixin:
             stt_preview_segments=aux_state["stt_preview_segments"],
             voice_activity_segments=aux_state["voice_activity_segments"],
             provisional_cut_boundaries=aux_state["provisional_cut_boundaries"],
+            persist_analysis_artifacts=False,
+            rewrite_stt_reference_tracks=False,
         )
         get_logger().log("💾 프로젝트 저장 완료")
 

@@ -834,6 +834,7 @@ class EditorActionsMixin:
         segs: list = None,
         *,
         persist_analysis_artifacts: bool = False,
+        rewrite_stt_reference_tracks: bool = False,
         allow_create: bool = True,
     ) -> str:
         from core.project.project_manager import (
@@ -956,6 +957,7 @@ class EditorActionsMixin:
             stt_mode_learning=stt_mode_learning,
             provisional_cut_boundaries=provisional_cut_boundaries,
             persist_analysis_artifacts=bool(persist_analysis_artifacts),
+            rewrite_stt_reference_tracks=bool(rewrite_stt_reference_tracks),
             preliminary_middle_segments=preliminary_middle_segments,
         )
         get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")

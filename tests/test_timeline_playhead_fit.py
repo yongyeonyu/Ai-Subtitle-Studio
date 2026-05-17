@@ -12,7 +12,7 @@ from PyQt6.QtGui import QColor, QWheelEvent, QTextCursor
 from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QVBoxLayout, QTextEdit, QWidget
 
 from core.frame_time import frame_to_sec
 from ui.editor.editor_segments import EditorSegmentsMixin
@@ -941,6 +941,138 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_partial_insert_rebuilds_current_segments_after_same_block_count_replacement(self):
+        editor = _DummyEditor()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("기존 자막")
+        editor.text_edit.update_margins = Mock()
+        editor._schedule_timeline = Mock()
+        editor._mark_dirty = Mock()
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0))
+
+            initial = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(initial[0]["text"], "기존 자막")
+            self.assertTrue(editor._segment_cache_valid)
+
+            editor.clear_segments_in_range(1.0, 2.0)
+            editor.insert_partial_segments([
+                {"start": 1.0, "end": 2.0, "text": "새 자막", "speaker": "00"}
+            ])
+
+            current = editor._get_current_segments()
+            self.assertEqual(current[0]["text"], "새 자막")
+            self.assertAlmostEqual(float(block.userData().end_sec), 2.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_partial_inserted_segments_can_resize_without_dropping_following_segments(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor._snapshot_timeline_view_for_resize = Mock(return_value={})
+        editor._redraw_timeline_preserve_resize_view = Mock()
+        editor._schedule_timeline = Mock()
+        editor.timeline = SimpleNamespace(
+            _begin_subtitle_resize_keep_view=Mock(),
+            _finish_subtitle_resize_keep_view=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n기존 후반 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=4.0))
+
+            editor._get_current_segments(force_rebuild=True)
+            editor.clear_segments_in_range(1.0, 4.0)
+            editor.insert_partial_segments([
+                {"start": 1.0, "end": 2.0, "text": "메인 자막", "speaker": "00"},
+                {"start": 2.0, "end": 3.0, "text": "다음 자막", "speaker": "00"},
+            ])
+
+            with patch(
+                "ui.editor.editor_timeline_video.plan_subtitle_timing_edit_via_swift",
+                return_value=None,
+            ):
+                editor._on_seg_time_changed(1, 1.0, 2.5, "square_right")
+                self.app.processEvents()
+
+            resized = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막", "메인 자막", "다음 자막"])
+            subtitle_rows = [(seg["start"], seg["end"], seg["text"]) for seg in resized if not seg.get("is_gap")]
+            self.assertEqual(subtitle_rows, [
+                (0.0, 1.0, "앞 자막"),
+                (1.0, 2.5, "메인 자막"),
+                (2.5, 3.0, "다음 자막"),
+            ])
+        finally:
+            editor.text_edit.close()
+
+    def test_current_segments_preserve_last_explicit_end_without_following_segment(self):
+        editor = _DummyEditor()
+        editor.video_player = SimpleNamespace(total_time=20.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("뒤쪽 이웃 없는 자막")
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 8.0, False, end_sec=14.0))
+
+            rows = editor._get_current_segments(force_rebuild=True)
+
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [
+                (8.0, 14.0, "뒤쪽 이웃 없는 자막"),
+            ])
+        finally:
+            editor.text_edit.close()
+
+    def test_last_segment_right_resize_works_without_following_segment(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._snapshot_timeline_view_for_resize = Mock(return_value={})
+        editor._redraw_timeline_preserve_resize_view = Mock()
+        editor.timeline = SimpleNamespace(
+            _begin_subtitle_resize_keep_view=Mock(),
+            _finish_subtitle_resize_keep_view=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=20.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("단독 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 8.0, False, end_sec=11.0))
+
+            with patch(
+                "ui.editor.editor_timeline_video.plan_subtitle_timing_edit_via_swift",
+                return_value=None,
+            ):
+                editor._on_seg_time_changed(0, 8.0, 14.0, "square_right")
+                self.app.processEvents()
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [
+                (8.0, 14.0, "단독 자막"),
+            ])
+            self.assertAlmostEqual(float(block.userData().end_sec), 14.0)
+        finally:
+            editor.text_edit.close()
+
     def test_seg_time_changed_does_not_insert_gap_block_and_allows_repeat_resize(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0
@@ -1372,6 +1504,30 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             rows = editor._get_current_segments(force_rebuild=True)
             self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막"])
             self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [(0.0, 2.5, "앞 자막")])
+        finally:
+            editor.text_edit.close()
+
+    def test_diamond_delete_can_keep_right_segment_when_current_overwrites_previous(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("삭제될 앞 자막\n현재 자막")
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._diamond_delete_keep_line_override = 1
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.5))
+
+            editor._on_diamond_delete(0, 1)
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["현재 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [(0.0, 2.5, "현재 자막")])
         finally:
             editor.text_edit.close()
 
@@ -1908,6 +2064,46 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_time_window_dialog_is_deferred_after_right_click_signal(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.show()
+            self.app.processEvents()
+
+            with patch.object(timeline, "_show_time_window_seconds_dialog") as show_mock:
+                timeline.time_window_btn.customContextMenuRequested.emit(QPoint(4, 4))
+                self.assertFalse(show_mock.called)
+                self.app.processEvents()
+                show_mock.assert_called_once_with()
+        finally:
+            timeline.close()
+
+    def test_time_window_dialog_uses_window_owner_when_embedded(self):
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        timeline = TimelineWidget()
+        layout.addWidget(timeline)
+        try:
+            host.resize(900, 320)
+            host.show()
+            self.app.processEvents()
+
+            dur = 180.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+            timeline.show_time_window_seconds(15.0, center_sec=40.0)
+
+            with patch("ui.timeline.timeline_widget.QInputDialog") as dialog_cls:
+                dialog = dialog_cls.return_value
+                dialog.exec.return_value = False
+                timeline._show_time_window_seconds_dialog()
+
+            dialog_cls.assert_called_once_with(host)
+        finally:
+            host.close()
+            timeline.close()
+
     def test_time_window_dialog_applies_selected_seconds_around_current_center(self):
         timeline = TimelineWidget()
         try:
@@ -1999,6 +2195,36 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertEqual(timeline._preferred_edit_window_seconds, 10.0)
             self.assertIn("10초", timeline.time_window_btn.toolTip())
         finally:
+            timeline.close()
+
+    def test_time_window_dialog_restore_releases_toolbar_mouse_grab(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.show()
+            self.app.processEvents()
+
+            button = timeline.time_window_btn
+            timeline._time_window_dialog_pending = True
+            button.setDown(True)
+            button.grabMouse()
+            self.assertIs(QWidget.mouseGrabber(), button)
+
+            timeline._restore_toolbar_after_time_window_dialog()
+            self.app.processEvents()
+
+            self.assertIsNone(QWidget.mouseGrabber())
+            self.assertFalse(timeline._time_window_dialog_pending)
+            for toolbar_button in timeline._zoom_buttons:
+                self.assertEqual(toolbar_button.focusPolicy(), Qt.FocusPolicy.NoFocus)
+                self.assertFalse(toolbar_button.isDown())
+                self.assertFalse(toolbar_button.hasFocus())
+        finally:
+            try:
+                grabber = QWidget.mouseGrabber()
+                if grabber is not None:
+                    grabber.releaseMouse()
+            except Exception:
+                pass
             timeline.close()
 
     def test_show_ten_second_edit_window_uses_saved_user_preference(self):
@@ -3282,7 +3508,11 @@ class TimelinePlayheadFitTests(unittest.TestCase):
     def test_scan_cut_active_toggles_playhead_busy_state(self):
         editor = _DummyTimelineVideoEditor()
         editor.video_player = SimpleNamespace(set_scan_cut_active=Mock())
-        editor.timeline = SimpleNamespace(set_playhead_busy=Mock(), set_playback_center_lock=Mock())
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(),
+            set_playhead_busy=Mock(),
+            set_playback_center_lock=Mock(),
+        )
         editor._auto_cut_boundary_scan_active = False
 
         editor._set_scan_cut_button_active(1)
@@ -3295,6 +3525,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor.timeline.set_playhead_busy.reset_mock()
         editor._set_auto_cut_boundary_scan_active(True)
         editor.timeline.set_playhead_busy.assert_called_with(True)
+        self.assertFalse(getattr(editor.timeline.canvas, "_scan_cut_input_locked", False))
 
     def test_auto_cut_boundary_preview_moves_playhead_without_thumbnail_work(self):
         editor = _DummyTimelineVideoEditor()
@@ -3432,6 +3663,38 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertTrue(handled)
             editor._cancel_scan_cut.assert_called_once_with("mouse-click-stop")
+        finally:
+            editor.close()
+
+    def test_editor_mouse_press_pauses_playback_on_timeline_click(self):
+        editor = EditorWidget(
+            "sample.m4a",
+            [{"start": 0.0, "end": 1.0, "text": "테스트", "speaker": "00"}],
+        )
+        try:
+            editor._is_video_playback_active = Mock(return_value=True)
+            editor.video_player.pause_video = Mock()
+
+            handled = editor.eventFilter(editor.timeline.canvas, QEvent(QEvent.Type.MouseButtonPress))
+
+            self.assertFalse(handled)
+            editor.video_player.pause_video.assert_called_once_with()
+        finally:
+            editor.close()
+
+    def test_editor_mouse_press_ignores_pause_when_playback_is_idle(self):
+        editor = EditorWidget(
+            "sample.m4a",
+            [{"start": 0.0, "end": 1.0, "text": "테스트", "speaker": "00"}],
+        )
+        try:
+            editor._is_video_playback_active = Mock(return_value=False)
+            editor.video_player.pause_video = Mock()
+
+            handled = editor.eventFilter(editor.text_edit.viewport(), QEvent(QEvent.Type.MouseButtonPress))
+
+            self.assertFalse(handled)
+            editor.video_player.pause_video.assert_not_called()
         finally:
             editor.close()
 

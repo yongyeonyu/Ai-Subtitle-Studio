@@ -10,6 +10,8 @@ segment-resize/diamond/snap/drag/merge-preview behavior on top.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
+import os
+import time
 
 from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QCursor, QPolygon
@@ -706,13 +708,20 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             self._snap_to_frame(getattr(self, "_drag_s0_start", -1.0)),
             self._snap_to_frame(getattr(self, "_drag_s0_end", -1.0)),
         }
+        if getattr(self, "_drag_edge", None) == "diamond":
+            drag_original_edges.add(self._snap_to_frame(getattr(self, "_drag_diamond_orig", -1.0)))
 
         for item in self._build_drag_snap_base_candidates():
             source = item.get("source")
             if source is dragged:
                 continue
+            snapped_edge = self._snap_to_frame(_as_float(item.get("time"), -1.0))
+            if getattr(self, "_drag_edge", None) == "diamond" and any(
+                abs(snapped_edge - original) < 0.05
+                for original in drag_original_edges
+            ):
+                continue
             if item.get("kind") in {"gap", "user_guide", "shadow_playhead"}:
-                snapped_edge = self._snap_to_frame(_as_float(item.get("time"), -1.0))
                 if any(abs(snapped_edge - original) < 0.05 for original in drag_original_edges):
                     continue
             candidates.append(item)
@@ -720,6 +729,7 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         priority = {
             "shadow_playhead": 14,
             "user_guide": 13,
+            "cut_live": 15,
             "cut_official": 12,
             "cut_temporary": 11,
             "subtitle": 10,
@@ -739,8 +749,275 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
                 deduped[t] = item
         return list(deduped.values())
 
+    def _iter_live_cut_snap_owners(self):
+        seen: set[int] = set()
+        owner = self
+        while owner is not None and id(owner) not in seen:
+            seen.add(id(owner))
+            yield owner
+            next_owner = None
+            try:
+                next_owner = owner.parentWidget()
+            except Exception:
+                next_owner = None
+            if next_owner is None:
+                try:
+                    next_owner = owner.parent()
+                except Exception:
+                    next_owner = None
+            owner = next_owner
+        try:
+            window = self.window()
+        except Exception:
+            window = None
+        if window is not None and id(window) not in seen:
+            yield window
+
+    def _live_cut_snap_settings_enabled(self) -> bool:
+        for owner in self._iter_live_cut_snap_owners():
+            settings = getattr(owner, "settings", None)
+            if not isinstance(settings, dict):
+                continue
+            if settings.get("timeline_live_cut_snap_enabled") is False:
+                return False
+            if settings.get("subtitle_diamond_live_cut_snap_enabled") is False:
+                return False
+        return True
+
+    def _resolve_live_cut_snap_context(self, global_sec: float) -> dict | None:
+        global_sec = float(global_sec or 0.0)
+        for owner in self._iter_live_cut_snap_owners():
+            resolver = getattr(owner, "_resolve_active_context", None)
+            if not callable(resolver):
+                continue
+            try:
+                ctx = resolver(global_sec=global_sec)
+            except Exception:
+                ctx = None
+            if not isinstance(ctx, dict):
+                continue
+            media_path = str(ctx.get("clip_file") or ctx.get("media_path") or "").strip()
+            if not media_path:
+                continue
+            return {
+                "media_path": media_path,
+                "local_sec": float(ctx.get("local_sec", global_sec) or 0.0),
+                "clip_start": float(ctx.get("clip_start", 0.0) or 0.0),
+                "fps": float(ctx.get("fps") or self._get_fps()),
+            }
+
+        for owner in self._iter_live_cut_snap_owners():
+            media_path = str(getattr(owner, "media_path", "") or "").strip()
+            if not media_path:
+                sm = getattr(owner, "sm", None)
+                media_path = str(getattr(sm, "current_file", "") or "").strip()
+            if not media_path:
+                continue
+            local_sec = global_sec
+            converter = getattr(owner, "_global_to_local_sec", None)
+            if callable(converter):
+                try:
+                    local_sec = float(converter(global_sec))
+                except Exception:
+                    local_sec = global_sec
+            return {
+                "media_path": media_path,
+                "local_sec": float(local_sec or 0.0),
+                "clip_start": max(0.0, global_sec - float(local_sec or 0.0)),
+                "fps": float(self._get_fps()),
+            }
+        return None
+
+    def _drag_live_cut_snap_candidates(self, global_sec: float, *, edge: str = "") -> list[dict]:
+        if str(edge or "") != "diamond":
+            return []
+        if not self._live_cut_snap_settings_enabled():
+            return []
+        ctx = self._resolve_live_cut_snap_context(global_sec)
+        if not isinstance(ctx, dict):
+            return []
+        media_path = str(ctx.get("media_path") or "").strip()
+        if not media_path:
+            return []
+        fps = max(1.0, float(ctx.get("fps") or self._get_fps()))
+        detected = self._detect_live_cut_boundary_record(
+            media_path,
+            float(ctx.get("local_sec", 0.0) or 0.0),
+            fps,
+        )
+        if detected is None:
+            return []
+        if isinstance(detected, dict):
+            local_cut_sec = detected.get("local_sec")
+            source = dict(detected)
+        else:
+            local_cut_sec = detected
+            source = {}
+        try:
+            local_cut_sec = float(local_cut_sec)
+        except Exception:
+            return []
+        clip_start = float(ctx.get("clip_start", 0.0) or 0.0)
+        cut_sec = self._snap_to_frame(clip_start + max(0.0, local_cut_sec))
+        max_distance = max(0.09, min(0.20, 6.0 / fps))
+        if abs(cut_sec - self._snap_to_frame(float(global_sec or 0.0))) > max_distance:
+            return []
+        source.update(
+            {
+                "media_path": media_path,
+                "local_sec": local_cut_sec,
+                "clip_start": clip_start,
+            }
+        )
+        return [{"time": cut_sec, "kind": "cut_live", "source": source}]
+
+    def _detect_live_cut_boundary_record(self, media_path: str, local_sec: float, fps: float) -> dict | None:
+        media_path = os.path.abspath(os.path.expanduser(str(media_path or "")))
+        if not media_path or not os.path.exists(media_path):
+            return None
+        fps = max(1.0, float(fps or self._get_fps()))
+        target_frame = max(1, int(round(max(0.0, float(local_sec or 0.0)) * fps)))
+        bucket = target_frame // 2
+        key = (media_path, round(fps, 3), bucket)
+        cache = getattr(self, "_live_cut_snap_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._live_cut_snap_cache = cache
+        if key in cache:
+            return cache[key]
+
+        now = time.monotonic()
+        last_compute = float(getattr(self, "_live_cut_snap_last_compute_mono", 0.0) or 0.0)
+        if now - last_compute < 0.024:
+            return None
+        self._live_cut_snap_last_compute_mono = now
+
+        record = self._compute_live_cut_boundary_record(media_path, target_frame, fps)
+        cache[key] = record
+        if len(cache) > 512:
+            try:
+                cache.pop(next(iter(cache)))
+            except Exception:
+                pass
+        return record
+
+    def _live_cut_snap_capture(self, media_path: str, cv2_mod):
+        record = getattr(self, "_live_cut_snap_capture_record", None)
+        if isinstance(record, dict) and record.get("path") == media_path:
+            cap = record.get("cap")
+            try:
+                if cap is not None and cap.isOpened():
+                    return cap
+            except Exception:
+                pass
+        if isinstance(record, dict):
+            old_cap = record.get("cap")
+            try:
+                if old_cap is not None:
+                    old_cap.release()
+            except Exception:
+                pass
+        cap = cv2_mod.VideoCapture(media_path)
+        try:
+            opened = bool(cap.isOpened())
+        except Exception:
+            opened = False
+        if not opened:
+            try:
+                cap.release()
+            except Exception:
+                pass
+            self._live_cut_snap_capture_record = None
+            return None
+        self._live_cut_snap_capture_record = {"path": media_path, "cap": cap}
+        return cap
+
+    def _compute_live_cut_boundary_record(self, media_path: str, target_frame: int, fps: float) -> dict | None:
+        try:
+            import cv2  # type: ignore
+            import numpy as np  # type: ignore
+        except Exception:
+            return None
+
+        cap = self._live_cut_snap_capture(media_path, cv2)
+        if cap is None:
+            return None
+
+        radius = max(3, min(5, int(round(float(fps or 30.0) * 0.08))))
+        first_frame = max(0, int(target_frame) - radius - 1)
+        last_frame = max(first_frame + 2, int(target_frame) + radius)
+        try:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, first_frame)
+        except Exception:
+            return None
+
+        def _thumb(frame):
+            if frame is None:
+                return None
+            try:
+                height, width = frame.shape[:2]
+                if height <= 0 or width <= 0:
+                    return None
+                target_w = 96
+                target_h = max(18, min(54, int(round(height * target_w / max(1, width)))))
+                small = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                return gray, small
+            except Exception:
+                return None
+
+        frames: list[tuple[int, object, object]] = []
+        for frame_no in range(first_frame, last_frame + 1):
+            ok, frame = cap.read()
+            if not ok:
+                break
+            item = _thumb(frame)
+            if item is None:
+                continue
+            gray, color = item
+            frames.append((frame_no, gray, color))
+        if len(frames) < 3:
+            return None
+
+        scored: list[tuple[float, int]] = []
+        for prev, cur in zip(frames, frames[1:]):
+            _prev_no, prev_gray, prev_color = prev
+            cur_no, cur_gray, cur_color = cur
+            try:
+                gray_score = float(np.mean(np.abs(cur_gray.astype(np.int16) - prev_gray.astype(np.int16))))
+                color_score = float(np.mean(np.abs(cur_color.astype(np.int16) - prev_color.astype(np.int16))))
+                score = max(gray_score, color_score * 0.85)
+            except Exception:
+                continue
+            scored.append((score, int(cur_no)))
+        if not scored:
+            return None
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_frame = scored[0]
+        scores = [score for score, _frame in scored]
+        try:
+            median_score = float(np.median(scores))
+        except Exception:
+            median_score = 0.0
+        second_score = float(scored[1][0]) if len(scored) > 1 else 0.0
+        isolated = best_score >= median_score + 7.0 and best_score >= second_score * 1.15
+        strong = best_score >= 18.0 or (best_score >= 12.0 and isolated)
+        if not strong:
+            return None
+        return {
+            "local_sec": self._snap_to_frame(best_frame / max(1.0, float(fps or 30.0))),
+            "frame": int(best_frame),
+            "score": round(float(best_score), 3),
+            "median_score": round(float(median_score), 3),
+        }
+
     def _snap_candidate_threshold_sec(self, candidate: dict, base_threshold: float) -> float:
         kind = str((candidate or {}).get("kind") or "")
+        if kind == "cut_live":
+            pps = max(1.0, float(getattr(self, "pps", 1.0) or 1.0))
+            fps = max(1.0, float(self._get_fps() if hasattr(self, "_get_fps") else 30.0))
+            return max(base_threshold, min(0.20, 24.0 / pps), 6.0 / fps)
         if kind not in {"user_guide", "shadow_playhead"}:
             return base_threshold
         pps = max(1.0, float(getattr(self, "pps", 1.0) or 1.0))

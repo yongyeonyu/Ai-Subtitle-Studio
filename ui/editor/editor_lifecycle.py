@@ -18,6 +18,7 @@ from ui.editor.editor_project_open_native import (
     merge_srt_segments_with_project_metadata as native_merge_srt_segments_with_project_metadata,
     normalized_open_path as native_normalized_open_path,
     normalized_segment_text as native_normalized_segment_text,
+    open_subtitle_segments_in_editor as native_open_subtitle_segments_in_editor,
     project_matches_opened_srt as native_project_matches_opened_srt,
     project_sidecar_candidates_for_srt as native_project_sidecar_candidates_for_srt,
     refresh_opened_editor_runtime as native_refresh_opened_editor_runtime,
@@ -92,6 +93,22 @@ class EditorLifecycleMixin:
     def _restore_project_context_for_srt_open(self, editor, project_path: str, project: dict | None) -> None:
         native_restore_project_context_for_srt_open(self, editor, project_path, project)
 
+    def _open_subtitle_segments_in_editor(self, srt_path: str, media_path: str, segments: list[dict]) -> bool:
+        opened = native_open_subtitle_segments_in_editor(self, srt_path, media_path, segments)
+        if opened:
+            editor = getattr(self, "_editor_widget", None)
+            if editor is not None:
+                def _save_and_home(segs=None, path=srt_path):
+                    if segs is not None:
+                        _save_srt_impl(path, segs)
+                    QTimer.singleShot(0, self.show_home)
+
+                try:
+                    editor.sig_next.connect(_save_and_home)
+                except Exception:
+                    pass
+        return bool(opened)
+
     def _schedule_editor_fit_to_view(self, editor, delay_ms: int = 120):
         native_schedule_editor_fit_to_view(editor, delay_ms=delay_ms)
 
@@ -136,10 +153,8 @@ class EditorLifecycleMixin:
         from core.srt_parser import parse_srt
         from core.subtitle_existing import backup_existing_srt, find_media_for_srt, validate_srt_duration
         from core.project.project_context import (
-            project_cut_boundary_provisional_segments,
-            project_voice_activity_segments,
+            project_media_files,
         )
-        from ui.editor.editor_widget import EditorWidget
         self._current_work_mode = "editor"
         detach_project_session(
             self,
@@ -187,64 +202,50 @@ class EditorLifecycleMixin:
             QMessageBox.warning(self, "기존 자막 오류", reason)
             backup_existing_srt(srt_path)
             segments = []
-        display_name = os.path.basename(media_path if media_path and media_path != srt_path else srt_path)
-        editor = EditorWidget(
-            video_name=display_name,
-            segments=[],
-            media_path=media_path,
-            parent=self,
-            defer_media_load=True,
-            hydrate_existing_srt_on_empty=False,
-        )
-        editor._source_srt_path = srt_path
-        editor._last_saved_srt_outputs = [(srt_path, media_path)]
-        editor._project_clips = None
-        editor._direct_srt_edit_mode = True
-        provisional_boundaries = (
-            project_cut_boundary_provisional_segments(linked_project)
-            if linked_project else None
-        )
-        voice_activity_segments = (
-            project_voice_activity_segments(linked_project)
-            if linked_project else None
-        )
-        if hasattr(editor, "apply_loaded_canvas_state"):
-            editor.apply_loaded_canvas_state(
-                segments,
-                auto_gap_segments_enabled=False,
-                boundary_times=self._project_boundary_times or [],
-                provisional_boundaries=provisional_boundaries,
-                voice_activity_segments=voice_activity_segments,
-                mark_dirty=False,
+        project_segment_opener = getattr(self, "_open_project_segments_in_editor", None)
+        if linked_project and callable(project_segment_opener):
+            project_media = [path for path in project_media_files(linked_project) if path and os.path.exists(path)]
+            if not project_media and media_path and media_path != srt_path and os.path.exists(media_path):
+                project_media = [media_path]
+            if project_media:
+                opened = bool(
+                    project_segment_opener(
+                        linked_project_path,
+                        linked_project,
+                        project_media,
+                        segments,
+                        source_srt_path=srt_path,
+                        direct_srt_edit_mode=True,
+                    )
+                )
+                if opened:
+                    get_logger().log_perf(
+                        "editor.open_srt",
+                        event="ready",
+                        elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                        linked_project=True,
+                        project_restore_path=True,
+                        segments=len(list(segments or [])),
+                        media_found=bool(project_media),
+                    )
+                    return
+        opened = self._open_subtitle_segments_in_editor(srt_path, media_path, segments)
+        if opened:
+            get_logger().log_perf(
+                "editor.open_srt",
+                event="ready",
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                linked_project=False,
+                project_restore_path=False,
+                segments=len(list(segments or [])),
+                media_found=bool(media_path and media_path != srt_path),
             )
-        def _save_and_home(segs=None):
-            if segs is not None: _save_srt_impl(srt_path, segs)
-            QTimer.singleShot(0, self.show_home)
-        editor.sig_save.connect(lambda segs, p=srt_path: _save_srt_impl(p, segs)); editor.sig_auto_save.connect(lambda segs, p=srt_path: _save_srt_impl(p, segs)); editor.sig_next.connect(_save_and_home); editor.sig_exit.connect(lambda _: self.close())
-        self._editor_widget = editor
-        if hasattr(self, "global_menu_bar"):
-            self.global_menu_bar.bind_editor(editor)
-        if hasattr(self, "_attach_global_menu_to_editor"):
-            self._attach_global_menu_to_editor(editor)
-        if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(True)
-        self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
-        self._schedule_native_open_editor_media(editor, media_path)
-        if hasattr(self, "_activate_editor_idle_mode"):
-            self._activate_editor_idle_mode(reason="direct_srt_open")
-        if linked_project:
-            self._restore_project_context_for_srt_open(editor, linked_project_path, linked_project)
-        self._schedule_editor_fit_to_view(editor)
-        self._schedule_opened_editor_runtime_refresh(editor)
-        if hasattr(self, "_refresh_work_mode_ui"):
-            QTimer.singleShot(0, self._refresh_work_mode_ui)
-        if hasattr(self, "_release_ai_models_for_editor_mode"):
-            QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
+            return
         get_logger().log_perf(
             "editor.open_srt",
-            event="ready",
+            event="failed",
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
-            linked_project=bool(linked_project),
-            segments=len(list(segments or [])),
+            linked_project=False,
             media_found=bool(media_path and media_path != srt_path),
         )
 
@@ -252,7 +253,10 @@ class EditorLifecycleMixin:
         """기존자막 reuse 완료 후 상태 전환"""
         try:
             if hasattr(editor, '_set_process_completed'):
-                editor._set_process_completed()
+                try:
+                    editor._set_process_completed(suppress_post_generation_tasks=True)
+                except TypeError:
+                    editor._set_process_completed()
             if hasattr(editor, '_redraw_timeline'):
                 QTimer.singleShot(0, editor._redraw_timeline)
             self._schedule_editor_fit_to_view(editor, delay_ms=160)

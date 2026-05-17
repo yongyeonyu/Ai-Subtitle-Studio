@@ -139,6 +139,15 @@ def backup_subtitle_file_copy(subtitle_path: str) -> str:
 class EditorSaveManagerMixin:
     """저장/자동저장/dirty/백업/캐쉬 관리 전용 믹스인."""
 
+    def _preferred_single_srt_output_path(self, media_path: str | None = None) -> str:
+        source_srt_path = str(getattr(self, "_source_srt_path", "") or "").strip()
+        if source_srt_path:
+            return source_srt_path
+        target_media_path = str(media_path or getattr(self, "media_path", "") or "").strip()
+        if not target_media_path:
+            return ""
+        return get_srt_path(target_media_path)
+
     def _auto_save_interval_ms(self) -> int:
         return int(DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC * 1000)
 
@@ -478,7 +487,10 @@ class EditorSaveManagerMixin:
         if len(multiclip_files) > 1:
             saved_any = self._save_multiclip_srts(srt_output_segs, multiclip_files, write_backup=write_backup)
         elif getattr(self, "media_path", None):
-            srt_path = get_srt_path(self.media_path)
+            srt_path = self._preferred_single_srt_output_path(self.media_path)
+            if not srt_path:
+                get_logger().log("⚠️ 저장 실패: SRT 저장 경로를 만들 수 없습니다.")
+                return False
             save_srt(
                 srt_output_segs,
                 srt_path,
@@ -610,6 +622,12 @@ class EditorSaveManagerMixin:
                     self._autosave_requires_manual_save = False
                     get_logger().log("💾 저장 생략: 변경사항이 없습니다.")
                     return True
+            except Exception:
+                pass
+        cancel_roughcut = getattr(self, "_cancel_post_generation_roughcut_draft", None)
+        if callable(cancel_roughcut):
+            try:
+                cancel_roughcut(reason="수동 저장")
             except Exception:
                 pass
         self._flush_pending_segment_queue_now()
@@ -886,6 +904,7 @@ class EditorSaveManagerMixin:
         segs: list = None,
         *,
         persist_analysis_artifacts: bool = False,
+        rewrite_stt_reference_tracks: bool = False,
         allow_create: bool = True,
     ) -> str:
         from core.project.project_manager import save_project, create_project
@@ -998,59 +1017,17 @@ class EditorSaveManagerMixin:
             stt_mode_learning=stt_mode_learning,
             provisional_cut_boundaries=provisional_cut_boundaries,
             persist_analysis_artifacts=bool(persist_analysis_artifacts),
+            rewrite_stt_reference_tracks=bool(rewrite_stt_reference_tracks),
             preliminary_middle_segments=preliminary_middle_segments,
         )
         get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
         return project_path
 
     def _editor_auto_save_allowed(self) -> bool:
-        sm = getattr(self, "sm", None)
-        if sm is None or getattr(sm, "is_locked", False):
-            return False
-        if bool(getattr(self, "_autosave_requires_manual_save", False)):
-            return False
-        return str(getattr(sm, "state", "") or "") in {
-            "editing",
-            "autosave",
-            "saved",
-            "ST_EDITING",
-            "ST_AUTOSAVE",
-            "ST_SAVED",
-            getattr(sm, "ST_EDITING", "editing"),
-            getattr(sm, "ST_AUTOSAVE", "autosave"),
-            getattr(sm, "ST_SAVED", "saved"),
-        }
+        return False
 
     def _on_auto_save(self):
-        if not self._editor_auto_save_allowed():
-            return
-        if hasattr(self, "_has_unsaved_changes"):
-            try:
-                if not self._has_unsaved_changes():
-                    if getattr(self.sm, "is_dirty", False) and hasattr(self, "_mark_save_completed"):
-                        self._mark_save_completed(touch_saved_time=False)
-                    return
-            except Exception:
-                pass
-        if getattr(self.sm, "is_dirty", False):
-            segs = self._get_current_segments()
-            if not segs:
-                return
-            self.sm.start_autosave()
-            try:
-                if not self._persist_editor_srts(segs, autosave=True):
-                    return
-            except Exception as exc:
-                get_logger().log(f"⚠️ 자동 저장 실패: {exc}")
-                return
-            self._remember_saved_segments(segs)
-            try:
-                project_path = self._auto_save_project(segs, persist_analysis_artifacts=False)
-            except Exception as exc:
-                get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {exc}")
-                project_path = ""
-            self._remember_saved_project_file(project_path)
-            self._mark_save_completed(touch_saved_time=True)
+        return
 
     def _confirm_close_before_exit(self, title: str = "종료 확인") -> bool:
         is_dirty = False

@@ -140,6 +140,8 @@ class EditorSegmentsManualEditsMixin:
 
         self.text_edit.update_margins()
         cur.endEditBlock()
+        if hasattr(self, "_invalidate_segment_cache"):
+            self._invalidate_segment_cache()
         self._schedule_timeline()
 
     def _partial_insert_segment_parts(self, seg: dict) -> tuple[float, list[str], str]:
@@ -165,11 +167,19 @@ class EditorSegmentsManualEditsMixin:
         gap_start = self._frame_time(seg["end"])
         if isinstance(next_seg, dict):
             if seg["end"] < next_seg["start"] - 0.05:
+                gap_end = self._frame_time(next_seg["start"])
                 cur.insertBlock()
-                cur.block().setUserData(SubtitleBlockData("00", gap_start, is_gap=True))
+                cur.block().setUserData(SubtitleBlockData("00", gap_start, is_gap=True, end_sec=gap_end))
             return
+        gap_end = None
+        try:
+            total_time = float(getattr(getattr(self, "video_player", None), "total_time", 0.0) or 0.0)
+            if total_time > gap_start + 0.001:
+                gap_end = self._frame_time(total_time)
+        except Exception:
+            gap_end = None
         cur.insertBlock()
-        cur.block().setUserData(SubtitleBlockData("00", gap_start, is_gap=True))
+        cur.block().setUserData(SubtitleBlockData("00", gap_start, is_gap=True, end_sec=gap_end))
 
     def insert_partial_segments(self, new_segments: list[dict]):
         try:
@@ -191,21 +201,24 @@ class EditorSegmentsManualEditsMixin:
                 if not cur.atBlockStart():
                     cur.insertBlock()
                 start_sec, parts, current_spk = self._partial_insert_segment_parts(seg)
+                end_sec = self._frame_time(seg.get("end", start_sec))
                 if not parts:
                     continue
                 cur.insertText(parts[0])
-                cur.block().setUserData(SubtitleBlockData(current_spk, start_sec))
+                cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, end_sec=end_sec))
                 for line_text in parts[1:]:
                     if line_text.startswith("-"):
                         current_spk = spk2_id if current_spk == spk1_id else spk1_id
                         cur.insertBlock()
                         cur.insertText(line_text)
-                        cur.block().setUserData(SubtitleBlockData(current_spk, start_sec))
+                        cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, end_sec=end_sec))
                     else:
                         cur.insertText("\u2028" + line_text)
                 next_seg = new_segments[idx + 1] if idx + 1 < len(new_segments) else None
                 self._partial_insert_gap_after_segment(cur, seg, next_seg)
 
+            if hasattr(self, "_invalidate_segment_cache"):
+                self._invalidate_segment_cache()
             self._mark_dirty()
             self.text_edit.update_margins()
             cur.endEditBlock()

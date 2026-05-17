@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -13,7 +14,7 @@ class EditorOpenLayoutTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_initial_open_layout_moves_editor_to_top_and_sets_ten_second_window(self):
+    def test_initial_open_layout_moves_editor_to_top_and_applies_saved_time_window(self):
         segments = [
             {
                 "start": float(index) + 0.95,
@@ -23,12 +24,13 @@ class EditorOpenLayoutTests(unittest.TestCase):
             }
             for index in range(40)
         ]
-        editor = EditorWidget(
-            video_name="sample.mp4",
-            segments=segments,
-            media_path="",
-            defer_media_load=True,
-        )
+        with patch("ui.timeline.timeline_widget.load_settings", return_value={"timeline_edit_window_seconds": 8}):
+            editor = EditorWidget(
+                video_name="sample.mp4",
+                segments=segments,
+                media_path="",
+                defer_media_load=True,
+            )
         try:
             editor.resize(1280, 720)
             editor.show()
@@ -47,7 +49,7 @@ class EditorOpenLayoutTests(unittest.TestCase):
 
             viewport_w = max(1, editor.timeline.scroll.viewport().width())
             visible_seconds = viewport_w / max(0.001, float(editor.timeline.canvas.pps))
-            self.assertAlmostEqual(visible_seconds, 10.0, delta=0.35)
+            self.assertAlmostEqual(visible_seconds, 8.0, delta=0.35)
             self.assertEqual(editor.timeline.scroll.horizontalScrollBar().value(), 0)
         finally:
             editor.close()

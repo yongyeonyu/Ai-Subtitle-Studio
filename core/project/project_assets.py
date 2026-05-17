@@ -266,6 +266,35 @@ def _inferred_track_ref(project: dict[str, Any] | None, key: str) -> dict[str, A
     return track
 
 
+def _existing_stt_track_manifest(
+    project: dict[str, Any] | None,
+    *,
+    key: str,
+    source: str,
+) -> dict[str, Any]:
+    if not isinstance(project, dict):
+        return {}
+    asset_storage = project.get("asset_storage")
+    tracks = asset_storage.get("tracks") if isinstance(asset_storage, dict) else {}
+    track = tracks.get(key) if isinstance(tracks, dict) else None
+    if isinstance(track, dict):
+        preserved = dict(track)
+    else:
+        preserved = _inferred_track_ref(project, key)
+    if not preserved:
+        return {}
+    preserved.setdefault("schema", PROJECT_TEXT_ASSET_SCHEMA)
+    preserved.setdefault("key", key)
+    preserved.setdefault("format", "srt")
+    preserved.setdefault("source", source)
+    if not str(preserved.get("path", "") or "").strip():
+        inferred = _inferred_track_path(project, key)
+        if inferred:
+            project_path = _project_file_path(project)
+            preserved["path"] = relative_asset_path(project_path, inferred) if project_path else inferred
+    return preserved
+
+
 def _segment_start(seg: dict[str, Any]) -> float:
     return _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
 
@@ -917,6 +946,7 @@ def externalize_project_text_assets(
     *,
     final_segments: list[dict[str, Any]] | None = None,
     stt_tracks: dict[str, list[dict[str, Any]]] | None = None,
+    rewrite_stt_reference_tracks: bool = True,
 ) -> dict[str, Any]:
     if not project_path or not isinstance(project, dict):
         return project
@@ -948,6 +978,17 @@ def externalize_project_text_assets(
 
     stt_external_tracks: dict[str, Any] = {}
     for source in ("STT1", "STT2"):
+        key = f"{_STT_TRACK_PREFIX}{source.lower()}"
+        if not rewrite_stt_reference_tracks:
+            preserved = _existing_stt_track_manifest(
+                project,
+                key=key,
+                source=source,
+            )
+            if preserved:
+                tracks_manifest[key] = preserved
+                stt_external_tracks[source] = preserved
+                continue
         rows = sanitize_stt_track_rows(
             stt_tracks.get(source),
             source=source,
@@ -955,14 +996,12 @@ def externalize_project_text_assets(
         )
         if not rows:
             continue
-        key = f"{_STT_TRACK_PREFIX}{source.lower()}"
         info = write_srt_track(
             rows,
             os.path.join(subtitle_dir, f"{source.lower()}.srt"),
             metadata_source=source,
             metadata_default_fps=primary_fps,
         )
-        persisted_rows = _track_rows_from_write_result(info)
         metadata = _track_metadata_from_write_result(info)
         track = _track_manifest(project_path, key, info, metadata)
         track["source"] = source

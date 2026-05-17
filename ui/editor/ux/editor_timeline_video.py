@@ -1266,57 +1266,17 @@ class EditorTimelineVideoMixin(EditorTimelineSegmentMergeMixin, EditorScanCutCor
         doc = self.text_edit.document()
         cur = QTextCursor(doc)
         cur.beginEditBlock()
-
-        if gap_start <= 0.05:
-            first_block = doc.begin()
-            orig_ud = first_block.userData()
-            orig_time = orig_ud.start_sec if isinstance(orig_ud, SubtitleBlockData) else gap_end
-            orig_spk = orig_ud.spk_id if isinstance(orig_ud, SubtitleBlockData) else self.settings.get("spk1_id", "00")
-            if not first_block.text().strip() or (isinstance(orig_ud, SubtitleBlockData) and orig_ud.is_gap):
-                cur.setPosition(first_block.position())
-                cur.select(QTextCursor.SelectionType.LineUnderCursor)
-                cur.insertText("새 자막")
-                first_block.setUserData(SubtitleBlockData(self.settings.get("spk1_id", "00"), 0.0, is_gap=False))
-            else:
-                cur.movePosition(QTextCursor.MoveOperation.Start)
-                cur.insertText("새 자막\n")
-                doc.findBlockByNumber(0).setUserData(SubtitleBlockData(self.settings.get("spk1_id", "00"), 0.0, is_gap=False))
-                doc.findBlockByNumber(1).setUserData(SubtitleBlockData(orig_spk, orig_time, is_gap=False))
-                if orig_time > gap_end + 0.05:
-                    cur.setPosition(doc.findBlockByNumber(1).position())
-                    cur.insertText("\n")
-                    doc.findBlockByNumber(1).setUserData(make_gap_ud(gap_end))
-                    doc.findBlockByNumber(2).setUserData(SubtitleBlockData(orig_spk, orig_time, is_gap=False))
-        else:
-            target_idx = None
-            for i in range(doc.blockCount()):
-                ud = doc.findBlockByNumber(i).userData()
-                if isinstance(ud, SubtitleBlockData) and abs(ud.start_sec - gap_start) < 0.05:
-                    target_idx = i
-                    break
-            if target_idx is not None:
-                block = doc.findBlockByNumber(target_idx)
-                cur.setPosition(block.position())
-                cur.select(QTextCursor.SelectionType.LineUnderCursor)
-                cur.insertText("새 자막")
-                block.setUserData(SubtitleBlockData(self.settings.get("spk1_id", "00"), gap_start, is_gap=False))
-                next_b = block.next()
-                if not next_b.isValid() or (isinstance(next_b.userData(), SubtitleBlockData) and next_b.userData().start_sec > gap_end + 0.05):
-                    cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-                    cur.insertText("\n")
-                    cur.block().setUserData(make_gap_ud(gap_end))
-            else:
-                cur.movePosition(QTextCursor.MoveOperation.End)
-                if doc.lastBlock().text().strip():
-                    cur.insertText("\n")
-                cur.insertText("새 자막")
-                cur.block().setUserData(SubtitleBlockData(self.settings.get("spk1_id", "00"), gap_start, is_gap=False))
-                cur.insertText("\n")
-                cur.block().setUserData(make_gap_ud(gap_end))
-
+        subtitle_idx = self._apply_gap_generation_parts(gap_start, [("subtitle", "새 자막", gap_start)])
         cur.endEditBlock()
-        self.text_edit.setTextCursor(cur)
         self._finalize_edit()
+        block = doc.findBlockByNumber(subtitle_idx)
+        if block.isValid():
+            ud = block.userData()
+            if isinstance(ud, SubtitleBlockData):
+                ud.end_sec = gap_end
+            cursor = QTextCursor(block)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            self.text_edit.setTextCursor(cursor)
 
     def _delete_gap_blocks_in_range(self, gap_start: float, gap_end: float) -> int:
         """Remove document gap blocks inside a deleted silence range."""

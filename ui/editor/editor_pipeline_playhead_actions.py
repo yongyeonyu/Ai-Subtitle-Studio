@@ -143,6 +143,7 @@ class EditorPipelinePlayheadActionsMixin:
         items.extend(
             [
                 {"id": "re_segment", "label": "현재 자막 세그먼트만 재인식", "accent": "#5AC8FA"},
+                {"id": "re_next_minute", "label": "현재부터 1분까지 자막 인식", "accent": "#30D158"},
                 {"id": "re_from", "label": "현재부터 끝까지 자막 재인식", "accent": "#34C759"},
             ]
         )
@@ -160,6 +161,8 @@ class EditorPipelinePlayheadActionsMixin:
             self._clear_shadow_playhead_from_menu()
         elif chosen == "re_segment":
             self._re_recognize_segment(sec)
+        elif chosen == "re_next_minute":
+            self._re_recognize_next_minute(sec)
         elif chosen == "re_from":
             self._re_recognize_from(sec)
 
@@ -186,11 +189,33 @@ class EditorPipelinePlayheadActionsMixin:
                 return seg_start, seg_end
         return None
 
+    def _segment_end_at_time(self, sec: float) -> float | None:
+        for seg in self._get_current_segments():
+            try:
+                seg_start = float(seg.get("start", 0.0))
+                seg_end = float(seg.get("end", 0.0))
+            except Exception:
+                continue
+            if seg_start < sec < seg_end:
+                return seg_end
+        return None
+
     def _re_recognize_segment(self, sec):
         seg_range = self._segment_range_at_time(float(sec or 0.0))
         if seg_range is None:
             return
         self._run_partial_backend(seg_range[0], seg_range[1], is_single=True)
+
+    def _re_recognize_next_minute(self, sec):
+        start_sec = self._segment_start_at_time(float(sec or 0.0))
+        total_end = self._partial_rerun_total_end()
+        end_sec = min(float(total_end or 0.0), start_sec + 60.0)
+        containing_end = self._segment_end_at_time(end_sec)
+        if containing_end is not None:
+            end_sec = min(float(total_end or containing_end), containing_end)
+        if end_sec <= start_sec:
+            return
+        self._run_partial_backend(start_sec, end_sec, is_single=False)
 
     def _re_recognize_from(self, sec):
         start_sec = self._segment_start_at_time(float(sec or 0.0))

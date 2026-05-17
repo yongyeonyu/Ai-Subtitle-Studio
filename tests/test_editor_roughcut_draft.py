@@ -19,6 +19,7 @@ from core.roughcut import (
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_roughcut_draft import EditorRoughcutDraftMixin
+from ui.editor.editor_segments_runtime_cache import EditorSegmentsRuntimeCacheMixin
 from ui.timeline.timeline_analysis import roughcut_major_markers
 
 
@@ -39,6 +40,62 @@ def _segments(count: int = 7) -> list[dict]:
 
 
 class EditorRoughcutDraftTests(unittest.TestCase):
+    def test_cancel_post_generation_roughcut_stops_pending_timer(self):
+        class _Timer:
+            def __init__(self):
+                self.active = True
+
+            def isActive(self):
+                return self.active
+
+            def stop(self):
+                self.active = False
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 4
+                self._roughcut_draft_status = "queued"
+                self._roughcut_draft_thread = None
+                self.queue_done_calls = 0
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _mark_roughcut_queue_done(self, **_kwargs):
+                self.queue_done_calls += 1
+
+        editor = _Editor()
+
+        cancelled = editor._cancel_post_generation_roughcut_draft(reason="test")
+
+        self.assertTrue(cancelled)
+        self.assertFalse(editor._roughcut_draft_timer.isActive())
+        self.assertFalse(editor._roughcut_draft_pending)
+        self.assertEqual(editor._roughcut_draft_generation, 5)
+        self.assertEqual(editor._roughcut_draft_status, "idle")
+        self.assertEqual(editor.queue_done_calls, 1)
+
+    def test_foreground_activity_cancels_pending_post_generation_roughcut(self):
+        class _Editor(EditorSegmentsRuntimeCacheMixin):
+            def __init__(self):
+                self.cancel_reasons = []
+
+            def _cancel_post_generation_roughcut_draft(self, *, reason: str = "") -> bool:
+                self.cancel_reasons.append(reason)
+                return True
+
+            def window(self):
+                return SimpleNamespace()
+
+        editor = _Editor()
+
+        editor._note_editor_foreground_activity()
+
+        self.assertEqual(editor.cancel_reasons, ["편집 시작"])
+        self.assertGreater(getattr(editor, "_last_editor_foreground_activity_at", 0.0), 0.0)
+
     def test_post_generation_autorun_ignores_legacy_false_when_roughcut_llm_is_enabled(self):
         class _Editor(EditorRoughcutDraftMixin):
             def __init__(self):
@@ -70,6 +127,67 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         editor = _Editor()
 
         self.assertFalse(editor._roughcut_draft_post_generation_autorun_enabled())
+
+    def test_draft_settings_snapshot_uses_partial_rerun_override(self):
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self.settings = {"stt_quality_preset": "fast", "selected_model": "old"}
+                self._roughcut_draft_settings_override = {
+                    "stt_quality_preset": "precise",
+                    "selected_model": "roughcut-mode-model",
+                }
+
+        editor = _Editor()
+
+        with mock.patch("core.settings.load_settings", return_value={}):
+            snapshot = editor._draft_settings_snapshot()
+
+        self.assertEqual(snapshot["stt_quality_preset"], "precise")
+        self.assertEqual(snapshot["selected_model"], "roughcut-mode-model")
+
+    def test_manual_partial_rerun_schedule_bypasses_autorun_gate(self):
+        class _Timer:
+            def __init__(self):
+                self.started = []
+
+            def isActive(self):
+                return False
+
+            def start(self, ms):
+                self.started.append(int(ms))
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_status = "idle"
+                self._roughcut_draft_pending = False
+                self._roughcut_draft_settings_override = None
+                self.queue_notes = []
+
+            def _roughcut_draft_post_generation_autorun_enabled(self):
+                return False
+
+            def _roughcut_draft_runtime_enabled(self):
+                return True
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _mark_roughcut_queue_active(self, note):
+                self.queue_notes.append(note)
+
+        editor = _Editor()
+
+        editor._schedule_post_generation_roughcut_draft(
+            force=True,
+            require_autorun=False,
+            settings_override={"stt_quality_preset": "precise"},
+        )
+
+        self.assertEqual(editor._roughcut_draft_status, "queued")
+        self.assertTrue(editor._roughcut_draft_pending)
+        self.assertEqual(editor._roughcut_draft_timer.started, [120])
+        self.assertEqual(editor._roughcut_draft_settings_override["stt_quality_preset"], "precise")
 
     def test_post_generation_draft_waits_for_cut_boundary_settle_when_project_has_provisionals(self):
         class _Timer:

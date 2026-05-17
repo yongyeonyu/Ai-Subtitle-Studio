@@ -387,9 +387,14 @@ def apply_project_ui_state(
         except Exception:
             pass
         try:
+            preferred_seconds = (
+                timeline.preferred_edit_window_seconds()
+                if timeline is not None and hasattr(timeline, "preferred_edit_window_seconds")
+                else float(getattr(timeline, "_preferred_edit_window_seconds", 10.0) or 10.0)
+            )
             if timeline is not None and hasattr(timeline, "show_time_window_seconds"):
                 timeline.show_time_window_seconds(
-                    15.0,
+                    preferred_seconds,
                     center_sec=sec if sec > 0.0 else None,
                 )
             elif timeline is not None and hasattr(timeline, "fit_to_view"):

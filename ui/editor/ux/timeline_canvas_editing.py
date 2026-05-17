@@ -86,11 +86,41 @@ class _TimelineInlineTextEdit(QPlainTextEdit):
         if canvas is not None:
             QTimer.singleShot(0, canvas._maybe_commit_inline_edit_from_focus_out)
 
+    def _pause_canvas_playback_for_keyboard_edit(self) -> None:
+        canvas = getattr(self, "_canvas", None)
+        request = getattr(canvas, "_request_canvas_pause_playback", None)
+        if callable(request):
+            try:
+                request()
+            except Exception:
+                pass
+
+    def _should_pause_canvas_playback_for_keypress(self, event) -> bool:
+        key = event.key()
+        if key in (
+            Qt.Key.Key_Shift,
+            Qt.Key.Key_Control,
+            Qt.Key.Key_Alt,
+            Qt.Key.Key_Meta,
+            Qt.Key.Key_AltGr,
+            Qt.Key.Key_CapsLock,
+            Qt.Key.Key_NumLock,
+            Qt.Key.Key_ScrollLock,
+            Qt.Key.Key_Escape,
+        ):
+            return False
+        if key == Qt.Key.Key_Space and not (event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier):
+            return bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        return True
+
     def keyPressEvent(self, event):
         canvas = self._canvas
         if canvas is None or not getattr(canvas, "_edit_active", False):
             super().keyPressEvent(event)
             return
+
+        if self._should_pause_canvas_playback_for_keypress(event):
+            self._pause_canvas_playback_for_keyboard_edit()
 
         if event.key() == Qt.Key.Key_Space and not (event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier):
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -169,22 +199,6 @@ def apply_timing_drag(canvas, delta: float) -> None:
         canvas._drag_snap_candidates_cache = snap_candidates
     snap_threshold = canvas._drag_snap_threshold_sec()
 
-    native_candidates = []
-    for candidate in snap_candidates:
-        if not isinstance(candidate, dict):
-            continue
-        try:
-            candidate_time = float(candidate.get("time", 0.0) or 0.0)
-        except Exception:
-            continue
-        native_candidates.append(
-            {
-                "time": canvas._snap_to_frame(candidate_time),
-                "kind": str(candidate.get("kind", "") or ""),
-                "threshold": float(canvas._snap_candidate_threshold_sec(candidate, snap_threshold)),
-            }
-        )
-
     def _native_snapped(result: dict | None) -> dict | None:
         if not isinstance(result, dict):
             return None
@@ -212,6 +226,31 @@ def apply_timing_drag(canvas, delta: float) -> None:
         if pair is not None and pair[0] < len(canvas.segments) and pair[1] < len(canvas.segments):
             s1, s2 = canvas.segments[pair[0]], canvas.segments[pair[1]]
             orig = getattr(canvas, "_drag_diamond_orig", 0.0)
+            requested_boundary = canvas._snap_to_frame(float(orig or 0.0) + float(delta or 0.0))
+            live_cut_provider = getattr(canvas, "_drag_live_cut_snap_candidates", None)
+            if callable(live_cut_provider):
+                try:
+                    live_cut_candidates = live_cut_provider(requested_boundary, edge="diamond")
+                except Exception:
+                    live_cut_candidates = []
+                if live_cut_candidates:
+                    snap_candidates = [*snap_candidates, *live_cut_candidates]
+
+            native_candidates = []
+            for candidate in snap_candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                try:
+                    candidate_time = float(candidate.get("time", 0.0) or 0.0)
+                except Exception:
+                    continue
+                native_candidates.append(
+                    {
+                        "time": canvas._snap_to_frame(candidate_time),
+                        "kind": str(candidate.get("kind", "") or ""),
+                        "threshold": float(canvas._snap_candidate_threshold_sec(candidate, snap_threshold)),
+                    }
+                )
             native = apply_timing_drag_via_swift(
                 edge="diamond",
                 delta=float(delta),
@@ -245,6 +284,22 @@ def apply_timing_drag(canvas, delta: float) -> None:
             _consume_shadow_snap(snapped)
             canvas._update_drag_visual_rect(before_rect)
         return
+
+    native_candidates = []
+    for candidate in snap_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            candidate_time = float(candidate.get("time", 0.0) or 0.0)
+        except Exception:
+            continue
+        native_candidates.append(
+            {
+                "time": canvas._snap_to_frame(candidate_time),
+                "kind": str(candidate.get("kind", "") or ""),
+                "threshold": float(canvas._snap_candidate_threshold_sec(candidate, snap_threshold)),
+            }
+        )
 
     seg = getattr(canvas, "_drag_seg", None)
     min_span = canvas._snap_to_frame(0.1)
@@ -457,6 +512,31 @@ class TimelineInlineEditMixin:
     def _native_inline_editor_active(self) -> bool:
         editor = getattr(self, "_inline_editor", None)
         return bool(editor is not None and editor.isVisible() and self._edit_active)
+
+    def _request_canvas_pause_playback(self) -> bool:
+        owner = self
+        visited: set[int] = set()
+        while owner is not None and id(owner) not in visited:
+            visited.add(id(owner))
+            pause_handler = getattr(owner, "_pause_playback_for_keyboard_edit", None)
+            if callable(pause_handler):
+                try:
+                    pause_handler()
+                    return True
+                except Exception:
+                    return False
+            next_owner = None
+            try:
+                next_owner = owner.parentWidget()
+            except Exception:
+                next_owner = None
+            if next_owner is None:
+                try:
+                    next_owner = owner.parent()
+                except Exception:
+                    next_owner = None
+            owner = next_owner
+        return False
 
     def _request_canvas_play_pause_toggle(self) -> bool:
         owner = self

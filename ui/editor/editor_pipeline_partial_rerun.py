@@ -177,8 +177,8 @@ class EditorPipelinePartialRerunMixin:
             pass
 
     def _prepare_partial_rerun_state(self, start_sec: float, end_sec: float, *, rerun_cut_boundaries: bool = False) -> list[dict]:
-        if hasattr(self, "clear_segments_in_range"):
-            self.clear_segments_in_range(start_sec, end_sec)
+        self._partial_rerun_replace_range = (float(start_sec or 0.0), float(end_sec or start_sec or 0.0))
+        self._partial_rerun_replace_committed = False
 
         live_preview = []
         for seg in list(getattr(self, "_live_stt_preview_segments", []) or []):
@@ -209,15 +209,114 @@ class EditorPipelinePartialRerunMixin:
             self._trim_cut_boundary_state_for_partial_rerun(start_sec)
         return prefix_vad
 
+    def _commit_partial_rerun_segments(self, new_segments: list[dict]) -> bool:
+        if not new_segments:
+            return False
+        replace_range = getattr(self, "_partial_rerun_replace_range", None)
+        if not bool(getattr(self, "_partial_rerun_replace_committed", False)):
+            if isinstance(replace_range, tuple) and len(replace_range) == 2 and hasattr(self, "clear_segments_in_range"):
+                self.clear_segments_in_range(float(replace_range[0]), float(replace_range[1]))
+            self._partial_rerun_replace_committed = True
+        if hasattr(self, "insert_partial_segments"):
+            self.insert_partial_segments(new_segments)
+            return True
+        return False
+
     def _update_partial_progress(self, sec):
         if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
             self.timeline.canvas.re_recog_progress = sec
             self.timeline.canvas.update()
 
+    def _partial_runtime_settings_snapshot(self) -> dict:
+        settings: dict = {}
+        if isinstance(getattr(self, "settings", None), dict):
+            settings.update(getattr(self, "settings", {}) or {})
+        try:
+            from core.settings import load_settings, runtime_settings_override
+
+            settings.update(load_settings() or {})
+            settings.update(runtime_settings_override() or {})
+        except Exception:
+            pass
+        try:
+            main_w = self.window()
+        except Exception:
+            main_w = None
+        runtime_override = getattr(main_w, "_runtime_settings_override", None) if main_w is not None else None
+        if isinstance(runtime_override, dict):
+            settings.update(runtime_override)
+        try:
+            from core.mode_manager import selected_mode_from_settings
+            from core.settings_simplifier import apply_simple_operation_mode
+
+            settings = apply_simple_operation_mode(settings, selected_mode_from_settings(settings))
+        except Exception as exc:
+            get_logger().log(f"⚠️ 부분 재인식 Mode 설정 적용 실패: {exc}")
+        return dict(settings or {})
+
+    def _apply_partial_runtime_settings(self, backend, settings: dict) -> tuple[dict, object, bool]:
+        previous_runtime: dict = {}
+        previous_vp_override = None
+        had_vp_override = False
+        try:
+            from core.settings import runtime_settings_override, set_runtime_settings_override
+
+            previous_runtime = runtime_settings_override()
+            set_runtime_settings_override(settings)
+        except Exception:
+            previous_runtime = {}
+        vp = getattr(backend, "video_processor", None)
+        if vp is not None:
+            had_vp_override = hasattr(vp, "_fast_mode_overrides")
+            previous_vp_override = getattr(vp, "_fast_mode_overrides", None)
+            try:
+                vp._fast_mode_overrides = dict(settings or {})
+            except Exception:
+                pass
+        return previous_runtime, previous_vp_override, had_vp_override
+
+    def _restore_partial_runtime_settings(self, backend, state: tuple[dict, object, bool]) -> None:
+        previous_runtime, previous_vp_override, had_vp_override = state
+        try:
+            from core.settings import set_runtime_settings_override
+
+            set_runtime_settings_override(previous_runtime if previous_runtime else None)
+        except Exception:
+            pass
+        vp = getattr(backend, "video_processor", None)
+        if vp is not None:
+            try:
+                if had_vp_override:
+                    vp._fast_mode_overrides = previous_vp_override
+                elif hasattr(vp, "_fast_mode_overrides"):
+                    delattr(vp, "_fast_mode_overrides")
+            except Exception:
+                pass
+
+    def _schedule_partial_rerun_roughcut(self, settings: dict, *, inserted_any: bool) -> None:
+        if not bool(inserted_any):
+            return
+        scheduler = getattr(self, "_schedule_post_generation_roughcut_draft", None)
+        if not callable(scheduler):
+            return
+        try:
+            scheduler(force=True, require_autorun=False, settings_override=dict(settings or {}))
+        except TypeError:
+            scheduler(force=True)
+        except Exception as exc:
+            get_logger().log(f"⚠️ 부분 재인식 후 러프컷 LLM 예약 실패: {exc}")
+
     def _run_partial_backend(self, start_sec, end_sec, is_single=False):
         main_w = self.window()
         if not (main_w and main_w.backend):
             return
+        runtime_settings = self._partial_runtime_settings_snapshot()
+        self._last_partial_runtime_settings = dict(runtime_settings)
+        try:
+            if isinstance(getattr(self, "settings", None), dict):
+                self.settings.update(runtime_settings)
+        except Exception:
+            pass
         if is_single:
             self.sm.start_partial_segment()
         else:
@@ -236,8 +335,13 @@ class EditorPipelinePartialRerunMixin:
         self._partial_signals.status.connect(lambda _code, msg: self.update_status(msg))
         self._partial_signals.progress.connect(self.update_progress)
         self._partial_signals.chunk_time.connect(self._update_partial_progress)
+        self._partial_rerun_inserted_any = False
         if hasattr(self, "insert_partial_segments"):
-            self._partial_signals.done.connect(self.insert_partial_segments)
+            def _insert_partial_segments(new_segments):
+                if self._commit_partial_rerun_segments(new_segments):
+                    self._partial_rerun_inserted_any = True
+
+            self._partial_signals.done.connect(_insert_partial_segments)
 
         def on_finished():
             self.sm.complete_ai()
@@ -251,6 +355,12 @@ class EditorPipelinePartialRerunMixin:
                     main_w._sig_set_llm_review_segment.emit({"active": False})
             except Exception:
                 pass
+            self._schedule_partial_rerun_roughcut(
+                runtime_settings,
+                inserted_any=bool(getattr(self, "_partial_rerun_inserted_any", False)),
+            )
+            self._partial_rerun_replace_range = None
+            self._partial_rerun_replace_committed = False
 
         self._partial_signals.finished.connect(on_finished)
 
@@ -260,6 +370,7 @@ class EditorPipelinePartialRerunMixin:
             if backend is None:
                 sig.finished.emit()
                 return
+            runtime_state = self._apply_partial_runtime_settings(backend, runtime_settings)
             try:
                 media_path = str(getattr(self, "media_path", "") or "")
                 project_path = str(getattr(main_w, "_current_project_path", "") or "")
@@ -473,8 +584,6 @@ class EditorPipelinePartialRerunMixin:
                     opt = align_stt_candidates_to_subtitle_segments(opt)
                     auto_collected_segs.extend([dict(seg) for seg in opt])
 
-                    sig.status.emit("STATUS_INSERTING_SEGS", "자막 정밀 삽입 중...")
-                    sig.done.emit(opt)
                     sig.progress.emit(last_c_idx, last_t_total)
                     if auto_collected_segs:
                         try:
@@ -524,6 +633,9 @@ class EditorPipelinePartialRerunMixin:
                 t_trans.join()
                 t_preview.join()
                 t_opt.join()
+                if auto_collected_segs:
+                    sig.status.emit("STATUS_INSERTING_SEGS", "자막 정밀 삽입 중...")
+                    sig.done.emit([dict(seg) for seg in auto_collected_segs])
             except Exception as e:
                 get_logger().log(f"⚠️ 재인식 중 치명적 오류: {e}")
             finally:
@@ -532,6 +644,7 @@ class EditorPipelinePartialRerunMixin:
                         backend.video_processor.stage_callback = None
                 except Exception:
                     pass
+                self._restore_partial_runtime_settings(backend, runtime_state)
             sig.finished.emit()
 
         threading.Thread(target=_task, daemon=True).start()

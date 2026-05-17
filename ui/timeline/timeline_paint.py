@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QScrollArea
 
 from core.frame_time import frame_count, frame_to_sec, normalize_fps
 from core.runtime import config
+from ui.editor.ux.timeline_playhead_mode import playhead_line_color_hex
 from ui.style import COLORS
 
 from ui.timeline.timeline_constants import (
@@ -1783,7 +1784,7 @@ class TimelinePaintMixin:
                         p.drawText(mic_x + 24, mic_y + 18, "Listening...")
 
         if self.playhead_sec >= 0 and not getattr(self, "_external_playhead_overlay", False):
-            ph_color = QColor("#4AFF80") if getattr(self, 'focus_mode', 'segment') == "waveform" else QColor("#FF4444")
+            ph_color = QColor(playhead_line_color_hex(getattr(self, "focus_mode", None)))
             p.setPen(QPen(ph_color, 2)); px = self._x(self.playhead_sec); p.drawLine(px, 0, px, CANVAS_H)
             handle_r = 7
             self._playhead_handle_rect = QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2)

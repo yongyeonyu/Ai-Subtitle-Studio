@@ -39,6 +39,7 @@ from core.project.project_assets import (
     PROJECT_EXTERNAL_STORAGE,
     externalize_project_text_assets,
     hydrate_project_text_asset_cache,
+    write_srt_track,
 )
 from core.project.project_format import PROJECT_SCHEMA_VERSION, PROJECT_STORAGE_SCHEMA, PROJECT_VIDEO_SCHEMA
 from core.project.project_srt import parse_srt_to_segments
@@ -1851,6 +1852,61 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(split[0]["cut_local_start"], 0.0)
         self.assertTrue(split[0]["cut_boundary_fitted"])
         self.assertEqual(split[0]["stt_candidates"][0]["start"], 3.0)
+
+    def test_save_project_can_preserve_existing_stt_reference_assets_without_rewriting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            save_project(
+                str(path),
+                media_paths=[str(media)],
+                segments=[{"id": "seg_a", "start": 0.0, "end": 1.0, "text": "최종 자막", "speaker": "00"}],
+                stt_preview_segments=[
+                    {"start": 0.0, "end": 1.0, "text": "후보 일", "stt_preview_source": "STT1"},
+                    {"start": 0.0, "end": 1.0, "text": "후보 이", "stt_preview_source": "STT2"},
+                ],
+            )
+
+            first_payload = json.loads(path.read_text(encoding="utf-8"))
+            stt1_path = path.parent / first_payload["asset_storage"]["tracks"]["stt_stt1"]["path"]
+            stt2_path = path.parent / first_payload["asset_storage"]["tracks"]["stt_stt2"]["path"]
+            before_stt1 = stt1_path.read_text(encoding="utf-8")
+            before_stt2 = stt2_path.read_text(encoding="utf-8")
+
+            with patch("core.project.project_assets.write_srt_track", wraps=write_srt_track) as writer:
+                save_project(
+                    str(path),
+                    segments=[{"id": "seg_a", "start": 0.0, "end": 1.0, "text": "수정 자막", "speaker": "00"}],
+                    persist_analysis_artifacts=False,
+                    rewrite_stt_reference_tracks=False,
+                )
+
+            self.assertEqual([Path(call.args[1]).name for call in writer.call_args_list], ["final.srt"])
+            self.assertEqual(stt1_path.read_text(encoding="utf-8"), before_stt1)
+            self.assertEqual(stt2_path.read_text(encoding="utf-8"), before_stt2)
+
+            loaded = load_project(str(path))
+
+        tracks = loaded["editor_state"]["stt"]["candidate_tracks"]
+        self.assertEqual({*tracks.keys()}, {"STT1", "STT2"})
+        self.assertEqual(tracks["STT1"][0]["text"], "후보 일")
+        self.assertEqual(tracks["STT2"][0]["text"], "후보 이")
 
     def test_save_project_persists_cut_boundaries_to_project_and_multiclip_state(self):
         with tempfile.TemporaryDirectory() as tmp:

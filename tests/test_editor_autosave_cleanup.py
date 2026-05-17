@@ -113,6 +113,21 @@ class _CompletedRecoverySaveEditor(EditorSaveManagerMixin):
         return "/tmp/project.json"
 
 
+class _SourceSrtSaveEditor(EditorSaveManagerMixin):
+    def __init__(self):
+        self.media_path = "/tmp/media.mp4"
+        self.video_fps = 30.0
+        self._source_srt_path = "/tmp/opened.assets/subtitles/final.srt"
+        self._window = SimpleNamespace(_multiclip_files=[])
+        self._last_saved_srt_outputs = []
+
+    def window(self):
+        return self._window
+
+    def _segments_for_srt_output(self, segs):
+        return list(segs or [])
+
+
 class _CompletionEditor(EditorPipelineMixin):
     def __init__(self):
         self._segment_state = [{"start": 0.0, "end": 1.0, "text": "ok"}]
@@ -181,7 +196,17 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor.settings = {"editor_auto_save_interval_sec": 600}
         self.assertEqual(editor._auto_save_interval_ms(), 300_000)
 
-    def test_auto_save_skips_document_scan_when_nothing_changed(self):
+    def test_editor_does_not_start_periodic_auto_save_timer(self):
+        editor = EditorWidget(
+            "sample.m4a",
+            [{"start": 0.0, "end": 1.0, "text": "테스트", "speaker": "00"}],
+        )
+        try:
+            self.assertFalse(editor._auto_save_timer.isActive())
+        finally:
+            editor.close()
+
+    def test_auto_save_is_disabled_even_when_document_state_changes(self):
         editor = _AutoSaveEditor()
         editor.sm = SimpleNamespace(
             is_locked=False,
@@ -197,34 +222,65 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
         editor._on_auto_save()
 
-        editor._has_unsaved_changes.assert_called_once()
-        editor._mark_save_completed.assert_called_once_with(touch_saved_time=False)
+        editor._has_unsaved_changes.assert_not_called()
+        editor._mark_save_completed.assert_not_called()
         editor.sm.start_autosave.assert_not_called()
         editor.sig_auto_save.emit.assert_not_called()
         editor._on_save.assert_not_called()
+        editor._get_current_segments.assert_not_called()
 
-    def test_auto_save_runs_only_while_editor_is_actively_editing(self):
+    def test_auto_save_remains_disabled_outside_editing_state(self):
         editor = _AutoSaveEditor()
         editor.sm = SimpleNamespace(is_locked=False, is_dirty=True, state="ST_COMP", start_autosave=Mock())
-        editor._has_unsaved_changes = Mock(side_effect=AssertionError("completed generation must not autosave"))
-        editor._get_current_segments = Mock(side_effect=AssertionError("completed generation must not scan subtitles"))
+        editor._has_unsaved_changes = Mock(side_effect=AssertionError("disabled autosave must not inspect state"))
+        editor._get_current_segments = Mock(side_effect=AssertionError("disabled autosave must not scan subtitles"))
 
         editor._on_auto_save()
 
         editor.sm.start_autosave.assert_not_called()
         editor._has_unsaved_changes.assert_not_called()
 
-    def test_auto_save_is_blocked_until_manual_save_for_manual_confirm_operations(self):
+    def test_auto_save_remains_disabled_for_manual_confirm_operations(self):
         editor = _AutoSaveEditor()
         editor._autosave_requires_manual_save = True
         editor.sm = SimpleNamespace(is_locked=False, is_dirty=True, state="ST_EDITING", start_autosave=Mock())
-        editor._has_unsaved_changes = Mock(side_effect=AssertionError("manual-save-required state must not autosave"))
-        editor._get_current_segments = Mock(side_effect=AssertionError("manual-save-required state must not scan"))
+        editor._has_unsaved_changes = Mock(side_effect=AssertionError("disabled autosave must not inspect manual-save state"))
+        editor._get_current_segments = Mock(side_effect=AssertionError("disabled autosave must not scan"))
 
         editor._on_auto_save()
 
         editor.sm.start_autosave.assert_not_called()
         editor._has_unsaved_changes.assert_not_called()
+
+    def test_auto_save_no_longer_cancels_or_saves_dirty_editor_content(self):
+        editor = _AutoSaveEditor()
+        editor.sm = SimpleNamespace(
+            is_locked=False,
+            is_dirty=True,
+            state="ST_EDITING",
+            start_autosave=Mock(),
+        )
+        editor._autosave_requires_manual_save = False
+        editor._has_unsaved_changes = Mock(return_value=True)
+        editor._cancel_post_generation_roughcut_draft = Mock(return_value=True)
+        editor._get_current_segments = Mock(return_value=[{"start": 0.0, "end": 1.0, "text": "자동저장"}])
+        editor._persist_editor_srts = Mock(return_value=True)
+        editor._auto_save_project = Mock(return_value="/tmp/project.json")
+        editor._remember_saved_segments = Mock()
+        editor._remember_saved_project_file = Mock()
+        editor._mark_save_completed = Mock()
+
+        editor._on_auto_save()
+
+        editor._has_unsaved_changes.assert_not_called()
+        editor._cancel_post_generation_roughcut_draft.assert_not_called()
+        editor.sm.start_autosave.assert_not_called()
+        editor._get_current_segments.assert_not_called()
+        editor._persist_editor_srts.assert_not_called()
+        editor._auto_save_project.assert_not_called()
+        editor._remember_saved_segments.assert_not_called()
+        editor._remember_saved_project_file.assert_not_called()
+        editor._mark_save_completed.assert_not_called()
 
     def test_manual_save_returns_immediately_when_nothing_changed(self):
         editor = _ManualSaveNoOpEditor()
@@ -257,6 +313,19 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual([seg["text"] for seg in saved_segments], ["복구 자막"])
         editor._auto_save_project.assert_called_once()
         editor._mark_save_completed.assert_called_once_with(touch_saved_time=True)
+
+    def test_persist_editor_srts_prefers_opened_source_srt_path_for_direct_srt_mode(self):
+        editor = _SourceSrtSaveEditor()
+
+        with patch("ui.editor.editor_save_manager.save_srt") as save_mock:
+            ok = editor._persist_editor_srts(
+                [{"start": 0.0, "end": 1.0, "text": "열린 SRT"}],
+                autosave=False,
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(save_mock.call_args.args[1], "/tmp/opened.assets/subtitles/final.srt")
+        self.assertEqual(editor._last_saved_srt_outputs, [("/tmp/opened.assets/subtitles/final.srt", "/tmp/media.mp4")])
 
     def test_hook_backend_signals_reconnects_backend_and_batch_slots(self):
         backend = SimpleNamespace(
@@ -320,7 +389,9 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
         prefix_vad = editor._prepare_partial_rerun_state(4.0, 10.0, rerun_cut_boundaries=False)
 
-        self.assertEqual(cleared_ranges, [(4.0, 10.0)])
+        self.assertEqual(cleared_ranges, [])
+        self.assertEqual(editor._partial_rerun_replace_range, (4.0, 10.0))
+        self.assertFalse(editor._partial_rerun_replace_committed)
         self.assertEqual(editor._live_stt_preview_segments, [{"start": 0.0, "end": 1.0, "text": "앞"}])
         self.assertEqual(removed_ranges, [{"start": 4.0, "end": 10.0}])
         self.assertEqual(
@@ -382,7 +453,7 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertFalse(window._auto_processing_active)
         self.assertGreaterEqual(window._restore_normal_cursor.call_count, 1)
 
-    def test_backend_generation_finalizer_marks_complete_and_auto_saves_once(self):
+    def test_backend_generation_finalizer_marks_complete_without_auto_save(self):
         editor = _CompletionEditor()
 
         with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
@@ -391,9 +462,9 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
         editor.sm.complete_ai.assert_called_once()
         editor._flush_pending_segment_queue_now.assert_called_once()
-        editor._on_save.assert_called_once_with(skip_auto_next=True)
+        editor._on_save.assert_not_called()
         self.assertTrue(editor._process_completed_finalized)
-        self.assertTrue(editor._generation_completion_autosave_done)
+        self.assertFalse(getattr(editor, "_generation_completion_autosave_done", False))
 
     def test_stt_progress_complete_does_not_finalize_before_backend_finalizer(self):
         editor = _CompletionEditor()
@@ -428,7 +499,7 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual(editor.sm.update_progress.call_args_list[-1].args[3], "⏳ 최종 자막 반영 중...")
         single_shot.assert_called_once()
 
-    def test_generation_completion_autosave_waits_until_segments_exist(self):
+    def test_generation_completion_autosave_is_disabled(self):
         editor = _CompletionEditor()
         editor._get_current_segments = Mock(return_value=[])
         editor._segment_queue = []
@@ -438,7 +509,8 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
             editor._run_generation_completion_autosave(attempt=0)
 
         editor._on_save.assert_not_called()
-        single_shot.assert_called_once()
+        single_shot.assert_not_called()
+        self.assertFalse(getattr(editor, "_generation_completion_autosave_pending", False))
 
     def test_backend_generation_finalizer_recovers_missing_segments_from_backend_backup(self):
         editor = _CompletionEditor()
@@ -453,7 +525,7 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
         editor.append_segments.assert_called_once()
         editor.sm.complete_ai.assert_called_once()
-        editor._on_save.assert_called_once_with(skip_auto_next=True)
+        editor._on_save.assert_not_called()
         self.assertTrue(editor._process_completed_finalized)
         self.assertEqual(editor._segment_state[0]["text"], "복구된 자막")
 

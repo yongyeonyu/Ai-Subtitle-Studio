@@ -142,15 +142,21 @@ class EditorSegmentsCurrentStateMixin:
         rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
         for idx, seg in enumerate(rows):
             is_last = idx + 1 == len(rows)
+            current_end = seg.get("end")
             if is_last:
-                if hasattr(self, "video_player") and getattr(self.video_player, "total_time", 0) > seg["start"]:
-                    next_start = self.video_player.total_time if seg.get("is_gap") else min(seg["start"] + 3.0, self.video_player.total_time)
+                clip_end = 0.0
+                try:
+                    clip_end = float(getattr(getattr(self, "video_player", None), "total_time", 0.0) or 0.0)
+                except Exception:
+                    clip_end = 0.0
+                if clip_end > float(seg["start"]):
+                    fallback_end = clip_end if seg.get("is_gap") else min(float(seg["start"]) + 3.0, clip_end)
+                    next_start = clip_end if current_end is not None else fallback_end
                 else:
-                    next_start = seg["start"] + 3.0
+                    next_start = float(current_end) if current_end is not None else float(seg["start"]) + 3.0
             else:
                 next_start = rows[idx + 1]["start"]
 
-            current_end = seg.get("end")
             if current_end is not None and seg["start"] < current_end <= next_start + 0.05:
                 seg["end"] = current_end
             else:

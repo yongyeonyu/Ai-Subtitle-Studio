@@ -10,8 +10,10 @@ class _PlayheadEditor(EditorPipelinePlayheadActionsMixin):
         self._segments = [
             {"start": 1.0, "end": 2.0, "text": "A"},
             {"start": 2.0, "end": 4.0, "text": "B"},
+            {"start": 61.0, "end": 63.5, "text": "C"},
         ]
         self.calls = []
+        self.total_end = 90.0
 
     def _get_current_segments(self):
         return list(self._segments)
@@ -20,7 +22,7 @@ class _PlayheadEditor(EditorPipelinePlayheadActionsMixin):
         self.calls.append((start_sec, end_sec, is_single))
 
     def _partial_rerun_total_end(self):
-        return 9.0
+        return self.total_end
 
 
 class _OwnerBridge(EditorMulticlipOwnerBridgeMixin):
@@ -47,12 +49,28 @@ class EditorPipelinePlayheadActionsTests(unittest.TestCase):
 
         editor._re_recognize_from(2.5)
 
-        self.assertEqual(editor.calls, [(2.0, 9.0, False)])
+        self.assertEqual(editor.calls, [(2.0, 90.0, False)])
+
+    def test_re_recognize_next_minute_uses_segment_start_and_safe_end(self):
+        editor = _PlayheadEditor()
+
+        editor._re_recognize_next_minute(2.5)
+
+        self.assertEqual(editor.calls, [(2.0, 63.5, False)])
+
+    def test_re_recognize_next_minute_clamps_to_media_end(self):
+        editor = _PlayheadEditor()
+        editor.total_end = 50.0
+
+        editor._re_recognize_next_minute(2.5)
+
+        self.assertEqual(editor.calls, [(2.0, 50.0, False)])
 
     def test_show_playhead_menu_routes_cut_boundary_and_partial_actions(self):
         editor = _PlayheadEditor()
         editor._set_cut_boundary_level_from_menu = Mock()
         editor._re_recognize_segment = Mock()
+        editor._re_recognize_next_minute = Mock()
         editor._re_recognize_from = Mock()
 
         with patch("ui.editor.editor_pipeline_playhead_actions.show_context_menu", return_value="cut_boundary:low"):
@@ -62,6 +80,10 @@ class EditorPipelinePlayheadActionsTests(unittest.TestCase):
         with patch("ui.editor.editor_pipeline_playhead_actions.show_context_menu", return_value="re_segment"):
             editor._show_playhead_menu(object(), 2.5)
         editor._re_recognize_segment.assert_called_once_with(2.5)
+
+        with patch("ui.editor.editor_pipeline_playhead_actions.show_context_menu", return_value="re_next_minute"):
+            editor._show_playhead_menu(object(), 2.5)
+        editor._re_recognize_next_minute.assert_called_once_with(2.5)
 
         with patch("ui.editor.editor_pipeline_playhead_actions.show_context_menu", return_value="re_from"):
             editor._show_playhead_menu(object(), 2.5)

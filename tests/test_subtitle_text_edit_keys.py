@@ -77,8 +77,10 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
         edit = SubtitleTextEdit()
         try:
             toggle_play = Mock()
+            pause_playback = Mock()
             edit._parent_widget = SimpleNamespace(
                 _toggle_video_play=toggle_play,
+                _pause_playback_for_keyboard_edit=pause_playback,
                 editor_popup=SimpleNamespace(is_visible=lambda: False),
             )
 
@@ -90,7 +92,32 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.keyPressEvent(event)
 
             toggle_play.assert_called_once_with()
+            pause_playback.assert_not_called()
             self.assertTrue(event.isAccepted())
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_typing_text_pauses_video_play_from_text_editor(self):
+        edit = SubtitleTextEdit()
+        try:
+            pause_playback = Mock()
+            edit._parent_widget = SimpleNamespace(
+                _pause_playback_for_keyboard_edit=pause_playback,
+                editor_popup=SimpleNamespace(is_visible=lambda: False),
+            )
+
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_A,
+                Qt.KeyboardModifier.NoModifier,
+                "a",
+            )
+            edit.keyPressEvent(event)
+
+            pause_playback.assert_called_once_with()
+            self.assertEqual(edit.toPlainText(), "a")
         finally:
             edit.close()
             edit.deleteLater()

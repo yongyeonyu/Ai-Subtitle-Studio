@@ -2,9 +2,10 @@
 Native-leaning helpers for project/SRT editor open flows.
 
 These helpers centralize the fast editor hydration path used when opening a
-project or opening an SRT that is linked to a project. The actual subtitle
-document load still goes through the editor's shared canvas loader, which in
-turn already uses the Swift/native preparation path when available.
+project, opening an SRT that is linked to a project, or opening a subtitle-only
+SRT. The actual subtitle document load still goes through the editor's shared
+canvas loader, which in turn already uses the Swift/native preparation path
+when available.
 """
 
 from __future__ import annotations
@@ -413,6 +414,14 @@ def schedule_editor_fit_to_view(editor, delay_ms: int = 120) -> None:
     if not hasattr(editor, "timeline"):
         return
     timeline = editor.timeline
+    try:
+        preferred_seconds = (
+            timeline.preferred_edit_window_seconds()
+            if hasattr(timeline, "preferred_edit_window_seconds")
+            else float(getattr(timeline, "_preferred_edit_window_seconds", 10.0) or 10.0)
+        )
+    except Exception:
+        preferred_seconds = 10.0
     first_delay = max(80, int(delay_ms * 0.66))
     delays = (first_delay, max(delay_ms, first_delay + 60), max(delay_ms + 180, 340))
     try:
@@ -422,12 +431,12 @@ def schedule_editor_fit_to_view(editor, delay_ms: int = 120) -> None:
         if hasattr(timeline, "schedule_initial_open_view"):
             timeline.schedule_initial_open_view(
                 delays=delays,
-                seconds=10.0,
+                seconds=preferred_seconds,
                 start_sec=0.0,
             )
         elif hasattr(timeline, "schedule_time_window_seconds"):
             timeline.schedule_time_window_seconds(
-                10.0,
+                preferred_seconds,
                 start_sec=0.0,
                 delays=delays,
             )
@@ -536,7 +545,124 @@ def _apply_loaded_editor_segments(
     editor.append_segments(segments)
 
 
-def open_project_segments_in_editor(owner, filepath: str, project: dict, media: list[str], segments: list[dict]) -> bool:
+def _clear_project_only_editor_state(owner, editor) -> None:
+    """Drop project-only aux rows while preserving normal editor controls."""
+    timeline = getattr(editor, "timeline", None)
+    canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+    global_canvas = getattr(timeline, "global_canvas", None) if timeline is not None else None
+    for obj in (owner, editor, timeline, canvas, global_canvas):
+        if obj is None:
+            continue
+        for attr in (
+            "_middle_segments",
+            "middle_segments",
+            "_roughcut_segments",
+            "roughcut_segments",
+            "_chapter_segments",
+            "chapter_segments",
+            "_roughcut_draft_segments",
+            "_preliminary_middle_segments",
+            "preliminary_middle_segments",
+        ):
+            try:
+                setattr(obj, attr, [])
+            except Exception:
+                pass
+        for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
+            try:
+                setattr(obj, attr, None)
+            except Exception:
+                pass
+
+
+def open_subtitle_segments_in_editor(
+    owner,
+    srt_path: str,
+    media_path: str,
+    segments: list[dict],
+) -> bool:
+    """Open a subtitle-only SRT through the same editor shell as project open."""
+    target_media = str(media_path or srt_path or "").strip()
+    if not target_media:
+        return False
+
+    owner._on_save_cb = None
+    owner._on_start_cb = None
+    owner._on_prev_cb = None
+    owner._on_exit_cb = None
+    owner._init_editor(target_media, is_batch=False)
+
+    editor = getattr(owner, "_editor_widget", None)
+    if editor is None:
+        return False
+
+    try:
+        editor._source_srt_path = str(srt_path or "")
+        editor._last_saved_srt_outputs = [(str(srt_path or ""), target_media)] if srt_path else []
+        editor._project_clips = None
+        editor._direct_srt_edit_mode = True
+        editor._linked_project_path_for_srt = ""
+    except Exception:
+        pass
+
+    timeline = getattr(editor, "timeline", None)
+    if timeline is not None:
+        try:
+            reset_single = getattr(timeline, "_reset_single_media_context", None)
+            if callable(reset_single):
+                reset_single(clear_duration=True)
+            else:
+                canvas = getattr(timeline, "canvas", None)
+                global_canvas = getattr(timeline, "global_canvas", None)
+                if canvas is not None:
+                    canvas.total_duration = 0.0
+                    canvas._segments_content_duration = 0.0
+                if global_canvas is not None:
+                    global_canvas.total_duration = 0.0
+        except Exception:
+            pass
+        if hasattr(timeline, "set_auto_gap_segments_enabled"):
+            timeline.set_auto_gap_segments_enabled(True)
+
+    try:
+        editor._live_stt_preview_segments = []
+    except Exception:
+        pass
+    _clear_project_only_editor_state(owner, editor)
+
+    _apply_loaded_editor_segments(
+        editor,
+        segments,
+        auto_gap_segments_enabled=True,
+        boundary_times=list(getattr(owner, "_project_boundary_times", []) or []),
+        provisional_boundaries=[],
+        voice_activity_segments=[],
+        stt_preview_segments=[],
+        stt_preview_subtitle_drafts=False,
+        mark_dirty=False,
+    )
+    if hasattr(editor, "_schedule_timeline"):
+        editor._schedule_timeline()
+
+    runtime_refresh = getattr(owner, "_refresh_opened_editor_runtime", None)
+    if callable(runtime_refresh):
+        runtime_refresh(editor)
+    schedule_runtime_refresh = getattr(owner, "_schedule_opened_editor_runtime_refresh", None)
+    if callable(schedule_runtime_refresh):
+        schedule_runtime_refresh(editor)
+    return True
+
+
+def open_project_segments_in_editor(
+    owner,
+    filepath: str,
+    project: dict,
+    media: list[str],
+    segments: list[dict],
+    *,
+    source_srt_path: str | None = None,
+    direct_srt_edit_mode: bool = False,
+) -> bool:
     if not media:
         return False
 
@@ -591,7 +717,20 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
     editor = getattr(owner, "_editor_widget", None)
     if editor is None:
         return False
+    source_srt_path = str(source_srt_path or "").strip()
     try:
+        if source_srt_path:
+            try:
+                editor._source_srt_path = source_srt_path
+                editor._last_saved_srt_outputs = [(source_srt_path, media[0])]
+                editor._linked_project_path_for_srt = filepath
+            except Exception:
+                pass
+        if direct_srt_edit_mode:
+            try:
+                editor._direct_srt_edit_mode = True
+            except Exception:
+                pass
         primary_fps = float(project_primary_fps(project) or 30.0)
         hydrate_project_roughcut_payload(project, primary_fps=primary_fps)
         analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
@@ -648,12 +787,12 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         canvas = getattr(timeline, "canvas", None) if timeline is not None else None
         global_canvas = getattr(timeline, "global_canvas", None) if timeline is not None else None
         if timeline is not None and hasattr(timeline, "set_auto_gap_segments_enabled"):
-            timeline.set_auto_gap_segments_enabled(False)
+            timeline.set_auto_gap_segments_enabled(True)
 
         _apply_loaded_editor_segments(
             editor,
             segments,
-            auto_gap_segments_enabled=False,
+            auto_gap_segments_enabled=True,
             boundary_times=owner._project_boundary_times or [],
             provisional_boundaries=provisional_boundaries,
             voice_activity_segments=voice_activity,
@@ -689,11 +828,6 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
                     pass
         if len(media) > 1 and hasattr(editor, "_apply_multiclip_state_from_owner"):
             editor._apply_multiclip_state_from_owner()
-        if hasattr(editor, "_set_process_completed"):
-            try:
-                editor._set_process_completed(suppress_post_generation_tasks=True)
-            except TypeError:
-                editor._set_process_completed()
         if hasattr(editor, "_schedule_timeline"):
             editor._schedule_timeline()
         runtime_refresh = getattr(owner, "_refresh_opened_editor_runtime", None)
@@ -738,6 +872,7 @@ __all__ = [
     "schedule_native_open_editor_media",
     "normalized_segment_text",
     "open_project_segments_in_editor",
+    "open_subtitle_segments_in_editor",
     "project_matches_opened_srt",
     "project_sidecar_candidates_for_srt",
     "refresh_opened_editor_runtime",

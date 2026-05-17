@@ -16,6 +16,41 @@ from ui.queue.queue_dispatch import dispatch_queue_status, find_queue_row_for_me
 
 
 class EditorRoughcutDraftMixin:
+    def _cancel_post_generation_roughcut_draft(self, *, reason: str = "") -> bool:
+        timer = getattr(self, "_roughcut_draft_timer", None)
+        try:
+            timer_active = bool(timer is not None and timer.isActive())
+        except Exception:
+            timer_active = False
+        pending = bool(getattr(self, "_roughcut_draft_pending", False))
+        status = str(getattr(self, "_roughcut_draft_status", "") or "")
+        thread = getattr(self, "_roughcut_draft_thread", None)
+        try:
+            thread_alive = bool(thread is not None and thread.is_alive())
+        except Exception:
+            thread_alive = False
+        if thread_alive:
+            return False
+        if not (timer_active or pending or status == "queued"):
+            return False
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        self._roughcut_draft_pending = False
+        self._roughcut_draft_generation = int(getattr(self, "_roughcut_draft_generation", 0) or 0) + 1
+        self._set_roughcut_draft_status("idle")
+        mark_done = getattr(self, "_mark_roughcut_queue_done", None)
+        if callable(mark_done):
+            try:
+                mark_done()
+            except Exception:
+                pass
+        detail = f": {reason}" if str(reason or "").strip() else ""
+        get_logger().log(f"⏹️ 러프컷 자동 실행 취소{detail}")
+        return True
+
     def _cut_boundary_runtime_settled_for_roughcut(self) -> bool:
         if bool(getattr(self, "_auto_cut_boundary_scan_active", False)):
             return False
@@ -294,6 +329,9 @@ class EditorRoughcutDraftMixin:
             settings.update(load_settings())
         except Exception:
             pass
+        override = getattr(self, "_roughcut_draft_settings_override", None)
+        if isinstance(override, dict):
+            settings.update(override)
         return settings
 
     def _roughcut_draft_runtime_enabled(self) -> bool:
@@ -510,32 +548,50 @@ class EditorRoughcutDraftMixin:
             current_row_hint=row,
         )
 
-    def _schedule_post_generation_roughcut_draft(self, force: bool = False):
-        if force and not self._roughcut_draft_post_generation_autorun_enabled():
+    def _schedule_post_generation_roughcut_draft(
+        self,
+        force: bool = False,
+        *,
+        require_autorun: bool = True,
+        settings_override: dict | None = None,
+    ):
+        if isinstance(settings_override, dict):
+            self._roughcut_draft_settings_override = dict(settings_override)
+        if force and require_autorun and not self._roughcut_draft_post_generation_autorun_enabled():
             self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("disabled")
+            if isinstance(settings_override, dict):
+                self._roughcut_draft_settings_override = None
             get_logger().log("⏭️ 러프컷 자동 실행 생략: 생성 완료 후 자동 실행 설정이 꺼져 있습니다.")
             return
         if not self._roughcut_draft_runtime_enabled():
             self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("disabled")
+            if isinstance(settings_override, dict):
+                self._roughcut_draft_settings_override = None
             get_logger().log("⏭️ 러프컷 자동 실행 생략: 컷 경계/러프컷 런타임이 비활성화되어 있습니다.")
             return
         timer = getattr(self, "_roughcut_draft_timer", None)
         if timer is None:
             self._roughcut_draft_pending = False
+            if isinstance(settings_override, dict):
+                self._roughcut_draft_settings_override = None
             return
         if force or not timer.isActive():
             self._roughcut_draft_pending = True
             self._set_roughcut_draft_status("queued")
             self._mark_roughcut_queue_active("⏳ [러프컷 LLM] 후처리 대기")
-            get_logger().log("⏳ 러프컷 LLM 후처리 예약: 자막 생성 완료 직후 중분류 초안을 이어서 만듭니다.")
+            if require_autorun:
+                get_logger().log("⏳ 러프컷 LLM 후처리 예약: 자막 생성 완료 직후 중분류 초안을 이어서 만듭니다.")
+            else:
+                get_logger().log("⏳ 러프컷 LLM 후처리 예약: 부분 재인식 완료 후 중분류 초안을 갱신합니다.")
             timer.start(120 if force else 300)
 
     def _run_post_generation_roughcut_draft(self):
         if not self._roughcut_draft_runtime_enabled():
             self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("disabled")
+            self._roughcut_draft_settings_override = None
             return
         if not self._cut_boundary_runtime_settled_for_roughcut():
             timer = getattr(self, "_roughcut_draft_timer", None)
@@ -564,6 +620,7 @@ class EditorRoughcutDraftMixin:
             self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("idle")
             self._mark_roughcut_queue_done()
+            self._roughcut_draft_settings_override = None
             return
         self._roughcut_draft_pending = True
         self._set_roughcut_draft_status("running")
@@ -764,6 +821,7 @@ class EditorRoughcutDraftMixin:
             self._set_roughcut_draft_status("failed")
             self._roughcut_draft_pending = False
             self._roughcut_draft_thread = None
+            self._roughcut_draft_settings_override = None
             self._mark_roughcut_queue_done(note="러프컷 미적용")
             self._schedule_post_roughcut_model_release()
             return
@@ -830,6 +888,7 @@ class EditorRoughcutDraftMixin:
         if not project_path:
             self._set_roughcut_draft_status("failed")
             self._mark_roughcut_queue_done(note="러프컷 미적용")
+            self._roughcut_draft_settings_override = None
             self._schedule_post_roughcut_model_release()
             return
         try:
@@ -901,5 +960,6 @@ class EditorRoughcutDraftMixin:
             except Exception:
                 pass
             self._schedule_post_roughcut_model_release()
+            self._roughcut_draft_settings_override = None
             if refinement_source in {"llm_refined", "local_after_generation_fallback"}:
                 self._roughcut_draft_thread = None

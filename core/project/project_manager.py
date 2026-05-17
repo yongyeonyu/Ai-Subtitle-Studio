@@ -987,6 +987,7 @@ def _externalize_project_payload(
     *,
     segments: list[dict] | None,
     user_settings: dict | None = None,
+    rewrite_stt_reference_tracks: bool = True,
 ) -> dict:
     if not _external_text_storage_enabled(project, user_settings):
         return project
@@ -995,7 +996,11 @@ def _externalize_project_payload(
     has_subtitles = _segments_have_text(rows)
     has_stt = _track_map_has_text(stt_tracks)
     recovered_subtitles = load_external_subtitle_segments(project) if not has_subtitles else []
-    recovered_stt_tracks = load_external_stt_tracks(project) if not has_stt else {}
+    recovered_stt_tracks = (
+        load_external_stt_tracks(project)
+        if not has_stt and rewrite_stt_reference_tracks
+        else {}
+    )
     recovered_has_subtitles = _segments_have_text(recovered_subtitles)
     recovered_has_stt = _track_map_has_text(recovered_stt_tracks)
     final_segments = recovered_subtitles if recovered_has_subtitles else rows
@@ -1025,6 +1030,7 @@ def _externalize_project_payload(
         project,
         final_segments=final_segments,
         stt_tracks=final_stt_tracks,
+        rewrite_stt_reference_tracks=bool(rewrite_stt_reference_tracks),
     )
 
 
@@ -1247,6 +1253,7 @@ def save_project(
     provisional_cut_boundaries: Optional[List[dict]] = None,
     recovery_state: Optional[dict] = None,
     persist_analysis_artifacts: bool = True,
+    rewrite_stt_reference_tracks: bool = True,
     preliminary_middle_segments: Optional[List[dict]] = None,
 ):
     """기존 프로젝트 JSON 업데이트"""
@@ -1505,6 +1512,7 @@ def save_project(
         project,
         segments=project_segment_rows,
         user_settings=effective_user_settings,
+        rewrite_stt_reference_tracks=bool(rewrite_stt_reference_tracks),
     )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)

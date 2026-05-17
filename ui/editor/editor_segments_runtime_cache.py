@@ -76,6 +76,12 @@ class EditorSegmentsRuntimeCacheMixin:
 
     def _note_editor_foreground_activity(self):
         self._last_editor_foreground_activity_at = time.monotonic()
+        cancel_roughcut = getattr(self, "_cancel_post_generation_roughcut_draft", None)
+        if callable(cancel_roughcut):
+            try:
+                cancel_roughcut(reason="편집 시작")
+            except Exception:
+                pass
         try:
             main_w = self.window()
             reset_idle = getattr(main_w, "_reset_post_completion_idle_timer", None)

@@ -22,6 +22,7 @@ from ui.timeline.timeline_constants import (
     _build_gaps,
 )
 from ui.editor.ux.timeline_input import TimelineInputMixin
+from ui.editor.ux.timeline_playhead_mode import PLAYHEAD_MODE_FRAME_STEP
 from ui.editor.ux.timeline_subtitle_segment_editing import TimelineInlineEditMixin
 from ui.timeline.timeline_paint import TimelinePaintMixin
 from ui.timeline.segment_store import TimelineSegmentStore
@@ -75,7 +76,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         configure_lightweight_paint(self, opaque=True)
         configure_opengl_widget(self, "timeline")
         self.render_backend = gpu_backend_name("timeline")
-        self.focus_mode = "segment"
+        self.focus_mode = PLAYHEAD_MODE_FRAME_STEP
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self._ime_preedit = ""
         self.sig_speech_result.connect(self._on_speech_result)

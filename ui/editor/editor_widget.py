@@ -138,7 +138,6 @@ class EditorWidget(
 
         self._auto_save_timer = QTimer(self)
         self._auto_save_timer.timeout.connect(self._on_auto_save)
-        self._auto_save_timer.start(self._auto_save_interval_ms())
 
         self._status_anim_idx = 0
         self._status_frames = {
@@ -490,15 +489,25 @@ class EditorWidget(
                 normalized_delays = normalized_delays + (final_delay,)
         try:
             if timeline is not None and hasattr(timeline, "schedule_initial_open_view"):
+                preferred_seconds = (
+                    timeline.preferred_edit_window_seconds()
+                    if hasattr(timeline, "preferred_edit_window_seconds")
+                    else float(getattr(timeline, "_preferred_edit_window_seconds", 10.0) or 10.0)
+                )
                 timeline.schedule_initial_open_view(
                     delays=normalized_delays,
                     mode=mode,
-                    seconds=10.0,
+                    seconds=preferred_seconds,
                     start_sec=0.0,
                 )
             elif timeline is not None and hasattr(timeline, "schedule_time_window_seconds"):
+                preferred_seconds = (
+                    timeline.preferred_edit_window_seconds()
+                    if hasattr(timeline, "preferred_edit_window_seconds")
+                    else float(getattr(timeline, "_preferred_edit_window_seconds", 10.0) or 10.0)
+                )
                 timeline.schedule_time_window_seconds(
-                    10.0,
+                    preferred_seconds,
                     start_sec=0.0,
                     delays=normalized_delays,
                 )
@@ -596,11 +605,17 @@ class EditorWidget(
         self.video_player.setStyleSheet("background: #000000; border: none; border-radius: 0px;")
         self.video_frame.add_content(self.video_player)
         for widget in (
+            self.video_frame,
             self.video_player,
             getattr(self.video_player, "video_container", None),
             getattr(self.video_player, "video_stack", None),
             getattr(self.video_player, "video_widget", None),
             getattr(self.video_player, "thumb_label", None),
+            getattr(self.video_player, "_control_bar_widget", None),
+            getattr(self.video_player, "time_label", None),
+            getattr(self.video_player, "frame_count_label", None),
+            getattr(self.video_player, "info_label", None),
+            getattr(self.video_player, "source_name_label", None),
         ):
             try:
                 if widget is not None:
@@ -629,10 +644,26 @@ class EditorWidget(
         if hasattr(self.timeline, 'canvas'):
             self.timeline.canvas.show_waveform = True
             self.timeline.canvas.update()
+        timeline_scroll = getattr(self.timeline, "scroll", None)
+        timeline_scroll_viewport = None
+        timeline_scroll_bar = None
+        try:
+            if timeline_scroll is not None:
+                timeline_scroll_viewport = timeline_scroll.viewport()
+                timeline_scroll_bar = timeline_scroll.horizontalScrollBar()
+        except Exception:
+            timeline_scroll_viewport = None
+            timeline_scroll_bar = None
         for widget in (
             self.timeline,
             getattr(self.timeline, "canvas", None),
             getattr(self.timeline, "global_canvas", None),
+            timeline_scroll,
+            timeline_scroll_viewport,
+            timeline_scroll_bar,
+            getattr(self.timeline, "lock_chk", None),
+            getattr(self.timeline, "magnet_btn", None),
+            getattr(self.timeline, "repeat_chk", None),
         ):
             try:
                 if widget is not None:
@@ -763,6 +794,22 @@ class EditorWidget(
         if self._widget_is_inside_editor_panel(old) or self._widget_is_inside_editor_panel(now):
             QTimer.singleShot(0, self._sync_editor_focus_border)
 
+    def _pause_active_video_playback(self) -> None:
+        if not self._is_video_playback_active():
+            return
+        pause_video = getattr(getattr(self, "video_player", None), "pause_video", None)
+        if callable(pause_video):
+            try:
+                pause_video()
+            except Exception:
+                pass
+
+    def _pause_playback_for_mouse_press(self) -> None:
+        self._pause_active_video_playback()
+
+    def _pause_playback_for_keyboard_edit(self) -> None:
+        self._pause_active_video_playback()
+
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.MouseButtonPress and getattr(self, "_scan_cut_state", None):
             video_player = getattr(self, "video_player", None)
@@ -775,6 +822,8 @@ class EditorWidget(
                 if callable(cancel_scan):
                     cancel_scan("mouse-click-stop")
                     return True
+        if event.type() == QEvent.Type.MouseButtonPress:
+            self._pause_playback_for_mouse_press()
         if obj is getattr(self, "_editor_wrap", None) and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._sync_editor_focus_border)
         if obj is getattr(self, "_editor_wrap", None) and event.type() == QEvent.Type.Wheel:

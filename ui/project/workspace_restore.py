@@ -81,6 +81,8 @@ class WorkspaceMixin:
                 segments=segments,
                 user_settings=dict(getattr(editor, "settings", {}) or {}),
                 workspace=workspace,
+                persist_analysis_artifacts=False,
+                rewrite_stt_reference_tracks=False,
             )
         except Exception as e:
             get_logger().log(f"Auto project save failed: {e}")
@@ -117,9 +119,14 @@ class WorkspaceMixin:
                             editor.timeline.set_playhead(playhead)
 
                     if hasattr(editor, "timeline"):
+                        preferred_seconds = (
+                            editor.timeline.preferred_edit_window_seconds()
+                            if hasattr(editor.timeline, "preferred_edit_window_seconds")
+                            else float(getattr(editor.timeline, "_preferred_edit_window_seconds", 10.0) or 10.0)
+                        )
                         if hasattr(editor.timeline, "show_time_window_seconds"):
                             editor.timeline.show_time_window_seconds(
-                                15.0,
+                                preferred_seconds,
                                 center_sec=playhead if playhead > 0 else None,
                             )
                         elif hasattr(editor.timeline, "fit_to_view"):
@@ -145,7 +152,12 @@ class WorkspaceMixin:
     def _fit_timeline_on_start(self, editor):
         timeline = getattr(editor, "timeline", None)
         if timeline is not None and hasattr(timeline, "schedule_time_window_seconds"):
-            timeline.schedule_time_window_seconds(15.0, delays=(500,))
+            preferred_seconds = (
+                timeline.preferred_edit_window_seconds()
+                if hasattr(timeline, "preferred_edit_window_seconds")
+                else float(getattr(timeline, "_preferred_edit_window_seconds", 10.0) or 10.0)
+            )
+            timeline.schedule_time_window_seconds(preferred_seconds, delays=(500,))
         elif timeline is not None and hasattr(timeline, "fit_to_view"):
             QTimer.singleShot(500, timeline.fit_to_view)
 

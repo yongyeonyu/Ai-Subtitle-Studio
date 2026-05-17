@@ -15,6 +15,11 @@ from core.coerce import safe_float as _as_float
 from core.runtime import config
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.editor_helpers import find_segment_at
+from ui.editor.ux.timeline_playhead_mode import (
+    dispatch_playhead_arrow_step,
+    set_playhead_focus_mode_from_key,
+    set_playhead_focus_mode_from_y,
+)
 from ui.responsive_profile import responsive_profile_for_size
 from ui.editor.ux.timeline_canvas_editing import apply_timing_drag
 from ui.style import COLORS
@@ -487,7 +492,7 @@ class TimelineInputMixin:
             return
 
         self._arrow_key_hold_repeat_active = True
-        self._dispatch_frame_step(direction * self._arrow_key_hold_speed_multiplier(elapsed))
+        dispatch_playhead_arrow_step(self, direction * self._arrow_key_hold_speed_multiplier(elapsed))
 
     def keyPressEvent(self, ev):
         if bool(getattr(self, "_editor_processing_input_locked", False)):
@@ -515,15 +520,16 @@ class TimelineInputMixin:
                 signal.emit()
             ev.accept()
             return
-        if ev.key() == Qt.Key.Key_Up: self.focus_mode = "waveform"; self.update(); ev.accept(); return
-        elif ev.key() == Qt.Key.Key_Down: self.focus_mode = "segment"; self.update(); ev.accept(); return
+        if set_playhead_focus_mode_from_key(self, ev.key()):
+            ev.accept()
+            return
 
         if ev.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
             direction = -1 if ev.key() == Qt.Key.Key_Left else 1
             if ev.isAutoRepeat():
                 ev.accept()
                 return
-            self._dispatch_frame_step(direction)
+            dispatch_playhead_arrow_step(self, direction)
             self._begin_arrow_key_hold(direction)
             ev.accept()
             return
@@ -1207,9 +1213,9 @@ class TimelineInputMixin:
             self,
             gpos,
             [
-                {"id": "delete", "label": "삭제", "enabled": True, "accent": "#FF453A"},
-                {"id": "to", "label": "여기까지 생성", "enabled": enabled, "accent": "#34C759"},
-                {"id": "from", "label": "여기부터 생성", "enabled": enabled, "accent": "#5AC8FA"},
+                {"id": "delete", "label": "자막 세그먼트 삭제", "enabled": True, "accent": "#FF453A"},
+                {"id": "to", "label": "여기까지 자막 생성", "enabled": enabled, "accent": "#34C759"},
+                {"id": "from", "label": "여기부터 자막 생성", "enabled": enabled, "accent": "#5AC8FA"},
             ],
         )
         if chosen == "delete":
@@ -1342,7 +1348,7 @@ class TimelineInputMixin:
 
         if ev.button() != Qt.MouseButton.LeftButton: return
 
-        self.focus_mode = "waveform" if y <= SEG_TOP else "segment"; self.update()
+        set_playhead_focus_mode_from_y(self, y)
 
         diamond_margin = 7 if abs(int(y) - int(DIAMOND_Y)) <= 10 else 5
         diamond_idx = self._diamond_index_at(x, y, margin=diamond_margin)

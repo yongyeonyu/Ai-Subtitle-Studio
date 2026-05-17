@@ -576,9 +576,9 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertTrue(opened)
         self.assertEqual(window.init_args, ("/tmp/sample.mp4", False))
         self.assertEqual(editor.reload_called_with, segments)
-        self.assertFalse(editor.timeline.auto_gap_segments_enabled)
-        self.assertTrue(editor.completed)
-        self.assertEqual(editor.completed_kwargs, {"suppress_post_generation_tasks": True})
+        self.assertTrue(editor.timeline.auto_gap_segments_enabled)
+        self.assertFalse(editor.completed)
+        self.assertIsNone(editor.completed_kwargs)
         self.assertTrue(editor.scheduled)
         self.assertGreaterEqual(window.runtime_schedule_count, 1)
         self.assertIsNotNone(editor.video_player.provider)
@@ -641,6 +641,60 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(getattr(editor, "_middle_segments")[0]["major_id"], "A")
         self.assertAlmostEqual(getattr(editor, "_middle_segments")[0]["start"], 120.0 / 59.94, places=6)
         self.assertEqual(getattr(editor, "_roughcut_result")["chapters"][0]["chapter_id"], "A_0001")
+
+    def test_project_open_helper_can_restore_linked_srt_mode_with_same_project_runtime(self):
+        editor = _ProjectOpenEditor()
+        window = _ProjectOpenWindow(editor)
+        segments = [{"start": 0.0, "end": 2.0, "text": "SRT 텍스트", "speaker": "00"}]
+        project = {
+            "project_name": "linked-srt-runtime",
+            "timeline": {"tracks": [{"clips": [{"source_path": "/tmp/sample.mp4"}]}]},
+            "editor_state": {},
+            "analysis": {},
+        }
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            opened = window._open_project_segments_in_editor(
+                "/tmp/sample_project.aissproj",
+                project,
+                ["/tmp/sample.mp4"],
+                segments,
+                source_srt_path="/tmp/sample.assets/subtitles/final.srt",
+                direct_srt_edit_mode=True,
+            )
+
+        self.assertTrue(opened)
+        self.assertEqual(getattr(editor, "_source_srt_path"), "/tmp/sample.assets/subtitles/final.srt")
+        self.assertEqual(getattr(editor, "_last_saved_srt_outputs"), [("/tmp/sample.assets/subtitles/final.srt", "/tmp/sample.mp4")])
+        self.assertTrue(getattr(editor, "_direct_srt_edit_mode"))
+        self.assertEqual(getattr(editor, "_linked_project_path_for_srt"), "/tmp/sample_project.aissproj")
+
+    def test_subtitle_only_open_helper_uses_same_editor_bootstrap_without_project_state(self):
+        editor = _ProjectOpenEditor()
+        window = _ProjectOpenWindow(editor)
+        window._current_project_path = None
+        window._middle_segments = [{"title": "stale"}]
+        segments = [{"start": 0.0, "end": 2.0, "text": "외부 SRT", "speaker": "00"}]
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            opened = project_open_native_module.open_subtitle_segments_in_editor(
+                window,
+                "/tmp/external.srt",
+                "/tmp/sample.mp4",
+                segments,
+            )
+
+        self.assertTrue(opened)
+        self.assertEqual(window.init_args, ("/tmp/sample.mp4", False))
+        self.assertIsNone(getattr(window, "_current_project_path", None))
+        self.assertEqual(getattr(editor, "_source_srt_path"), "/tmp/external.srt")
+        self.assertEqual(getattr(editor, "_last_saved_srt_outputs"), [("/tmp/external.srt", "/tmp/sample.mp4")])
+        self.assertTrue(getattr(editor, "_direct_srt_edit_mode"))
+        self.assertEqual(getattr(editor, "_linked_project_path_for_srt"), "")
+        self.assertEqual([seg["text"] for seg in editor._cached_segs], ["외부 SRT"])
+        self.assertTrue(editor.timeline.auto_gap_segments_enabled)
+        self.assertEqual(getattr(window, "_middle_segments"), [])
+        self.assertEqual(getattr(editor, "_roughcut_result"), None)
 
     def test_apply_loaded_canvas_state_uses_segment_frame_rate_from_project_rows(self):
         editor = _CanvasStateEditor()

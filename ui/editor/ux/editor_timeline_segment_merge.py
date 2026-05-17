@@ -135,6 +135,20 @@ class EditorTimelineSegmentMergeMixin:
             if isinstance(ud, SubtitleBlockData):
                 ud.end_sec = resolved_end
 
+    def _set_block_group_start(self, doc, line_num: int, start_sec: float, new_start_sec: float) -> None:
+        snap_to_frame = getattr(self, "_snap_to_frame", None)
+        resolved_start = float(new_start_sec)
+        if callable(snap_to_frame):
+            try:
+                resolved_start = float(snap_to_frame(resolved_start))
+            except Exception:
+                resolved_start = float(new_start_sec)
+        for idx in get_sub_block_indices(doc, int(line_num), float(start_sec)):
+            block = doc.findBlockByNumber(int(idx))
+            ud = block.userData() if block.isValid() else None
+            if isinstance(ud, SubtitleBlockData):
+                ud.start_sec = resolved_start
+
     def _delete_block_group(self, doc, line_num: int, start_sec: float) -> None:
         for idx in reversed(get_sub_block_indices(doc, int(line_num), float(start_sec))):
             block = doc.findBlockByNumber(int(idx))
@@ -185,6 +199,38 @@ class EditorTimelineSegmentMergeMixin:
         if hasattr(self, "_finalize_edit"):
             self._finalize_edit()
 
+    def _diamond_delete_keep_line(self, left_line: int, right_line: int) -> int:
+        """Keep the segment being dragged; default diamond clicks keep the left side."""
+        valid_lines = {int(left_line), int(right_line)}
+        explicit = getattr(self, "_diamond_delete_keep_line_override", None)
+        if explicit is not None:
+            try:
+                explicit_line = int(explicit)
+                if explicit_line in valid_lines:
+                    return explicit_line
+            except Exception:
+                pass
+
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        drag_seg = getattr(canvas, "_drag_seg", None)
+        drag_edge = str(getattr(canvas, "_drag_edge", "") or "")
+        drag_pair = tuple(getattr(canvas, "_drag_merge_pair", ()) or ())
+        if (
+            isinstance(drag_seg, dict)
+            and drag_edge in {"square_left", "square_right"}
+            and len(drag_pair) == 2
+        ):
+            try:
+                pair = (int(drag_pair[0]), int(drag_pair[1]))
+                drag_line = int(drag_seg.get("line", -1))
+            except Exception:
+                pair = ()
+                drag_line = -1
+            if pair == (int(left_line), int(right_line)) and drag_line in valid_lines:
+                return drag_line
+        return int(left_line)
+
     def _on_diamond_merge(self, left_line: int, right_line: int) -> None:
         ctx = self._resolve_diamond_merge_context(int(left_line), int(right_line))
         if ctx is None:
@@ -220,20 +266,34 @@ class EditorTimelineSegmentMergeMixin:
         if ctx is None:
             return
 
+        keep_line = self._diamond_delete_keep_line(int(left_line), int(right_line))
         self._undo_mgr.push_immediate()
         cur = QTextCursor(ctx["doc"])
         cur.beginEditBlock()
-        self._set_block_group_end(
-            ctx["doc"],
-            int(left_line),
-            float(ctx["left_start_sec"]),
-            float(ctx["right_end_sec"]),
-        )
-        self._delete_block_group(
-            ctx["doc"],
-            int(right_line),
-            float(ctx["right_start_sec"]),
-        )
+        if keep_line == int(right_line):
+            self._set_block_group_start(
+                ctx["doc"],
+                int(right_line),
+                float(ctx["right_start_sec"]),
+                float(ctx["left_start_sec"]),
+            )
+            self._delete_block_group(
+                ctx["doc"],
+                int(left_line),
+                float(ctx["left_start_sec"]),
+            )
+        else:
+            self._set_block_group_end(
+                ctx["doc"],
+                int(left_line),
+                float(ctx["left_start_sec"]),
+                float(ctx["right_end_sec"]),
+            )
+            self._delete_block_group(
+                ctx["doc"],
+                int(right_line),
+                float(ctx["right_start_sec"]),
+            )
         cur.endEditBlock()
 
         self._finish_segment_merge_edit()

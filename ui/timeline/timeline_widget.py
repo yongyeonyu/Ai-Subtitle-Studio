@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ui.editor.ux.timeline_playhead_mode import playhead_line_color_hex
 from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, RULER_H, SEG_TOP, WAVE_H
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
@@ -210,7 +211,7 @@ class TimelinePlayheadOverlay(QWidget):
         timeline = self._timeline
         canvas = getattr(timeline, "canvas", None)
         visible = bool(canvas is not None and float(getattr(canvas, "total_duration", 0.0) or 0.0) > 0)
-        line_color = "#4AFF80" if getattr(canvas, "focus_mode", "segment") == "waveform" else "#FF4444"
+        line_color = playhead_line_color_hex(getattr(canvas, "focus_mode", None))
         try:
             root = quick.rootObject()
             if root is None:
@@ -269,7 +270,7 @@ class TimelinePlayheadOverlay(QWidget):
             painter.drawEllipse(shadow_px - 6, 3, 12, 12)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         if current_visible:
-            color = QColor("#4AFF80") if getattr(canvas, "focus_mode", "segment") == "waveform" else QColor("#FF4444")
+            color = QColor(playhead_line_color_hex(getattr(canvas, "focus_mode", None)))
             painter.setPen(QPen(color, 2))
             painter.drawLine(px, 0, px, self.height())
             handle_r = 7
@@ -354,12 +355,13 @@ class TimelineWidget(QWidget):
         ):
             btn = QPushButton(text)
             btn.setFixedSize(28, 24)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             btn.setToolTip(tip)
             btn.setStyleSheet(button_style("toolbar", font_size="11px", padding="2px 6px"))
             btn.clicked.connect(slot)
             if text == "O":
                 btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-                btn.customContextMenuRequested.connect(self._show_time_window_seconds_dialog)
+                btn.customContextMenuRequested.connect(self._queue_time_window_seconds_dialog)
                 self.time_window_btn = btn
                 self._refresh_time_window_button_tooltip()
             self._zoom_buttons.append(btn)
@@ -457,6 +459,7 @@ class TimelineWidget(QWidget):
         self._fit_to_view_locked = False
         self._fit_after_resize_pending = False
         self._manual_zoom_since_fit = False
+        self._time_window_dialog_pending = False
         self._initial_open_view_request: dict[str, object] | None = None
         self._initial_open_view_token = None
         self.set_toolbar_tooltips(
@@ -817,6 +820,58 @@ class TimelineWidget(QWidget):
         self._manual_zoom_since_fit = True
         self._begin_manual_scroll(hold_sec=1.2)
 
+    def _queue_time_window_seconds_dialog(self, _pos: QPoint | None = None) -> None:
+        if bool(getattr(self, "_time_window_dialog_pending", False)):
+            return
+        self._time_window_dialog_pending = True
+        QTimer.singleShot(0, self._show_time_window_seconds_dialog)
+
+    def _restore_toolbar_after_time_window_dialog(self) -> None:
+        self._time_window_dialog_pending = False
+        for grabber_getter, releaser_name in (
+            (QWidget.mouseGrabber, "releaseMouse"),
+            (QWidget.keyboardGrabber, "releaseKeyboard"),
+        ):
+            try:
+                grabber = grabber_getter()
+            except Exception:
+                grabber = None
+            if grabber is None:
+                continue
+            try:
+                getattr(grabber, releaser_name)()
+            except Exception:
+                pass
+
+        for btn in list(getattr(self, "_zoom_buttons", []) or []):
+            try:
+                btn.releaseMouse()
+                btn.releaseKeyboard()
+                btn.setDown(False)
+                btn.clearFocus()
+                btn.update()
+            except Exception:
+                continue
+        try:
+            owner = self.window()
+        except Exception:
+            owner = None
+        if owner is not None and owner is not self:
+            try:
+                owner.activateWindow()
+            except Exception:
+                pass
+        try:
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
+        except Exception:
+            pass
+        self._sync_focus_border()
+
+    def _queue_toolbar_restore_after_time_window_dialog(self) -> None:
+        self._restore_toolbar_after_time_window_dialog()
+        for delay in (0, 40, 120):
+            QTimer.singleShot(delay, self._restore_toolbar_after_time_window_dialog)
+
     def _show_time_window_seconds_dialog(self, _pos: QPoint | None = None) -> None:
         current_seconds = self._current_visible_seconds()
         current_seconds_rounded = max(1, int(round(current_seconds)))
@@ -826,7 +881,14 @@ class TimelineWidget(QWidget):
             else f"{current_seconds_rounded}초"
         )
         center_sec = self._current_visible_center_sec()
-        dialog = QInputDialog(self)
+        try:
+            owner = self.window()
+        except Exception:
+            owner = None
+        if owner is None:
+            owner = self
+        dialog = QInputDialog(owner)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dialog.setWindowTitle("편집 창 시간")
         dialog.setInputMode(QInputDialog.InputMode.IntInput)
         dialog.setLabelText(
@@ -839,10 +901,22 @@ class TimelineWidget(QWidget):
         dialog.setOkButtonText("적용")
         dialog.setCancelButtonText("취소")
         dialog.setStyleSheet(settings_dialog_stylesheet())
-        if dialog.exec():
-            selected_seconds = float(dialog.intValue())
-            self._apply_edit_window_seconds(selected_seconds, center_sec=center_sec)
-            self._save_preferred_edit_window_seconds(selected_seconds)
+        try:
+            if dialog.exec():
+                selected_seconds = float(dialog.intValue())
+                self._apply_edit_window_seconds(selected_seconds, center_sec=center_sec)
+                self._save_preferred_edit_window_seconds(selected_seconds)
+        finally:
+            try:
+                dialog.releaseMouse()
+                dialog.releaseKeyboard()
+            except Exception:
+                pass
+            try:
+                dialog.deleteLater()
+            except Exception:
+                pass
+            self._queue_toolbar_restore_after_time_window_dialog()
 
     def _create_playhead_overlay(self):
         # Keep the lightweight overlay object for playhead state bookkeeping,
@@ -1977,6 +2051,13 @@ class TimelineWidget(QWidget):
     def show_ten_second_edit_window(self) -> None:
         anchor_sec = self._editing_window_anchor_sec()
         self._apply_edit_window_seconds(self._preferred_edit_window_seconds, center_sec=anchor_sec)
+
+    def preferred_edit_window_seconds(self) -> float:
+        try:
+            value = float(getattr(self, "_preferred_edit_window_seconds", 10.0) or 10.0)
+        except Exception:
+            value = 10.0
+        return max(1.0, min(600.0, value))
 
     def _load_preferred_edit_window_seconds(self) -> float:
         try:

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core.project.project_assets import copy_project_rows, externalize_project_text_assets, write_srt_track
 
@@ -91,6 +92,44 @@ class ProjectAssetsTests(unittest.TestCase):
 
         self.assertIn("최종", final_srt)
         self.assertIn("후보", stt_srt)
+
+    def test_externalize_project_text_assets_can_reuse_existing_stt_assets_without_rewriting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project.json"
+            project = {
+                "project_path": str(project_path),
+                "subtitles": {},
+                "editor_state": {"stt": {"candidate_tracks": {}}},
+                "analysis": {},
+            }
+
+            externalize_project_text_assets(
+                str(project_path),
+                project,
+                final_segments=[{"start": 0.0, "end": 1.0, "text": "최종", "speaker": "00"}],
+                stt_tracks={
+                    "STT1": [{"start": 0.0, "end": 1.0, "text": "후보 일", "speaker": "00"}],
+                    "STT2": [{"start": 0.0, "end": 1.0, "text": "후보 이", "speaker": "00"}],
+                },
+            )
+
+            subtitle_dir = Path(tmp) / "project.assets" / "subtitles"
+            stt1_path = subtitle_dir / "stt1.srt"
+            stt2_path = subtitle_dir / "stt2.srt"
+            before_stt1 = stt1_path.read_text(encoding="utf-8")
+            before_stt2 = stt2_path.read_text(encoding="utf-8")
+
+            with patch("core.project.project_assets.write_srt_track", wraps=write_srt_track) as writer:
+                externalize_project_text_assets(
+                    str(project_path),
+                    project,
+                    final_segments=[{"start": 0.0, "end": 1.0, "text": "수정 최종", "speaker": "00"}],
+                    stt_tracks={},
+                    rewrite_stt_reference_tracks=False,
+                )
+            self.assertEqual([Path(call.args[1]).name for call in writer.call_args_list], ["final.srt"])
+            self.assertEqual(stt1_path.read_text(encoding="utf-8"), before_stt1)
+            self.assertEqual(stt2_path.read_text(encoding="utf-8"), before_stt2)
 
 
 if __name__ == "__main__":

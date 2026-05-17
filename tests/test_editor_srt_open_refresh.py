@@ -3,6 +3,7 @@ import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from PyQt6.QtWidgets import QApplication
 
@@ -86,6 +87,28 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
         self.assertEqual(editor.video_player.provider(), editor._cached_segs)
         self.assertEqual(editor.video_player.display_time, 9.0)
 
+    def test_reuse_completion_suppresses_post_generation_tasks(self):
+        class _ReuseEditor:
+            def __init__(self):
+                self.calls = []
+                self.redraws = 0
+
+            def _set_process_completed(self, suppress_post_generation_tasks=False):
+                self.calls.append(bool(suppress_post_generation_tasks))
+
+            def _redraw_timeline(self):
+                self.redraws += 1
+
+        lifecycle = _Lifecycle()
+        lifecycle._schedule_editor_fit_to_view = lambda editor, delay_ms=0: None
+        editor = _ReuseEditor()
+
+        with mock.patch("ui.editor.editor_lifecycle.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
+            lifecycle._finalize_reuse_completion(editor)
+
+        self.assertEqual(editor.calls, [True])
+        self.assertEqual(editor.redraws, 1)
+
     def test_direct_srt_open_finds_project_asset_sidecar(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -167,6 +190,94 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
         self.assertEqual(merged[0]["quality_candidates"][0]["candidate_id"], "c1")
         self.assertEqual(merged[0]["subtitle_stage_confidence"]["stages"]["stt"]["label"], "yellow")
         self.assertEqual(merged[0]["line"], 0)
+
+    def test_linked_project_srt_open_uses_project_restore_helper(self):
+        class _DelegatingLifecycle(EditorLifecycleMixin):
+            def __init__(self):
+                self._current_work_mode = ""
+                self._project_boundary_times = []
+                self._editor_widget = None
+                self.open_calls = []
+
+            def _remove_old_editor(self):
+                return None
+
+            def _open_project_segments_in_editor(self, filepath, project, media, segments, **kwargs):
+                self.open_calls.append((filepath, project, list(media or []), list(segments or []), dict(kwargs)))
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            srt_path = root / "demo.assets" / "subtitles" / "final.srt"
+            media_path = root / "demo.mp4"
+            project_path = root / "demo.aissproj"
+            srt_path.parent.mkdir(parents=True)
+            srt_path.write_text("1\n00:00:01,000 --> 00:00:02,000\nSRT 수정 텍스트\n\n", encoding="utf-8")
+            media_path.write_bytes(b"video")
+            project_path.write_text("{}", encoding="utf-8")
+
+            lifecycle = _DelegatingLifecycle()
+            linked_project = {
+                "media": [{"order": 0, "path": str(media_path)}],
+                "editor_state": {"media_files": [str(media_path)]},
+            }
+            merged_segments = [{"start": 1.0, "end": 2.0, "text": "SRT 수정 텍스트", "speaker": "02"}]
+
+            with mock.patch("ui.editor.editor_lifecycle.detach_project_session"), \
+                 mock.patch("ui.editor.editor_lifecycle.attach_project_session"), \
+                 mock.patch("core.subtitle_existing.find_media_for_srt", return_value=str(media_path)), \
+                 mock.patch("core.subtitle_existing.validate_srt_duration", return_value=(True, "")), \
+                 mock.patch("core.srt_parser.parse_srt", return_value=[{"start": 1.0, "end": 2.0, "text": "SRT 수정 텍스트"}]), \
+                 mock.patch.object(_DelegatingLifecycle, "_find_project_for_srt_open", return_value=(str(project_path), linked_project)), \
+                 mock.patch.object(_DelegatingLifecycle, "_merge_srt_segments_with_project_metadata", return_value=merged_segments), \
+                 mock.patch("core.project.project_context.project_segments_to_editor", return_value=[{"start": 1.0, "end": 2.0, "text": "프로젝트"}]):
+                lifecycle._open_srt_in_editor(str(srt_path))
+
+        self.assertEqual(len(lifecycle.open_calls), 1)
+        filepath, project, media, segments, kwargs = lifecycle.open_calls[0]
+        self.assertEqual(filepath, str(project_path))
+        self.assertEqual(project, linked_project)
+        self.assertEqual(media, [str(media_path)])
+        self.assertEqual(segments, merged_segments)
+        self.assertEqual(kwargs["source_srt_path"], str(srt_path))
+        self.assertTrue(kwargs["direct_srt_edit_mode"])
+
+    def test_unlinked_srt_open_uses_subtitle_only_shared_bootstrap(self):
+        class _DelegatingLifecycle(EditorLifecycleMixin):
+            def __init__(self):
+                self._current_work_mode = ""
+                self._project_boundary_times = []
+                self._editor_widget = None
+                self.subtitle_calls = []
+
+            def _remove_old_editor(self):
+                return None
+
+            def _open_project_segments_in_editor(self, *_args, **_kwargs):
+                raise AssertionError("unlinked SRT should not restore project metadata")
+
+            def _open_subtitle_segments_in_editor(self, srt_path, media_path, segments):
+                self.subtitle_calls.append((srt_path, media_path, list(segments or [])))
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            srt_path = root / "external.srt"
+            media_path = root / "external.mp4"
+            srt_path.write_text("1\n00:00:01,000 --> 00:00:02,000\n외부 SRT\n\n", encoding="utf-8")
+            media_path.write_bytes(b"video")
+
+            lifecycle = _DelegatingLifecycle()
+            parsed_segments = [{"start": 1.0, "end": 2.0, "text": "외부 SRT"}]
+
+            with mock.patch("ui.editor.editor_lifecycle.detach_project_session"), \
+                 mock.patch("core.subtitle_existing.find_media_for_srt", return_value=str(media_path)), \
+                 mock.patch("core.subtitle_existing.validate_srt_duration", return_value=(True, "")), \
+                 mock.patch("core.srt_parser.parse_srt", return_value=parsed_segments), \
+                 mock.patch.object(_DelegatingLifecycle, "_find_project_for_srt_open", return_value=("", None)):
+                lifecycle._open_srt_in_editor(str(srt_path))
+
+        self.assertEqual(lifecycle.subtitle_calls, [(str(srt_path), str(media_path), parsed_segments)])
 
     def test_timestamp_area_uses_cached_srt_segments_when_block_metadata_is_missing(self):
         text_edit = SubtitleTextEdit()
