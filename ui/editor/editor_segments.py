@@ -15,7 +15,7 @@ from ui.editor.editor_roughcut_draft import EditorRoughcutDraftMixin
 from ui.editor.editor_segments_block_surgery import EditorSegmentsBlockSurgeryMixin
 from ui.editor.editor_segments_bulk_load import EditorSegmentsBulkLoadMixin
 from ui.editor.editor_segments_current_state import EditorSegmentsCurrentStateMixin
-from ui.editor.editor_segments_live_preview import EditorSegmentsLivePreviewMixin
+from ui.editor.ux.editor_segments_live_preview import EditorSegmentsLivePreviewMixin
 from ui.editor.editor_segments_manual_edits import EditorSegmentsManualEditsMixin
 from ui.editor.editor_segments_queue_flush import EditorSegmentsQueueFlushMixin
 from ui.editor.editor_segments_reload import EditorSegmentsReloadMixin

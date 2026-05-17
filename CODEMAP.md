@@ -37,6 +37,8 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `ui/ux/`: reusable Apple-black popup palette/theme helpers and shared UX color tables.
 - `ui/editor/ux/`: editor interaction mixins.
   - `editor_timeline_video.py`: playback sync, playhead behavior, editor/timeline coordination.
+  - `editor_timeline_gap_split.py`: gap conversion/generation plus smart-split interaction scenarios.
+  - `editor_segments_live_preview.py`: in-progress STT/subtitle preview rows and preview-stage coordination.
   - `timeline_input.py`: timeline mouse/key input, scrubbing, drag entry points.
   - `timeline_subtitle_segment_editing.py`: segment-edge, center, diamond drag, snap behavior.
 - `ui/timeline/`: timeline rendering and viewport systems.

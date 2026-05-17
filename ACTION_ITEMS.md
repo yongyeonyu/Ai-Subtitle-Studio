@@ -23,7 +23,7 @@ app_version: "04.00.09"
 document_version: "04.00.09-mac-native"
 phase: "MAC_NATIVE_APPSTORE_V4_0_9_RELEASED"
 next_phase: null
-active_item_count: 17
+active_item_count: 16
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
 native_plan: "NATIVE_LIB_PLAN.md"
@@ -48,11 +48,6 @@ native_plan: "NATIVE_LIB_PLAN.md"
 ## Active Work
 
 ### P0 - UX And Editor Refactor Boundaries
-
-- [ ] 4. Move remaining editor/timeline UX scenarios into dedicated `ux/` modules.
-  Scope: live preview, smart split, merge/delete popup behavior, tab timing, timeline segment merge, and interaction-only scenario logic.
-  Success: owner widgets only wire signals; UX behavior lives in explicit scenario files under `ui/editor/ux/` or an equivalent `ux/` folder.
-  Constraint: do not change UI behavior without explicit approval.
 
 - [ ] 5. Finish splitting `ui/editor/video_player_widget.py`.
   Scope: transport controls, audio-output recovery, provider adapter, thumbnail/surface handling, and player status widgets.
