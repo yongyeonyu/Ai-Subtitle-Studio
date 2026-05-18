@@ -259,7 +259,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             default_mock.assert_called_once()
             saved = save_mock.call_args.args[0]
             self.assertEqual(saved["selected_audio_ai"], "none")
-            self.assertEqual(saved["selected_vad"], "silero")
+            self.assertEqual(saved["selected_vad"], "ten_vad")
             self.assertEqual(saved["selected_whisper_model"], "user-stt1")
             self.assertEqual(saved["selected_whisper_model_secondary"], "user-stt2")
             self.assertEqual(saved["selected_model"], "custom-llm")

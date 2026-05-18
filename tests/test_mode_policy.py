@@ -132,7 +132,7 @@ class ModePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(settings["selected_audio_ai"], "none")
-        self.assertEqual(settings["selected_vad"], "ten_vad")
+        self.assertEqual(settings["selected_vad"], "silero")
         self.assertEqual(settings["selected_whisper_model"], "user-stt1")
         self.assertEqual(settings["selected_whisper_model_secondary"], "user-stt2")
         self.assertEqual(settings["selected_model"], "custom-llm")
@@ -167,7 +167,7 @@ class ModePolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(settings["selected_audio_ai"], "none")
-        self.assertEqual(settings["selected_vad"], "silero")
+        self.assertEqual(settings["selected_vad"], "ten_vad")
         self.assertEqual(settings["selected_whisper_model"], "current-stt1")
         self.assertEqual(settings["selected_whisper_model_secondary"], "current-stt2")
         self.assertEqual(settings["selected_model"], "current-llm")

@@ -32,6 +32,7 @@ VAD_MODE_AUTOMATION_NOTE = (
 TINIPING_BENCHMARK_REFERENCE = "Tiniping 0~3분 sweep + 0~11분 final"
 TINIPING_FAST_PRIMARY_MODEL = "youngouk/whisper-medium-komixv2-mlx"
 TINIPING_SUBTITLE_LLM_MODEL = "exaone3.5:7.8b"
+WINDOWED_STT_REFERENCE = "3분 windowed STT + overlap hysteresis"
 
 
 def _quality_model() -> str:
@@ -75,6 +76,63 @@ def _pipeline_mapping(ff_chunk: int, overlap_sec: float, parallel_level: int) ->
         "ff_chunk": ff_chunk,
         "whisper_chunk_overlap_sec": overlap_sec,
         "stt_parallel_level": parallel_level,
+    }
+
+
+def _windowed_stt_mapping(
+    *,
+    window_sec: float = 180.0,
+    overlap_sec: float,
+    hysteresis_sec: float,
+    max_boundary_shift_sec: float,
+) -> dict:
+    return {
+        "stt_windowed_finalize_enabled": True,
+        "stt_window_sec": float(window_sec),
+        "stt_window_overlap_sec": float(overlap_sec),
+        "stt_window_hysteresis_sec": float(hysteresis_sec),
+        "stt_window_max_boundary_shift_sec": float(max_boundary_shift_sec),
+    }
+
+
+def _ffmpeg_silero_relaxed_audio_mapping() -> dict:
+    return {
+        "selected_audio_ai": "none",
+        "use_basic_filter": True,
+        "ff_hp": 90,
+        "ff_lp": 5200,
+        "ff_nf": -18,
+        "ff_dynaudnorm_m": 10.0,
+        "ff_dynaudnorm_p": 0.97,
+        "ff_treble_boost": 1.0,
+        "ffmpeg_filter_threads": 8,
+        "none_hp": 90,
+        "none_lp": 3200,
+        "none_nf": -32,
+        "none_target": -14,
+    }
+
+
+def _high_ten_vad_stable_mapping() -> dict:
+    return {
+        "selected_audio_ai": "none",
+        "selected_vad": "ten_vad",
+        "vad_backend_policy": "auto",
+        "use_basic_filter": True,
+        "audio_chunk_routing_enabled": True,
+        "audio_chunk_route_vad_enabled": True,
+        "audio_chunk_profile_sec": 18.0,
+        "scan_cut_audio_gain_enabled": True,
+        "cut_boundary_detection_enabled": True,
+        "cut_boundary_enabled": True,
+        "scan_cut_enabled": True,
+        "scan_cut_auto_enabled": True,
+        "vad_threshold": 0.46,
+        "ten_vad_threshold": 0.46,
+        "review_vad_before_stt_enabled": True,
+        "review_vad_speech_pad_sec": 0.28,
+        "review_vad_min_silence_sec": 0.65,
+        "vad_post_stt_align_enabled": True,
     }
 
 
@@ -181,9 +239,11 @@ def _mode_locked_vad_mapping(preset_key: str) -> dict:
         }.get(key, "balanced")
     # BENCH LOCK 2026-05-18:
     # - Fast    -> clearvoice_ten_vad_noisy
-    # - Auto    -> audio_baseline_fresh
-    # - High    -> ffmpeg_silero_relaxed
-    # Source: Tiniping 0~3m sweep + 0~11m final validation.
+    # - Auto    -> ffmpeg_silero_relaxed + 3분 롤링 재시작
+    # - High    -> ten_vad 안정형 + 3분 롤링 재시작
+    # Source:
+    # - Auto: Tiniping 0~3m sweep + 0~11m final validation.
+    # - High: full-video final rerun + current-mode reproducibility check.
     profiles = {
         "fast": {
             "selected_vad": "ten_vad",
@@ -198,15 +258,14 @@ def _mode_locked_vad_mapping(preset_key: str) -> dict:
             "vad_post_stt_align_enabled": True,
         },
         "balanced": {
-            "selected_vad": "ten_vad",
-            "vad_threshold": 0.46,
-            "ten_vad_threshold": 0.46,
-            "vad_min_speech": 0.20,
-            "vad_min_silence": 0.65,
+            "selected_vad": "silero",
+            "vad_threshold": 0.36,
+            "vad_min_speech": 0.14,
+            "vad_min_silence": 0.45,
             "vad_speech_pad": 0.28,
             "vad_window_size": 512,
-            "review_vad_speech_pad_sec": 0.28,
-            "review_vad_min_silence_sec": 0.65,
+            "review_vad_speech_pad_sec": 0.32,
+            "review_vad_min_silence_sec": 0.45,
             "vad_post_stt_align_enabled": True,
         },
         "precise": {
@@ -281,7 +340,8 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "selected_audio_ai": "clearvoice",
             "stt_candidate_scoring_enabled": True,
             **_mode_locked_vad_mapping("fast"),
-            **_pipeline_mapping(30, 0.5, 4),
+            **_pipeline_mapping(180, 6.0, 4),
+            **_windowed_stt_mapping(overlap_sec=6.0, hysteresis_sec=3.0, max_boundary_shift_sec=0.16),
             **_cut_boundary_mapping("off"),
             **_decoder_settings(0.86, -1.0, 1.6, 0.0, 3, 1.0),
             "stt_ensemble_enabled": True,
@@ -336,9 +396,9 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "runtime_scheduler_ramp_initial_sec": 90.0,
             "background_prefetch_lora_enabled": False,
             "background_prefetch_candidates_enabled": False,
-            "audio_chunk_routing_enabled": False,
-            "audio_chunk_route_vad_enabled": False,
-            "audio_chunk_profile_sec": 30.0,
+            "audio_chunk_routing_enabled": True,
+            "audio_chunk_route_vad_enabled": True,
+            "audio_chunk_profile_sec": 24.0,
             "vad_dual_model_enabled": True,
             "speaker_diarization_auto_enabled": False,
             "ff_hp": 150,
@@ -356,10 +416,11 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
         "balanced": {
             "selected_whisper_model": turbo_model,
             "selected_whisper_model_secondary": quality_model,
-            "selected_audio_ai": "none",
             "stt_candidate_scoring_enabled": True,
+            **_ffmpeg_silero_relaxed_audio_mapping(),
             **_mode_locked_vad_mapping("balanced"),
-            **_pipeline_mapping(25, 1.5, 3),
+            **_pipeline_mapping(180, 10.0, 3),
+            **_windowed_stt_mapping(overlap_sec=10.0, hysteresis_sec=5.0, max_boundary_shift_sec=0.14),
             **_cut_boundary_mapping("low"),
             **_decoder_settings(0.58, -1.8, 2.2, 0.4, 5, 1.1),
             "stt_ensemble_enabled": True,
@@ -413,22 +474,11 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "runtime_scheduler_ramp_step_sec": 60.0,
             "background_prefetch_lora_enabled": False,
             "background_prefetch_candidates_enabled": False,
-            "audio_chunk_routing_enabled": False,
-            "audio_chunk_route_vad_enabled": False,
+            "audio_chunk_routing_enabled": True,
+            "audio_chunk_route_vad_enabled": True,
             "audio_chunk_profile_sec": 30.0,
             "vad_dual_model_enabled": False,
             "speaker_diarization_auto_enabled": False,
-            "ff_hp": 150,
-            "ff_lp": 4600,
-            "ff_nf": -30,
-            "ff_dynaudnorm_m": 16.0,
-            "ff_dynaudnorm_p": 0.97,
-            "ff_treble_boost": 3.0,
-            "ffmpeg_filter_threads": 8,
-            "none_hp": 90,
-            "none_lp": 3200,
-            "none_nf": -32,
-            "none_target": -14,
         },
         "precise": {
             "selected_whisper_model": quality_model,
@@ -436,10 +486,11 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "selected_model": TINIPING_SUBTITLE_LLM_MODEL,
             "selected_llm_provider": "ollama",
             "subtitle_llm_user_selected": True,
-            "selected_audio_ai": "none",
             "stt_candidate_scoring_enabled": True,
             **_mode_locked_vad_mapping("precise"),
-            **_pipeline_mapping(35, 3.0, 2),
+            **_high_ten_vad_stable_mapping(),
+            **_pipeline_mapping(180, 12.0, 2),
+            **_windowed_stt_mapping(overlap_sec=12.0, hysteresis_sec=6.0, max_boundary_shift_sec=0.12),
             **_cut_boundary_mapping("medium"),
             **_roughcut_llm_mapping(TINIPING_SUBTITLE_LLM_MODEL),
             **_decoder_settings(0.42, -2.6, 2.4, 0.6, 8, 1.35),
@@ -512,9 +563,6 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "runtime_scheduler_ramp_up_enabled": False,
             "background_prefetch_lora_enabled": False,
             "background_prefetch_candidates_enabled": False,
-            "audio_chunk_routing_enabled": False,
-            "audio_chunk_route_vad_enabled": False,
-            "audio_chunk_profile_sec": 30.0,
             "vad_dual_model_enabled": True,
             "speaker_diarization_auto_enabled": False,
             "ff_hp": 90,
@@ -573,12 +621,12 @@ def load_stt_quality_presets() -> dict[str, dict]:
         },
         "balanced": {
             "label": STT_QUALITY_PRESET_LABELS["balanced"],
-            "description": f"{TINIPING_BENCHMARK_REFERENCE} 기준 Auto 우승 조합: WhisperKit Turbo + selective STT2/Deep selector",
+            "description": f"{TINIPING_BENCHMARK_REFERENCE} 기준 Auto 우승 조합: WhisperKit Turbo + ffmpeg/silero relaxed + {WINDOWED_STT_REFERENCE}",
             "settings": mode_benchmark_locked_settings("balanced"),
         },
         "precise": {
             "label": STT_QUALITY_PRESET_LABELS["precise"],
-            "description": f"{TINIPING_BENCHMARK_REFERENCE} 기준 High 우승 조합: WhisperKit 품질 + selective STT2 + LLM",
+            "description": f"{TINIPING_BENCHMARK_REFERENCE} 기준 High 안정 조합: WhisperKit 품질 + TEN VAD 안정형 + {WINDOWED_STT_REFERENCE} + LLM",
             "settings": mode_benchmark_locked_settings("precise"),
         },
         "stt": {
