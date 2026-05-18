@@ -699,6 +699,151 @@ def _nearby_audio_boundary(seg: dict, target: float, *, window_sec: float) -> fl
     return best[1] if best else None
 
 
+def _piecewise_drift_enabled(settings: dict | None = None) -> bool:
+    return _setting_bool(dict(settings or {}), "subtitle_timing_piecewise_drift_enabled", False)
+
+
+def _piecewise_drift_trigger_sec(settings: dict | None = None) -> float:
+    return max(0.0, _setting_float(dict(settings or {}), "subtitle_timing_piecewise_drift_trigger_sec", 0.05))
+
+
+def _piecewise_drift_max_shift_sec(settings: dict | None = None) -> float:
+    return max(0.0, _setting_float(dict(settings or {}), "subtitle_timing_piecewise_drift_max_shift_sec", 0.12))
+
+
+def _piecewise_drift_min_run(settings: dict | None = None) -> int:
+    return max(2, _clamp_int(dict(settings or {}).get("subtitle_timing_piecewise_drift_min_run_segments", 3), 2, 12, 3))
+
+
+def _piecewise_drift_anchor_spread_sec(settings: dict | None = None) -> float:
+    return max(0.0, _setting_float(dict(settings or {}), "subtitle_timing_piecewise_drift_anchor_spread_sec", 0.08))
+
+
+def _signed_median(values: list[float]) -> float | None:
+    vals = sorted(float(value) for value in values if abs(float(value)) > 0.0)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    if len(vals) % 2:
+        return vals[mid]
+    return (vals[mid - 1] + vals[mid]) / 2.0
+
+
+def _segment_piecewise_drift(seg: dict, settings: dict | None = None) -> tuple[float | None, dict]:
+    s = dict(settings or {})
+    start, end = _time_bounds(seg)
+    if end <= start:
+        return None, {}
+    max_shift = _piecewise_drift_max_shift_sec(s)
+    if max_shift <= 0.0:
+        return None, {}
+
+    current_center = (start + end) * 0.5
+    spread_limit = max(0.02, _piecewise_drift_anchor_spread_sec(s))
+    trigger = _piecewise_drift_trigger_sec(s)
+    candidates: list[tuple[str, float]] = []
+
+    start_anchor, _start_source = _subtitle_start_anchor(seg)
+    end_anchor, _end_source = _subtitle_end_anchor(seg)
+    if start_anchor is not None and end_anchor is not None:
+        start_drift = float(start_anchor) - start
+        end_drift = float(end_anchor) - end
+        if abs(start_drift - end_drift) <= spread_limit:
+            candidates.append(("anchor_center", (start_drift + end_drift) * 0.5))
+
+    vad_span = _overlapping_vad_span(seg, pad=max(0.18, spread_limit))
+    if vad_span is not None:
+        vad_center = (float(vad_span[0]) + float(vad_span[1])) * 0.5
+        vad_drift = vad_center - current_center
+        if abs(vad_drift) <= max_shift * 1.5:
+            candidates.append(("vad_center", vad_drift))
+
+    if not candidates:
+        return None, {}
+    drift = _signed_median([value for _source, value in candidates])
+    if drift is None or abs(drift) < trigger:
+        return None, {"candidates": [{"source": source, "drift_sec": round(value, 4)} for source, value in candidates]}
+    return max(-max_shift, min(max_shift, drift)), {
+        "candidates": [{"source": source, "drift_sec": round(value, 4)} for source, value in candidates],
+        "trigger_sec": round(trigger, 4),
+        "max_shift_sec": round(max_shift, 4),
+    }
+
+
+def _apply_piecewise_timing_drift(
+    segments: list[dict],
+    settings: dict | None = None,
+    *,
+    default_min_duration: float,
+) -> list[dict]:
+    s = dict(settings or {})
+    if not segments or not _piecewise_drift_enabled(s):
+        return segments
+
+    trigger = _piecewise_drift_trigger_sec(s)
+    min_run = _piecewise_drift_min_run(s)
+
+    def _sign(value: float) -> int:
+        if value >= trigger:
+            return 1
+        if value <= -trigger:
+            return -1
+        return 0
+
+    def _flush(run_indices: list[int], run_drifts: list[float], run_scope: object) -> None:
+        if len(run_indices) < min_run:
+            return
+        shift = _signed_median(run_drifts)
+        if shift is None or abs(shift) < trigger:
+            return
+        for idx in run_indices:
+            seg = segments[idx]
+            seg_settings = _segment_gap_settings(s, seg)
+            min_duration = max(0.05, _setting_float(seg_settings, "sub_min_duration", default_min_duration))
+            start = max(0.0, float(seg.get("start", 0.0) or 0.0) + shift)
+            end = float(seg.get("end", start + min_duration) or start + min_duration) + shift
+            if end <= start + min_duration:
+                end = start + min_duration
+            seg["start"] = round(start, 3)
+            seg["end"] = round(end, 3)
+            seg["_piecewise_drift_policy"] = {
+                "task": "subtitle_timing_piecewise_drift",
+                "run_size": len(run_indices),
+                "scope": str(run_scope),
+                "applied_shift_sec": round(shift, 4),
+                "trigger_sec": round(trigger, 4),
+            }
+
+    run_indices: list[int] = []
+    run_drifts: list[float] = []
+    run_scope = None
+    run_sign = 0
+
+    for idx, seg in enumerate(segments):
+        if seg.get("is_gap"):
+            _flush(run_indices, run_drifts, run_scope)
+            run_indices, run_drifts, run_scope, run_sign = [], [], None, 0
+            continue
+        drift, _details = _segment_piecewise_drift(seg, s)
+        scope = _segment_scope_key(seg)
+        sign = _sign(float(drift or 0.0))
+        if drift is None or sign == 0:
+            _flush(run_indices, run_drifts, run_scope)
+            run_indices, run_drifts, run_scope, run_sign = [], [], None, 0
+            continue
+        if run_indices and (scope != run_scope or sign != run_sign):
+            _flush(run_indices, run_drifts, run_scope)
+            run_indices, run_drifts = [], []
+        if not run_indices:
+            run_scope = scope
+            run_sign = sign
+        run_indices.append(idx)
+        run_drifts.append(float(drift))
+
+    _flush(run_indices, run_drifts, run_scope)
+    return segments
+
+
 def apply_timing_fusion_policy(segment: dict, settings: dict | None = None) -> dict:
     """Blend word, VAD, audio, cut, and LoRA timing evidence before final gap shaping."""
     seg = dict(segment or {})
@@ -1542,6 +1687,7 @@ def apply_final_gap_settings(
         if fused is not seg:
             seg.update(fused)
 
+    adj = _apply_piecewise_timing_drift(adj, s, default_min_duration=default_min_duration)
     adj = _apply_common_subtitle_split_guard(adj, s)
 
     for idx, cur in enumerate(adj):

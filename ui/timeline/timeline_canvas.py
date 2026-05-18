@@ -100,6 +100,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.shadow_playhead_sec: float | None = None
         self._shadow_playhead_armed_sec: float | None = None
         self._last_shadow_playhead_px: int | None = None
+        self._drag_shadow_playhead_sec: float | None = None
+        self._last_drag_shadow_playhead_px: int | None = None
         self._waveform = None
         self.boundary_times: list[float] = []
         self.scan_boundary_times: list[float] = []
@@ -1338,6 +1340,35 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def clear_shadow_playhead(self) -> bool:
         return self.set_shadow_playhead(None)
+
+    def set_drag_shadow_playhead(self, sec) -> bool:
+        normalized = None if sec is None else self._normalize_canvas_sec(sec)
+        current = getattr(self, "_drag_shadow_playhead_sec", None)
+        if normalized is None and current is None:
+            return False
+        if normalized is not None and current is not None and abs(float(normalized) - float(current)) < 0.001:
+            return False
+        old_px = self._last_drag_shadow_playhead_px
+        self._drag_shadow_playhead_sec = normalized
+        self._last_drag_shadow_playhead_px = None if normalized is None else self._x(normalized)
+        if getattr(self, "_external_playhead_overlay", False):
+            return True
+        if old_px is None and self._last_drag_shadow_playhead_px is None:
+            return True
+        if old_px is None:
+            px = int(self._last_drag_shadow_playhead_px or 0)
+            self.update(QRect(max(0, px - 12), 0, 25, CANVAS_H))
+            return True
+        if self._last_drag_shadow_playhead_px is None:
+            self.update(QRect(max(0, old_px - 12), 0, 25, CANVAS_H))
+            return True
+        left = max(0, min(old_px, self._last_drag_shadow_playhead_px) - 12)
+        right = min(self.width(), max(old_px, self._last_drag_shadow_playhead_px) + 13)
+        self.update(QRect(left, 0, max(1, right - left), CANVAS_H))
+        return True
+
+    def clear_drag_shadow_playhead(self) -> bool:
+        return self.set_drag_shadow_playhead(None)
 
     def set_waveform(self, wf):
         self._waveform = wf

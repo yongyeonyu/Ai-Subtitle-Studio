@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from core.native_swift_timeline import prepare_editor_segments_for_load_via_swift
+from ui.editor.editor_helpers import should_split_multiline_part_into_block
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
 
@@ -166,7 +167,7 @@ class EditorSegmentsBulkPrepareMixin:
             SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
         )
         for part in parts[1:]:
-            if part.startswith("-"):
+            if should_split_multiline_part_into_block(seg, part):
                 current_spk = spk2_id if current_spk == spk1_id else spk1_id
                 block_texts.append(part)
                 block_meta.append(

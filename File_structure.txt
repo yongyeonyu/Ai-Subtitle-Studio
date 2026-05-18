@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.09-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_9_RELEASED
-Last-Updated: 2026-05-18
+Document-Version: 04.00.10-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
+Last-Updated: 2026-05-19
 Updated-By: Codex
 Scope: Shallow actual filesystem map. This file intentionally stays at root depth plus selected first-level entries for high-signal directories.
 Role-Description-Rule: Tree entries must match real paths. Review notes and speculative cleanup notes are not allowed.
@@ -10,8 +10,8 @@ Role-Description-Rule: Tree entries must match real paths. Review notes and spec
 AI Subtitle Studio - Shallow Actual File Structure
 Created: 2026-04-20
 Last Updated: 2026-05-18
-Phase: MAC_NATIVE_APPSTORE_V4_0_9_RELEASED
-App Version: 04.00.09
+Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
+App Version: 04.00.10
 Structure Document: File_structure.txt
 Note: This map is intentionally shallow for token-efficient handoff and navigation.
 ================================================================================
@@ -36,6 +36,7 @@ ai_subtitle_studio/
 ├── RELEASE_v04.00.07.md
 ├── RELEASE_v04.00.08.md
 ├── RELEASE_v04.00.09.md
+├── RELEASE_v04.00.10.md
 ├── assets/
 │   └── icons/
 ├── core/
@@ -82,6 +83,7 @@ ai_subtitle_studio/
 │   ├── test_queue_dispatch.py
 │   ├── test_runtime_eta.py
 │   ├── test_timeline_hit_targets.py
+│   ├── test_tiniping_timing_ideas.py
 │   ├── test_timeline_playhead_fit.py
 │   ├── test_timeline_render_cache.py
 │   └── test_verify_full_media_pipeline.py
@@ -96,6 +98,7 @@ ai_subtitle_studio/
 │   ├── benchmark_stt_native_backends.py
 │   ├── benchmark_subtitle_pipeline_variants.py
 │   ├── benchmark_tiniping_mode_search.py
+│   ├── benchmark_tiniping_timing_ideas.py
 │   ├── build_native_extensions.py
 │   ├── check_maintenance_budget.py
 │   ├── overnight_optimize.py

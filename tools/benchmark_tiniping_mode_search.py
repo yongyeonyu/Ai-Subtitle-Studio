@@ -139,6 +139,12 @@ def _seed_from_payload(payload: dict[str, Any]) -> BenchmarkSeed:
     )
 
 
+def _row_with_effective_settings(row: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    out["effective_settings"] = dict(settings)
+    return out
+
+
 def _log(message: str) -> None:
     stamp = datetime.now().strftime("%H:%M:%S")
     print(f"[tiniping-bench {stamp}] {message}", flush=True)

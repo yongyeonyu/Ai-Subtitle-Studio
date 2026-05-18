@@ -137,6 +137,46 @@ class PresetAutoClassifierTests(unittest.TestCase):
         self.assertLessEqual(tune["ff_nf"], -30)
         self.assertIn("저역", reason)
 
+    def test_audio_profile_tunes_roomy_indoor_dialog_to_clearvoice_stack(self):
+        features = {
+            "rms_mean": 0.019,
+            "rms_p90": 0.09,
+            "silence_ratio": 0.24,
+            "zero_crossing_rate": 0.09,
+            "low_band_ratio": 0.18,
+            "high_band_ratio": 0.10,
+            "spectral_centroid_hz": 2100.0,
+        }
+        profile = build_audio_profile(features)
+        tune, reason = tune_audio_settings_for_profile(profile, features)
+
+        self.assertEqual(profile["environment"], "indoor")
+        self.assertFalse(profile["mic_present"])
+        self.assertTrue(profile["roomy_dialog"])
+        self.assertEqual(tune["selected_audio_ai"], "clearvoice")
+        self.assertGreaterEqual(tune["ff_hp"], 150)
+        self.assertIn("음성", reason)
+
+    def test_audio_profile_tunes_clean_in_car_dialog_to_rnnoise_stack(self):
+        features = {
+            "rms_mean": 0.032,
+            "rms_p90": 0.10,
+            "silence_ratio": 0.18,
+            "zero_crossing_rate": 0.08,
+            "low_band_ratio": 0.58,
+            "high_band_ratio": 0.05,
+            "spectral_centroid_hz": 1350.0,
+        }
+        profile = build_audio_profile(features)
+        tune, reason = tune_audio_settings_for_profile(profile, features)
+
+        self.assertEqual(profile["environment"], "car")
+        self.assertTrue(profile["clean_dialog"])
+        self.assertFalse(profile["driving_noise"])
+        self.assertEqual(tune["selected_audio_ai"], "rnnoise")
+        self.assertLessEqual(tune["ff_nf"], -28)
+        self.assertIn("음성", reason)
+
     def test_auto_classify_media_presets_scans_samples_without_llm(self):
         with mock.patch("core.audio.preset_auto_classifier.prepare_audio_samples") as prep:
             prep.return_value = {

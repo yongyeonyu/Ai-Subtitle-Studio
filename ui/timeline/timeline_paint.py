@@ -1738,6 +1738,13 @@ class TimelinePaintMixin:
                 p.setPen(QPen(QColor(255, 214, 10, 170), 2, Qt.PenStyle.DashLine))
                 p.drawLine(int(shadow_x), 0, int(shadow_x), CANVAS_H)
 
+        drag_shadow_playhead_sec = getattr(self, "_drag_shadow_playhead_sec", None)
+        if drag_shadow_playhead_sec is not None:
+            drag_shadow_x = self._x(float(drag_shadow_playhead_sec or 0.0))
+            if clip_left - 8 <= drag_shadow_x <= clip_right + 8:
+                p.setPen(QPen(QColor(177, 92, 255, 180), 2, Qt.PenStyle.DashLine))
+                p.drawLine(int(drag_shadow_x), 0, int(drag_shadow_x), CANVAS_H)
+
         if getattr(self, '_is_listening', False):
             listening_line = getattr(self, "_listening_line", None)
             if listening_line is None and getattr(self, "_edit_active", False):

@@ -27,6 +27,18 @@ from tools.benchmark_tiniping_mode_search import (
 )
 
 
+def _phase_modes(modes: list[str] | tuple[str, ...] | None, *, include_fast: bool = True) -> list[str]:
+    allowed = ("fast", "auto", "high") if include_fast else ("auto", "high")
+    if not modes:
+        return list(allowed)
+    selected: list[str] = []
+    for mode in modes:
+        normalized = _normalized_mode(mode)
+        if normalized in allowed and normalized not in selected:
+            selected.append(normalized)
+    return selected or list(allowed)
+
+
 def _primary_scan(
     *,
     media: Path,
@@ -37,9 +49,10 @@ def _primary_scan(
     start_sec: float,
     end_sec: float,
     span_sec: float,
+    modes: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     results_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode in ("fast", "auto", "high"):
+    for mode in _phase_modes(modes):
         mode_settings = _mode_base_settings(base_settings, mode)
         extract_name = f"phase1_primary_{mode}"
         chunk_source, extract_meta = _run_extract(
@@ -92,9 +105,10 @@ def _pair_scan(
     start_sec: float,
     end_sec: float,
     span_sec: float,
+    modes: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     results_by_mode: dict[str, list[dict[str, Any]]] = {"auto": [], "high": []}
-    for mode in ("auto", "high"):
+    for mode in _phase_modes(modes, include_fast=False):
         mode_settings = _mode_base_settings(base_settings, mode)
         method = "selective_ensemble"
         chunk_source, extract_meta = _run_extract(
@@ -143,9 +157,10 @@ def _pair_scan(
 def _collect_phase1_seeds(
     primary_rows: dict[str, list[dict[str, Any]]],
     pair_rows: dict[str, list[dict[str, Any]]],
+    modes: list[str] | None = None,
 ) -> dict[str, list[BenchmarkSeed]]:
     out: dict[str, list[BenchmarkSeed]] = {"fast": [], "auto": [], "high": []}
-    for mode in ("fast", "auto", "high"):
+    for mode in _phase_modes(modes):
         if mode == "fast":
             ranked = _objective_rank(primary_rows.get(mode, []), mode, 3)
         else:
@@ -178,9 +193,10 @@ def _audio_scan(
     start_sec: float,
     end_sec: float,
     span_sec: float,
+    modes: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     rows_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode in ("fast", "auto", "high"):
+    for mode in _phase_modes(modes):
         profiles = _adaptive_audio_profiles(base_settings)
         seeds = list(seeds_by_mode.get(mode) or [])
         for seed in seeds:
@@ -237,6 +253,7 @@ def _method_scan(
     start_sec: float,
     end_sec: float,
     span_sec: float,
+    modes: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     rows_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
     methods_by_mode = {
@@ -244,7 +261,7 @@ def _method_scan(
         "auto": ("stt1_word_precision", "selective_ensemble", "parallel_ensemble"),
         "high": ("selective_ensemble", "parallel_ensemble", "proposed_lora_deep_gate"),
     }
-    for mode in ("fast", "auto", "high"):
+    for mode in _phase_modes(modes):
         seeds = list(seeds_by_mode.get(mode) or [])
         for seed in seeds:
             base_seed_settings = dict(seed.settings or _mode_base_settings(base_settings, mode))
@@ -290,9 +307,10 @@ def _cached_postprocess_scan(
     start_sec: float,
     end_sec: float,
     span_sec: float,
+    modes: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     rows_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode in ("fast", "auto", "high"):
+    for mode in _phase_modes(modes):
         ranked = _objective_rank(method_rows.get(mode, []), mode, 3)
         for row in ranked:
             settings = dict(row.get("effective_settings") or row.get("settings") or _mode_base_settings(base_settings, mode))
@@ -347,9 +365,10 @@ def _long_run_validation(
     start_sec: float,
     end_sec: float,
     span_sec: float,
+    modes: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     rows_by_mode: dict[str, list[dict[str, Any]]] = {"fast": [], "auto": [], "high": []}
-    for mode in ("fast", "auto", "high"):
+    for mode in _phase_modes(modes):
         rows = list(finalists.get(mode) or [])
         for row in rows:
             settings = dict(row.get("effective_settings") or row.get("settings") or _mode_base_settings(base_settings, mode))
@@ -424,13 +443,16 @@ def _recommendations_payload(
     winners: dict[str, dict[str, Any]],
     models: list[str],
     run_dir: Path,
+    modes: list[str] | None = None,
 ) -> dict[str, Any]:
+    selected_modes = _phase_modes(modes)
     return {
         "schema": "ai_subtitle_studio.tiniping_mode_search.v1",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "media": str(media),
         "reference_srt": str(reference_srt),
         "run_dir": str(run_dir),
+        "selected_modes": selected_modes,
         "hardware": hardware_profile(),
         "models_tested": models,
         "short_phase_top3": {
@@ -448,6 +470,7 @@ def _recommendations_payload(
                 for row in rows[:3]
             ]
             for mode, rows in short_rows.items()
+            if mode in selected_modes
         },
         "long_phase_top3": {
             mode: [
@@ -464,8 +487,9 @@ def _recommendations_payload(
                 for row in rows[:3]
             ]
             for mode, rows in long_rows.items()
+            if mode in selected_modes
         },
-        "winners": {mode: _winner_summary(winner) for mode, winner in winners.items()},
+        "winners": {mode: _winner_summary(winner) for mode, winner in winners.items() if mode in selected_modes},
     }
 
 
@@ -482,7 +506,8 @@ def _write_manual_summary(*, summary_path: Path, payload: dict[str, Any]) -> Non
         "| Mode | STT1 | STT2 | Method | Audio/VAD | Quality | Speed | Time(s) |",
         "|---|---|---|---|---|---:|---:|---:|",
     ]
-    for mode in ("fast", "auto", "high"):
+    selected_modes = _phase_modes(payload.get("selected_modes"))
+    for mode in selected_modes:
         winner = dict(payload.get("winners", {}).get(mode) or {})
         lines.append(
             "| {mode} | `{stt1}` | `{stt2}` | `{method}` | `{audio}` | {quality:.3f} | {speed:.3f} | {elapsed:.3f} |".format(

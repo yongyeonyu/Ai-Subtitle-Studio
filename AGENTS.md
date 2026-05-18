@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.09-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_9_RELEASED
-Last-Updated: 2026-05-18
+Document-Version: 04.00.10-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
+Last-Updated: 2026-05-19
 Updated-By: Codex
 Purpose: Agent bootstrap, token-efficient navigation, and handoff rules only.
 -->
@@ -93,10 +93,10 @@ Required workflow:
 - Short-video test rule: use `/Users/u_mo_c/Downloads/마카오테스트` for quick smoke tests, short subtitle-generation regressions, and fast UI/runtime verification runs.
 - Long-video test rule: use `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4` for long-running pipeline checks, cache-reset/fresh-run validation, ETA/progress observation, and memory/performance validation on extended media.
 - New-chat rule: when handing off to a fresh chat, keep the user-facing handoff in Korean but compress it for token efficiency; prefer exact paths, commands, verified results, and next actions over narrative explanation.
-- Current app version in code: `04.00.09`
-- Current handoff document version: `04.00.09-mac-native`
-- Latest release checkpoint: `v04.00.09`
-- Current phase: `MAC_NATIVE_APPSTORE_V4_0_9_RELEASED`
+- Current app version in code: `04.00.10`
+- Current handoff document version: `04.00.10-mac-native`
+- Latest release checkpoint: `v04.00.10`
+- Current phase: `MAC_NATIVE_APPSTORE_V4_0_10_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
@@ -104,6 +104,8 @@ Required workflow:
 - Release state: Fast, Auto, and High are now the single user-facing Mode controls. Fast runs LoRA-only subtitle post-processing, Auto runs LoRA + Deep, and High runs LoRA + Deep + chunked LLM. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
 - Mode-manager state: `core/mode_manager.py` is now the central owner for Fast/Auto/High/STT mode policy. Mode-managed routes such as audio preset, VAD, and ensemble gates should not be re-persisted by LoRA autopilot; only user-selectable model identities should flow back into per-mode defaults.
 - Tiniping benchmark state: `tools/benchmark_tiniping_mode_search.py` plus `output/manual_verification/latest/tiniping_benchmark_summary.md` now lock Fast/Auto/High defaults from the 티니핑 0~3분 sweep and 0~11분 final run. STT model menus surface `[Fast]`, `[Auto]`, and `[High]` tags on the winning STT1/STT2 models.
+- Adaptive audio state: chunk audio routing now has profile-memory reuse, preview self-score guard, and switch-confirmation heuristics in `core/audio/media_processor_audio.py` and `core/audio/preset_auto_classifier.py`; High keeps the conservative benchmark-locked route by default, while adaptive routing remains available for broader runtime use and benchmark suites.
+- High timing state: High now keeps `ffmpeg/silero relaxed` plus a 120-second rolling STT window with 8-second overlap and 4-second hysteresis so benchmark-locked timing survives the real transcribe path instead of only the search harness.
 - Completion state: subtitle generation, editor save, quality review, and cleanup paths clear foreground busy UI before deferred learning starts; editor-save truth/text LoRA work is queued for Home-idle processing.
 - Completion score state: when subtitle generation finishes, the Home sidebar progress card appends the final subtitle self-review score next to elapsed/expected time, rounded to two decimals, so queue review can see quality without reopening the editor.
 - Generation completion state: the editor does not mark subtitle generation complete from STT progress alone. Backend finalization waits until saveable subtitle segments exist, retries completion autosave when the timeline is still being populated, and prevents empty-segment auto-save failures.
@@ -155,8 +157,8 @@ Required workflow:
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Refactor state: the longest subtitle/project/editor/runtime modules were split by responsibility into `core.audio.transcribe_worker_io`, `core.engine.subtitle_segment_filter`, `core.engine.subtitle_accuracy_utils`, `core.pipeline.cut_boundary_cache`, and `ui.editor.editor_segments_bulk_load` so future native migration work has smaller seams.
-- Verification state: `v04.00.09` release verification passed the Tiniping benchmark run, the consolidated 291-test unittest sweep for the touched release surface, `compileall`, `git diff --check`, and refreshed release handoff files. Full release verification details are in `RELEASE_v04.00.09.md`.
-- Latest regression checkpoint: on 2026-05-18, `./venv/bin/python tools/benchmark_tiniping_mode_search.py --manual-seeds-json .codex_work/benchmarks/tiniping_manual_seeds.json --keep-artifacts`, `./venv/bin/python -m unittest tests.test_stt_quality_presets tests.test_mode_policy tests.test_whisper_model_catalog tests.test_tiniping_mode_search tests.test_benchmark_mode_profiles tests.test_editor_roughcut_draft tests.test_project_context tests.test_timeline_hit_targets tests.test_ai_settings_runtime_apply tests.test_stt_mode_policy`, `./venv/bin/python -m compileall -q main.py core ui tests tools`, and `git diff --check -- .` passed for `v04.00.09`.
+- Verification state: `v04.00.10` release verification now covers the adaptive-audio/timing/editor regression surface, `compileall`, `git diff --check`, refreshed release handoff files, and a real `test video/X5_시승기_후반` mode benchmark. Full release verification details are in `RELEASE_v04.00.10.md`.
+- Latest regression checkpoint: on 2026-05-19, `./venv/bin/python -m unittest tests.test_stt_quality_presets tests.test_mode_policy tests.test_ai_settings_runtime_apply tests.test_benchmark_mode_profiles tests.test_audio_presets tests.test_preset_auto_classifier tests.test_media_processor_overlap tests.test_subtitle_engine_settings tests.test_subtitle_line_breaks tests.test_timeline_hit_targets tests.test_tiniping_timing_ideas tests.test_tiniping_mode_search -q`, `./venv/bin/python -m compileall -q main.py core ui tests tools`, `git diff --check -- .`, and `tools/benchmark_subtitle_pipeline_variants.py --suite modes --media test video/X5_시승기_후반.MP4 --reference-srt test video/X5_시승기_후반.srt --start-sec 0 --duration-sec 180 --keep-artifacts` were run for `v04.00.10`.
 
 ## Collaboration Rules
 

@@ -2540,13 +2540,52 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas._detect_live_cut_boundary_record = Mock(
                 return_value={"local_sec": 1.23, "frame": 123, "score": 40.0}
             )
+            canvas._drag_edge = "diamond"
+            canvas._drag_diamond_pair = (0, 1)
+            canvas._drag_diamond_orig = 2.0
 
             candidates = canvas._drag_live_cut_snap_candidates(2.19, edge="diamond")
 
             self.assertEqual(len(candidates), 1)
             self.assertEqual(candidates[0]["kind"], "cut_live")
             self.assertAlmostEqual(candidates[0]["time"], 2.23)
-            canvas._detect_live_cut_boundary_record.assert_called_once_with(__file__, 1.19, 100.0)
+            canvas._detect_live_cut_boundary_record.assert_called_once()
+            call = canvas._detect_live_cut_boundary_record.call_args
+            self.assertEqual(call.args, (__file__, 1.19, 100.0))
+            self.assertEqual(call.kwargs.get("direction"), 1)
+            self.assertAlmostEqual(call.kwargs.get("search_start_local_sec"), 0.19, places=2)
+            self.assertAlmostEqual(call.kwargs.get("search_end_local_sec"), 1.19, places=2)
+            self.assertAlmostEqual(canvas._drag_shadow_playhead_sec or 0.0, 2.23, places=4)
+        finally:
+            canvas.deleteLater()
+
+    def test_live_cut_snap_candidate_uses_reverse_direction_window_when_dragging_left(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas._resolve_active_context = Mock(
+                return_value={
+                    "clip_file": __file__,
+                    "local_sec": 1.70,
+                    "clip_start": 0.0,
+                    "fps": 100.0,
+                }
+            )
+            canvas._detect_live_cut_boundary_record = Mock(
+                return_value={"local_sec": 1.66, "frame": 166, "score": 31.0}
+            )
+            canvas._drag_edge = "diamond"
+            canvas._drag_diamond_pair = (0, 1)
+            canvas._drag_diamond_orig = 2.0
+            canvas.segments[0]["end"] = 2.0
+
+            candidates = canvas._drag_live_cut_snap_candidates(1.70, edge="diamond")
+
+            self.assertEqual(len(candidates), 1)
+            call = canvas._detect_live_cut_boundary_record.call_args
+            self.assertEqual(call.kwargs.get("direction"), -1)
+            self.assertAlmostEqual(call.kwargs.get("search_start_local_sec"), 1.70, places=2)
+            self.assertAlmostEqual(call.kwargs.get("search_end_local_sec"), 2.70, places=2)
         finally:
             canvas.deleteLater()
 

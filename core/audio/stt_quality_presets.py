@@ -32,7 +32,8 @@ VAD_MODE_AUTOMATION_NOTE = (
 TINIPING_BENCHMARK_REFERENCE = "Tiniping 0~3분 sweep + 0~11분 final"
 TINIPING_FAST_PRIMARY_MODEL = "youngouk/whisper-medium-komixv2-mlx"
 TINIPING_SUBTITLE_LLM_MODEL = "exaone3.5:7.8b"
-WINDOWED_STT_REFERENCE = "3분 windowed STT + overlap hysteresis"
+AUTO_WINDOWED_STT_REFERENCE = "3분 windowed STT + overlap hysteresis"
+HIGH_WINDOWED_STT_REFERENCE = "120초 windowed STT + 8초 overlap / 4초 hysteresis"
 
 
 def _quality_model() -> str:
@@ -113,25 +114,40 @@ def _ffmpeg_silero_relaxed_audio_mapping() -> dict:
     }
 
 
-def _high_ten_vad_stable_mapping() -> dict:
+def _high_runtime_detail_mapping() -> dict:
     return {
-        "selected_audio_ai": "none",
-        "selected_vad": "ten_vad",
-        "vad_backend_policy": "auto",
-        "use_basic_filter": True,
-        "audio_chunk_routing_enabled": True,
-        "audio_chunk_route_vad_enabled": True,
-        "audio_chunk_profile_sec": 18.0,
+        "audio_preset_auto_benchmark_locked": True,
+        "audio_chunk_routing_benchmark_locked": False,
+        "audio_chunk_routing_enabled": False,
+        "audio_chunk_route_vad_enabled": False,
+        "vad_backend_policy": "legacy",
+        "audio_chunk_profile_sec": 24.0,
+        "audio_chunk_route_profile_samples": 3,
+        "audio_chunk_route_profile_window_sec": 8.0,
+        "audio_chunk_route_candidate_limit": 3,
+        "audio_chunk_route_preview_enabled": True,
+        "audio_chunk_route_preview_min_confidence": 0.76,
+        "audio_chunk_route_preview_gap_max": 0.08,
+        "audio_chunk_route_hysteresis_enabled": True,
+        "audio_chunk_route_hysteresis_margin": 0.05,
+        "audio_chunk_route_profile_memory_enabled": True,
+        "audio_chunk_route_profile_memory_margin": 0.04,
+        "audio_chunk_route_profile_memory_min_confidence": 0.64,
+        "audio_chunk_route_switch_confirmation_enabled": True,
+        "audio_chunk_route_switch_confirmation_margin": 0.04,
+        "audio_chunk_route_switch_confirmation_strong_margin": 0.11,
+        "audio_chunk_route_switch_confirmation_min_streak": 2,
+        "audio_chunk_route_precision_threshold": 0.74,
+        "audio_chunk_route_secondary_recheck_threshold": 0.68,
+        "audio_chunk_route_low_confidence_threshold": 0.58,
+        "audio_chunk_route_max_workers": 2,
         "scan_cut_audio_gain_enabled": True,
         "cut_boundary_detection_enabled": True,
         "cut_boundary_enabled": True,
         "scan_cut_enabled": True,
         "scan_cut_auto_enabled": True,
-        "vad_threshold": 0.46,
         "ten_vad_threshold": 0.46,
         "review_vad_before_stt_enabled": True,
-        "review_vad_speech_pad_sec": 0.28,
-        "review_vad_min_silence_sec": 0.65,
         "vad_post_stt_align_enabled": True,
     }
 
@@ -240,10 +256,12 @@ def _mode_locked_vad_mapping(preset_key: str) -> dict:
     # BENCH LOCK 2026-05-18:
     # - Fast    -> clearvoice_ten_vad_noisy
     # - Auto    -> ffmpeg_silero_relaxed + 3분 롤링 재시작
-    # - High    -> ten_vad 안정형 + 3분 롤링 재시작
+    # - High    -> ffmpeg_silero_relaxed + 120초 롤링 재시작
+    #              adaptive chunk audio는 구현은 유지하되 covered-only 회귀가 있어
+    #              기본 High 잠금값에서는 비활성화
     # Source:
     # - Auto: Tiniping 0~3m sweep + 0~11m final validation.
-    # - High: full-video final rerun + current-mode reproducibility check.
+    # - High: 11~17분 무자막 공백 제외 full rerun.
     profiles = {
         "fast": {
             "selected_vad": "ten_vad",
@@ -396,8 +414,8 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "runtime_scheduler_ramp_initial_sec": 90.0,
             "background_prefetch_lora_enabled": False,
             "background_prefetch_candidates_enabled": False,
-            "audio_chunk_routing_enabled": True,
-            "audio_chunk_route_vad_enabled": True,
+            "audio_chunk_routing_enabled": False,
+            "audio_chunk_route_vad_enabled": False,
             "audio_chunk_profile_sec": 24.0,
             "vad_dual_model_enabled": True,
             "speaker_diarization_auto_enabled": False,
@@ -477,6 +495,13 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "audio_chunk_routing_enabled": True,
             "audio_chunk_route_vad_enabled": True,
             "audio_chunk_profile_sec": 30.0,
+            "audio_chunk_route_profile_memory_enabled": True,
+            "audio_chunk_route_profile_memory_margin": 0.04,
+            "audio_chunk_route_profile_memory_min_confidence": 0.64,
+            "audio_chunk_route_switch_confirmation_enabled": True,
+            "audio_chunk_route_switch_confirmation_margin": 0.04,
+            "audio_chunk_route_switch_confirmation_strong_margin": 0.11,
+            "audio_chunk_route_switch_confirmation_min_streak": 2,
             "vad_dual_model_enabled": False,
             "speaker_diarization_auto_enabled": False,
         },
@@ -487,10 +512,16 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "selected_llm_provider": "ollama",
             "subtitle_llm_user_selected": True,
             "stt_candidate_scoring_enabled": True,
+            **_ffmpeg_silero_relaxed_audio_mapping(),
             **_mode_locked_vad_mapping("precise"),
-            **_high_ten_vad_stable_mapping(),
-            **_pipeline_mapping(180, 12.0, 2),
-            **_windowed_stt_mapping(overlap_sec=12.0, hysteresis_sec=6.0, max_boundary_shift_sec=0.12),
+            **_high_runtime_detail_mapping(),
+            **_pipeline_mapping(120, 8.0, 2),
+            **_windowed_stt_mapping(
+                window_sec=120.0,
+                overlap_sec=8.0,
+                hysteresis_sec=4.0,
+                max_boundary_shift_sec=0.10,
+            ),
             **_cut_boundary_mapping("medium"),
             **_roughcut_llm_mapping(TINIPING_SUBTITLE_LLM_MODEL),
             **_decoder_settings(0.42, -2.6, 2.4, 0.6, 8, 1.35),
@@ -505,16 +536,17 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "stt_ensemble_selective_enabled": True,
             "stt_ensemble_parallel_enabled": False,
             "stt_selective_secondary_recheck_enabled": True,
-            "stt_low_score_recheck_enabled": False,
-            "stt_low_score_recheck_threshold": 72,
+            "stt_low_score_recheck_enabled": True,
+            "stt_low_score_recheck_threshold": 78,
             "stt_low_score_recheck_padding_sec": 0.45,
-            "stt_low_score_recheck_max_segments": 0,
-            "stt_low_score_recheck_max_audio_sec": 0.0,
+            "stt_low_score_recheck_max_segments": 24,
+            "stt_low_score_recheck_max_audio_sec": 110.0,
+            "stt_low_score_recheck_min_improvement": 2.0,
             "stt_word_timestamps_mode": "selective",
             "stt_word_timestamps_default_enabled": False,
-            "stt_word_timestamps_precision_enabled": False,
+            "stt_word_timestamps_precision_enabled": True,
             "stt_word_timestamps_precision_threshold": 72.0,
-            "stt_word_timestamps_precision_max_segments": 32,
+            "stt_word_timestamps_precision_max_segments": 48,
             "stt_word_timestamps_precision_max_audio_sec": 100.0,
             "stt_word_timestamps_precision_keep_text": True,
             "stt_word_timestamps_precision_min_similarity": 0.36,
@@ -542,7 +574,7 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "deep_subtitle_policy_enabled": True,
             "deep_segment_setting_policy_enabled": False,
             "deep_stt_candidate_selector_enabled": True,
-            "deep_timing_adjustment_enabled": False,
+            "deep_timing_adjustment_enabled": True,
             "subtitle_llm_runtime_enabled": True,
             "subtitle_llm_macro_chunk_enabled": True,
             "subtitle_llm_context_boundary_refine_enabled": True,
@@ -621,12 +653,14 @@ def load_stt_quality_presets() -> dict[str, dict]:
         },
         "balanced": {
             "label": STT_QUALITY_PRESET_LABELS["balanced"],
-            "description": f"{TINIPING_BENCHMARK_REFERENCE} 기준 Auto 우승 조합: WhisperKit Turbo + ffmpeg/silero relaxed + {WINDOWED_STT_REFERENCE}",
+            "description": f"{TINIPING_BENCHMARK_REFERENCE} 기준 Auto 우승 조합: WhisperKit Turbo + ffmpeg/silero relaxed + {AUTO_WINDOWED_STT_REFERENCE}",
             "settings": mode_benchmark_locked_settings("balanced"),
         },
         "precise": {
             "label": STT_QUALITY_PRESET_LABELS["precise"],
-            "description": f"{TINIPING_BENCHMARK_REFERENCE} 기준 High 안정 조합: WhisperKit 품질 + TEN VAD 안정형 + {WINDOWED_STT_REFERENCE} + LLM",
+            "description": "Tiniping 11~17분 무자막 공백 제외 full rerun 기준 High 우승 조합: "
+            f"WhisperKit 품질 + ffmpeg/silero relaxed + {HIGH_WINDOWED_STT_REFERENCE} + selective STT2/word precision + LLM "
+            "(adaptive chunk audio 엔진은 유지하지만 기본 High에는 아직 강제하지 않음)",
             "settings": mode_benchmark_locked_settings("precise"),
         },
         "stt": {

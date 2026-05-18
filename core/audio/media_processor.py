@@ -578,12 +578,14 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 data = apply_audio_preset(data, preset_name)
             except Exception as e:
                 get_logger().log(f"⚠️ 오디오 프리셋 적용 실패({preset_name}): {e}")
-        auto_tune = data.get("audio_preset_auto_tune")
-        if isinstance(auto_tune, dict):
-            data.update(auto_audio_settings_only(auto_tune))
-        runtime_tune = getattr(self, "_auto_audio_tune_overrides", None)
-        if isinstance(runtime_tune, dict) and runtime_tune:
-            data.update(auto_audio_settings_only(runtime_tune))
+        auto_tune_locked = bool(data.get("audio_preset_auto_benchmark_locked", False))
+        if not auto_tune_locked:
+            auto_tune = data.get("audio_preset_auto_tune")
+            if isinstance(auto_tune, dict):
+                data.update(auto_audio_settings_only(auto_tune))
+            runtime_tune = getattr(self, "_auto_audio_tune_overrides", None)
+            if isinstance(runtime_tune, dict) and runtime_tune:
+                data.update(auto_audio_settings_only(runtime_tune))
         # Legacy override hook kept for compatibility with older batch callers.
         overrides = getattr(self, '_fast_mode_overrides', None)
         if overrides and isinstance(overrides, dict):
@@ -1038,7 +1040,14 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         long_quality_overlap = bool(settings.get("subtitle_quality_long_overlap_enabled", mode != "fast"))
         if quality_review_enabled and long_quality_overlap:
             overlap = max(overlap, 3.0)
-        return max(0.0, min(8.0, overlap))
+        max_overlap = 8.0
+        if self._settings_bool(settings, "stt_windowed_finalize_enabled", False):
+            try:
+                chunk_sec = max(1.0, float(settings.get("ff_chunk", _CHUNK_DURATION) or _CHUNK_DURATION))
+            except (TypeError, ValueError):
+                chunk_sec = _CHUNK_DURATION
+            max_overlap = max(max_overlap, min(30.0, chunk_sec / 2.0))
+        return max(0.0, min(max_overlap, overlap))
 
     def _split_range_with_overlap(self, start: float, end: float, max_chunk_dur: float, overlap_sec: float) -> list[dict]:
         start = max(0.0, float(start or 0.0))

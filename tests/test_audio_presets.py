@@ -287,7 +287,25 @@ class AudioPresetTests(unittest.TestCase):
 
         self.assertEqual(settings["ff_hp"], 190)
         self.assertEqual(settings.get("selected_audio_ai"), "clearvoice")
-        self.assertEqual(settings.get("selected_vad"), "ten_vad")
+        self.assertEqual(settings.get("selected_vad"), "silero")
+
+    def test_media_processor_skips_auto_tune_when_benchmark_locked(self):
+        processor = VideoProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = os.path.join(tmp, "user_settings.json")
+            with open(settings_path, "w", encoding="utf-8") as handle:
+                json.dump({"audio_preset_auto_benchmark_locked": True}, handle)
+            with mock.patch.object(config, "DATASET_DIR", tmp):
+                processor.set_auto_audio_tune_overrides({
+                    "ff_hp": 190,
+                    "selected_audio_ai": "clearvoice",
+                    "selected_vad": "ten_vad",
+                })
+                locked = processor._load_all_settings()
+
+        self.assertNotEqual(locked["ff_hp"], 190)
+        self.assertNotEqual(locked.get("selected_audio_ai"), "clearvoice")
+        self.assertEqual(locked.get("selected_vad"), "silero")
 
     def test_media_processor_uses_ffmpeg_and_cleanup_preset_fields(self):
         processor = VideoProcessor()
@@ -500,6 +518,708 @@ class AudioPresetTests(unittest.TestCase):
         self.assertTrue(all("highpass=f=150" in value for value in filters))
         self.assertTrue(all("loudnorm" not in value for value in filters))
 
+    def test_adaptive_chunk_audio_routing_applies_hysteresis_before_render(self):
+        class RoutingProcessor(VideoProcessor):
+            def __init__(self):
+                super().__init__()
+                self.rendered_audio_ai = []
+
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                if index == 0:
+                    return {
+                        "audio_strategy": "clean_voice",
+                        "audio_strategy_label": "깨끗한 음성",
+                        "audio_tune_reason": "테스트 1",
+                        "confidence": 0.84,
+                        "feature_confidence": 0.84,
+                        "settings": {"selected_audio_ai": "deepfilter", "selected_vad": "silero"},
+                        "audio_profile": {"environment": "indoor", "noise_level": "low", "volatile_scene": False},
+                        "precision_review": False,
+                        "secondary_recheck_hint": False,
+                    }
+                return {
+                    "audio_strategy": "noisy_voice",
+                    "audio_strategy_label": "잡음 음성",
+                    "audio_tune_reason": "테스트 2",
+                    "confidence": 0.81,
+                    "feature_confidence": 0.81,
+                    "settings": {"selected_audio_ai": "clearvoice", "selected_vad": "ten_vad"},
+                    "audio_profile": {"environment": "indoor", "noise_level": "low", "volatile_scene": False},
+                    "precision_review": False,
+                    "secondary_recheck_hint": False,
+                }
+
+            def _write_adaptive_chunk_from_media(self, _media_path, out_path, _seg, settings, *, tmpdir):
+                _ = tmpdir
+                self.rendered_audio_ai.append(str(settings.get("selected_audio_ai") or "none"))
+                with open(out_path, "wb") as f:
+                    f.write(b"wav")
+                return True
+
+        processor = RoutingProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 0.0, "end": 10.0}, {"start": 10.0, "end": 20.0}],
+                {
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": False,
+                    "audio_chunk_route_profile_memory_enabled": False,
+                    "audio_chunk_route_switch_confirmation_enabled": False,
+                    "audio_chunk_route_hysteresis_enabled": True,
+                    "audio_chunk_route_hysteresis_margin": 0.05,
+                },
+            )
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "r", encoding="utf-8") as f:
+                routes = json.load(f)
+
+        self.assertTrue(ok)
+        self.assertEqual(processor.rendered_audio_ai, ["deepfilter", "deepfilter"])
+        self.assertEqual(routes[1]["audio_strategy"], "clean_voice")
+        self.assertTrue(routes[1]["hysteresis_applied"])
+
+    def test_adaptive_chunk_audio_routing_prefers_baseline_when_noisy_voice_is_not_clearly_better(self):
+        class GuardProcessor(VideoProcessor):
+            def _preview_chunk_audio_route(
+                self,
+                sample_path,
+                *,
+                route_features,
+                route_profile,
+                candidate_scores,
+                settings,
+                tmpdir,
+                force=False,
+            ):
+                _ = (sample_path, route_features, route_profile, settings, tmpdir, force)
+                rows = []
+                for row in candidate_scores:
+                    cid = str(row.get("id") or "")
+                    if cid == "benchmark_locked_baseline":
+                        rows.append(
+                            {
+                                "id": cid,
+                                "label": "기본 High 유지",
+                                "signature": row.get("signature"),
+                                "preview_ok": True,
+                                "score": 0.68,
+                                "settings": {"selected_audio_ai": "none", "selected_vad": "silero"},
+                            }
+                        )
+                    else:
+                        rows.append(
+                            {
+                                "id": cid,
+                                "label": str(row.get("label") or cid),
+                                "signature": row.get("signature"),
+                                "preview_ok": True,
+                                "score": 0.69,
+                                "settings": {"selected_audio_ai": "clearvoice", "selected_vad": "ten_vad"},
+                            }
+                        )
+                rows.sort(key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+                return rows[0], rows
+
+        processor = GuardProcessor()
+        guarded = processor._maybe_apply_audio_route_baseline_guard(
+            "/tmp/sample.wav",
+            route_features={"high_band_ratio": 0.2, "low_band_ratio": 0.3},
+            route_profile={"speech_confidence": 0.62, "noise_level": "high", "volatile_scene": False},
+            candidate_scores=[
+                {"id": "noisy_voice", "label": "Noisy Voice", "score": 0.93},
+                {"id": "clean_voice", "label": "Clean Voice", "score": 0.44},
+            ],
+            selected_strategy="noisy_voice",
+            selected_label="Noisy Voice",
+            selected_confidence=0.69,
+            selected_settings={"selected_audio_ai": "clearvoice", "selected_vad": "ten_vad"},
+            preview_self_score=0.69,
+            settings={"selected_audio_ai": "none", "selected_vad": "silero"},
+            tmpdir="/tmp",
+        )
+
+        self.assertIsNotNone(guarded)
+        self.assertTrue(bool(guarded.get("applied")))
+        self.assertEqual(guarded.get("audio_strategy"), "benchmark_locked_baseline")
+        self.assertGreaterEqual(float(guarded.get("margin") or 0.0), 0.05)
+
+    def test_adaptive_chunk_audio_routing_keeps_specialist_route_for_challenging_audio_when_preview_gap_is_large(self):
+        class GuardProcessor(VideoProcessor):
+            def _preview_chunk_audio_route(
+                self,
+                sample_path,
+                *,
+                route_features,
+                route_profile,
+                candidate_scores,
+                settings,
+                tmpdir,
+                force=False,
+            ):
+                _ = (sample_path, route_features, route_profile, settings, tmpdir, force)
+                rows = []
+                for row in candidate_scores:
+                    cid = str(row.get("id") or "")
+                    if cid == "benchmark_locked_baseline":
+                        rows.append(
+                            {
+                                "id": cid,
+                                "label": "기본 High 유지",
+                                "signature": row.get("signature"),
+                                "preview_ok": True,
+                                "score": 0.63,
+                                "settings": {"selected_audio_ai": "none", "selected_vad": "silero"},
+                            }
+                        )
+                    else:
+                        rows.append(
+                            {
+                                "id": cid,
+                                "label": str(row.get("label") or cid),
+                                "signature": row.get("signature"),
+                                "preview_ok": True,
+                                "score": 0.76,
+                                "settings": {"selected_audio_ai": "clearvoice", "selected_vad": "ten_vad"},
+                            }
+                        )
+                rows.sort(key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+                return rows[0], rows
+
+        processor = GuardProcessor()
+        guarded = processor._maybe_apply_audio_route_baseline_guard(
+            "/tmp/sample.wav",
+            route_features={"high_band_ratio": 0.2, "low_band_ratio": 0.3},
+            route_profile={
+                "speech_confidence": 0.63,
+                "noise_level": "high",
+                "volatile_scene": True,
+                "mic_present": False,
+                "environment": "outdoor",
+            },
+            candidate_scores=[
+                {"id": "noisy_voice", "label": "Noisy Voice", "score": 0.93},
+                {"id": "clean_voice", "label": "Clean Voice", "score": 0.44},
+            ],
+            selected_strategy="noisy_voice",
+            selected_label="Noisy Voice",
+            selected_confidence=0.76,
+            selected_settings={"selected_audio_ai": "clearvoice", "selected_vad": "ten_vad"},
+            preview_self_score=0.76,
+            settings={"selected_audio_ai": "none", "selected_vad": "silero"},
+            tmpdir="/tmp",
+        )
+
+        self.assertIsNotNone(guarded)
+        self.assertFalse(bool(guarded.get("applied")))
+        self.assertIn("adaptive route 유지", str(guarded.get("reason") or ""))
+
+    def test_adaptive_chunk_audio_routing_can_split_large_windows_for_environment_changes(self):
+        processor = VideoProcessor()
+
+        expanded = processor._maybe_expand_grouped_chunks_for_audio_route(
+            [{"start": 0.0, "end": 180.0}],
+            {
+                "audio_chunk_route_split_enabled": True,
+                "audio_chunk_route_max_span_sec": 120.0,
+                "whisper_chunk_overlap_sec": 10.0,
+            },
+        )
+
+        self.assertEqual(expanded, [{"start": 0.0, "end": 120.0}, {"start": 112.0, "end": 180.0}])
+
+    def test_adaptive_chunk_audio_routing_selectively_splits_only_ambiguous_challenging_segments(self):
+        processor = VideoProcessor()
+        grouped = [
+            {"start": 0.0, "end": 180.0},
+            {"start": 180.0, "end": 360.0},
+        ]
+        route_logs = {
+            0: {
+                "audio_strategy": "noisy_voice",
+                "confidence": 0.72,
+                "feature_confidence": 0.61,
+                "self_score": 0.72,
+                "preview_route_switched": True,
+                "candidate_scores": [
+                    {"id": "noisy_voice", "score": 0.72},
+                    {"id": "clean_voice", "score": 0.68},
+                ],
+                "preview_scores": [
+                    {"id": "noisy_voice", "score": 0.72},
+                    {"id": "clean_voice", "score": 0.66},
+                ],
+                "audio_profile": {
+                    "noise_level": "high",
+                    "volatile_scene": True,
+                    "environment": "outdoor",
+                    "mic_present": False,
+                },
+            },
+            1: {
+                "audio_strategy": "noisy_voice",
+                "confidence": 0.95,
+                "feature_confidence": 0.94,
+                "self_score": 0.95,
+                "preview_route_switched": False,
+                "candidate_scores": [
+                    {"id": "noisy_voice", "score": 0.95},
+                    {"id": "clean_voice", "score": 0.71},
+                ],
+                "preview_scores": [
+                    {"id": "noisy_voice", "score": 0.95},
+                    {"id": "clean_voice", "score": 0.72},
+                ],
+                "audio_profile": {
+                    "noise_level": "high",
+                    "volatile_scene": False,
+                    "environment": "outdoor",
+                    "mic_present": False,
+                },
+            },
+        }
+
+        expanded = processor._selective_expand_grouped_chunks_for_audio_route(
+            grouped,
+            route_logs,
+            {
+                "audio_chunk_route_split_enabled": True,
+                "audio_chunk_route_max_span_sec": 120.0,
+                "audio_chunk_route_split_confidence_threshold": 0.8,
+                "audio_chunk_route_split_candidate_gap_max": 0.07,
+                "audio_chunk_route_split_preview_divergence_min": 0.08,
+                "whisper_chunk_overlap_sec": 10.0,
+            },
+        )
+
+        self.assertEqual(
+            expanded,
+            [
+                {"start": 0.0, "end": 120.0},
+                {"start": 112.0, "end": 180.0},
+                {"start": 180.0, "end": 360.0},
+            ],
+        )
+
+    def test_adaptive_chunk_audio_routing_keeps_long_specialist_chunk_when_route_is_confident(self):
+        processor = VideoProcessor()
+
+        should_split = processor._should_split_audio_route_segment(
+            {"start": 0.0, "end": 180.0},
+            {
+                "audio_strategy": "noisy_voice",
+                "confidence": 0.92,
+                "feature_confidence": 0.90,
+                "self_score": 0.92,
+                "preview_route_switched": False,
+                "candidate_scores": [
+                    {"id": "noisy_voice", "score": 0.92},
+                    {"id": "clean_voice", "score": 0.76},
+                ],
+                "preview_scores": [
+                    {"id": "noisy_voice", "score": 0.92},
+                    {"id": "clean_voice", "score": 0.75},
+                ],
+                "audio_profile": {
+                    "noise_level": "high",
+                    "volatile_scene": True,
+                    "environment": "outdoor",
+                    "mic_present": False,
+                },
+            },
+            {
+                "audio_chunk_route_split_enabled": True,
+                "audio_chunk_route_max_span_sec": 120.0,
+                "audio_chunk_route_split_confidence_threshold": 0.8,
+                "audio_chunk_route_split_candidate_gap_max": 0.07,
+                "audio_chunk_route_split_preview_divergence_min": 0.08,
+                "whisper_chunk_overlap_sec": 10.0,
+            },
+        )
+
+        self.assertFalse(should_split)
+
+    def test_adaptive_chunk_audio_routing_does_not_undo_baseline_guard_with_hysteresis(self):
+        class GuardedRoutingProcessor(VideoProcessor):
+            def __init__(self):
+                super().__init__()
+                self.rendered_audio_ai = []
+
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                _ = tmpdir
+                if index == 0:
+                    return {
+                        "audio_strategy": "noisy_voice",
+                        "audio_strategy_label": "잡음 음성",
+                        "audio_tune_reason": "테스트 noisy",
+                        "confidence": 0.83,
+                        "self_score": 0.83,
+                        "feature_confidence": 0.83,
+                        "settings": {"selected_audio_ai": "clearvoice", "selected_vad": "none"},
+                        "audio_profile": {"environment": "outdoor", "noise_level": "high", "volatile_scene": False},
+                        "precision_review": False,
+                        "secondary_recheck_hint": False,
+                        "baseline_guard_applied": False,
+                    }
+                return {
+                    "audio_strategy": "benchmark_locked_baseline",
+                    "audio_strategy_label": "기본 High 유지",
+                    "audio_tune_reason": "테스트 baseline",
+                    "confidence": 0.72,
+                    "self_score": 0.72,
+                    "feature_confidence": 0.72,
+                    "settings": {"selected_audio_ai": "none", "selected_vad": "silero"},
+                    "audio_profile": {"environment": "outdoor", "noise_level": "high", "volatile_scene": False},
+                    "precision_review": False,
+                    "secondary_recheck_hint": False,
+                    "baseline_guard_applied": True,
+                }
+
+            def _write_adaptive_chunk_from_media(self, _media_path, out_path, _seg, settings, *, tmpdir):
+                _ = tmpdir
+                self.rendered_audio_ai.append(str(settings.get("selected_audio_ai") or "none"))
+                with open(out_path, "wb") as f:
+                    f.write(b"wav")
+                return True
+
+        processor = GuardedRoutingProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 0.0, "end": 10.0}, {"start": 10.0, "end": 20.0}],
+                {
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": False,
+                    "audio_chunk_route_hysteresis_enabled": True,
+                    "audio_chunk_route_hysteresis_margin": 0.2,
+                },
+            )
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "r", encoding="utf-8") as f:
+                routes = json.load(f)
+
+        self.assertTrue(ok)
+        self.assertEqual(processor.rendered_audio_ai, ["clearvoice", "none"])
+        self.assertEqual(routes[1]["audio_strategy"], "benchmark_locked_baseline")
+        self.assertEqual(routes[1]["audio_tune_settings"]["selected_audio_ai"], "none")
+        self.assertFalse(routes[1].get("hysteresis_applied"))
+
+    def test_adaptive_chunk_audio_routing_reuses_profile_memory_for_similar_chunks(self):
+        class ProfileMemoryProcessor(VideoProcessor):
+            def __init__(self):
+                super().__init__()
+                self.rendered_audio_ai = []
+
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                _ = tmpdir
+                profile = {
+                    "environment": "outdoor",
+                    "noise_level": "high",
+                    "low_rumble": False,
+                    "quiet": False,
+                    "hot_signal": False,
+                    "volatile_scene": False,
+                    "speech_density": 0.82,
+                    "speech_confidence": 0.7,
+                    "mic_present": False,
+                }
+                if index == 0:
+                    return {
+                        "audio_strategy": "noisy_voice",
+                        "audio_strategy_label": "잡음 음성",
+                        "audio_tune_reason": "테스트 noisy",
+                        "confidence": 0.78,
+                        "self_score": 0.78,
+                        "feature_confidence": 0.78,
+                        "settings": {"selected_audio_ai": "clearvoice", "selected_vad": "none"},
+                        "audio_profile": dict(profile),
+                        "precision_review": False,
+                        "secondary_recheck_hint": False,
+                    }
+                return {
+                    "audio_strategy": "clip_fallback",
+                    "audio_strategy_label": "기존 청크 유지",
+                    "audio_tune_reason": "테스트 fallback",
+                    "confidence": 0.52,
+                    "self_score": 0.52,
+                    "feature_confidence": 0.52,
+                    "settings": {"selected_audio_ai": "none", "selected_vad": "silero"},
+                    "audio_profile": dict(profile),
+                    "precision_review": False,
+                    "secondary_recheck_hint": False,
+                }
+
+            def _write_adaptive_chunk_from_media(self, _media_path, out_path, _seg, settings, *, tmpdir):
+                _ = tmpdir
+                self.rendered_audio_ai.append(str(settings.get("selected_audio_ai") or "none"))
+                with open(out_path, "wb") as f:
+                    f.write(b"wav")
+                return True
+
+        processor = ProfileMemoryProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 0.0, "end": 10.0}, {"start": 10.0, "end": 20.0}],
+                {
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": False,
+                    "audio_chunk_route_profile_memory_enabled": True,
+                    "audio_chunk_route_profile_memory_min_confidence": 0.64,
+                    "audio_chunk_route_profile_memory_margin": 0.04,
+                    "audio_chunk_route_hysteresis_enabled": False,
+                },
+            )
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "r", encoding="utf-8") as f:
+                routes = json.load(f)
+
+        self.assertTrue(ok)
+        self.assertEqual(processor.rendered_audio_ai, ["clearvoice", "clearvoice"])
+        self.assertTrue(routes[1]["profile_memory_applied"])
+        self.assertEqual(routes[1]["audio_strategy"], "noisy_voice")
+        self.assertEqual(routes[1]["audio_tune_settings"]["selected_audio_ai"], "clearvoice")
+
+    def test_adaptive_chunk_audio_routing_requires_confirmation_before_switching_profiles(self):
+        class ConfirmationProcessor(VideoProcessor):
+            def __init__(self):
+                super().__init__()
+                self.rendered_audio_ai = []
+
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                _ = tmpdir
+                profile = {"environment": "outdoor", "noise_level": "high", "volatile_scene": False}
+                if index == 0:
+                    return {
+                        "audio_strategy": "clean_voice",
+                        "audio_strategy_label": "깨끗한 음성",
+                        "audio_tune_reason": "기준 chunk",
+                        "confidence": 0.84,
+                        "self_score": 0.84,
+                        "feature_confidence": 0.84,
+                        "settings": {"selected_audio_ai": "deepfilter", "selected_vad": "silero"},
+                        "audio_profile": dict(profile),
+                        "precision_review": False,
+                        "secondary_recheck_hint": False,
+                    }
+                return {
+                    "audio_strategy": "noisy_voice",
+                    "audio_strategy_label": "잡음 음성",
+                    "audio_tune_reason": "한 번만 흔들리는 noisy chunk",
+                    "confidence": 0.86,
+                    "self_score": 0.86,
+                    "feature_confidence": 0.86,
+                    "settings": {"selected_audio_ai": "clearvoice", "selected_vad": "none"},
+                    "audio_profile": dict(profile),
+                    "precision_review": False,
+                    "secondary_recheck_hint": False,
+                }
+
+            def _write_adaptive_chunk_from_media(self, _media_path, out_path, _seg, settings, *, tmpdir):
+                _ = tmpdir
+                self.rendered_audio_ai.append(str(settings.get("selected_audio_ai") or "none"))
+                with open(out_path, "wb") as f:
+                    f.write(b"wav")
+                return True
+
+        processor = ConfirmationProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 0.0, "end": 10.0}, {"start": 10.0, "end": 20.0}],
+                {
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": False,
+                    "audio_chunk_route_profile_memory_enabled": False,
+                    "audio_chunk_route_switch_confirmation_enabled": True,
+                    "audio_chunk_route_switch_confirmation_margin": 0.04,
+                    "audio_chunk_route_switch_confirmation_strong_margin": 0.11,
+                    "audio_chunk_route_switch_confirmation_min_streak": 2,
+                    "audio_chunk_route_hysteresis_enabled": False,
+                },
+            )
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "r", encoding="utf-8") as f:
+                routes = json.load(f)
+
+        self.assertTrue(ok)
+        self.assertEqual(processor.rendered_audio_ai, ["deepfilter", "deepfilter"])
+        self.assertTrue(routes[1]["switch_confirmation_applied"])
+        self.assertEqual(routes[1]["audio_strategy"], "clean_voice")
+
+    def test_adaptive_chunk_audio_routing_switches_after_confirmed_repeated_profile(self):
+        class ConfirmationProcessor(VideoProcessor):
+            def __init__(self):
+                super().__init__()
+                self.rendered_audio_ai = []
+
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                _ = tmpdir
+                profile = {"environment": "outdoor", "noise_level": "high", "volatile_scene": False}
+                if index == 0:
+                    return {
+                        "audio_strategy": "clean_voice",
+                        "audio_strategy_label": "깨끗한 음성",
+                        "audio_tune_reason": "기준 chunk",
+                        "confidence": 0.84,
+                        "self_score": 0.84,
+                        "feature_confidence": 0.84,
+                        "settings": {"selected_audio_ai": "deepfilter", "selected_vad": "silero"},
+                        "audio_profile": dict(profile),
+                        "precision_review": False,
+                        "secondary_recheck_hint": False,
+                    }
+                return {
+                    "audio_strategy": "noisy_voice",
+                    "audio_strategy_label": "잡음 음성",
+                    "audio_tune_reason": "반복 확인되는 noisy chunk",
+                    "confidence": 0.88 if index == 2 else 0.87,
+                    "self_score": 0.88 if index == 2 else 0.87,
+                    "feature_confidence": 0.88 if index == 2 else 0.87,
+                    "settings": {"selected_audio_ai": "clearvoice", "selected_vad": "none"},
+                    "audio_profile": dict(profile),
+                    "precision_review": False,
+                    "secondary_recheck_hint": False,
+                }
+
+            def _write_adaptive_chunk_from_media(self, _media_path, out_path, _seg, settings, *, tmpdir):
+                _ = tmpdir
+                self.rendered_audio_ai.append(str(settings.get("selected_audio_ai") or "none"))
+                with open(out_path, "wb") as f:
+                    f.write(b"wav")
+                return True
+
+        processor = ConfirmationProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [
+                    {"start": 0.0, "end": 10.0},
+                    {"start": 10.0, "end": 20.0},
+                    {"start": 20.0, "end": 30.0},
+                ],
+                {
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": False,
+                    "audio_chunk_route_profile_memory_enabled": False,
+                    "audio_chunk_route_switch_confirmation_enabled": True,
+                    "audio_chunk_route_switch_confirmation_margin": 0.04,
+                    "audio_chunk_route_switch_confirmation_strong_margin": 0.11,
+                    "audio_chunk_route_switch_confirmation_min_streak": 2,
+                    "audio_chunk_route_hysteresis_enabled": False,
+                },
+            )
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "r", encoding="utf-8") as f:
+                routes = json.load(f)
+
+        self.assertTrue(ok)
+        self.assertEqual(processor.rendered_audio_ai, ["deepfilter", "deepfilter", "clearvoice"])
+        self.assertTrue(routes[1]["switch_confirmation_applied"])
+        self.assertTrue(routes[2]["switch_confirmation_approved"])
+        self.assertEqual(routes[2]["audio_strategy"], "noisy_voice")
+
+    def test_adaptive_chunk_audio_routing_profile_memory_respects_baseline_guard(self):
+        class GuardRespectProcessor(VideoProcessor):
+            def __init__(self):
+                super().__init__()
+                self.rendered_audio_ai = []
+
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                _ = tmpdir
+                profile = {
+                    "environment": "outdoor",
+                    "noise_level": "high",
+                    "low_rumble": False,
+                    "quiet": False,
+                    "hot_signal": False,
+                    "volatile_scene": False,
+                    "speech_density": 0.82,
+                    "speech_confidence": 0.7,
+                    "mic_present": False,
+                }
+                if index == 0:
+                    return {
+                        "audio_strategy": "noisy_voice",
+                        "audio_strategy_label": "잡음 음성",
+                        "audio_tune_reason": "테스트 noisy",
+                        "confidence": 0.78,
+                        "self_score": 0.78,
+                        "feature_confidence": 0.78,
+                        "settings": {"selected_audio_ai": "clearvoice", "selected_vad": "none"},
+                        "audio_profile": dict(profile),
+                        "precision_review": False,
+                        "secondary_recheck_hint": False,
+                    }
+                return {
+                    "audio_strategy": "benchmark_locked_baseline",
+                    "audio_strategy_label": "기본 High 유지",
+                    "audio_tune_reason": "테스트 baseline guard",
+                    "confidence": 0.58,
+                    "self_score": 0.58,
+                    "feature_confidence": 0.58,
+                    "settings": {"selected_audio_ai": "none", "selected_vad": "silero"},
+                    "audio_profile": dict(profile),
+                    "precision_review": False,
+                    "secondary_recheck_hint": False,
+                    "baseline_guard_applied": True,
+                }
+
+            def _write_adaptive_chunk_from_media(self, _media_path, out_path, _seg, settings, *, tmpdir):
+                _ = tmpdir
+                self.rendered_audio_ai.append(str(settings.get("selected_audio_ai") or "none"))
+                with open(out_path, "wb") as f:
+                    f.write(b"wav")
+                return True
+
+        processor = GuardRespectProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 0.0, "end": 10.0}, {"start": 10.0, "end": 20.0}],
+                {
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": False,
+                    "audio_chunk_route_profile_memory_enabled": True,
+                    "audio_chunk_route_profile_memory_min_confidence": 0.64,
+                    "audio_chunk_route_profile_memory_margin": 0.04,
+                    "audio_chunk_route_hysteresis_enabled": False,
+                },
+            )
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "r", encoding="utf-8") as f:
+                routes = json.load(f)
+
+        self.assertTrue(ok)
+        self.assertEqual(processor.rendered_audio_ai, ["clearvoice", "none"])
+        self.assertFalse(routes[1].get("profile_memory_applied"))
+        self.assertEqual(routes[1]["audio_strategy"], "benchmark_locked_baseline")
+        self.assertEqual(routes[1]["audio_tune_settings"]["selected_audio_ai"], "none")
+
     def test_adaptive_chunk_audio_routing_caps_parallel_workers(self):
         class RoutingProcessor(VideoProcessor):
             def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
@@ -562,8 +1282,8 @@ class AudioPresetTests(unittest.TestCase):
                 )
 
         self.assertTrue(ok)
-        self.assertEqual(max_workers_seen, [2])
-        self.assertEqual(len(submitted), 3)
+        self.assertEqual(max_workers_seen, [2, 2])
+        self.assertEqual(len(submitted), 6)
 
     def test_adaptive_audio_routing_respects_string_false_settings(self):
         self.assertFalse(VideoProcessor._adaptive_audio_routing_enabled({"audio_chunk_routing_enabled": "false"}))
@@ -572,6 +1292,14 @@ class AudioPresetTests(unittest.TestCase):
                 {
                     "audio_chunk_routing_enabled": True,
                     "audio_chunk_routing_disabled": "true",
+                }
+            )
+        )
+        self.assertFalse(
+            VideoProcessor._adaptive_audio_routing_enabled(
+                {
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_routing_benchmark_locked": True,
                 }
             )
         )

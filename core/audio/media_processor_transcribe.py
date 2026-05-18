@@ -101,6 +101,88 @@ class VideoProcessorTranscribeMixin:
     _clone_ensemble_chunk_dir = staticmethod(clone_ensemble_chunk_dir)
     _whisper_worker_options = staticmethod(whisper_worker_options)
 
+    def _load_audio_route_hints(self, chunk_dir: str) -> dict[str, dict]:
+        route_json = os.path.join(str(chunk_dir or ""), "audio_routes.json")
+        if not route_json or not os.path.exists(route_json):
+            return {}
+        try:
+            with open(route_json, "r", encoding="utf-8") as handle:
+                rows = json.load(handle)
+        except Exception:
+            return {}
+        hints: dict[str, dict] = {}
+        for row in list(rows or []):
+            if not isinstance(row, dict):
+                continue
+            name = os.path.basename(str(row.get("path") or ""))
+            if name:
+                hints[name] = dict(row)
+        return hints
+
+    def _apply_audio_route_segment_hints(
+        self,
+        segments: list[dict],
+        chunk_item: dict,
+        route_hints: dict[str, dict] | None,
+    ) -> list[dict]:
+        if not segments or not route_hints:
+            return segments
+        chunk_name = os.path.basename(str((chunk_item or {}).get("input_path") or ""))
+        route = dict((route_hints or {}).get(chunk_name) or {})
+        if not route:
+            return segments
+        confidence = float(route.get("confidence", route.get("self_score", route.get("feature_confidence", 0.0))) or 0.0)
+        risk_level = str(route.get("risk_level") or "low").strip().lower()
+        precision_review = bool(route.get("precision_review"))
+        secondary_hint = bool(route.get("secondary_recheck_hint"))
+        strategy = str(route.get("audio_strategy") or "")
+        updated: list[dict] = []
+        for seg in list(segments or []):
+            out = dict(seg)
+            meta = dict(out.get("asr_metadata") or {})
+            meta["adaptive_audio_route"] = {
+                "strategy": strategy,
+                "confidence": round(confidence, 4),
+                "risk_level": risk_level,
+                "hysteresis_applied": bool(route.get("hysteresis_applied")),
+                "precision_review": precision_review,
+                "secondary_recheck_hint": secondary_hint,
+            }
+            out["asr_metadata"] = meta
+            if precision_review:
+                out["precision_review"] = True
+            if risk_level == "high":
+                out["needs_review"] = True
+            if secondary_hint:
+                out["stt_route_secondary_recheck_hint"] = True
+            updated.append(out)
+        return updated
+
+    def _route_hint_recheck_ranges(self, primary_segments: list[dict], settings: dict | None = None) -> list[stt_rescue.SttRecheckRange]:
+        ranges: list[stt_rescue.SttRecheckRange] = []
+        for primary in primary_segments or []:
+            if not bool(primary.get("stt_route_secondary_recheck_hint")):
+                continue
+            text = str(primary.get("text", "") or "").strip()
+            if not text:
+                continue
+            start = max(0.0, float(primary.get("start", 0.0) or 0.0))
+            end = max(float(primary.get("end", start) or start), start + 0.1)
+            score = self._segment_score_100(primary)
+            ranges.append(
+                stt_rescue.SttRecheckRange(
+                    start=round(start, 3),
+                    end=round(end, 3),
+                    primary_score=round(score, 2),
+                    secondary_score=0.0,
+                    primary_text=text,
+                    secondary_text="",
+                    primary=dict(primary),
+                    secondary={},
+                )
+            )
+        return stt_rescue.budget_recheck_ranges(ranges, settings) if ranges else []
+
     def _collect_transcribe_result(
         self,
         chunk_dir: str,
@@ -181,6 +263,7 @@ class VideoProcessorTranscribeMixin:
                     cleanup_chunk_dir=False,
                     log_label=label,
                     preview_callback=preview_callback,
+                    _allow_window_rolling=False,
                 ):
                     result.extend(chunk_segs or [])
             except RuntimeError as exc:
@@ -852,6 +935,17 @@ class VideoProcessorTranscribeMixin:
         )
         if missing_ranges:
             ranges = list(ranges) + missing_ranges
+        hinted_ranges = self._route_hint_recheck_ranges(scored_primary, settings)
+        if hinted_ranges:
+            existing_keys = {
+                (round(float(item.start), 2), round(float(item.end), 2))
+                for item in ranges
+            }
+            for item in hinted_ranges:
+                key = (round(float(item.start), 2), round(float(item.end), 2))
+                if key not in existing_keys:
+                    ranges.append(item)
+                    existing_keys.add(key)
         raw_range_count = len(ranges)
         ranges = stt_rescue.budget_recheck_ranges(ranges, settings)
         if raw_range_count > len(ranges):
@@ -1119,8 +1213,49 @@ class VideoProcessorTranscribeMixin:
         is_single: bool = False,
         preview_callback=None,
         cleanup_chunk_dir: bool = True,
+        _allow_window_rolling: bool = True,
     ):
+        chunks, q, _t_sec = self._scan_transcribe_chunks(chunk_dir)
+        if not chunks:
+            yield [], 0, 0
+            return
+
+        vad_strict = []
+        vad_json = os.path.join(chunk_dir, "vad_strict.json")
+        if os.path.exists(vad_json):
+            try:
+                with open(vad_json, "r", encoding="utf-8") as handle:
+                    vad_strict = json.load(handle)
+            except Exception:
+                vad_strict = []
+
         s = self._load_all_settings()
+        if _allow_window_rolling and self._windowed_span_ranges(q, s):
+            had_window_error = False
+            try:
+                yield from self._transcribe_with_windowed_spans(
+                    chunk_dir,
+                    q,
+                    s,
+                    vad_strict=vad_strict,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    model_override=None,
+                    log_label="STT-ENSEMBLE",
+                    preview_callback=preview_callback,
+                )
+            except Exception:
+                had_window_error = True
+                raise
+            finally:
+                if cleanup_chunk_dir:
+                    shutil.rmtree(chunk_dir, ignore_errors=True)
+                if had_window_error:
+                    get_logger().log("[WARN] STT-ENSEMBLE rolling-window transcription aborted due to worker failure")
+                else:
+                    get_logger().log("[DONE] STT-ENSEMBLE rolling-window transcription completed")
+            return
+
         from core.audio.npu_acceleration import prefer_npu_whisper_model
 
         raw_primary_model = s.get("selected_whisper_model", self.whisper_model)
@@ -1148,6 +1283,7 @@ class VideoProcessorTranscribeMixin:
                 cleanup_chunk_dir=cleanup_chunk_dir,
                 log_label="STT1",
                 preview_callback=preview_callback,
+                _allow_window_rolling=False,
             )
             return
         primary_accel, secondary_accel, backend_mix = self._ensemble_scheduler_context(
@@ -1304,6 +1440,34 @@ class VideoProcessorTranscribeMixin:
             if cleanup_chunk_dir:
                 shutil.rmtree(chunk_dir, ignore_errors=True)
             self._release_after_transcribe_job("STT 앙상블")
+
+    def _scan_transcribe_chunks(self, chunk_dir: str) -> tuple[list[str], list[dict], float]:
+        chunks = sorted(
+            [f for f in os.listdir(chunk_dir) if f.endswith(".wav")],
+            key=self._chunk_sort_key,
+        )
+        t_sec = 1.0
+        items: list[dict] = []
+        for i, cf in enumerate(chunks):
+            cp = os.path.join(chunk_dir, cf)
+            m = re.search(r'vad_\d+_([\d\.]+)\.wav', cf)
+            ov_start = float(m.group(1)) if m else i * 30.0
+            try:
+                with wave.open(cp, "r") as w:
+                    chunk_duration = w.getnframes() / float(w.getframerate())
+                    chunk_end = ov_start + chunk_duration
+            except Exception:
+                chunk_duration = 30.0
+                chunk_end = ov_start + 30.0
+            items.append({
+                "idx": i,
+                "input_path": cp,
+                "ov_start_offset": ov_start,
+                "duration": max(0.001, float(chunk_duration or 0.001)),
+            })
+            t_sec = max(t_sec, chunk_end)
+        return chunks, items, t_sec
+
     def transcribe(
         self,
         chunk_dir: str,
@@ -1314,12 +1478,10 @@ class VideoProcessorTranscribeMixin:
         cleanup_chunk_dir: bool = True,
         log_label: str = "STT",
         preview_callback=None,
+        _allow_window_rolling: bool = True,
     ):
         _ = is_fast_mode
-        chunks = sorted(
-            [f for f in os.listdir(chunk_dir) if f.endswith(".wav")],
-            key=self._chunk_sort_key,
-        )
+        chunks, q, t_sec = self._scan_transcribe_chunks(chunk_dir)
         if not chunks:
             yield [], 0, 0
             return
@@ -1332,9 +1494,37 @@ class VideoProcessorTranscribeMixin:
                     vad_strict = json.load(f)
             except Exception:
                 pass
+        route_hints = self._load_audio_route_hints(chunk_dir)
 
         total = len(chunks)
         _s = self._load_all_settings()
+
+        if _allow_window_rolling and self._windowed_span_ranges(q, _s):
+            had_window_error = False
+            try:
+                yield from self._transcribe_with_windowed_spans(
+                    chunk_dir,
+                    q,
+                    _s,
+                    vad_strict=vad_strict,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    model_override=model_override,
+                    log_label=log_label,
+                    preview_callback=preview_callback,
+                )
+            except Exception:
+                had_window_error = True
+                raise
+            finally:
+                if cleanup_chunk_dir:
+                    shutil.rmtree(chunk_dir, ignore_errors=True)
+                if had_window_error:
+                    get_logger().log(f"[WARN] {log_label} rolling-window transcription aborted due to worker failure")
+                else:
+                    get_logger().log(f"[DONE] {log_label} rolling-window transcription completed")
+            return
+
         if model_override is None and bool(_s.get("stt_ensemble_enabled", False)):
             yield from self.transcribe_ensemble(
                 chunk_dir,
@@ -1342,6 +1532,7 @@ class VideoProcessorTranscribeMixin:
                 is_single=is_single,
                 preview_callback=preview_callback,
                 cleanup_chunk_dir=cleanup_chunk_dir,
+                _allow_window_rolling=_allow_window_rolling,
             )
             return
         from core.audio.npu_acceleration import prefer_npu_whisper_model
@@ -1397,29 +1588,8 @@ class VideoProcessorTranscribeMixin:
         self._notify_stage(f"⏳ [{log_label}] Whisper 인식 중")
         get_logger().log(f"\n🎯 [{log_label}] Whisper 인식 시작 (총 {total}블록, 모델: {target_model.split(chr(47))[-1]})")
 
-        t_sec = 1.0
-        q = []
-        for i, cf in enumerate(chunks):
-            cp = os.path.join(chunk_dir, cf)
-            m = re.search(r'vad_\d+_([\d\.]+)\.wav', cf)
-            ov_start = float(m.group(1)) if m else i * 30.0
-            try:
-                with wave.open(cp, "r") as w:
-                    chunk_duration = w.getnframes() / float(w.getframerate())
-                    chunk_end = ov_start + chunk_duration
-            except Exception:
-                chunk_duration = 30.0
-                chunk_end = ov_start + 30.0
-            q.append({
-                "idx": i,
-                "input_path": cp,
-                "ov_start_offset": ov_start,
-                "duration": max(0.001, float(chunk_duration or 0.001)),
-            })
-            t_sec = max(t_sec, chunk_end)
-
         safe_paths = [x["input_path"] for x in q]
-        s = self._load_all_settings()
+        s = _s
         progress_by_audio_duration = bool(s.get("stt_rescue_whisper_mode", False)) or bool(
             s.get("stt_word_timestamp_precision_pass", False)
         )
@@ -1634,6 +1804,14 @@ class VideoProcessorTranscribeMixin:
                             target_end_sec=target_end_sec,
                             is_single=is_single
                         )
+                        chunk_segs = self._apply_audio_route_segment_hints(chunk_segs, pending_item, route_hints)
+                        chunk_segs = self._apply_windowed_chunk_finalize(
+                            chunk_segs,
+                            pending_item,
+                            s,
+                            total_chunks=total,
+                            vad_segments=vad_strict,
+                        )
                         chunk_segs = self._dedupe_overlapping_segments(
                             chunk_segs,
                             previous_end=prev_end,
@@ -1701,6 +1879,7 @@ class VideoProcessorTranscribeMixin:
                                 cleanup_chunk_dir=cleanup_chunk_dir,
                                 log_label=log_label,
                                 preview_callback=preview_callback,
+                                _allow_window_rolling=_allow_window_rolling,
                             )
                         finally:
                             self._fast_mode_overrides = previous_overrides
@@ -1732,6 +1911,7 @@ class VideoProcessorTranscribeMixin:
                             cleanup_chunk_dir=cleanup_chunk_dir,
                             log_label=log_label,
                             preview_callback=preview_callback,
+                            _allow_window_rolling=_allow_window_rolling,
                         )
                     finally:
                         self._fast_mode_overrides = previous_overrides
@@ -1760,6 +1940,14 @@ class VideoProcessorTranscribeMixin:
                         vad_strict,
                         target_end_sec=target_end_sec,
                         is_single=is_single
+                    )
+                    chunk_segs = self._apply_audio_route_segment_hints(chunk_segs, item, route_hints)
+                    chunk_segs = self._apply_windowed_chunk_finalize(
+                        chunk_segs,
+                        item,
+                        s,
+                        total_chunks=total,
+                        vad_segments=vad_strict,
                     )
                     chunk_segs = self._dedupe_overlapping_segments(
                         chunk_segs,
@@ -1992,6 +2180,9 @@ class VideoProcessorTranscribeMixin:
             if data.get("word_timestamps") is not None:
                 asr_metadata["word_timestamps_requested"] = bool(data.get("word_timestamps"))
             asr_metadata["word_timestamps_available"] = bool(offset_words)
+            asr_metadata["chunk_start"] = round(float(offset), 6)
+            asr_metadata["chunk_end"] = round(float(offset) + float(item.get("duration", 0.0) or 0.0), 6)
+            asr_metadata["chunk_duration"] = round(float(item.get("duration", 0.0) or 0.0), 6)
             segment["asr_metadata"] = asr_metadata
             if vad_strict:
                 segment = annotate_segment_vad_alignment(segment, vad_strict)
@@ -1999,6 +2190,441 @@ class VideoProcessorTranscribeMixin:
             chunk_segs.append(segment)
 
         return chunk_segs
+
+    @staticmethod
+    def _windowed_float(settings: dict, key: str, default: float, minimum: float, maximum: float) -> float:
+        try:
+            value = float(settings.get(key, default) or default)
+        except (TypeError, ValueError):
+            value = float(default)
+        return max(float(minimum), min(float(maximum), value))
+
+    def _apply_windowed_chunk_finalize(
+        self,
+        chunk_segs: list[dict],
+        item: dict,
+        settings: dict,
+        *,
+        total_chunks: int,
+        vad_segments: list[dict] | None = None,
+    ) -> list[dict]:
+        if not chunk_segs or total_chunks <= 1 or not bool(settings.get("stt_windowed_finalize_enabled", False)):
+            return chunk_segs
+        chunk_idx = int(item.get("idx", 0) or 0)
+        chunk_start = float(item.get("ov_start_offset", 0.0) or 0.0)
+        chunk_duration = max(0.001, float(item.get("duration", 0.001) or 0.001))
+        chunk_end = chunk_start + chunk_duration
+        overlap_sec = self._windowed_float(
+            settings,
+            "stt_window_overlap_sec",
+            float(settings.get("whisper_chunk_overlap_sec", 0.0) or 0.0),
+            0.0,
+            min(30.0, chunk_duration / 2.0),
+        )
+        hysteresis_sec = self._windowed_float(
+            settings,
+            "stt_window_hysteresis_sec",
+            max(0.0, overlap_sec / 2.0),
+            0.0,
+            max(0.0, overlap_sec / 2.0),
+        )
+        max_shift = self._windowed_float(settings, "stt_window_max_boundary_shift_sec", 0.12, 0.0, 1.0)
+        commit_start = chunk_start + hysteresis_sec if chunk_idx > 0 else None
+        commit_end = chunk_end - hysteresis_sec if chunk_idx < total_chunks - 1 else None
+        if commit_start is None and commit_end is None:
+            return chunk_segs
+
+        finalized: list[dict] = []
+        for seg in chunk_segs:
+            trimmed = self._trim_segment_to_commit_window(
+                seg,
+                commit_start=commit_start,
+                commit_end=commit_end,
+                max_shift=max_shift,
+                vad_segments=vad_segments or [],
+            )
+            if trimmed:
+                meta = dict(trimmed.get("asr_metadata") or {})
+                meta["windowed_finalize"] = {
+                    "enabled": True,
+                    "chunk_index": chunk_idx,
+                    "total_chunks": int(total_chunks),
+                    "chunk_start": round(chunk_start, 3),
+                    "chunk_end": round(chunk_end, 3),
+                    "commit_start": None if commit_start is None else round(commit_start, 3),
+                    "commit_end": None if commit_end is None else round(commit_end, 3),
+                    "hysteresis_sec": round(hysteresis_sec, 3),
+                    "max_boundary_shift_sec": round(max_shift, 3),
+                }
+                trimmed["asr_metadata"] = meta
+                finalized.append(trimmed)
+        return finalized
+
+    def _windowed_span_ranges(self, items: list[dict], settings: dict) -> list[dict]:
+        if not items or not bool(settings.get("stt_windowed_finalize_enabled", False)):
+            return []
+        window_sec = self._windowed_float(settings, "stt_window_sec", 0.0, 0.0, 3600.0)
+        if window_sec < 30.0:
+            return []
+        start = float(items[0].get("ov_start_offset", 0.0) or 0.0)
+        end = start
+        for item in items:
+            item_start = float(item.get("ov_start_offset", 0.0) or 0.0)
+            item_duration = max(0.001, float(item.get("duration", 0.001) or 0.001))
+            end = max(end, item_start + item_duration)
+        if end - start <= window_sec + 1e-3:
+            return []
+        overlap_default = float(settings.get("whisper_chunk_overlap_sec", 0.0) or 0.0)
+        overlap_sec = self._windowed_float(
+            settings,
+            "stt_window_overlap_sec",
+            overlap_default,
+            0.0,
+            min(60.0, window_sec / 2.0),
+        )
+        ranges = self._split_range_with_overlap(start, end, window_sec, overlap_sec)
+        return ranges if len(ranges) > 1 else []
+
+    @staticmethod
+    def _window_items_for_range(items: list[dict], start: float, end: float) -> list[dict]:
+        selected: list[dict] = []
+        lower = float(start)
+        upper = float(end)
+        for item in list(items or []):
+            item_start = float(item.get("ov_start_offset", 0.0) or 0.0)
+            item_duration = max(0.001, float(item.get("duration", 0.001) or 0.001))
+            item_end = item_start + item_duration
+            if item_end <= lower or item_start >= upper:
+                continue
+            selected.append(dict(item))
+        return selected
+
+    @staticmethod
+    def _clip_vad_segments_to_window(vad_segments: list[dict] | None, start: float, end: float) -> list[dict]:
+        clipped: list[dict] = []
+        lower = float(start)
+        upper = float(end)
+        for seg in list(vad_segments or []):
+            try:
+                seg_start = float(seg.get("start", 0.0) or 0.0)
+                seg_end = float(seg.get("end", seg_start) or seg_start)
+            except (TypeError, ValueError):
+                continue
+            if seg_end <= lower or seg_start >= upper:
+                continue
+            clipped_seg = dict(seg)
+            clipped_seg["start"] = max(lower, seg_start)
+            clipped_seg["end"] = min(upper, seg_end)
+            if clipped_seg["end"] > clipped_seg["start"]:
+                clipped.append(clipped_seg)
+        return clipped
+
+    def _build_window_chunk_dir(
+        self,
+        base_chunk_dir: str,
+        window_items: list[dict],
+        *,
+        window_index: int,
+        total_windows: int,
+        window_range: dict,
+        vad_segments: list[dict] | None = None,
+    ) -> str:
+        base_dir = os.path.dirname(os.path.abspath(base_chunk_dir))
+        base_name = os.path.basename(os.path.abspath(base_chunk_dir).rstrip(os.sep))
+        window_dir = os.path.join(base_dir, f"{base_name}__stt_window_{window_index + 1:03d}")
+        shutil.rmtree(window_dir, ignore_errors=True)
+        os.makedirs(window_dir, exist_ok=True)
+
+        for item in list(window_items or []):
+            source = os.path.abspath(str(item.get("input_path") or ""))
+            if not source or not os.path.exists(source):
+                continue
+            link_name = os.path.join(window_dir, os.path.basename(source))
+            try:
+                os.symlink(source, link_name)
+            except Exception:
+                shutil.copy2(source, link_name)
+
+        clipped_vad = list(vad_segments or [])
+        if clipped_vad:
+            with open(os.path.join(window_dir, "vad_strict.json"), "w", encoding="utf-8") as handle:
+                json.dump(clipped_vad, handle, ensure_ascii=False, indent=2)
+        route_json = os.path.join(base_chunk_dir, "audio_routes.json")
+        if os.path.exists(route_json):
+            try:
+                with open(route_json, "r", encoding="utf-8") as handle:
+                    route_rows = json.load(handle)
+                wanted = {os.path.basename(str(item.get("input_path") or "")) for item in list(window_items or [])}
+                clipped_routes = [
+                    dict(row)
+                    for row in list(route_rows or [])
+                    if os.path.basename(str((row or {}).get("path") or "")) in wanted
+                ]
+                if clipped_routes:
+                    with open(os.path.join(window_dir, "audio_routes.json"), "w", encoding="utf-8") as handle:
+                        json.dump(clipped_routes, handle, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        window_meta = {
+            "window_index": int(window_index),
+            "total_windows": int(total_windows),
+            "start": round(float(window_range.get("start", 0.0) or 0.0), 3),
+            "end": round(float(window_range.get("end", 0.0) or 0.0), 3),
+            "chunk_count": int(len(window_items or [])),
+        }
+        with open(os.path.join(window_dir, "window_meta.json"), "w", encoding="utf-8") as handle:
+            json.dump(window_meta, handle, ensure_ascii=False, indent=2)
+        return window_dir
+
+    def _collect_window_transcribe_segments(
+        self,
+        window_chunk_dir: str,
+        *,
+        target_end_sec: float | None,
+        is_single: bool,
+        model_override: str | None,
+        log_label: str,
+    ) -> list[dict]:
+        collected: list[dict] = []
+        for chunk_segs, _idx, _total in self.transcribe(
+            window_chunk_dir,
+            is_fast_mode=False,
+            target_end_sec=target_end_sec,
+            is_single=is_single,
+            model_override=model_override,
+            cleanup_chunk_dir=True,
+            log_label=log_label,
+            preview_callback=None,
+            _allow_window_rolling=False,
+        ):
+            collected.extend([dict(seg) for seg in (chunk_segs or [])])
+        return collected
+
+    def _apply_windowed_span_finalize(
+        self,
+        window_segments: list[dict],
+        window_range: dict,
+        settings: dict,
+        *,
+        window_index: int,
+        total_windows: int,
+        previous_end: float,
+        vad_segments: list[dict] | None = None,
+    ) -> list[dict]:
+        if not window_segments:
+            return []
+        window_start = float(window_range.get("start", 0.0) or 0.0)
+        window_end = float(window_range.get("end", window_start) or window_start)
+        overlap_default = float(settings.get("whisper_chunk_overlap_sec", 0.0) or 0.0)
+        overlap_sec = self._windowed_float(
+            settings,
+            "stt_window_overlap_sec",
+            overlap_default,
+            0.0,
+            min(60.0, max(1.0, window_end - window_start) / 2.0),
+        )
+        hysteresis_sec = self._windowed_float(
+            settings,
+            "stt_window_hysteresis_sec",
+            max(0.0, overlap_sec / 2.0),
+            0.0,
+            max(0.0, overlap_sec / 2.0),
+        )
+        max_shift = self._windowed_float(settings, "stt_window_max_boundary_shift_sec", 0.12, 0.0, 1.0)
+        commit_start = window_start + hysteresis_sec if window_index > 0 else None
+        commit_end = window_end - hysteresis_sec if window_index < total_windows - 1 else None
+
+        finalized: list[dict] = []
+        for seg in list(window_segments or []):
+            trimmed = self._trim_segment_to_commit_window(
+                seg,
+                commit_start=commit_start,
+                commit_end=commit_end,
+                max_shift=max_shift,
+                vad_segments=vad_segments or [],
+            )
+            if not trimmed:
+                continue
+            meta = dict(trimmed.get("asr_metadata") or {})
+            meta["windowed_span_finalize"] = {
+                "enabled": True,
+                "window_index": int(window_index),
+                "total_windows": int(total_windows),
+                "window_start": round(window_start, 3),
+                "window_end": round(window_end, 3),
+                "commit_start": None if commit_start is None else round(commit_start, 3),
+                "commit_end": None if commit_end is None else round(commit_end, 3),
+                "hysteresis_sec": round(hysteresis_sec, 3),
+                "max_boundary_shift_sec": round(max_shift, 3),
+            }
+            trimmed["asr_metadata"] = meta
+            finalized.append(trimmed)
+        return self._dedupe_overlapping_segments(
+            finalized,
+            previous_end=previous_end,
+            dedup_window=float(settings.get("sub_dedup_window", 0.5) or 0.5),
+            vad_segments=vad_segments or [],
+        )
+
+    def _transcribe_with_windowed_spans(
+        self,
+        chunk_dir: str,
+        items: list[dict],
+        settings: dict,
+        *,
+        vad_strict: list[dict] | None,
+        target_end_sec: float | None,
+        is_single: bool,
+        model_override: str | None,
+        log_label: str,
+        preview_callback=None,
+    ):
+        window_ranges = self._windowed_span_ranges(items, settings)
+        if not window_ranges:
+            return
+        overlap_default = float(settings.get("whisper_chunk_overlap_sec", 0.0) or 0.0)
+        overlap_sec = self._windowed_float(
+            settings,
+            "stt_window_overlap_sec",
+            overlap_default,
+            0.0,
+            min(60.0, float(settings.get("stt_window_sec", 180.0) or 180.0) / 2.0),
+        )
+        hysteresis_sec = self._windowed_float(
+            settings,
+            "stt_window_hysteresis_sec",
+            max(0.0, overlap_sec / 2.0),
+            0.0,
+            max(0.0, overlap_sec / 2.0),
+        )
+        total_windows = len(window_ranges)
+        get_logger().log(
+            f"🪟 [{log_label}] 롤링 STT 창 활성화: {total_windows}개 창 · "
+            f"window {float(settings.get('stt_window_sec', 180.0) or 180.0):.1f}초 · "
+            f"overlap {overlap_sec:.1f}초 · hysteresis {hysteresis_sec:.1f}초"
+        )
+
+        previous_end = 0.0
+        for window_index, window_range in enumerate(window_ranges):
+            window_items = self._window_items_for_range(
+                items,
+                float(window_range.get("start", 0.0) or 0.0),
+                float(window_range.get("end", 0.0) or 0.0),
+            )
+            clipped_vad = self._clip_vad_segments_to_window(
+                vad_strict,
+                float(window_range.get("start", 0.0) or 0.0),
+                float(window_range.get("end", 0.0) or 0.0),
+            )
+            if not window_items:
+                yield [], window_index + 1, total_windows
+                continue
+            get_logger().log(
+                f"  🪟 [{log_label}] 창 {window_index + 1}/{total_windows} "
+                f"{float(window_range.get('start', 0.0) or 0.0):.1f}s~"
+                f"{float(window_range.get('end', 0.0) or 0.0):.1f}s "
+                f"(청크 {len(window_items)}개)"
+            )
+            window_chunk_dir = self._build_window_chunk_dir(
+                chunk_dir,
+                window_items,
+                window_index=window_index,
+                total_windows=total_windows,
+                window_range=window_range,
+                vad_segments=clipped_vad,
+            )
+            window_label = f"{log_label}-window-{window_index + 1}/{total_windows}"
+            window_segments = self._collect_window_transcribe_segments(
+                window_chunk_dir,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                model_override=model_override,
+                log_label=window_label,
+            )
+            committed = self._apply_windowed_span_finalize(
+                window_segments,
+                window_range,
+                settings,
+                window_index=window_index,
+                total_windows=total_windows,
+                previous_end=previous_end,
+                vad_segments=clipped_vad,
+            )
+            if committed:
+                previous_end = float(committed[-1].get("end", previous_end) or previous_end)
+                if callable(preview_callback):
+                    try:
+                        preview_callback(committed, log_label)
+                    except Exception:
+                        pass
+            get_logger().log(
+                f"  💾 [{log_label}] 창 {window_index + 1}/{total_windows} 확정 "
+                f"세그먼트 {len(committed)}개"
+            )
+            yield committed, window_index + 1, total_windows
+
+    def _trim_segment_to_commit_window(
+        self,
+        seg: dict,
+        *,
+        commit_start: float | None,
+        commit_end: float | None,
+        max_shift: float,
+        vad_segments: list[dict],
+    ) -> dict | None:
+        start = float(seg.get("start", 0.0) or 0.0)
+        end = float(seg.get("end", start) or start)
+        lower = None if commit_start is None else float(commit_start) - float(max_shift)
+        upper = None if commit_end is None else float(commit_end) + float(max_shift)
+        if lower is not None and end <= lower:
+            return None
+        if upper is not None and start >= upper:
+            return None
+
+        words = list(seg.get("words") or [])
+        if words:
+            kept_words = []
+            for word in words:
+                try:
+                    word_start = float(word.get("start", 0.0) or 0.0)
+                    word_end = float(word.get("end", word_start) or word_start)
+                except (TypeError, ValueError):
+                    continue
+                midpoint = (word_start + word_end) / 2.0
+                if lower is not None and midpoint < lower:
+                    continue
+                if upper is not None and midpoint > upper:
+                    continue
+                kept_words.append(dict(word))
+            if not kept_words:
+                return None
+            out = dict(seg)
+            out["words"] = kept_words
+            out["start"] = max(start, float(kept_words[0].get("start", start) or start))
+            out["end"] = min(end, float(kept_words[-1].get("end", end) or end))
+            text = _join_clean_word_texts(kept_words)
+            if text:
+                out["text"] = text
+            previous_meta = dict(out.get("asr_metadata") or {})
+            out = attach_asr_metadata(out, backend=previous_meta.get("backend"))
+            merged_meta = dict(previous_meta)
+            merged_meta.update(dict(out.get("asr_metadata") or {}))
+            out["asr_metadata"] = merged_meta
+            if vad_segments:
+                out = annotate_segment_vad_alignment(out, vad_segments)
+            return annotate_segment_hallucination_risk(out, vad_segments=vad_segments)
+
+        out = dict(seg)
+        if lower is not None:
+            out["start"] = max(start, float(commit_start))
+        if upper is not None:
+            out["end"] = min(end, float(commit_end))
+        if float(out.get("end", 0.0) or 0.0) <= float(out.get("start", 0.0) or 0.0) + 0.03:
+            return None
+        if vad_segments:
+            out = annotate_segment_vad_alignment(out, vad_segments)
+        return annotate_segment_hallucination_risk(out, vad_segments=vad_segments)
+
     def _dedupe_overlapping_segments(
         self,
         chunk_segs: list[dict],

@@ -7,6 +7,8 @@ from tools.benchmark_subtitle_pipeline_variants import (
     _compact_text,
     _rank_rows,
     _base_benchmark_settings,
+    _chunk_extraction_signature,
+    _variant_chunk_settings,
     benchmark_mode_lora_deep_profiles,
     benchmark_mode_lora_packaging_profiles,
     benchmark_mode_lora_selective_profiles,
@@ -20,7 +22,18 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         variants = benchmark_mode_profiles(_base_benchmark_settings("current"))
         by_name = {variant.name: variant for variant in variants}
 
-        self.assertEqual(set(by_name), {"mode_fast", "mode_auto", "mode_high"})
+        self.assertEqual(
+            set(by_name),
+            {
+                "mode_fast",
+                "mode_auto",
+                "mode_auto_adaptive_split",
+                "mode_auto_piecewise_drift",
+                "mode_auto_adaptive_split_drift",
+                "mode_high",
+                "mode_high_piecewise_drift",
+            },
+        )
 
         fast = by_name["mode_fast"]
         self.assertEqual(fast.method, "selective_ensemble")
@@ -56,10 +69,28 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertTrue(bool(auto.overrides.get("deep_subtitle_policy_enabled")))
         self.assertFalse(bool(auto.overrides.get("subtitle_bundle_use_provisional_cuts")))
 
+        auto_split = by_name["mode_auto_adaptive_split"]
+        self.assertEqual(auto_split.method, "selective_ensemble")
+        self.assertTrue(bool(auto_split.overrides.get("audio_chunk_route_split_enabled")))
+        self.assertEqual(auto_split.overrides.get("audio_chunk_route_max_span_sec"), 120.0)
+        self.assertEqual(auto_split.overrides.get("audio_chunk_route_split_confidence_threshold"), 0.78)
+        self.assertEqual(auto_split.overrides.get("audio_chunk_route_split_candidate_gap_max"), 0.07)
+        self.assertEqual(auto_split.overrides.get("audio_chunk_route_split_preview_divergence_min"), 0.08)
+
+        auto_drift = by_name["mode_auto_piecewise_drift"]
+        self.assertEqual(auto_drift.method, "selective_ensemble")
+        self.assertTrue(bool(auto_drift.overrides.get("subtitle_timing_piecewise_drift_enabled")))
+        self.assertEqual(auto_drift.overrides.get("subtitle_timing_piecewise_drift_trigger_sec"), 0.05)
+        self.assertEqual(auto_drift.overrides.get("subtitle_timing_piecewise_drift_max_shift_sec"), 0.10)
+
+        auto_split_drift = by_name["mode_auto_adaptive_split_drift"]
+        self.assertTrue(bool(auto_split_drift.overrides.get("audio_chunk_route_split_enabled")))
+        self.assertTrue(bool(auto_split_drift.overrides.get("subtitle_timing_piecewise_drift_enabled")))
+
         high = by_name["mode_high"]
         self.assertEqual(high.method, "selective_ensemble")
         self.assertEqual(high.overrides.get("subtitle_mode"), "high")
-        self.assertFalse(bool(high.overrides.get("stt_word_timestamps_precision_enabled")))
+        self.assertTrue(bool(high.overrides.get("stt_word_timestamps_precision_enabled")))
         self.assertEqual(high.overrides.get("cut_boundary_level"), "medium")
         self.assertEqual(high.overrides.get("stt_word_timestamps_precision_min_similarity"), 0.36)
         self.assertEqual(high.overrides.get("stt_word_timestamps_precision_max_timing_shift_sec"), 0.28)
@@ -69,9 +100,46 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertFalse(bool(high.overrides.get("subtitle_lora_micro_merge_enabled")))
         self.assertTrue(bool(high.overrides.get("subtitle_lora_packaging_enabled")))
         self.assertEqual(high.overrides.get("subtitle_lora_packaging_mode"), "readability_selective")
-        self.assertFalse(bool(high.overrides.get("deep_timing_adjustment_enabled")))
+        self.assertTrue(bool(high.overrides.get("deep_timing_adjustment_enabled")))
         self.assertTrue(bool(high.overrides.get("deep_subtitle_policy_enabled")))
         self.assertFalse(bool(high.overrides.get("subtitle_bundle_use_provisional_cuts")))
+
+        high_drift = by_name["mode_high_piecewise_drift"]
+        self.assertEqual(high_drift.method, "selective_ensemble")
+        self.assertTrue(bool(high_drift.overrides.get("subtitle_timing_piecewise_drift_enabled")))
+
+    def test_variant_chunk_settings_use_mode_specific_audio_path(self):
+        base = _base_benchmark_settings("current")
+        variants = benchmark_mode_profiles(base)
+        by_name = {variant.name: variant for variant in variants}
+
+        base_sig = _chunk_extraction_signature(base)
+        auto_settings = _variant_chunk_settings(base, by_name["mode_auto"].overrides)
+        auto_split_settings = _variant_chunk_settings(base, by_name["mode_auto_adaptive_split"].overrides)
+        auto_drift_settings = _variant_chunk_settings(base, by_name["mode_auto_piecewise_drift"].overrides)
+        auto_split_drift_settings = _variant_chunk_settings(base, by_name["mode_auto_adaptive_split_drift"].overrides)
+        high_settings = _variant_chunk_settings(base, by_name["mode_high"].overrides)
+        high_drift_settings = _variant_chunk_settings(base, by_name["mode_high_piecewise_drift"].overrides)
+
+        self.assertTrue(bool(auto_settings.get("audio_chunk_routing_enabled")))
+        self.assertTrue(bool(auto_settings.get("audio_chunk_route_vad_enabled")))
+        self.assertTrue(bool(auto_split_settings.get("audio_chunk_route_split_enabled")))
+        self.assertTrue(bool(auto_drift_settings.get("subtitle_timing_piecewise_drift_enabled")))
+        self.assertTrue(bool(auto_split_drift_settings.get("audio_chunk_route_split_enabled")))
+        self.assertFalse(bool(high_settings.get("audio_chunk_routing_enabled")))
+        self.assertNotEqual(base_sig, _chunk_extraction_signature(auto_settings))
+        self.assertNotEqual(_chunk_extraction_signature(auto_settings), _chunk_extraction_signature(auto_split_settings))
+        self.assertEqual(_chunk_extraction_signature(auto_settings), _chunk_extraction_signature(auto_drift_settings))
+        self.assertEqual(_chunk_extraction_signature(auto_split_settings), _chunk_extraction_signature(auto_split_drift_settings))
+        self.assertNotEqual(base_sig, _chunk_extraction_signature(high_settings))
+        self.assertEqual(_chunk_extraction_signature(high_settings), _chunk_extraction_signature(high_drift_settings))
+
+    def test_variant_chunk_signature_ignores_packaging_only_changes(self):
+        base = _base_benchmark_settings("current")
+        signature = _chunk_extraction_signature(base)
+        packaging_only = _variant_chunk_settings(base, {"subtitle_lora_packaging_enabled": False})
+
+        self.assertEqual(signature, _chunk_extraction_signature(packaging_only))
 
     def test_high_mode_can_enable_llm_when_explicit_model_is_supplied(self):
         variants = benchmark_mode_profiles(

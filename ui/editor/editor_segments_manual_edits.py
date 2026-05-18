@@ -5,7 +5,11 @@ from __future__ import annotations
 from PyQt6.QtGui import QTextCursor
 
 from core.runtime.logger import get_logger
-from ui.editor.editor_helpers import build_segment_lookup, find_segment_for_line_lookup
+from ui.editor.editor_helpers import (
+    build_segment_lookup,
+    find_segment_for_line_lookup,
+    should_split_multiline_part_into_block,
+)
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
 
@@ -155,7 +159,7 @@ class EditorSegmentsManualEditsMixin:
         cur.insertText(parts[0])
         cur.block().setUserData(SubtitleBlockData(current_spk, self._frame_time(seg.get("start", 0))))
         for line_text in parts[1:]:
-            if line_text.startswith("-"):
+            if should_split_multiline_part_into_block(seg, line_text):
                 current_spk = spk2_id if current_spk == spk1_id else spk1_id
                 cur.insertBlock()
                 cur.insertText(line_text)
@@ -207,7 +211,7 @@ class EditorSegmentsManualEditsMixin:
                 cur.insertText(parts[0])
                 cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, end_sec=end_sec))
                 for line_text in parts[1:]:
-                    if line_text.startswith("-"):
+                    if should_split_multiline_part_into_block(seg, line_text):
                         current_spk = spk2_id if current_spk == spk1_id else spk1_id
                         cur.insertBlock()
                         cur.insertText(line_text)

@@ -9,6 +9,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCharFormat, QTextCursor
 
 from core.runtime.logger import get_logger
+from ui.editor.editor_helpers import should_split_multiline_part_into_block
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
 
@@ -306,6 +307,7 @@ class EditorSegmentsQueueFlushMixin:
         current_spk = spk_list[0] if len(spk_list) > 0 else spk1_id
         _clip_idx, clip_kwargs = self._bulk_segment_clip_kwargs(seg)
         return {
+            "source_segment": dict(seg),
             "parts": parts,
             "start_sec": start_sec,
             "end_sec": end_sec,
@@ -331,6 +333,7 @@ class EditorSegmentsQueueFlushMixin:
     ) -> dict:
         parts = list(payload.get("parts") or [])
         current_spk = str(payload.get("current_spk", spk1_id) or spk1_id)
+        source_segment = dict(payload.get("source_segment") or {})
         start_sec = float(payload.get("start_sec", 0.0) or 0.0)
         end_sec = float(payload.get("end_sec", start_sec) or start_sec)
         stt_kwargs = dict(payload.get("stt_kwargs") or {})
@@ -349,7 +352,7 @@ class EditorSegmentsQueueFlushMixin:
             "text": parts[0],
         }
         for line_text in parts[1:]:
-            if line_text.startswith("-"):
+            if should_split_multiline_part_into_block(source_segment, line_text):
                 current_spk = spk2_id if current_spk == spk1_id else spk1_id
                 cur.insertText("\n" + line_text, QTextCharFormat())
                 cur.block().setUserData(

@@ -517,6 +517,8 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
     def _auto_audio_tune_enabled(self) -> bool:
         try:
             settings = load_settings()
+            if bool(settings.get("audio_preset_auto_benchmark_locked", False)):
+                return False
             return not bool(settings.get("audio_preset_auto_disabled", False))
         except Exception:
             return True

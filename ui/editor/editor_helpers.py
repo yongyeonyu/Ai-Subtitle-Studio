@@ -80,6 +80,29 @@ def build_segment_lookup(segs) -> dict:
     }
 
 
+def segment_has_multi_speaker_payload(seg: dict | None) -> bool:
+    """Return True only when a row explicitly carries multiple speakers."""
+    if not isinstance(seg, dict):
+        return False
+    speakers = []
+    for item in list(seg.get("speaker_list") or []):
+        speaker = str(item or "").strip()
+        if speaker:
+            speakers.append(speaker)
+    if len(set(speakers)) >= 2:
+        return True
+    speaker = str(seg.get("speaker", seg.get("spk", "")) or "").strip()
+    second_speaker = str(seg.get("speaker2", "") or "").strip()
+    return bool(speaker and second_speaker and speaker != second_speaker)
+
+
+def should_split_multiline_part_into_block(seg: dict | None, part: str) -> bool:
+    """Split multiline subtitle parts into separate QTextBlocks only for true speaker-split rows."""
+    if not str(part or "").startswith("-"):
+        return False
+    return segment_has_multi_speaker_payload(seg)
+
+
 def find_segment_at_lookup(lookup: dict | None, sec: float, skip_gap=True):
     """Binary-search a segment lookup table for the segment containing sec."""
     if not isinstance(lookup, dict):

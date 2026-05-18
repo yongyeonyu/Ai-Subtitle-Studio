@@ -1,6 +1,6 @@
 <!--
-Document-Version: 04.00.09-codemap
-Last-Updated: 2026-05-18
+Document-Version: 04.00.10-codemap
+Last-Updated: 2026-05-19
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
 -->
@@ -23,6 +23,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/remote_verify.py`: higher-level remote verification runner and artifact capture.
 - `tools/overnight_optimize.py`: compact baseline/check runner that writes long-run artifacts under `output/manual_verification/latest/`.
 - `tools/benchmark_tiniping_mode_search.py`: CLI entry point for Tiniping mode search and regression-pack generation.
+- `tools/benchmark_tiniping_timing_ideas.py`: Tiniping timing-idea benchmark runner for reference-aligned timing experiments.
 - `tools/tiniping_mode_search_phases.py`: phase-by-phase Tiniping search orchestration for primary/pair/audio/method/cached/long validation passes.
 - `tools/subtitle_regression_pack.py`: repeatable subtitle regression-pack builder for X5, Macau, and Tinyping artifacts under `output/manual_verification/latest/`.
 - `tools/check_maintenance_budget.py`: changed-file guard for file/function length and broad silent-exception regressions.
@@ -55,7 +56,11 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 
 - `core/pipeline/`: queue/runtime orchestration and backend coordination.
 - `core/audio/`: audio extraction, preprocessing, STT/VAD backend routing.
+  - `media_processor_audio.py`: adaptive audio routing, chunk profile memory, preview guard, selective split experiments.
+  - `media_processor_transcribe.py`: rolling STT windows, overlap/hysteresis finalize, ensemble window orchestration.
+  - `preset_auto_classifier.py`: auto audio profile classification and candidate ranking.
 - `core/engine/`: subtitle generation, scoring, timing, correction, LLM chunking.
+  - `subtitle_timing.py`: final timing fusion, piecewise drift experiments, common split guards.
 - `core/llm/`: provider routing and model adapters.
 - `core/roughcut/`: roughcut draft and LLM-assisted roughcut logic.
 
@@ -97,6 +102,11 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
   - `tests/test_media_info_cache.py`
 - Full-media verification summaries:
   - `tests/test_verify_full_media_pipeline.py`
+- Audio/adaptive-routing and timing regressions:
+  - `tests/test_audio_presets.py`
+  - `tests/test_preset_auto_classifier.py`
+  - `tests/test_media_processor_overlap.py`
+  - `tests/test_subtitle_engine_settings.py`
 - Queue/progress/runtime ETA:
   - `tests/test_queue_dispatch.py`
   - `tests/test_pipeline_status.py`
@@ -112,6 +122,9 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - Roughcut:
   - `tests/test_editor_roughcut_draft.py`
   - `tests/test_roughcut_*.py`
+- Editor multiline/timeline drag regressions:
+  - `tests/test_subtitle_line_breaks.py`
+  - `tests/test_timeline_hit_targets.py`
 - Mode defaults / benchmark locks:
   - `tests/test_stt_quality_presets.py`
   - `tests/test_mode_policy.py`

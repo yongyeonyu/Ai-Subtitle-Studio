@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.09-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_9_RELEASED
-Last-Updated: 2026-05-18
+Document-Version: 04.00.10-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
+Last-Updated: 2026-05-19
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.09"
-document_version: "04.00.09-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_9_RELEASED"
+app_version: "04.00.10"
+document_version: "04.00.10-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_10_RELEASED"
 next_phase: null
 active_item_count: 15
 commit_policy: "Commit only when the user explicitly asks."

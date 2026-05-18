@@ -334,6 +334,12 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         self._drag_adj_orig_start_r = self._drag_adj_r["start"] if self._drag_adj_r else 0.0
         self._drag_adj_orig_end_r = self._drag_adj_r["end"] if self._drag_adj_r else 0.0
         self._set_drag_merge_preview_pair(None)
+        clearer = getattr(self, "clear_drag_shadow_playhead", None)
+        if callable(clearer):
+            try:
+                clearer()
+            except Exception:
+                pass
         self._clear_active_gaps_for_segment_drag()
         self._drag_snap_candidates_cache = self._drag_snap_candidates()
         self._drag_last_paint_rect = self._drag_visual_rect()
@@ -773,6 +779,64 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         if window is not None and id(window) not in seen:
             yield window
 
+    def _set_drag_live_cut_shadow(self, sec: float | None) -> None:
+        setter_name = "set_drag_shadow_playhead" if sec is not None else "clear_drag_shadow_playhead"
+        setter = getattr(self, setter_name, None)
+        if not callable(setter):
+            return
+        try:
+            if sec is None:
+                setter()
+            else:
+                setter(float(sec))
+        except Exception:
+            pass
+
+    def _current_diamond_boundary_sec(self) -> float | None:
+        pair = getattr(self, "_drag_diamond_pair", None)
+        if pair is None:
+            return None
+        try:
+            left_idx = int(pair[0])
+        except Exception:
+            return None
+        if left_idx < 0 or left_idx >= len(self.segments):
+            return None
+        seg = self.segments[left_idx]
+        if not isinstance(seg, dict):
+            return None
+        try:
+            return self._snap_to_frame(float(seg.get("end", 0.0) or 0.0))
+        except Exception:
+            return None
+
+    def _live_cut_drag_direction(self, target_global_sec: float) -> int:
+        target_global_sec = self._snap_to_frame(float(target_global_sec or 0.0))
+        current_boundary = self._current_diamond_boundary_sec()
+        if current_boundary is None:
+            current_boundary = self._snap_to_frame(float(getattr(self, "_drag_diamond_orig", target_global_sec) or target_global_sec))
+        epsilon = max(0.001, 1.0 / max(1.0, float(self._get_fps())))
+        if target_global_sec > current_boundary + epsilon:
+            return 1
+        if target_global_sec < current_boundary - epsilon:
+            return -1
+        original_boundary = self._snap_to_frame(float(getattr(self, "_drag_diamond_orig", current_boundary) or current_boundary))
+        if target_global_sec > original_boundary + epsilon:
+            return 1
+        if target_global_sec < original_boundary - epsilon:
+            return -1
+        return 1
+
+    def _live_cut_search_window_secs(self, local_sec: float, direction: int) -> tuple[float, float]:
+        target_local_sec = max(0.0, float(local_sec or 0.0))
+        if direction < 0:
+            search_start = target_local_sec
+            search_end = target_local_sec + 1.0
+        else:
+            search_end = target_local_sec
+            search_start = max(0.0, target_local_sec - 1.0)
+        return (round(search_start, 4), round(max(search_start, search_end), 4))
+
     def _live_cut_snap_settings_enabled(self) -> bool:
         for owner in self._iter_live_cut_snap_owners():
             settings = getattr(owner, "settings", None)
@@ -830,22 +894,35 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
 
     def _drag_live_cut_snap_candidates(self, global_sec: float, *, edge: str = "") -> list[dict]:
         if str(edge or "") != "diamond":
+            self._set_drag_live_cut_shadow(None)
             return []
         if not self._live_cut_snap_settings_enabled():
+            self._set_drag_live_cut_shadow(None)
             return []
         ctx = self._resolve_live_cut_snap_context(global_sec)
         if not isinstance(ctx, dict):
+            self._set_drag_live_cut_shadow(None)
             return []
         media_path = str(ctx.get("media_path") or "").strip()
         if not media_path:
+            self._set_drag_live_cut_shadow(None)
             return []
         fps = max(1.0, float(ctx.get("fps") or self._get_fps()))
+        direction = self._live_cut_drag_direction(float(global_sec or 0.0))
+        search_start_local_sec, search_end_local_sec = self._live_cut_search_window_secs(
+            float(ctx.get("local_sec", 0.0) or 0.0),
+            direction,
+        )
         detected = self._detect_live_cut_boundary_record(
             media_path,
             float(ctx.get("local_sec", 0.0) or 0.0),
             fps,
+            direction=direction,
+            search_start_local_sec=search_start_local_sec,
+            search_end_local_sec=search_end_local_sec,
         )
         if detected is None:
+            self._set_drag_live_cut_shadow(None)
             return []
         if isinstance(detected, dict):
             local_cut_sec = detected.get("local_sec")
@@ -856,35 +933,79 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         try:
             local_cut_sec = float(local_cut_sec)
         except Exception:
+            self._set_drag_live_cut_shadow(None)
             return []
         clip_start = float(ctx.get("clip_start", 0.0) or 0.0)
         cut_sec = self._snap_to_frame(clip_start + max(0.0, local_cut_sec))
-        max_distance = max(0.09, min(0.20, 6.0 / fps))
+        max_distance = max(
+            0.20,
+            min(
+                1.0,
+                abs(float(search_end_local_sec) - float(search_start_local_sec)) + (2.0 / fps),
+            ),
+        )
         if abs(cut_sec - self._snap_to_frame(float(global_sec or 0.0))) > max_distance:
+            self._set_drag_live_cut_shadow(None)
             return []
         source.update(
             {
                 "media_path": media_path,
                 "local_sec": local_cut_sec,
                 "clip_start": clip_start,
+                "direction": int(direction),
+                "search_start_local_sec": float(search_start_local_sec),
+                "search_end_local_sec": float(search_end_local_sec),
             }
         )
+        self._set_drag_live_cut_shadow(cut_sec)
         return [{"time": cut_sec, "kind": "cut_live", "source": source}]
 
-    def _detect_live_cut_boundary_record(self, media_path: str, local_sec: float, fps: float) -> dict | None:
+    def _detect_live_cut_boundary_record(
+        self,
+        media_path: str,
+        local_sec: float,
+        fps: float,
+        *,
+        direction: int = 1,
+        search_start_local_sec: float | None = None,
+        search_end_local_sec: float | None = None,
+    ) -> dict | None:
         media_path = os.path.abspath(os.path.expanduser(str(media_path or "")))
         if not media_path or not os.path.exists(media_path):
             return None
         fps = max(1.0, float(fps or self._get_fps()))
-        target_frame = max(1, int(round(max(0.0, float(local_sec or 0.0)) * fps)))
-        bucket = target_frame // 2
-        key = (media_path, round(fps, 3), bucket)
+        target_local_sec = max(0.0, float(local_sec or 0.0))
+        target_frame = max(1, int(round(target_local_sec * fps)))
+        if search_start_local_sec is None or search_end_local_sec is None:
+            search_start_local_sec, search_end_local_sec = self._live_cut_search_window_secs(target_local_sec, direction)
+        search_start_local_sec = max(0.0, float(search_start_local_sec or 0.0))
+        search_end_local_sec = max(search_start_local_sec, float(search_end_local_sec or search_start_local_sec))
+        search_start_frame = max(0, int(round(search_start_local_sec * fps)))
+        search_end_frame = max(search_start_frame + 2, int(round(search_end_local_sec * fps)))
+        bucket_frames = max(1, int(round(fps * 0.25)))
+        key = (
+            media_path,
+            round(fps, 3),
+            -1 if int(direction) < 0 else 1,
+            search_start_frame // bucket_frames,
+            search_end_frame // bucket_frames,
+        )
         cache = getattr(self, "_live_cut_snap_cache", None)
         if not isinstance(cache, dict):
             cache = {}
             self._live_cut_snap_cache = cache
-        if key in cache:
-            return cache[key]
+        payload = cache.get(key)
+        if payload is not None:
+            candidates = list((payload or {}).get("candidates") or [])
+            if candidates:
+                return min(
+                    candidates,
+                    key=lambda item: (
+                        abs(int(item.get("frame", target_frame)) - target_frame),
+                        -float(item.get("score", 0.0) or 0.0),
+                    ),
+                )
+            return None
 
         now = time.monotonic()
         last_compute = float(getattr(self, "_live_cut_snap_last_compute_mono", 0.0) or 0.0)
@@ -892,14 +1013,32 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             return None
         self._live_cut_snap_last_compute_mono = now
 
-        record = self._compute_live_cut_boundary_record(media_path, target_frame, fps)
-        cache[key] = record
+        candidates = self._compute_live_cut_boundary_candidates(
+            media_path,
+            search_start_frame,
+            search_end_frame,
+            fps,
+        )
+        payload = {
+            "candidates": candidates,
+            "search_start_local_sec": search_start_local_sec,
+            "search_end_local_sec": search_end_local_sec,
+        }
+        cache[key] = payload
         if len(cache) > 512:
             try:
                 cache.pop(next(iter(cache)))
             except Exception:
                 pass
-        return record
+        if not candidates:
+            return None
+        return min(
+            candidates,
+            key=lambda item: (
+                abs(int(item.get("frame", target_frame)) - target_frame),
+                -float(item.get("score", 0.0) or 0.0),
+            ),
+        )
 
     def _live_cut_snap_capture(self, media_path: str, cv2_mod):
         record = getattr(self, "_live_cut_snap_capture_record", None)
@@ -932,24 +1071,29 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         self._live_cut_snap_capture_record = {"path": media_path, "cap": cap}
         return cap
 
-    def _compute_live_cut_boundary_record(self, media_path: str, target_frame: int, fps: float) -> dict | None:
+    def _compute_live_cut_boundary_candidates(
+        self,
+        media_path: str,
+        search_start_frame: int,
+        search_end_frame: int,
+        fps: float,
+    ) -> list[dict]:
         try:
             import cv2  # type: ignore
             import numpy as np  # type: ignore
         except Exception:
-            return None
+            return []
 
         cap = self._live_cut_snap_capture(media_path, cv2)
         if cap is None:
-            return None
+            return []
 
-        radius = max(3, min(5, int(round(float(fps or 30.0) * 0.08))))
-        first_frame = max(0, int(target_frame) - radius - 1)
-        last_frame = max(first_frame + 2, int(target_frame) + radius)
+        first_frame = max(0, int(search_start_frame))
+        last_frame = max(first_frame + 2, int(search_end_frame))
         try:
             cap.set(cv2.CAP_PROP_POS_FRAMES, first_frame)
         except Exception:
-            return None
+            return []
 
         def _thumb(frame):
             if frame is None:
@@ -977,7 +1121,7 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             gray, color = item
             frames.append((frame_no, gray, color))
         if len(frames) < 3:
-            return None
+            return []
 
         scored: list[tuple[float, int]] = []
         for prev, cur in zip(frames, frames[1:]):
@@ -991,26 +1135,47 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
                 continue
             scored.append((score, int(cur_no)))
         if not scored:
-            return None
+            return []
 
-        scored.sort(key=lambda item: item[0], reverse=True)
-        best_score, best_frame = scored[0]
         scores = [score for score, _frame in scored]
         try:
             median_score = float(np.median(scores))
         except Exception:
             median_score = 0.0
-        second_score = float(scored[1][0]) if len(scored) > 1 else 0.0
-        isolated = best_score >= median_score + 7.0 and best_score >= second_score * 1.15
-        strong = best_score >= 18.0 or (best_score >= 12.0 and isolated)
-        if not strong:
-            return None
-        return {
-            "local_sec": self._snap_to_frame(best_frame / max(1.0, float(fps or 30.0))),
-            "frame": int(best_frame),
-            "score": round(float(best_score), 3),
-            "median_score": round(float(median_score), 3),
-        }
+        threshold = max(12.0, median_score + 7.0)
+        strong_scored = [(float(score), int(frame_no)) for score, frame_no in scored if float(score) >= threshold]
+        if not strong_scored:
+            strong_scored = []
+            top_score, top_frame = max(scored, key=lambda item: item[0])
+            if float(top_score) >= 18.0:
+                strong_scored.append((float(top_score), int(top_frame)))
+        if not strong_scored:
+            return []
+
+        cluster_gap = max(1, int(round(max(1.0, float(fps or 30.0)) * 0.04)))
+        strong_scored.sort(key=lambda item: item[1])
+        clustered: list[tuple[float, int]] = []
+        cluster_scores: list[tuple[float, int]] = []
+        for score, frame_no in strong_scored:
+            if not cluster_scores or frame_no - cluster_scores[-1][1] <= cluster_gap:
+                cluster_scores.append((score, frame_no))
+                continue
+            clustered.append(max(cluster_scores, key=lambda item: item[0]))
+            cluster_scores = [(score, frame_no)]
+        if cluster_scores:
+            clustered.append(max(cluster_scores, key=lambda item: item[0]))
+
+        candidates: list[dict] = []
+        for score, frame_no in clustered:
+            candidates.append(
+                {
+                    "local_sec": self._snap_to_frame(frame_no / max(1.0, float(fps or 30.0))),
+                    "frame": int(frame_no),
+                    "score": round(float(score), 3),
+                    "median_score": round(float(median_score), 3),
+                }
+            )
+        return candidates
 
     def _snap_candidate_threshold_sec(self, candidate: dict, base_threshold: float) -> float:
         kind = str((candidate or {}).get("kind") or "")
@@ -1112,6 +1277,7 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
     def _finish_timing_drag_cleanup(self, dirty: QRect | None = None) -> None:
         preview_rect = self._merge_preview_repaint_rect(getattr(self, "_drag_merge_pair", None))
         self._drag_merge_pair = None
+        self._set_drag_live_cut_shadow(None)
         if preview_rect.isValid() and not preview_rect.isEmpty():
             dirty = preview_rect if dirty is None else dirty.united(preview_rect)
         super()._finish_timing_drag_cleanup(dirty)

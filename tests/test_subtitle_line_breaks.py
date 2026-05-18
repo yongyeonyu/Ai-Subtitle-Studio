@@ -67,6 +67,43 @@ class SubtitleLineBreakTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_flush_queue_keeps_single_speaker_hyphen_multiline_in_one_segment(self):
+        editor = self._editor()
+        try:
+            editor._segment_queue = [
+                {"start": 1.0, "end": 3.0, "text": "- 안녕하세요\n- 반갑습니다", "speaker_list": ["00"]},
+            ]
+
+            editor._flush_queue()
+
+            first_block = editor.text_edit.document().begin()
+            self.assertEqual(first_block.text(), "- 안녕하세요\u2028- 반갑습니다")
+            segs = [seg for seg in editor._get_current_segments() if not seg.get("is_gap")]
+            self.assertEqual(len(segs), 1)
+            self.assertEqual(segs[0]["text"], "- 안녕하세요\n- 반갑습니다")
+        finally:
+            editor.text_edit.close()
+
+    def test_bulk_load_keeps_true_multi_speaker_hyphen_multiline_as_grouped_blocks(self):
+        editor = self._editor()
+        try:
+            loaded = editor._bulk_load_segments_to_document(
+                [
+                    {"start": 1.0, "end": 3.0, "text": "- 안녕하세요\n- 반갑습니다", "speaker_list": ["00", "01"]},
+                ]
+            )
+
+            self.assertEqual(len(loaded or []), 1)
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            self.assertEqual(first.text(), "- 안녕하세요")
+            self.assertEqual(second.text(), "- 반갑습니다")
+            segs = editor._get_current_segments()
+            self.assertEqual(len(segs), 1)
+            self.assertEqual(segs[0]["text"], "- 안녕하세요\n- 반갑습니다")
+        finally:
+            editor.text_edit.close()
+
     def test_flush_queue_sorts_out_of_order_generated_segments_before_insert(self):
         editor = self._editor()
         try:

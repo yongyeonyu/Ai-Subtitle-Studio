@@ -670,6 +670,88 @@ def benchmark_mode_profiles(base_settings: dict[str, Any], *, llm_model: str = "
                 run_llm=run_llm,
             )
         )
+        if mode == "auto":
+            split_settings = dict(mode_settings)
+            split_settings.update(
+                {
+                    "audio_chunk_route_split_enabled": True,
+                    "audio_chunk_route_max_span_sec": 120.0,
+                    "audio_chunk_route_split_confidence_threshold": 0.78,
+                    "audio_chunk_route_split_candidate_gap_max": 0.07,
+                    "audio_chunk_route_split_preview_divergence_min": 0.08,
+                }
+            )
+            variants.append(
+                Variant(
+                    name="mode_auto_adaptive_split",
+                    phase="mode_profile",
+                    description="Auto 모드에 route disagreement 기반 selective adaptive split v2를 추가합니다.",
+                    method=_mode_profile_method(split_settings),
+                    overrides=split_settings,
+                    run_llm=False,
+                )
+            )
+            drift_settings = dict(mode_settings)
+            drift_settings.update(
+                {
+                    "subtitle_timing_piecewise_drift_enabled": True,
+                    "subtitle_timing_piecewise_drift_trigger_sec": 0.05,
+                    "subtitle_timing_piecewise_drift_max_shift_sec": 0.10,
+                    "subtitle_timing_piecewise_drift_min_run_segments": 3,
+                    "subtitle_timing_piecewise_drift_anchor_spread_sec": 0.08,
+                }
+            )
+            variants.append(
+                Variant(
+                    name="mode_auto_piecewise_drift",
+                    phase="mode_profile",
+                    description="Auto 모드에 연속 구간 piecewise drift timing 보정을 추가합니다.",
+                    method=_mode_profile_method(drift_settings),
+                    overrides=drift_settings,
+                    run_llm=False,
+                )
+            )
+            split_drift_settings = dict(split_settings)
+            split_drift_settings.update(
+                {
+                    "subtitle_timing_piecewise_drift_enabled": True,
+                    "subtitle_timing_piecewise_drift_trigger_sec": 0.05,
+                    "subtitle_timing_piecewise_drift_max_shift_sec": 0.10,
+                    "subtitle_timing_piecewise_drift_min_run_segments": 3,
+                    "subtitle_timing_piecewise_drift_anchor_spread_sec": 0.08,
+                }
+            )
+            variants.append(
+                Variant(
+                    name="mode_auto_adaptive_split_drift",
+                    phase="mode_profile",
+                    description="Auto 모드에 selective split v2와 piecewise drift 보정을 함께 적용합니다.",
+                    method=_mode_profile_method(split_drift_settings),
+                    overrides=split_drift_settings,
+                    run_llm=False,
+                )
+            )
+        if mode == "high":
+            high_drift_settings = dict(mode_settings)
+            high_drift_settings.update(
+                {
+                    "subtitle_timing_piecewise_drift_enabled": True,
+                    "subtitle_timing_piecewise_drift_trigger_sec": 0.05,
+                    "subtitle_timing_piecewise_drift_max_shift_sec": 0.10,
+                    "subtitle_timing_piecewise_drift_min_run_segments": 3,
+                    "subtitle_timing_piecewise_drift_anchor_spread_sec": 0.08,
+                }
+            )
+            variants.append(
+                Variant(
+                    name="mode_high_piecewise_drift",
+                    phase="mode_profile",
+                    description="High 모드에 연속 구간 piecewise drift timing 보정을 추가합니다.",
+                    method=_mode_profile_method(high_drift_settings),
+                    overrides=high_drift_settings,
+                    run_llm=run_llm,
+                )
+            )
     return variants
 
 
@@ -1327,6 +1409,61 @@ def _copy_chunk_dir(source: Path, target: Path) -> Path:
     return target
 
 
+_CHUNK_EXACT_KEYS = {
+    "subtitle_mode",
+    "simple_operation_mode",
+    "mode",
+    "user_facing_mode",
+    "auto_start_mode",
+    "stt_quality_preset",
+    "selected_audio_ai",
+    "selected_vad",
+    "use_basic_filter",
+    "ff_chunk",
+    "whisper_chunk_overlap_sec",
+    "direct_ffmpeg_chunk_extract",
+    "direct_ffmpeg_chunk_batch_extract",
+    "wav_pcm_fast_chunk_extract",
+    "vad_pre_split_enabled",
+    "vad_post_stt_align_enabled",
+    "vad_post_stt_edge_pad_sec",
+    "vad_backend_policy",
+    "audio_chunk_routing_enabled",
+    "audio_chunk_route_vad_enabled",
+    "audio_chunk_routing_benchmark_locked",
+    "audio_chunk_routing_disabled",
+    "audio_chunk_profile_sec",
+}
+_CHUNK_PREFIXES = (
+    "ff_",
+    "df_",
+    "none_",
+    "vad_",
+    "ten_vad_",
+    "audio_chunk_route_",
+    "direct_ffmpeg_",
+    "wav_pcm_",
+    "scan_cut_",
+    "cut_boundary_",
+    "review_vad_",
+)
+
+
+def _chunk_extraction_signature(settings: dict[str, Any]) -> str:
+    subset: dict[str, Any] = {}
+    for key, value in dict(settings or {}).items():
+        if key in _CHUNK_EXACT_KEYS or key.startswith(_CHUNK_PREFIXES):
+            subset[key] = value
+    return json.dumps(subset, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _variant_chunk_settings(base_settings: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    merged = dict(base_settings or {})
+    if overrides:
+        merged.update(dict(overrides))
+    return merged
+
+
 def _bind_processor_settings(processor: VideoProcessor, settings: dict[str, Any]) -> None:
     """Keep benchmark variants from being re-routed by app-wide runtime autotune."""
     frozen = dict(settings)
@@ -1804,76 +1941,21 @@ def main() -> int:
 
     results = []
     audio_extracts: list[dict[str, Any]] = []
-    if selected_audio_profiles:
-        for profile in selected_audio_profiles:
-            profile_settings = {**base_settings, **profile.overrides, "_benchmark_audio_profile": profile.name}
-            extractor = VideoProcessor()
-            _bind_processor_settings(extractor, profile_settings)
-            extract_started = time.perf_counter()
-            chunk_dir_text, _vad_segments = extractor.extract_audio(
-                str(media),
-                target_start_sec=start_sec,
-                target_end_sec=end_sec,
-                is_single_segment=False,
-            )
-            extract_elapsed = time.perf_counter() - extract_started
-            extractor.release_runtime_models()
-            chunk_source = Path(chunk_dir_text)
-            if not chunk_source.exists():
-                raise RuntimeError(f"audio chunk extraction failed for {profile.name}: {chunk_source}")
-            seed_chunk_source = _copy_chunk_dir(chunk_source, work_dir / "_seed_chunks" / profile.name)
-            vad_count = len(_load_vad(chunk_source))
-            audio_extracts.append(
-                {
-                    "profile": profile.name,
-                    "description": profile.description,
-                    "elapsed_sec": round(extract_elapsed, 3),
-                    "audio_chunk_dir": str(seed_chunk_source),
-                    "chunk_wavs": _chunk_wav_count(seed_chunk_source),
-                    "vad_segments": vad_count,
-                    "settings": {
-                        key: profile_settings.get(key)
-                        for key in (
-                            "selected_audio_ai",
-                            "selected_vad",
-                            "ff_hp",
-                            "ff_lp",
-                            "ff_nf",
-                            "vad_threshold",
-                            "ten_vad_threshold",
-                            "review_vad_speech_pad_sec",
-                            "review_vad_min_silence_sec",
-                        )
-                    },
-                }
-            )
-            profile_work_dir = work_dir / profile.name
-            profile_work_dir.mkdir(parents=True, exist_ok=True)
-            for variant in variants:
-                profiled_variant = Variant(
-                    name=f"{profile.name}__{variant.name}",
-                    phase=variant.phase,
-                    description=f"{profile.description} / {variant.description}",
-                    method=variant.method,
-                    overrides=dict(variant.overrides),
-                    run_llm=variant.run_llm,
-                )
-                row = _run_variant(
-                    profiled_variant,
-                    chunk_source=seed_chunk_source,
-                    work_dir=profile_work_dir,
-                    base_settings=profile_settings,
-                    reference=reference_rows,
-                )
-                row["audio_profile"] = profile.name
-                row["audio_profile_description"] = profile.description
-                row["audio_extract_elapsed_sec"] = round(extract_elapsed, 3)
-                row["audio_chunk_wavs"] = _chunk_wav_count(seed_chunk_source)
-                row["audio_vad_segments"] = vad_count
-                results.append(row)
-    else:
+    extraction_cache: dict[str, dict[str, Any]] = {}
+
+    def _seed_chunks_for_settings(
+        extraction_settings: dict[str, Any],
+        *,
+        seed_name: str,
+        profile_name: str,
+        profile_description: str = "",
+    ) -> dict[str, Any]:
+        signature = _chunk_extraction_signature(extraction_settings)
+        cached = extraction_cache.get(signature)
+        if cached:
+            return cached
         extractor = VideoProcessor()
-        _bind_processor_settings(extractor, base_settings)
+        _bind_processor_settings(extractor, extraction_settings)
         extract_started = time.perf_counter()
         chunk_dir_text, _vad_segments = extractor.extract_audio(
             str(media),
@@ -1885,23 +1967,96 @@ def main() -> int:
         extractor.release_runtime_models()
         chunk_source = Path(chunk_dir_text)
         if not chunk_source.exists():
-            raise RuntimeError(f"audio chunk extraction failed: {chunk_source}")
-        seed_chunk_source = _copy_chunk_dir(chunk_source, work_dir / "_seed_chunks" / "default")
+            raise RuntimeError(f"audio chunk extraction failed for {seed_name}: {chunk_source}")
+        seed_chunk_source = _copy_chunk_dir(chunk_source, work_dir / "_seed_chunks" / seed_name)
+        cached = {
+            "profile": profile_name,
+            "description": profile_description,
+            "elapsed_sec": round(extract_elapsed, 3),
+            "chunk_source": seed_chunk_source,
+            "chunk_wavs": _chunk_wav_count(seed_chunk_source),
+            "vad_segments": len(_load_vad(seed_chunk_source)),
+            "signature": signature,
+            "settings": extraction_settings,
+        }
+        extraction_cache[signature] = cached
         audio_extracts.append(
             {
-                "profile": "default",
-                "elapsed_sec": round(extract_elapsed, 3),
+                "profile": profile_name,
+                "description": profile_description,
+                "elapsed_sec": cached["elapsed_sec"],
                 "audio_chunk_dir": str(seed_chunk_source),
-                "chunk_wavs": _chunk_wav_count(seed_chunk_source),
-                "vad_segments": len(_load_vad(seed_chunk_source)),
+                "chunk_wavs": cached["chunk_wavs"],
+                "vad_segments": cached["vad_segments"],
+                "settings": {
+                    key: extraction_settings.get(key)
+                    for key in (
+                        "subtitle_mode",
+                        "stt_quality_preset",
+                        "selected_audio_ai",
+                        "selected_vad",
+                        "audio_chunk_routing_enabled",
+                        "audio_chunk_route_vad_enabled",
+                        "audio_chunk_profile_sec",
+                        "ff_hp",
+                        "ff_lp",
+                        "ff_nf",
+                        "vad_threshold",
+                        "ten_vad_threshold",
+                        "review_vad_speech_pad_sec",
+                        "review_vad_min_silence_sec",
+                    )
+                },
             }
         )
+        return cached
 
+    if selected_audio_profiles:
+        for profile in selected_audio_profiles:
+            profile_settings = {**base_settings, **profile.overrides, "_benchmark_audio_profile": profile.name}
+            profile_work_dir = work_dir / profile.name
+            profile_work_dir.mkdir(parents=True, exist_ok=True)
+            for variant in variants:
+                extraction_settings = _variant_chunk_settings(profile_settings, variant.overrides)
+                chunk_info = _seed_chunks_for_settings(
+                    extraction_settings,
+                    seed_name=f"{profile.name}__{variant.name}",
+                    profile_name=profile.name,
+                    profile_description=profile.description,
+                )
+                profiled_variant = Variant(
+                    name=f"{profile.name}__{variant.name}",
+                    phase=variant.phase,
+                    description=f"{profile.description} / {variant.description}",
+                    method=variant.method,
+                    overrides=dict(variant.overrides),
+                    run_llm=variant.run_llm,
+                )
+                row = _run_variant(
+                    profiled_variant,
+                    chunk_source=Path(chunk_info["chunk_source"]),
+                    work_dir=profile_work_dir,
+                    base_settings=profile_settings,
+                    reference=reference_rows,
+                )
+                row["audio_profile"] = profile.name
+                row["audio_profile_description"] = profile.description
+                row["audio_extract_elapsed_sec"] = float(chunk_info["elapsed_sec"])
+                row["audio_chunk_wavs"] = int(chunk_info["chunk_wavs"])
+                row["audio_vad_segments"] = int(chunk_info["vad_segments"])
+                results.append(row)
+    else:
         for variant in variants:
+            extraction_settings = _variant_chunk_settings(base_settings, variant.overrides)
+            chunk_info = _seed_chunks_for_settings(
+                extraction_settings,
+                seed_name=variant.name,
+                profile_name="default",
+            )
             results.append(
                 _run_variant(
                     variant,
-                    chunk_source=seed_chunk_source,
+                    chunk_source=Path(chunk_info["chunk_source"]),
                     work_dir=work_dir,
                     base_settings=base_settings,
                     reference=reference_rows,

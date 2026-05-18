@@ -157,6 +157,59 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual(collect.call_args.args[1], "whisperkit-persistent:large-v3-v20240930_turbo_632MB")
 
+    def test_audio_route_segment_hints_mark_precision_review_and_secondary_recheck(self):
+        item = {"input_path": "/tmp/vad_000_0.000.wav"}
+        route_hints = {
+            "vad_000_0.000.wav": {
+                "audio_strategy": "noisy_voice",
+                "confidence": 0.61,
+                "risk_level": "high",
+                "precision_review": True,
+                "secondary_recheck_hint": True,
+            }
+        }
+        segments = [{"start": 0.0, "end": 1.2, "text": "테스트"}]
+
+        updated = self.processor._apply_audio_route_segment_hints(segments, item, route_hints)
+
+        self.assertTrue(updated[0]["precision_review"])
+        self.assertTrue(updated[0]["needs_review"])
+        self.assertTrue(updated[0]["stt_route_secondary_recheck_hint"])
+        self.assertEqual(updated[0]["asr_metadata"]["adaptive_audio_route"]["strategy"], "noisy_voice")
+
+    def test_window_chunk_dir_copies_matching_audio_route_rows(self):
+        with tempfile.TemporaryDirectory() as chunk_dir:
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 1600)
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    [
+                        {"path": wav_path, "audio_strategy": "clean_voice"},
+                        {"path": os.path.join(chunk_dir, "vad_001_10.000.wav"), "audio_strategy": "noisy_voice"},
+                    ],
+                    handle,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+
+            window_dir = self.processor._build_window_chunk_dir(
+                chunk_dir,
+                [{"input_path": wav_path}],
+                window_index=0,
+                total_windows=1,
+                window_range={"start": 0.0, "end": 10.0},
+                vad_segments=[],
+            )
+            with open(os.path.join(window_dir, "audio_routes.json"), "r", encoding="utf-8") as handle:
+                rows = json.load(handle)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["audio_strategy"], "clean_voice")
+
     def test_native_batch_refine_routes_precision_rechecks_after_full_stt1_pass(self):
         with tempfile.TemporaryDirectory() as chunk_dir:
             for idx, start in enumerate((0.0, 2.0)):
@@ -364,10 +417,173 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         balanced = apply_stt_quality_preset({}, "balanced")
         precise = apply_stt_quality_preset({}, "precise")
 
-        self.assertEqual(fast["whisper_chunk_overlap_sec"], 0.5)
+        self.assertEqual(fast["ff_chunk"], 180)
+        self.assertEqual(fast["whisper_chunk_overlap_sec"], 6.0)
         self.assertLess(fast["whisper_chunk_overlap_sec"], balanced["whisper_chunk_overlap_sec"])
-        self.assertLess(balanced["whisper_chunk_overlap_sec"], precise["whisper_chunk_overlap_sec"])
-        self.assertEqual(precise["whisper_chunk_overlap_sec"], 3.0)
+        self.assertEqual(balanced["whisper_chunk_overlap_sec"], 10.0)
+        self.assertEqual(precise["ff_chunk"], 120)
+        self.assertEqual(precise["whisper_chunk_overlap_sec"], 8.0)
+        self.assertTrue(precise["stt_windowed_finalize_enabled"])
+
+    def test_windowed_finalize_allows_long_overlap_for_mode_chunks(self):
+        overlap = self.processor._chunk_overlap_sec({
+            "ff_chunk": 180,
+            "whisper_chunk_overlap_sec": 12.0,
+            "stt_windowed_finalize_enabled": True,
+        })
+
+        self.assertEqual(overlap, 12.0)
+
+    def test_windowed_finalize_keeps_only_chunk_commit_region(self):
+        chunk = [
+            {
+                "start": 168.0,
+                "end": 181.0,
+                "text": "앞 겹침 확정 새구간",
+                "words": [
+                    {"word": "앞", "start": 168.3, "end": 168.8},
+                    {"word": "겹침", "start": 170.0, "end": 170.5},
+                    {"word": "확정", "start": 174.2, "end": 174.8},
+                    {"word": "새구간", "start": 180.2, "end": 180.8},
+                ],
+                "asr_metadata": {"backend": "unit"},
+            }
+        ]
+
+        finalized = self.processor._apply_windowed_chunk_finalize(
+            chunk,
+            {"idx": 1, "ov_start_offset": 168.0, "duration": 180.0},
+            {
+                "stt_windowed_finalize_enabled": True,
+                "stt_window_overlap_sec": 12.0,
+                "stt_window_hysteresis_sec": 6.0,
+                "stt_window_max_boundary_shift_sec": 0.12,
+            },
+            total_chunks=3,
+            vad_segments=[],
+        )
+
+        self.assertEqual(len(finalized), 1)
+        self.assertEqual(finalized[0]["text"], "확정 새구간")
+        self.assertAlmostEqual(finalized[0]["start"], 174.2)
+        self.assertEqual([w["word"] for w in finalized[0]["words"]], ["확정", "새구간"])
+        self.assertEqual(finalized[0]["asr_metadata"]["windowed_finalize"]["commit_start"], 174.0)
+
+    def test_windowed_span_ranges_split_long_media_into_three_minute_windows(self):
+        items = [
+            {"ov_start_offset": float(idx * 30), "duration": 30.0}
+            for idx in range(7)
+        ]
+
+        ranges = self.processor._windowed_span_ranges(
+            items,
+            {
+                "stt_windowed_finalize_enabled": True,
+                "stt_window_sec": 180.0,
+                "stt_window_overlap_sec": 12.0,
+            },
+        )
+
+        self.assertEqual(ranges, [
+            {"start": 0.0, "end": 180.0},
+            {"start": 168.0, "end": 210.0},
+        ])
+
+    def test_windowed_span_finalize_keeps_only_span_commit_region(self):
+        chunk = [
+            {
+                "start": 168.0,
+                "end": 181.0,
+                "text": "앞 겹침 확정 새구간",
+                "words": [
+                    {"word": "앞", "start": 168.3, "end": 168.8},
+                    {"word": "겹침", "start": 170.0, "end": 170.5},
+                    {"word": "확정", "start": 174.2, "end": 174.8},
+                    {"word": "새구간", "start": 180.2, "end": 180.8},
+                ],
+                "asr_metadata": {"backend": "unit"},
+            }
+        ]
+
+        finalized = self.processor._apply_windowed_span_finalize(
+            chunk,
+            {"start": 168.0, "end": 348.0},
+            {
+                "stt_windowed_finalize_enabled": True,
+                "stt_window_sec": 180.0,
+                "stt_window_overlap_sec": 12.0,
+                "stt_window_hysteresis_sec": 6.0,
+                "stt_window_max_boundary_shift_sec": 0.12,
+            },
+            window_index=1,
+            total_windows=3,
+            previous_end=160.0,
+            vad_segments=[],
+        )
+
+        self.assertEqual(len(finalized), 1)
+        self.assertEqual(finalized[0]["text"], "확정 새구간")
+        self.assertAlmostEqual(finalized[0]["start"], 174.2)
+        self.assertEqual([w["word"] for w in finalized[0]["words"]], ["확정", "새구간"])
+        self.assertEqual(finalized[0]["asr_metadata"]["windowed_span_finalize"]["commit_start"], 174.0)
+
+    def test_transcribe_uses_three_minute_window_restart_structure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for idx in range(7):
+                path = os.path.join(tmp, f"vad_{idx:03d}_{idx * 30:.3f}.wav")
+                with wave.open(path, "wb") as handle:
+                    handle.setnchannels(1)
+                    handle.setsampwidth(2)
+                    handle.setframerate(1)
+                    handle.writeframes(struct.pack("<" + "h" * 30, *([0] * 30)))
+
+            self.processor._load_all_settings = lambda: {
+                "stt_windowed_finalize_enabled": True,
+                "stt_window_sec": 180.0,
+                "stt_window_overlap_sec": 12.0,
+                "stt_window_hysteresis_sec": 6.0,
+                "stt_window_max_boundary_shift_sec": 0.12,
+                "sub_dedup_window": 0.5,
+            }
+
+            calls = []
+            preview_calls = []
+
+            def fake_collect(window_chunk_dir, **_kwargs):
+                with open(os.path.join(window_chunk_dir, "window_meta.json"), "r", encoding="utf-8") as handle:
+                    meta = json.load(handle)
+                calls.append(meta)
+                if meta["window_index"] == 0:
+                    return [
+                        {
+                            "start": 150.0,
+                            "end": 176.0,
+                            "text": "첫창 겹침",
+                            "asr_metadata": {"backend": "unit"},
+                        }
+                    ]
+                return [
+                    {
+                        "start": 174.2,
+                        "end": 190.0,
+                        "text": "둘창 새구간",
+                        "asr_metadata": {"backend": "unit"},
+                    }
+                ]
+
+            self.processor._collect_window_transcribe_segments = fake_collect
+
+            result = list(self.processor.transcribe(
+                tmp,
+                cleanup_chunk_dir=False,
+                preview_callback=lambda segs, label: preview_calls.append((label, list(segs))),
+            ))
+
+            self.assertEqual(len(calls), 2)
+            self.assertEqual([(item[1], item[2]) for item in result], [(1, 2), (2, 2)])
+            self.assertAlmostEqual(result[0][0][0]["end"], 174.0)
+            self.assertAlmostEqual(result[1][0][0]["start"], 174.2)
+            self.assertEqual(len(preview_calls), 2)
 
     def test_quality_review_keeps_fast_overlap_short(self):
         overlap = self.processor._chunk_overlap_sec({
@@ -392,8 +608,54 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual(progress, "  ▶ [STT2] 진행 상황: 02분 05초 / 10분 00초 (20%)")
 
+    def test_transcribe_ensemble_uses_windowed_spans_for_long_high_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for idx in range(8):
+                path = os.path.join(tmp, f"vad_{idx:03d}_{idx * 30:.3f}.wav")
+                with wave.open(path, "wb") as handle:
+                    handle.setnchannels(1)
+                    handle.setsampwidth(2)
+                    handle.setframerate(1)
+                    handle.writeframes(struct.pack("<" + "h" * 30, *([0] * 30)))
+
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary",
+                "selected_whisper_model_secondary": "secondary",
+                "stt_ensemble_enabled": True,
+                "stt_windowed_finalize_enabled": True,
+                "stt_window_sec": 120.0,
+                "stt_window_overlap_sec": 8.0,
+                "stt_window_hysteresis_sec": 4.0,
+            }
+
+            calls = {}
+
+            def fake_windowed(window_chunk_dir, items, settings, **kwargs):
+                calls["chunk_dir"] = window_chunk_dir
+                calls["items"] = list(items)
+                calls["settings"] = dict(settings)
+                calls["log_label"] = kwargs.get("log_label")
+                yield [{"start": 0.0, "end": 1.0, "text": "rolled"}], 1, 2
+
+            self.processor._transcribe_with_windowed_spans = fake_windowed
+
+            result = list(self.processor.transcribe_ensemble(tmp, cleanup_chunk_dir=False))
+
+            self.assertEqual(calls["chunk_dir"], tmp)
+            self.assertEqual(calls["log_label"], "STT-ENSEMBLE")
+            self.assertEqual(len(calls["items"]), 8)
+            self.assertTrue(calls["settings"]["stt_windowed_finalize_enabled"])
+            self.assertEqual(result[0][0][0]["text"], "rolled")
+            self.assertEqual(result[0][1:], (1, 2))
+
     def test_ensemble_preview_callback_receives_stt2_segments(self):
         with tempfile.TemporaryDirectory() as tmp:
+            wav_path = os.path.join(tmp, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
             calls = []
 
             self.processor._load_all_settings = lambda: {
@@ -423,10 +685,39 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertEqual({label for label, _ in calls}, {"STT1", "STT2"})
             stt2_call = next(segs for label, segs in calls if label == "STT2")
             self.assertEqual(stt2_call[0]["text"], "STT2")
-            self.assertEqual(result[0][1:], (1, 1))
+
+    def test_collect_transcribe_result_disables_nested_window_rolling(self):
+        class _Worker(VideoProcessor):
+            last_kwargs = None
+
+            def transcribe(self, *args, **kwargs):
+                type(self).last_kwargs = dict(kwargs)
+                yield [], 1, 1
+
+            def stop_transcribe(self):
+                return None
+
+        worker = _Worker()
+        worker._load_all_settings = lambda: {}
+
+        result = worker._collect_transcribe_result(
+            "/tmp/does-not-matter",
+            "unit-model",
+            label="STT2",
+        )
+
+        self.assertEqual(result, [])
+        self.assertIsNotNone(_Worker.last_kwargs)
+        self.assertFalse(_Worker.last_kwargs["_allow_window_rolling"])
 
     def test_ensemble_runs_stt1_and_stt2_on_parallel_threads(self):
         with tempfile.TemporaryDirectory() as tmp:
+            wav_path = os.path.join(tmp, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
             barrier = threading.Barrier(2)
             thread_names = {}
             preview_calls = []

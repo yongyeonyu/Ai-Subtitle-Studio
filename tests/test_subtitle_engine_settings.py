@@ -507,6 +507,57 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertIn("vad", sources)
         self.assertIn("lora_duration", sources)
 
+    def test_final_gap_settings_apply_piecewise_drift_for_consistent_run(self):
+        segments = [
+            {
+                "start": 0.06,
+                "end": 1.06,
+                "text": "A",
+                "words": [{"word": "A", "start": 0.0, "end": 1.0}],
+                "voice_activity_segments": [{"start": 0.0, "end": 1.0}],
+            },
+            {
+                "start": 1.56,
+                "end": 2.56,
+                "text": "B",
+                "words": [{"word": "B", "start": 1.5, "end": 2.5}],
+                "voice_activity_segments": [{"start": 1.5, "end": 2.5}],
+            },
+            {
+                "start": 3.06,
+                "end": 4.06,
+                "text": "C",
+                "words": [{"word": "C", "start": 3.0, "end": 4.0}],
+                "voice_activity_segments": [{"start": 3.0, "end": 4.0}],
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "subtitle_timing_fusion_enabled": False,
+                "subtitle_timing_piecewise_drift_enabled": True,
+                "subtitle_timing_piecewise_drift_trigger_sec": 0.05,
+                "subtitle_timing_piecewise_drift_max_shift_sec": 0.10,
+                "subtitle_timing_piecewise_drift_min_run_segments": 3,
+                "subtitle_timing_piecewise_drift_anchor_spread_sec": 0.08,
+                "subtitle_timing_anchor_max_start_lag_sec": 0.08,
+                "subtitle_timing_anchor_max_end_lag_sec": 0.08,
+                "subtitle_timing_anchor_max_end_lead_sec": 0.08,
+                "continuous_threshold": 0.0,
+                "gap_push_rate": 0.0,
+                "gap_pull_rate": 0.0,
+                "single_subtitle_end": 0.0,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[0]["start"], 0.0, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 1.5, places=3)
+        self.assertAlmostEqual(adjusted[2]["end"], 4.0, places=3)
+        self.assertEqual(adjusted[1].get("_piecewise_drift_policy", {}).get("task"), "subtitle_timing_piecewise_drift")
+
     def test_enforce_len_preserves_segment_lora_metadata(self):
         segments = [
             {

@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.09-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.09-30D158?style=for-the-badge)](RELEASE_v04.00.09.md)
+[![App Version](https://img.shields.io/badge/app-04.00.10-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.10-30D158?style=for-the-badge)](RELEASE_v04.00.10.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -27,7 +27,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - iCloud and NAS background processing.
 - Fast/Auto/High Mode policy shared across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - `core/mode_manager.py` now owns the single user-facing Fast/Auto/High/STT abstraction, while per-mode persistence keeps only user-selected STT1/STT2 and subtitle/roughcut LLM model identities.
-- Tiniping benchmark-locked mode defaults now pin STT1/STT2, audio filter, VAD, LoRA bucket, Deep selector, and timing-anchor behavior from the 티니핑 0~3분 sweep plus 0~11분 final validation run.
+- Tiniping benchmark-locked mode defaults now pin STT1/STT2, audio filter, VAD, LoRA bucket, Deep selector, and timing-anchor behavior from the 티니핑 0~3분 sweep plus the later long-window validation runs; High now keeps a 120-second rolling STT window with 8-second overlap and 4-second hysteresis.
 - STT model menus now show `[Fast]`, `[Auto]`, and `[High]` tags on the benchmark-winning STT1/STT2 model combinations.
 - Subtitle tool stack policy: Fast = LoRA, Auto = LoRA + Deep Learning, High = LoRA + Deep Learning + LLM, STT Mode = VAD + human input + LoRA/Deep/rules.
 - STT Mode portable project state: `stt_mode_state` keeps VAD work segments, raw dictation, rolling windows, and final subtitle mirrors separate from the normal vector subtitle canvas.
@@ -52,7 +52,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - OpenAI Codex ChatGPT CLI can be selected as a subscription-backed LLM provider without requiring an API key or Ollama model preflight.
 - Compact QML popup/menu surfaces use outside-click dismissal, hover/press feedback, and Korean-only bottom/global menu labels.
 - Ten-step engine dashboard: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
-- Runtime sidebar display of the current file's automatic audio-filter and VAD choices.
+- Runtime sidebar display of the current file's automatic audio-filter and VAD choices, backed by chunk-profile memory, preview self-score guards, and conservative switch confirmation so adaptive audio routing can generalize beyond one benchmark video.
 - Runtime ETA prediction now uses per-variant history with media/FPS/cache features and recent-run weighting, and the active queue row keeps elapsed-versus-expected time updated even before the full backend pipeline clock is ready.
 - Fast/Auto/High now lock benchmarked VAD defaults instead of exposing a separate VAD settings menu; automatic audio preset detection can still retune only the audio frontend stack.
 - Correction-dictionary cleanup now has a SQLite-backed indexed runtime path while keeping the JSON dictionary as the editable source of truth.
@@ -156,10 +156,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.09` |
-| Latest release checkpoint | `v04.00.09` |
-| Handoff document version | `04.00.09-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_9_RELEASED` |
+| App version in code | `04.00.10` |
+| Latest release checkpoint | `v04.00.10` |
+| Handoff document version | `04.00.10-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_10_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -190,7 +190,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.09.md`](RELEASE_v04.00.09.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.10.md`](RELEASE_v04.00.10.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

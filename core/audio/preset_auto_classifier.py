@@ -288,18 +288,84 @@ def build_audio_profile(features: dict, **_legacy_kwargs) -> dict:
     volume_conf = min(1.0, max(0.0, rms / 0.05))
     noise_penalty = min(0.35, high * 0.9 + max(0.0, low - 0.45) * 0.35 + zcr * 0.18)
     speech_confidence = max(0.05, min(0.98, 0.2 + speech_density * 0.42 + volume_conf * 0.34 - noise_penalty))
+    volatile_scene = bool(
+        float(features.get("silence_ratio_std", 0.0) or 0.0) >= 0.11
+        or float(features.get("high_band_ratio_std", 0.0) or 0.0) >= 0.035
+        or float(features.get("low_band_ratio_std", 0.0) or 0.0) >= 0.045
+    )
+    clean_dialog = bool(
+        speech_density >= 0.7
+        and speech_confidence >= 0.62
+        and not quiet
+        and noise_level != "high"
+        and not hot_signal
+        and (mic_present or rms >= 0.028)
+    )
+    roomy_dialog = bool(
+        environment == "indoor"
+        and speech_density >= 0.55
+        and not mic_present
+        and speech_confidence >= 0.5
+        and (noise_level != "low" or rms < 0.022 or high >= 0.09)
+    )
+    driving_noise = bool(
+        environment == "car"
+        and low_rumble
+        and (
+            noise_level != "low"
+            or low >= 0.62
+            or volatile_scene
+        )
+    )
 
     return {
         "environment": environment,
         "mic_present": mic_present,
         "noise_level": noise_level,
         "low_rumble": low_rumble,
+        "clean_dialog": clean_dialog,
+        "roomy_dialog": roomy_dialog,
+        "driving_noise": driving_noise,
         "quiet": quiet,
         "hot_signal": hot_signal,
+        "volatile_scene": volatile_scene,
         "speech_density": round(speech_density, 4),
         "speech_confidence": round(float(speech_confidence), 4),
         "sample_count": int(features.get("sample_count", 0) or 0),
     }
+
+
+def build_audio_route_bucket(profile: dict | None) -> str:
+    profile = dict(profile or {})
+    environment = str(profile.get("environment") or "indoor").strip().lower() or "indoor"
+    noise = str(profile.get("noise_level") or "low").strip().lower() or "low"
+    speech_density = float(profile.get("speech_density", 0.0) or 0.0)
+    speech_confidence = float(profile.get("speech_confidence", 0.0) or 0.0)
+    if speech_density >= 0.78:
+        density_bucket = "dense"
+    elif speech_density >= 0.55:
+        density_bucket = "steady"
+    elif speech_density >= 0.3:
+        density_bucket = "mixed"
+    else:
+        density_bucket = "sparse"
+    if speech_confidence >= 0.72:
+        confidence_bucket = "strong"
+    elif speech_confidence >= 0.5:
+        confidence_bucket = "mid"
+    else:
+        confidence_bucket = "weak"
+    flags = [
+        "rumble1" if bool(profile.get("low_rumble")) else "rumble0",
+        "dialog1" if bool(profile.get("clean_dialog")) else "dialog0",
+        "roomy1" if bool(profile.get("roomy_dialog")) else "roomy0",
+        "drive1" if bool(profile.get("driving_noise")) else "drive0",
+        "quiet1" if bool(profile.get("quiet")) else "quiet0",
+        "hot1" if bool(profile.get("hot_signal")) else "hot0",
+        "volatile1" if bool(profile.get("volatile_scene")) else "volatile0",
+        "mic1" if bool(profile.get("mic_present")) else "mic0",
+    ]
+    return "|".join([environment, noise, density_bucket, confidence_bucket, *flags])
 
 
 def tune_audio_settings_for_profile(profile: dict, features: dict | None = None) -> tuple[dict, str]:
@@ -436,12 +502,71 @@ def aggregate_sample_features(samples: list[dict]) -> dict:
     return aggregate
 
 
-def select_audio_candidate(
+def build_chunk_route_features(
+    wav_path: str,
+    *,
+    sample_count: int = 3,
+    window_sec: float = 8.0,
+) -> dict:
+    """Analyze several short windows inside one routing sample.
+
+    Chunk-level audio can swing from outdoor to indoor or music-heavy to clean
+    speech in a short time. Aggregating a few short windows is more stable than
+    trusting a single center slice.
+    """
+    rate, samples = _load_wav(wav_path)
+    total_sec = samples.size / float(rate) if rate > 0 else 0.0
+    if total_sec <= 0.0:
+        return aggregate_sample_features([])
+
+    count = max(1, min(5, int(sample_count or 1)))
+    win = max(2.0, min(float(window_sec or 8.0), total_sec))
+    if total_sec <= win or count == 1:
+        starts = [0.0]
+    else:
+        starts = [float(x) for x in np.linspace(0.0, max(0.0, total_sec - win), num=count)]
+
+    sample_rows: list[dict] = []
+    feature_rows: list[dict] = []
+    for idx, start in enumerate(starts, start=1):
+        features = analyze_sample_features(wav_path, start_sec=start, duration_sec=win)
+        feature_rows.append(dict(features))
+        sample_rows.append(
+            {
+                "index": idx,
+                "start_sec": round(float(start), 3),
+                "duration_sec": round(float(win), 3),
+                "features": features,
+                "speech_score": round(_speech_feature_score(features), 6),
+            }
+        )
+
+    aggregate = aggregate_sample_features(sample_rows)
+    if feature_rows:
+        aggregate["rms_mean_std"] = round(float(np.std([float(row.get("rms_mean", 0.0) or 0.0) for row in feature_rows])), 6)
+        aggregate["silence_ratio_std"] = round(
+            float(np.std([float(row.get("silence_ratio", 0.0) or 0.0) for row in feature_rows])),
+            6,
+        )
+        aggregate["high_band_ratio_std"] = round(
+            float(np.std([float(row.get("high_band_ratio", 0.0) or 0.0) for row in feature_rows])),
+            6,
+        )
+        aggregate["low_band_ratio_std"] = round(
+            float(np.std([float(row.get("low_band_ratio", 0.0) or 0.0) for row in feature_rows])),
+            6,
+        )
+    aggregate["route_window_sec"] = round(float(win), 3)
+    aggregate["route_sample_count"] = len(sample_rows)
+    return aggregate
+
+
+def rank_audio_candidates(
     profile: dict,
     features: dict,
     *,
     use_lora_prior: bool = True,
-) -> dict:
+) -> list[dict]:
     profile = dict(profile or {})
     features = dict(features or {})
     prior = _audio_lora_prior_scores(profile) if use_lora_prior else {}
@@ -460,6 +585,24 @@ def select_audio_candidate(
             "reason": ", ".join(dict.fromkeys(reasons)),
         })
     scored.sort(key=lambda row: float(row.get("score", 0.0) or 0.0), reverse=True)
+    return scored
+
+
+def candidate_settings_for_id(candidate_id: str) -> dict:
+    candidate = next(
+        (row for row in _AUTO_AUDIO_CANDIDATES if str(row.get("id") or "") == str(candidate_id or "")),
+        None,
+    )
+    return auto_audio_settings_only((candidate or {}).get("settings") or {})
+
+
+def select_audio_candidate(
+    profile: dict,
+    features: dict,
+    *,
+    use_lora_prior: bool = True,
+) -> dict:
+    scored = rank_audio_candidates(profile, features, use_lora_prior=use_lora_prior)
     best_id = str((scored[0] if scored else {}).get("id") or "clean_voice")
     best = next((candidate for candidate in _AUTO_AUDIO_CANDIDATES if candidate.get("id") == best_id), _AUTO_AUDIO_CANDIDATES[0])
     best_score = float((scored[0] if scored else {}).get("score", 0.62) or 0.62)
@@ -540,45 +683,94 @@ def _score_audio_candidate(candidate: dict, profile: dict, features: dict) -> tu
     env = str(profile.get("environment") or "indoor")
     noise = str(profile.get("noise_level") or "low")
     low_rumble = bool(profile.get("low_rumble"))
+    raw_low = float(features.get("low_band_ratio", 0.0) or 0.0)
+    clean_dialog = bool(profile.get("clean_dialog"))
+    roomy_dialog = bool(profile.get("roomy_dialog"))
+    driving_noise = bool(profile.get("driving_noise"))
+    mic_present = bool(profile.get("mic_present"))
     quiet = bool(profile.get("quiet"))
     hot = bool(profile.get("hot_signal"))
+    volatile = bool(profile.get("volatile_scene"))
+    speech_density = float(profile.get("speech_density", features.get("speech_density", 0.0)) or 0.0)
     speech_conf = float(profile.get("speech_confidence", features.get("speech_confidence", 0.55)) or 0.55)
-    subtitle_quality_risk = bool(speech_conf < 0.58 or quiet or noise == "high" or low_rumble)
+    subtitle_quality_risk = bool(speech_conf < 0.58 or quiet or noise == "high" or driving_noise or volatile)
     score = 0.42 + speech_conf * 0.28
     reasons: list[str] = []
+    stable_cabin_dialog = bool(
+        mic_present
+        and clean_dialog
+        and not driving_noise
+        and noise in {"low", "medium"}
+        and (env == "car" or volatile)
+    )
+    stable_speech = bool(
+        clean_dialog
+        and noise in {"low", "medium"}
+        and not driving_noise
+        and not hot
+        and not volatile
+    )
+    airy_room_dialog = bool(roomy_dialog and speech_density >= 0.55)
 
     if cid == "low_rumble":
-        score += 0.32 if low_rumble or env == "car" else -0.08
+        if driving_noise:
+            score += 0.38 if raw_low >= 0.62 else 0.34
+        elif low_rumble and not clean_dialog:
+            score += 0.18
+        else:
+            score += -0.05 if clean_dialog else (0.04 if low_rumble or env == "car" else -0.08)
         reasons.append("저역 울림에서 자막 인식 안정성 우선")
     elif cid == "noisy_voice":
-        if noise == "high" or env == "outdoor":
+        if driving_noise or noise == "high" or (env == "outdoor" and not clean_dialog):
             score += 0.34
+        elif airy_room_dialog:
+            score += 0.3
+        elif volatile and noise == "medium" and not clean_dialog:
+            score += 0.18
         elif noise == "medium" and subtitle_quality_risk:
-            score += 0.26
+            score += 0.22
         else:
-            score += 0.04 if noise == "medium" else -0.1
+            score += 0.06 if quiet and not mic_present else -0.08
         reasons.append("잡음 구간에서 자막 품질 우선 음성 복원")
     elif cid == "quiet_boost":
-        score += 0.3 if quiet else -0.04
+        if quiet and speech_density < 0.55:
+            score += 0.3
+        elif quiet and mic_present:
+            score += 0.18
+        else:
+            score += -0.06
         reasons.append("작은 음량 자막 누락 방지")
     elif cid == "fast_noise_gate":
-        stable_speech = bool(noise == "medium" and not subtitle_quality_risk and not low_rumble)
-        score += 0.1 if stable_speech else -0.12
+        if stable_cabin_dialog:
+            score += 0.3
+        elif stable_speech:
+            score += 0.22
+        else:
+            score += -0.12
         reasons.append("음성이 충분히 선명한 중간 잡음에서 음성 보존형 억제")
     elif cid == "minimal_hot_signal":
         score += 0.22 if hot and noise == "low" else -0.12
         reasons.append("과입력 음성 왜곡 최소화")
     else:
-        score += 0.2 if noise == "low" and not quiet and not low_rumble else -0.02
+        if env == "indoor" and mic_present and stable_speech:
+            score += 0.24
+        elif stable_speech and noise == "low" and not low_rumble:
+            score += 0.16
+        else:
+            score += -0.02
         reasons.append("일반 음성 자막 인식 균형")
 
     if quiet and cid not in {"quiet_boost", "noisy_voice"}:
         score -= 0.08
-    if low_rumble and cid not in {"low_rumble", "noisy_voice"}:
+    if low_rumble and driving_noise and cid not in {"low_rumble", "noisy_voice"}:
+        score -= 0.12
+    if clean_dialog and cid == "low_rumble":
         score -= 0.12
     if noise == "high" and cid not in {"noisy_voice", "low_rumble"}:
         score -= 0.13
-    if subtitle_quality_risk and cid == "fast_noise_gate":
+    if clean_dialog and cid == "noisy_voice" and not airy_room_dialog and env != "outdoor" and not driving_noise:
+        score -= 0.1
+    if subtitle_quality_risk and cid == "fast_noise_gate" and not stable_cabin_dialog:
         score -= 0.08
     if hot and cid in {"quiet_boost", "noisy_voice"}:
         score -= 0.08
