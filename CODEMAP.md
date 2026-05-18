@@ -31,7 +31,10 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 ## UI Areas
 
 - `ui/editor/editor_widget.py`: main editor composition root.
-- `ui/editor/video_player_widget.py`: video player composition and transport shell.
+- `ui/editor/video_player_widget.py`: video player composition root with frame/seek helpers and shared wiring.
+- `ui/editor/video_player_transport.py`: transport controls, quick-control-bar sync, frame-step hold, and playback status widgets.
+- `ui/editor/video_player_audio.py`: audio-output creation, route rebinding, and vocal-player lifecycle helpers.
+- `ui/editor/video_player_surface.py`: media-source loading, preview proxy, thumbnail/surface stack, and navigation/shutdown handling.
 - `ui/editor/video_player_subtitles.py`: subtitle overlay context/provider refresh and lookup logic for the video player.
 - `ui/home/ux/auto_source_settings_dialog.py`: dedicated NAS/iCloud auto-source settings popup flow and shared sidebar state bridge.
 - `ui/ux/`: reusable Apple-black popup palette/theme helpers and shared UX color tables.

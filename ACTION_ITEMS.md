@@ -23,7 +23,7 @@ app_version: "04.00.09"
 document_version: "04.00.09-mac-native"
 phase: "MAC_NATIVE_APPSTORE_V4_0_9_RELEASED"
 next_phase: null
-active_item_count: 16
+active_item_count: 15
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
 native_plan: "NATIVE_LIB_PLAN.md"
@@ -48,12 +48,6 @@ native_plan: "NATIVE_LIB_PLAN.md"
 ## Active Work
 
 ### P0 - UX And Editor Refactor Boundaries
-
-- [ ] 5. Finish splitting `ui/editor/video_player_widget.py`.
-  Scope: transport controls, audio-output recovery, provider adapter, thumbnail/surface handling, and player status widgets.
-  Already done: subtitle provider/overlay logic is partially separated.
-  Remaining: transport/provider/audio/surface modules plus typed nonfatal logging.
-  Verification: Macau playback/audio-output smoke.
 
 - [ ] 6. Split `ui/timeline/timeline_paint.py` into testable paint passes.
   Scope: row layout, final subtitle paint, STT preview paint, helper-line paint, cut-boundary paint, playhead/marker paint, and cache use.
