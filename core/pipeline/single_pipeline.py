@@ -30,6 +30,10 @@ from core.pipeline.subtitle_memory_guard import (
     create_subtitle_generation_memory_guard,
     subtitle_generation_memory_checkpoint,
 )
+from core.pipeline.single_pipeline_plan import (
+    PipelineProgressCoordinator,
+    build_single_pipeline_iteration_plan,
+)
 from ui.queue.queue_formatting import (
     build_queue_header_payload,
     build_queue_status_payload,
@@ -46,10 +50,15 @@ def _is_deleted_qt_error(exc: BaseException) -> bool:
 class SinglePipelineMixin:
     """단일 / 배치 품질모드 파이프라인."""
 
+    def _pipeline_progress_coordinator(self) -> PipelineProgressCoordinator:
+        coordinator = getattr(self, "_pipeline_progress_coordinator_obj", None)
+        if not isinstance(coordinator, PipelineProgressCoordinator):
+            coordinator = PipelineProgressCoordinator(self._ui_emit)
+            self._pipeline_progress_coordinator_obj = coordinator
+        return coordinator
+
     def _emit_processing_stage(self, queue_index: int, status: str) -> None:
-        text = str(status or "")
-        self._ui_emit("_sig_update_queue", queue_index, text, "", "", "")
-        self._ui_emit("_sig_editor_processing_stage", text)
+        self._pipeline_progress_coordinator().emit_stage(queue_index, str(status or ""))
 
     def _emit_generation_completion_ready(
         self,
@@ -473,11 +482,15 @@ class SinglePipelineMixin:
                     if hasattr(self, "_cut_boundary_snapshot_for_pipeline")
                     else {"cut_boundaries": [], "provisional_cut_boundaries": []}
                 )
-                pipeline_cut_boundaries = [
-                    dict(row) for row in list(cut_boundary_snapshot.get("cut_boundaries", []) or [])
-                ]
+                pipeline_plan = build_single_pipeline_iteration_plan(
+                    target_file=target_file,
+                    queue_index=queue_index,
+                    total_files=len(self.files_to_process),
+                    cut_boundary_snapshot=cut_boundary_snapshot,
+                )
+                pipeline_cut_boundaries = [dict(row) for row in pipeline_plan.cut_boundaries]
                 pipeline_provisional_cut_boundaries = [
-                    dict(row) for row in list(cut_boundary_snapshot.get("provisional_cut_boundaries", []) or [])
+                    dict(row) for row in pipeline_plan.provisional_cut_boundaries
                 ]
 
                 try:
@@ -487,7 +500,7 @@ class SinglePipelineMixin:
                         settings=diagnostic_settings,
                         cut_boundaries=pipeline_cut_boundaries,
                         provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
-                        speaker_count_hint=getattr(self, "max_speakers", None),
+                        speaker_count_hint=None,
                     )
                     diag_duration = float(
                         ((startup_diagnostic.get("media", {}) or {}).get("duration_sec", 0.0))
@@ -529,17 +542,7 @@ class SinglePipelineMixin:
                 # media_processor가 오디오 청크를 만들기 전에 hard cut을 주입한다.
                 try:
                     if hasattr(self, "video_processor"):
-                        hard_cuts = []
-                        for row in pipeline_cut_boundaries:
-                            try:
-                                if isinstance(row, dict):
-                                    sec = float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
-                                else:
-                                    sec = float(row)
-                                if sec > 0.0:
-                                    hard_cuts.append(round(sec, 3))
-                            except Exception:
-                                continue
+                        hard_cuts = list(pipeline_plan.hard_cut_boundaries)
                         self.video_processor.hard_cut_boundaries = sorted(set(hard_cuts))
                         if hard_cuts:
                             get_logger().log(f"  ✂️ [컷 경계] STT 청크 hard cut {len(hard_cuts)}개 적용")
@@ -587,6 +590,8 @@ class SinglePipelineMixin:
                     settings=load_settings(),
                 )
                 self._autopilot_speaker_preflight = speaker_preflight
+                if hasattr(self, "_apply_speaker_preflight_runtime_override"):
+                    self._apply_speaker_preflight_runtime_override(speaker_preflight)
                 get_logger().log(
                     "🗣️ [AutoPilot 화자] "
                     f"{speaker_preflight.get('lane')} · "
@@ -642,40 +647,10 @@ class SinglePipelineMixin:
                 video_duration_sec = 0.0
 
             opt_queue = queue.Queue()
-            base_name = os.path.splitext(os.path.basename(target_file))[0]
-
-            # Fingerprint-scoped audio paths prevent same-name media collisions.
-            cleaned_wav = str(getattr(self.video_processor, "last_cleaned_wav", "") or "")
-            raw_wav = str(getattr(self.video_processor, "last_raw_wav", "") or "")
-            if (not cleaned_wav or not os.path.exists(cleaned_wav)) and hasattr(self.video_processor, "_audio_work_paths"):
-                try:
-                    audio_paths = self.video_processor._audio_work_paths(target_file)
-                    cleaned_wav = str(audio_paths.get("cleaned_wav") or cleaned_wav)
-                    raw_wav = str(audio_paths.get("raw_wav") or raw_wav)
-                except Exception:
-                    pass
-            if not cleaned_wav:
-                cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
-            if not raw_wav:
-                raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
-            if os.path.exists(cleaned_wav):
-                audio_for_diarization = cleaned_wav
-            elif os.path.exists(raw_wav):
-                audio_for_diarization = raw_wav
-            else:
-                wav_in_chunks = sorted(
-                    [
-                        os.path.join(chunk_dir, f)
-                        for f in os.listdir(chunk_dir)
-                        if f.endswith(".wav")
-                    ]
-                )
-                audio_for_diarization = (
-                    wav_in_chunks[0] if wav_in_chunks else target_file
-                )
+            audio_for_diarization = self._speaker_diarization_audio_path(target_file, chunk_dir)
 
             t_diarize = None
-            if self.max_speakers > 1:
+            if self._speaker_auto_processing_enabled():
                 t_diarize = threading.Thread(
                     target=self._prepare_speaker_map,
                     args=(audio_for_diarization,),
@@ -906,55 +881,8 @@ class SinglePipelineMixin:
                         opt,
                     )
 
-                    if self.max_speakers > 1 and self._speaker_map:
-                        from core.audio.diarize import get_speaker_for_segment
-
-                        for seg in opt:
-                            spk_full = get_speaker_for_segment(
-                                seg["start"], seg["end"], self._speaker_map
-                            )
-                            seg["speaker"] = spk_full.replace("SPEAKER_", "")
-
-                        grouped_opt = []
-                        for seg in opt:
-                            text = seg.get("text", "").strip()
-                            if text.startswith("-"):
-                                text = text.lstrip("-").strip()
-                            spk = seg.get("speaker", "00")
-                            if not grouped_opt:
-                                seg["text_list"] = [text]
-                                seg["speaker_list"] = [spk]
-                                grouped_opt.append(seg)
-                            else:
-                                prev = grouped_opt[-1]
-                                gap = seg["start"] - prev["end"]
-                                if (
-                                    gap < 1.5
-                                    and spk != prev["speaker_list"][-1]
-                                    and len(prev["speaker_list"]) < 2
-                                ):
-                                    prev["text_list"].append(text)
-                                    prev["speaker_list"].append(spk)
-                                    prev["end"] = max(prev["end"], seg["end"])
-                                else:
-                                    seg["text_list"] = [text]
-                                    seg["speaker_list"] = [spk]
-                                    grouped_opt.append(seg)
-
-                        for seg in grouped_opt:
-                            if len(seg.get("text_list", [])) > 1:
-                                seg["text"] = (
-                                    f"- {seg['text_list'][0]}\n- {seg['text_list'][1]}"
-                                )
-                            else:
-                                seg["text"] = (
-                                    seg["text_list"][0]
-                                    if "text_list" in seg
-                                    else seg.get("text", "")
-                                )
-                            if "text_list" in seg:
-                                del seg["text_list"]
-                        opt = grouped_opt
+                    if self._speaker_auto_processing_enabled():
+                        opt = self._apply_runtime_speaker_diarization(opt)
 
                     if opt:
                         opt[0]["_subtitle_bundle_policy"] = {

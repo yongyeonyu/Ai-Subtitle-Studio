@@ -13,7 +13,6 @@ from core.runtime import config
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtMultimedia import QSoundEffect
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QColorDialog,
     QDialog,
     QFrame,
@@ -27,6 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QInputDialog,
 )
+from core.speaker_profile_settings import materialize_automatic_speaker_settings
 
 from ui.settings.settings_common import DATASET_DIR, _create_bottom_buttons
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
@@ -86,7 +86,7 @@ class SpeakerDialog(QDialog):
         hero_title = QLabel("화자 설정")
         hero_title.setObjectName("applePopupHeroTitle")
         hero_layout.addWidget(hero_title)
-        hero_subtitle = QLabel("화자 ID, 표시 색상, 학습된 목소리 데이터를 한 화면에서 관리합니다.")
+        hero_subtitle = QLabel("화자 구분은 자동으로 처리하고, 화자 1/2/3 프로필과 학습된 목소리 데이터를 한 화면에서 관리합니다.")
         hero_subtitle.setObjectName("applePopupHeroSubtitle")
         hero_subtitle.setWordWrap(True)
         hero_layout.addWidget(hero_subtitle)
@@ -102,7 +102,7 @@ class SpeakerDialog(QDialog):
         section_title.setObjectName("applePopupSectionTitle")
         content_layout.addWidget(section_title)
 
-        section_hint = QLabel("이름, ID, 색상, 음성 학습 데이터 상태를 각 화자별로 조정합니다.")
+        section_hint = QLabel("이름, ID, 색상, 음성 학습 데이터 상태를 조정하면 자동 화자 인식이 이 프로필을 우선 매칭합니다.")
         section_hint.setObjectName("applePopupSectionHint")
         section_hint.setWordWrap(True)
         content_layout.addWidget(section_hint)
@@ -112,7 +112,7 @@ class SpeakerDialog(QDialog):
         form.setHorizontalSpacing(0)
         form.setVerticalSpacing(8)
 
-        def create_row(idx, default_id, default_color, show_chk=True):
+        def create_row(idx, default_id, default_color):
             row_w = QWidget()
             row_w.setObjectName("speakerDialogRow")
             row_w.setStyleSheet("background-color: transparent;")
@@ -203,30 +203,25 @@ class SpeakerDialog(QDialog):
             h.addWidget(btn_del_voice)
             h.addWidget(btn_play)
 
-            chk = None
-            if show_chk:
-                chk = QCheckBox("사용")
-                chk.setFixedWidth(58)
-                chk.setChecked(self.result.get(f"spk{idx}_enabled", False))
-                h.addWidget(chk)
-            else:
-                spacer = QWidget()
-                spacer.setFixedWidth(58)
-                spacer.setStyleSheet("background: transparent;")
-                h.addWidget(spacer)
+            auto_label = QLabel("자동 매칭")
+            auto_label.setFixedWidth(58)
+            auto_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            auto_label.setStyleSheet(label_style("muted", 10, bold=True))
+            h.addWidget(auto_label)
 
             h.addStretch()
-            return row_w, txt_id, chk
+            return row_w, txt_id
 
-        self.row1, self.txt1, _ = create_row(1, "00", "#FFFFFF", False)
-        self.row2, self.txt2, self.chk2 = create_row(2, "01", COLORS["warning"], True)
-        self.row3, self.txt3, self.chk3 = create_row(3, "02", "#00FFFF", True)
+        self.row1, self.txt1 = create_row(1, "00", "#FFFFFF")
+        self.row2, self.txt2 = create_row(2, "01", COLORS["warning"])
+        self.row3, self.txt3 = create_row(3, "02", "#00FFFF")
 
         form.addRow("", self.row1)
         form.addRow("", self.row2)
         form.addRow("", self.row3)
 
         note = QLabel(
+            "화자 수는 자동 감지되며, 학습된 화자 1/2/3 프로필이 있으면 해당 화자로 우선 인식합니다.\n"
             "화자 ID는 diarize 결과 번호(00, 01, 02)에 맞춰 사용합니다.\n"
             "voice_data 폴더의 spk1_/spk2_/spk3_ 접두 wav 파일이 학습 데이터로 사용됩니다.\n"
             "[X] 버튼은 파일을 삭제하지 않고 앱에서만 사용 해제합니다."
@@ -430,15 +425,5 @@ class SpeakerDialog(QDialog):
         self.result["spk3_id"] = self.txt3.text().strip()
         for idx, btn in self._name_buttons.items():
             self.result[f"spk{idx}_name"] = btn.text().strip() or f"화자 {idx}"
-        self.result["spk2_enabled"] = self.chk2.isChecked()
-        self.result["spk3_enabled"] = self.chk3.isChecked()
-
-        max_spk = 1
-        if self.chk2.isChecked():
-            max_spk = 2
-        if self.chk3.isChecked():
-            max_spk = 3
-
-        self.result["max_speakers"] = max_spk
-        self.result["min_speakers"] = 1
+        self.result = materialize_automatic_speaker_settings(self.result)
         self.accept()

@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QApplication
 
 from core.coerce import safe_float as _as_float
 from core.runtime import config
+from core.speaker_profile_settings import visible_speaker_slots
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.editor_helpers import find_segment_at
 from ui.editor.ux.timeline_playhead_mode import (
@@ -295,6 +296,47 @@ class TimelineInputMixin:
         if remember_shadow:
             self._remember_shadow_before_playhead_move(target_sec)
         self.scrub_sec.emit(target_sec)
+
+    def _begin_playhead_handle_scrub(self) -> None:
+        self._clear_pending_center_drag()
+        self._is_scrubbing = True
+        self._playhead_handle_scrubbing = True
+        self._playhead_cut_magnet_locked_sec = None
+        try:
+            origin = self._snap_to_frame(float(getattr(self, "playhead_sec", 0.0) or 0.0))
+        except Exception:
+            origin = 0.0
+        self._playhead_cut_magnet_origin_sec = origin
+        self._playhead_cut_magnet_previous_sec = origin
+
+    def _finish_playhead_handle_scrub(self) -> None:
+        self._playhead_handle_scrubbing = False
+        self._playhead_cut_magnet_locked_sec = None
+        self._playhead_cut_magnet_origin_sec = None
+        self._playhead_cut_magnet_previous_sec = None
+
+    def _emit_scrub_with_playhead_cut_magnet(self, sec: float) -> None:
+        if getattr(self, "_playhead_cut_magnet_locked_sec", None) is not None:
+            return
+        target_sec = self._snap_to_frame(float(sec or 0.0))
+        snapper = getattr(self, "_playhead_auto_cut_snap_sec", None)
+        if callable(snapper):
+            try:
+                previous_sec = self._snap_to_frame(
+                    float(getattr(self, "_playhead_cut_magnet_previous_sec", getattr(self, "playhead_sec", target_sec)) or target_sec)
+                )
+                snapped = snapper(target_sec, previous_sec)
+            except Exception:
+                snapped = None
+            if isinstance(snapped, tuple) and len(snapped) >= 2 and bool(snapped[1]):
+                snap_sec = self._snap_to_frame(float(snapped[0] or target_sec))
+                self._playhead_cut_magnet_locked_sec = snap_sec
+                self._playhead_cut_magnet_previous_sec = snap_sec
+                self._emit_scrub_with_shadow(snap_sec)
+                return
+
+        self._playhead_cut_magnet_previous_sec = target_sec
+        self._emit_scrub_with_shadow(target_sec)
 
     def _timing_drag_preview_sec(self) -> float | None:
         edge = getattr(self, "_drag_edge", None)
@@ -1090,10 +1132,13 @@ class TimelineInputMixin:
         owner = self._find_owner_with_settings()
         settings = getattr(owner, "settings", {}) if owner is not None else {}
         keys = (
-            "max_speakers",
             "spk1_enabled", "spk1_id", "spk1_name", "spk1_color",
+            "spk1_voice_disabled", "spk1_voice_file",
             "spk2_enabled", "spk2_id", "spk2_name", "spk2_color",
+            "spk2_voice_disabled", "spk2_voice_file",
             "spk3_enabled", "spk3_id", "spk3_name", "spk3_color",
+            "spk3_voice_disabled", "spk3_voice_file",
+            "speaker_diarization_auto_enabled",
         )
         key = tuple((name, str((settings or {}).get(name, ""))) for name in keys)
         if key == getattr(self, "_speaker_hit_settings_cache_key", None):
@@ -1108,15 +1153,15 @@ class TimelineInputMixin:
     def _speaker_options(self):
         owner = self._find_owner_with_settings()
         settings = getattr(owner, "settings", {}) if owner is not None else {}
-        max_spk = max(1, min(3, int(settings.get("max_speakers", 1) or 1)))
         options = []
-        for idx in range(1, max_spk + 1):
-            if idx > 1 and not bool(settings.get(f"spk{idx}_enabled", False)):
-                continue
-            spk_id = str(settings.get(f"spk{idx}_id", f"{idx - 1:02d}") or f"{idx - 1:02d}")
-            color = str(settings.get(f"spk{idx}_color", "#FFFFFF") or "#FFFFFF")
-            name = str(settings.get(f"spk{idx}_name", "") or f"화자{idx}")
-            options.append((spk_id, name, color))
+        for row in visible_speaker_slots(current_speaker_settings(settings)):
+            options.append(
+                (
+                    str(row.get("id", "00") or "00"),
+                    str(row.get("name", "") or "화자"),
+                    str(row.get("color", "#FFFFFF") or "#FFFFFF"),
+                )
+            )
         return options
 
     def _speaker_icon(self, color_hex):
@@ -1246,9 +1291,18 @@ class TimelineInputMixin:
         if self._timeline_input_locked():
             ev.accept()
             return
-        if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
-            if self._playhead_handle_hit_rect().contains(ev.pos()):
-                self.playhead_menu_requested.emit(ev.globalPosition().toPoint(), self.playhead_sec); return
+        if self._playhead_handle_hit_rect().contains(ev.pos()):
+            if ev.button() == Qt.MouseButton.RightButton:
+                self.playhead_menu_requested.emit(ev.globalPosition().toPoint(), self.playhead_sec)
+                return
+            if ev.button() == Qt.MouseButton.LeftButton:
+                x, y = ev.pos().x(), ev.pos().y()
+                set_playhead_focus_mode_from_y(self, y)
+                self._last_click_x = x
+                self._last_click_y = y
+                self._begin_playhead_handle_scrub()
+                self._emit_scrub_with_playhead_cut_magnet(self.playhead_sec)
+                return
 
         x, y = ev.pos().x(), ev.pos().y()
         self._last_click_x = x; self._last_click_y = y
@@ -1618,7 +1672,12 @@ class TimelineInputMixin:
             self._pan_last_x = current_x; return
 
         if getattr(self, '_is_scrubbing', False) and (ev.buttons() & Qt.MouseButton.LeftButton):
-            self.scrub_sec.emit(self._snap_to_frame(max(0.0, self._sec_from_x(x)))); return
+            scrub_sec = self._snap_to_frame(max(0.0, self._sec_from_x(x)))
+            if getattr(self, "_playhead_handle_scrubbing", False):
+                self._emit_scrub_with_playhead_cut_magnet(scrub_sec)
+            else:
+                self.scrub_sec.emit(scrub_sec)
+            return
 
         pending_center_drag = getattr(self, "_pending_center_drag_seg", None)
         if pending_center_drag is not None:
@@ -1708,7 +1767,11 @@ class TimelineInputMixin:
             self._clear_pending_center_drag()
             return
         if getattr(self, '_is_panning', False): self._is_panning = False; self.unsetCursor(); self._clear_pending_center_drag(); return
-        if getattr(self, '_is_scrubbing', False): self._is_scrubbing = False; self._clear_pending_center_drag(); return
+        if getattr(self, '_is_scrubbing', False):
+            self._is_scrubbing = False
+            self._finish_playhead_handle_scrub()
+            self._clear_pending_center_drag()
+            return
 
         if getattr(self, '_drag_edge', None) == "diamond":
             dirty = getattr(self, "_drag_last_paint_rect", None) or self._drag_visual_rect()

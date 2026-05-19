@@ -9,6 +9,7 @@ once the segments are in memory.
 from __future__ import annotations
 
 from core.frame_time import clamp_segments_to_duration, normalize_fps, normalize_segments_to_frame_grid
+from ui.editor.editor_session_model import EditorSessionModel
 
 
 class EditorCanvasStateMixin:
@@ -66,6 +67,35 @@ class EditorCanvasStateMixin:
 
         if stt_preview_subtitle_drafts is not None:
             self._stt_preview_subtitle_drafts_enabled = bool(stt_preview_subtitle_drafts)
+
+        existing_session = getattr(self, "editor_session_model", None)
+        if isinstance(existing_session, EditorSessionModel):
+            self.editor_session_model = EditorSessionModel.from_canvas_state(
+                final_segments=existing_session.final_segments,
+                stt_preview_segments=(
+                    existing_session.stt_preview_segments
+                    if stt_preview_segments is None
+                    else stt_preview_segments
+                ),
+                voice_activity_segments=(
+                    existing_session.voice_activity_segments
+                    if voice_activity_segments is None
+                    else voice_activity_segments
+                ),
+                boundary_times=(
+                    existing_session.boundary_times if boundary_times is None else boundary_times
+                ),
+                provisional_boundaries=(
+                    existing_session.provisional_boundaries
+                    if provisional_boundaries is None
+                    else provisional_boundaries
+                ),
+                stt_preview_subtitle_drafts=(
+                    existing_session.stt_preview_subtitle_drafts
+                    if stt_preview_subtitle_drafts is None
+                    else bool(stt_preview_subtitle_drafts)
+                ),
+            )
 
         if schedule_timeline and hasattr(self, "_schedule_timeline"):
             self._schedule_timeline()
@@ -145,5 +175,13 @@ class EditorCanvasStateMixin:
             stt_preview_segments=stt_preview_segments,
             stt_preview_subtitle_drafts=stt_preview_subtitle_drafts,
             schedule_timeline=True,
+        )
+        self.editor_session_model = EditorSessionModel.from_canvas_state(
+            final_segments=ordered,
+            stt_preview_segments=stt_preview_segments,
+            voice_activity_segments=voice_activity_segments,
+            boundary_times=boundary_times,
+            provisional_boundaries=provisional_boundaries,
+            stt_preview_subtitle_drafts=stt_preview_subtitle_drafts,
         )
         return ordered

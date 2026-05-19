@@ -51,6 +51,9 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
   - `timeline_paint.py`: painter rendering path.
 - `ui/project/`: multiclip/project session UI.
 - `ui/home_sidebar.py`, `ui/queue_widget.py`: home dashboard, queue status, progress cards.
+- `ui/queue/queue_state_model.py`: canonical queue row state, progress snapshots, and widget/sidebar/top-card synchronization seams.
+- `ui/settings/settings_dictionary.py`: correction-dictionary management dialog and CRUD/search workflow.
+- `ui/editor/editor_session_model.py`: lightweight editor subtitle/STT/preview lane session model extracted from owner widgets.
 
 ## Pipeline Areas
 
@@ -69,15 +72,19 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `core/project/`: project JSON, snapshots, model settings, timeline metadata.
 - `core/project/project_assets.py`: external text-asset/SRT persistence, row-copy helpers, and STT candidate-track cache shaping.
 - `core/project/project_runtime_capture.py`: editor auxiliary project-state copy helpers plus lightweight status-count snapshots.
+- `core/project/project_session_service.py`: project open/save/reopen/resume lifecycle service and serialization entry seam.
 - `core/mode_manager.py`: central Fast/Auto/High/STT mode ownership and user-selectable model snapshot policy.
 - `core/audio/stt_quality_presets.py`: benchmark-locked Fast/Auto/High defaults, VAD lock notes, and STT recommendation tags.
 - `core/mode_policy.py`: runtime mode enforcement layer that applies benchmark-locked mode settings on top of persisted user model routes.
+- `core/speaker_profile_settings.py`: learned speaker-profile enablement and runtime diarization preference policy.
 - `ui/editor/editor_project_open_native.py`: SRT/project open flows and workspace restore.
 - `ui/editor/editor_save_manager.py`: save/export/project persistence actions.
 
 ## Native And Performance
 
 - `native/macos/AIStudioNative/`: Swift-native package for shared macOS-first core logic.
+- `core/native/_native_cut_boundary.cpp`: native cut-boundary scan/alignment hot loop used behind Python parity checks.
+- `core/subtitle_core_contract.py`, `core/native_swift_subtitle_core.py`, `native/macos/AIStudioNative/Sources/AIStudioCore/SubtitleCore.swift`: subtitle-core contract and current Swift bridge seam for future native migration.
 - `core/native_swift_*.py`: Python bridges into Swift/native functionality.
 - `core/runtime_eta.py`: queue/startup ETA estimation and history.
 - `core/performance.py`: runtime profiling and performance helpers.

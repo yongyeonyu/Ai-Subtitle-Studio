@@ -49,6 +49,7 @@ from ui.timeline.timeline_analysis import (
     subtitle_score_overlay_marker,
 )
 from ui.timeline.timeline_roughcut_paint import coalesce_roughcut_paint_markers
+from ui.timeline.paint_passes import build_cut_boundary_work_lane_paint_plan
 from ui.timeline.stt_preview_layout import MAX_STT_PREVIEW_SUBLANES, assign_stt_preview_lanes, stt_preview_lane_geometry
 from ui.timeline.speaker_labels import (
     current_speaker_settings,
@@ -58,11 +59,8 @@ from ui.timeline.speaker_labels import (
 from ui.timeline.timeline_segment_style import (
     SEGMENT_TEXT_KIND_STYLES,  # noqa: F401 - compatibility re-export for tests/legacy callers
     build_stt_selection_index,
-    cut_boundary_scan_marker_verified,
+    cut_boundary_scan_marker_verified,  # noqa: F401 - compatibility re-export for tests/legacy callers
     final_stt_selection_source,
-    official_boundary_marker_visual,
-    scan_boundary_marker_label,
-    scan_boundary_marker_visual,
     segment_text_kind,  # noqa: F401 - compatibility re-export for tests/legacy callers
     stt_candidate_selected,  # noqa: F401 - compatibility re-export for tests/legacy callers
     stt_candidate_selected_by_llm,  # noqa: F401 - compatibility re-export for tests/legacy callers
@@ -716,96 +714,42 @@ class TimelinePaintMixin:
         def _draw_cut_boundary_work_lane():
             official_rows = getattr(self, "boundary_times", []) or []
             scan_rows = getattr(self, "scan_boundary_times", []) or []
-            if hasattr(self, "_visible_items_for_paint"):
-                official_candidates = self._visible_items_for_paint(
-                    official_rows,
-                    "boundary_times",
-                    visible_start_sec,
-                    visible_end_sec,
-                    pad_sec=0.05,
-                )
-                scan_candidates = self._visible_items_for_paint(
-                    scan_rows,
-                    "scan_boundaries",
-                    visible_start_sec,
-                    visible_end_sec,
-                    pad_sec=0.05,
-                )
-            else:
-                official_candidates = list(official_rows or [])
-                scan_candidates = list(scan_rows or [])
-            official_items = list(official_candidates or [])
-            scan_items = [item for item in list(scan_candidates or []) if isinstance(item, dict)]
-            if not official_items and not scan_items:
-                return
-            clip = paint_clip
-            lane_top = RULER_H + WAVE_H + 5
-            lane_h = max(18, SEG_TOP - lane_top - 7)
-            p.setFont(QFont(config.FONT, 8, QFont.Weight.Bold))
-            detail_items = []
-            official_secs: set[float] = set()
-            try:
-                timeline_end_sec = max(0.0, float(getattr(self, "total_duration", 0.0) or 0.0))
-            except Exception:
-                timeline_end_sec = 0.0
             try:
                 fps = normalize_fps(self._get_fps() if hasattr(self, "_get_fps") else getattr(self, "frame_rate", 30.0))
             except Exception:
                 fps = 30.0
-            end_boundary_slop = max(0.05, 2.0 / max(1.0, float(fps or 30.0)))
-
-            def _is_timeline_end_boundary(sec: float) -> bool:
-                return timeline_end_sec > 0.0 and float(sec) >= max(0.0, timeline_end_sec - end_boundary_slop)
-
-            def _boundary_visual_hidden(visual) -> bool:
-                return not isinstance(visual, dict) or bool(visual.get("hidden")) or visual.get("visible") is False
-
-            for item in official_items:
-                try:
-                    if isinstance(item, dict):
-                        sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
-                    else:
-                        sec = float(item or 0.0)
-                except Exception:
-                    continue
-                if _is_timeline_end_boundary(sec):
-                    continue
-                x = self._x(sec)
-                if x < clip.left() - 8 or x > clip.right() + 8:
-                    continue
-                visual = official_boundary_marker_visual(item)
-                if _boundary_visual_hidden(visual):
-                    continue
-                official_secs.add(round(float(sec), 3))
-                color = QColor(str(visual.get("color") or "#F5F7FA"))
-                width = max(1, int(visual.get("width", 1) or 1))
-                p.setPen(QPen(color, width, Qt.PenStyle.SolidLine))
-                p.drawLine(int(x), lane_top + 2, int(x), lane_top + lane_h - 3)
-            for item in scan_items:
-                try:
-                    sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
-                except Exception:
-                    continue
-                if _is_timeline_end_boundary(sec):
-                    continue
-                x = self._x(sec)
-                if x < clip.left() - 8 or x > clip.right() + 8:
-                    continue
-                visual = scan_boundary_marker_visual(item)
-                if _boundary_visual_hidden(visual):
-                    continue
-                if cut_boundary_scan_marker_verified(item) and round(float(sec), 3) in official_secs:
-                    x -= 1
-                color = QColor(str(visual.get("color") or "#8E8E93"))
-                width = max(1, int(visual.get("width", 1) or 1))
-                style_name = str(visual.get("style") or "solid")
+            plan = build_cut_boundary_work_lane_paint_plan(
+                official_rows=official_rows,
+                scan_rows=scan_rows,
+                visible_start_sec=visible_start_sec,
+                visible_end_sec=visible_end_sec,
+                clip_left=paint_clip.left(),
+                clip_right=paint_clip.right(),
+                total_duration=float(getattr(self, "total_duration", 0.0) or 0.0),
+                fps=fps,
+                dense_segment_mode=dense_segment_mode,
+                sec_to_x=self._x,
+                visible_filter=getattr(self, "_visible_items_for_paint", None),
+            )
+            if not plan.has_items:
+                return
+            clip = paint_clip
+            lane_top = int(plan.lane_top)
+            lane_h = int(plan.lane_h)
+            p.setFont(QFont(config.FONT, 8, QFont.Weight.Bold))
+            for item in plan.lines:
+                color = QColor(item.color)
+                width = max(1, int(item.width))
+                style_name = str(item.style or "solid")
                 pen_style = Qt.PenStyle.DashLine if style_name == "dash" else (Qt.PenStyle.DotLine if style_name == "dot" else Qt.PenStyle.SolidLine)
                 p.setPen(QPen(color, width, pen_style))
-                p.drawLine(int(x), lane_top + 3, int(x), lane_top + lane_h - 4)
-                label = scan_boundary_marker_label(item)
-                if label and not dense_segment_mode:
-                    detail_items.append((label, color, x, width))
-            for label, color, x, _width in detail_items:
+                top_offset = 2 if item.kind == "official" else 3
+                bottom_offset = 3 if item.kind == "official" else 4
+                p.drawLine(int(item.x), lane_top + top_offset, int(item.x), lane_top + lane_h - bottom_offset)
+            for item in plan.labels:
+                label = item.label
+                color = QColor(item.color)
+                x = int(item.x)
                 label_w = max(34, min(76, p.fontMetrics().horizontalAdvance(label) + 12))
                 rect = QRect(int(x) + 7, lane_top + 2, label_w, min(18, lane_h - 4))
                 if rect.right() > clip.right():

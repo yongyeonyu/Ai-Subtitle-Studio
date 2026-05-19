@@ -82,6 +82,14 @@ class EditorCanvasStateTests(unittest.TestCase):
         self.assertEqual(editor.scan_lines, [{"start": 1.2, "end": 1.3}])
         self.assertEqual(editor.voice_activity, [{"start": 0.5, "end": 0.9}])
         self.assertEqual(editor._live_stt_preview_segments, [{"line": 99, "text": "preview"}])
+        self.assertEqual(
+            editor.editor_session_model.project_save_view()["segments"][0]["text"],
+            "earlier",
+        )
+        self.assertEqual(
+            editor.editor_session_model.project_save_view()["stt_preview_segments"],
+            [{"line": 99, "text": "preview"}],
+        )
         self.assertEqual(editor.schedule_count, 1)
 
     def test_apply_loaded_canvas_state_normalizes_to_frame_grid_and_closes_micro_gap(self):
@@ -114,6 +122,25 @@ class EditorCanvasStateTests(unittest.TestCase):
         self.assertEqual(editor.timeline.boundary_times, [0.5])
         self.assertEqual(editor._live_stt_preview_segments, [{"line": 1}])
         self.assertEqual(editor.schedule_count, 0)
+
+    def test_editor_session_model_delays_row_copy_until_view_requested(self):
+        editor = _DummyEditor()
+        source_row = {"start": 0.0, "end": 1.0, "text": "final"}
+
+        ordered = editor.apply_loaded_canvas_state(
+            [source_row],
+            preserve_view=False,
+            mark_dirty=False,
+            boundary_times=[0.5],
+            voice_activity_segments=[{"start": 0.1, "end": 0.2}],
+        )
+
+        session = editor.editor_session_model
+        self.assertIs(session.final_segments[0], ordered[0])
+        view = session.project_save_view()
+        view["segments"][0]["text"] = "changed"
+        self.assertEqual(session.final_segments[0]["text"], "final")
+        self.assertEqual(view["boundary_times"], [0.5])
 
     def test_loaded_canvas_state_fps_scans_stream_without_extra_truth_test(self):
         editor = _DummyEditor()

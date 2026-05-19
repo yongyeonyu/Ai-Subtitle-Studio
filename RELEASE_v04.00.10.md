@@ -8,9 +8,9 @@ Release app version: `04.00.10`
 
 ## Summary
 
-v04.00.10 hardens the post-v04.00.09 subtitle runtime instead of widening the visible UI surface. The release keeps the benchmark-winning High timing path alive inside the real transcribe runtime, adds a conservative adaptive-audio routing engine for mixed environments such as indoor, in-car, and outdoor footage, and fixes two editor regressions discovered during manual subtitle review: diamond drag cut search was heavier than needed, and some multiline hyphen subtitles could leak their second line into a separate normal segment.
+v04.00.10 remains the active release line and was refreshed on 2026-05-19 with the latest runtime, subtitle, and handoff fixes from the same version branch. The line still keeps the benchmark-winning High timing path and the guarded adaptive-audio engine from the original release, but it now also includes the current automatic-speaker workflow, the in-app correction-dictionary editor, faster/native cut-boundary work, and the shutdown/runtime-safety fixes validated during the latest manual Tiniping and personalization passes.
 
-The adaptive-audio engine is intentionally guarded. This release ships the route classifier, profile-memory reuse, preview self-score gate, and switch-confirmation heuristics, but it does not force every experimental route into the benchmark-locked High default unless long-fixture validation actually improved.
+The release line remains conservative where quality can drift. Automatic speaker grouping only promotes multi-speaker output when local evidence supports it, native cut-boundary acceleration keeps Python parity coverage, and the personalization shutdown path now prefers immediate cancelability and visible status over background persistence that can trap the UI.
 
 ## Changes Since v04.00.09
 
@@ -33,6 +33,17 @@ The adaptive-audio engine is intentionally guarded. This release ships the route
   - `tests/test_subtitle_line_breaks.py` now verifies single-speaker hyphen line breaks stay in one segment while real multi-speaker rows still use grouped blocks.
 - Expanded correction-dictionary coverage for a newly observed error.
   - `dataset/dataset_correction.json` now maps `원 청포논` to `완성품은`.
+- Refreshed the release line with current automatic-speaker and subtitle formatting behavior.
+  - `core/audio/diarize.py`, `core/speaker_profile_settings.py`, `core/pipeline/pipeline_helpers.py`, `core/pipeline/single_pipeline.py`, `core/backend_fast.py`, and `ui/editor/editor_pipeline_partial_rerun.py` now allow local one/two/three-speaker decisions while preferring learned `spk1`/`spk2`/`spk3` profiles when available.
+  - `core/engine/srt_writer.py` and `core/engine/subtitle_engine.py` now preserve actual grouped speaker rows, recover inline dialogue into two-line speaker subtitles, merge over-split early fragments, and suppress repeated ending lines more aggressively.
+- Added the in-app correction-dictionary management surface.
+  - `ui/settings/settings_dictionary.py`, `ui/menu_bar.py`, `ui/home_ui.py`, and `ui/settings/settings_dialog.py` now expose a dedicated bottom-menu dialog for alphabetized correction search/add/edit/delete flows.
+  - `ui/main/app_command_bridge.py` and `tools/appctl.py` now support live dictionary opening and snapshot capture for remote/runtime verification.
+- Hardened personalization shutdown and runtime cleanup.
+  - `ui/settings/settings_personalization.py`, `core/personalization/idle_trainer.py`, `core/personalization/ground_truth_import.py`, `core/personalization/subtitle_pattern_index.py`, and `core/personalization/lora_retrieval_index.py` now keep stop controls available earlier, propagate cancellation through long index rebuild loops, and avoid saving partial cancelled index state.
+  - `ui/main/main_runtime_cleanup.py` now prioritizes personalization stop signals during app shutdown.
+- Continued cut-boundary performance work on the active release line.
+  - `core/native/_native_cut_boundary.cpp`, `core/native_cut_boundary.py`, `core/pipeline/cut_boundary_helpers.py`, `ui/editor/editor_pipeline_playhead_actions.py`, `ui/editor/ux/timeline_input.py`, and `ui/editor/ux/timeline_subtitle_segment_editing.py` now keep the new automatic cut-boundary magnet path explicit, reduce duplicate scans, and move more deterministic loop work behind native parity-tested helpers.
 
 ## Code Review Notes
 
@@ -40,6 +51,8 @@ The adaptive-audio engine is intentionally guarded. This release ships the route
 - Kept the production defaults conservative even after the X5 spot benchmark because the new `mode_auto_adaptive_split_drift` path won that fixture, but earlier Tiniping/BMW validation still showed cross-fixture trade-offs that do not justify a blanket default flip yet.
 - Verified that the multiline subtitle fix does not change the existing multi-speaker grouped-block path; only the false positive split path was removed.
 - Verified that the diamond drag shadow playhead is isolated from the pinned shadow playhead, so drag preview cannot overwrite the existing playhead-shadow UX state.
+- Verified that automatic speaker grouping can still fall back to one visible line locally even when learned speaker profiles are loaded, instead of forcing a global speaker count.
+- Verified that cancellation inside personalization indexing does not write partial index files and does not require the full training loop to finish before the UI can stop or exit.
 
 ## Compatibility Notes
 
@@ -57,6 +70,11 @@ Completed verification for this release:
   - `./venv/bin/python -m unittest tests.test_audio_presets tests.test_preset_auto_classifier tests.test_media_processor_overlap tests.test_subtitle_engine_settings -q`
   - `./venv/bin/python -m unittest tests.test_subtitle_line_breaks tests.test_timeline_hit_targets -q`
   - `./venv/bin/python -m unittest tests.test_tiniping_timing_ideas tests.test_tiniping_mode_search -q`
+- Focused unittest sweeps for the 2026-05-19 refresh
+  - `./venv/bin/python -m unittest tests.test_settings_dictionary tests.test_app_command_bridge tests.test_sidebar_terminal_layout tests.test_subtitle_engine_settings`
+  - `./venv/bin/python -m unittest tests.test_pipeline_speaker_diarization tests.test_speaker_profile_settings tests.test_editor_speaker_ops tests.test_benchmark_mode_profiles tests.test_audio_presets`
+  - `./venv/bin/python -m unittest tests.test_personalization_idle_runtime tests.test_lora_vector_retriever tests.test_subtitle_pattern_index tests.test_native_cut_boundary`
+  - `./venv/bin/python -m unittest tests.test_timeline_hit_targets tests.test_timeline_playhead_fit tests.test_timeline_render_cache tests.test_queue_dispatch tests.test_project_runtime_capture tests.test_cp08_cp10_home_timeline`
 - Python syntax and diff hygiene
   - `./venv/bin/python -m compileall -q main.py core ui tests tools`
   - `git diff --check -- .`

@@ -164,6 +164,69 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
         ])
         self.assertEqual(getattr(backend, "_cut_boundary_prescan_pending_request", None), None)
 
+    def test_inflight_forced_cut_boundary_prescan_reuses_same_request_without_rerun(self):
+        backend = _DummyBackend("")
+        first_started = threading.Event()
+        allow_first_finish = threading.Event()
+        calls = []
+
+        def fake_sync(project_path, files):
+            calls.append((project_path, list(files or [])))
+            first_started.set()
+            allow_first_finish.wait(timeout=1.0)
+
+        backend._auto_scan_cut_boundaries_for_start_sync = fake_sync
+
+        backend._force_cut_boundary_rescan_once = True
+        backend._auto_scan_cut_boundaries_for_start("/tmp/sample.assp", ["sample.mp4"])
+        self.assertTrue(first_started.wait(timeout=1.0))
+
+        backend._force_cut_boundary_rescan_once = True
+        backend._auto_scan_cut_boundaries_for_start("/tmp/sample.assp", ["sample.mp4"])
+
+        self.assertEqual(getattr(backend, "_cut_boundary_prescan_pending_request", None), None)
+        allow_first_finish.set()
+
+        follower = getattr(backend, "_cut_boundary_prescan_thread", None)
+        if follower is not None:
+            follower.join(timeout=1.0)
+
+        self.assertEqual(calls, [
+            ("/tmp/sample.assp", ["sample.mp4"]),
+        ])
+        self.assertIsNone(getattr(backend, "_cut_boundary_prescan_active_request", None))
+
+    def test_inflight_forced_cut_boundary_follower_reuses_same_request_without_rerun(self):
+        backend = _DummyBackend("")
+        allow_finish = threading.Event()
+        calls = []
+
+        def fake_sync(project_path, files):
+            calls.append((project_path, list(files or [])))
+
+        def follower():
+            allow_finish.wait(timeout=1.0)
+
+        backend._auto_scan_cut_boundaries_for_start_sync = fake_sync
+        backend._cut_boundary_prescan_active_request = {
+            "project_path": "/tmp/sample.assp",
+            "files": ["sample.mp4"],
+            "force_rescan": True,
+        }
+        backend._cut_boundary_follower_thread = threading.Thread(target=follower, daemon=True)
+        backend._cut_boundary_follower_thread.start()
+
+        backend._force_cut_boundary_rescan_once = True
+        backend._auto_scan_cut_boundaries_for_start("/tmp/sample.assp", ["sample.mp4"])
+
+        self.assertEqual(calls, [])
+        self.assertEqual(getattr(backend, "_cut_boundary_prescan_pending_request", None), None)
+
+        allow_finish.set()
+        backend._cut_boundary_follower_thread.join(timeout=1.0)
+        backend._cut_boundary_follower_thread = None
+        backend._cut_boundary_prescan_active_request = None
+
     def test_follower_marks_then_removes_checked_provisional_rows(self):
         backend = _DummyBackend("")
         provisional_rows = [

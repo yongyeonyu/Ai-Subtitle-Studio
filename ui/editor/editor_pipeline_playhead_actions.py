@@ -20,7 +20,7 @@ class EditorPipelinePlayheadActionsMixin:
             try:
                 shadow_sec = float(getattr(getattr(timeline, "canvas", None), "shadow_playhead_sec", 0.0) or 0.0)
                 self.sm.set_custom_status(f"📍 그림자 플레이헤드 {shadow_sec:.2f}s")
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError, ValueError):
                 pass
 
     def _clear_shadow_playhead_from_menu(self) -> None:
@@ -31,7 +31,7 @@ class EditorPipelinePlayheadActionsMixin:
         if bool(clearer()):
             try:
                 self.sm.set_custom_status("🧹 그림자 플레이헤드 지움")
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
                 pass
 
     def _current_cut_boundary_level(self) -> str:
@@ -103,16 +103,52 @@ class EditorPipelinePlayheadActionsMixin:
 
             try:
                 self.sm.set_custom_status(f"🎬 컷 경계 단계: {settings['scan_cut_boundary_label']}")
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError, KeyError):
                 pass
 
             get_logger().log(f"  🎚️ [컷 경계] 단계 변경: {settings['scan_cut_boundary_label']}")
         except Exception as exc:
             get_logger().log(f"⚠️ 컷 경계 단계 저장 실패: {exc}")
 
+    def _playhead_auto_cut_magnet_enabled(self) -> bool:
+        if hasattr(self, "settings") and isinstance(self.settings, dict):
+            return bool(self.settings.get("playhead_auto_cut_magnet_enabled", True))
+        try:
+            from core.settings import load_settings
+
+            return bool((load_settings() or {}).get("playhead_auto_cut_magnet_enabled", True))
+        except Exception as exc:
+            get_logger().log(f"⚠️ 자동 컷 경계 자석 설정 조회 실패: {exc}")
+            return True
+
+    def _set_playhead_auto_cut_magnet_enabled(self, enabled: bool):
+        enabled = bool(enabled)
+        try:
+            from core.settings import load_settings
+            try:
+                from core.settings import save_settings
+            except ImportError:
+                save_settings = None
+
+            settings = load_settings() or {}
+            settings["playhead_auto_cut_magnet_enabled"] = enabled
+            if callable(save_settings):
+                save_settings(settings)
+            if hasattr(self, "settings") and isinstance(self.settings, dict):
+                self.settings.update(settings)
+            label = "켬" if enabled else "끔"
+            try:
+                self.sm.set_custom_status(f"🧲 자동 컷 경계 자석: {label}")
+            except (RuntimeError, AttributeError, TypeError):
+                pass
+            get_logger().log(f"  🧲 [플레이헤드] 자동 컷 경계 자석: {label}")
+        except Exception as exc:
+            get_logger().log(f"⚠️ 자동 컷 경계 자석 저장 실패: {exc}")
+
     def _playhead_menu_items(self) -> list[dict]:
         items = []
         current = self._current_cut_boundary_level()
+        magnet_enabled = self._playhead_auto_cut_magnet_enabled()
         level_labels = {
             "off": "컷 경계: 사용안함",
             "low": "컷 경계: 낮음 - 3초 간격",
@@ -127,6 +163,14 @@ class EditorPipelinePlayheadActionsMixin:
                     "accent": "#34C759" if level != "off" else "#A9B0B7",
                 }
             )
+        items.append(
+            {
+                "id": "playhead_auto_cut_magnet",
+                "label": "자동 컷 경계 자석",
+                "checked": magnet_enabled,
+                "accent": "#34C759" if magnet_enabled else "#A9B0B7",
+            }
+        )
         items.append({"separator": True})
         items.extend(
             [
@@ -155,6 +199,8 @@ class EditorPipelinePlayheadActionsMixin:
             return
         if chosen.startswith("cut_boundary:"):
             self._set_cut_boundary_level_from_menu(chosen.split(":", 1)[1])
+        elif chosen == "playhead_auto_cut_magnet":
+            self._set_playhead_auto_cut_magnet_enabled(not self._playhead_auto_cut_magnet_enabled())
         elif chosen == "shadow_pin":
             self._pin_shadow_playhead_from_menu(sec)
         elif chosen == "shadow_clear":

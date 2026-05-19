@@ -1266,7 +1266,7 @@ class AudioPresetTests(unittest.TestCase):
             open(media, "wb").close()
             chunk_dir = os.path.join(tmp, "chunks")
             with mock.patch(
-                "core.audio.media_processor_audio.runtime_parallel_worker_plan",
+                "core.audio.audio_runtime_services.runtime_parallel_worker_plan",
                 return_value=(8, {"reductions": []}),
             ), mock.patch("core.audio.media_processor_audio.ThreadPoolExecutor", CapturingExecutor):
                 ok = processor._write_adaptive_grouped_chunks_from_media(

@@ -732,6 +732,14 @@ class MainRuntimeCleanupMixin:
         _run_cleanup_step("app exit stop post completion idle timer", self._stop_post_completion_idle_timer)
         watchdog_result = _run_cleanup_step("app exit stop auto watchdogs", self._stop_auto_watchdogs_for_exit, default=False)
         stopped_any = bool(watchdog_result) or stopped_any
+        dialog_stop_result = _run_cleanup_step(
+            "app exit stop personalization dialogs",
+            lambda: self._request_personalization_stop_for_user_input()
+            if hasattr(self, "_request_personalization_stop_for_user_input")
+            else None,
+            default=None,
+        )
+        stopped_any = bool(dialog_stop_result) or stopped_any
         def _pause_personalization_trainer():
             nonlocal stopped_any
             trainer = getattr(self, "_personalization_idle_trainer", None)
@@ -1036,7 +1044,7 @@ class MainRuntimeCleanupMixin:
                     if stopped_runtime:
                         now = time.monotonic()
                         last_log_at = float(getattr(self, "_editor_ai_release_last_log_at", 0.0) or 0.0)
-                        if now - last_log_at >= 3.0:
+                        if now - last_log_at >= 600.0:
                             self._editor_ai_release_last_log_at = now
                             get_logger().log("🧹 에디터 모드: AI/STT/LLM 모델을 종료하고 GPU/런타임 메모리를 정리했습니다.")
                 finally:

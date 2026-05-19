@@ -46,6 +46,41 @@ class NativeSwiftAdaptiveRoutingTests(unittest.TestCase):
         with mock.patch.object(common_split, "IS_MAC", True), mock.patch.dict(os.environ, {}, clear=True):
             self.assertFalse(common_split._enabled(1000, settings))
 
+    def test_common_split_prefers_unified_subtitle_core_contract(self):
+        settings = {
+            "mac_native_acceleration_enabled": True,
+            "native_swift_common_split_enabled": True,
+            "native_swift_common_split_min_items": 1,
+        }
+        items = [{"text": "테스트", "start": 0.0, "end": 1.0, "words": [], "policy": {"enabled": False}}]
+        with mock.patch.object(common_split, "IS_MAC", True), \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(
+                    common_split,
+                    "run_subtitle_core_operation_via_swift",
+                    return_value={"plans": [{"action": "keep"}]},
+                ) as request_mock:
+            plans = common_split.plan_common_split_via_swift(items, settings=settings)
+
+        self.assertEqual(plans, [{"action": "keep"}])
+        request_mock.assert_called_once()
+
+    def test_common_split_legacy_worker_stays_as_fallback(self):
+        settings = {
+            "mac_native_acceleration_enabled": True,
+            "native_swift_common_split_enabled": True,
+            "native_swift_common_split_min_items": 1,
+        }
+        items = [{"text": "테스트", "start": 0.0, "end": 1.0, "words": [], "policy": {"enabled": False}}]
+        with mock.patch.object(common_split, "IS_MAC", True), \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(common_split, "run_subtitle_core_operation_via_swift", return_value=None), \
+                mock.patch.object(common_split, "find_native_cli_path", return_value="dummy-cli"), \
+                mock.patch.object(common_split, "_request_worker", return_value={"plans": [{"action": "keep"}]}):
+            plans = common_split.plan_common_split_via_swift(items, settings=settings)
+
+        self.assertEqual(plans, [{"action": "keep"}])
+
     def test_swift_policy_helpers_require_experimental_gate(self):
         settings = {"native_swift_lora_scoring_enabled": True}
         with mock.patch.object(swift_policy, "IS_MAC", True), mock.patch.dict(os.environ, {}, clear=True):

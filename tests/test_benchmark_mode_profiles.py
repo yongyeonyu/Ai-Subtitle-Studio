@@ -1,11 +1,13 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from tools.benchmark_subtitle_pipeline_variants import (
     _copy_chunk_dir,
     _compact_text,
     _rank_rows,
+    _run_postprocess,
     _base_benchmark_settings,
     _chunk_extraction_signature,
     _variant_chunk_settings,
@@ -152,6 +154,24 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertTrue(high.run_llm)
         self.assertEqual(high.overrides.get("selected_model"), "OpenAI Codex ChatGPT")
         self.assertEqual(high.overrides.get("selected_llm_provider"), "openai")
+
+    @mock.patch(
+        "tools.benchmark_subtitle_pipeline_variants.subtitle_engine.optimize_segments",
+        return_value=[{"start": 411.76, "end": 413.74, "text": "- 아이스로 드릴까요? - 네네"}],
+    )
+    def test_run_postprocess_restores_inline_two_speaker_dialogue_in_auto_mode(self, _optimize_segments):
+        settings = _base_benchmark_settings("current")
+        settings["speaker_diarization_auto_enabled"] = True
+
+        rows = _run_postprocess(
+            [{"start": 411.76, "end": 413.74, "text": "- 아이스로 드릴까요? - 네네"}],
+            [],
+            settings,
+            run_llm=False,
+        )
+
+        self.assertEqual(rows[0]["text"], "- 아이스로 드릴까요?\n- 네네")
+        self.assertEqual(rows[0]["speaker_list"], ["00", "01"])
 
     def test_mode_lora_deep_profiles_cover_expected_ablation_paths(self):
         variants = benchmark_mode_lora_deep_profiles(_base_benchmark_settings("current"))

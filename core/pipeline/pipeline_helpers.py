@@ -5,6 +5,7 @@ core/pipeline/pipeline_helpers.py
 PipelineHelpersMixin — VAD 정렬 · 백업 · 재시작 · 저장/내보내기 · 렌더링 · 화자분리 · ntfy · 프리페치 · 오디오 추출
 """
 import os
+import re
 import threading
 import traceback
 
@@ -12,6 +13,8 @@ from core.project.project_runtime_capture import collect_editor_project_aux_stat
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.audio.media_processor import VideoProcessor
+from core.platform_compat import ffmpeg_binary
+from core.speaker_profile_settings import automatic_speaker_ceiling, speaker_diarization_auto_enabled
 from core.settings import load_settings
 from core.pipeline.cut_boundary_helpers import PipelineCutBoundaryMixin
 from ui.queue.queue_formatting import (
@@ -23,6 +26,250 @@ from ui.project.project_session_runtime import attach_project_session
 
 class PipelineHelpersMixin(PipelineCutBoundaryMixin):
     """CoreBackend 에서 사용하는 공통 헬퍼 메서드 모음."""
+
+    @staticmethod
+    def _normalize_runtime_speaker_id(value) -> str:
+        speaker = str(value or "").strip()
+        if speaker.startswith("SPEAKER_"):
+            speaker = speaker.replace("SPEAKER_", "", 1)
+        return speaker or "00"
+
+    def _dialogue_turn_speaker_pair(self) -> tuple[str, str]:
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = {}
+        first = self._normalize_runtime_speaker_id(settings.get("spk1_id", "00"))
+        second = self._normalize_runtime_speaker_id(settings.get("spk2_id", "01"))
+        if second == first:
+            second = "01" if first != "01" else "02"
+        return first, second
+
+    def _runtime_speaker_limits(self) -> tuple[int, int]:
+        try:
+            min_speakers = int(
+                getattr(self, "_effective_min_speakers", getattr(self, "min_speakers", 1)) or 1
+            )
+        except Exception:
+            min_speakers = 1
+        try:
+            max_speakers = int(
+                getattr(self, "_effective_max_speakers", getattr(self, "max_speakers", min_speakers)) or min_speakers
+            )
+        except Exception:
+            max_speakers = min_speakers
+        min_speakers = max(1, min_speakers)
+        max_speakers = max(min_speakers, max_speakers)
+        return min_speakers, max_speakers
+
+    def _speaker_diarization_enabled(self) -> bool:
+        _min_speakers, max_speakers = self._runtime_speaker_limits()
+        return max_speakers > 1
+
+    def _speaker_auto_processing_enabled(self) -> bool:
+        return bool(getattr(self, "_speaker_auto_enabled", True) or self._speaker_diarization_enabled())
+
+    def _apply_speaker_preflight_runtime_override(
+        self,
+        speaker_preflight: dict | None = None,
+    ) -> tuple[int, int]:
+        base_min = max(1, int(getattr(self, "min_speakers", 1) or 1))
+        base_max = max(base_min, int(getattr(self, "max_speakers", base_min) or base_min))
+        effective_min = base_min
+        effective_max = base_max
+        preflight = dict(speaker_preflight or getattr(self, "_autopilot_speaker_preflight", {}) or {})
+        if bool(preflight.get("enabled", True)):
+            estimated = max(1, int(preflight.get("estimated_speaker_count", base_max) or base_max))
+            lane = str(preflight.get("lane", "") or "")
+            if estimated >= 2 and lane in {"sample_check", "targeted_diarization"}:
+                try:
+                    settings = load_settings()
+                except Exception:
+                    settings = {}
+                auto_ceiling = automatic_speaker_ceiling(settings)
+                effective_max = min(3, max(effective_max, estimated, auto_ceiling))
+        self._effective_min_speakers = min(effective_min, effective_max)
+        self._effective_max_speakers = effective_max
+        if effective_max > base_max:
+            get_logger().log(
+                "🗣️ [AutoPilot 화자] "
+                f"자동 화자 모드에서 이번 구간은 {effective_max}명 대화 가능성이 높아 "
+                "국소 화자 분리를 활성화합니다."
+            )
+        return self._effective_min_speakers, self._effective_max_speakers
+
+    @staticmethod
+    def _inline_dialogue_turns(text: str) -> list[str]:
+        compact = re.sub(r"\s+", " ", str(text or "").replace("\n", " ")).strip()
+        if not compact.startswith("-"):
+            return []
+        turns = [part.lstrip("-").strip() for part in re.split(r"\s+-\s+", compact) if part.strip()]
+        turns = [turn for turn in turns if turn]
+        if len(turns) != 2:
+            return []
+        return turns
+
+    def _speaker_sequence_for_range(
+        self,
+        start_t: float,
+        end_t: float,
+        speaker_map: list[dict] | None = None,
+    ) -> list[str]:
+        start_sec = float(start_t or 0.0)
+        end_sec = max(start_sec, float(end_t or start_sec))
+        sequence: list[str] = []
+        for item in sorted(list(speaker_map or []), key=lambda row: (float(row.get("start", 0.0) or 0.0), float(row.get("end", 0.0) or 0.0))):
+            try:
+                seg_start = float(item.get("start", 0.0) or 0.0)
+                seg_end = float(item.get("end", seg_start) or seg_start)
+            except Exception:
+                continue
+            if min(end_sec, seg_end) <= max(start_sec, seg_start):
+                continue
+            speaker = self._normalize_runtime_speaker_id(item.get("speaker"))
+            if not sequence or sequence[-1] != speaker:
+                sequence.append(speaker)
+        return sequence
+
+    def _apply_inline_dialogue_speaker_split(
+        self,
+        row: dict,
+        speaker_map: list[dict] | None = None,
+    ) -> dict:
+        turns = self._inline_dialogue_turns(row.get("text", ""))
+        if len(turns) != 2:
+            return row
+        speakers = self._speaker_sequence_for_range(row.get("start", 0.0), row.get("end", 0.0), speaker_map)
+        if len(set(speakers)) < 2:
+            try:
+                from core.audio.diarize import get_speaker_for_segment
+
+                start_sec = float(row.get("start", 0.0) or 0.0)
+                end_sec = max(start_sec, float(row.get("end", start_sec) or start_sec))
+                mid_sec = start_sec + ((end_sec - start_sec) / 2.0)
+                first = self._normalize_runtime_speaker_id(get_speaker_for_segment(start_sec, mid_sec, speaker_map or []))
+                second = self._normalize_runtime_speaker_id(get_speaker_for_segment(mid_sec, end_sec, speaker_map or []))
+                if first != second:
+                    speakers = [first, second]
+            except Exception:
+                pass
+        if len(set(speakers)) < 2:
+            speakers = list(self._dialogue_turn_speaker_pair())
+        updated = dict(row)
+        updated["speaker"] = speakers[0]
+        updated["speaker_list"] = speakers[:2]
+        updated["text"] = "\n".join(f"- {turn}" for turn in turns)
+        updated["_speaker_dialogue_turn_split"] = {
+            "task": "runtime_dialogue_turn_split",
+            "turns": 2,
+            "fallback_speakers": len(set(speakers[:2])) < 2,
+        }
+        return updated
+
+    def _apply_runtime_speaker_diarization(
+        self,
+        segments: list[dict],
+        *,
+        merge_gap_sec: float = 1.5,
+    ) -> list[dict]:
+        rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+        speaker_map = list(getattr(self, "_speaker_map", []) or [])
+        if not rows or not self._speaker_auto_processing_enabled():
+            return rows
+
+        get_speaker_for_segment = None
+        if speaker_map:
+            from core.audio.diarize import get_speaker_for_segment
+
+        diarized_rows: list[dict] = []
+        inline_split_count = 0
+        for seg in rows:
+            row = dict(seg)
+            if callable(get_speaker_for_segment):
+                row["speaker"] = self._normalize_runtime_speaker_id(
+                    get_speaker_for_segment(row.get("start", 0.0), row.get("end", 0.0), speaker_map)
+                )
+            updated = self._apply_inline_dialogue_speaker_split(row, speaker_map)
+            if updated.get("text") != row.get("text"):
+                inline_split_count += 1
+            diarized_rows.append(updated)
+
+        grouped_rows: list[dict] = []
+        for row in diarized_rows:
+            speaker_list = [
+                self._normalize_runtime_speaker_id(item)
+                for item in list(row.get("speaker_list") or [])
+                if self._normalize_runtime_speaker_id(item)
+            ]
+            if len(set(speaker_list)) >= 2:
+                row["speaker_list"] = speaker_list[:2]
+                row["speaker"] = speaker_list[0]
+                grouped_rows.append(row)
+                continue
+
+            line_parts = [
+                line.strip().lstrip("-").strip()
+                for line in str(row.get("text", "") or "").splitlines()
+                if line.strip()
+            ]
+            flat_text = " ".join(part for part in line_parts if part)
+            if not flat_text:
+                continue
+            speaker = self._normalize_runtime_speaker_id(row.get("speaker"))
+            if grouped_rows:
+                prev = grouped_rows[-1]
+                prev_speakers = [
+                    self._normalize_runtime_speaker_id(item)
+                    for item in list(prev.get("speaker_list") or [])
+                    if self._normalize_runtime_speaker_id(item)
+                ]
+                gap = float(row.get("start", 0.0) or 0.0) - float(prev.get("end", 0.0) or 0.0)
+                if (
+                    gap < float(merge_gap_sec or 1.5)
+                    and prev_speakers
+                    and len(set(prev_speakers)) == 1
+                    and speaker != prev_speakers[-1]
+                    and len(prev_speakers) < 2
+                ):
+                    prev.setdefault("text_list", [str(prev.get("text", "") or "").strip()])
+                    prev["text_list"].append(flat_text)
+                    prev["speaker_list"] = prev_speakers + [speaker]
+                    prev["end"] = max(float(prev.get("end", 0.0) or 0.0), float(row.get("end", 0.0) or 0.0))
+                    continue
+
+            grouped_rows.append(
+                {
+                    **row,
+                    "speaker": speaker,
+                    "speaker_list": [speaker],
+                    "text_list": [flat_text],
+                }
+            )
+
+        finalized_rows: list[dict] = []
+        for row in grouped_rows:
+            item = dict(row)
+            text_list = [str(part).strip() for part in list(item.get("text_list") or []) if str(part).strip()]
+            speaker_list = [
+                self._normalize_runtime_speaker_id(part)
+                for part in list(item.get("speaker_list") or [])
+                if self._normalize_runtime_speaker_id(part)
+            ]
+            if text_list:
+                if len(set(speaker_list)) >= 2 and len(text_list) >= 2:
+                    item["text"] = "\n".join(f"- {part}" for part in text_list[:2])
+                    item["speaker_list"] = speaker_list[:2]
+                    item["speaker"] = item["speaker_list"][0]
+                else:
+                    item["text"] = text_list[0]
+                    item["speaker_list"] = speaker_list[:1] or [self._normalize_runtime_speaker_id(item.get("speaker"))]
+                    item["speaker"] = item["speaker_list"][0]
+            item.pop("text_list", None)
+            finalized_rows.append(item)
+
+        if inline_split_count > 0:
+            get_logger().log(f"🗣️ [화자 분리] 한 줄 대화 자막 {inline_split_count}개를 2줄 화자 자막으로 복원했습니다.")
+        return finalized_rows
 
     def _align_subtitle_segments_to_vad(self, segments, vad_segments, *, context: str = "자막") -> list[dict]:
         """VAD 음성 경계로 자막 시작/끝을 보정한 뒤 에디터로 넘깁니다."""
@@ -377,6 +624,9 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         s = load_settings()
         self.min_speakers = int(s.get("min_speakers", 1))
         self.max_speakers = int(s.get("max_speakers", 1))
+        self._speaker_auto_enabled = speaker_diarization_auto_enabled(s)
+        self._effective_min_speakers = self.min_speakers
+        self._effective_max_speakers = self.max_speakers
 
     def _load_selected_model(self):
         s = load_settings()
@@ -386,11 +636,72 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         try:
             from core.audio.diarize import get_speaker_map
 
+            min_speakers, max_speakers = self._runtime_speaker_limits()
             self._speaker_map = get_speaker_map(
-                audio_path, self.min_speakers, self.max_speakers
+                audio_path, min_speakers, max_speakers
             )
         except Exception:
             self._speaker_map = []
+
+    def _speaker_diarization_audio_path(self, target_file: str, chunk_dir: str | None = None) -> str:
+        audio_for_diarization = str(target_file or "")
+        base_name = os.path.splitext(os.path.basename(str(target_file or "")))[0]
+        cleaned_wav = str(getattr(self.video_processor, "last_cleaned_wav", "") or "")
+        raw_wav = str(getattr(self.video_processor, "last_raw_wav", "") or "")
+        if (not cleaned_wav or not os.path.exists(cleaned_wav) or not raw_wav or not os.path.exists(raw_wav)) and hasattr(self.video_processor, "_audio_work_paths"):
+            try:
+                audio_paths = self.video_processor._audio_work_paths(target_file)
+                cleaned_wav = str(audio_paths.get("cleaned_wav") or cleaned_wav)
+                raw_wav = str(audio_paths.get("raw_wav") or raw_wav)
+            except Exception:
+                pass
+        if not cleaned_wav:
+            cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
+        if not raw_wav:
+            raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
+        if os.path.exists(cleaned_wav):
+            return cleaned_wav
+        if os.path.exists(raw_wav):
+            return raw_wav
+
+        if target_file and raw_wav:
+            try:
+                os.makedirs(os.path.dirname(raw_wav), exist_ok=True)
+                extract_cmd = [
+                    ffmpeg_binary(),
+                    "-y",
+                    "-nostdin",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    target_file,
+                    *self.video_processor._ffmpeg_audio_stream_args(),
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    "-acodec",
+                    "pcm_s16le",
+                    raw_wav,
+                ]
+                runner = getattr(self.video_processor, "_run_media_command", None)
+                if callable(runner) and runner(extract_cmd, label="화자 분리용 전체 오디오 추출"):
+                    return raw_wav
+            except Exception as exc:
+                get_logger().log(f"⚠️ [화자 분리] 전체 오디오 추출 실패: {exc}")
+
+        if chunk_dir:
+            try:
+                wav_in_chunks = sorted(
+                    os.path.join(chunk_dir, name)
+                    for name in os.listdir(chunk_dir)
+                    if str(name).lower().endswith(".wav")
+                )
+                if wav_in_chunks:
+                    audio_for_diarization = wav_in_chunks[0]
+            except Exception:
+                pass
+        return audio_for_diarization
 
     # ─── NTFY 알림 ───────────────────────────────────────
     def _send_ntfy_notification(self, title, message, tags=""):

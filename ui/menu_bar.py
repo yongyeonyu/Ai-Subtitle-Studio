@@ -381,6 +381,7 @@ class GlobalMenuBar(QWidget):
             ("설정", "settings", self._open_ai, COLORS["accent"]),
             *([("개인화", "ai", self._open_personalization, COLORS["accent"])] if config.IS_MAC else []),
             ("화자", "speaker", self._open_speaker, COLORS["purple"]),
+            ("사전", "review", self._open_dictionary, "#64D2FF"),
             ("비디오", "video", self._toggle_video, COLORS["info"]),
             ("자막", "export", self._open_export, COLORS["accent"]),
             ("음성", "mic", self._toggle_stt_mode, COLORS["danger"]),
@@ -707,6 +708,13 @@ class GlobalMenuBar(QWidget):
             editor._show_speaker_settings()
         elif hasattr(self.main_window, "_open_main_speaker_settings"):
             self.main_window._open_main_speaker_settings()
+
+    def _open_dictionary(self):
+        editor = self._active_editor()
+        if editor is not None and hasattr(editor, "_show_correction_dictionary"):
+            editor._show_correction_dictionary()
+        elif hasattr(self.main_window, "_open_main_correction_dictionary"):
+            self.main_window._open_main_correction_dictionary()
 
     def _open_personalization(self):
         if hasattr(self.main_window, "_open_main_personalization_learning"):

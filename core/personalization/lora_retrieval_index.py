@@ -33,6 +33,15 @@ from core.personalization.lora_retrieval_utils import (
 from core.personalization.lora_storage import personalization_path_lookup_keys
 
 
+def _cancel_requested(cancel_callback) -> bool:
+    if not callable(cancel_callback):
+        return False
+    try:
+        return bool(cancel_callback())
+    except Exception:
+        return False
+
+
 def source_signature(paths: dict[str, Path]) -> dict[str, Any]:
     signature: dict[str, Any] = {
         "schema": LORA_RETRIEVAL_INDEX_SCHEMA,
@@ -365,21 +374,29 @@ def _make_doc(kind: str, row: dict[str, Any], ordinal: int) -> dict[str, Any] | 
     }
 
 
-def _iter_jsonl_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
+def _iter_jsonl_docs(paths: dict[str, Path], *, cancel_callback=None) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     for kind in INDEX_JSONL_SOURCE_KEYS:
+        if _cancel_requested(cancel_callback):
+            break
         for ordinal, row in enumerate(read_jsonl(paths[kind])):
+            if ordinal % 128 == 0 and _cancel_requested(cancel_callback):
+                return docs
             doc = _make_doc(kind, dict(row), ordinal)
             if doc is not None:
                 docs.append(doc)
     return docs
 
 
-def _iter_learned_rule_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
+def _iter_learned_rule_docs(paths: dict[str, Path], *, cancel_callback=None) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     for rule_kind, path_key in (("learned_split_rules", "learned_split_rules"), ("learned_line_break_rules", "learned_line_break_rules")):
+        if _cancel_requested(cancel_callback):
+            break
         payload = read_json(paths[path_key], {})
         for ordinal, item in enumerate(list((payload or {}).get("items") or [])):
+            if ordinal % 128 == 0 and _cancel_requested(cancel_callback):
+                return docs
             if not isinstance(item, dict):
                 continue
             row = dict(item)
@@ -390,7 +407,7 @@ def _iter_learned_rule_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
     return docs
 
 
-def _iter_best_setting_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
+def _iter_best_setting_docs(paths: dict[str, Path], *, cancel_callback=None) -> list[dict[str, Any]]:
     payload = read_json(paths["best_settings"], {})
     if not isinstance(payload, dict):
         return []
@@ -406,7 +423,11 @@ def _iter_best_setting_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
             docs.append(doc)
     ordinal = 1
     for section in ("by_media_id", "by_media_path", "by_audio_profile", "by_style_cluster"):
+        if _cancel_requested(cancel_callback):
+            break
         for key, item in dict(payload.get(section) or {}).items():
+            if ordinal % 128 == 0 and _cancel_requested(cancel_callback):
+                return docs
             if not isinstance(item, dict):
                 continue
             row = {
@@ -425,7 +446,7 @@ def _iter_best_setting_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
     return docs
 
 
-def _iter_manifest_plan_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
+def _iter_manifest_plan_docs(paths: dict[str, Path], *, cancel_callback=None) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     for ordinal, key in enumerate(
         (
@@ -434,6 +455,8 @@ def _iter_manifest_plan_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
             "text_lora_training_plan",
         )
     ):
+        if _cancel_requested(cancel_callback):
+            break
         payload = read_json(paths[key], {})
         if not isinstance(payload, dict) or not payload:
             continue
@@ -450,10 +473,12 @@ def _iter_manifest_plan_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
     return docs
 
 
-def _build_bm25_index(docs: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_bm25_index(docs: list[dict[str, Any]], *, cancel_callback=None) -> dict[str, Any]:
     postings: dict[str, list[list[int]]] = defaultdict(list)
     doc_lengths: list[int] = []
     for doc_index, doc in enumerate(docs):
+        if doc_index % 128 == 0 and _cancel_requested(cancel_callback):
+            return {"model": "bm25_hash_terms.v1", "cancelled": True}
         counts = Counter(doc.pop("_terms", {}) or {})
         doc_len = int(sum(int(value) for value in counts.values()))
         doc_lengths.append(doc_len)
@@ -468,7 +493,9 @@ def _build_bm25_index(docs: list[dict[str, Any]]) -> dict[str, Any]:
     doc_count = len(docs)
     avg_doc_len = sum(doc_lengths) / max(1, doc_count)
     idf: dict[str, float] = {}
-    for term_hash, values in postings.items():
+    for term_index, (term_hash, values) in enumerate(postings.items()):
+        if term_index % 512 == 0 and _cancel_requested(cancel_callback):
+            return {"model": "bm25_hash_terms.v1", "cancelled": True}
         df = len(values)
         idf[term_hash] = round(math.log(1.0 + (doc_count - df + 0.5) / max(0.5, df + 0.5)), 6)
     return {
@@ -482,7 +509,7 @@ def _build_bm25_index(docs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _adaptive_profiles(docs: list[dict[str, Any]]) -> dict[str, Any]:
+def _adaptive_profiles(docs: list[dict[str, Any]], *, cancel_callback=None) -> dict[str, Any]:
     facet_counts: dict[str, Counter[str]] = {
         "scene": Counter(),
         "topic": Counter(),
@@ -492,7 +519,9 @@ def _adaptive_profiles(docs: list[dict[str, Any]]) -> dict[str, Any]:
         "training_focus": Counter(),
     }
     kind_by_topic: dict[str, Counter[str]] = defaultdict(Counter)
-    for doc in docs:
+    for doc_index, doc in enumerate(docs):
+        if doc_index % 128 == 0 and _cancel_requested(cancel_callback):
+            return {"schema": "ai_subtitle_studio.lora_adaptive_profiles.v1", "cancelled": True}
         kind = str(doc.get("kind") or "")
         facets = dict(doc.get("facets") or {})
         for key in ("scene", "topic", "mic_type", "noise_level"):
@@ -513,21 +542,58 @@ def _adaptive_profiles(docs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _build_inverted_index(docs: list[dict[str, Any]]) -> dict[str, list[list[float]]]:
+def _build_inverted_index(docs: list[dict[str, Any]], *, cancel_callback=None) -> dict[str, list[list[float]]]:
     postings: dict[str, list[list[float]]] = defaultdict(list)
     for doc_index, doc in enumerate(docs):
+        if doc_index % 128 == 0 and _cancel_requested(cancel_callback):
+            return {"__cancelled__": []}
         vector = dict(doc.pop("_vector", {}) or {})
         for bucket, weight in vector.items():
             postings[str(bucket)].append([doc_index, float(weight)])
     return {bucket: values for bucket, values in postings.items()}
 
 
-def build_lora_retrieval_index_payload(paths: dict[str, Path]) -> dict[str, Any]:
-    docs = _iter_jsonl_docs(paths)
-    docs.extend(_iter_learned_rule_docs(paths))
-    docs.extend(_iter_best_setting_docs(paths))
-    docs.extend(_iter_manifest_plan_docs(paths))
+def _cancelled_retrieval_index_payload(paths: dict[str, Path], docs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "schema": LORA_RETRIEVAL_INDEX_SCHEMA,
+        "updated_at": iso_now(),
+        "score_model": LORA_RETRIEVAL_SCORE_MODEL,
+        "hash_dim": LORA_RETRIEVAL_HASH_DIM,
+        "source_signature": source_signature(paths),
+        "doc_count": len(list(docs or [])),
+        "kind_counts": {},
+        "docs": [],
+        "bm25": {},
+        "adaptive_profiles": {},
+        "inverted_index": {},
+        "cancelled": True,
+        "reason": "cancelled",
+    }
+
+
+def build_lora_retrieval_index_payload(paths: dict[str, Path], *, cancel_callback=None) -> dict[str, Any]:
+    docs = _iter_jsonl_docs(paths, cancel_callback=cancel_callback)
+    if _cancel_requested(cancel_callback):
+        return _cancelled_retrieval_index_payload(paths, docs)
+    docs.extend(_iter_learned_rule_docs(paths, cancel_callback=cancel_callback))
+    if _cancel_requested(cancel_callback):
+        return _cancelled_retrieval_index_payload(paths, docs)
+    docs.extend(_iter_best_setting_docs(paths, cancel_callback=cancel_callback))
+    if _cancel_requested(cancel_callback):
+        return _cancelled_retrieval_index_payload(paths, docs)
+    docs.extend(_iter_manifest_plan_docs(paths, cancel_callback=cancel_callback))
+    if _cancel_requested(cancel_callback):
+        return _cancelled_retrieval_index_payload(paths, docs)
     kind_counts = Counter(str(doc.get("kind") or "") for doc in docs)
+    bm25 = _build_bm25_index(docs, cancel_callback=cancel_callback)
+    if bool(bm25.get("cancelled")) or _cancel_requested(cancel_callback):
+        return _cancelled_retrieval_index_payload(paths, docs)
+    adaptive_profiles = _adaptive_profiles(docs, cancel_callback=cancel_callback)
+    if bool(adaptive_profiles.get("cancelled")) or _cancel_requested(cancel_callback):
+        return _cancelled_retrieval_index_payload(paths, docs)
+    inverted_index = _build_inverted_index(docs, cancel_callback=cancel_callback)
+    if "__cancelled__" in inverted_index or _cancel_requested(cancel_callback):
+        return _cancelled_retrieval_index_payload(paths, docs)
     return {
         "schema": LORA_RETRIEVAL_INDEX_SCHEMA,
         "updated_at": iso_now(),
@@ -537,9 +603,9 @@ def build_lora_retrieval_index_payload(paths: dict[str, Path]) -> dict[str, Any]
         "doc_count": len(docs),
         "kind_counts": dict(sorted(kind_counts.items())),
         "docs": docs,
-        "bm25": _build_bm25_index(docs),
-        "adaptive_profiles": _adaptive_profiles(docs),
-        "inverted_index": _build_inverted_index(docs),
+        "bm25": bm25,
+        "adaptive_profiles": adaptive_profiles,
+        "inverted_index": inverted_index,
         "notes": [
             "Hybrid hashed-vector + BM25 + context-facet scorer for fast LoRA/RAG subtitle personalization retrieval.",
             "Bracketed editorial text is indexed only as exclusion policy, not as spoken subtitle target.",

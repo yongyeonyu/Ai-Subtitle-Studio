@@ -9,6 +9,7 @@ from core.runtime import config
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
 from core.json_file import read_json_file, write_json_file_atomic
 from core.settings_profiles import hardcoded_default_settings, materialize_user_settings
+from core.speaker_profile_settings import speaker_diarization_auto_enabled
 
 SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
 _RUNTIME_SETTINGS_OVERRIDE: dict | None = None
@@ -70,8 +71,7 @@ def save_settings(data: dict):
 
 def get_model_key(settings: dict | None = None) -> str:
     s = settings or load_settings()
-    max_spk = int(s.get("max_speakers", 1))
-    dia_flag = "O" if max_spk > 1 else "X"
+    dia_flag = "O" if speaker_diarization_auto_enabled(s) else "X"
     stt = s.get("selected_whisper_model", "기본")
     if s.get("stt_ensemble_enabled"):
         stt2 = s.get("selected_whisper_model_secondary", "")

@@ -16,6 +16,7 @@ from core.native_swift_startup_diagnostics import (
 )
 from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 from core.project.project_io import read_project_file, write_project_file
+from core.speaker_profile_settings import automatic_speaker_ceiling, speaker_diarization_auto_enabled
 
 STARTUP_DIAGNOSTIC_SCHEMA = "ai_subtitle_studio.startup_diagnostic.v1"
 
@@ -224,6 +225,8 @@ def _speaker_hint(settings: dict[str, Any] | None, speaker_count_hint: int | Non
     if speaker_count_hint is not None:
         return {"count": max(1, _to_int(speaker_count_hint, 1)), "source": "runtime"}
     settings = settings if isinstance(settings, dict) else {}
+    if speaker_diarization_auto_enabled(settings):
+        return {"count": max(1, automatic_speaker_ceiling(settings)), "source": "auto"}
     return {"count": max(1, _to_int(settings.get("max_speakers"), 1)), "source": "settings"}
 
 

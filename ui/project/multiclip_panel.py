@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 from core.runtime import config
 from core.path_manager import get_last_folder
 from core.settings import load_settings, save_settings
+from core.audio.audio_display import audio_filter_display_name
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
     load_stt_quality_presets,
@@ -213,13 +214,7 @@ class MultiClipEditor(QDialog):
         return {"off": "미사용", "low": "낮음", "medium": "중간"}.get(level, "중간")
 
     def _pipeline_summary_text(self, settings: dict) -> str:
-        audio_model = {
-            "deepfilter": "DeepFilter",
-            "rnnoise": "RNNoise",
-            "resemble_enhance": "Resemble",
-            "clearvoice": "ClearVoice",
-            "none": "미사용",
-        }.get(str(settings.get("selected_audio_ai", "none") or "none"), "미사용")
+        audio_model = audio_filter_display_name(settings)
         vad_model = {
             "silero": "Silero",
             "ten_vad": "TEN VAD",

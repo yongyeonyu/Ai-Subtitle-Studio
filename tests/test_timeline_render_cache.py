@@ -15,12 +15,24 @@ from PyQt6.QtWidgets import QApplication, QScrollArea
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, RULER_H, SCORE_H, SCORE_TOP, SEG_TOP, STT2_TOP, STT_PREVIEW_VERTICAL_INSET, SUBTITLE_BOT, SUBTITLE_TOP, WAVE_H
+from ui.timeline.paint_passes import build_cut_boundary_work_lane_paint_plan
 from ui.timeline.timeline_widget import TimelineWidget
 
 
 class _NoEqualitySegment(dict):
     def __eq__(self, other):
         raise AssertionError("adjacent segment lookup should use identity cache, not list.index equality scans")
+
+
+class _NoBoolRows:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __bool__(self):
+        raise AssertionError("timeline paint rows should not be truth-tested")
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 class _FakeScenegraphLayer:
@@ -135,6 +147,53 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertEqual(first["stt_selection_states"].get(id(first["stt2_preview_segments"][0])), "unselected")
         finally:
             canvas.close()
+
+    def test_cut_boundary_work_lane_plan_filters_visible_rows(self):
+        plan = build_cut_boundary_work_lane_paint_plan(
+            official_rows=[
+                {"timeline_sec": 1.0, "source": "visual", "status": "verified"},
+                {"timeline_sec": 9.9, "source": "visual", "status": "verified"},
+            ],
+            scan_rows=[
+                {"time": 1.0, "status": "verified", "source": "visual"},
+                {"time": 2.0, "status": "pending", "source": "visual", "line_style": "dot", "ui_label": "대기"},
+            ],
+            visible_start_sec=0.0,
+            visible_end_sec=3.0,
+            clip_left=0,
+            clip_right=400,
+            total_duration=10.0,
+            fps=100.0,
+            dense_segment_mode=False,
+            sec_to_x=lambda sec: int(round(sec * 100.0)),
+            visible_filter=lambda rows, _key, start, end, pad_sec=0.0: [
+                row
+                for row in rows
+                if start - pad_sec <= float((row if not isinstance(row, dict) else row.get("timeline_sec", row.get("time", 0.0))) or 0.0) <= end + pad_sec
+            ],
+        )
+
+        self.assertTrue(plan.has_items)
+        self.assertEqual([item.kind for item in plan.lines], ["official", "scan", "scan"])
+        self.assertEqual(plan.lines[0].x, 100)
+        self.assertEqual(plan.lines[1].x, 99)
+        self.assertEqual(list(plan.labels), [])
+
+    def test_cut_boundary_work_lane_plan_accepts_streaming_rows_without_truth_testing(self):
+        plan = build_cut_boundary_work_lane_paint_plan(
+            official_rows=_NoBoolRows([{"timeline_sec": 1.0, "source": "visual", "status": "verified"}]),
+            scan_rows=_NoBoolRows([{"time": 2.0, "status": "pending", "source": "visual"}]),
+            visible_start_sec=0.0,
+            visible_end_sec=3.0,
+            clip_left=0,
+            clip_right=400,
+            total_duration=10.0,
+            fps=100.0,
+            dense_segment_mode=False,
+            sec_to_x=lambda sec: int(round(sec * 100.0)),
+        )
+
+        self.assertEqual([item.kind for item in plan.lines], ["official", "scan"])
 
     def test_project_loaded_overlapping_stt_preview_candidates_split_to_two_sublanes(self):
         canvas = TimelineCanvas()

@@ -14,7 +14,7 @@ setup(
     ext_modules=[
         Extension(
             "core._native_cut_boundary",
-            sources=[str(ROOT / "native" / "cut_boundary" / "native_cut_boundary.cpp")],
+            sources=[str(ROOT / "core" / "native" / "_native_cut_boundary.cpp")],
             language="c++",
             extra_compile_args=["-std=c++17", "-O3"],
         )

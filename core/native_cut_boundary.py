@@ -88,7 +88,7 @@ def _compile_native_extension() -> bool:
         except Exception:
             try:
                 tmp_output.unlink()
-            except Exception:
+            except OSError:
                 pass
             return output.exists()
 
@@ -272,6 +272,25 @@ def waveform_peaks_f32le(
     if peaks.size <= 0 or dur <= 0.0:
         return None
     return peaks, dur
+
+
+def live_cut_scores(
+    gray_frames: Any,
+    color_frames: Any,
+    frame_numbers: Any,
+) -> list[tuple[float, int]] | None:
+    if not native_cut_boundary_enabled():
+        return None
+    try:
+        values = _native.live_cut_scores(gray_frames, color_frames, frame_numbers)
+        scores: list[tuple[float, int]] = []
+        for item in list(values or []):
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                return None
+            scores.append((float(item[0]), int(item[1])))
+        return scores
+    except Exception:
+        return None
 
 
 def interval_overlaps(

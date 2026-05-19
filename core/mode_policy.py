@@ -679,7 +679,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "stt_ensemble_llm_judge_low_score_threshold": 78.0,
                 "stt_ensemble_llm_judge_min_score_delta": 10.0,
                 "stt_ensemble_llm_judge_max_similarity": 0.94,
-                "speaker_diarization_auto_enabled": False,
+                "speaker_diarization_auto_enabled": True,
                 "vad_dual_model_enabled": True,
                 "editor_lora_runtime_enabled": True,
                 "deep_subtitle_policy_enabled": True,

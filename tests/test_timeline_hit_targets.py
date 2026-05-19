@@ -2589,6 +2589,35 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             canvas.deleteLater()
 
+    def test_live_cut_snap_reuses_expanded_score_cache(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas._compute_live_cut_boundary_scores = Mock(return_value=[(25.0, 110)])
+
+            first = canvas._detect_live_cut_boundary_record(
+                __file__,
+                1.20,
+                100.0,
+                direction=1,
+                search_start_local_sec=0.20,
+                search_end_local_sec=1.20,
+            )
+            second = canvas._detect_live_cut_boundary_record(
+                __file__,
+                1.25,
+                100.0,
+                direction=1,
+                search_start_local_sec=0.25,
+                search_end_local_sec=1.25,
+            )
+
+            canvas._compute_live_cut_boundary_scores.assert_called_once()
+            self.assertEqual(int(first["frame"]), 110)
+            self.assertEqual(int(second["frame"]), 110)
+        finally:
+            canvas.deleteLater()
+
     def test_live_cut_snap_has_stronger_magnet_threshold(self):
         canvas = self._canvas()
         try:
@@ -2703,6 +2732,156 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertEqual(scrubbed, [3.2])
             self.assertAlmostEqual(canvas.shadow_playhead_sec or 0.0, 2.0, places=4)
             self.assertIsNone(getattr(canvas, "_shadow_playhead_armed_sec", None))
+        finally:
+            canvas.deleteLater()
+
+    def test_left_drag_playhead_handle_scrubs_without_opening_menu(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.frame_rate = 100.0
+            canvas.pps = 100.0
+            canvas.total_duration = 5.0
+            canvas.playhead_sec = 1.0
+            scrubbed = []
+            menus = []
+            canvas.scrub_sec.connect(scrubbed.append)
+            canvas.playhead_menu_requested.connect(lambda *_args: menus.append(True))
+            canvas.show()
+            self.app.processEvents()
+
+            start = QPoint(canvas._x(1.0), 9)
+            end = QPoint(canvas._x(1.5), 9)
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+            QTest.mouseMove(canvas, end, delay=1)
+            self.app.processEvents()
+            QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
+
+            self.assertEqual(menus, [])
+            self.assertTrue(scrubbed)
+            self.assertAlmostEqual(scrubbed[-1], 1.5, places=3)
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_playhead_auto_cut_magnet_locks_until_next_drag(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.frame_rate = 100.0
+            canvas.pps = 100.0
+            canvas.total_duration = 5.0
+            canvas.playhead_sec = 1.0
+            scrubbed = []
+            canvas.scrub_sec.connect(scrubbed.append)
+            canvas._playhead_auto_cut_snap_sec = Mock(
+                side_effect=lambda target, previous: (1.25, True) if float(target) > 1.05 else (target, False)
+            )
+            canvas.show()
+            self.app.processEvents()
+
+            start = QPoint(canvas._x(1.0), 9)
+            first = QPoint(canvas._x(1.20), 9)
+            second = QPoint(canvas._x(1.80), 9)
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+            QTest.mouseMove(canvas, first, delay=1)
+            QTest.mouseMove(canvas, second, delay=1)
+            self.app.processEvents()
+            QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, second)
+
+            self.assertIn(1.25, [round(value, 2) for value in scrubbed])
+            self.assertNotIn(1.80, [round(value, 2) for value in scrubbed])
+            self.assertIsNone(getattr(canvas, "_playhead_cut_magnet_locked_sec", None))
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_playhead_auto_cut_magnet_requires_strict_verification(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas.settings = {"playhead_auto_cut_magnet_enabled": True}
+            canvas._resolve_active_context = Mock(
+                return_value={
+                    "clip_file": __file__,
+                    "local_sec": 1.40,
+                    "clip_start": 0.0,
+                    "fps": 100.0,
+                }
+            )
+            canvas._detect_live_cut_boundary_record = Mock(
+                return_value={"local_sec": 1.25, "frame": 125, "score": 31.0, "median_score": 8.0}
+            )
+            canvas._playhead_cut_magnet_verify_candidate = Mock(return_value=None)
+
+            snapped, locked = canvas._playhead_auto_cut_snap_sec(1.40, 1.00)
+
+            self.assertFalse(locked)
+            self.assertAlmostEqual(snapped, 1.40, places=3)
+        finally:
+            canvas.deleteLater()
+
+    def test_playhead_auto_cut_magnet_uses_strict_verified_frame(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas.settings = {"playhead_auto_cut_magnet_enabled": True}
+            canvas._resolve_active_context = Mock(
+                return_value={
+                    "clip_file": __file__,
+                    "local_sec": 1.40,
+                    "clip_start": 0.0,
+                    "fps": 100.0,
+                }
+            )
+            canvas._detect_live_cut_boundary_record = Mock(
+                return_value={"local_sec": 1.25, "frame": 125, "score": 31.0, "median_score": 8.0}
+            )
+            canvas._playhead_cut_magnet_verify_candidate = Mock(
+                return_value={
+                    "local_sec": 1.22,
+                    "frame": 122,
+                    "score": 31.0,
+                    "median_score": 8.0,
+                    "strict_verified": True,
+                }
+            )
+
+            snapped, locked = canvas._playhead_auto_cut_snap_sec(1.40, 1.00)
+
+            self.assertTrue(locked)
+            self.assertAlmostEqual(snapped, 1.22, places=3)
+        finally:
+            canvas.deleteLater()
+
+    def test_playhead_auto_cut_magnet_prefers_confirmed_boundary(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas.settings = {"playhead_auto_cut_magnet_enabled": True}
+            canvas.boundary_times = [1.22]
+            canvas._detect_live_cut_boundary_record = Mock(side_effect=AssertionError("live probe should not run"))
+
+            snapped, locked = canvas._playhead_auto_cut_snap_sec(1.40, 1.00)
+
+            self.assertTrue(locked)
+            self.assertAlmostEqual(snapped, 1.22, places=3)
+        finally:
+            canvas.deleteLater()
+
+    def test_playhead_auto_cut_magnet_ignores_origin_confirmed_boundary_on_next_drag(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas.settings = {"playhead_auto_cut_magnet_enabled": True}
+            canvas.boundary_times = [1.22, 1.60]
+            canvas._playhead_cut_magnet_origin_sec = 1.22
+            canvas._detect_live_cut_boundary_record = Mock(side_effect=AssertionError("live probe should not run"))
+
+            snapped, locked = canvas._playhead_auto_cut_snap_sec(1.80, 1.22)
+
+            self.assertTrue(locked)
+            self.assertAlmostEqual(snapped, 1.60, places=3)
         finally:
             canvas.deleteLater()
 

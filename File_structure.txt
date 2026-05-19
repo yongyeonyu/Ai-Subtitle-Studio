@@ -9,7 +9,7 @@ Role-Description-Rule: Tree entries must match real paths. Review notes and spec
 ================================================================================
 AI Subtitle Studio - Shallow Actual File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-18
+Last Updated: 2026-05-19
 Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
 App Version: 04.00.10
 Structure Document: File_structure.txt
@@ -17,6 +17,7 @@ Note: This map is intentionally shallow for token-efficient handoff and navigati
 ================================================================================
 
 ai_subtitle_studio/
+├── .github/
 ├── ACTION_ITEMS.md
 ├── AGENTS.md
 ├── CODEMAP.md

@@ -4,6 +4,10 @@
 Speaker label helpers for timeline rendering.
 """
 from core.settings import load_settings
+from core.speaker_profile_settings import (
+    materialize_automatic_speaker_settings,
+    normalize_speaker_id,
+)
 
 
 _SPEAKER_KEYS = (
@@ -13,21 +17,19 @@ _SPEAKER_KEYS = (
     "spk2_id",
     "spk2_name",
     "spk2_color",
+    "spk2_voice_disabled",
+    "spk2_voice_file",
     "spk3_id",
     "spk3_name",
     "spk3_color",
+    "spk3_voice_disabled",
+    "spk3_voice_file",
+    "spk1_voice_disabled",
+    "spk1_voice_file",
     "spk2_enabled",
     "spk3_enabled",
-    "min_speakers",
-    "max_speakers",
+    "speaker_diarization_auto_enabled",
 )
-
-
-def normalize_speaker_id(raw) -> str:
-    spk = str(raw or "").strip()
-    if spk.startswith("SPEAKER_"):
-        spk = spk.replace("SPEAKER_", "", 1)
-    return spk
 
 
 def current_speaker_settings(owner_settings: dict | None = None) -> dict:
@@ -40,7 +42,7 @@ def current_speaker_settings(owner_settings: dict | None = None) -> dict:
         value = saved.get(key)
         if value not in (None, ""):
             merged[key] = value
-    return merged
+    return materialize_automatic_speaker_settings(merged)
 
 
 def speaker_name_for_id(settings: dict, raw, fallback_index: int = 1) -> str:

@@ -9,7 +9,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QTimer
-from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QCheckBox, QComboBox, QTableWidgetItem, QWidget, QMessageBox, QPushButton
+from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QCheckBox, QComboBox, QTableWidgetItem, QWidget, QMessageBox, QPushButton, QToolButton
 
 from ui.main.main_window import MainWindow
 from ui.style import APP_PANEL_GAP, COLORS
@@ -174,6 +174,24 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(window.global_menu_bar.btn_undo.text(), "실행취소")
             self.assertEqual(window.global_menu_bar.btn_redo.text(), "다시실행")
             self.assertEqual(window.global_menu_bar.btn_help.text(), "도움말")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_dictionary_button_exists_in_global_menu_and_home_shortcuts(self):
+        window = MainWindow()
+        try:
+            window.show_home()
+            global_texts = [button.text() for button in window.global_menu_bar._tool_buttons]
+            self.assertIn("사전", global_texts)
+
+            home_texts = [
+                button.text()
+                for button in window.home_page.findChildren(QToolButton)
+                if button.text()
+            ]
+            self.assertIn("사전", home_texts)
         finally:
             window.close()
             window.deleteLater()
@@ -549,6 +567,29 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIn("TEN VAD 자동", html)
             self.assertIn("current_clip.mp4", window.sidebar_settings_label.toolTip())
             self.assertIn("잡음 대응", window.sidebar_settings_label.toolTip())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_pipeline_shows_ffmpeg_basic_filter_when_audio_ai_is_none(self):
+        window = MainWindow()
+        try:
+            settings = {
+                "selected_audio_ai": "none",
+                "use_basic_filter": True,
+                "selected_vad": "silero",
+                "selected_model": "사용 안함 (Whisper 단독 진행)",
+                "roughcut_llm_enabled": False,
+            }
+
+            rows = {stage: model for _key, stage, model in window._pipeline_rows(settings)}
+            self.assertEqual(rows["음성"], "FFMPEG 기본필터")
+
+            window._refresh_sidebar_engine_info(settings=settings)
+            html = window.sidebar_settings_label.text()
+            self.assertIn("FFMPEG 기본필터", html)
+            self.assertNotIn(">미사용</td>", html)
         finally:
             window.close()
             window.deleteLater()

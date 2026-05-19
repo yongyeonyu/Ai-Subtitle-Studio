@@ -228,6 +228,88 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
                 )
                 self.assertTrue(all(seg.get("_final_gap_settings_applied") for seg in adjusted))
 
+    def test_final_sequence_cleanup_merges_safe_filler_and_connective_fragments(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "네"},
+            {"start": 1.02, "end": 3.5, "text": "영화를 보고 나왔는데"},
+            {"start": 3.52, "end": 4.5, "text": "그래서 여기까지고"},
+            {"start": 4.52, "end": 6.8, "text": "지금까지 소설가유모씨였습니다"},
+        ]
+
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            segments,
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual(
+            [seg["text"] for seg in cleaned],
+            [
+                "네 영화를 보고 나왔는데",
+                "그래서 여기까지고 지금까지 소설가유모씨였습니다",
+            ],
+        )
+
+    def test_final_sequence_cleanup_trims_recent_overlap_and_drops_duplicate_outro(self):
+        segments = [
+            {
+                "start": 447.6,
+                "end": 451.36,
+                "text": "그래서 여기까지고 지금까지 소설가유모씨였습니다",
+            },
+            {
+                "start": 451.38,
+                "end": 452.551,
+                "text": "감사합니다 네 그래서 여기까지고 지금까지",
+            },
+            {
+                "start": 452.571,
+                "end": 453.171,
+                "text": "소설가유모씨였습니다 감사합니다",
+            },
+        ]
+
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            segments,
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual(
+            [seg["text"] for seg in cleaned],
+            [
+                "그래서 여기까지고 지금까지 소설가유모씨였습니다",
+                "감사합니다",
+            ],
+        )
+
+    def test_final_sequence_cleanup_drops_low_value_bridge_before_duplicate_closing(self):
+        segments = [
+            {
+                "start": 449.52,
+                "end": 452.0,
+                "text": "지금까지 소설가유모씨였습니다 감사합니다",
+            },
+            {
+                "start": 452.0,
+                "end": 453.5,
+                "text": "네 그래서 여기까지고 지금까지 소설가유모씨였습니다 감사합니다",
+            },
+        ]
+
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            segments,
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual(
+            [seg["text"] for seg in cleaned],
+            [
+                "지금까지 소설가유모씨였습니다 감사합니다",
+            ],
+        )
+
     def test_swift_common_split_bridge_matches_python_when_available(self):
         from core.native_swift_subtitle import find_native_cli_path
 
@@ -810,6 +892,36 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
 
         self.assertIn("00:00:01,000 --> 00:00:02,000", content)
         self.assertIn("00:00:02,000 --> 00:00:03,467", content)
+
+    def test_save_srt_writes_color_srt_when_runtime_detects_two_speakers(self):
+        from core.engine.srt_writer import save_srt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "runtime_speakers.srt")
+            with unittest.mock.patch(
+                "core.engine.srt_writer.json.load",
+                return_value={"max_speakers": 1, "spk1_id": "00", "spk2_id": "01"},
+            ):
+                save_srt(
+                    [
+                        {
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "- 아이스로 드릴까요?\n- 네네",
+                            "speaker_list": ["00", "01"],
+                        }
+                    ],
+                    path,
+                    apply_offset=False,
+                )
+
+            color_path = os.path.join(tmp, "runtime_speakers_화자.srt")
+            self.assertTrue(os.path.exists(color_path))
+            with open(color_path, "r", encoding="utf-8") as f:
+                color_content = f.read()
+
+        self.assertIn('<font color="', color_content)
+        self.assertIn("- 아이스로 드릴까요?", color_content)
 
     def test_project_text_asset_srt_strips_periods(self):
         from core.project.project_assets import write_srt_track

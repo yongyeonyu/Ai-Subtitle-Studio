@@ -77,9 +77,36 @@ FOREGROUND_ACTIVITY_HOLD_MS = 600_000
 NATIVE_INPUT_WATCHDOG_ACTIVE_INTERVAL_SEC = 0.12
 NATIVE_INPUT_WATCHDOG_IDLE_INTERVAL_SEC = 0.45
 NATIVE_INPUT_RECENT_THRESHOLD_SEC = 0.24
+_TRAINING_INTERRUPT_EVENT = threading.Event()
+_TRAINING_INTERRUPT_REASON = ""
+_TRAINING_INTERRUPT_LOCK = threading.Lock()
+
+
+def request_personalization_training_interrupt(reason: str = "cancelled") -> dict[str, Any]:
+    global _TRAINING_INTERRUPT_REASON
+    normalized = str(reason or "cancelled").strip() or "cancelled"
+    with _TRAINING_INTERRUPT_LOCK:
+        _TRAINING_INTERRUPT_REASON = normalized
+        _TRAINING_INTERRUPT_EVENT.set()
+    return {"requested": True, "reason": normalized}
+
+
+def clear_personalization_training_interrupt() -> dict[str, Any]:
+    global _TRAINING_INTERRUPT_REASON
+    with _TRAINING_INTERRUPT_LOCK:
+        previous = _TRAINING_INTERRUPT_REASON
+        _TRAINING_INTERRUPT_REASON = ""
+        _TRAINING_INTERRUPT_EVENT.clear()
+    return {"cleared": True, "previous_reason": previous}
+
+
+def personalization_training_interrupt_requested() -> bool:
+    return bool(_TRAINING_INTERRUPT_EVENT.is_set())
 
 
 def _cancel_requested(cancel_callback) -> bool:
+    if personalization_training_interrupt_requested():
+        return True
     if not callable(cancel_callback):
         return False
     try:
@@ -565,9 +592,11 @@ def _run_hard_case_subtitle_policy_job(
         "🧠 [LoRA 학습] 하드케이스 자막 정책: "
         f"{event_id_or_reason} 이벤트를 패턴 인덱스에 반영 중"
     )
-    pattern_result = save_subtitle_pattern_index(store_dir, force=True)
+    pattern_result = save_subtitle_pattern_index(store_dir, force=True, cancel_callback=cancel_callback)
     if _cancel_requested(cancel_callback):
         return _cancelled_training_result()
+    if bool(pattern_result.get("cancelled")):
+        return _cancelled_training_result(str(pattern_result.get("reason") or "cancelled"))
     return {
         "status": "complete",
         "score": float(pattern_result.get("pattern_count", 0) or 0),
@@ -786,10 +815,14 @@ def run_training_job(
         job_payload = dict(job.get("payload") or {})
         force = bool(job_payload.get("force", True))
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: 벡터 검색 인덱스와 ZIP 갱신 중")
-        pattern_result = save_subtitle_pattern_index(store_dir, force=force)
+        pattern_result = save_subtitle_pattern_index(store_dir, force=force, cancel_callback=cancel_callback)
+        if bool(pattern_result.get("cancelled")):
+            return _cancelled_training_result(str(pattern_result.get("reason") or "cancelled"))
         if _cancel_requested(cancel_callback):
             return _cancelled_training_result()
-        index_result = build_lora_retrieval_index(store_dir, force=force)
+        index_result = build_lora_retrieval_index(store_dir, force=force, cancel_callback=cancel_callback)
+        if bool(index_result.get("cancelled")):
+            return _cancelled_training_result(str(index_result.get("reason") or "cancelled"))
         if _cancel_requested(cancel_callback):
             return _cancelled_training_result()
         bundle_result = refresh_unified_lora_data_bundle(store_dir, force=force)
@@ -808,7 +841,9 @@ def run_training_job(
         job_payload = dict(job.get("payload") or {})
         force = bool(job_payload.get("force", True))
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: 원문 없는 자막 패턴 인덱스 생성 중")
-        result = save_subtitle_pattern_index(store_dir, force=force)
+        result = save_subtitle_pattern_index(store_dir, force=force, cancel_callback=cancel_callback)
+        if bool(result.get("cancelled")):
+            return _cancelled_training_result(str(result.get("reason") or "cancelled"))
         if _cancel_requested(cancel_callback):
             return _cancelled_training_result()
         return {"status": "complete", "score": float(result.get("pattern_count", 0) or 0), "result": result}
@@ -853,12 +888,8 @@ def run_training_queue_once(
     cancel_callback=None,
     low_resource: bool = False,
 ) -> dict[str, Any]:
-    if callable(cancel_callback):
-        try:
-            if cancel_callback():
-                return {"processed": False, "reason": "cancelled_before_start"}
-        except Exception:
-            pass
+    if _cancel_requested(cancel_callback):
+        return {"processed": False, "reason": "cancelled_before_start"}
     payload = load_training_queue(store_dir)
     jobs = sorted(
         list(payload.get("items") or []),
@@ -900,29 +931,25 @@ def run_training_queue_once(
     )
     _save_queue_payload(payload, store_dir, refresh_manifest=not low_resource)
 
-    if callable(cancel_callback):
-        try:
-            if cancel_callback():
-                payload = load_training_queue(store_dir)
-                current_job = _job_from_payload(payload, job_id) or target
-                payload = _update_job(
-                    payload,
-                    job_id,
-                    status="waiting",
-                    progress=float(current_job.get("progress", 0.0) or 0.0),
-                    last_error="paused_for_foreground_activity",
-                    payload=_checkpoint_payload(
-                        current_job,
-                        "paused_for_foreground_activity",
-                        job_type=job_type,
-                        resumable=True,
-                    ),
-                )
-                _save_queue_payload(payload, store_dir, refresh_manifest=not low_resource)
-                get_logger().log(f"⏸️ [LoRA 학습] 일시정지: {mode_label} · {_queue_job_type_label(job_type)}")
-                return {"processed": False, "job_id": job_id, "reason": "cancelled_before_job_run"}
-        except Exception:
-            pass
+    if _cancel_requested(cancel_callback):
+        payload = load_training_queue(store_dir)
+        current_job = _job_from_payload(payload, job_id) or target
+        payload = _update_job(
+            payload,
+            job_id,
+            status="waiting",
+            progress=float(current_job.get("progress", 0.0) or 0.0),
+            last_error="paused_for_foreground_activity",
+            payload=_checkpoint_payload(
+                current_job,
+                "paused_for_foreground_activity",
+                job_type=job_type,
+                resumable=True,
+            ),
+        )
+        _save_queue_payload(payload, store_dir, refresh_manifest=not low_resource)
+        get_logger().log(f"⏸️ [LoRA 학습] 일시정지: {mode_label} · {_queue_job_type_label(job_type)}")
+        return {"processed": False, "job_id": job_id, "reason": "cancelled_before_job_run"}
 
     progress_buckets: dict[str, int] = {}
     progress_save_times: dict[str, float] = {}
@@ -1070,14 +1097,22 @@ def run_training_queue_once(
                             get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 저전력 자동")
                         elif _lora_index_refresh_due(store_dir):
                             get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 중")
-                            retrieval_index = build_lora_retrieval_index(store_dir)
-                            outcome["retrieval_index"] = {
-                                "doc_count": int(retrieval_index.get("doc_count", 0) or 0),
-                                "updated_at": retrieval_index.get("updated_at"),
-                            }
-                            get_logger().log(
-                                f"🧠 [LoRA 학습] 검색 인덱스 갱신 완료: {int(retrieval_index.get('doc_count', 0) or 0)}개 기억"
+                            retrieval_index = build_lora_retrieval_index(
+                                store_dir,
+                                cancel_callback=cancel_callback,
                             )
+                            if bool(retrieval_index.get("cancelled")):
+                                outcome["retrieval_index"] = {"skipped": True, "reason": "cancelled"}
+                                get_logger().log("⏸️ [LoRA 학습] 중지 요청 감지: 검색 인덱스 갱신을 중단했습니다.")
+                                stop_after_job = True
+                            else:
+                                outcome["retrieval_index"] = {
+                                    "doc_count": int(retrieval_index.get("doc_count", 0) or 0),
+                                    "updated_at": retrieval_index.get("updated_at"),
+                                }
+                                get_logger().log(
+                                    f"🧠 [LoRA 학습] 검색 인덱스 갱신 완료: {int(retrieval_index.get('doc_count', 0) or 0)}개 기억"
+                                )
                         else:
                             outcome["retrieval_index"] = {"skipped": True, "reason": "low_resource_cooldown"}
                             get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 쿨다운")
@@ -1385,7 +1420,11 @@ class PersonalizationIdleTrainer(QObject):
         if message == self._last_auto_learning_status_log:
             return
         self._last_auto_learning_status_log = message
-        get_logger().log(message)
+        logger = get_logger()
+        try:
+            logger.log(message, level="INFO")
+        except TypeError:
+            logger.log(message)
 
     def _learning_context(self) -> str:
         stack = getattr(self.owner, "stack", None)
@@ -1416,6 +1455,7 @@ class PersonalizationIdleTrainer(QObject):
             return {"started": False, "reason": "shutdown_in_progress"}
         if self.is_busy():
             return {"started": False, "reason": "busy"}
+        clear_personalization_training_interrupt()
         self._stop_requested.clear()
         self._current_low_resource = bool(low_resource)
         self._current_learning_mode = "lite" if low_resource else "heavy"
@@ -1459,6 +1499,7 @@ class PersonalizationIdleTrainer(QObject):
             if not self.has_pending_jobs():
                 return {"started": False, "reason": "no_pending_job"}
             self._log_auto_learning_status("백그라운드 시작")
+            clear_personalization_training_interrupt()
             self._stop_requested.clear()
             self._worker_thread = threading.Thread(
                 target=self._background_run_once,
@@ -1674,10 +1715,13 @@ class PersonalizationIdleTrainer(QObject):
 
 __all__ = [
     "PersonalizationIdleTrainer",
+    "clear_personalization_training_interrupt",
     "enqueue_default_training_jobs",
     "enqueue_full_training_jobs",
     "format_training_queue_status_summary",
+    "personalization_training_interrupt_requested",
     "recover_interrupted_training_jobs",
+    "request_personalization_training_interrupt",
     "run_training_job",
     "run_training_queue_once",
 ]

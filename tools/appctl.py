@@ -32,7 +32,10 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("guided-subtitle-status")
     capture_snapshot = sub.add_parser("capture-snapshot", aliases=["snapshot"])
     capture_snapshot.add_argument("path", nargs="?")
+    capture_dictionary_snapshot = sub.add_parser("capture-dictionary-snapshot")
+    capture_dictionary_snapshot.add_argument("path", nargs="?")
     sub.add_parser("show-home")
+    sub.add_parser("open-dictionary")
     sub.add_parser("save-project")
     sub.add_parser("start-current-pipeline")
     sub.add_parser("start-current-roughcut")
@@ -117,8 +120,10 @@ def _editor_selection_options(args: argparse.Namespace) -> dict:
 
 def _payload_from_args(args: argparse.Namespace) -> dict:
     command = str(args.command or "")
-    if command in {"open-project", "open-srt", "open-media", "queue-folder", "capture-snapshot", "snapshot"}:
+    if command in {"open-project", "open-srt", "open-media", "queue-folder", "capture-snapshot", "snapshot", "capture-dictionary-snapshot"}:
         return build_command_payload(command, path=args.path)
+    if command == "open-dictionary":
+        return build_command_payload(command)
     if command == "guided-subtitle-run":
         return build_command_payload(command, path=args.path, options={"snapshot_dir": str(args.snapshot_dir or "")})
     if command == "queue-files":

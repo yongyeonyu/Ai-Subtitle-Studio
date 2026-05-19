@@ -180,6 +180,8 @@ func run() throws {
                     response = PipelineStatusNative.summary(payload: payload)
                 case "runtime_disk_cache_prune":
                     response = RuntimeDiskCache.prune(payload: payload)
+                case "subtitle_core_plan":
+                    response = SubtitleCoreNative.plan(payload: payload)
                 default:
                     response = ["error": "Unsupported core task: \(task)"]
                 }

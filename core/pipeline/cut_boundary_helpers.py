@@ -27,9 +27,9 @@ from core.pipeline.cut_boundary_cache import (
     cut_boundary_cache_settings_payload,
     truthy_setting,
 )
-from core.pipeline.cut_boundary_prescan_policy import (
-    cut_boundary_adaptive_prescan_plan,
-    fast_cut_boundary_prescan_settings,
+from core.pipeline.cut_boundary_strategy import (
+    CutBoundaryCandidateStrategy,
+    CutBoundaryPrescanStrategy,
 )
 from core.project.project_io import read_project_file, write_project_file
 from core.runtime.logger import get_logger
@@ -42,6 +42,20 @@ _truthy_setting = truthy_setting
 
 class PipelineCutBoundaryMixin:
     """Pipeline 컷 경계 분석/캐시/적용 헬퍼 모음."""
+
+    def _cut_boundary_candidate_strategy(self) -> CutBoundaryCandidateStrategy:
+        strategy = getattr(self, "_cut_boundary_candidate_strategy_obj", None)
+        if not isinstance(strategy, CutBoundaryCandidateStrategy):
+            strategy = CutBoundaryCandidateStrategy()
+            self._cut_boundary_candidate_strategy_obj = strategy
+        return strategy
+
+    def _cut_boundary_prescan_strategy(self) -> CutBoundaryPrescanStrategy:
+        strategy = getattr(self, "_cut_boundary_prescan_strategy_obj", None)
+        if not isinstance(strategy, CutBoundaryPrescanStrategy):
+            strategy = CutBoundaryPrescanStrategy()
+            self._cut_boundary_prescan_strategy_obj = strategy
+        return strategy
 
     def _cut_boundary_snapshot_for_pipeline(self, *, force_reload: bool = False) -> dict:
         """Return cached cut-boundary/provisional rows for the current project.
@@ -396,53 +410,20 @@ class PipelineCutBoundaryMixin:
 
 
     def _cut_boundary_sec_from_row(self, row) -> float | None:
-        try:
-            if isinstance(row, dict):
-                return float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
-            return float(row)
-        except Exception:
-            return None
+        return self._cut_boundary_candidate_strategy().sec_from_row(row)
 
     def _cut_boundary_candidate_key(self, row) -> str:
-        sec = self._cut_boundary_sec_from_row(row)
-        if sec is None:
-            sec = 0.0
-        try:
-            clip_idx = int(row.get("clip_idx", 0) or 0) if isinstance(row, dict) else 0
-        except Exception:
-            clip_idx = 0
-        return f"{clip_idx}:{float(sec):.3f}"
+        return self._cut_boundary_candidate_strategy().candidate_key(row)
 
-    _fast_cut_boundary_prescan_settings = staticmethod(fast_cut_boundary_prescan_settings)
-    _cut_boundary_adaptive_prescan_plan = staticmethod(cut_boundary_adaptive_prescan_plan)
+    def _fast_cut_boundary_prescan_settings(self, settings: dict | None) -> dict:
+        return self._cut_boundary_prescan_strategy().fast_settings(settings)
+
+    def _cut_boundary_adaptive_prescan_plan(self, settings: dict | None, files: list[str] | None) -> dict:
+        return self._cut_boundary_prescan_strategy().adaptive_plan(settings, files)
 
     def _mark_cut_boundary_rows_following(self, provisional_rows: list[dict], rows: list[dict]) -> bool:
         """Mark pioneer candidates as actively checked by the follower worker."""
-        candidate_keys = {
-            self._cut_boundary_candidate_key(row)
-            for row in list(rows or [])
-            if isinstance(row, dict)
-        }
-        if not candidate_keys:
-            return False
-        changed = False
-        for idx, item in enumerate(list(provisional_rows or [])):
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get("candidate_key") or self._cut_boundary_candidate_key(item))
-            if key not in candidate_keys:
-                continue
-            marked = dict(item)
-            marked["candidate_key"] = key
-            marked["status"] = "verifying"
-            marked["detector_stage"] = "follower"
-            marked["follower_active"] = True
-            marked["line_color"] = "#FFD60A"
-            marked["line_style"] = "dash"
-            marked["ui_label"] = "후발대 확인"
-            provisional_rows[idx] = marked
-            changed = True
-        return changed
+        return self._cut_boundary_candidate_strategy().mark_following(provisional_rows, rows)
 
     def _remove_cut_boundary_checked_rows(self, provisional_rows: list[dict], rows: list[dict]) -> bool:
         """Remove follower-checked temporary candidates from the UI list.
@@ -450,30 +431,7 @@ class PipelineCutBoundaryMixin:
         Relocated rollback hints are intentionally kept because they are new
         provisional evidence for a later verification pass.
         """
-        candidate_keys = {
-            self._cut_boundary_candidate_key(row)
-            for row in list(rows or [])
-            if isinstance(row, dict)
-        }
-        if not candidate_keys:
-            return False
-        kept: list[dict] = []
-        changed = False
-        for item in list(provisional_rows or []):
-            if not isinstance(item, dict):
-                kept.append(item)
-                continue
-            if bool(item.get("follower_relocated") or item.get("rollback_relocated")):
-                kept.append(item)
-                continue
-            key = str(item.get("candidate_key") or self._cut_boundary_candidate_key(item))
-            if key in candidate_keys:
-                changed = True
-                continue
-            kept.append(item)
-        if changed:
-            provisional_rows[:] = kept
-        return changed
+        return self._cut_boundary_candidate_strategy().remove_checked(provisional_rows, rows)
 
     def _cut_boundary_placeholder_duration(self, files=None) -> float:
         try:
@@ -710,9 +668,44 @@ class PipelineCutBoundaryMixin:
         try:
             import threading
 
+            force_rescan_requested = bool(getattr(self, "_force_cut_boundary_rescan_once", False))
+            request_state = {
+                "project_path": str(project_path or ""),
+                "files": list(files or []),
+                "force_rescan": force_rescan_requested,
+            }
+
+            def _same_request(left, right) -> bool:
+                if not isinstance(left, dict) or not isinstance(right, dict):
+                    return False
+                return (
+                    str(left.get("project_path") or "") == str(right.get("project_path") or "")
+                    and list(left.get("files") or []) == list(right.get("files") or [])
+                )
+
             old_thread = getattr(self, "_cut_boundary_prescan_thread", None)
-            if old_thread is not None and old_thread.is_alive():
-                force_rescan_requested = bool(getattr(self, "_force_cut_boundary_rescan_once", False))
+            follower_thread = getattr(self, "_cut_boundary_follower_thread", None)
+            prescan_alive = old_thread is not None and old_thread.is_alive()
+            follower_alive = follower_thread is not None and follower_thread.is_alive()
+            if prescan_alive or follower_alive:
+                active_request = getattr(self, "_cut_boundary_prescan_active_request", None)
+                if (
+                    force_rescan_requested
+                    and _same_request(active_request, request_state)
+                    and bool((active_request or {}).get("force_rescan", False))
+                ):
+                    self._ui_emit("_sig_set_cut_boundary_scan_active", True)
+                    try:
+                        self._emit_cut_boundary_count_to_sidebar(0, percent=0, done=False)
+                    except Exception:
+                        pass
+                    try:
+                        get_logger().log(
+                            "  ♻️ [컷 경계] 같은 재확인 스캔이 이미 진행 중이라 중복 재실행을 생략합니다"
+                        )
+                    except Exception:
+                        pass
+                    return []
                 if force_rescan_requested:
                     try:
                         self._cut_boundary_prescan_pending_request = {
@@ -730,7 +723,7 @@ class PipelineCutBoundaryMixin:
                 if force_rescan_requested:
                     try:
                         get_logger().log(
-                            "  🔄 [컷 경계] 진행 중 스캔이 끝나면 음성/임시/후발대 재확인을 바로 다시 시작하도록 예약했습니다"
+                            "  🔄 [컷 경계] 진행 중 스캔/검증이 끝나면 음성/임시/후발대 재확인을 바로 다시 시작하도록 예약했습니다"
                         )
                     except Exception:
                         pass
@@ -758,6 +751,16 @@ class PipelineCutBoundaryMixin:
                             self._cut_boundary_prescan_pending_request = None
                     except Exception:
                         pending_request = None
+                    try:
+                        follower = getattr(self, "_cut_boundary_follower_thread", None)
+                        follower_alive = follower is not None and follower.is_alive()
+                    except Exception:
+                        follower_alive = False
+                    if not follower_alive and not pending_request:
+                        try:
+                            self._cut_boundary_prescan_active_request = None
+                        except Exception:
+                            pass
                     if pending_request:
                         try:
                             next_project_path = str(pending_request.get("project_path") or project_path or "")
@@ -781,6 +784,7 @@ class PipelineCutBoundaryMixin:
                 daemon=True,
             )
             self._cut_boundary_prescan_thread = thread
+            self._cut_boundary_prescan_active_request = dict(request_state)
             self._ui_emit("_sig_set_cut_boundary_scan_active", True)
             try:
                 self._emit_cut_boundary_count_to_sidebar(0, percent=0, done=False)
@@ -1800,6 +1804,38 @@ class PipelineCutBoundaryMixin:
                         )
                 except Exception as exc:
                     get_logger().log(f"  ⚠️ [컷 경계] 후발대 검증 실패: {exc}")
+                finally:
+                    pending_request = None
+                    try:
+                        if getattr(self, "_cut_boundary_follower_thread", None) is threading.current_thread():
+                            self._cut_boundary_follower_thread = None
+                        raw_pending = getattr(self, "_cut_boundary_prescan_pending_request", None)
+                        if isinstance(raw_pending, dict) and raw_pending:
+                            pending_request = dict(raw_pending)
+                            self._cut_boundary_prescan_pending_request = None
+                    except Exception:
+                        pending_request = None
+                    if pending_request:
+                        try:
+                            next_project_path = str(pending_request.get("project_path") or project_path or "")
+                            next_files = list(pending_request.get("files") or list(files or []))
+                            if bool(pending_request.get("force_rescan", False)):
+                                self._force_cut_boundary_rescan_once = True
+                                self._cut_boundary_prescan_completed = False
+                            get_logger().log("  🔄 [컷 경계] 후발대 완료 후 대기 중이던 재확인 요청을 이어서 시작합니다")
+                            self._auto_scan_cut_boundaries_for_start(next_project_path, next_files)
+                        except Exception as rerun_exc:
+                            try:
+                                get_logger().log(
+                                    f"  ⚠️ [컷 경계] 후발대 완료 후 재확인 재시작 실패: {rerun_exc}"
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            self._cut_boundary_prescan_active_request = None
+                        except Exception:
+                            pass
 
             follower_thread: threading.Thread | None = None
 

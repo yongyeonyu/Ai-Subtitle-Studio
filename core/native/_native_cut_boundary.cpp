@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <cmath>
 #include <string>
@@ -970,6 +971,189 @@ PyObject* py_waveform_peaks_f32le(PyObject*, PyObject* args) {
     return out;
 }
 
+bool is_c_contiguous_u8(const BufferView& view) {
+    if (view.view.itemsize != 1 || view.view.ndim < 2 || view.view.shape == nullptr || view.view.strides == nullptr) {
+        return false;
+    }
+    if (view.view.ndim == 2) {
+        return view.view.strides[1] == 1 && view.view.strides[0] == view.view.shape[1];
+    }
+    if (view.view.ndim == 3) {
+        return view.view.strides[2] == 1
+            && view.view.strides[1] == view.view.shape[2]
+            && view.view.strides[0] == view.view.shape[1] * view.view.shape[2];
+    }
+    return false;
+}
+
+double mean_abs_u8_pair(const BufferView& left, const BufferView& right) {
+    if (left.view.ndim < 2 || right.view.ndim < 2 || left.view.itemsize != 1 || right.view.itemsize != 1) {
+        return 0.0;
+    }
+    if (is_c_contiguous_u8(left) && is_c_contiguous_u8(right)) {
+        const Py_ssize_t n = std::min(left.view.len, right.view.len);
+        if (n <= 0) {
+            return 0.0;
+        }
+        const auto* left_data = static_cast<const unsigned char*>(left.view.buf);
+        const auto* right_data = static_cast<const unsigned char*>(right.view.buf);
+        uint64_t total = 0;
+        for (Py_ssize_t i = 0; i < n; ++i) {
+            total += static_cast<uint64_t>(std::abs(static_cast<int>(left_data[i]) - static_cast<int>(right_data[i])));
+        }
+        return static_cast<double>(total) / static_cast<double>(n);
+    }
+    const Py_ssize_t h = std::min(left.view.shape[0], right.view.shape[0]);
+    const Py_ssize_t w = std::min(left.view.shape[1], right.view.shape[1]);
+    if (h <= 0 || w <= 0) {
+        return 0.0;
+    }
+    const Py_ssize_t channels = (left.view.ndim >= 3 && right.view.ndim >= 3)
+        ? std::min(left.view.shape[2], right.view.shape[2])
+        : 1;
+    if (channels <= 0) {
+        return 0.0;
+    }
+
+    const auto* left_base = static_cast<const char*>(left.view.buf);
+    const auto* right_base = static_cast<const char*>(right.view.buf);
+    double total = 0.0;
+    Py_ssize_t count = 0;
+    for (Py_ssize_t y = 0; y < h; ++y) {
+        const char* left_row = left_base + y * left.view.strides[0];
+        const char* right_row = right_base + y * right.view.strides[0];
+        for (Py_ssize_t x = 0; x < w; ++x) {
+            const char* left_px = left_row + x * left.view.strides[1];
+            const char* right_px = right_row + x * right.view.strides[1];
+            if (channels == 1) {
+                const auto lv = *reinterpret_cast<const unsigned char*>(left_px);
+                const auto rv = *reinterpret_cast<const unsigned char*>(right_px);
+                total += std::abs(static_cast<int>(lv) - static_cast<int>(rv));
+                ++count;
+            } else {
+                for (Py_ssize_t c = 0; c < channels; ++c) {
+                    const auto lv = *reinterpret_cast<const unsigned char*>(left_px + c * left.view.strides[2]);
+                    const auto rv = *reinterpret_cast<const unsigned char*>(right_px + c * right.view.strides[2]);
+                    total += std::abs(static_cast<int>(lv) - static_cast<int>(rv));
+                    ++count;
+                }
+            }
+        }
+    }
+    return count > 0 ? total / static_cast<double>(count) : 0.0;
+}
+
+PyObject* py_live_cut_scores(PyObject*, PyObject* args) {
+    PyObject* gray_frames_obj = nullptr;
+    PyObject* color_frames_obj = nullptr;
+    PyObject* frame_numbers_obj = nullptr;
+    if (!PyArg_ParseTuple(
+            args,
+            "OOO:live_cut_scores",
+            &gray_frames_obj,
+            &color_frames_obj,
+            &frame_numbers_obj)) {
+        return nullptr;
+    }
+
+    PyObject* gray_seq = PySequence_Fast(gray_frames_obj, "gray_frames must be a sequence");
+    if (gray_seq == nullptr) {
+        return nullptr;
+    }
+    PyObject* color_seq = PySequence_Fast(color_frames_obj, "color_frames must be a sequence");
+    if (color_seq == nullptr) {
+        Py_DECREF(gray_seq);
+        return nullptr;
+    }
+    PyObject* frame_seq = PySequence_Fast(frame_numbers_obj, "frame_numbers must be a sequence");
+    if (frame_seq == nullptr) {
+        Py_DECREF(gray_seq);
+        Py_DECREF(color_seq);
+        return nullptr;
+    }
+
+    const Py_ssize_t n = std::min({
+        PySequence_Fast_GET_SIZE(gray_seq),
+        PySequence_Fast_GET_SIZE(color_seq),
+        PySequence_Fast_GET_SIZE(frame_seq),
+    });
+    PyObject* out = PyList_New(0);
+    if (out == nullptr) {
+        Py_DECREF(gray_seq);
+        Py_DECREF(color_seq);
+        Py_DECREF(frame_seq);
+        return nullptr;
+    }
+    if (n < 2) {
+        Py_DECREF(gray_seq);
+        Py_DECREF(color_seq);
+        Py_DECREF(frame_seq);
+        return out;
+    }
+
+    PyObject** gray_items = PySequence_Fast_ITEMS(gray_seq);
+    PyObject** color_items = PySequence_Fast_ITEMS(color_seq);
+    PyObject** frame_items = PySequence_Fast_ITEMS(frame_seq);
+    std::vector<BufferView> gray_buffers(static_cast<size_t>(n));
+    std::vector<BufferView> color_buffers(static_cast<size_t>(n));
+    std::vector<long> frame_numbers(static_cast<size_t>(n), 0);
+    std::vector<int> valid(static_cast<size_t>(n), 1);
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        if (!get_buffer(gray_items[i], gray_buffers[static_cast<size_t>(i)], PyBUF_STRIDES) ||
+            !get_buffer(color_items[i], color_buffers[static_cast<size_t>(i)], PyBUF_STRIDES)) {
+            PyErr_Clear();
+            valid[static_cast<size_t>(i)] = 0;
+            continue;
+        }
+        frame_numbers[static_cast<size_t>(i)] = PyLong_AsLong(frame_items[i]);
+        if (PyErr_Occurred()) {
+            PyErr_Clear();
+            frame_numbers[static_cast<size_t>(i)] = static_cast<long>(i);
+        }
+    }
+
+    std::vector<std::pair<double, long>> scores;
+    scores.reserve(static_cast<size_t>(n - 1));
+    Py_BEGIN_ALLOW_THREADS
+    for (Py_ssize_t i = 1; i < n; ++i) {
+        if (!valid[static_cast<size_t>(i - 1)] || !valid[static_cast<size_t>(i)]) {
+            continue;
+        }
+        double gray_score = 0.0;
+        double color_score = 0.0;
+        gray_score = mean_abs_u8_pair(gray_buffers[static_cast<size_t>(i - 1)], gray_buffers[static_cast<size_t>(i)]);
+        color_score = mean_abs_u8_pair(color_buffers[static_cast<size_t>(i - 1)], color_buffers[static_cast<size_t>(i)]);
+        const double score = std::max(gray_score, color_score * 0.85);
+        scores.push_back({score, frame_numbers[static_cast<size_t>(i)]});
+    }
+    Py_END_ALLOW_THREADS
+
+    for (const auto& score_record : scores) {
+        PyObject* item = Py_BuildValue("(dl)", score_record.first, score_record.second);
+        if (item == nullptr) {
+            Py_DECREF(out);
+            Py_DECREF(gray_seq);
+            Py_DECREF(color_seq);
+            Py_DECREF(frame_seq);
+            return nullptr;
+        }
+        const int append_status = PyList_Append(out, item);
+        Py_DECREF(item);
+        if (append_status != 0) {
+            Py_DECREF(out);
+            Py_DECREF(gray_seq);
+            Py_DECREF(color_seq);
+            Py_DECREF(frame_seq);
+            return nullptr;
+        }
+    }
+
+    Py_DECREF(gray_seq);
+    Py_DECREF(color_seq);
+    Py_DECREF(frame_seq);
+    return out;
+}
+
 PyObject* py_interval_overlaps(PyObject*, PyObject* args) {
     PyObject* segment_starts_obj = nullptr;
     PyObject* segment_ends_obj = nullptr;
@@ -1210,6 +1394,7 @@ PyMethodDef methods[] = {
     {"dense_flow_pair_metrics", py_dense_flow_pair_metrics, METH_VARARGS, "Compute dense optical-flow pair metrics without NumPy temporaries."},
     {"gray_rollback_search", py_gray_rollback_search, METH_VARARGS, "Search rollback window densely and refine the cut frame with native C++."},
     {"waveform_peaks_f32le", py_waveform_peaks_f32le, METH_VARARGS, "Downsample f32le PCM bytes into normalized waveform peaks."},
+    {"live_cut_scores", py_live_cut_scores, METH_VARARGS, "Compute interactive live-cut adjacent-frame scores in native C++."},
     {"interval_overlaps", py_interval_overlaps, METH_VARARGS, "Compute segment/VAD interval overlaps."},
     {"word_split_groups", py_word_split_groups, METH_VARARGS, "Split word indexes into subtitle groups with native C++ thresholds."},
     {"llm_macro_group_ranges", py_llm_macro_group_ranges, METH_VARARGS, "Build LLM macro group ranges from cut and review flags."},

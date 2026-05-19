@@ -1593,7 +1593,7 @@
         ],
         "cut_boundary_policy": "hybrid"
     },
-    "speaker_diarization_auto_enabled": false,
+    "speaker_diarization_auto_enabled": true,
     "vad_dual_model_enabled": true,
     "subtitle_lora_quality_buckets": [
         "high",

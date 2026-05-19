@@ -1,0 +1,38 @@
+name: Maintenance Budget
+
+on:
+  pull_request:
+    paths:
+      - "core/**"
+      - "ui/**"
+      - "tools/**"
+      - "native/macos/AIStudioNative/Sources/**"
+      - "tools/check_maintenance_budget.py"
+  workflow_dispatch:
+
+jobs:
+  maintenance-budget:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check changed-file maintenance budget
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- \
+              core ui tools native/macos/AIStudioNative/Sources \
+              > /tmp/maintenance_budget_paths.txt
+            if [ ! -s /tmp/maintenance_budget_paths.txt ]; then
+              echo "No changed source files for maintenance budget."
+              exit 0
+            fi
+            python3 tools/check_maintenance_budget.py $(cat /tmp/maintenance_budget_paths.txt) --json
+          else
+            python3 tools/check_maintenance_budget.py --json
+          fi

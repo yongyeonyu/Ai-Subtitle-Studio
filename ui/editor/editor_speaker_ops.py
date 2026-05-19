@@ -6,28 +6,28 @@ EditorWidget 화자 메뉴 / 화자 드래그 조작 Mixin.
 from PyQt6.QtCore import QPoint
 from PyQt6.QtGui import QTextCursor
 
+from core.speaker_profile_settings import normalize_speaker_id, visible_speaker_slots
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import get_sub_block_indices
+from ui.timeline.speaker_labels import current_speaker_settings
 from ui.style import COLORS
 
 
 class EditorSpeakerOpsMixin:
     def _show_speaker_circle_menu(self, line_num: int, current_spk_id: str, gpos: QPoint):
-        max_spk = int(self.settings.get("max_speakers", 1))
-        spk_map = {
-            "00": self.settings.get("spk1_color", "#FFFFFF"),
-            "01": self.settings.get("spk2_color", COLORS["warning"]),
-            "02": self.settings.get("spk3_color", "#00FFFF")
+        current_spk_id = normalize_speaker_id(current_spk_id)
+        settings = current_speaker_settings(getattr(self, "settings", {}) or {})
+        slot_map = {
+            normalize_speaker_id(row.get("id", "00")): row
+            for row in visible_speaker_slots(settings)
         }
-        available_spks = [f"{i:02d}" for i in range(max_spk)]
         items = []
-        for spk in available_spks:
+        for spk, row in slot_map.items():
             if spk == current_spk_id:
                 continue
-            color_hex = spk_map.get(spk, "#FFFFFF")
-            spk_idx = int(spk) + 1 if str(spk).isdigit() else 1
-            spk_name = str(self.settings.get(f"spk{spk_idx}_name", "") or f"화자 {spk_idx}")
+            color_hex = str(row.get("color", COLORS["warning"]) or COLORS["warning"])
+            spk_name = str(row.get("name", "") or "화자")
             items.append(
                 {
                     "id": spk,

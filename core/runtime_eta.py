@@ -11,6 +11,7 @@ from core.native_swift_subtitle import request_native_core_task
 from core.runtime import config
 from core.runtime.setting_utils import setting_bool
 from core.settings import load_settings
+from core.speaker_profile_settings import automatic_speaker_ceiling, speaker_diarization_auto_enabled
 
 
 ETA_HISTORY_SCHEMA = "ai_subtitle_studio.runtime_eta_store.v2"
@@ -178,6 +179,8 @@ def _speaker_count(settings: dict[str, Any], startup_diagnostic: dict[str, Any] 
         count = _safe_int(speakers.get("count"), 0)
         if count > 0:
             return max(1, count)
+    if speaker_diarization_auto_enabled(settings):
+        return max(1, automatic_speaker_ceiling(settings))
     return max(1, _safe_int(settings.get("max_speakers"), 1))
 
 
@@ -246,7 +249,7 @@ def _vad_cache_state(runtime_flags: dict[str, Any], settings: dict[str, Any]) ->
 
 
 def _speaker_cache_state(target_file: str, settings: dict[str, Any]) -> str:
-    if max(1, _safe_int(settings.get("max_speakers"), 1)) <= 1:
+    if not speaker_diarization_auto_enabled(settings):
         return "disabled"
     stem, _ = os.path.splitext(str(target_file or ""))
     return "warm" if stem and os.path.exists(f"{stem}_speaker_cache.json") else "cold"
@@ -386,8 +389,8 @@ def build_runtime_eta_payload(
             "stt_ensemble_enabled": _safe_bool(s.get("stt_ensemble_enabled")),
             "llm_provider": "none" if _llm_disabled(llm_model, llm_provider) else llm_provider,
             "llm_model": "none" if _llm_disabled(llm_model, llm_provider) else llm_model,
-            "diarization_enabled": _safe_int(s.get("max_speakers"), 1) > 1,
-            "max_speakers": max(1, _safe_int(s.get("max_speakers"), 1)),
+            "diarization_enabled": speaker_diarization_auto_enabled(s),
+            "max_speakers": automatic_speaker_ceiling(s) if speaker_diarization_auto_enabled(s) else max(1, _safe_int(s.get("max_speakers"), 1)),
             "selected_vad": _safe_str(s.get("selected_vad"), "none"),
             "selected_audio_ai": _safe_str(s.get("selected_audio_ai"), "none"),
         },

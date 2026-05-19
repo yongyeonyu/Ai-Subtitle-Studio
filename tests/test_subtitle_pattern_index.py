@@ -77,6 +77,21 @@ class SubtitlePatternIndexTests(unittest.TestCase):
             self.assertGreaterEqual(matched["settings"]["continuous_threshold"], 2.0)
             self.assertGreater(matched["settings"]["gap_pull_rate"], 0.0)
 
+    def test_pattern_index_build_can_cancel_without_writing_partial_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            capture_editor_truth_records(
+                [{"start": 1.0, "end": 2.0, "text": "취소 가능한 패턴입니다."}],
+                settings={"lora_store_full_text_enabled": False, "user_edit_metrics_enabled": False},
+                store_dir=tmpdir,
+                refresh_bundle=False,
+            )
+            path = store_paths(tmpdir)["subtitle_pattern_index"]
+
+            index = save_subtitle_pattern_index(tmpdir, force=True, cancel_callback=lambda: True)
+
+            self.assertTrue(index["cancelled"])
+            self.assertFalse(path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

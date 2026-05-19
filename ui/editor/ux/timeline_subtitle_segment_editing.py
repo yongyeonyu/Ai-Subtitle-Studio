@@ -21,6 +21,12 @@ from core.native_swift_timeline import (
     build_subtitle_drag_snap_base_via_swift,
     compute_subtitle_merge_preview_via_swift,
 )
+
+try:
+    from core.native_cut_boundary import live_cut_scores as _native_live_cut_scores
+except Exception:  # pragma: no cover - optional native extension.
+    _native_live_cut_scores = None
+
 from ui.editor.editor_helpers import find_segment_at
 from ui.editor.ux.timeline_canvas_editing import (
     NEW_SUBTITLE_PLACEHOLDER,
@@ -286,6 +292,10 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
 
     def _diamond_index_at(self, x: int, y: int, *, margin: int = 5):
         margin = max(int(margin), self._touch_hit_slop(10))
+        x_radius = 5 + max(0, int(margin))
+        y_radius = 8 + max(0, int(margin))
+        if int(y) < int(DIAMOND_Y - y_radius) or int(y) >= int(DIAMOND_Y + y_radius):
+            return None
         pairs = self._diamond_pairs()
         if len(pairs) >= 64:
             cache = getattr(self, "_diamond_pairs_cache", {}) or {}
@@ -299,7 +309,8 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         else:
             candidates = enumerate(pairs)
         for pair_idx, (_, _, s1, _) in candidates:
-            if self._diamond_hit_rect(self._x(s1["end"]), margin=margin).contains(x, y):
+            bx = int(self._x(s1["end"]))
+            if bx - x_radius <= int(x) < bx + x_radius:
                 return pair_idx
         return None
 
@@ -848,6 +859,342 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
                 return False
         return True
 
+    def _playhead_auto_cut_magnet_enabled(self) -> bool:
+        for owner in self._iter_live_cut_snap_owners():
+            settings = getattr(owner, "settings", None)
+            if not isinstance(settings, dict):
+                continue
+            if settings.get("timeline_live_cut_snap_enabled") is False:
+                return False
+            if "playhead_auto_cut_magnet_enabled" in settings:
+                return bool(settings.get("playhead_auto_cut_magnet_enabled"))
+        try:
+            from core.settings import load_settings
+
+            settings = load_settings() or {}
+            if settings.get("timeline_live_cut_snap_enabled") is False:
+                return False
+            return bool(settings.get("playhead_auto_cut_magnet_enabled", True))
+        except Exception:
+            return True
+
+    def _playhead_auto_cut_magnet_settings(self) -> dict:
+        merged: dict = {}
+        try:
+            from core.settings import load_settings
+
+            loaded = load_settings() or {}
+            if isinstance(loaded, dict):
+                merged.update(loaded)
+        except Exception:
+            pass
+        for owner in self._iter_live_cut_snap_owners():
+            settings = getattr(owner, "settings", None)
+            if isinstance(settings, dict):
+                merged.update(settings)
+        return merged
+
+    def _playhead_cut_candidate_is_confident(self, candidate: dict) -> bool:
+        try:
+            score = float(candidate.get("score", 0.0) or 0.0)
+            median_score = float(candidate.get("median_score", 0.0) or 0.0)
+        except Exception:
+            return False
+        margin = score - median_score
+        ratio = score / max(1.0, median_score)
+        return bool(score >= 18.0 and margin >= 7.0 and ratio >= 1.35)
+
+    def _playhead_cut_magnet_verify_candidate(
+        self,
+        media_path: str,
+        fps: float,
+        candidate: dict,
+    ) -> dict | None:
+        settings = self._playhead_auto_cut_magnet_settings()
+        if settings.get("playhead_auto_cut_magnet_strict_verify_enabled") is False:
+            return dict(candidate)
+        if not self._playhead_cut_candidate_is_confident(candidate):
+            return None
+
+        try:
+            import cv2  # type: ignore
+            import core.cut_boundary as cut_boundary
+        except Exception:
+            return None
+
+        media_path = os.path.abspath(os.path.expanduser(str(media_path or "")))
+        cap = self._live_cut_snap_capture(media_path, cv2)
+        if cap is None:
+            return None
+        try:
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        except Exception:
+            frame_count = 0
+        if frame_count <= 1:
+            return None
+
+        try:
+            coarse_frame = int(candidate.get("frame"))
+        except Exception:
+            return None
+        fps = max(1.0, float(fps or self._get_fps()))
+        verify_cache = getattr(self, "_playhead_cut_magnet_verify_cache", None)
+        if not isinstance(verify_cache, dict):
+            verify_cache = {}
+            self._playhead_cut_magnet_verify_cache = verify_cache
+        cache_key = (media_path, round(fps, 3), int(coarse_frame))
+        if cache_key in verify_cache:
+            cached = verify_cache.get(cache_key)
+            return dict(cached) if isinstance(cached, dict) else None
+
+        verify_settings = dict(settings)
+        strict_multiplier = float(verify_settings.get("playhead_auto_cut_magnet_strict_multiplier", 1.22) or 1.22)
+        try:
+            existing_multiplier = float(verify_settings.get("scan_cut_follower_strict_multiplier", 1.08) or 1.08)
+        except Exception:
+            existing_multiplier = 1.08
+        verify_settings["scan_cut_follower_strict_multiplier"] = max(existing_multiplier, strict_multiplier)
+        verify_settings["scan_cut_auto_verify_rollback_window_sec"] = float(
+            verify_settings.get("playhead_auto_cut_magnet_verify_window_sec", 0.42) or 0.42
+        )
+        verify_settings["scan_cut_auto_verify_forward_window_sec"] = float(
+            verify_settings.get("playhead_auto_cut_magnet_verify_window_sec", 0.42) or 0.42
+        )
+        verify_settings["scan_cut_auto_verify_window_stages"] = [8, 4, 2, 1]
+        verify_settings["scan_cut_follower_strict_region_bonus"] = max(
+            2,
+            int(verify_settings.get("scan_cut_follower_strict_region_bonus", 1) or 1),
+        )
+        verify_settings["scan_cut_follower_gray_agreement_frames"] = max(1, int(round(fps * 0.06)))
+        verify_settings["scan_cut_follower_gray_color_agreement_frames"] = max(1, int(round(fps * 0.08)))
+
+        profile = None
+        try:
+            profiles = getattr(cut_boundary, "CUT_BOUNDARY_GRID_PROFILES", {}) or {}
+            profile = dict(profiles.get("medium") or {})
+        except Exception:
+            profile = None
+        if not profile:
+            try:
+                profile = dict(cut_boundary.cut_boundary_scan_profile(verify_settings))
+            except Exception:
+                profile = None
+
+        try:
+            verifier = getattr(cut_boundary, "_auto_grid_v3_manual_verify_strict", None)
+            if not callable(verifier):
+                return None
+            verified = verifier(
+                cap,
+                cv2,
+                fps=fps,
+                frame_count=frame_count,
+                coarse_frame=coarse_frame,
+                settings=verify_settings,
+                scan_profile=profile,
+                sample_positions=None,
+            )
+        except Exception:
+            verified = None
+
+        if not isinstance(verified, dict) or not bool(verified.get("passed")):
+            verify_cache[cache_key] = None
+            return None
+
+        try:
+            verified_frame = int(verified.get("frame"))
+        except Exception:
+            verify_cache[cache_key] = None
+            return None
+        max_shift_frames = max(2, int(round(fps * 0.16)))
+        if abs(verified_frame - coarse_frame) > max_shift_frames:
+            verify_cache[cache_key] = None
+            return None
+
+        out = dict(candidate)
+        out.update(
+            {
+                "frame": int(verified_frame),
+                "local_sec": self._snap_to_frame(float(verified_frame) / fps),
+                "strict_verified": True,
+                "strict_mode": str(verified.get("mode") or verified.get("reason") or "strict_visual_verify"),
+                "strict_score": float(verified.get("score", 0.0) or 0.0),
+                "strict_regions": int(verified.get("regions", 0) or 0),
+                "strict_color_score": float(verified.get("color_score", 0.0) or 0.0),
+                "strict_color_regions": int(verified.get("color_regions", 0) or 0),
+            }
+        )
+        verify_cache[cache_key] = out
+        if len(verify_cache) > 128:
+            try:
+                verify_cache.pop(next(iter(verify_cache)))
+            except (StopIteration, RuntimeError, TypeError):
+                pass
+        return out
+
+    def _playhead_confirmed_cut_boundary_secs(self) -> list[float]:
+        rows: list = []
+
+        def _extend(value) -> None:
+            if isinstance(value, (list, tuple)):
+                rows.extend(list(value))
+
+        for owner in self._iter_live_cut_snap_owners():
+            _extend(getattr(owner, "boundary_times", None))
+            _extend(getattr(owner, "_project_boundary_times", None))
+            timeline = getattr(owner, "timeline", None)
+            if timeline is not None:
+                _extend(getattr(timeline, "boundary_times", None))
+                canvas = getattr(timeline, "canvas", None)
+                if canvas is not None:
+                    _extend(getattr(canvas, "boundary_times", None))
+            canvas = getattr(owner, "canvas", None)
+            if canvas is not None:
+                _extend(getattr(canvas, "boundary_times", None))
+
+        secs: list[float] = []
+        seen: set[int] = set()
+        for item in rows:
+            try:
+                if isinstance(item, dict):
+                    visible = item.get("visible", True) is not False and item.get("hidden", False) is not True
+                    if not visible:
+                        continue
+                    sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
+                else:
+                    sec = float(item or 0.0)
+            except Exception:
+                continue
+            if sec <= 0.0:
+                continue
+            key = int(round(sec * 1000.0))
+            if key in seen:
+                continue
+            seen.add(key)
+            secs.append(self._snap_to_frame(sec))
+        secs.sort()
+        return secs
+
+    def _playhead_confirmed_cut_boundary_snap_sec(
+        self,
+        target_global_sec: float,
+        previous_global_sec: float,
+        direction: int,
+        fps: float,
+    ) -> float | None:
+        boundaries = self._playhead_confirmed_cut_boundary_secs()
+        if not boundaries:
+            return None
+        fps = max(1.0, float(fps or self._get_fps()))
+        epsilon = max(0.001, 1.0 / fps)
+        pps = max(1.0, float(getattr(self, "pps", 100.0) or 100.0))
+        near_threshold = max(4.0 / fps, min(0.12, 18.0 / pps))
+        target_global_sec = self._snap_to_frame(float(target_global_sec or 0.0))
+        previous_global_sec = self._snap_to_frame(float(previous_global_sec or target_global_sec))
+        origin_global = getattr(self, "_playhead_cut_magnet_origin_sec", previous_global_sec)
+        try:
+            origin_global = self._snap_to_frame(float(origin_global or previous_global_sec))
+        except Exception:
+            origin_global = previous_global_sec
+        origin_exclusion = max(0.02, 2.0 / fps)
+
+        if int(direction) > 0:
+            candidates = [
+                sec
+                for sec in boundaries
+                if sec > previous_global_sec + epsilon
+                and sec <= target_global_sec + near_threshold
+                and abs(sec - origin_global) > origin_exclusion
+            ]
+            return min(candidates) if candidates else None
+        candidates = [
+            sec
+            for sec in boundaries
+            if sec < previous_global_sec - epsilon
+            and sec >= target_global_sec - near_threshold
+            and abs(sec - origin_global) > origin_exclusion
+        ]
+        return max(candidates) if candidates else None
+
+    def _playhead_auto_cut_snap_sec(self, target_global_sec: float, previous_global_sec: float) -> tuple[float, bool]:
+        target_global_sec = self._snap_to_frame(float(target_global_sec or 0.0))
+        previous_global_sec = self._snap_to_frame(float(previous_global_sec or target_global_sec))
+        if not self._playhead_auto_cut_magnet_enabled():
+            return target_global_sec, False
+
+        fps = max(1.0, float(self._get_fps() if hasattr(self, "_get_fps") else 30.0))
+        epsilon = max(0.001, 1.0 / fps)
+        if target_global_sec > previous_global_sec + epsilon:
+            direction = 1
+        elif target_global_sec < previous_global_sec - epsilon:
+            direction = -1
+        else:
+            return target_global_sec, False
+
+        confirmed_sec = self._playhead_confirmed_cut_boundary_snap_sec(
+            target_global_sec,
+            previous_global_sec,
+            direction,
+            fps,
+        )
+        if confirmed_sec is not None:
+            return self._snap_to_frame(float(confirmed_sec)), True
+
+        ctx = self._resolve_live_cut_snap_context(target_global_sec)
+        if not isinstance(ctx, dict):
+            return target_global_sec, False
+        media_path = str(ctx.get("media_path") or "").strip()
+        if not media_path:
+            return target_global_sec, False
+
+        local_sec = float(ctx.get("local_sec", target_global_sec) or 0.0)
+        clip_start = float(ctx.get("clip_start", 0.0) or 0.0)
+        fps = max(1.0, float(ctx.get("fps") or fps))
+        search_start, search_end = self._live_cut_search_window_secs(local_sec, direction)
+
+        # When a drag starts exactly on a cut, ignore that starting cut so a
+        # second drag can move onward instead of snapping back to the same frame.
+        origin_global = getattr(self, "_playhead_cut_magnet_origin_sec", previous_global_sec)
+        try:
+            origin_local = max(0.0, float(origin_global or 0.0) - clip_start)
+        except Exception:
+            origin_local = local_sec
+        exclusion = max(0.02, 2.0 / fps)
+        if direction > 0:
+            search_start = max(float(search_start), origin_local + exclusion)
+        else:
+            search_end = min(float(search_end), max(0.0, origin_local - exclusion))
+        if search_end <= search_start + epsilon:
+            return target_global_sec, False
+
+        detected = self._detect_live_cut_boundary_record(
+            media_path,
+            local_sec,
+            fps,
+            direction=direction,
+            search_start_local_sec=search_start,
+            search_end_local_sec=search_end,
+        )
+        if detected is None:
+            return target_global_sec, False
+        verified = self._playhead_cut_magnet_verify_candidate(media_path, fps, detected)
+        if verified is None:
+            return target_global_sec, False
+        detected = verified
+        local_cut_sec = detected.get("local_sec") if isinstance(detected, dict) else detected
+        try:
+            cut_sec = self._snap_to_frame(clip_start + max(0.0, float(local_cut_sec)))
+        except Exception:
+            return target_global_sec, False
+        if direction > 0 and cut_sec <= previous_global_sec + epsilon:
+            return target_global_sec, False
+        if direction < 0 and cut_sec >= previous_global_sec - epsilon:
+            return target_global_sec, False
+        distance_limit = max(0.20, min(1.20, abs(float(search_end) - float(search_start)) + (2.0 / fps)))
+        if abs(cut_sec - target_global_sec) > distance_limit:
+            return target_global_sec, False
+        return cut_sec, True
+
     def _resolve_live_cut_snap_context(self, global_sec: float) -> dict | None:
         global_sec = float(global_sec or 0.0)
         for owner in self._iter_live_cut_snap_owners():
@@ -982,30 +1329,40 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         search_end_local_sec = max(search_start_local_sec, float(search_end_local_sec or search_start_local_sec))
         search_start_frame = max(0, int(round(search_start_local_sec * fps)))
         search_end_frame = max(search_start_frame + 2, int(round(search_end_local_sec * fps)))
-        bucket_frames = max(1, int(round(fps * 0.25)))
-        key = (
-            media_path,
-            round(fps, 3),
-            -1 if int(direction) < 0 else 1,
-            search_start_frame // bucket_frames,
-            search_end_frame // bucket_frames,
-        )
         cache = getattr(self, "_live_cut_snap_cache", None)
         if not isinstance(cache, dict):
             cache = {}
             self._live_cut_snap_cache = cache
-        payload = cache.get(key)
-        if payload is not None:
-            candidates = list((payload or {}).get("candidates") or [])
-            if candidates:
-                return min(
-                    candidates,
-                    key=lambda item: (
-                        abs(int(item.get("frame", target_frame)) - target_frame),
-                        -float(item.get("score", 0.0) or 0.0),
-                    ),
+
+        for payload in list(cache.values()):
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("path") != media_path:
+                continue
+            try:
+                payload_fps = float(payload.get("fps", fps) or fps)
+                first_frame = int(payload.get("first_frame", -1))
+                last_frame = int(payload.get("last_frame", -1))
+            except Exception:
+                continue
+            if abs(payload_fps - fps) > 0.01:
+                continue
+            if first_frame <= search_start_frame and last_frame >= search_end_frame:
+                window_scores = self._filter_live_cut_scores(
+                    payload.get("scores"),
+                    search_start_frame,
+                    search_end_frame,
                 )
-            return None
+                candidates = self._live_cut_candidates_from_scores(window_scores, fps)
+                if candidates:
+                    return min(
+                        candidates,
+                        key=lambda item: (
+                            abs(int(item.get("frame", target_frame)) - target_frame),
+                            -float(item.get("score", 0.0) or 0.0),
+                        ),
+                    )
+                return None
 
         now = time.monotonic()
         last_compute = float(getattr(self, "_live_cut_snap_last_compute_mono", 0.0) or 0.0)
@@ -1013,22 +1370,55 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             return None
         self._live_cut_snap_last_compute_mono = now
 
-        candidates = self._compute_live_cut_boundary_candidates(
+        bucket_frames = max(1, int(round(fps * 0.50)))
+        base_pad_frames = max(bucket_frames, int(round(fps * 0.50)))
+        forward_pad_frames = max(base_pad_frames, int(round(fps * 1.50)))
+        if int(direction) < 0:
+            scan_start_frame = max(0, search_start_frame - forward_pad_frames)
+            scan_end_frame = max(search_end_frame + base_pad_frames, scan_start_frame + 2)
+        else:
+            scan_start_frame = max(0, search_start_frame - base_pad_frames)
+            scan_end_frame = max(search_end_frame + forward_pad_frames, scan_start_frame + 2)
+        key = (
             media_path,
+            round(fps, 3),
+            scan_start_frame // bucket_frames,
+            scan_end_frame // bucket_frames,
+        )
+        payload = cache.get(key)
+        if not isinstance(payload, dict) or int(payload.get("first_frame", -1)) > search_start_frame or int(payload.get("last_frame", -1)) < search_end_frame:
+            scores = self._compute_live_cut_boundary_scores(
+                media_path,
+                scan_start_frame,
+                scan_end_frame,
+                fps,
+            )
+            payload = {
+                "path": media_path,
+                "fps": fps,
+                "first_frame": scan_start_frame,
+                "last_frame": scan_end_frame,
+                "scores": scores,
+                "search_start_local_sec": search_start_local_sec,
+                "search_end_local_sec": search_end_local_sec,
+            }
+            cache[key] = payload
+
+        window_scores = self._filter_live_cut_scores(
+            payload.get("scores") if isinstance(payload, dict) else [],
             search_start_frame,
             search_end_frame,
-            fps,
         )
+        candidates = self._live_cut_candidates_from_scores(window_scores, fps)
         payload = {
-            "candidates": candidates,
-            "search_start_local_sec": search_start_local_sec,
-            "search_end_local_sec": search_end_local_sec,
+            **(payload if isinstance(payload, dict) else {}),
+            "last_candidates": candidates,
         }
         cache[key] = payload
-        if len(cache) > 512:
+        if len(cache) > 160:
             try:
                 cache.pop(next(iter(cache)))
-            except Exception:
+            except (StopIteration, RuntimeError, TypeError):
                 pass
         if not candidates:
             return None
@@ -1040,6 +1430,20 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             ),
         )
 
+    def _filter_live_cut_scores(self, scored, start_frame: int, end_frame: int) -> list[tuple[float, int]]:
+        filtered: list[tuple[float, int]] = []
+        for item in list(scored or []):
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            try:
+                score = float(item[0])
+                frame_no = int(item[1])
+            except (TypeError, ValueError):
+                continue
+            if int(start_frame) <= frame_no <= int(end_frame):
+                filtered.append((score, frame_no))
+        return filtered
+
     def _live_cut_snap_capture(self, media_path: str, cv2_mod):
         record = getattr(self, "_live_cut_snap_capture_record", None)
         if isinstance(record, dict) and record.get("path") == media_path:
@@ -1047,106 +1451,51 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             try:
                 if cap is not None and cap.isOpened():
                     return cap
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
                 pass
         if isinstance(record, dict):
             old_cap = record.get("cap")
             try:
                 if old_cap is not None:
                     old_cap.release()
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
                 pass
+            self._live_cut_snap_thumb_cache = {}
         cap = cv2_mod.VideoCapture(media_path)
         try:
             opened = bool(cap.isOpened())
-        except Exception:
+        except (RuntimeError, AttributeError, TypeError):
             opened = False
         if not opened:
             try:
                 cap.release()
-            except Exception:
+            except (RuntimeError, AttributeError, TypeError):
                 pass
             self._live_cut_snap_capture_record = None
             return None
         self._live_cut_snap_capture_record = {"path": media_path, "cap": cap}
         return cap
 
-    def _compute_live_cut_boundary_candidates(
-        self,
-        media_path: str,
-        search_start_frame: int,
-        search_end_frame: int,
-        fps: float,
-    ) -> list[dict]:
-        try:
-            import cv2  # type: ignore
-            import numpy as np  # type: ignore
-        except Exception:
-            return []
-
-        cap = self._live_cut_snap_capture(media_path, cv2)
-        if cap is None:
-            return []
-
-        first_frame = max(0, int(search_start_frame))
-        last_frame = max(first_frame + 2, int(search_end_frame))
-        try:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, first_frame)
-        except Exception:
-            return []
-
-        def _thumb(frame):
-            if frame is None:
-                return None
+    def _live_cut_candidates_from_scores(self, scored: list[tuple[float, int]], fps: float) -> list[dict]:
+        clean_scores: list[tuple[float, int]] = []
+        for score, frame_no in list(scored or []):
             try:
-                height, width = frame.shape[:2]
-                if height <= 0 or width <= 0:
-                    return None
-                target_w = 96
-                target_h = max(18, min(54, int(round(height * target_w / max(1, width)))))
-                small = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
-                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-                return gray, small
-            except Exception:
-                return None
-
-        frames: list[tuple[int, object, object]] = []
-        for frame_no in range(first_frame, last_frame + 1):
-            ok, frame = cap.read()
-            if not ok:
-                break
-            item = _thumb(frame)
-            if item is None:
-                continue
-            gray, color = item
-            frames.append((frame_no, gray, color))
-        if len(frames) < 3:
-            return []
-
-        scored: list[tuple[float, int]] = []
-        for prev, cur in zip(frames, frames[1:]):
-            _prev_no, prev_gray, prev_color = prev
-            cur_no, cur_gray, cur_color = cur
-            try:
-                gray_score = float(np.mean(np.abs(cur_gray.astype(np.int16) - prev_gray.astype(np.int16))))
-                color_score = float(np.mean(np.abs(cur_color.astype(np.int16) - prev_color.astype(np.int16))))
-                score = max(gray_score, color_score * 0.85)
+                clean_scores.append((float(score), int(frame_no)))
             except Exception:
                 continue
-            scored.append((score, int(cur_no)))
-        if not scored:
+        if not clean_scores:
             return []
 
-        scores = [score for score, _frame in scored]
-        try:
-            median_score = float(np.median(scores))
-        except Exception:
-            median_score = 0.0
+        values = sorted(float(score) for score, _frame in clean_scores)
+        mid = len(values) // 2
+        if len(values) % 2:
+            median_score = values[mid]
+        else:
+            median_score = (values[mid - 1] + values[mid]) / 2.0
         threshold = max(12.0, median_score + 7.0)
-        strong_scored = [(float(score), int(frame_no)) for score, frame_no in scored if float(score) >= threshold]
+        strong_scored = [(float(score), int(frame_no)) for score, frame_no in clean_scores if float(score) >= threshold]
         if not strong_scored:
-            strong_scored = []
-            top_score, top_frame = max(scored, key=lambda item: item[0])
+            top_score, top_frame = max(clean_scores, key=lambda item: item[0])
             if float(top_score) >= 18.0:
                 strong_scored.append((float(top_score), int(top_frame)))
         if not strong_scored:
@@ -1173,9 +1522,135 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
                     "frame": int(frame_no),
                     "score": round(float(score), 3),
                     "median_score": round(float(median_score), 3),
+                    "score_margin": round(float(score) - float(median_score), 3),
+                    "score_ratio": round(float(score) / max(1.0, float(median_score)), 3),
                 }
             )
         return candidates
+
+    def _compute_live_cut_boundary_scores(
+        self,
+        media_path: str,
+        search_start_frame: int,
+        search_end_frame: int,
+        fps: float,
+    ) -> list[tuple[float, int]]:
+        try:
+            import cv2  # type: ignore
+        except Exception:
+            return []
+
+        cap = self._live_cut_snap_capture(media_path, cv2)
+        if cap is None:
+            return []
+
+        first_frame = max(0, int(search_start_frame))
+        last_frame = max(first_frame + 2, int(search_end_frame))
+
+        def _thumb(frame):
+            if frame is None:
+                return None
+            try:
+                height, width = frame.shape[:2]
+                if height <= 0 or width <= 0:
+                    return None
+                target_w = 96
+                target_h = max(18, min(54, int(round(height * target_w / max(1, width)))))
+                small = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                return gray, small
+            except Exception:
+                return None
+
+        thumb_cache = getattr(self, "_live_cut_snap_thumb_cache", None)
+        if not isinstance(thumb_cache, dict):
+            thumb_cache = {}
+            self._live_cut_snap_thumb_cache = thumb_cache
+
+        frames_by_no: dict[int, tuple[object, object]] = {}
+        missing_ranges: list[tuple[int, int]] = []
+        missing_start: int | None = None
+        for frame_no in range(first_frame, last_frame + 1):
+            cached = thumb_cache.get((media_path, frame_no))
+            if cached is not None:
+                frames_by_no[frame_no] = cached
+                if missing_start is not None:
+                    missing_ranges.append((missing_start, frame_no - 1))
+                    missing_start = None
+                continue
+            if missing_start is None:
+                missing_start = frame_no
+        if missing_start is not None:
+            missing_ranges.append((missing_start, last_frame))
+
+        for range_start, range_end in missing_ranges:
+            try:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, int(range_start))
+            except Exception:
+                continue
+            for frame_no in range(int(range_start), int(range_end) + 1):
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                item = _thumb(frame)
+                if item is None:
+                    continue
+                gray, color = item
+                pair = (gray, color)
+                frames_by_no[frame_no] = pair
+                thumb_cache[(media_path, frame_no)] = pair
+
+        if len(thumb_cache) > 360:
+            overflow = len(thumb_cache) - 360
+            for key in list(thumb_cache.keys())[:overflow]:
+                try:
+                    thumb_cache.pop(key, None)
+                except Exception:
+                    pass
+
+        frames: list[tuple[int, object, object]] = [
+            (frame_no, item[0], item[1])
+            for frame_no, item in sorted(frames_by_no.items())
+            if first_frame <= int(frame_no) <= last_frame
+        ]
+        if len(frames) < 3:
+            return []
+
+        frame_numbers = [int(frame_no) for frame_no, _gray, _color in frames]
+        gray_frames = [gray for _frame_no, gray, _color in frames]
+        color_frames = [color for _frame_no, _gray, color in frames]
+        if _native_live_cut_scores is not None:
+            native_scores = _native_live_cut_scores(gray_frames, color_frames, frame_numbers)
+            if isinstance(native_scores, list):
+                return [(float(score), int(frame_no)) for score, frame_no in native_scores]
+
+        try:
+            import numpy as np  # type: ignore
+        except Exception:
+            return []
+
+        scored: list[tuple[float, int]] = []
+        for prev, cur in zip(frames, frames[1:]):
+            _prev_no, prev_gray, prev_color = prev
+            cur_no, cur_gray, cur_color = cur
+            try:
+                gray_score = float(np.mean(np.abs(cur_gray.astype(np.int16) - prev_gray.astype(np.int16))))
+                color_score = float(np.mean(np.abs(cur_color.astype(np.int16) - prev_color.astype(np.int16))))
+                score = max(gray_score, color_score * 0.85)
+            except Exception:
+                continue
+            scored.append((score, int(cur_no)))
+        return scored
+
+    def _compute_live_cut_boundary_candidates(
+        self,
+        media_path: str,
+        search_start_frame: int,
+        search_end_frame: int,
+        fps: float,
+    ) -> list[dict]:
+        scores = self._compute_live_cut_boundary_scores(media_path, search_start_frame, search_end_frame, fps)
+        return self._live_cut_candidates_from_scores(scores, fps)
 
     def _snap_candidate_threshold_sec(self, candidate: dict, base_threshold: float) -> float:
         kind = str((candidate or {}).get("kind") or "")
@@ -1290,6 +1765,9 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             return
         if getattr(self, "_is_scrubbing", False):
             self._is_scrubbing = False
+            finisher = getattr(self, "_finish_playhead_handle_scrub", None)
+            if callable(finisher):
+                finisher()
             self._clear_pending_center_drag()
             return
 

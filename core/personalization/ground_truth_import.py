@@ -37,6 +37,15 @@ CLOSE_TO_OPEN = {value: key for key, value in OPEN_TO_CLOSE.items()}
 VOICE_BRIDGE_DEFAULT_FPS = 30.0
 
 
+def _cancel_requested(cancel_callback) -> bool:
+    if not callable(cancel_callback):
+        return False
+    try:
+        return bool(cancel_callback())
+    except Exception:
+        return False
+
+
 def _normalize_basename(value: str) -> str:
     return re.sub(r"[\W_]+", "", str(value or "").casefold())
 
@@ -713,6 +722,7 @@ def import_ground_truth_pairs(
     pairs: list[dict[str, Any]],
     *,
     store_dir: str | Path | None = None,
+    cancel_callback=None,
 ) -> dict[str, Any]:
     imported_pairs = 0
     truth_total = 0
@@ -722,6 +732,17 @@ def import_ground_truth_pairs(
     skipped_total = 0
 
     for pair in pairs or []:
+        if _cancel_requested(cancel_callback):
+            return {
+                "imported_pairs": imported_pairs,
+                "truth_rows": truth_total,
+                "excluded_rows": excluded_total,
+                "voice_bridge_rows": voice_bridge_total,
+                "multimodal_context_rows": multimodal_context_total,
+                "skipped_rows": skipped_total,
+                "cancelled": True,
+                "reason": "cancelled",
+            }
         result = build_truth_table_records_from_srt(
             pair.get("media_path", ""),
             pair.get("subtitle_path", ""),
@@ -739,6 +760,8 @@ def import_ground_truth_pairs(
         voice_bridge_total += len(list(result.get("voice_bridge_rows") or []))
         multimodal_context_total += len(list(result.get("multimodal_context_rows") or []))
         skipped_total += int(result["stats"]["skipped_empty_text"]) + int(result["stats"]["skipped_pure_symbols"])
+        if _cancel_requested(cancel_callback):
+            break
 
     return {
         "imported_pairs": imported_pairs,
@@ -747,6 +770,7 @@ def import_ground_truth_pairs(
         "voice_bridge_rows": voice_bridge_total,
         "multimodal_context_rows": multimodal_context_total,
         "skipped_rows": skipped_total,
+        "cancelled": _cancel_requested(cancel_callback),
     }
 
 

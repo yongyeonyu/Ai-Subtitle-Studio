@@ -74,7 +74,6 @@ def save_srt(
         except Exception:
             pass
 
-    max_speakers = int(s.get("max_speakers", 1))
     unique_speakers = set()
     for seg in segments:
         if "speaker_list" in seg and seg["speaker_list"]:
@@ -82,7 +81,7 @@ def save_srt(
         elif "speaker" in seg:
             unique_speakers.add(seg["speaker"])
 
-    generate_color_srt = (max_speakers > 1) and (len(unique_speakers) > 1)
+    generate_color_srt = len(unique_speakers) > 1
 
     spk1_id = s.get("spk1_id", "00")
     spk1_c = s.get("spk1_color", "#FFFFFF")

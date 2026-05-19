@@ -181,6 +181,15 @@ class LoraVectorRetrieverTests(unittest.TestCase):
         )
         return paths
 
+    def test_retrieval_index_build_can_cancel_without_writing_partial_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = self._seed_vehicle_store(tmpdir)
+
+            index = build_lora_retrieval_index(tmpdir, force=True, cancel_callback=lambda: True)
+
+            self.assertTrue(index["cancelled"])
+            self.assertFalse(paths["lora_retrieval_index"].exists())
+
     def test_vector_index_ranks_relevant_vehicle_rows_over_unrelated_rows(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._seed_vehicle_store(tmpdir)

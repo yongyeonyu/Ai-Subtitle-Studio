@@ -158,6 +158,28 @@ _LLM_SKIP_DUR    = 1.0
 _LOCAL_LLM_BACKOFF_SEC = 60.0
 _LOCAL_LLM_UNAVAILABLE_UNTIL = 0.0
 _LOCAL_LLM_LOCK = threading.Lock()
+_FINAL_FILLER_FRAGMENTS = {
+    "네",
+    "네네",
+    "예",
+    "예예",
+    "응",
+    "음",
+    "어",
+    "아",
+    "오",
+    "와",
+}
+_FINAL_CLOSING_PHRASES = {"감사합니다", "고맙습니다"}
+_FINAL_DUPLICATE_BRIDGE_TOKENS = {
+    "그래서",
+    "여기까지",
+    "여기까지고",
+    "지금까지",
+}
+_FINAL_CONTINUATION_TAIL_RE = re.compile(
+    r"(고|서|데|는데|니까|지만|면서|려고|라서|해서|이며|이고|하고)$"
+)
 
 
 def _is_local_llm_connection_error(exc: BaseException) -> bool:
@@ -1261,6 +1283,319 @@ def _sequence_text_for_integrity(segments: list[dict] | None) -> str:
     ).strip()
 
 
+def _segment_scope_key_local(segment: dict | None) -> tuple[str, str] | None:
+    if not isinstance(segment, dict):
+        return None
+    clip_idx = segment.get("_clip_idx")
+    if clip_idx is not None:
+        return ("clip_idx", str(clip_idx))
+    clip_file = segment.get("_clip_file") or segment.get("clip_file")
+    if clip_file:
+        return ("clip_file", str(clip_file))
+    return None
+
+
+def _same_segment_scope_local(left: dict | None, right: dict | None) -> bool:
+    if not left or not right:
+        return False
+    left_key = _segment_scope_key_local(left)
+    right_key = _segment_scope_key_local(right)
+    if left_key is None and right_key is None:
+        return True
+    return left_key == right_key
+
+
+def _speaker_signature(row: dict | None) -> tuple[str, ...]:
+    if not isinstance(row, dict):
+        return ()
+    speakers = [
+        str(item).strip()
+        for item in list(row.get("speaker_list") or [])
+        if str(item).strip()
+    ]
+    if not speakers:
+        speaker = str(row.get("speaker") or row.get("spk") or "").strip()
+        if speaker:
+            speakers = [speaker]
+    return tuple(sorted(set(speakers)))
+
+
+def _compatible_speaker_signature(left: dict | None, right: dict | None) -> bool:
+    left_sig = _speaker_signature(left)
+    right_sig = _speaker_signature(right)
+    if left_sig and right_sig:
+        return left_sig == right_sig
+    return True
+
+
+def _compact_subtitle_text(text: str) -> str:
+    return re.sub(r"\s+", "", " ".join(_subtitle_text_lines(text)))
+
+
+def _subtitle_tokens(text: str) -> list[str]:
+    return [token for token in " ".join(_subtitle_text_lines(text)).split() if token]
+
+
+def _token_compact_len(tokens: list[str]) -> int:
+    return len(re.sub(r"\s+", "", "".join(tokens)))
+
+
+def _overlap_token_count(left_tokens: list[str], right_tokens: list[str], *, mode: str) -> int:
+    max_size = min(len(left_tokens), len(right_tokens), 8)
+    for size in range(max_size, 0, -1):
+        if mode == "prefix":
+            matched = left_tokens[-size:] == right_tokens[:size]
+        else:
+            matched = right_tokens[-size:] == left_tokens[:size]
+        if matched:
+            return size
+    return 0
+
+
+def _normalize_short_closing_phrase(text: str) -> str:
+    tokens = _subtitle_tokens(text)
+    if len(tokens) != 2:
+        return " ".join(tokens).strip()
+    if tokens[0] in _FINAL_CLOSING_PHRASES and tokens[1] in _FINAL_FILLER_FRAGMENTS:
+        return tokens[0]
+    if tokens[1] in _FINAL_CLOSING_PHRASES and tokens[0] in _FINAL_FILLER_FRAGMENTS:
+        return tokens[1]
+    return " ".join(tokens).strip()
+
+
+def _is_low_value_duplicate_bridge_tokens(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    for token in tokens:
+        if token in _FINAL_FILLER_FRAGMENTS:
+            continue
+        if token in _FINAL_DUPLICATE_BRIDGE_TOKENS:
+            continue
+        if _FINAL_CONTINUATION_TAIL_RE.search(token):
+            continue
+        return False
+    return True
+
+
+def _merge_adjacent_rows(left: dict, right: dict, *, stage: str, reason: str) -> dict:
+    left_text = " ".join(_subtitle_text_lines(str(left.get("text", "") or "")))
+    right_text = " ".join(_subtitle_text_lines(str(right.get("text", "") or "")))
+    merged = dict(left)
+    merged["end"] = max(_setting_float(right, "end", 0.0), _setting_float(left, "end", 0.0))
+    merged["text"] = f"{left_text} {right_text}".strip()
+    if "timeline_end" in merged or "timeline_start" in merged:
+        merged["timeline_start"] = _setting_float(merged, "start", 0.0)
+        merged["timeline_end"] = merged["end"]
+    if isinstance(left.get("words"), list) and isinstance(right.get("words"), list):
+        merged["words"] = [dict(word) for word in left.get("words", [])] + [dict(word) for word in right.get("words", [])]
+    policy = {
+        "task": "final_sequence_cleanup",
+        "stage": stage,
+        "action": "merge",
+        "reason": reason,
+    }
+    merged["_final_sequence_cleanup_policy"] = policy
+    _clear_split_timing_projection_fields(merged)
+    return merged
+
+
+def _drop_shadowed_short_rows(rows: list[dict], settings: dict | None, *, stage: str) -> tuple[list[dict], int]:
+    del stage
+    if not rows:
+        return rows, 0
+    max_chars = max(4, _setting_int(settings or {}, "subtitle_final_shadow_drop_max_chars", 8))
+    max_gap = max(0.0, _setting_float(settings or {}, "subtitle_final_shadow_drop_gap_sec", 0.08))
+    min_growth = max(2, _setting_int(settings or {}, "subtitle_final_shadow_drop_growth_chars", 4))
+    result: list[dict] = []
+    dropped = 0
+    count = len(rows)
+    for index, raw_row in enumerate(rows):
+        row = dict(raw_row)
+        if index + 1 >= count:
+            result.append(row)
+            continue
+        nxt = rows[index + 1]
+        text = " ".join(_subtitle_text_lines(str(row.get("text", "") or "")))
+        next_text = " ".join(_subtitle_text_lines(str(nxt.get("text", "") or "")))
+        compact = _compact_subtitle_text(text)
+        next_compact = _compact_subtitle_text(next_text)
+        gap = _setting_float(nxt, "start", 0.0) - _setting_float(row, "end", 0.0)
+        if (
+            compact
+            and next_compact
+            and len(compact) <= max_chars
+            and len(next_compact) >= len(compact) + min_growth
+            and next_compact.startswith(compact)
+            and gap <= max_gap
+            and _same_segment_scope_local(row, nxt)
+            and _compatible_speaker_signature(row, nxt)
+            and not _is_speaker_split_multiline_segment(row)
+            and not _is_speaker_split_multiline_segment(nxt)
+        ):
+            dropped += 1
+            continue
+        result.append(row)
+    return result, dropped
+
+
+def _merge_likely_oversplit_rows(rows: list[dict], settings: dict | None, *, stage: str) -> tuple[list[dict], int]:
+    if not rows:
+        return rows, 0
+    max_gap = max(0.0, _setting_float(settings or {}, "subtitle_final_micro_merge_gap_sec", 0.08))
+    split_threshold = max(12, _setting_int(settings or {}, "split_length_threshold", 20))
+    max_chars = max(18, int(split_threshold * 1.45))
+    max_cps = max(1.0, _setting_float(settings or {}, "sub_max_cps", _MAX_CPS))
+    continuation_max_chars = max(6, _setting_int(settings or {}, "subtitle_final_micro_merge_continuation_max_chars", 14))
+    result: list[dict] = []
+    merged_count = 0
+    for raw_row in rows:
+        row = dict(raw_row)
+        if not result:
+            result.append(row)
+            continue
+        previous = result[-1]
+        if previous.get("_final_sequence_cleanup_policy", {}).get("action") == "merge":
+            result.append(row)
+            continue
+        prev_text = " ".join(_subtitle_text_lines(str(previous.get("text", "") or "")))
+        text = " ".join(_subtitle_text_lines(str(row.get("text", "") or "")))
+        prev_compact = _compact_subtitle_text(prev_text)
+        compact = _compact_subtitle_text(text)
+        gap = _setting_float(row, "start", 0.0) - _setting_float(previous, "end", 0.0)
+        if (
+            not prev_compact
+            or not compact
+            or gap > max_gap
+            or _is_speaker_split_multiline_segment(previous)
+            or _is_speaker_split_multiline_segment(row)
+            or not _same_segment_scope_local(previous, row)
+            or not _compatible_speaker_signature(previous, row)
+        ):
+            result.append(row)
+            continue
+        merged_text = f"{prev_text} {text}".strip()
+        merged_compact_len = len(_compact_subtitle_text(merged_text))
+        duration = max(0.05, _setting_float(row, "end", 0.0) - _setting_float(previous, "start", 0.0))
+        merged_cps = merged_compact_len / duration
+        reason = None
+        if prev_compact in _FINAL_FILLER_FRAGMENTS or compact in _FINAL_FILLER_FRAGMENTS:
+            reason = "filler_fragment"
+        elif (
+            len(prev_compact) <= continuation_max_chars
+            and _FINAL_CONTINUATION_TAIL_RE.search(prev_compact)
+            and not re.search(r"[?!…~]$", prev_text)
+        ):
+            reason = "continuation_tail"
+        if reason and merged_compact_len <= max_chars and merged_cps <= max_cps * 1.12:
+            result[-1] = _merge_adjacent_rows(previous, row, stage=stage, reason=reason)
+            merged_count += 1
+            continue
+        result.append(row)
+    return result, merged_count
+
+
+def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage: str) -> tuple[list[dict], int]:
+    del settings
+    if not rows:
+        return rows, 0
+    result: list[dict] = []
+    changed = 0
+    for raw_row in rows:
+        row = dict(raw_row)
+        text = " ".join(_subtitle_text_lines(str(row.get("text", "") or "")))
+        tokens = _subtitle_tokens(text)
+        if (
+            not tokens
+            or not result
+            or _is_speaker_split_multiline_segment(row)
+        ):
+            result.append(row)
+            continue
+        recent_rows = [item for item in result[-2:] if isinstance(item, dict)]
+        recent_tokens = [
+            token
+            for item in recent_rows
+            for token in _subtitle_tokens(str(item.get("text", "") or ""))
+        ]
+        updated_tokens = list(tokens)
+        if recent_tokens:
+            prefix_overlap = _overlap_token_count(recent_tokens, updated_tokens, mode="prefix")
+            if prefix_overlap and (prefix_overlap >= 3 or _token_compact_len(updated_tokens[:prefix_overlap]) >= 8):
+                updated_tokens = updated_tokens[prefix_overlap:]
+            suffix_overlap = _overlap_token_count(recent_tokens, updated_tokens, mode="suffix")
+            if suffix_overlap and (suffix_overlap >= 3 or _token_compact_len(updated_tokens[-suffix_overlap:]) >= 8):
+                updated_tokens = updated_tokens[:-suffix_overlap]
+        trimmed_text = _normalize_short_closing_phrase(" ".join(updated_tokens).strip())
+        if trimmed_text != text:
+            changed += 1
+        if not trimmed_text:
+            continue
+        previous = result[-1]
+        gap = _setting_float(row, "start", 0.0) - _setting_float(previous, "end", 0.0)
+        previous_tokens = _subtitle_tokens(str(previous.get("text", "") or ""))
+        if (
+            previous_tokens
+            and len(updated_tokens) > len(previous_tokens)
+            and updated_tokens[-len(previous_tokens):] == previous_tokens
+            and _is_low_value_duplicate_bridge_tokens(updated_tokens[:-len(previous_tokens)])
+            and any(token in _FINAL_CLOSING_PHRASES for token in previous_tokens)
+            and gap <= 0.35
+            and _same_segment_scope_local(previous, row)
+            and _compatible_speaker_signature(previous, row)
+        ):
+            changed += 1
+            continue
+        if (
+            updated_tokens
+            and _is_low_value_duplicate_bridge_tokens(updated_tokens)
+            and any(token in _FINAL_CLOSING_PHRASES for token in previous_tokens)
+            and gap <= 0.35
+            and _same_segment_scope_local(previous, row)
+            and _compatible_speaker_signature(previous, row)
+        ):
+            changed += 1
+            continue
+        if (
+            _compact_subtitle_text(trimmed_text) == _compact_subtitle_text(str(previous.get("text", "") or ""))
+            and gap <= 0.08
+            and _same_segment_scope_local(previous, row)
+            and _compatible_speaker_signature(previous, row)
+        ):
+            changed += 1
+            continue
+        row["text"] = trimmed_text
+        if trimmed_text != text:
+            row["_final_sequence_cleanup_policy"] = {
+                "task": "final_sequence_cleanup",
+                "stage": stage,
+                "action": "trim_recent_overlap",
+            }
+        result.append(row)
+    return result, changed
+
+
+def _apply_final_sequence_cleanup(
+    segments: list[dict],
+    settings: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    if not segments or not _bool_setting(settings or {}, "subtitle_final_sequence_cleanup_enabled", True):
+        return segments
+    rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    if not rows:
+        return segments
+    rows, dropped_shadow = _drop_shadowed_short_rows(rows, settings, stage=stage)
+    rows, merged = _merge_likely_oversplit_rows(rows, settings, stage=stage)
+    rows, trimmed = _trim_recent_overlap_rows(rows, settings, stage=stage)
+    if dropped_shadow or merged or trimmed:
+        get_logger().log(
+            "[자막후단보정] "
+            f"{stage}: 그림자 삭제 {dropped_shadow}개, 과분할 병합 {merged}개, 최근중복 정리 {trimmed}개"
+        )
+    return rows
+
+
 def _safe_source_integrity_variant(source_segments: list[dict], settings: dict | None) -> list[dict]:
     rows = [
         dict(seg)
@@ -1275,6 +1610,7 @@ def _safe_source_integrity_variant(source_segments: list[dict], settings: dict |
     raw_corr = get_local_dataset_corrections()
     corrections: dict = raw_corr if isinstance(raw_corr, dict) else {}
     rows = _enforce_final_subtitle_text_policy(rows, corrections)
+    rows = _apply_final_sequence_cleanup(rows, settings or {}, stage="source_integrity")
     return _expand_non_speaker_multiline_segments(rows, settings or {})
 
 
@@ -3081,6 +3417,7 @@ def optimize_segments(
     optimized = _annotate_context_consistency(optimized, loaded_settings)
     optimized = _apply_output_variant_selector(optimized, original_segments, vad_segments or [], loaded_settings, stage="llm")
     optimized = _enforce_final_subtitle_text_policy(optimized, corrections)
+    optimized = _apply_final_sequence_cleanup(optimized, loaded_settings, stage="llm_final")
     _emit_processing_preview(
         stage_segments_callback,
         stage="context_review",

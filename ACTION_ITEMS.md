@@ -23,7 +23,7 @@ app_version: "04.00.10"
 document_version: "04.00.10-mac-native"
 phase: "MAC_NATIVE_APPSTORE_V4_0_10_RELEASED"
 next_phase: null
-active_item_count: 15
+active_item_count: 16
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
 native_plan: "NATIVE_LIB_PLAN.md"
@@ -31,6 +31,7 @@ native_plan: "NATIVE_LIB_PLAN.md"
 
 ## Action Execution Rules
 
+- Treat optimization and performance improvement as the top priority for action-item execution and implementation choice, as long as subtitle quality, verified behavior, and required user workflows do not regress.
 - Refactor code when it can be done inside the approved scope without changing behavior.
 - After modifying code, perform a code-review pass, fix the review findings, and only then report completion.
 - Prefer implementations that improve launch/runtime speed or reduce memory, CPU, disk, or bridge overhead.
@@ -76,56 +77,61 @@ native_plan: "NATIVE_LIB_PLAN.md"
   Success: no new broad silent exception patterns in touched files; real failures are visible in terminal or app logs.
   Verification: maintenance guard plus targeted tests for touched files.
 
-- [ ] 11. Refactor cut-boundary helper builders into explicit strategy objects.
+- [ ] 11. Remove remaining `QTableWidget` stylesheet parse warnings from `MainWindow` test/runtime paths.
+  Scope: identify the active style source, fix malformed or over-escaped selectors/properties, and keep the current visual result unchanged.
+  Success: `MainWindow`-heavy tests and offscreen runtime smoke no longer emit recurring `Could not parse stylesheet of object QTableWidget(...)` warnings.
+  Verification: targeted `MainWindow` unittest slice plus offscreen app startup smoke with log inspection.
+
+- [ ] 12. Refactor cut-boundary helper builders into explicit strategy objects.
   Scope: `core/pipeline/cut_boundary_helpers.py`, `core/cut_boundary_auto_scan.py`, `core/cut_boundary_auto_verify.py`, and related FPS/provisional helpers.
   Success: no giant helper-installer functions remain on the active cut-boundary path.
   Verification: cut-boundary unit tests plus Macau visual smoke.
 
-- [ ] 12. Split `core/pipeline/single_pipeline.py` into planner and progress coordinator.
+- [ ] 13. Split `core/pipeline/single_pipeline.py` into planner and progress coordinator.
   Scope: separate media-processing decisions from queue/header updates, autosave, project writes, and UI callbacks.
   Success: subtitle generation behavior is unchanged while execution planning becomes testable without UI state.
   Verification: pipeline tests plus Macau generation smoke.
 
-- [ ] 13. Split audio processing into durable services.
+- [ ] 14. Split audio processing into durable services.
   Scope: extraction, chunking, transcription, VAD, cache decisions, worker pooling, retry policy, and resource cleanup.
   Success: common subprocess/worker cleanup policy is shared and persistent worker ownership is explicit.
   Verification: audio/STT tests plus X5 or Tinyping slice when subtitle accuracy can be affected.
 
 ### P1 - Performance, Memory, And Tooling
 
-- [ ] 14. Reduce duplicated segment/project state and lazy-hydrate large assets.
+- [ ] 15. Reduce duplicated segment/project state and lazy-hydrate large assets.
   Scope: editor/timeline/STT/save payload duplication, candidate lattices, preview rows, quality payloads, and large text assets.
   Success: project open/save does not eagerly copy large optional tracks until a lane/panel needs them.
   Verification: project load/save tests plus memory snapshot on Tinyping when relevant.
 
-- [ ] 15. Wire maintenance-budget checks into CI or the release checklist.
+- [ ] 16. Wire maintenance-budget checks into CI or the release checklist.
   Scope: max file/function length, broad silent-exception regression checks, and legacy allowlist burn-down.
   Success: new oversized functions or silent catch regressions fail before release.
   Verification: `venv/bin/python tools/check_maintenance_budget.py --json`.
 
-- [ ] 16. Add dead-code and stale-QML-binding review.
+- [ ] 17. Add dead-code and stale-QML-binding review.
   Scope: high-confidence unused Python functions, stale QML property bindings, duplicate native cut-boundary paths, and dynamic Qt signal wiring.
   Success: removable dead code is deleted only after static and dynamic wiring checks.
   Verification: targeted symbol scan plus QML/offscreen smoke where applicable.
 
 ### P1 - Native Library Queue
 
-- [ ] 17. Benchmark native media-info normalization against the current cached Python path.
+- [ ] 18. Benchmark native media-info normalization against the current cached Python path.
   Scope: only probe-result normalization and cache-key shaping, not full ffprobe orchestration.
   Success: native path is kept only if it is equal or faster on real project open/save benchmarks.
   Details: see `NATIVE_LIB_PLAN.md`.
 
-- [ ] 18. Prepare cut-boundary scoring/alignment loops for native migration.
+- [ ] 19. Prepare cut-boundary scoring/alignment loops for native migration.
   Scope: isolate deterministic numeric loops after the cut-boundary Python refactor lands.
   Success: Swift/C++ path has parity tests and Python fallback before becoming default.
   Details: see `NATIVE_LIB_PLAN.md`.
 
-- [ ] 19. Prepare subtitle candidate scoring and sequence smoothing for native migration.
+- [ ] 20. Prepare subtitle candidate scoring and sequence smoothing for native migration.
   Scope: STT candidate scoring, lattice overlap scoring, subtitle timing, and word resegmenting hot loops.
   Success: native path improves or matches accuracy/speed and does not change final subtitle quality.
   Verification: X5 accuracy slice.
 
-- [ ] 20. Split oversized Swift core files before adding more native features.
+- [ ] 21. Split oversized Swift core files before adding more native features.
   Scope: `TimelineEditing.swift`, `NativePolicyEngine.swift`, and `RuntimeETAEstimator.swift`.
   Success: geometry, magnet, undo, serialization, scoring, retrieval, decision, persistence, and prediction responsibilities are separated.
   Verification: `swift test` in `native/macos/AIStudioNative`.

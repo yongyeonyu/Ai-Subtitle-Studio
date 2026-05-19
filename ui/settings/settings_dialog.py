@@ -13,6 +13,7 @@ ui/settings_dialog.py
 """
 from ui.settings.settings_ai       import SettingsDialog
 from ui.settings.settings_advanced import AdvancedSettingsDialog
+from ui.settings.settings_dictionary import CorrectionDictionaryDialog
 from ui.settings.settings_speaker  import SpeakerDialog
 from ui.settings.settings_gap      import GapSettingsDialog
 from ui.settings.settings_export   import ExportDialog
@@ -20,6 +21,7 @@ from ui.settings.settings_export   import ExportDialog
 __all__ = [
     "SettingsDialog",
     "AdvancedSettingsDialog",
+    "CorrectionDictionaryDialog",
     "SpeakerDialog",
     "GapSettingsDialog",
     "ExportDialog",

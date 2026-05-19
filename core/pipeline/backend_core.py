@@ -42,6 +42,9 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self.current_folder = None
         self.min_speakers = 1
         self.max_speakers = 1
+        self._speaker_auto_enabled = True
+        self._effective_min_speakers = 1
+        self._effective_max_speakers = 1
         self._active = False
         self._stop_requested = False
         self._speaker_map = []

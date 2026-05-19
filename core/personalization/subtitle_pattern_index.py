@@ -46,6 +46,15 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _cancel_requested(cancel_callback) -> bool:
+    if not callable(cancel_callback):
+        return False
+    try:
+        return bool(cancel_callback())
+    except Exception:
+        return False
+
+
 def _clamp(value: Any, low: float, high: float, default: float) -> float:
     return max(float(low), min(float(high), _safe_float(value, default)))
 
@@ -369,39 +378,69 @@ def _iter_pattern_rows(paths: dict[str, Path]) -> list[tuple[str, dict[str, Any]
     return rows
 
 
-def build_subtitle_pattern_index_payload(paths: dict[str, Path]) -> dict[str, Any]:
+def _cancelled_pattern_payload(
+    paths: dict[str, Path],
+    *,
+    accepted_rows: int = 0,
+    source_counts: dict[str, int] | None = None,
+    reason: str = "cancelled",
+) -> dict[str, Any]:
+    return {
+        "schema": SUBTITLE_PATTERN_INDEX_SCHEMA,
+        "model": SUBTITLE_PATTERN_MODEL_ID,
+        "updated_at": iso_now(),
+        "source_signature": _source_signature(paths),
+        "source_counts": dict(sorted(dict(source_counts or {}).items())),
+        "accepted_rows": int(accepted_rows),
+        "pattern_count": 0,
+        "patterns": {},
+        "cancelled": True,
+        "reason": str(reason or "cancelled"),
+    }
+
+
+def build_subtitle_pattern_index_payload(paths: dict[str, Path], *, cancel_callback=None) -> dict[str, Any]:
     buckets: dict[str, dict[str, Any]] = defaultdict(dict)
     source_counts: dict[str, int] = defaultdict(int)
     accepted_rows = 0
-    for kind, row in _iter_pattern_rows(paths):
-        features = _features_from_row(kind, row)
-        if not features or _safe_int(features.get("char_count"), 0) <= 0:
-            continue
-        settings = _settings_from_row(kind, row, features)
-        if not settings:
-            continue
-        accepted_rows += 1
-        source_counts[kind] += 1
-        full_key = _pattern_key(features, include_gaps=True)
-        compact_key = _pattern_key(features, include_gaps=False)
-        _add_sample(buckets[full_key], kind, features, settings)
-        _add_sample(buckets[compact_key], kind, features, settings)
-        _add_sample(
-            buckets[f"chars:{_char_bucket(_safe_int(features.get('char_count'), 0))}|lines:{_clamp_int(features.get('line_count'), 1, 3, 1)}"],
-            kind,
-            features,
-            settings,
-        )
-        _add_sample(
-            buckets[
-                f"dur:{_duration_bucket(_safe_float(features.get('duration_sec'), 0.0))}|"
-                f"cps:{_cps_bucket(_safe_float(features.get('cps'), 0.0))}"
-            ],
-            kind,
-            features,
-            settings,
-        )
-        _add_sample(buckets["global"], kind, features, settings)
+    for kind in ("truth_table", "text_lora_dataset", "text_lora_corpus", "multimodal_lora_context", "deep_policy_events"):
+        if _cancel_requested(cancel_callback):
+            return _cancelled_pattern_payload(paths, accepted_rows=accepted_rows, source_counts=source_counts)
+        for row_index, row in enumerate(read_jsonl(paths[kind])):
+            if row_index % 128 == 0 and _cancel_requested(cancel_callback):
+                return _cancelled_pattern_payload(paths, accepted_rows=accepted_rows, source_counts=source_counts)
+            if not isinstance(row, dict):
+                continue
+            features = _features_from_row(kind, dict(row))
+            if not features or _safe_int(features.get("char_count"), 0) <= 0:
+                continue
+            settings = _settings_from_row(kind, dict(row), features)
+            if not settings:
+                continue
+            accepted_rows += 1
+            source_counts[kind] += 1
+            full_key = _pattern_key(features, include_gaps=True)
+            compact_key = _pattern_key(features, include_gaps=False)
+            _add_sample(buckets[full_key], kind, features, settings)
+            _add_sample(buckets[compact_key], kind, features, settings)
+            _add_sample(
+                buckets[f"chars:{_char_bucket(_safe_int(features.get('char_count'), 0))}|lines:{_clamp_int(features.get('line_count'), 1, 3, 1)}"],
+                kind,
+                features,
+                settings,
+            )
+            _add_sample(
+                buckets[
+                    f"dur:{_duration_bucket(_safe_float(features.get('duration_sec'), 0.0))}|"
+                    f"cps:{_cps_bucket(_safe_float(features.get('cps'), 0.0))}"
+                ],
+                kind,
+                features,
+                settings,
+            )
+            _add_sample(buckets["global"], kind, features, settings)
+    if _cancel_requested(cancel_callback):
+        return _cancelled_pattern_payload(paths, accepted_rows=accepted_rows, source_counts=source_counts)
 
     patterns = {
         key: _finalize_bucket(key, dict(bucket))
@@ -424,13 +463,20 @@ def build_subtitle_pattern_index_payload(paths: dict[str, Path]) -> dict[str, An
     }
 
 
-def save_subtitle_pattern_index(store_dir: str | Path | None = None, *, force: bool = False) -> dict[str, Any]:
+def save_subtitle_pattern_index(
+    store_dir: str | Path | None = None,
+    *,
+    force: bool = False,
+    cancel_callback=None,
+) -> dict[str, Any]:
     paths = store_paths(store_dir)
     path = paths["subtitle_pattern_index"]
     current = read_json(path, {})
     if not force and subtitle_pattern_index_is_current(current, paths):
         return current
-    payload = build_subtitle_pattern_index_payload(paths)
+    payload = build_subtitle_pattern_index_payload(paths, cancel_callback=cancel_callback)
+    if bool(payload.get("cancelled")):
+        return payload
     write_json(path, payload)
     return payload
 

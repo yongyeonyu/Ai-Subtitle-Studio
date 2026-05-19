@@ -19,6 +19,7 @@ from core.runtime import config
 from core.settings import load_settings, save_settings
 from core.path_manager import load_settings as _path_load_settings, save_settings as _path_save_settings
 from core.pipeline_status import generation_stage_keys, generation_stage_keys_all, generation_stage_label, generation_stage_summary
+from core.audio.audio_display import audio_filter_display_name
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
     apply_recommended_stt_quality_defaults,
@@ -1067,16 +1068,7 @@ class HomeSidebarMixin:
         return text
 
     def _audio_model_name(self, settings: dict) -> str:
-        label = {
-            "deepfilter": "DeepFilter",
-            "rnnoise": "RNNoise",
-            "resemble_enhance": "Resemble",
-            "clearvoice": "ClearVoice",
-            "none": "미사용",
-        }.get(settings.get("selected_audio_ai", "none"), "미사용")
-        if bool(settings.get("_runtime_auto_audio_ai_selected")):
-            return f"{label} 자동"
-        return label
+        return audio_filter_display_name(settings)
 
     def _vad_model_name(self, settings: dict) -> tuple[str, str]:
         vad_model = {

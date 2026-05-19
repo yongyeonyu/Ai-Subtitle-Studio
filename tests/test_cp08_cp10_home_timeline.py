@@ -199,6 +199,48 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
                 dialog.deleteLater()
                 self.app.processEvents()
 
+    def test_personalization_full_learning_enables_stop_during_prepare(self):
+        from core.personalization.idle_trainer import clear_personalization_training_interrupt
+        from ui.settings.settings_personalization import PersonalizationLearningDialog
+
+        fake_threads = []
+
+        class _FakeThread:
+            def __init__(self, *, target, name=None, daemon=False):
+                self.target = target
+                self.name = name
+                self.daemon = daemon
+                self.started = False
+                fake_threads.append(self)
+
+            def start(self):
+                self.started = True
+
+            def is_alive(self):
+                return self.started
+
+        dialog = PersonalizationLearningDialog(None)
+        try:
+            dialog._trainer = lambda: SimpleNamespace(is_busy=lambda: False)
+            dialog._resolve_pairs_for_import = lambda: {"pairs": [], "unresolved": []}
+            dialog._current_editor_segments = lambda: ([], "")
+            with patch("ui.settings.settings_personalization.threading.Thread", _FakeThread):
+                dialog._start_full_learning()
+
+            self.assertTrue(fake_threads)
+            self.assertTrue(dialog.btn_stop_full_learning.isEnabled())
+            self.assertFalse(dialog.btn_start_auto_learning.isEnabled())
+            self.assertEqual(dialog.btn_start_auto_learning.text(), "준비 중...")
+
+            dialog._stop_full_learning()
+            self.assertTrue(dialog._pending_queue_batch_stop_requested)
+        finally:
+            clear_personalization_training_interrupt()
+            dialog._full_learning_prepare_timer.stop()
+            dialog.close()
+            dialog.deleteLater()
+            self.app.processEvents()
+
     def test_lora_learning_info_dialog_defers_payload_build_until_event_loop(self):
         from ui.settings.personalization_learning_info import PersonalizationLearningInfoDialog
 

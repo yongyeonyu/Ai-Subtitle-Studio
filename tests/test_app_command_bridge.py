@@ -327,6 +327,8 @@ class _DummyOwner:
         self.multiclip_start_calls = []
         self.applied_settings = []
         self.settings = {}
+        self.dictionary_dialog_opened = 0
+        self._correction_dictionary_dialog = None
         self.backend = SimpleNamespace(
             _active=False,
             start_pipeline=self._start_pipeline,
@@ -421,6 +423,11 @@ class _DummyOwner:
             "last_async_snapshot": dict(self._last_async_snapshot_result),
         }
 
+    def _show_main_correction_dictionary_nonmodal(self):
+        self.dictionary_dialog_opened += 1
+        self._correction_dictionary_dialog = _DummyVisibleDialog()
+        return self._correction_dictionary_dialog
+
 
 class _DummyPixmap:
     def __init__(self, *, save_ok: bool = True, width: int = 640, height: int = 360):
@@ -442,6 +449,18 @@ class _DummyPixmap:
 
     def height(self):
         return self._height
+
+
+class _DummyVisibleDialog:
+    def __init__(self, *, visible: bool = True, save_ok: bool = True):
+        self._visible = bool(visible)
+        self._pixmap = _DummyPixmap(save_ok=save_ok, width=1960, height=1280)
+
+    def isVisible(self):
+        return self._visible
+
+    def grab(self):
+        return self._pixmap
 
 
 class AppCommandBridgeTests(unittest.TestCase):
@@ -853,6 +872,40 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["message"], "snapshot_queued")
         self.assertEqual(result["data"]["path"], "/tmp/queued_capture.png")
         self.assertEqual(owner.async_snapshot_requests[0]["path"], "/tmp/queued_capture.png")
+
+    def test_open_dictionary_command_shows_nonmodal_dictionary(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "open-dictionary"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "dictionary_visible")
+        self.assertEqual(owner.dictionary_dialog_opened, 1)
+        self.assertIsNotNone(owner._correction_dictionary_dialog)
+
+    def test_capture_dictionary_snapshot_command_saves_dialog_png(self):
+        owner = _DummyOwner()
+        owner._correction_dictionary_dialog = _DummyVisibleDialog()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "dictionary_capture.png")
+            result = execute_app_command(owner, {"command": "capture-dictionary-snapshot", "path": target})
+            self.assertTrue(os.path.isfile(target))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "dictionary_snapshot_captured")
+        self.assertEqual(result["data"]["path"], target)
+        self.assertEqual(result["data"]["width"], 1960)
+        self.assertEqual(result["data"]["height"], 1280)
+
+    def test_capture_dictionary_snapshot_command_requires_visible_dialog(self):
+        owner = _DummyOwner()
+        owner._correction_dictionary_dialog = _DummyVisibleDialog(visible=False)
+
+        result = execute_app_command(owner, {"command": "capture-dictionary-snapshot", "path": "/tmp/dictionary_capture.png"})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "dictionary_not_visible")
 
     def test_guided_subtitle_run_opens_media_starts_pipeline_and_captures_initial_snapshots(self):
         owner = _DummyOwner()

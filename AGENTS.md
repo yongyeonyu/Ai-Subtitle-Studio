@@ -102,6 +102,8 @@ Required workflow:
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - Platform rule: this branch is macOS-only and Apple Silicon first. Do not add Windows/Linux fallback work unless the user explicitly asks to restart cross-platform development. However, most reusable business logic should be shaped as Apple-platform Swift core code that can later move to iPadOS with minimal changes.
 - Release state: Fast, Auto, and High are now the single user-facing Mode controls. Fast runs LoRA-only subtitle post-processing, Auto runs LoRA + Deep, and High runs LoRA + Deep + chunked LLM. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
+- Speaker state: visible speaker count is now automatic per local span instead of a fixed global setting, and learned `voice_data` speaker profiles (`spk1`/`spk2`/`spk3`) should be preferred when diarization evidence is strong enough.
+- Dictionary state: the correction dictionary now has an in-app editor reachable from the bottom menu, while `dataset/dataset_correction.json` remains the editable source of truth and runtime indexed caches stay derived data.
 - Mode-manager state: `core/mode_manager.py` is now the central owner for Fast/Auto/High/STT mode policy. Mode-managed routes such as audio preset, VAD, and ensemble gates should not be re-persisted by LoRA autopilot; only user-selectable model identities should flow back into per-mode defaults.
 - Tiniping benchmark state: `tools/benchmark_tiniping_mode_search.py` plus `output/manual_verification/latest/tiniping_benchmark_summary.md` now lock Fast/Auto/High defaults from the 티니핑 0~3분 sweep and 0~11분 final run. STT model menus surface `[Fast]`, `[Auto]`, and `[High]` tags on the winning STT1/STT2 models.
 - Adaptive audio state: chunk audio routing now has profile-memory reuse, preview self-score guard, and switch-confirmation heuristics in `core/audio/media_processor_audio.py` and `core/audio/preset_auto_classifier.py`; High keeps the conservative benchmark-locked route by default, while adaptive routing remains available for broader runtime use and benchmark suites.
@@ -158,6 +160,7 @@ Required workflow:
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Refactor state: the longest subtitle/project/editor/runtime modules were split by responsibility into `core.audio.transcribe_worker_io`, `core.engine.subtitle_segment_filter`, `core.engine.subtitle_accuracy_utils`, `core.pipeline.cut_boundary_cache`, and `ui.editor.editor_segments_bulk_load` so future native migration work has smaller seams.
 - Verification state: `v04.00.10` release verification now covers the adaptive-audio/timing/editor regression surface, `compileall`, `git diff --check`, refreshed release handoff files, and a real `test video/X5_시승기_후반` mode benchmark. Full release verification details are in `RELEASE_v04.00.10.md`.
+- Latest runtime reliability state: personalization full-learning stop/exit now keeps cancellation responsive through import and index rebuild phases, and current remaining work explicitly tracks the unresolved `QTableWidget` stylesheet parse warning on `MainWindow`-heavy paths.
 - Latest regression checkpoint: on 2026-05-19, `./venv/bin/python -m unittest tests.test_stt_quality_presets tests.test_mode_policy tests.test_ai_settings_runtime_apply tests.test_benchmark_mode_profiles tests.test_audio_presets tests.test_preset_auto_classifier tests.test_media_processor_overlap tests.test_subtitle_engine_settings tests.test_subtitle_line_breaks tests.test_timeline_hit_targets tests.test_tiniping_timing_ideas tests.test_tiniping_mode_search -q`, `./venv/bin/python -m compileall -q main.py core ui tests tools`, `git diff --check -- .`, and `tools/benchmark_subtitle_pipeline_variants.py --suite modes --media test video/X5_시승기_후반.MP4 --reference-srt test video/X5_시승기_후반.srt --start-sec 0 --duration-sec 180 --keep-artifacts` were run for `v04.00.10`.
 
 ## Collaboration Rules
@@ -176,6 +179,7 @@ Required workflow:
 
 ## Action Item Execution Rules
 
+- Treat optimization and performance improvement as the top priority for action-item execution and implementation choice, as long as subtitle quality, verified behavior, and required user workflows do not regress.
 - Treat each unchecked row in `ACTION_ITEMS.md` under **Active Work** as one countable executable item.
 - When the owner asks how many action items remain, answer with the number of countable active items that can be executed sequentially in one pass.
 - When the owner asks to run a number of items, such as "5개 수행해", execute the first N unchecked active items in order unless a blocker or owner-decision item is reached.
@@ -194,6 +198,8 @@ Required workflow:
 ## Token Efficiency Rules
 
 - Prefer `CODEMAP.md` over `File_structure.txt` when deciding where to read or edit code.
+- Before widening code reads or refactors, actively ask whether the same result can be reached with a smaller contract, a narrower helper extraction, or a bridge boundary that keeps stable hot-path code out of the main orchestration surface.
+- When token reduction matters over repeated chats, prefer structural reductions over reply-length tricks: keep Python/UI orchestration thin, move stable deterministic hot loops behind JSON-in or typed-value-in boundaries, and keep a tested Python fallback when promoting code into Swift, C++, or another external library.
 - After the initial bootstrap in a chat, do not re-read unchanged bootstrap documents (`AGENTS.md`, `ACTION_ITEMS.md`, `File_structure.txt`, `CODEMAP.md`, latest `RELEASE_v*.md`, `README.md`) unless:
   - a new chat starts;
   - the user explicitly asks for a re-read; or

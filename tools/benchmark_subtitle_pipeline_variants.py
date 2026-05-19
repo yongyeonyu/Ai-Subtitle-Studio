@@ -28,8 +28,10 @@ from core.engine.subtitle_text_policy import normalize_subtitle_text_lines, spli
 from core.mode_policy import apply_mode_runtime_settings  # noqa: E402
 from core.native_text_similarity import character_error_rate, similarity_ratio  # noqa: E402
 from core.performance import hardware_profile  # noqa: E402
+from core.pipeline.pipeline_helpers import PipelineHelpersMixin  # noqa: E402
 from core.runtime import config  # noqa: E402
 from core.settings_profiles import materialize_user_settings  # noqa: E402
+from core.speaker_profile_settings import automatic_speaker_ceiling, speaker_diarization_auto_enabled  # noqa: E402
 
 
 DEFAULT_FIXTURE_DIR = ROOT / "test video"
@@ -1546,7 +1548,26 @@ def _run_postprocess(rows: list[dict[str, Any]], vad: list[dict[str, Any]], sett
         model = "사용 안함 (benchmark no-llm)"
         settings = {**settings, "selected_model": model}
     with patched_subtitle_settings(settings, model):
-        return subtitle_engine.optimize_segments([dict(row) for row in rows], vad_segments=vad)
+        optimized = subtitle_engine.optimize_segments([dict(row) for row in rows], vad_segments=vad)
+    return _apply_benchmark_speaker_postprocess(optimized, settings)
+
+
+class _BenchmarkSpeakerRuntime(PipelineHelpersMixin):
+    def __init__(self, settings: dict[str, Any]) -> None:
+        ceiling = max(1, automatic_speaker_ceiling(settings))
+        self.min_speakers = 1
+        self.max_speakers = 1
+        self._effective_min_speakers = 1
+        self._effective_max_speakers = ceiling
+        self._speaker_auto_enabled = speaker_diarization_auto_enabled(settings)
+        self._speaker_map: list[dict[str, Any]] = []
+
+
+def _apply_benchmark_speaker_postprocess(rows: list[dict[str, Any]], settings: dict[str, Any]) -> list[dict[str, Any]]:
+    runtime = _BenchmarkSpeakerRuntime(settings)
+    if not runtime._speaker_auto_processing_enabled():
+        return [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    return runtime._apply_runtime_speaker_diarization([dict(row) for row in list(rows or []) if isinstance(row, dict)])
 
 
 def _avg_cps(rows: list[dict[str, Any]]) -> float:

@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QTableWidgetItem
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
+from core.runtime.logger import get_logger
 from core.pipeline_status import is_generation_stage_status
 from ui.queue.queue_formatting import (
     build_queue_sidebar_item,
@@ -27,11 +28,19 @@ from ui.queue.queue_formatting import (
     queue_expected_time_is_unknown,
     queue_status_flags,
 )
+from ui.queue.queue_state_model import QueueStateModel, normalize_queue_row_snapshot
 from ui.style import COLORS
 
 
 class QueueMixin:
     """큐 테이블 관리 (MainWindow에 Mixin으로 결합)"""
+
+    def _queue_log_nonfatal(self, step: str, exc: BaseException) -> None:
+        get_logger().log(
+            f"⚠️ 큐 상태 처리 실패 [{step}]: {exc}",
+            level="WARN",
+            stage="queue",
+        )
 
     def _queue_table_ref(self):
         return getattr(self, "queue_table", None)
@@ -99,11 +108,15 @@ class QueueMixin:
         return item
 
     def _set_queue_header_text(self, text) -> None:
+        header_text = str(text or DEFAULT_QUEUE_HEADER)
+        state_model = getattr(self, "_queue_state_model", None)
+        if isinstance(state_model, QueueStateModel):
+            self._queue_state_model = state_model.with_header(header_text)
         label = self._queue_header_label_ref()
         if label is None:
             return
         try:
-            label.setText(str(text or DEFAULT_QUEUE_HEADER))
+            label.setText(header_text)
         except Exception:
             return
 
@@ -203,6 +216,7 @@ class QueueMixin:
         self._queue_row_cache = []
         self._sidebar_queue_cache_items = []
         self._sidebar_queue_cache_header = header_text
+        self._queue_state_model = QueueStateModel.empty(header_text)
         if hasattr(self, "_live_timer"):
             self._live_timer.stop()
         self._refresh_queue_sidebar_views()
@@ -271,8 +285,8 @@ class QueueMixin:
             timer = getattr(self, "_live_timer", None)
             if timer is not None:
                 timer.start(1000)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError, TypeError, ValueError) as exc:
+            self._queue_log_nonfatal("restart reset", exc)
 
     def _queue_card_time_text(self, eta_text: str, duration_text: str) -> str:
         return format_queue_card_time(eta_text, duration_text)
@@ -310,6 +324,10 @@ class QueueMixin:
                 raw = ""
         if not raw:
             raw = str(getattr(self, "_sidebar_queue_cache_header", "") or "")
+        if not raw:
+            state_model = getattr(self, "_queue_state_model", None)
+            if isinstance(state_model, QueueStateModel):
+                raw = str(state_model.header or "")
         progress = self.queue_progress_state()
         return normalize_queue_header_text(
             raw,
@@ -321,6 +339,9 @@ class QueueMixin:
     def _queue_row_count(self) -> int:
         table = self._queue_table_ref()
         if table is None:
+            state_model = getattr(self, "_queue_state_model", None)
+            if isinstance(state_model, QueueStateModel):
+                return state_model.row_count()
             return 0
         try:
             return max(0, int(table.rowCount()))
@@ -339,17 +360,15 @@ class QueueMixin:
             return {}
         table = self._queue_table_ref()
         if table is None:
+            state_model = getattr(self, "_queue_state_model", None)
+            if isinstance(state_model, QueueStateModel):
+                snapshot = state_model.row_snapshot(row_idx)
+                if snapshot:
+                    return snapshot
             cache = list(getattr(self, "_queue_row_cache", []) or [])
             if 0 <= row_idx < len(cache):
                 item = dict(cache[row_idx] or {})
-                return {
-                    "row": row_idx,
-                    "status": str(item.get("statusRaw", item.get("status", "")) or ""),
-                    "file": str(item.get("fileRaw", item.get("file", "")) or ""),
-                    "info": str(item.get("infoRaw", item.get("info", "")) or ""),
-                    "duration": str(item.get("duration", "") or ""),
-                    "eta": str(item.get("etaRaw", item.get("eta", "")) or ""),
-                }
+                return normalize_queue_row_snapshot(row_idx, item)
             return {}
         if row_idx >= self._queue_row_count():
             return {}
@@ -432,6 +451,10 @@ class QueueMixin:
             cache.append(self._queue_sidebar_placeholder_item(len(cache) + 1))
         cache[row_idx] = dict(entry or self._queue_sidebar_placeholder_item(row_idx + 1))
         self._queue_row_cache = cache
+        state_model = getattr(self, "_queue_state_model", None)
+        if not isinstance(state_model, QueueStateModel):
+            state_model = QueueStateModel.empty(str(getattr(self, "_sidebar_queue_cache_header", "") or ""))
+        self._queue_state_model = state_model.with_row(row_idx, cache[row_idx])
 
     def _queue_row_cache_items_copy(self) -> list[dict]:
         return [dict(item) for item in list(getattr(self, "_queue_row_cache", []) or [])]
@@ -463,7 +486,7 @@ class QueueMixin:
                 hint_idx = int(hint)
                 if 0 <= hint_idx < row_count:
                     candidates.append(hint_idx)
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
         media_name = os.path.basename(str(media_path or "")).strip().lower()
@@ -867,6 +890,7 @@ class QueueMixin:
         self._queue_execution_started_at = 0.0
         self._queue_row_cache = []
         self._real_pct = 0
+        self._queue_state_model = QueueStateModel.empty("")
         if files:
             self._sidebar_queue_cache_items = []
             self._sidebar_queue_cache_header = ""
@@ -900,6 +924,9 @@ class QueueMixin:
         table.setUpdatesEnabled(True)
 
         self._set_queue_header_text(format_queue_header(1 if files else 0, len(files), 0))
+        self._queue_state_model = self._queue_state_model.with_header(
+            format_queue_header(1 if files else 0, len(files), 0)
+        )
         self._refresh_queue_sidebar_views()
         self._live_timer.start(1000)
 
@@ -972,8 +999,8 @@ class QueueMixin:
             try:
                 if bool(running_checker()):
                     return True
-            except Exception:
-                pass
+            except (RuntimeError, AttributeError, TypeError) as exc:
+                self._queue_log_nonfatal("generation running probe", exc)
 
         editor = getattr(self, "_editor_widget", None)
         if editor is not None:
@@ -984,8 +1011,8 @@ class QueueMixin:
                 try:
                     if bool(cleanup_pending()):
                         return True
-                except Exception:
-                    pass
+                except (RuntimeError, AttributeError, TypeError) as exc:
+                    self._queue_log_nonfatal("roughcut cleanup probe", exc)
             state_manager = getattr(editor, "sm", None)
             if state_manager is not None:
                 if str(getattr(state_manager, "state", "") or "") == "ST_PROC":
@@ -1226,8 +1253,8 @@ class QueueMixin:
         if "컷 경계" in status_text and "완료" in status_text:
             try:
                 state_manager.set_custom_status(status_text)
-            except Exception:
-                pass
+            except (RuntimeError, AttributeError, TypeError) as exc:
+                self._queue_log_nonfatal("cut boundary status sync", exc)
             if hasattr(self, "_refresh_sidebar_engine_info"):
                 self._refresh_sidebar_engine_info()
             return
@@ -1238,19 +1265,19 @@ class QueueMixin:
                 if callable(completed):
                     try:
                         completed()
-                    except Exception:
-                        pass
+                    except (RuntimeError, AttributeError, TypeError) as exc:
+                        self._queue_log_nonfatal("editor completion status sync", exc)
                 else:
                     try:
                         state_manager.complete_auto_mode() if bool(getattr(editor, "is_auto_start", False)) else state_manager.complete_ai()
-                    except Exception:
-                        pass
+                    except (RuntimeError, AttributeError, TypeError) as exc:
+                        self._queue_log_nonfatal("state-manager completion sync", exc)
             clearer = getattr(editor, "_clear_processing_indicators", None)
             if callable(clearer):
                 try:
                     clearer()
-                except Exception:
-                    pass
+                except (RuntimeError, AttributeError, TypeError) as exc:
+                    self._queue_log_nonfatal("processing indicator cleanup", exc)
             if hasattr(self, "sync_menu_from_editor"):
                 self.sync_menu_from_editor(editor)
             if hasattr(self, "_refresh_saved_status_label"):
@@ -1339,8 +1366,8 @@ class QueueMixin:
                 total_files = max(0, int(metrics.get("total_files", total) or total))
                 if total_expected > 0.0 and known_expected_rows >= total_files and total_files > 0:
                     return max(0, min(100, int(round(float(metrics.get("percent", 0.0) or 0.0)))))
-            except Exception:
-                pass
+            except (RuntimeError, AttributeError, TypeError, ValueError) as exc:
+                self._queue_log_nonfatal("live header percent", exc)
         statuses = list(row_statuses if row_statuses is not None else self._queue_row_statuses())
         row_metrics = [
             {"status": status_text, "done": bool(self._queue_status_flags(status_text)[0])}
@@ -1495,6 +1522,9 @@ class QueueMixin:
             self._queue_finalize_header_completion(total=total)
         else:
             self._set_queue_header_text(format_queue_header(current, total, pct))
+        state_model = getattr(self, "_queue_state_model", None)
+        if isinstance(state_model, QueueStateModel):
+            self._queue_state_model = state_model.with_header(format_queue_header(current, total, pct))
         self._sync_all_queue_row_cache_from_table()
         self._refresh_queue_sidebar_views()
         if hasattr(self, "_refresh_sidebar_engine_info"):
@@ -1534,5 +1564,9 @@ class QueueMixin:
                 self._queue_sidebar_item_for_row(row, active_row=active_row)
                 for row in self._queue_row_indices()
             ]
+            self._queue_state_model = QueueStateModel.from_snapshots(
+                [self.queue_row_snapshot(row) for row in self._queue_row_indices()],
+                header=str(getattr(self, "_sidebar_queue_cache_header", "") or self.queue_sidebar_header_text()),
+            )
         except RuntimeError:
             return

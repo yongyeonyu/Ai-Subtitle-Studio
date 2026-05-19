@@ -22,6 +22,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QEvent, QEventLoop
 from PyQt6.QtGui import QKeySequence, QShortcut, QTextCursor, QIcon
 
 from core.runtime import config
+from core.audio.audio_display import audio_filter_display_name
 from core.runtime.logger import get_logger
 from core.project.data_manager import (
     load_settings as _dm_load_settings, load_corrections as _dm_load_corrections, cleanup_rules as _dm_cleanup_rules, load_subtitle_rules as _dm_load_rules
@@ -30,6 +31,7 @@ from core.state_manager import SubtitleStateManager
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.speaker_labels import current_speaker_settings
+from core.speaker_profile_settings import visible_speaker_slots
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import COLORS, button_style, label_style, line_icon, tool_button_style
 from ui.editor.ux.editor_popup_qt import EditorPopup
@@ -1500,10 +1502,9 @@ class EditorWidget(
                 widget.deleteLater()
         colors = ["#007AFF", "#34C759", "#FF9500"]
         speaker_settings = current_speaker_settings(self.settings)
-        max_spk = max(1, min(3, int(speaker_settings.get("max_speakers", self.settings.get("max_speakers", 1)) or 1)))
-        for idx in range(1, max_spk + 1):
-            color = speaker_settings.get(f"spk{idx}_color", colors[idx - 1])
-            name = str(speaker_settings.get(f"spk{idx}_name", "") or f"화자 {idx}")
+        for idx, row_data in enumerate(visible_speaker_slots(speaker_settings), start=1):
+            color = str(row_data.get("color", colors[min(idx - 1, len(colors) - 1)]) or colors[min(idx - 1, len(colors) - 1)])
+            name = str(row_data.get("name", "") or f"화자 {idx}")
             btn = QPushButton(f"● {name}")
             btn.setToolTip(f"{name} 설정")
             btn.setStyleSheet(
@@ -1875,13 +1876,7 @@ class EditorWidget(
             short_w2 = str(self.settings.get("selected_whisper_model_secondary", "") or "").replace("mlx-community/", "").replace("-mlx", "")
             if short_w2 and short_w2 != short_w:
                 short_w = f"{short_w} + {short_w2}"
-        audio_ai = {
-            "deepfilter": "DeepFilter",
-            "rnnoise": "RNNoise",
-            "resemble_enhance": "Resemble",
-            "clearvoice": "ClearVoice",
-            "none": "미사용",
-        }.get(self.settings.get("selected_audio_ai", "deepfilter"), "DeepFilter")
+        audio_ai = audio_filter_display_name(self.settings)
         vad_model = {"silero": "Silero", "ten_vad": "TEN VAD", "webrtc": "WebRTC", "pyannote": "Pyannote", "none": "미사용"}.get(self.settings.get("selected_vad", "none"), "미사용")
         if not self.settings.get("vad_pre_split_enabled", False):
             vad_model = "검수용" if vad_model != "미사용" else "미사용"

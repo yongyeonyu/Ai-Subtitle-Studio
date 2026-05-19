@@ -7,6 +7,7 @@ from typing import Any
 
 from core.native_json import dumps_json_text, json_default, loads_json, loads_json_output, write_jsonl_line
 from core.native_swift_subtitle import find_native_cli_path
+from core.native_swift_subtitle_core import run_subtitle_core_operation_via_swift
 from core.runtime.config import IS_MAC
 from core.runtime.setting_utils import KOREAN_FALSE_VALUES, env_bool as _env_bool, positive_int as _positive_int, setting_bool as _setting_bool
 
@@ -41,26 +42,50 @@ def plan_common_split_via_swift(
 ) -> list[dict[str, Any]] | None:
     if not items or not _enabled(len(items), settings):
         return None
+    result = run_subtitle_core_operation_via_swift(
+        "common_split_plan",
+        {"segments": items},
+        context={"bridge": "native_swift_common_split"},
+    )
+    plans = _coerce_plans(result, len(items))
+    if plans is not None:
+        return plans
+
     cli = find_native_cli_path()
     if cli is None:
         return None
+    payload = _legacy_payload(items)
+    if payload is None:
+        return None
+    decoded = _request_worker(cli, payload)
+    if decoded is None:
+        decoded = _request_one_shot(cli, payload, len(items))
+    return _coerce_plans(decoded, len(items))
+
+
+def _legacy_payload(items: list[dict[str, Any]]) -> str | None:
     try:
-        payload = dumps_json_text(
+        return dumps_json_text(
             {"segments": items},
             compact=True,
             default=json_default,
         )
     except Exception:
         return None
-    decoded = _request_worker(cli, payload)
-    if decoded is None:
-        decoded = _request_one_shot(cli, payload, len(items))
+
+
+def _coerce_plans(decoded: dict[str, Any] | None, item_count: int) -> list[dict[str, Any]] | None:
     if decoded is None:
         return None
     plans = decoded.get("plans") or []
-    if len(plans) != len(items):
+    if len(plans) != item_count:
         return None
-    return [dict(plan) for plan in plans if isinstance(plan, dict)]
+    out: list[dict[str, Any]] = []
+    for plan in plans:
+        if not isinstance(plan, dict):
+            return None
+        out.append(dict(plan))
+    return out
 
 
 def _start_worker(cli: Any) -> subprocess.Popen | None:
@@ -126,11 +151,11 @@ def _stop_worker() -> None:
     try:
         if worker.stdin is not None:
             worker.stdin.close()
-    except Exception:
+    except (BrokenPipeError, OSError, RuntimeError):
         pass
     try:
         worker.terminate()
-    except Exception:
+    except (OSError, RuntimeError):
         pass
 
 

@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
+from core.audio.audio_runtime_services import plan_audio_route_workers
 from core.llm.secure_keys import get_api_key
 from core.media_fingerprint import media_fingerprint_snapshot
 from core.media_info import probe_media
@@ -33,7 +34,6 @@ from core.performance import (
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary, subprocess_env
 from core.runtime import config
 from core.runtime.logger import get_logger
-from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.runtime.subprocess_utils import run_subprocess_capture
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
 
@@ -2204,26 +2204,13 @@ class VideoProcessorAudioHelpersMixin:
         )
         failures = 0
         workload = len(grouped)
-        max_workers, scheduler = runtime_parallel_worker_plan(
+        worker_plan = plan_audio_route_workers(
             settings=settings,
-            task="io",
             requested=getattr(self, "io_workers", None),
             workload=workload,
-            minimum=1,
-            maximum=workload,
-            reserve_task="io",
         )
-        try:
-            route_worker_cap = int(float(settings.get("audio_chunk_route_max_workers", 2) or 0))
-        except (TypeError, ValueError):
-            route_worker_cap = 2
-        if route_worker_cap > 0 and max_workers > route_worker_cap:
-            max_workers = max(1, min(max_workers, route_worker_cap))
-            reductions_list = list(scheduler.get("reductions") or [])
-            reductions_list.append("audio_route_cap")
-            scheduler["reductions"] = reductions_list
-            scheduler["audio_chunk_route_max_workers"] = int(route_worker_cap)
-        reductions = ",".join(scheduler.get("reductions") or [])
+        max_workers = worker_plan.max_workers
+        reductions = worker_plan.reductions_label
         if max_workers > 1:
             suffix = f" ({reductions})" if reductions else ""
             _runtime_get_logger().log(f"  🧵 [오디오 라우팅] 청크 라우팅 병렬 워커 {max_workers}개{suffix}")

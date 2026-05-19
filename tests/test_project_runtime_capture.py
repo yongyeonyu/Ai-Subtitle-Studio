@@ -3,6 +3,7 @@ import unittest
 
 from core.runtime.logger import get_logger
 from core.project.project_runtime_capture import collect_editor_project_aux_state, count_editor_project_aux_state
+from core.project.project_session_service import editor_session_row_counts, editor_session_save_view
 
 
 class _Canvas:
@@ -35,6 +36,34 @@ class _StreamingRows:
 
     def __iter__(self):
         return iter(self._rows)
+
+
+class _SessionModel:
+    stt_preview_segments = ({"text": "session-preview"},)
+    voice_activity_segments = ({"kind": "session-voice"},)
+    provisional_boundaries = ({"timeline_sec": 4.0, "status": "session"},)
+
+    def project_save_view(self):
+        return {
+            "segments": [],
+            "stt_preview_segments": [{"text": "session-preview"}],
+            "voice_activity_segments": [{"kind": "session-voice"}],
+            "provisional_boundaries": [{"timeline_sec": 4.0, "status": "session"}],
+        }
+
+
+class _PartialSessionModel:
+    stt_preview_segments = ({"text": "session-preview"},)
+    voice_activity_segments = ()
+    provisional_boundaries = ()
+
+    def project_save_view(self):
+        return {
+            "segments": [],
+            "stt_preview_segments": [{"text": "session-preview"}],
+            "voice_activity_segments": [],
+            "provisional_boundaries": [],
+        }
 
 
 class ProjectRuntimeCaptureTests(unittest.TestCase):
@@ -138,6 +167,68 @@ class ProjectRuntimeCaptureTests(unittest.TestCase):
         self.assertEqual(captured["stt_preview_segments"][0]["text"], "preview")
         self.assertEqual(captured["voice_activity_segments"][0]["kind"], "speech")
         self.assertEqual(captured["provisional_cut_boundaries"][0]["status"], "editor-policy")
+
+    def test_collect_editor_project_aux_state_uses_editor_session_service_view(self):
+        canvas = _Canvas()
+        editor = SimpleNamespace(
+            editor_session_model=_SessionModel(),
+            _live_stt_preview_segments=[{"text": "legacy"}],
+            timeline=SimpleNamespace(canvas=canvas),
+        )
+
+        captured = collect_editor_project_aux_state(editor)
+        counts = count_editor_project_aux_state(editor)
+
+        self.assertEqual(canvas.refresh_calls, 0)
+        self.assertEqual(captured["stt_preview_segments"], [{"text": "session-preview"}])
+        self.assertEqual(captured["voice_activity_segments"], [{"kind": "session-voice"}])
+        self.assertEqual(captured["provisional_cut_boundaries"], [{"timeline_sec": 4.0, "status": "session"}])
+        self.assertEqual(counts["stt_preview_segment_count"], 1)
+        self.assertEqual(counts["voice_activity_segment_count"], 1)
+        self.assertEqual(counts["provisional_cut_boundary_count"], 1)
+
+    def test_count_editor_project_aux_state_merges_partial_session_counts_with_runtime_counts(self):
+        canvas = _Canvas()
+        canvas.voice_activity_segments = _LenOnlyRows(7)
+        canvas.scan_boundary_times = _LenOnlyRows(3)
+        editor = SimpleNamespace(
+            editor_session_model=_PartialSessionModel(),
+            _live_stt_preview_segments=_LenOnlyRows(5),
+            timeline=SimpleNamespace(canvas=canvas),
+        )
+
+        counts = count_editor_project_aux_state(editor)
+
+        self.assertEqual(counts["stt_preview_segment_count"], 1)
+        self.assertEqual(counts["voice_activity_segment_count"], 7)
+        self.assertEqual(counts["provisional_cut_boundary_count"], 3)
+
+    def test_project_session_service_accepts_streaming_views_without_truth_testing(self):
+        class _StreamingSession:
+            stt_preview_segments = _StreamingRows([{"text": "preview"}])
+            voice_activity_segments = _StreamingRows([{"kind": "voice"}])
+            provisional_boundaries = _StreamingRows([{"timeline_sec": 1.0}])
+
+            def project_save_view(self):
+                return {
+                    "segments": _StreamingRows([{"text": "final"}]),
+                    "stt_preview_segments": _StreamingRows([{"text": "preview"}]),
+                    "voice_activity_segments": _StreamingRows([{"kind": "voice"}]),
+                    "boundary_times": _StreamingRows([0.5]),
+                    "provisional_boundaries": _StreamingRows([{"timeline_sec": 1.0}]),
+                }
+
+        editor = SimpleNamespace(editor_session_model=_StreamingSession())
+
+        self.assertEqual(editor_session_save_view(editor)["segments"], [{"text": "final"}])
+        self.assertEqual(
+            editor_session_row_counts(editor),
+            {
+                "stt_preview_segment_count": 1,
+                "voice_activity_segment_count": 1,
+                "provisional_cut_boundary_count": 1,
+            },
+        )
 
 
 if __name__ == "__main__":

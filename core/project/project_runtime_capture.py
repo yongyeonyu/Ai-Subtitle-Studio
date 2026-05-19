@@ -5,6 +5,10 @@ from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from core.project.project_assets import copy_project_rows
+from core.project.project_session_service import (
+    editor_session_row_counts,
+    editor_session_rows,
+)
 from core.runtime.logger import get_logger
 
 
@@ -67,10 +71,16 @@ def _runtime_capture_best_effort(step: str, callback, *, default=None):
 
 
 def copy_editor_live_stt_preview_segments(editor: Any) -> list[dict[str, Any]]:
+    session_rows = editor_session_rows(editor, "stt_preview_segments")
+    if session_rows:
+        return copy_project_rows(session_rows)
     return copy_project_rows(getattr(editor, "_live_stt_preview_segments", None))
 
 
 def copy_editor_voice_activity_segments(editor: Any, *, refresh: bool = True) -> list[dict[str, Any]]:
+    session_rows = editor_session_rows(editor, "voice_activity_segments")
+    if session_rows:
+        return copy_project_rows(session_rows)
     canvas = _editor_timeline_canvas(editor)
     if canvas is None:
         return []
@@ -97,6 +107,10 @@ def editor_provisional_cut_boundaries_for_save(editor: Any) -> list[Any]:
         )
         if provisional:
             return provisional
+
+    session_rows = editor_session_rows(editor, "provisional_boundaries")
+    if session_rows:
+        return _copy_boundary_rows(session_rows)
 
     canvas = _editor_timeline_canvas(editor)
     provisional = _runtime_capture_best_effort(
@@ -265,6 +279,40 @@ def count_editor_project_aux_state(editor: Any, *, refresh: bool = True) -> dict
             "voice_activity_segment_count": 0,
             "provisional_cut_boundary_count": 0,
         }
+    session_counts = editor_session_row_counts(editor)
+    base_count_keys = (
+        "stt_preview_segment_count",
+        "voice_activity_segment_count",
+        "provisional_cut_boundary_count",
+    )
+    if session_counts is not None and all(int(session_counts.get(key, 0) or 0) > 0 for key in base_count_keys):
+        counts = dict(session_counts)
+        sources = _editor_runtime_sources(editor)
+        middle_count = _first_row_count_from_sources(
+            sources,
+            (
+                "_middle_segments",
+                "middle_segments",
+                "_roughcut_segments",
+                "roughcut_segments",
+                "_chapter_segments",
+                "chapter_segments",
+                "_roughcut_draft_segments",
+                "_cut_boundary_topicless_middle_segments",
+                "cut_boundary_topicless_middle_segments",
+            ),
+        )
+        if middle_count <= 0:
+            middle_count = _roughcut_result_segment_count_from_sources(sources)
+        preliminary_count = _first_row_count_from_sources(
+            sources,
+            ("_preliminary_middle_segments", "preliminary_middle_segments"),
+        )
+        if middle_count > 0:
+            counts["middle_segment_count"] = middle_count
+        if preliminary_count > 0:
+            counts["preliminary_middle_segment_count"] = preliminary_count
+        return counts
     canvas = _editor_timeline_canvas(editor)
     if refresh and canvas is not None and hasattr(canvas, "_refresh_voice_activity_segments"):
         _runtime_capture_best_effort(
@@ -318,4 +366,9 @@ def count_editor_project_aux_state(editor: Any, *, refresh: bool = True) -> dict
         counts["middle_segment_count"] = middle_count
     if preliminary_count > 0:
         counts["preliminary_middle_segment_count"] = preliminary_count
+    if session_counts is not None:
+        for key, value in session_counts.items():
+            count = int(value or 0)
+            if count > 0:
+                counts[key] = count
     return counts

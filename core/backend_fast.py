@@ -109,6 +109,8 @@ class CoreBackendFast(CoreBackend):
         )
         if hasattr(self, "_apply_personalization_runtime_override_for_file"):
             self._apply_personalization_runtime_override_for_file(target_file)
+        if hasattr(self, "_reload_speaker_settings"):
+            self._reload_speaker_settings()
 
         # ── STEP 0: 백업 ──
         self._backup_existing(target_file)
@@ -164,6 +166,8 @@ class CoreBackendFast(CoreBackend):
                 settings=load_settings(),
             )
             self._autopilot_speaker_preflight = speaker_preflight
+            if hasattr(self, "_apply_speaker_preflight_runtime_override"):
+                self._apply_speaker_preflight_runtime_override(speaker_preflight)
             get_logger().log(
                 "🗣️ [AutoPilot 화자] "
                 f"{speaker_preflight.get('lane')} · "
@@ -214,6 +218,17 @@ class CoreBackendFast(CoreBackend):
         preview_opt_queue = _queue.Queue()
         preview_opt_sentinel = object()
         all_segments = []
+
+        t_diarize = None
+        audio_for_diarization = self._speaker_diarization_audio_path(target_file, chunk_dir)
+        if self._speaker_auto_processing_enabled():
+            t_diarize = threading.Thread(
+                target=self._prepare_speaker_map,
+                args=(audio_for_diarization,),
+                daemon=True,
+                name="auto-batch-diarizer",
+            )
+            t_diarize.start()
 
         def _emit_processed_preview(chunk_segs, label="STT"):
             try:
@@ -268,6 +283,9 @@ class CoreBackendFast(CoreBackend):
                 opt_queue.put(_SENTINEL)
 
         def do_optimize():
+            if t_diarize and t_diarize.is_alive():
+                get_logger().log("\n⏳ [안내] 화자 분리 연산 대기 중...")
+                t_diarize.join()
             try:
                 s = load_settings()
                 chunk_time_limit = int(s.get('chunk_time_limit', 60))
@@ -340,6 +358,8 @@ class CoreBackendFast(CoreBackend):
                     "VAD 경계 정렬",
                     opt,
                 )
+                if self._speaker_auto_processing_enabled():
+                    opt = self._apply_runtime_speaker_diarization(opt)
                 opt = apply_final_gap_settings(opt, force=True)
                 if hasattr(self, "_magnetize_by_saved_cut_boundaries"):
                     opt = self._magnetize_by_saved_cut_boundaries(

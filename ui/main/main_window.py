@@ -1954,15 +1954,17 @@ class MainWindow(
             if item is not None and item is not dialog
         ]
 
-    def _request_personalization_stop_for_user_input(self) -> None:
+    def _request_personalization_stop_for_user_input(self) -> bool:
+        stopped_any = False
         for widget in list(getattr(self, "_personalization_learning_dialogs", []) or []):
             request_stop = getattr(widget, "_request_stop_for_user_input", None)
             if not callable(request_stop):
                 continue
             try:
-                request_stop()
+                stopped_any = bool(request_stop()) or stopped_any
             except Exception:
                 continue
+        return stopped_any
 
     def _run_personalization_idle_jobs_now(self):
         trainer = getattr(self, "_personalization_idle_trainer", None)

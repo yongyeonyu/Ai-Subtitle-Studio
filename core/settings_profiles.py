@@ -9,6 +9,7 @@ from core.json_file import read_json_file
 from core.mode_manager import apply_mode_scope_quality, selected_mode_from_settings
 from core.mode_policy import apply_mode_runtime_settings
 from core.runtime import config
+from core.speaker_profile_settings import materialize_automatic_speaker_settings
 
 
 USER_SETTINGS_SCHEMA = "ai_subtitle_studio.user_settings.v2"
@@ -375,6 +376,10 @@ CUT_BOUNDARY_DEFAULTS: dict[str, Any] = {
     "cut_boundary_level": "medium",
     "scan_cut_enabled": True,
     "scan_cut_auto_enabled": True,
+    "playhead_auto_cut_magnet_enabled": True,
+    "playhead_auto_cut_magnet_strict_verify_enabled": True,
+    "playhead_auto_cut_magnet_strict_multiplier": 1.22,
+    "playhead_auto_cut_magnet_verify_window_sec": 0.42,
     "scan_cut_boundary_level": "medium",
     "scan_cut_level": "medium",
     "scan_cut_auto_sample_step_sec": 2.0,
@@ -1156,7 +1161,8 @@ def materialize_user_settings(
         out.update(deepcopy(SPEED_SAFE_AUTO_DEFAULTS))
         out = apply_mode_scope_quality(out, "auto")
         out["_speed_safe_auto_profile"] = SPEED_SAFE_AUTO_PROFILE_VERSION
-    return apply_mode_runtime_settings(apply_autopilot_runtime_policy(out))
+    out = apply_mode_runtime_settings(apply_autopilot_runtime_policy(out))
+    return materialize_automatic_speaker_settings(out)
 
 
 def sanitize_persisted_settings(settings: dict[str, Any] | None = None) -> dict[str, Any]:

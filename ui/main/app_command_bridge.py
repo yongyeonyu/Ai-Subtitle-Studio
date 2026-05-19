@@ -222,6 +222,30 @@ def _capture_window_snapshot(owner: Any, command_payload: dict[str, Any]) -> dic
     }
 
 
+def _capture_widget_snapshot(widget: Any, command_payload: dict[str, Any]) -> dict[str, Any]:
+    path = _snapshot_output_path(command_payload)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if widget is None:
+        return {"ok": False, "error": "snapshot_unavailable", "message": path}
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    pixmap = widget.grab()
+    if pixmap is None or getattr(pixmap, "isNull", lambda: True)():
+        return {"ok": False, "error": "snapshot_unavailable", "message": path}
+    if not bool(pixmap.save(path, "PNG")):
+        return {"ok": False, "error": "snapshot_save_failed", "message": path}
+    return {
+        "ok": True,
+        "data": {
+            "path": path,
+            "width": int(getattr(pixmap, "width", lambda: 0)() or 0),
+            "height": int(getattr(pixmap, "height", lambda: 0)() or 0),
+            "bytes": int(os.path.getsize(path)) if os.path.isfile(path) else 0,
+        },
+    }
+
+
 def _queue_window_snapshot(owner: Any, command_payload: dict[str, Any]) -> dict[str, Any]:
     path = _snapshot_output_path(command_payload)
     queue_capture = getattr(owner, "_automation_request_async_snapshot_capture", None)
@@ -796,11 +820,30 @@ def execute_app_command(owner: Any, payload: dict[str, Any] | None) -> dict[str,
             queued=bool(snapshot_result.get("queued", False)),
         )
 
+    if command == "capture-dictionary-snapshot":
+        logger.log("🤖 자동화 명령 수신: capture-dictionary-snapshot")
+        dialog = getattr(owner, "_correction_dictionary_dialog", None)
+        if dialog is None or not bool(getattr(dialog, "isVisible", lambda: False)()):
+            return fail("dictionary_not_visible")
+        snapshot_result = _capture_widget_snapshot(dialog, command_payload)
+        if not snapshot_result.get("ok"):
+            return fail(str(snapshot_result.get("error", "snapshot_failed")), message=str(snapshot_result.get("message", "")))
+        return ok(message="dictionary_snapshot_captured", data=snapshot_result.get("data"))
+
     if command == "show-home":
         logger.log("🤖 자동화 명령 수신: show-home")
         owner.show_home()
         _bring_to_front(owner)
         return ok(message="home_visible")
+
+    if command == "open-dictionary":
+        logger.log("🤖 자동화 명령 수신: open-dictionary")
+        opener = getattr(owner, "_show_main_correction_dictionary_nonmodal", None)
+        if not callable(opener):
+            return fail("dictionary_open_unavailable")
+        opener()
+        _bring_to_front(owner)
+        return ok(message="dictionary_visible")
 
     if command == "open-project":
         path = _normalize_path(command_payload.get("path"))

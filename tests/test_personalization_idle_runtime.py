@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,9 +14,11 @@ from PyQt6.QtWidgets import QApplication
 
 from core.personalization.idle_trainer import (
     PersonalizationIdleTrainer,
+    clear_personalization_training_interrupt,
     enqueue_default_training_jobs,
     enqueue_full_training_jobs,
     format_training_queue_status_summary,
+    request_personalization_training_interrupt,
     recover_interrupted_training_jobs,
     run_training_job,
     run_training_queue_once,
@@ -268,6 +270,31 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             cleanup.assert_not_called()
             recover.assert_not_called()
             trainer.deleteLater()
+
+    def test_training_interrupt_cancels_queue_before_start(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            save_training_queue(
+                [
+                    {
+                        "job_id": "cancel-before-start",
+                        "job_type": "analyze_truth_table",
+                        "status": "waiting",
+                        "priority": 1,
+                        "progress": 0.0,
+                        "payload": {},
+                    }
+                ],
+                tmpdir,
+            )
+            try:
+                request_personalization_training_interrupt("unit_test_exit")
+                result = run_training_queue_once(tmpdir)
+            finally:
+                clear_personalization_training_interrupt()
+
+            self.assertFalse(result["processed"])
+            self.assertEqual(result["reason"], "cancelled_before_start")
 
     def test_fast_shutdown_detaches_busy_worker_and_suppresses_late_ui_notifications(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -596,6 +623,57 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             self.assertTrue((result.get("result") or {}).get("cancelled"))
             build_index.assert_not_called()
             refresh_bundle.assert_not_called()
+
+    def test_retrieval_index_job_treats_cancelled_index_build_as_waiting(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            with (
+                patch(
+                    "core.personalization.idle_trainer.save_subtitle_pattern_index",
+                    return_value={"pattern_count": 3},
+                ),
+                patch(
+                    "core.personalization.idle_trainer.build_lora_retrieval_index",
+                    return_value={"cancelled": True, "reason": "cancelled"},
+                ),
+                patch("core.personalization.idle_trainer.refresh_unified_lora_data_bundle") as refresh_bundle,
+            ):
+                result = run_training_job(
+                    {
+                        "job_id": "index-cancel-during-build",
+                        "job_type": "build_retrieval_index",
+                        "media_id": "global",
+                        "payload": {"force": True},
+                    },
+                    store_dir=tmpdir,
+                )
+
+            self.assertEqual(result["status"], "waiting")
+            self.assertTrue((result.get("result") or {}).get("cancelled"))
+            refresh_bundle.assert_not_called()
+
+    def test_auto_learning_status_summary_logs_info_even_with_failed_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            save_training_queue(
+                [
+                    {"job_id": "done", "job_type": "analyze_truth_table", "status": "complete"},
+                    {"job_id": "failed", "job_type": "analyze_truth_table", "status": "failed"},
+                ],
+                tmpdir,
+            )
+            owner = _DummyOwner()
+            trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
+            trainer._poll_timer.stop()
+            try:
+                logger = SimpleNamespace(log=Mock())
+                with patch("core.personalization.idle_trainer.get_logger", return_value=logger):
+                    trainer._log_auto_learning_status("unit")
+                logger.log.assert_called_once()
+                self.assertEqual(logger.log.call_args.kwargs.get("level"), "INFO")
+            finally:
+                trainer.deleteLater()
 
     def test_cancelled_completion_skips_post_job_prune_and_retrieval_refresh(self):
         with tempfile.TemporaryDirectory() as tmpdir:

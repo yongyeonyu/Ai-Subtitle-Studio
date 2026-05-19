@@ -47,6 +47,7 @@ def build_lora_retrieval_index(
     store_dir: str | Path | None = None,
     *,
     force: bool = False,
+    cancel_callback=None,
 ) -> dict[str, Any]:
     paths = store_paths(store_dir)
     index_path = paths["lora_retrieval_index"]
@@ -55,7 +56,9 @@ def build_lora_retrieval_index(
         _cache_index_put(str(index_path), existing)
         return existing
 
-    index = build_lora_retrieval_index_payload(paths)
+    index = build_lora_retrieval_index_payload(paths, cancel_callback=cancel_callback)
+    if bool(index.get("cancelled")):
+        return index
     write_json(index_path, index)
     _cache_index_put(str(index_path), index)
     _PROCESS_QUERY_CACHE.clear()

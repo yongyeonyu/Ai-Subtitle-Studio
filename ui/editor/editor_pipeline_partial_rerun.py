@@ -432,6 +432,8 @@ class EditorPipelinePartialRerunMixin:
                 from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
                 from core.engine.subtitle_timing import align_stt_candidates_to_subtitle_segments
                 from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments
+                from core.autopilot_policy import speaker_preflight_decision
+                from core.settings import load_settings
 
                 opt_queue = queue.Queue()
                 preview_opt_queue = queue.Queue()
@@ -440,30 +442,25 @@ class EditorPipelinePartialRerunMixin:
                 auto_collected_segs = []
 
                 audio_for_diarization = media_path
+                if hasattr(backend, "_speaker_diarization_audio_path"):
+                    audio_for_diarization = backend._speaker_diarization_audio_path(media_path, chunk_dir)
+
                 try:
-                    base_name = os.path.splitext(os.path.basename(media_path))[0]
-                    cleaned_wav = str(getattr(backend.video_processor, "last_cleaned_wav", "") or "")
-                    raw_wav = str(getattr(backend.video_processor, "last_raw_wav", "") or "")
-                    if (not cleaned_wav or not os.path.exists(cleaned_wav)) and hasattr(backend.video_processor, "_audio_work_paths"):
-                        try:
-                            audio_paths = backend.video_processor._audio_work_paths(media_path)
-                            cleaned_wav = str(audio_paths.get("cleaned_wav") or cleaned_wav)
-                            raw_wav = str(audio_paths.get("raw_wav") or raw_wav)
-                        except Exception:
-                            pass
-                    if not cleaned_wav:
-                        cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
-                    if not raw_wav:
-                        raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
-                    if os.path.exists(cleaned_wav):
-                        audio_for_diarization = cleaned_wav
-                    elif os.path.exists(raw_wav):
-                        audio_for_diarization = raw_wav
+                    if hasattr(backend, "_reload_speaker_settings"):
+                        backend._reload_speaker_settings()
+                    speaker_preflight = speaker_preflight_decision(
+                        merged_vad,
+                        media_duration_sec=max(0.0, float(end_sec or 0.0) - float(start_sec or 0.0)),
+                        settings=load_settings(),
+                    )
+                    backend._autopilot_speaker_preflight = speaker_preflight
+                    if hasattr(backend, "_apply_speaker_preflight_runtime_override"):
+                        backend._apply_speaker_preflight_runtime_override(speaker_preflight)
                 except Exception:
                     pass
 
                 t_diarize = None
-                if getattr(backend, "max_speakers", 1) > 1 and hasattr(backend, "_prepare_speaker_map"):
+                if hasattr(backend, "_speaker_auto_processing_enabled") and backend._speaker_auto_processing_enabled() and hasattr(backend, "_prepare_speaker_map"):
                     t_diarize = threading.Thread(
                         target=backend._prepare_speaker_map,
                         args=(audio_for_diarization,),
@@ -558,18 +555,9 @@ class EditorPipelinePartialRerunMixin:
                             merged_vad,
                             context="부분 재인식",
                         )
-
-                    if getattr(backend, "max_speakers", 1) > 1 and getattr(backend, "_speaker_map", None):
-                        try:
-                            from core.audio.diarize import get_speaker_for_segment
-
-                            for seg in opt:
-                                spk_full = get_speaker_for_segment(
-                                    seg["start"], seg["end"], backend._speaker_map
-                                )
-                                seg["speaker"] = spk_full.replace("SPEAKER_", "")
-                        except Exception:
-                            pass
+                    if hasattr(backend, "_speaker_auto_processing_enabled") and backend._speaker_auto_processing_enabled():
+                        if hasattr(backend, "_apply_runtime_speaker_diarization"):
+                            opt = backend._apply_runtime_speaker_diarization(opt)
 
                     opt = apply_final_gap_settings(opt, force=True)
                     if hasattr(backend, "_magnetize_by_saved_cut_boundaries"):

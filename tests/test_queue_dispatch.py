@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QTableWidget, QTableWidgetItem
 from ui.queue.queue_dispatch import dispatch_queue_header, dispatch_queue_status
 from ui.queue.queue_dispatch import find_queue_row_for_media, sync_saved_queue_state
 from ui.queue.queue_dispatch import queue_active_row_index, queue_progress_state
+from ui.queue.queue_state_model import QueueStateModel
 from ui.queue_widget import QueueMixin
 
 
@@ -41,6 +42,17 @@ class _FallbackTarget:
 
     def update_queue_header(self, payload):
         self.header_calls.append(payload)
+
+
+class _NoBoolRows:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __bool__(self):
+        raise AssertionError("queue snapshot rows should not be truth-tested")
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 class QueueDispatchTests(unittest.TestCase):
@@ -816,6 +828,74 @@ class QueueDispatchTests(unittest.TestCase):
             queue_progress_state(owner, current_default=1, total_default=1, pct_default=0),
             {"current": 2, "total": 7, "pct": 14},
         )
+
+    def test_queue_state_model_serves_snapshots_without_table(self):
+        class _DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = None
+                self.queue_header_lbl = None
+                self._queue_state_model = QueueStateModel.from_snapshots(
+                    [
+                        {
+                            "row": 0,
+                            "status": "대기 중",
+                            "file": "clip_a.mp4",
+                            "info": "분석 중",
+                            "duration": "-",
+                            "eta": "계산 중",
+                        }
+                    ],
+                    header="큐 리스트 : (1/1) - 0% 완료",
+                )
+                self._queue_row_cache = []
+                self._sidebar_queue_cache_items = []
+
+        queue = _DummyQueue()
+
+        self.assertEqual(queue.queue_row_count(), 1)
+        self.assertEqual(queue.queue_row_snapshot(0)["file"], "clip_a.mp4")
+        self.assertEqual(queue.queue_sidebar_header_text(), "큐 리스트 : (1/1) - 0% 완료")
+
+    def test_queue_state_model_accepts_iterable_rows_without_truth_testing(self):
+        state = QueueStateModel.from_snapshots(
+            _NoBoolRows([{"status": "대기 중", "file": "clip_a.mp4"}]),
+            header="큐 리스트 : (1/1) - 0% 완료",
+        )
+
+        self.assertEqual(state.row_count(), 1)
+        self.assertEqual(state.row_snapshot(0)["file"], "clip_a.mp4")
+
+    def test_queue_state_model_updates_from_table_cache_sync(self):
+        class _DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._current_file_idx = 1
+                self._total_files = 0
+                self._real_pct = 0
+                self._expected_seconds = {}
+                self._file_start_times = {}
+                self._file_complete_times = {}
+                self._queue_row_cache = []
+                self._sidebar_queue_cache_items = []
+                self._sidebar_queue_cache_header = ""
+                self.backend = None
+                self.backend_fast = None
+                self._live_timer = type("_Timer", (), {"start": lambda _self, _interval: None, "stop": lambda _self: None})()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = _DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+        queue.update_queue_status(0, "자막 생성 중", "01:00", "1920x1080", "01:00")
+
+        state = queue._queue_state_model.row_snapshot(0)
+        self.assertEqual(state["status"], "자막 생성 중")
+        self.assertEqual(state["file"], "clip_a.mp4")
 
 
 if __name__ == "__main__":

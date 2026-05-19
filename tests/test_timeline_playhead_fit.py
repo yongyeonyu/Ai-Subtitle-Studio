@@ -18,6 +18,7 @@ from core.frame_time import frame_to_sec
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_helpers import build_segment_lookup
 from ui.editor.editor_pipeline import EditorPipelineMixin
+from ui.editor.editor_pipeline_playhead_actions import EditorPipelinePlayheadActionsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.ux.editor_tab_timing import EditorTabTimingMixin
@@ -87,6 +88,17 @@ class _PlaybackEditor(EditorTimelineVideoMixin):
 
     def _get_current_segments(self):
         return self._segments
+
+
+class _PlayheadMenuEditor(EditorPipelinePlayheadActionsMixin):
+    def __init__(self):
+        self.settings = {"playhead_auto_cut_magnet_enabled": False}
+
+    def _current_cut_boundary_level(self) -> str:
+        return "medium"
+
+    def _shadow_playhead_active(self) -> bool:
+        return False
 
 
 class _WaveformReadyTimeline(TimelineWidget):
@@ -2857,6 +2869,15 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertEqual(emitted, [2.5])
         finally:
             timeline.close()
+
+    def test_playhead_menu_includes_auto_cut_boundary_magnet_toggle(self):
+        editor = _PlayheadMenuEditor()
+
+        items = editor._playhead_menu_items()
+
+        magnet = next(item for item in items if item.get("id") == "playhead_auto_cut_magnet")
+        self.assertEqual(magnet["label"], "자동 컷 경계 자석")
+        self.assertFalse(magnet["checked"])
 
     def test_playing_segment_sync_does_not_jump_playhead_to_segment_start(self):
         editor = _DummyTimelineVideoEditor()

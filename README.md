@@ -56,7 +56,10 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Runtime ETA prediction now uses per-variant history with media/FPS/cache features and recent-run weighting, and the active queue row keeps elapsed-versus-expected time updated even before the full backend pipeline clock is ready.
 - Fast/Auto/High now lock benchmarked VAD defaults instead of exposing a separate VAD settings menu; automatic audio preset detection can still retune only the audio frontend stack.
 - Correction-dictionary cleanup now has a SQLite-backed indexed runtime path while keeping the JSON dictionary as the editable source of truth.
+- The bottom menu now exposes a dedicated correction-dictionary editor so stored replacements can be searched, added, edited, deleted, and kept alphabetized without leaving the app.
+- Speaker count is now automatic at runtime: local spans can collapse to one speaker or expand to two or three speakers, and learned `spk1`/`spk2`/`spk3` voice profiles are preferred when diarization confidence supports them.
 - Manual `<<` / `>>` cut-boundary hits are persisted as confirmed project cut boundaries for later subtitle magnet alignment.
+- Playhead cut-boundary magnet behavior is now an explicit right-click option so normal scrubbing can stay fast while precise automatic cut snapping remains available on demand.
 - Live STT previews now stay in timeline/STT preview lanes only; the editor text pane and playback subtitle overlay remain reserved for committed subtitle segments.
 - Cut-boundary helper rows can still be saved into project metadata for verification and timing work, but follower-checked provisional lines and terminal helper boundaries are hidden from the normal editor UI after confirmation.
 - Roughcut Codex CLI calls now use wider context and longer timeouts, then fall back to local-rule draft generation if the Codex CLI times out.

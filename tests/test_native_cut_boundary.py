@@ -89,6 +89,42 @@ class NativeCutBoundaryTests(unittest.TestCase):
         self.assertIsNotNone(native_out)
         self.assertEqual([round(value, 3) for value in native_out or []], [1.5, 0.5, 1.0])
 
+    def test_live_cut_scores_match_numpy_reference(self):
+        import numpy as np
+
+        previous = os.environ.get("AI_SUBTITLE_NATIVE_CUT_BOUNDARY")
+        gray_frames = [
+            np.zeros((4, 6), dtype=np.uint8),
+            np.full((4, 6), 10, dtype=np.uint8),
+            np.full((4, 6), 80, dtype=np.uint8),
+        ]
+        color_frames = [
+            np.zeros((4, 6, 3), dtype=np.uint8),
+            np.full((4, 6, 3), 20, dtype=np.uint8),
+            np.full((4, 6, 3), 40, dtype=np.uint8),
+        ]
+        try:
+            os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = "1"
+            if not native.native_cut_boundary_enabled():
+                self.skipTest("native cut-boundary extension unavailable")
+            native_out = native.live_cut_scores(gray_frames, color_frames, [100, 101, 102])
+        finally:
+            if previous is None:
+                os.environ.pop("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", None)
+            else:
+                os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = previous
+
+        self.assertIsNotNone(native_out)
+        reference = []
+        for index in range(1, len(gray_frames)):
+            gray_score = float(np.mean(np.abs(gray_frames[index].astype(np.int16) - gray_frames[index - 1].astype(np.int16))))
+            color_score = float(np.mean(np.abs(color_frames[index].astype(np.int16) - color_frames[index - 1].astype(np.int16))))
+            reference.append((max(gray_score, color_score * 0.85), 100 + index))
+        self.assertEqual(len(native_out or []), len(reference))
+        for actual, expected in zip(native_out or [], reference):
+            self.assertAlmostEqual(actual[0], expected[0], places=6)
+            self.assertEqual(actual[1], expected[1])
+
     def test_dense_flow_pair_metrics_runs_in_native_extension(self):
         import numpy as np
 

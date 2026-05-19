@@ -256,6 +256,7 @@ class HomeUIMixin(HomeSidebarMixin):
             left_col.addWidget(self._ensure_sidebar_nav_menu())
             left_col.addWidget(self._icloud_btn("iCloud 자동", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
             left_col.addWidget(self._icloud_btn("NAS 자동", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
+            left_col.addWidget(self._editor_shortcuts_row())
             left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=9)
         else:
             left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
@@ -796,6 +797,7 @@ class HomeUIMixin(HomeSidebarMixin):
             ("AI", "ai", self._open_main_ai_settings),
             *([("개인화", "ai", self._open_main_personalization_learning)] if config.IS_MAC else []),
             ("화자", "speaker", self._open_main_speaker_settings),
+            ("사전", "review", self._open_main_correction_dictionary),
             ("비디오", "video", self._toggle_main_video),
             ("자막출력", "export", self._open_main_export_dialog),
         ]
@@ -1255,6 +1257,34 @@ class HomeUIMixin(HomeSidebarMixin):
         if dlg.exec():
             settings.update(dlg.result)
             save_settings(settings)
+
+    def _open_main_correction_dictionary(self):
+        from ui.settings.settings_dialog import CorrectionDictionaryDialog
+
+        dlg = CorrectionDictionaryDialog(self)
+        dlg.exec()
+
+    def _show_main_correction_dictionary_nonmodal(self):
+        from ui.settings.settings_dialog import CorrectionDictionaryDialog
+
+        existing = getattr(self, "_correction_dictionary_dialog", None)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.raise_()
+                    existing.activateWindow()
+                    return existing
+            except Exception:
+                pass
+        dlg = CorrectionDictionaryDialog(self)
+        dlg.setModal(False)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dlg.destroyed.connect(lambda *_: setattr(self, "_correction_dictionary_dialog", None))
+        self._correction_dictionary_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        return dlg
 
     def _open_main_gap_settings(self):
         editor = self._active_editor()

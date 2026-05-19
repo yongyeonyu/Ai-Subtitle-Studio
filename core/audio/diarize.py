@@ -14,6 +14,7 @@ import numpy as np
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.audio.torch_acceleration import move_torch_model_to_preferred_device
 from core.runtime.logger import get_logger
+from core.speaker_profile_settings import trained_speaker_profiles
 
 
 _DIARIZE_DEPENDENCIES = (
@@ -23,6 +24,9 @@ _DIARIZE_DEPENDENCIES = (
     ("sklearn", "scikit-learn"),
 )
 _missing_dependency_notice_logged = False
+_DIARIZE_CACHE_SCHEMA = "ai_subtitle_studio.speaker_cache.v2"
+_REFERENCE_MATCH_MIN_SIM = 0.20
+_AUTO_CLUSTER_MIN_SILHOUETTE = 0.18
 
 
 def missing_diarization_packages() -> list[str]:
@@ -51,20 +55,240 @@ def log_missing_diarization_dependencies(missing: list[str] | None = None) -> No
     _missing_dependency_notice_logged = True
     packages = " ".join(missing)
     get_logger().log(
-        "⚠️ [화자 분리] 선택 화자 수가 2명 이상이지만 필요한 패키지가 없습니다. "
+        "⚠️ [화자 분리] 자동 화자 분리에 필요한 패키지가 없습니다. "
         f"누락: {packages}. 이번 작업은 단일 화자로 계속 진행합니다. "
         f"화자 분리가 필요하면 venv/bin/python -m pip install {packages}"
     )
 
+
+def _normalize_embedding(vector) -> np.ndarray:
+    arr = np.asarray(vector, dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(arr))
+    if norm <= 1e-9:
+        return arr
+    return arr / norm
+
+
+def _speaker_similarity(left, right) -> float:
+    left_arr = _normalize_embedding(left)
+    right_arr = _normalize_embedding(right)
+    denom = float(np.linalg.norm(left_arr) * np.linalg.norm(right_arr))
+    if denom <= 1e-9:
+        return 0.0
+    return float(np.dot(left_arr, right_arr) / denom)
+
+
+def _speaker_cache_key(settings: dict | None, max_speakers: int, reference_profiles: list[dict]) -> dict:
+    refs = []
+    for row in list(reference_profiles or []):
+        path = str(row.get("primary_voice_path", "") or "")
+        try:
+            stat = os.stat(path) if path and os.path.exists(path) else None
+        except Exception:
+            stat = None
+        refs.append(
+            {
+                "id": str(row.get("id", "") or ""),
+                "name": str(row.get("name", "") or ""),
+                "path": os.path.basename(path) if path else "",
+                "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
+                "size": int(getattr(stat, "st_size", 0) or 0),
+            }
+        )
+    return {
+        "schema": _DIARIZE_CACHE_SCHEMA,
+        "max_speakers": int(max_speakers or 1),
+        "references": refs,
+    }
+
+
+def _cache_matches(payload, cache_key: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("schema") != _DIARIZE_CACHE_SCHEMA:
+        return False
+    return dict(payload.get("cache_key") or {}) == dict(cache_key or {})
+
+
+def _choose_cluster_count(embeddings: np.ndarray, max_speakers: int) -> tuple[int, list[int], dict]:
+    sample_count = int(len(embeddings) or 0)
+    if sample_count <= 0:
+        return 1, [], {"reason": "no_embeddings"}
+    max_clusters = max(1, min(int(max_speakers or 1), 3, sample_count))
+    if max_clusters <= 1 or sample_count < 4:
+        return 1, [0] * sample_count, {"reason": "single_cluster_default", "sample_count": sample_count}
+
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+
+    best: dict | None = None
+    for cluster_count in range(2, max_clusters + 1):
+        if sample_count <= cluster_count:
+            break
+        model = KMeans(n_clusters=cluster_count, random_state=42, n_init=10)
+        labels = model.fit_predict(embeddings)
+        if len(set(labels)) < 2:
+            continue
+        try:
+            score = float(silhouette_score(embeddings, labels))
+        except Exception:
+            score = -1.0
+        if best is None or score > float(best.get("score", -1.0)):
+            best = {
+                "cluster_count": cluster_count,
+                "labels": list(labels),
+                "score": score,
+            }
+    if not best or float(best.get("score", -1.0)) < _AUTO_CLUSTER_MIN_SILHOUETTE:
+        return 1, [0] * sample_count, {
+            "reason": "silhouette_low",
+            "sample_count": sample_count,
+            "score": float((best or {}).get("score", -1.0) or -1.0),
+        }
+    return int(best["cluster_count"]), list(best["labels"]), {
+        "reason": "silhouette_best",
+        "sample_count": sample_count,
+        "score": round(float(best["score"]), 4),
+    }
+
+
+def _smooth_cluster_labels(labels: list[int]) -> list[int]:
+    if len(labels) <= 2:
+        return list(labels)
+    smoothed = list(labels)
+    for idx in range(1, len(labels) - 1):
+        if labels[idx - 1] == labels[idx + 1]:
+            smoothed[idx] = labels[idx - 1]
+    return smoothed
+
+
+def _cluster_centroids(embeddings: np.ndarray, labels: list[int]) -> dict[int, np.ndarray]:
+    centroids: dict[int, list[np.ndarray]] = {}
+    for idx, label in enumerate(list(labels or [])):
+        centroids.setdefault(int(label), []).append(np.asarray(embeddings[idx], dtype=np.float32))
+    return {
+        label: _normalize_embedding(np.mean(np.stack(items), axis=0))
+        for label, items in centroids.items()
+        if items
+    }
+
+
+def _profile_numeric_id(profile: dict) -> int:
+    raw_id = str(profile.get("id", "") or "").strip()
+    if raw_id.isdigit():
+        return max(0, min(98, int(raw_id)))
+    return max(0, int(profile.get("index", 1) or 1) - 1)
+
+
+def _match_reference_profiles(
+    centroids: dict[int, np.ndarray],
+    reference_profiles: list[dict],
+    *,
+    similarity_threshold: float = _REFERENCE_MATCH_MIN_SIM,
+) -> tuple[dict[int, int], list[dict]]:
+    candidates: list[tuple[float, int, dict]] = []
+    for profile in list(reference_profiles or []):
+        embedding = profile.get("embedding")
+        if embedding is None:
+            continue
+        for label, centroid in centroids.items():
+            score = _speaker_similarity(embedding, centroid)
+            candidates.append((score, int(label), dict(profile)))
+    mapping: dict[int, int] = {}
+    details: list[dict] = []
+    used_labels: set[int] = set()
+    used_ids: set[int] = set()
+    for score, label, profile in sorted(candidates, key=lambda item: item[0], reverse=True):
+        numeric_id = _profile_numeric_id(profile)
+        if score < float(similarity_threshold):
+            continue
+        if label in used_labels or numeric_id in used_ids:
+            continue
+        mapping[int(label)] = numeric_id
+        used_labels.add(int(label))
+        used_ids.add(numeric_id)
+        details.append(
+            {
+                "label": int(label),
+                "id": f"{numeric_id:02d}",
+                "name": str(profile.get("name", "") or ""),
+                "score": round(float(score), 4),
+            }
+        )
+    return mapping, details
+
+
+def _assign_remaining_cluster_ids(labels: list[int], mapping: dict[int, int], *, limit: int = 3) -> dict[int, int]:
+    assigned = dict(mapping or {})
+    used_ids = {int(value) for value in assigned.values()}
+    remaining_ids = [idx for idx in range(max(1, int(limit or 3))) if idx not in used_ids]
+    ordered_labels: list[int] = []
+    for label in list(labels or []):
+        value = int(label)
+        if value not in ordered_labels:
+            ordered_labels.append(value)
+    next_id = max(remaining_ids[-1] + 1, len(used_ids)) if remaining_ids else len(used_ids)
+    for label in ordered_labels:
+        if label in assigned:
+            continue
+        if remaining_ids:
+            assigned[label] = remaining_ids.pop(0)
+        else:
+            assigned[label] = next_id
+            next_id += 1
+    return assigned
+
+
+def _load_reference_profile_embeddings(classifier, torch, torchaudio, settings: dict | None) -> list[dict]:
+    references: list[dict] = []
+    for profile in trained_speaker_profiles(settings):
+        path = str(profile.get("primary_voice_path", "") or "")
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            get_logger().log(f"🔊 화자 학습 데이터 사용: {path}")
+            signal, sample_rate = torchaudio.load(path)
+            if signal.shape[0] > 1:
+                signal = signal.mean(dim=0, keepdim=True)
+            if sample_rate != 16000:
+                signal = torchaudio.functional.resample(signal, sample_rate, 16000)
+            max_samples = 16000 * 15
+            if signal.shape[1] > max_samples:
+                signal = signal[:, :max_samples]
+            signal = torch.nan_to_num(signal, nan=0.0, posinf=0.0, neginf=0.0).to(classifier.device)
+            with torch.no_grad():
+                embedding = classifier.encode_batch(signal).squeeze().cpu().numpy()
+            references.append(
+                {
+                    **profile,
+                    "embedding": _normalize_embedding(embedding),
+                }
+            )
+        except Exception as exc:
+            get_logger().log(f"⚠️ {profile.get('name', '화자')} 학습 데이터 분석 실패: {exc}")
+    return references
+
 def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2) -> list[dict]:
     cache_file = f"{os.path.splitext(file_path)[0]}_speaker_cache.json"
+    try:
+        from core.settings import load_settings
+
+        settings = load_settings()
+    except Exception:
+        settings = {}
+    reference_profiles = trained_speaker_profiles(settings)
+    cache_key = _speaker_cache_key(settings, max_speakers, reference_profiles)
     if os.path.exists(cache_file):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
-                speaker_map = json.load(f)
-            if speaker_map:
-                get_logger().log("⚡ [캐시 적중] 이전에 분석한 화자 분리 데이터를 불러왔습니다!")
-                return speaker_map
+                cached_payload = json.load(f)
+            if _cache_matches(cached_payload, cache_key):
+                speaker_map = list(cached_payload.get("speaker_map") or [])
+                if speaker_map:
+                    get_logger().log("⚡ [캐시 적중] 자동 화자 분리 캐시를 재사용합니다!")
+                    return speaker_map
+            elif isinstance(cached_payload, list):
+                get_logger().log("♻️ [화자 분리] 레거시 캐시를 자동 화자 프로필 기준으로 다시 계산합니다.")
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
             get_logger().log(f"⚠️ [화자 분리] 캐시 로드 실패: {exc}")
 
@@ -77,7 +301,6 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         import torch
         import torchaudio
         from speechbrain.inference.classifiers import EncoderClassifier
-        from sklearn.cluster import KMeans
     except ImportError as exc:
         log_missing_diarization_dependencies(missing_diarization_packages() or [str(exc)])
         return []
@@ -152,99 +375,27 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         if not embeddings:
             raise ValueError("오디오가 너무 짧거나 추출에 실패했습니다.")
             
-        # 💡 [핵심 해결 1] 임베딩(목소리 지문) 정규화! 
-        # 크기(음량)를 무시하고 오직 '목소리 톤'만으로 비교하여 20분 중 3분만 말하는 게스트의 목소리가 묻히지 않게 살려냅니다!
-        embeddings = np.array(embeddings)
-        embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
-        
-        kmeans = KMeans(n_clusters=max_speakers, random_state=42, n_init=10)
-        labels = kmeans.fit_predict(embeddings)
-        
-        smoothed_labels = list(labels)
-        for i in range(1, len(labels)-1):
-            if labels[i-1] == labels[i+1]:
-                smoothed_labels[i] = labels[i-1]
-        labels = smoothed_labels
+        embeddings = np.array([_normalize_embedding(item) for item in embeddings], dtype=np.float32)
+        cluster_count, labels, cluster_meta = _choose_cluster_count(embeddings, max_speakers)
+        labels = _smooth_cluster_labels(labels)
+        centroids = _cluster_centroids(embeddings, labels)
 
-        # 💡 [핵심] 대표님 목소리 학습 및 화자 1 고정 알고리즘
-        centroids = {}
-        for i, l in enumerate(labels):
-            if l not in centroids: centroids[l] = []
-            centroids[l].append(embeddings[i])
-            
-        for l in centroids:
-            centroids[l] = np.mean(centroids[l], axis=0)
+        reference_embeddings = _load_reference_profile_embeddings(classifier, torch, torchaudio, settings)
+        mapping, matched_profiles = _match_reference_profiles(centroids, reference_embeddings)
+        mapping = _assign_remaining_cluster_ids(labels, mapping, limit=max(3, int(max_speakers or 1)))
+        labels = [mapping[int(label)] for label in labels]
 
-        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ref_file = os.path.join(_project_root, "voice_data", "spk1_voice.wav")
-        ref_emb = None
-        try:
-            from core.settings import load_settings
-            settings = load_settings()
-            ref_disabled = bool(settings.get("spk1_voice_disabled", False))
-            configured = str(settings.get("spk1_voice_file", "") or "").strip()
-            if configured:
-                candidate = os.path.join(_project_root, "voice_data", configured)
-                if os.path.exists(candidate):
-                    ref_file = candidate
-            elif not os.path.exists(ref_file):
-                import glob
-                candidates = sorted(glob.glob(os.path.join(_project_root, "voice_data", "spk1_*.wav")))
-                if candidates:
-                    ref_file = candidates[0]
-        except Exception:
-            ref_disabled = False
-        if ref_disabled:
-            get_logger().log("🔇 화자 1 학습 데이터가 사용 해제되어 목소리 매칭을 건너뜁니다.")
-        if os.path.exists(ref_file) and not ref_disabled:
-            get_logger().log(f"🔊 화자 학습 데이터 사용: {ref_file}")
-            try:
-                get_logger().log("🎙️ 대표님 목소리(화자 1) 지문 데이터를 분석하여 우선 매칭합니다...")
-                r_sig, r_fs = torchaudio.load(ref_file)
-                if r_sig.shape[0] > 1: r_sig = r_sig.mean(dim=0, keepdim=True)
-                if r_fs != 16000: r_sig = torchaudio.functional.resample(r_sig, r_fs, 16000)
-                
-                # 메모리 방지를 위해 학습 데이터는 첫 15초만 잘라서 핵심 톤만 파악
-                max_samples = 16000 * 15
-                if r_sig.shape[1] > max_samples: r_sig = r_sig[:, :max_samples]
-                
-                r_sig = torch.nan_to_num(r_sig, nan=0.0, posinf=0.0, neginf=0.0).to(classifier.device)
-                with torch.no_grad():
-                    ref_emb = classifier.encode_batch(r_sig).squeeze().cpu().numpy()
-            except Exception as e:
-                get_logger().log(f"⚠️ 목소리 학습 데이터 분석 실패 (시간순 분리로 자동 전환): {e}")
-
-        # [diarize.py] 대표님 목소리 매칭 및 번호 할당 로직 부분 교체
-        # [diarize.py] 화자 번호 할당 및 정렬 로직 수정
-        mapping = {}
-        if ref_emb is not None:
-            best_sim = -1
-            best_label = None
-            # 영상 속 목소리들 중 대표님 목소리와 가장 똑같은 톤 찾기 (코사인 유사도)
-            for l, centroid in centroids.items():
-                sim = np.dot(ref_emb, centroid) / (np.linalg.norm(ref_emb) * np.linalg.norm(centroid))
-                if sim > best_sim:
-                    best_sim = sim
-                    best_label = l
-                    
-            # 💡 유사도 기준을 충족하여 대표님(0번)으로 확정된 경우에만 0번을 사용합니다.
-            if best_label is not None and best_sim > 0.2: 
-                mapping[best_label] = 0
-                get_logger().log(f"🎯 대표님 목소리 매칭 완료! (유사도: {best_sim*100:.1f}%)")
-            else:
-                if best_label is not None:
-                    get_logger().log(f"⚠️ 대표님 목소리 인식 실패 (최고 유사도 {best_sim*100:.1f}% < 기준 20%)")
-
-        # 💡 [핵심 버그 수정] 실제로 0번(화자 1)이 매칭되었는지 확인하여 다음 번호를 결정합니다.
-        # 만약 매칭에 실패했다면 0번이 비어있으므로, 첫 번째 화자에게 0번을 줍니다.
-        next_id = 1 if 0 in mapping.values() else 0
-        
-        for l in labels:
-            if l not in mapping:
-                mapping[l] = next_id
-                next_id += 1
-
-        labels = [mapping[l] for l in labels]
+        if matched_profiles:
+            for match in matched_profiles:
+                get_logger().log(
+                    "🎯 화자 학습 프로필 매칭 완료: "
+                    f"{match.get('name') or match.get('id')} -> SPEAKER_{match.get('id')} "
+                    f"(유사도 {float(match.get('score', 0.0) or 0.0) * 100:.1f}%)"
+                )
+        get_logger().log(
+            "🧠 자동 화자 군집 결정: "
+            f"{cluster_count}명 ({cluster_meta.get('reason')}, score={cluster_meta.get('score', 'n/a')})"
+        )
         
         # 4. 동일한 화자 구간 병합
         speaker_map = []
@@ -302,19 +453,11 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         except Exception:
             pass
         try:
-            del ref_emb
-        except Exception:
-            pass
-        try:
             del embeddings
         except Exception:
             pass
         try:
             del centroids
-        except Exception:
-            pass
-        try:
-            del kmeans
         except Exception:
             pass
         clear_audio_model_memory_caches(include_gpu=True)
@@ -327,7 +470,16 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         get_logger().log(f"✅ 화자 분리 완료! 총 {len(speaker_map)}번의 대화 교체가 감지되었습니다.")
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(speaker_map, f, ensure_ascii=False, indent=2)
+                json.dump(
+                    {
+                        "schema": _DIARIZE_CACHE_SCHEMA,
+                        "cache_key": cache_key,
+                        "speaker_map": speaker_map,
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
         except (OSError, TypeError, ValueError) as exc:
             get_logger().log(f"⚠️ [화자 분리] 캐시 저장 실패: {exc}")
         
