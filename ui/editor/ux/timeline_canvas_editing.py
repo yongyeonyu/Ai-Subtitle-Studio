@@ -31,7 +31,7 @@ class _TimelineInlineTextEdit(QPlainTextEdit):
         super().__init__(canvas)
         self._canvas = canvas
         self.setObjectName("timelineInlineTextEdit")
-        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setWindowFlags(Qt.WindowType.Widget); self.setProperty("timelineInlineEditorRole", "segment-inline-locked")
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
@@ -855,10 +855,10 @@ class TimelineInlineEditMixin:
         self._cursor_vis = False
         self._cursor_timer.stop()
         if editor is not None:
-            editor.hide()
-        self.sig_editing_mode.emit(False)
+            editor.clearFocus(); editor.hide()
         self._update_inline_edit_region(line)
-        self.setFocus()
+        # 편집 종료 신호 전에 canvas 포커스를 회복해야 전역 Space 재생 단축키가 다시 켜진다.
+        self.setFocus(); self.sig_editing_mode.emit(False)
 
     def _handle_edit_key(self, ev):
         if ev.key() == Qt.Key.Key_Space and not (ev.modifiers() & ~Qt.KeyboardModifier.ShiftModifier):

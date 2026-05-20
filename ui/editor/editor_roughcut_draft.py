@@ -32,7 +32,14 @@ class EditorRoughcutDraftMixin:
             thread_alive = False
         if thread_alive:
             return False
+        try:
+            current_auto_epoch = int(getattr(self, "_roughcut_draft_auto_schedule_epoch", 0) or 0)
+        except Exception:
+            current_auto_epoch = 0
         if not (timer_active or pending or status == "queued"):
+            if str(reason or "").strip() == "수동 저장" and current_auto_epoch > 0:
+                self._roughcut_draft_auto_schedule_blocked_epoch = current_auto_epoch
+                self._roughcut_draft_cancelled = True
             return False
         if timer is not None:
             try:
@@ -40,6 +47,8 @@ class EditorRoughcutDraftMixin:
             except Exception:
                 pass
         self._roughcut_draft_pending = False
+        self._roughcut_draft_cancelled = True
+        self._roughcut_draft_auto_schedule_blocked_epoch = current_auto_epoch
         self._roughcut_draft_generation = int(getattr(self, "_roughcut_draft_generation", 0) or 0) + 1
         self._set_roughcut_draft_status("idle")
         mark_done = getattr(self, "_mark_roughcut_queue_done", None)
@@ -651,6 +660,22 @@ class EditorRoughcutDraftMixin:
         require_autorun: bool = True,
         settings_override: dict | None = None,
     ):
+        manual_run = bool(getattr(self, "_roughcut_draft_manual_run_requested", False))
+        try:
+            current_epoch = int(getattr(self, "_roughcut_draft_auto_schedule_epoch", 0) or 0)
+            blocked_epoch = int(getattr(self, "_roughcut_draft_auto_schedule_blocked_epoch", 0) or 0)
+        except Exception:
+            current_epoch = 0
+            blocked_epoch = 0
+        if not manual_run and current_epoch > 0 and blocked_epoch == current_epoch:
+            # 수동 저장이 취소한 생성완료 singleShot 예약이 뒤늦게 와도 러프컷 LLM을 부활시키지 않는다.
+            self._roughcut_draft_pending = False
+            self._set_roughcut_draft_status("idle")
+            if isinstance(settings_override, dict):
+                self._roughcut_draft_settings_override = None
+            get_logger().log("⏭️ 러프컷 자동 실행 생략: 수동 저장으로 취소된 예약입니다.")
+            return
+        self._roughcut_draft_cancelled = False
         if isinstance(settings_override, dict):
             self._roughcut_draft_settings_override = dict(settings_override)
         if force and require_autorun and not self._roughcut_draft_post_generation_autorun_enabled():
@@ -678,7 +703,6 @@ class EditorRoughcutDraftMixin:
         if force or not timer.isActive():
             self._roughcut_draft_pending = True
             self._set_roughcut_draft_status("queued")
-            manual_run = bool(getattr(self, "_roughcut_draft_manual_run_requested", False))
             queue_text = "⏳ [러프컷 LLM] 수동 실행 대기" if manual_run else "⏳ [러프컷 LLM] 후처리 대기"
             self._mark_roughcut_queue_active(queue_text)
             if manual_run:
@@ -689,7 +713,17 @@ class EditorRoughcutDraftMixin:
                 get_logger().log("⏳ 러프컷 LLM 후처리 예약: 부분 재인식 완료 후 중분류 초안을 갱신합니다.")
             timer.start(120 if force else 300)
 
+    def _consume_cancelled_roughcut_timeout(self) -> bool:
+        if not bool(getattr(self, "_roughcut_draft_cancelled", False)) or bool(
+            getattr(self, "_roughcut_draft_manual_run_requested", False)
+        ):
+            return False
+        self._roughcut_draft_pending = False
+        self._set_roughcut_draft_status("idle")
+        return True
+
     def _run_post_generation_roughcut_draft(self):
+        if self._consume_cancelled_roughcut_timeout(): return
         if not self._roughcut_draft_runtime_enabled():
             self._roughcut_draft_pending = False
             self._set_roughcut_draft_status("disabled")
@@ -713,7 +747,6 @@ class EditorRoughcutDraftMixin:
         thread = getattr(self, "_roughcut_draft_thread", None)
         if thread is not None and thread.is_alive():
             return
-
         segments = [
             dict(seg)
             for seg in self._get_current_segments()

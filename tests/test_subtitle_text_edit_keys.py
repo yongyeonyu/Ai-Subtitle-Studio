@@ -73,7 +73,7 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.deleteLater()
             self.app.processEvents()
 
-    def test_bare_shift_toggles_video_play_from_text_editor(self):
+    def test_bare_shift_does_not_start_video_from_text_editor(self):
         edit = SubtitleTextEdit()
         try:
             toggle_play = Mock()
@@ -91,7 +91,7 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             )
             edit.keyPressEvent(event)
 
-            toggle_play.assert_called_once_with()
+            toggle_play.assert_not_called()
             pause_playback.assert_not_called()
             self.assertTrue(event.isAccepted())
         finally:
@@ -118,6 +118,38 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
 
             pause_playback.assert_called_once_with()
             self.assertEqual(edit.toPlainText(), "a")
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_space_key_edits_text_without_starting_video(self):
+        edit = SubtitleTextEdit()
+        try:
+            toggle_play = Mock()
+            pause_playback = Mock()
+            edit._parent_widget = SimpleNamespace(
+                _toggle_video_play=toggle_play,
+                _pause_playback_for_keyboard_edit=pause_playback,
+                editor_popup=SimpleNamespace(is_visible=lambda: False),
+            )
+            edit.setPlainText("안녕세계")
+            cursor = edit.textCursor()
+            cursor.setPosition(2)
+            edit.setTextCursor(cursor)
+
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_Space,
+                Qt.KeyboardModifier.NoModifier,
+                " ",
+            )
+            edit.keyPressEvent(event)
+
+            toggle_play.assert_not_called()
+            pause_playback.assert_called_once_with()
+            self.assertEqual(edit.toPlainText(), "안녕 세계")
+            self.assertTrue(event.isAccepted())
         finally:
             edit.close()
             edit.deleteLater()
@@ -259,6 +291,19 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
         try:
             self.assertIsNone(edit._quick_layer)
             self.assertFalse(edit._quick_layer_overlay_text_active())
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_focus_in_disables_window_space_shortcut_while_editing(self):
+        edit = SubtitleTextEdit()
+        shortcut = SimpleNamespace(setEnabled=Mock())
+        edit._parent_widget = SimpleNamespace(space_shortcut=shortcut)
+        try:
+            edit.focusInEvent(QFocusEvent(QEvent.Type.FocusIn))
+
+            shortcut.setEnabled.assert_called_once_with(False)
         finally:
             edit.close()
             edit.deleteLater()

@@ -914,14 +914,18 @@ class VideoPlayerSurfaceMixin:
                     widget.setUpdatesEnabled(False)
             except Exception as exc:
                 self._log_video_surface_nonfatal(f"shutdown_hide_widget:{widget_name}", exc)
-        try:
-            self.media_player.durationChanged.disconnect(self._on_duration_changed)
-        except Exception as exc:
-            self._log_video_surface_nonfatal("shutdown_disconnect_duration", exc)
-        try:
-            self.media_player.mediaStatusChanged.disconnect(self._on_media_status_changed)
-        except Exception as exc:
-            self._log_video_surface_nonfatal("shutdown_disconnect_status", exc)
+        duration_signal = getattr(self.media_player, "durationChanged", None)
+        if duration_signal is not None:
+            try:
+                duration_signal.disconnect(self._on_duration_changed)
+            except Exception as exc:
+                self._log_video_surface_nonfatal("shutdown_disconnect_duration", exc)
+        status_signal = getattr(self.media_player, "mediaStatusChanged", None)
+        if status_signal is not None:
+            try:
+                status_signal.disconnect(self._on_media_status_changed)
+            except Exception as exc:
+                self._log_video_surface_nonfatal("shutdown_disconnect_status", exc)
         seen_players = set()
         for player_name in ("media_player", "vocal_player", "audio_player"):
             player = getattr(self, player_name, None)

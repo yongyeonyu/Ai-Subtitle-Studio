@@ -1,98 +1,17 @@
-# Native Library Plan
+# Native Library Plan - Pointer
 
-This file contains only the remaining native-library work and migration rules.
-Completed native modules are intentionally omitted from the active queue.
+The active native migration plan, migration rules, graduation checklist,
+rejection boundaries, and execution order have been consolidated into
+`idea_item.md`.
 
-## Migration Rules
+Completed native-library items must be deleted from this file instead of kept as
+checked history. This file should remain a pointer unless the owner explicitly
+asks to restore a separate native queue.
 
-- Migrate by function family, not by whole orchestration files.
-- Keep Python fallback until parity, performance, and real-media behavior are proven.
-- Prefer Swift for Apple-platform reusable core logic and C++ for narrow numeric kernels already adjacent to existing C++ paths.
-- Use `.js` only when the runtime boundary is already JavaScript/QML-oriented and the measured result is equal or faster.
-- Do not migrate live Qt widgets, mutable editor state, subprocess orchestration, model-worker ownership, or UI callbacks.
-- Do not change UI, UX, subtitle quality, or existing behavior as part of native migration unless the owner explicitly approves it.
-- Promote native code only when the native path is equal or faster than the current cached Python path on real fixtures.
+Use this source of truth:
 
-## Graduation Checklist
+- `idea_item.md`
+- Section: `2026-05-20 최종 통합 실행 계획: ACTION_ITEMS + NATIVE_LIB_PLAN 전체`
 
-A Python function family may move into native library form only when all items are true:
-
-- The behavior is deterministic for the same input.
-- It can be expressed as JSON-in / JSON-out or typed value-in / value-out.
-- It does not depend on live Qt objects.
-- It does not own long-running model processes.
-- It already has focused tests for the Python behavior.
-- The interface is stable enough to justify compile/build overhead.
-- A Python fallback exists and stays covered by tests.
-- Benchmarks include a real fixture, not only synthetic payloads.
-
-## Active Native Queue
-
-- [ ] 1. Benchmark native media-info normalization against the current cached Python path.
-  Scope: probe-result normalization, media-info copy/presence helpers, cache-key shaping, and ffprobe-result payload shaping only.
-  Keep in Python: ffprobe subprocess orchestration, file stat/fingerprint collection, project-session ownership, and UI status display.
-  Promote only if: Swift normalization beats or matches the cached Python path on project open/save benchmarks without changing serialized media metadata.
-  Verification: Macau project smoke plus project open/save benchmark; use Tinyping only if long-media project metadata is affected.
-
-- [ ] 2. Prepare cut-boundary scoring and alignment loops for Swift/C++.
-  Scope: deterministic color/gray/delta/alignment scoring loops, dense frame comparison kernels, and boundary-candidate numeric reduction.
-  Prerequisite: split helper-builder functions in `core/pipeline/cut_boundary_helpers.py`, `core/cut_boundary_auto_scan.py`, and `core/cut_boundary_auto_verify.py` into stable Python interfaces first.
-  Keep in Python: UI helper-line policy, project mutation, logging, worker orchestration, media probing, and fallback routing.
-  Verification: cut-boundary unit tests plus Macau visual smoke.
-
-- [ ] 3. Prepare subtitle candidate scoring and sequence smoothing for native acceleration.
-  Scope: `core/audio/stt_candidate_scorer.py`, `core/audio/stt_lattice.py`, `core/engine/subtitle_accuracy_pipeline.py`, `core/engine/subtitle_timing.py`, and `core/engine/word_resegmenter.py` hot loops.
-  Prerequisite: isolate scorer/planner interfaces and preserve original STT evidence ranges before native promotion.
-  Promote only if: final subtitle text/timing accuracy is equal or higher on X5 and Tinyping checks.
-  Verification: X5 accuracy slice plus targeted unit tests.
-
-- [ ] 4. Split oversized Swift core files before expanding native features.
-  Scope:
-  `TimelineEditing.swift` -> geometry, magnet, undo, and serialization files.
-  `NativePolicyEngine.swift` -> scoring, retrieval, and decision files.
-  `RuntimeETAEstimator.swift` -> persistence and prediction files.
-  Progress: 2026-05-20 `TimelineEditing.swift` 분해 1차 완료. public contract는 `TimelineEditingModels.swift`, geometry/drag는 `TimelineEditingDrag.swift`, magnet은 `TimelineEditingMagnet.swift`, preview/STT selection은 `TimelineEditingPreviewSelection.swift`, undo/SRT load/fingerprint는 `TimelineEditingPersistence.swift`로 이동했다.
-  Progress: 2026-05-20 `RuntimeETAEstimator.swift` 분해 1차 완료. public API는 얇게 유지하고 `RuntimeETAEstimatorModels.swift`, `RuntimeETAEstimatorPrediction.swift`, `RuntimeETAEstimatorRequest.swift`, `RuntimeETAEstimatorStore.swift`로 request/prediction/persistence 책임을 분리했다.
-  Progress: 2026-05-20 `swift test` 38개 통과, current-code bundle rebuilt, 마카오 직접 파이프라인 검증 `output/manual_verification/latest/20260520_native_swift_split_macau_high_verify` 완료.
-  Next: `NativePolicyEngine.swift`만 남은 oversized Swift core split 대상으로 유지한다.
-  Promote only if: Swift tests stay green and Python bridge contracts do not change.
-  Verification: `swift test` in `native/macos/AIStudioNative`.
-
-- [ ] 5. Measure native bridge payload sizes before adding new bridge calls.
-  Scope: `core/native_swift_policy.py`, `core/native_swift_subtitle.py`, `core/native_swift_timeline.py`, `core/native_json.py`, and the persistent `core-jsonl-worker`.
-  Success: large-batch native calls are preferred only when serialization/bridge cost does not erase the native win.
-  Keep in Python: small payloads where cached Python work is cheaper than bridge setup.
-  Verification: JSON payload size logs plus targeted benchmark artifacts under `output/manual_verification/latest/`.
-
-- [ ] 6. Runtime 캐시 정리 native 경로의 경량화
-  Scope: `core/native_swift_runtime_cache.py` 및 호출측 정리 호출 빈도.
-  Current note: 2026-05-20 마카오/X5 10회 반복에서는 Python checkpoint cleanup을 더 느슨하게 하는 것만으로는 X5가 빨라지지 않았다.
-  Progress: 2026-05-20 `tools/verify_full_media_pipeline.py`가 `stage_trim_total_elapsed_ms`, `stage_trim_executed_count`, `stage_trim_slowest_stage`를 repeat artifact에 실을 수 있게 되어, 이후 Swift runtime cache prune 호출 수/elapsed를 같은 형식으로 비교할 수 있다.
-  Progress: 2026-05-20 실앱 마카오 run에서는 `stt_optimizer_threads_done` 직후 trim summary가 `executed_count=1`, `total_elapsed_ms=14.669`로 찍혔고, 종료 직후 남아 있던 `Ollama`/`WhisperKitPersistentWorker` residency는 2초 settle 뒤 RSS가 크게 줄었다. 현재 우선순위는 native trim 호출 자체보다 warm-session에서 `critical`을 만드는 residency/압축메모리 조건 재현이다.
-  다음 패스는 cleanup 완화보다 `stage_trim.elapsed_ms`, `stage_trim.action_timings`, `stage_trim.failures`로 native bridge 호출 수와 elapsed를 먼저 계측해야 한다.
-  Success: 연속 실행에서 동일 경로 정리 요청이 중복되는 동안 Swift 호출 오버헤드가 낮아지고,
-  동일한 기능 요구 대비 브리지 비용이 증가하지 않는다.
-  Verification: 반복 10회 벤치에서 `memory_manager` 정리 로그 및 전체 pipeline 평균 시간 비교.
-
-## Parked Or Rejected For Now
-
-- `core/project/project_model_settings.py`
-  Decision: keep Python-side.
-  Reason: payload is small, deterministic Python reads are cheap, and bridge/parity cost is higher than the likely gain.
-
-- `core/audio/media_processor_transcribe.py`
-- `core/audio/media_processor_audio.py`
-- `core/pipeline/single_pipeline.py`
-- `core/pipeline/backend_core.py`
-- `core/backend_fast.py`
-- most `ui/editor/*`
-- most `ui/timeline/*` widgets with Qt object state
-- live automation/status snapshot assembly in `ui/main/app_command_bridge.py`
-  Decision: do not migrate as whole modules.
-  Reason: these paths own Qt lifecycle, subprocesses, dynamic settings, model routing, mutable project state, live logger state, or UI callbacks.
-
-## Practical Target
-
-Native code should own stable algorithmic hot paths, repeated large-batch transforms, deterministic layout/scoring/planning, and canonical serialization/normalization rules.
-
-Native code should not be used just to reduce Python line count. If a migration mirrors live UI/runtime state or adds bridge overhead without a measured win, leave it in Python and refactor the Python boundary instead.
+Standalone native action items are intentionally not duplicated here. Completed
+native split history and stale active queue text were removed from this file.

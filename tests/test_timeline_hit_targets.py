@@ -30,6 +30,7 @@ from ui.timeline.timeline_constants import (
 )
 from ui.timeline.timeline_paint import (
     build_stt_selection_index,
+    should_paint_subtitle_segment_text,
     stt_candidate_selected,
     stt_candidate_selected_by_llm,
     stt_candidate_selection_state,
@@ -38,10 +39,13 @@ from ui.timeline.timeline_paint import (
 from ui.timeline.timeline_segment_style import official_boundary_marker_visual
 from ui.timeline.timeline_analysis import subtitle_detection_segments_for_editor
 from ui.editor.editor_helpers import make_gap_ud
+from ui.editor.editor_multiclip_context import EditorMulticlipContextMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 from ui.editor.editor_video_controls import EditorVideoControlsMixin
+from ui.editor.undo_manager import UndoManager
+from ui.editor.ux.timeline_playhead_mode import dispatch_playhead_arrow_step
 from ui.editor import timeline_scan_cut_relative_refine as scan_cut_relative_refine
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
@@ -74,6 +78,10 @@ class _GapGenerateEditor(EditorTimelineVideoMixin, EditorSegmentsMixin):
 
     def _mark_dirty(self):
         self.dirty = True
+
+
+class _GapGenerateUndoRouteEditor(EditorMulticlipContextMixin, _GapGenerateEditor):
+    pass
 
 
 class _ReviewEditor(EditorVideoControlsMixin, EditorSegmentsMixin):
@@ -427,6 +435,82 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.close()
             canvas.deleteLater()
             holder.deleteLater()
+
+    def test_canvas_keypress_space_toggles_play_pause_after_inline_edit_enter_commit(self):
+        holder = QWidget()
+        holder._toggle_video_play = Mock()
+        canvas = TimelineCanvas(holder)
+        try:
+            canvas.pps = 100.0
+            canvas.total_duration = 4.0
+            canvas.segments = [
+                {"start": 1.0, "end": 2.5, "text": "캔버스 자막", "line": 0},
+            ]
+            canvas.start_inline_edit(0, 1.0)
+            inline_editor = canvas._ensure_inline_editor()
+
+            commit_event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_Return,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            inline_editor.keyPressEvent(commit_event)
+            self.assertFalse(canvas._edit_active)
+            self.assertTrue(commit_event.isAccepted())
+
+            play_event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_Space,
+                Qt.KeyboardModifier.NoModifier,
+                " ",
+            )
+            canvas.keyPressEvent(play_event)
+
+            holder._toggle_video_play.assert_called_once_with()
+            self.assertTrue(play_event.isAccepted())
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+            holder.deleteLater()
+
+    def test_inline_edit_enter_restores_canvas_focus_before_editing_mode_signal(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.pps = 100.0
+            canvas.total_duration = 4.0
+            canvas.segments = [
+                {"start": 1.0, "end": 2.5, "text": "캔버스 자막", "line": 0},
+            ]
+            focus_at_end = []
+            canvas.sig_editing_mode.connect(
+                lambda active: focus_at_end.append(QApplication.focusWidget()) if not active else None
+            )
+            canvas.show()
+            canvas.activateWindow()
+            canvas.setFocus()
+            self.app.processEvents()
+
+            canvas.start_inline_edit(0, 1.0)
+            inline_editor = canvas._ensure_inline_editor()
+            inline_editor.setFocus()
+            self.app.processEvents()
+
+            commit_event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_Return,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            inline_editor.keyPressEvent(commit_event)
+            self.app.processEvents()
+
+            self.assertFalse(canvas._edit_active)
+            self.assertTrue(focus_at_end)
+            self.assertIs(focus_at_end[-1], canvas)
+            self.assertIsNot(QApplication.focusWidget(), inline_editor)
+        finally:
+            canvas.close()
+            canvas.deleteLater()
 
     def test_segment_drag_snap_ignores_stt_preview_lanes(self):
         canvas = TimelineCanvas()
@@ -827,6 +911,75 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertIsNotNone(canvas._scan_boundary_hit_at(canvas._x(2.0) + 18, boundary_y, margin=7))
         self.assertTrue(canvas._playhead_handle_hit_rect().contains(canvas._x(1.0) + 16, 8))
 
+    def test_playhead_handle_drag_preserves_keyboard_focus_mode(self):
+        canvas = self._canvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.total_duration = 4.0
+            canvas.set_playhead(1.0)
+            canvas.focus_mode = "segment"
+            canvas.show()
+            self.app.processEvents()
+
+            handle_pos = QPoint(canvas._x(1.0), 8)
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, handle_pos)
+            self.app.processEvents()
+            QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, handle_pos)
+
+            self.assertEqual(canvas.focus_mode, "segment")
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_playhead_click_preserves_keyboard_focus_mode(self):
+        canvas = self._canvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.total_duration = 5.0
+            canvas.show()
+            self.app.processEvents()
+
+            scrubbed = []
+            canvas.scrub_sec.connect(scrubbed.append)
+
+            canvas.focus_mode = "segment"
+            QTest.mouseClick(
+                canvas,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(canvas._x(3.2), RULER_H + 8),
+            )
+            self.app.processEvents()
+            self.assertEqual(canvas.focus_mode, "segment")
+            self.assertAlmostEqual(scrubbed[-1], 3.2)
+
+            canvas.focus_mode = "waveform"
+            QTest.mouseClick(
+                canvas,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(canvas._x(1.5), SEG_TOP + 32),
+            )
+            self.app.processEvents()
+            self.assertEqual(canvas.focus_mode, "waveform")
+            self.assertAlmostEqual(scrubbed[-1], 1.5)
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_left_right_dispatch_restores_keyboard_selected_focus_mode(self):
+        target = SimpleNamespace(focus_mode="segment", update=Mock())
+
+        def mutate_mode(_direction):
+            target.focus_mode = "waveform"
+            return True
+
+        target._dispatch_frame_step = mutate_mode
+
+        self.assertTrue(dispatch_playhead_arrow_step(target, 1))
+        self.assertEqual(target.focus_mode, "segment")
+        target.update.assert_called_once()
+
     def test_tablet_profile_expands_timeline_zoom_buttons(self):
         timeline = TimelineWidget()
         try:
@@ -1180,6 +1333,44 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertTrue(doc.findBlockByNumber(2).userData().is_gap)
             self.assertAlmostEqual(doc.findBlockByNumber(2).userData().start_sec, 3.0)
             self.assertTrue(editor.finalized)
+        finally:
+            editor.text_edit.close()
+
+    def test_gap_generate_undo_routes_to_snapshot_before_textedit_undo(self):
+        editor = _GapGenerateUndoRouteEditor()
+        editor.finalized = False
+        editor._undo_mgr = UndoManager(editor)
+        editor.timeline = None
+        editor.video_player = None
+        editor.video_fps = 30.0
+        editor._timeline_timer = SimpleNamespace(start=Mock())
+        editor.text_edit = _TimelineTextEdit()
+        editor.text_edit.setUndoRedoEnabled(True)
+        try:
+            editor.text_edit.setPlainText("앞\n\n뒤")
+            doc = editor.text_edit.document()
+            doc.findBlockByNumber(0).setUserData(SubtitleBlockData("00", 0.0))
+            doc.findBlockByNumber(1).setUserData(make_gap_ud(1.0))
+            doc.findBlockByNumber(2).setUserData(SubtitleBlockData("00", 5.0))
+            editor.text_edit.show()
+            editor.text_edit.setFocus()
+            self.app.processEvents()
+
+            editor._on_gap_generate_requested(1.0, 5.0, 3.0, "to")
+
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞", "새자막", "", "뒤"])
+            self.assertEqual(getattr(editor, "_snapshot_undo_revision", None), editor._editor_doc_revision())
+
+            editor._route_undo()
+
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞", "", "뒤"])
+            self.assertIsInstance(doc.findBlockByNumber(1).userData(), SubtitleBlockData)
+            self.assertTrue(doc.findBlockByNumber(1).userData().is_gap)
+
+            editor._route_redo()
+
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞", "새자막", "", "뒤"])
+            self.assertFalse(doc.findBlockByNumber(1).userData().is_gap)
         finally:
             editor.text_edit.close()
 
@@ -1998,7 +2189,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(visual["width"], 2)
         self.assertEqual(visual["style"], "solid")
 
-    def test_set_active_repaints_only_segment_region(self):
+    def test_set_active_repaints_full_canvas_in_single_owner_2d_mode(self):
         canvas = self._canvas()
         canvas.resize(500, canvas.height())
 
@@ -2006,12 +2197,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.set_active(1.0)
 
         update.assert_called_once()
-        args = update.call_args.args
-        self.assertEqual(len(args), 1)
-        rect = args[0]
-        self.assertLess(rect.width(), canvas.width())
-        self.assertGreaterEqual(rect.left(), 0)
-        self.assertLessEqual(rect.right(), canvas.width())
+        self.assertEqual(update.call_args.args, ())
 
     def test_active_segment_uses_line_not_nearby_start_time(self):
         canvas = self._canvas()
@@ -2039,7 +2225,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertTrue(canvas._is_active_segment(canvas.segments[0]))
         self.assertFalse(canvas._is_active_segment(canvas.segments[1]))
 
-    def test_external_playhead_overlay_does_not_repaint_timeline_body_during_playback(self):
+    def test_legacy_external_playhead_overlay_flag_does_not_bypass_single_owner_2d_repaint(self):
         canvas = self._canvas()
         canvas.resize(640, canvas.height())
         canvas._external_playhead_overlay = True
@@ -2050,7 +2236,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         with patch.object(canvas, "update") as update:
             canvas.set_playhead(2.4)
 
-        update.assert_not_called()
+        update.assert_called_once_with()
 
     def test_hovered_arrow_stays_active_when_segment_objects_refresh(self):
         canvas = self._canvas()
@@ -2139,7 +2325,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.close()
             canvas.deleteLater()
 
-    def test_native_inline_editor_stays_inside_subtitle_lane_not_popup_sized(self):
+    def test_native_inline_editor_stays_inside_subtitle_segment_text_box(self):
         canvas = TimelineCanvas()
         try:
             canvas.resize(520, canvas.height())
@@ -2157,12 +2343,33 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertIsNotNone(editor)
             self.assertFalse(editor.isWindow())
             self.assertIs(editor.parentWidget(), canvas)
+            self.assertEqual(editor.property("timelineInlineEditorRole"), "segment-inline-locked")
             self.assertGreaterEqual(editor.geometry().top(), SUBTITLE_TOP)
             self.assertLessEqual(editor.geometry().bottom(), SUBTITLE_BOT)
             self.assertLessEqual(editor.geometry().height(), (SUBTITLE_BOT - SUBTITLE_TOP))
+            self.assertTrue(editor.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+            self.assertIn("background: transparent", editor.styleSheet())
         finally:
             canvas.close()
             canvas.deleteLater()
+
+    def test_native_inline_editor_suppresses_background_segment_text(self):
+        self.assertFalse(
+            should_paint_subtitle_segment_text(
+                native_inline_active=True,
+                rect_width=220,
+                dense_segment_mode=False,
+                focus_detail=True,
+            )
+        )
+        self.assertTrue(
+            should_paint_subtitle_segment_text(
+                native_inline_active=False,
+                rect_width=220,
+                dense_segment_mode=False,
+                focus_detail=True,
+            )
+        )
 
     def test_inline_edit_enter_uses_playhead_split_when_started_with_split_mode(self):
         canvas = TimelineCanvas()
@@ -2961,6 +3168,37 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertIn(1.25, [round(value, 2) for value in scrubbed])
             self.assertNotIn(1.80, [round(value, 2) for value in scrubbed])
             self.assertIsNone(getattr(canvas, "_playhead_cut_magnet_locked_sec", None))
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_playhead_auto_cut_magnet_pins_shadow_at_found_boundary(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.frame_rate = 100.0
+            canvas.pps = 100.0
+            canvas.total_duration = 5.0
+            canvas.playhead_sec = 1.0
+            canvas._arm_shadow_playhead(1.0)
+            scrubbed = []
+            canvas.scrub_sec.connect(scrubbed.append)
+            canvas._playhead_auto_cut_snap_sec = Mock(
+                side_effect=lambda target, previous: (1.25, True) if float(target) > 1.05 else (target, False)
+            )
+            canvas.show()
+            self.app.processEvents()
+
+            start = QPoint(canvas._x(1.0), 9)
+            end = QPoint(canvas._x(1.20), 9)
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+            QTest.mouseMove(canvas, end, delay=1)
+            self.app.processEvents()
+            QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
+
+            self.assertIn(1.25, [round(value, 2) for value in scrubbed])
+            self.assertAlmostEqual(canvas.shadow_playhead_sec or 0.0, 1.25, places=3)
+            self.assertIsNone(getattr(canvas, "_shadow_playhead_armed_sec", None))
         finally:
             canvas.close()
             canvas.deleteLater()

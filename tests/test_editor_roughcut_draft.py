@@ -76,6 +76,151 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertEqual(editor._roughcut_draft_generation, 5)
         self.assertEqual(editor._roughcut_draft_status, "idle")
         self.assertEqual(editor.queue_done_calls, 1)
+        self.assertTrue(editor._roughcut_draft_cancelled)
+
+    def test_cancelled_post_generation_roughcut_ignores_stale_timeout(self):
+        class _Timer:
+            def __init__(self):
+                self.active = True
+
+            def isActive(self):
+                return self.active
+
+            def stop(self):
+                self.active = False
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 1
+                self._roughcut_draft_status = "queued"
+                self._roughcut_draft_thread = None
+                self.get_segments = mock.Mock(side_effect=AssertionError("cancelled roughcut must not inspect subtitles"))
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _mark_roughcut_queue_done(self, **_kwargs):
+                pass
+
+            def _get_current_segments(self):
+                return self.get_segments()
+
+        editor = _Editor()
+
+        self.assertTrue(editor._cancel_post_generation_roughcut_draft(reason="수동 저장"))
+        editor._run_post_generation_roughcut_draft()
+
+        self.assertEqual(editor._roughcut_draft_status, "idle")
+        self.assertFalse(editor._roughcut_draft_pending)
+        editor.get_segments.assert_not_called()
+
+    def test_manual_save_cancel_blocks_delayed_auto_schedule_single_shot(self):
+        class _Timer:
+            def __init__(self):
+                self.started = []
+                self.active = False
+
+            def isActive(self):
+                return self.active
+
+            def stop(self):
+                self.active = False
+
+            def start(self, ms):
+                self.active = True
+                self.started.append(int(ms))
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 7
+                self._roughcut_draft_status = "queued"
+                self._roughcut_draft_thread = None
+                self._roughcut_draft_auto_schedule_epoch = 3
+                self._roughcut_draft_settings_override = None
+                self.queue_notes = []
+
+            def _roughcut_draft_post_generation_autorun_enabled(self):
+                return True
+
+            def _roughcut_draft_runtime_enabled(self):
+                return True
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _mark_roughcut_queue_active(self, note):
+                self.queue_notes.append(note)
+
+            def _mark_roughcut_queue_done(self, **_kwargs):
+                pass
+
+        editor = _Editor()
+
+        self.assertTrue(editor._cancel_post_generation_roughcut_draft(reason="수동 저장"))
+        editor._schedule_post_generation_roughcut_draft(force=True)
+
+        self.assertEqual(editor._roughcut_draft_status, "idle")
+        self.assertFalse(editor._roughcut_draft_pending)
+        self.assertEqual(editor._roughcut_draft_timer.started, [])
+        self.assertEqual(editor.queue_notes, [])
+
+        editor._roughcut_draft_manual_run_requested = True
+        editor._schedule_post_generation_roughcut_draft(force=True, require_autorun=False)
+
+        self.assertEqual(editor._roughcut_draft_status, "queued")
+        self.assertTrue(editor._roughcut_draft_pending)
+        self.assertEqual(editor._roughcut_draft_timer.started, [120])
+
+    def test_manual_save_blocks_delayed_auto_schedule_even_if_pending_flag_was_cleared(self):
+        class _Timer:
+            def __init__(self):
+                self.started = []
+                self.active = False
+
+            def isActive(self):
+                return self.active
+
+            def stop(self):
+                self.active = False
+
+            def start(self, ms):
+                self.active = True
+                self.started.append(int(ms))
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_pending = False
+                self._roughcut_draft_generation = 7
+                self._roughcut_draft_status = "idle"
+                self._roughcut_draft_thread = None
+                self._roughcut_draft_auto_schedule_epoch = 4
+                self._roughcut_draft_settings_override = None
+
+            def _roughcut_draft_post_generation_autorun_enabled(self):
+                return True
+
+            def _roughcut_draft_runtime_enabled(self):
+                return True
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _mark_roughcut_queue_active(self, note):
+                raise AssertionError("manual-save-blocked roughcut must not update queue")
+
+        editor = _Editor()
+
+        self.assertFalse(editor._cancel_post_generation_roughcut_draft(reason="수동 저장"))
+        editor._schedule_post_generation_roughcut_draft(force=True)
+
+        self.assertEqual(editor._roughcut_draft_status, "idle")
+        self.assertFalse(editor._roughcut_draft_pending)
+        self.assertEqual(editor._roughcut_draft_timer.started, [])
 
     def test_foreground_activity_cancels_pending_post_generation_roughcut(self):
         class _Editor(EditorSegmentsRuntimeCacheMixin):

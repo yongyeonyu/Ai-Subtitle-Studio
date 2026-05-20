@@ -128,6 +128,26 @@ class _SourceSrtSaveEditor(EditorSaveManagerMixin):
         return list(segs or [])
 
 
+class _AutoProjectCreateSaveEditor(EditorSaveManagerMixin):
+    def __init__(self):
+        self.media_path = "/tmp/manual-save-source.mp4"
+        self.settings = {"roughcut_llm_enabled": True}
+        self.timeline = SimpleNamespace(
+            lock_chk=SimpleNamespace(isChecked=Mock(return_value=False)),
+            canvas=SimpleNamespace(_active_clip_idx=0),
+        )
+        self._window = SimpleNamespace(
+            _current_project_path="",
+            _multiclip_files=[],
+            _log_visible=False,
+            _dashboard_mode="dashboard",
+            _project_panel_visible=True,
+        )
+
+    def window(self):
+        return self._window
+
+
 class _CompletionEditor(EditorPipelineMixin):
     def __init__(self):
         self._segment_state = [{"start": 0.0, "end": 1.0, "text": "ok"}]
@@ -294,6 +314,17 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor._flush_pending_segment_queue_now.assert_not_called()
         editor._get_current_segments.assert_not_called()
 
+    def test_manual_save_cancels_pending_roughcut_even_when_nothing_changed(self):
+        editor = _ManualSaveNoOpEditor()
+        editor._cancel_post_generation_roughcut_draft = Mock(return_value=True)
+
+        result = EditorSaveManagerMixin._on_save(editor, skip_auto_next=True)
+
+        self.assertTrue(result)
+        editor._cancel_post_generation_roughcut_draft.assert_called_once_with(reason="수동 저장")
+        editor._flush_pending_segment_queue_now.assert_not_called()
+        editor._get_current_segments.assert_not_called()
+
     def test_manual_save_recovers_backend_backup_when_completion_temporarily_has_no_segments(self):
         editor = _CompletedRecoverySaveEditor()
 
@@ -326,6 +357,21 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(save_mock.call_args.args[1], "/tmp/opened.assets/subtitles/final.srt")
         self.assertEqual(editor._last_saved_srt_outputs, [("/tmp/opened.assets/subtitles/final.srt", "/tmp/media.mp4")])
+
+    def test_manual_save_auto_project_create_does_not_prefill_roughcut_analysis(self):
+        editor = _AutoProjectCreateSaveEditor()
+        segs = [{"start": 0.0, "end": 1.0, "text": "외부 SRT 저장"}]
+
+        with patch("core.project.project_manager.create_project", return_value="/tmp/generated.aissproj") as create_project, \
+             patch("core.project.project_manager.save_project") as save_project, \
+             patch("ui.editor.editor_save_manager.attach_project_session") as attach_project_session:
+            project_path = editor._auto_save_project(segs, allow_create=True)
+
+        self.assertEqual(project_path, "/tmp/generated.aissproj")
+        self.assertFalse(create_project.call_args.kwargs["prefill_analysis_artifacts"])
+        save_project.assert_called_once()
+        self.assertFalse(save_project.call_args.kwargs["persist_analysis_artifacts"])
+        attach_project_session.assert_called_once()
 
     def test_hook_backend_signals_reconnects_backend_and_batch_slots(self):
         backend = SimpleNamespace(

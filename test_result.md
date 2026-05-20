@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.00.12 릴리즈 후보 full QA - 2026-05-21 02:23~02:25
+
+- 사전 조치:
+  - `./packaging/macos/build_app_bundle.sh`
+  - 현재 코드/명령 surface가 반영된 `dist/macos/AI Subtitle Studio.app`로 stale bundle 가능성을 제거했다.
+- 실행:
+  - `./venv/bin/python tools/qa_suite_runner.py full`
+- 결과:
+  - `profile=full`
+  - `scenario_count=7`
+  - `failed_count=0`
+- 산출물:
+  - `output/manual_verification/latest/qa_suite_full_20260521_022256`
+  - `output/manual_verification/latest/qa_suite_full_20260521_022256/suite_result.json`
+- scenario 요약:
+  - `editor_compact_macau`: pass
+  - `video_menu_macau`: pass
+  - `save_export_macau`: pass
+  - `menu_stt_lora_macau`: pass
+  - `tinyping_fast_60s`: pass (`total_elapsed_sec=26.031`, `peak_rss_bytes=440418304`)
+  - `tinyping_auto_60s`: pass (`total_elapsed_sec=44.917`, `peak_rss_bytes=918962176`)
+  - `tinyping_high_60s`: pass (`total_elapsed_sec=19.358`, `peak_rss_bytes=1294532608`)
+- 분류:
+  - 실패 없음
+  - 집계 문제/fixture drift/environment bundle issue 없음
+
 실행 일시: 2026-05-20 10:04:47 ~ 10:08:00 (KST)
 대상 모드: full
 실행 폴더: `/Users/u_mo_c/Downloads/ai_subtitle_studio/output/manual_verification/latest/20260520_100447_automation4_full`

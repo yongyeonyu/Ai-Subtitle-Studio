@@ -7,7 +7,7 @@ Global timeline minimap
 import numpy as np
 from PyQt6.QtCore import QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QSizePolicy
+from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from core.runtime import config
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
@@ -18,10 +18,11 @@ from ui.timeline.timeline_analysis import (
     topicless_major_markers_for_widget,
 )
 from ui.dialogs.qml_popup import show_context_menu
-from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
+from ui.gpu_rendering import configure_lightweight_paint
 from ui.ux.apple_black_palette import APPLE_BLACK_MINIMAP
 
-GlobalCanvasBase = accelerated_widget_base("timeline")
+GLOBAL_TIMELINE_RENDER_BACKEND_2D = "qwidget-2d"
+GlobalCanvasBase = QWidget
 
 MINIMAP_BG = APPLE_BLACK_MINIMAP["bg"]
 MINIMAP_TOP_LANE_BG = APPLE_BLACK_MINIMAP["top_lane_bg"]
@@ -53,8 +54,9 @@ class GlobalCanvas(GlobalCanvasBase):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
-        configure_opengl_widget(self, "timeline")
-        self.render_backend = gpu_backend_name("timeline")
+        # 미니맵도 2D 단일 렌더러로 맞춰 메인 타임라인과 다른 합성 경로를 만들지 않는다.
+        self._single_owner_2d_renderer = True
+        self.render_backend = GLOBAL_TIMELINE_RENDER_BACKEND_2D
 
         self.segments = []
         self.view_start = 0.0
@@ -131,17 +133,9 @@ class GlobalCanvas(GlobalCanvasBase):
         px = self._sec_to_px(sec)
         if self.playhead_sec == sec or self._last_playhead_px == px:
             return
-        old_px = self._last_playhead_px
         self.playhead_sec = sec
         self._last_playhead_px = px
-        margin = 4
-        if old_px is None:
-            dirty = QRect(max(0, px - margin), 0, margin * 2 + 1, self.height())
-        else:
-            left = max(0, min(old_px, px) - margin)
-            right = min(max(1, self.width()), max(old_px, px) + margin + 1)
-            dirty = QRect(left, 0, max(1, right - left), self.height())
-        self.update(dirty)
+        self.update()
 
     def update_segments(self, segs, total_dur, *, signature=None, rows=None):
         if rows is None:
@@ -171,16 +165,10 @@ class GlobalCanvas(GlobalCanvasBase):
         px = (int(max(0.0, min(1.0, s)) * self.width()), int(max(0.0, min(1.0, e)) * self.width()))
         if (self.view_start == s and self.view_end == e) or self._last_viewport_px == px:
             return
-        old_px = self._last_viewport_px
         self.view_start = s
         self.view_end = e
         self._last_viewport_px = px
-        if old_px is None:
-            self.update()
-        else:
-            left = max(0, min(old_px[0], old_px[1], px[0], px[1]) - 4)
-            right = min(self.width(), max(old_px[0], old_px[1], px[0], px[1]) + 5)
-            self.update(QRect(left, 0, max(1, right - left), self.height()))
+        self.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

@@ -284,7 +284,7 @@ class TimelineRenderCacheTests(unittest.TestCase):
         finally:
             canvas.close()
 
-    def test_clear_active_visual_repaints_full_segment_band_and_resets_active_keys(self):
+    def test_clear_active_visual_repaints_full_canvas_and_resets_active_keys(self):
         canvas = TimelineCanvas()
         try:
             canvas.resize(1600, canvas.height())
@@ -299,10 +299,7 @@ class TimelineRenderCacheTests(unittest.TestCase):
 
             self.assertIsNone(canvas.active_seg_start)
             self.assertIsNone(canvas.active_seg_line)
-            update.assert_called_once()
-            rect = update.call_args.args[0]
-            self.assertLessEqual(rect.top(), SEG_TOP - 18)
-            self.assertGreaterEqual(rect.bottom(), CANVAS_H - 1)
+            update.assert_called_once_with()
         finally:
             canvas.close()
 
@@ -805,7 +802,7 @@ class TimelineRenderCacheTests(unittest.TestCase):
         self.assertEqual(rows[0]["renderProfile"], "full")
         self.assertTrue(rows[0]["showText"])
 
-    def test_scenegraph_sync_uses_visible_canvas_subset(self):
+    def test_scenegraph_sync_is_disabled_by_single_owner_2d_timeline(self):
         timeline = TimelineWidget()
         try:
             timeline._scenegraph_layer = _FakeScenegraphLayer()
@@ -822,14 +819,9 @@ class TimelineRenderCacheTests(unittest.TestCase):
 
             timeline._sync_scenegraph_layer()
 
-            passed = timeline._scenegraph_layer.last_kwargs["segments"]
-            visible_start = float(timeline._scenegraph_layer.last_kwargs["visible_start_sec"])
-            visible_end = float(timeline._scenegraph_layer.last_kwargs["visible_end_sec"])
-            self.assertLess(len(passed), 12)
-            self.assertIs(
-                passed,
-                timeline.canvas.visible_segments_for_time_window(visible_start, visible_end, pad_sec=0.35),
-            )
+            self.assertIsNone(timeline._scenegraph_layer.last_kwargs)
+            self.assertFalse(timeline._scenegraph_layer.visible)
+            self.assertFalse(getattr(timeline.canvas, "_scenegraph_subtitle_rendering", True))
         finally:
             timeline.close()
 

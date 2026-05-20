@@ -273,6 +273,12 @@ class MainRuntimeCleanupMixin:
         return False
 
     def _schedule_forced_exit_for_busy_about_to_quit(self) -> bool:
+        return self._schedule_forced_process_exit_if_busy(context="app about-to-quit forced process exit")
+
+    def _runtime_busy_forced_exit_delay_ms(self) -> int:
+        return 1800 if getattr(config, "IS_MAC", False) else 2500
+
+    def _schedule_forced_process_exit_if_busy(self, *, context: str = "app close forced process exit") -> bool:
         schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
         if not callable(schedule_exit):
             return False
@@ -282,10 +288,9 @@ class MainRuntimeCleanupMixin:
             should_force = False
         if not should_force:
             return False
-        delay_ms = 80 if getattr(config, "IS_MAC", False) else 320
         _run_cleanup_step(
-            "app about-to-quit forced process exit",
-            lambda: schedule_exit(delay_ms=delay_ms),
+            str(context or "app close forced process exit"),
+            lambda: schedule_exit(delay_ms=self._runtime_busy_forced_exit_delay_ms()),
             default=None,
         )
         return True
@@ -576,6 +581,9 @@ class MainRuntimeCleanupMixin:
     def _schedule_forced_process_exit(self, *, delay_ms: int = 250):
         if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
             return
+        if bool(getattr(self, "_forced_process_exit_scheduled", False)):
+            return
+        self._forced_process_exit_scheduled = True
         delay_sec = max(0.02, float(max(20, int(delay_ms))) / 1000.0)
         if getattr(config, "IS_MAC", False):
             _run_cleanup_step(
@@ -591,6 +599,8 @@ class MainRuntimeCleanupMixin:
                 default=False,
             )
         try:
+            # Default to a clean exit-status kill switch so Terminal .command
+            # launches do not print "Terminated: 15" on ordinary app close.
             timer = _main_window_threading_module().Timer(delay_sec, lambda: os._exit(0))
             timer.daemon = True
             timer.start()

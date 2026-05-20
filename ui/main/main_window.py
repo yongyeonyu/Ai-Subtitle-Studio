@@ -2346,15 +2346,8 @@ class MainWindow(
         if callable(confirm_exit) and not confirm_exit():
             event.ignore()
             return
-        try:
-            self._schedule_forced_process_exit(delay_ms=20 if getattr(config, "IS_MAC", False) else 60)
-        except Exception:
-            pass
-        busy_before_exit = False
-        try:
-            busy_before_exit = bool(self._has_active_runtime_work_for_exit())
-        except Exception:
-            pass
+        schedule_forced_exit = getattr(self, "_schedule_forced_process_exit_if_busy", None)
+        busy_before_exit = bool(schedule_forced_exit()) if callable(schedule_forced_exit) else False
         try:
             self._pause_all_runtime_work_for_exit(context="앱 종료")
         except Exception as exc:

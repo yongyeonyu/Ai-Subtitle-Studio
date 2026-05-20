@@ -2602,7 +2602,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             scheduled = window._schedule_forced_exit_for_busy_about_to_quit()
 
             self.assertTrue(scheduled)
-            self.assertEqual(calls, [80 if sys.platform == "darwin" else 320])
+            self.assertEqual(calls, [1800 if sys.platform == "darwin" else 2500])
         finally:
             window._personalization_idle_trainer = None
             window.close()
@@ -2871,9 +2871,32 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             event.accept.assert_called_once()
             event.ignore.assert_not_called()
-            window._schedule_forced_process_exit.assert_called_once()
+            window._schedule_forced_process_exit.assert_not_called()
             window._start_runtime_cleanup_for_app_exit_async.assert_called_once()
             window._backup_before_quick_exit.assert_called_once_with(include_project_backup=False)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_window_close_schedules_forced_exit_only_when_runtime_busy(self):
+        window = MainWindow()
+        event = SimpleNamespace(accept=mock.Mock(), ignore=mock.Mock())
+        try:
+            window._confirm_save_dirty_editor_before_exit = mock.Mock(return_value=True)
+            window._has_active_runtime_work_for_exit = mock.Mock(return_value=True)
+            window._pause_all_runtime_work_for_exit = mock.Mock()
+            window._start_runtime_cleanup_for_app_exit_async = mock.Mock()
+            window._schedule_forced_process_exit = mock.Mock()
+            window._backup_before_quick_exit = mock.Mock()
+
+            with mock.patch.dict(os.environ, {"QT_QPA_PLATFORM": "cocoa"}):
+                MainWindow.closeEvent(window, event)
+
+            event.accept.assert_called_once()
+            expected_delay = 1800 if sys.platform == "darwin" else 2500
+            window._schedule_forced_process_exit.assert_called_once_with(delay_ms=expected_delay)
+            window._backup_before_quick_exit.assert_not_called()
         finally:
             window.close()
             window.deleteLater()

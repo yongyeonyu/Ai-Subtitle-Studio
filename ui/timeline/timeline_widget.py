@@ -132,6 +132,7 @@ class TimelinePlayheadOverlay(QWidget):
         self._last_visual_px: int | None = None
         self._last_shadow_visual_px: int | None = None
         self._last_state_signature = None
+        self._render_visuals = False
         self._quick = self._create_quick_layer()
         self._shutdown_in_progress = False
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -178,6 +179,7 @@ class TimelinePlayheadOverlay(QWidget):
         self._last_visual_px = visual_px
         self._last_shadow_visual_px = shadow_px
         self._last_state_signature = signature
+        if not bool(getattr(self, "_render_visuals", False)): return True
         if getattr(self, "_quick", None) is not None:
             self._sync_quick_layer()
             return True
@@ -690,11 +692,6 @@ class TimelineWidget(QWidget):
         self._sync_scenegraph_layer()
 
     def _create_scenegraph_layer(self):
-        # Keep the heavy timeline body on the classic painter canvas. Recent
-        # SceneGraph body experiments made the subtitle/canvas surface appear
-        # blank or incomplete in real projects, so we restore the proven
-        # QWidget/QPainter path by default and reserve QML for lighter overlays
-        # like the playhead.
         self.canvas._scenegraph_subtitle_rendering = False
         return None
 
@@ -719,10 +716,17 @@ class TimelineWidget(QWidget):
         return dict(self._speaker_settings_cache)
 
     def _sync_scenegraph_layer(self):
+        canvas = getattr(self, "canvas", None)
+        if canvas is not None and bool(getattr(canvas, "_single_owner_2d_renderer", True)):
+            canvas._scenegraph_subtitle_rendering = False
+            layer = getattr(self, "_scenegraph_layer", None)
+            if layer is not None:
+                try: layer.set_visible(False)
+                except RuntimeError: pass
+            return
         layer = getattr(self, "_scenegraph_layer", None)
         if layer is None:
             return
-        canvas = getattr(self, "canvas", None)
         viewport = self.scroll.viewport() if hasattr(self, "scroll") else None
         if canvas is None or viewport is None:
             return
@@ -921,10 +925,6 @@ class TimelineWidget(QWidget):
             self._queue_toolbar_restore_after_time_window_dialog()
 
     def _create_playhead_overlay(self):
-        # Keep the lightweight overlay object for playhead state bookkeeping,
-        # but leave it hidden and render the visible playhead on the canvas.
-        # On macOS, showing this full-viewport overlay can composite as an
-        # opaque layer after height changes and hide the waveform/canvas body.
         return TimelinePlayheadOverlay(self, self.scroll.viewport())
 
     def _refresh_canvas_playhead_cache(self) -> None:

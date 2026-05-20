@@ -18,7 +18,7 @@ def schedule_native_forced_exit(
 
     if sys.platform != "darwin":
         return False
-    if not native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_EXIT_WATCHDOG"):
+    if not native_swift_runtime_enabled("AI_SUBTITLE_STUDIO_SWIFT_EXIT_WATCHDOG", default_on_macos=False):
         return False
     cli = find_native_cli_path()
     if cli is None:

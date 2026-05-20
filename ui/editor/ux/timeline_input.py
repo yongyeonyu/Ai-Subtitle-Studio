@@ -19,7 +19,6 @@ from ui.editor.editor_helpers import find_segment_at
 from ui.editor.ux.timeline_playhead_mode import (
     dispatch_playhead_arrow_step,
     set_playhead_focus_mode_from_key,
-    set_playhead_focus_mode_from_y,
 )
 from ui.responsive_profile import responsive_profile_for_size
 from ui.editor.ux.timeline_canvas_editing import apply_timing_drag
@@ -353,7 +352,8 @@ class TimelineInputMixin:
                 snap_sec = self._snap_to_frame(float(snapped[0] or target_sec))
                 self._playhead_cut_magnet_locked_sec = snap_sec
                 self._playhead_cut_magnet_previous_sec = snap_sec
-                self._emit_scrub_with_shadow(snap_sec)
+                self._set_shadow_playhead(snap_sec)  # 컷 자석 경계를 세그먼트 스냅 기준으로 보존.
+                self._emit_scrub_with_shadow(snap_sec, remember_shadow=False)
                 return
 
         self._playhead_cut_magnet_previous_sec = target_sec
@@ -564,6 +564,9 @@ class TimelineInputMixin:
         if self._edit_active:
             self._handle_edit_key(ev); ev.accept(); return
 
+        if ev.key() == Qt.Key.Key_Space and ev.modifiers() == Qt.KeyboardModifier.NoModifier:
+            play_toggle = getattr(self, "_request_canvas_play_pause_toggle", None)
+            if callable(play_toggle) and play_toggle(): ev.accept(); return
         if ev.key() in (Qt.Key.Key_F2, Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.active_seg_start is not None:
             candidates = self._active_segment_candidates() if hasattr(self, "_active_segment_candidates") else self.segments
             seg = next(
@@ -1318,7 +1321,6 @@ class TimelineInputMixin:
                 return
             if ev.button() == Qt.MouseButton.LeftButton:
                 x, y = ev.pos().x(), ev.pos().y()
-                set_playhead_focus_mode_from_y(self, y)
                 self._last_click_x = x
                 self._last_click_y = y
                 self._begin_playhead_handle_scrub()
@@ -1422,8 +1424,6 @@ class TimelineInputMixin:
             return
 
         if ev.button() != Qt.MouseButton.LeftButton: return
-
-        set_playhead_focus_mode_from_y(self, y)
 
         diamond_margin = 7 if abs(int(y) - int(DIAMOND_Y)) <= 10 else 5
         diamond_idx = self._diamond_index_at(x, y, margin=diamond_margin)

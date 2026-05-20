@@ -611,6 +611,12 @@ class EditorSaveManagerMixin:
         allow_project_create: bool = True,
         auto_export: bool | None = None,
     ):
+        cancel_roughcut = getattr(self, "_cancel_post_generation_roughcut_draft", None)
+        if callable(cancel_roughcut):
+            try:
+                cancel_roughcut(reason="수동 저장")
+            except Exception as exc:
+                get_logger().log(f"⚠️ 수동 저장 러프컷 취소 실패: {type(exc).__name__}: {exc}")
         has_saved_reference = bool(
             str(getattr(self, "_saved_segments_signature", "") or "").strip()
             or str(self._current_project_path_for_dirty_check() or "").strip()
@@ -622,12 +628,6 @@ class EditorSaveManagerMixin:
                     self._autosave_requires_manual_save = False
                     get_logger().log("💾 저장 생략: 변경사항이 없습니다.")
                     return True
-            except Exception:
-                pass
-        cancel_roughcut = getattr(self, "_cancel_post_generation_roughcut_draft", None)
-        if callable(cancel_roughcut):
-            try:
-                cancel_roughcut(reason="수동 저장")
             except Exception:
                 pass
         self._flush_pending_segment_queue_now()
@@ -928,6 +928,8 @@ class EditorSaveManagerMixin:
                 media_paths=[media_path],
                 srt_path=get_srt_path(media_path),
                 user_settings=dict(getattr(self, "settings", {}) or {}),
+                # 수동 저장의 자동 프로젝트 생성은 저장만 해야 하며 러프컷 LLM prefill을 시작하면 안 된다.
+                prefill_analysis_artifacts=False,
             )
             attach_project_session(
                 main_w,

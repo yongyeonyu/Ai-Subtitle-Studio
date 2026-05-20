@@ -126,6 +126,9 @@ class EditorPipelineCompletionMixin:
             start_idle()
         roughcut = getattr(self, "_schedule_post_generation_roughcut_draft", None)
         if callable(roughcut):
+            self._roughcut_draft_auto_schedule_epoch = int(
+                getattr(self, "_roughcut_draft_auto_schedule_epoch", 0) or 0
+            ) + 1
             self._roughcut_draft_pending = True
             self._pipeline_single_shot(900, lambda: roughcut(force=True))
         self._pipeline_single_shot(200, self._post_completion_sync)

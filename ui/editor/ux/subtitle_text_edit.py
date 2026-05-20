@@ -620,11 +620,16 @@ class SubtitleTextEdit(QTextEdit):
             if canvas is not None:
                 canvas.setFocus()
             return
+        parent = _qt_best_effort_getattr(self, "_parent_widget", None, step="focusInEvent parent widget")
+        shortcut = _qt_best_effort_getattr(parent, "space_shortcut", None, step="focusInEvent space shortcut")
+        if shortcut is not None:
+            # 텍스트 편집 중 Space는 공백 입력이므로 창 재생 단축키가 영상을 시작하지 못하게 잠시 끈다.
+            _run_text_edit_ui_step("focusInEvent disable space shortcut", lambda: shortcut.setEnabled(False))
         # 💡 [클릭 오지랖 완벽 삭제] 창이 켜지면서 커서가 잡힐 때 상태가 바뀌는 것을 원천 차단!
         # ✅ 수정
-        parent = self.parent()
-        if hasattr(parent, '_undo_mgr'):
-            parent._undo_mgr.push_immediate()
+        qt_parent = self.parent()
+        if hasattr(qt_parent, '_undo_mgr'):
+            qt_parent._undo_mgr.push_immediate()
         super().focusInEvent(event)
         self._refresh_gpu_document_overlay_mode()
 
@@ -1145,17 +1150,8 @@ class SubtitleTextEdit(QTextEdit):
                 elif key == Qt.Key.Key_Escape: popup.close_popup(refocus=True); return
 
         if key == Qt.Key.Key_Shift and not e.isAutoRepeat():
-            parent = getattr(self, "_parent_widget", None)
-            handler = getattr(parent, "_handle_repeat_play_pause_shortcut", None)
-            toggle = getattr(parent, "_toggle_video_play", None)
-            if callable(handler):
-                handler("text_shift")
-                e.accept()
-                return
-            if callable(toggle):
-                toggle()
-                e.accept()
-                return
+            e.accept()
+            return
 
         if self._should_pause_playback_for_keypress(e):
             self._pause_parent_playback_for_keyboard_edit()

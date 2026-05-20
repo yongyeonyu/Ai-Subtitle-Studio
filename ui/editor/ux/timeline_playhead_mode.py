@@ -78,19 +78,24 @@ def dispatch_playhead_arrow_step(target, direction: int) -> bool:
         return False
 
     mode = normalize_playhead_focus_mode(getattr(target, "focus_mode", None))
-    if is_segment_navigation_mode(mode):
-        jump_name = "_jump_to_next_segment" if raw_direction > 0 else "_jump_to_prev_segment"
-        jumper = getattr(target, jump_name, None)
-        if not callable(jumper):
-            return False
-        moved = False
-        for _ in range(max(1, abs(raw_direction))):
-            if not bool(jumper()):
-                break
-            moved = True
-        return moved
+    try:
+        if is_segment_navigation_mode(mode):
+            jump_name = "_jump_to_next_segment" if raw_direction > 0 else "_jump_to_prev_segment"
+            jumper = getattr(target, jump_name, None)
+            if not callable(jumper):
+                return False
+            moved = False
+            for _ in range(max(1, abs(raw_direction))):
+                if not bool(jumper()):
+                    break
+                moved = True
+            return moved
 
-    dispatcher = getattr(target, "_dispatch_frame_step", None)
-    if not callable(dispatcher):
-        return False
-    return bool(dispatcher(raw_direction))
+        dispatcher = getattr(target, "_dispatch_frame_step", None)
+        if not callable(dispatcher):
+            return False
+        return bool(dispatcher(raw_direction))
+    finally:
+        if normalize_playhead_focus_mode(getattr(target, "focus_mode", None)) != mode:
+            # 좌우 이동은 위/아래 키로 고른 플레이헤드 모드/색상 속성을 바꾸지 않는다.
+            set_playhead_focus_mode(target, mode)

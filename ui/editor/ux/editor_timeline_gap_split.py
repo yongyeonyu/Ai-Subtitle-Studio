@@ -9,6 +9,12 @@ from ui.editor.editor_helpers import delete_block_safely, get_sub_block_indices,
 
 
 class EditorTimelineGapSplitMixin:
+    def _arm_gap_snapshot_undo_routing(self) -> None:
+        arm_snapshot_undo = getattr(self, "_arm_snapshot_undo_routing", None)
+        if callable(arm_snapshot_undo):
+            # 갭/자막 생성은 QTextEdit 내부 undo가 아니라 앱 스냅샷 undo로 한 번에 되돌린다.
+            arm_snapshot_undo()
+
     def _on_seg_to_gap(self, line_num: int):
         """Convert a subtitle segment into an editable silence gap."""
         self._undo_mgr.push_immediate()
@@ -51,6 +57,7 @@ class EditorTimelineGapSplitMixin:
         if hasattr(self, "_invalidate_segment_cache"):
             self._invalidate_segment_cache()
         self._finalize_edit()
+        self._arm_gap_snapshot_undo_routing()
 
     def _remove_live_detection_for_range(self, start_sec: float, end_sec: float):
         start = float(start_sec)
@@ -121,6 +128,7 @@ class EditorTimelineGapSplitMixin:
             cursor = QTextCursor(block)
             cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
             self.text_edit.setTextCursor(cursor)
+        self._arm_gap_snapshot_undo_routing()
 
     def _delete_gap_blocks_in_range(self, gap_start: float, gap_end: float) -> int:
         """Remove document gap blocks inside a deleted silence range."""
@@ -198,6 +206,7 @@ class EditorTimelineGapSplitMixin:
         self._delete_gap_blocks_in_range(gap_start, gap_end)
         self._remove_live_detection_for_range(gap_start, gap_end)
         self._finalize_edit()
+        self._arm_gap_snapshot_undo_routing()
 
     def _gap_part_user_data(self, kind: str, start_sec: float) -> SubtitleBlockData:
         if kind == "gap":
@@ -351,6 +360,7 @@ class EditorTimelineGapSplitMixin:
         if hasattr(self.text_edit, "timestampArea"):
             self.text_edit.timestampArea.update()
         self._finalize_edit()
+        self._arm_gap_snapshot_undo_routing()
 
     def _on_smart_split(self, line_num: int, split_sec: float, new_on_left: bool):
         """Split the current subtitle into two editable timeline rows."""

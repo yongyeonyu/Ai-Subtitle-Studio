@@ -8,6 +8,7 @@ import os
 from PyQt6.QtCore import QTimer, QSettings, QPoint
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtMultimedia import QMediaPlayer
+from PyQt6.QtWidgets import QApplication, QLineEdit, QPlainTextEdit, QTextEdit
 
 from core.media_info import probe_media
 from core.frame_time import normalize_fps
@@ -36,9 +37,30 @@ class EditorVideoControlsMixin:
         return False
 
     def _on_seg_editing_mode(self, active: bool):
-        self.space_shortcut.setEnabled(not active)
+        self.space_shortcut.setEnabled(
+            not active and not self._text_input_has_focus_for_playback_shortcut()
+        )
+
+    def _text_input_has_focus_for_playback_shortcut(self) -> bool:
+        try:
+            focus = QApplication.focusWidget()
+        except Exception:
+            return False
+        visited: set[int] = set()
+        while focus is not None and id(focus) not in visited:
+            visited.add(id(focus))
+            if isinstance(focus, (QLineEdit, QPlainTextEdit, QTextEdit)):
+                return True
+            try:
+                focus = focus.parentWidget()
+            except Exception:
+                return False
+        return False
 
     def _on_space_pressed(self):
+        # 전역 Space 핫패스: 입력 위젯 포커스에서는 공백 문자 입력이 재생 토글보다 우선이다.
+        if self._text_input_has_focus_for_playback_shortcut():
+            return
         handler = getattr(self, "_handle_repeat_play_pause_shortcut", None)
         if callable(handler):
             handler("window_space")

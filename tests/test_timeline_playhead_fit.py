@@ -2666,7 +2666,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertFalse(getattr(timeline.canvas, "_external_playhead_overlay", True))
             self.assertEqual(timeline.canvas.playhead_sec, 2.5)
             self.assertEqual(timeline.canvas._last_playhead_px, timeline.canvas._x(2.5))
-            timeline.canvas.update.assert_called_once()
+            timeline.canvas.update.assert_called_once_with()
             self.assertEqual(timeline._playhead_overlay._sec, 2.5)
             self.assertIs(timeline._playhead_overlay.parent(), timeline.scroll.viewport())
             self.assertTrue(timeline._playhead_overlay.isHidden())
@@ -2693,7 +2693,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
-    def test_playhead_overlay_repaints_only_dirty_strip(self):
+    def test_playhead_canvas_repaints_full_2d_owner_instead_of_overlay_dirty_strip(self):
         timeline = TimelineWidget()
         try:
             timeline.resize(900, timeline.height())
@@ -2704,17 +2704,16 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             timeline.set_playhead(2.0)
             self.app.processEvents()
 
+            timeline.canvas.update = Mock()
             timeline._playhead_overlay.update = Mock()
             timeline.set_playhead(3.0)
 
-            timeline._playhead_overlay.update.assert_called()
-            dirty = timeline._playhead_overlay.update.call_args.args[0]
-            self.assertIsInstance(dirty, QRect)
-            self.assertLess(dirty.width(), timeline._playhead_overlay.width())
+            timeline.canvas.update.assert_called_once_with()
+            timeline._playhead_overlay.update.assert_not_called()
         finally:
             timeline.close()
 
-    def test_playhead_overlay_repaints_when_shadow_playhead_changes(self):
+    def test_shadow_playhead_repaints_canvas_full_2d_owner_without_overlay_dirty_strip(self):
         timeline = TimelineWidget()
         try:
             timeline.resize(900, timeline.height())
@@ -2725,13 +2724,12 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             timeline.set_playhead(2.0)
             self.app.processEvents()
 
+            timeline.canvas.update = Mock()
             timeline._playhead_overlay.update = Mock()
             timeline.pin_shadow_playhead(4.0)
 
-            timeline._playhead_overlay.update.assert_called()
-            dirty = timeline._playhead_overlay.update.call_args.args[0]
-            self.assertIsInstance(dirty, QRect)
-            self.assertLess(dirty.width(), timeline._playhead_overlay.width())
+            timeline.canvas.update.assert_called_once_with()
+            timeline._playhead_overlay.update.assert_not_called()
             self.assertAlmostEqual(timeline.canvas.shadow_playhead_sec, 4.0)
         finally:
             timeline.close()
@@ -3628,10 +3626,13 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         timeline = TimelineWidget()
         try:
             self.assertIsNone(getattr(timeline._playhead_overlay, "_quick", None))
+            self.assertFalse(getattr(timeline._playhead_overlay, "_render_visuals", True))
             self.assertTrue(timeline._playhead_overlay.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
             self.assertIs(timeline._playhead_overlay.parent(), timeline.scroll.viewport())
             self.assertTrue(timeline._playhead_overlay.isHidden())
             self.assertFalse(getattr(timeline.canvas, "_external_playhead_overlay", True))
+            self.assertEqual(getattr(timeline.canvas, "render_backend", ""), "qwidget-2d")
+            self.assertEqual(getattr(timeline.global_canvas, "render_backend", ""), "qwidget-2d")
         finally:
             timeline.close()
 
@@ -3646,6 +3647,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertTrue(getattr(timeline.canvas, "playhead_busy", False))
             self.assertTrue(getattr(timeline.global_canvas, "playhead_busy", False))
             self.assertTrue(getattr(timeline._playhead_overlay, "_busy", False))
+            self.assertFalse(getattr(timeline._playhead_overlay, "_render_visuals", True))
 
             timeline.set_playhead_busy(False)
 

@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QSizePolicy, QScrollArea
+from PyQt6.QtWidgets import QSizePolicy, QScrollArea, QWidget
 
 from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 
@@ -26,10 +26,11 @@ from ui.editor.ux.timeline_playhead_mode import PLAYHEAD_MODE_FRAME_STEP
 from ui.editor.ux.timeline_subtitle_segment_editing import TimelineInlineEditMixin
 from ui.timeline.timeline_paint import TimelinePaintMixin
 from ui.timeline.segment_store import TimelineSegmentStore
-from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
+from ui.gpu_rendering import configure_lightweight_paint
 
 
-TimelineCanvasBase = accelerated_widget_base("timeline")
+TIMELINE_RENDER_BACKEND_2D = "qwidget-2d"
+TimelineCanvasBase = QWidget
 
 
 class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintMixin, TimelineCanvasBase):
@@ -75,8 +76,11 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
-        configure_opengl_widget(self, "timeline")
-        self.render_backend = gpu_backend_name("timeline")
+        # 타임라인은 2D 단일 렌더러가 전체 화면을 다시 그려 오버레이/부분 갱신 잔상을 막는다.
+        self._single_owner_2d_renderer = True
+        self._external_playhead_overlay = False
+        self._scenegraph_subtitle_rendering = False
+        self.render_backend = TIMELINE_RENDER_BACKEND_2D
         self.focus_mode = PLAYHEAD_MODE_FRAME_STEP
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self._ime_preedit = ""
@@ -1297,10 +1301,12 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         px = self._x(sec)
         if self.playhead_sec == sec or self._last_playhead_px == px:
             return
-        old_sec = float(getattr(self, "playhead_sec", 0.0) or 0.0)
         old_px = self._last_playhead_px
         self.playhead_sec = sec
         self._last_playhead_px = px
+        if self._timeline_uses_single_owner_2d():
+            self.update()
+            return
         if getattr(self, "_external_playhead_overlay", False):
             return
         if old_px is None:
@@ -1324,6 +1330,9 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._last_shadow_playhead_px = None if normalized is None else self._x(normalized)
         self._drag_snap_base_cache_key = None
         self._drag_snap_base_candidates = []
+        if self._timeline_uses_single_owner_2d():
+            self.update()
+            return True
         if getattr(self, "_external_playhead_overlay", False):
             return True
         if old_px is None and self._last_shadow_playhead_px is None:
@@ -1353,6 +1362,9 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         old_px = self._last_drag_shadow_playhead_px
         self._drag_shadow_playhead_sec = normalized
         self._last_drag_shadow_playhead_px = None if normalized is None else self._x(normalized)
+        if self._timeline_uses_single_owner_2d():
+            self.update()
+            return True
         if getattr(self, "_external_playhead_overlay", False):
             return True
         if old_px is None and self._last_drag_shadow_playhead_px is None:
@@ -1492,7 +1504,14 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 dirty = rect if dirty.isNull() else dirty.united(rect)
         return dirty
 
+    def _timeline_uses_single_owner_2d(self) -> bool:
+        return bool(getattr(self, "_single_owner_2d_renderer", True))
+
     def _update_dirty_rect(self, rect: QRect):
+        if self._timeline_uses_single_owner_2d():
+            self.update()
+            self._notify_scenegraph_layer()
+            return
         if rect.isValid() and not rect.isEmpty():
             self.update(rect.intersected(QRect(0, 0, max(1, self.width()), max(1, self.height()))))
         else:
@@ -1500,6 +1519,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._notify_scenegraph_layer()
 
     def _notify_scenegraph_layer(self):
+        if self._timeline_uses_single_owner_2d():
+            return
         owner = self.parent()
         while owner is not None:
             sync = getattr(owner, "_sync_scenegraph_layer", None)

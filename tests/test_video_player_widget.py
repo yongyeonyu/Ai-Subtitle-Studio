@@ -367,7 +367,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         try:
             tooltip = widget.btn_play.toolTip()
 
-            self.assertIn("Shift", tooltip)
+            self.assertNotIn("Shift", tooltip)
             self.assertIn("Space", tooltip)
             self.assertIn("Tab", tooltip)
         finally:

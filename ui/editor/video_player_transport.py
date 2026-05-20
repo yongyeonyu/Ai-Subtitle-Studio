@@ -61,7 +61,6 @@ class VideoPlayerTransportMixin:
         return (
             "재생/일시정지\n"
             "Tab: 기본\n"
-            "Shift: 자막 에디터\n"
             "Space: 캔버스\n"
             "반복재생 체크 시 선택 세그먼트만 반복\n"
             "캔버스 Space 두 번: 다음 세그먼트"
@@ -525,7 +524,7 @@ class VideoPlayerTransportMixin:
     def eventFilter(self, obj, event):
         if obj is getattr(self, "_control_bar_widget", None) and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
             quick = getattr(self, "_quick_control_bar", None)
-            if quick is not None:
+            if quick is not None and callable(getattr(quick, "rootObject", None)):
                 self._apply_control_bar_video_content_insets()
                 quick.setGeometry(obj.rect())
                 quick.raise_()
@@ -594,9 +593,10 @@ class VideoPlayerTransportMixin:
 
     def _sync_quick_control_bar(self, *_args):
         quick = getattr(self, "_quick_control_bar", None)
-        if quick is None:
+        if quick is None or not callable(getattr(quick, "rootObject", None)):
             return
         try:
+            # QWidget 전환 테스트 더블은 QML rootObject가 없으므로 실제 QQuickWidget일 때만 동기화한다.
             root = quick.rootObject()
             if root is None:
                 return

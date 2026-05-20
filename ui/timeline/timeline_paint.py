@@ -94,6 +94,18 @@ WAVEFORM_BOTTOM_QUIET = QColor(*APPLE_BLACK_WAVEFORM["bottom_quiet_rgba"])
 WAVEFORM_VAD_OVERLAY = QColor(*APPLE_BLACK_WAVEFORM["vad_overlay_rgba"])
 
 
+def should_paint_subtitle_segment_text(
+    *,
+    native_inline_active: bool,
+    rect_width: int,
+    dense_segment_mode: bool,
+    focus_detail: bool,
+) -> bool:
+    if native_inline_active:
+        return False
+    return int(rect_width) >= 44 and (not bool(dense_segment_mode) or bool(focus_detail))
+
+
 class TimelinePaintMixin:
     def _timeline_playback_active(self) -> bool:
         owner = self.parent()
@@ -378,7 +390,10 @@ class TimelinePaintMixin:
             include_non_subtitle_band: bool,
             include_handle: bool,
         ) -> None:
-            if self.playhead_sec < 0 or getattr(self, "_external_playhead_overlay", False):
+            external_overlay = bool(getattr(self, "_external_playhead_overlay", False)) and not bool(
+                getattr(self, "_single_owner_2d_renderer", True)
+            )
+            if self.playhead_sec < 0 or external_overlay:
                 return
             px = int(self._x(self.playhead_sec))
             ph_color = QColor(playhead_line_color_hex(getattr(self, "focus_mode", None)))
@@ -1460,7 +1475,13 @@ class TimelinePaintMixin:
                             p.drawLine(cx, cursor_top, cx, cursor_bot)
                         curr_y += line_h + 4
                 else:
-                    if rect.width() >= 44 and (not dense_segment_mode or focus_detail):
+                    # native inline editor가 활성화된 세그먼트는 위젯이 텍스트를 그리므로 배경 QPainter 텍스트를 중복 렌더하지 않는다.
+                    if should_paint_subtitle_segment_text(
+                        native_inline_active=native_inline_active,
+                        rect_width=rect.width(),
+                        dense_segment_mode=dense_segment_mode,
+                        focus_detail=focus_detail,
+                    ):
                         text_color = visual_style.get("text", "")
                         p.setPen(QColor(text_color) if text_color else (QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA")))
                         seg_text = str(seg.get("text", "") or "")
