@@ -6,6 +6,7 @@ diarize.py - AI 화자 분리 (SpeechBrain 엔진 적용 완료)
 [추가] 대표님 목소리 지문(Embedding) 학습 및 화자 1번 강제 매칭 알고리즘 
 """
 import os
+import platform
 import time
 import json
 import threading
@@ -27,6 +28,29 @@ _missing_dependency_notice_logged = False
 _DIARIZE_CACHE_SCHEMA = "ai_subtitle_studio.speaker_cache.v2"
 _REFERENCE_MATCH_MIN_SIM = 0.20
 _AUTO_CLUSTER_MIN_SILHOUETTE = 0.18
+
+
+def _diarization_runtime_settings(settings: dict | None = None) -> dict:
+    runtime = dict(settings or {})
+    gpu_opt_in = str(os.environ.get("AI_SUBTITLE_STUDIO_ENABLE_GPU_SPEAKER_DIARIZATION", "") or "").strip().lower()
+    if platform.system() == "Darwin" and gpu_opt_in not in {"1", "true", "yes", "on"}:
+        # SpeechBrain diarization uses torch conv/relu kernels that have been
+        # unstable on macOS MPS during active subtitle generation.
+        runtime["audio_torch_gpu_enabled"] = False
+    return runtime
+
+
+def _apply_diarization_device(classifier, torch_module, settings: dict | None = None) -> None:
+    runtime_settings = _diarization_runtime_settings(settings)
+    device_name = move_torch_model_to_preferred_device(
+        classifier.mods,
+        settings=runtime_settings,
+        task="speaker_diarization",
+        log_label="화자 분리",
+    )
+    classifier.device = torch_module.device(device_name if device_name != "cpu" else "cpu")
+    if device_name == "cpu":
+        get_logger().log("  └ 💻 CPU 연산 모드")
 
 
 def missing_diarization_packages() -> list[str]:
@@ -312,13 +336,7 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
             source="speechbrain/spkrec-ecapa-voxceleb", 
             savedir=os.path.join(os.path.expanduser("~"), ".cache", "speechbrain")
         )
-
-        device_name = move_torch_model_to_preferred_device(classifier.mods, log_label="화자 분리")
-        if device_name != "cpu":
-            classifier.device = torch.device(device_name)
-        else:
-            classifier.device = torch.device("cpu")
-            get_logger().log("  └ 💻 CPU 연산 모드")
+        _apply_diarization_device(classifier, torch, settings)
     except Exception as e:
         get_logger().log(f"❌ 모델 로딩 에러: {e}")
         clear_audio_model_memory_caches(include_gpu=True)

@@ -13,7 +13,9 @@ from ui.main.app_command_bridge import dispatch_app_command, execute_app_command
 class _DummyEditor:
     def __init__(self, state: str = "ST_IDLE"):
         self.media_path = "/tmp/media.mp4"
+        self.video_fps = 30.0
         self.sm = SimpleNamespace(state=state)
+        self.settings = {}
         self.start_clicks = 0
         self.save_calls = 0
         self.roughcut_starts = 0
@@ -28,6 +30,13 @@ class _DummyEditor:
         self._timeline_pps = 12.0
         self._playback_center_lock = False
         self._playing = False
+        self._video_visible = True
+        self._active_footer_menu_id = "video"
+        self._stt_mode_enabled = False
+        self._stt_state = "disabled"
+        self._stt_recording = False
+        self._stt_vad_running = False
+        self._last_saved_srt_outputs = []
         self._segments = [
             {"line": 0, "start": 0.0, "end": 1.0, "text": "첫 줄", "is_gap": False},
             {"line": 1, "start": 1.0, "end": 2.0, "text": "둘째 줄", "is_gap": False},
@@ -39,9 +48,19 @@ class _DummyEditor:
         if callable(callback):
             callback()
 
-    def _on_save(self, skip_auto_next=True):
+    def _on_save(self, skip_auto_next=True, auto_export=False):
         self.save_calls += 1
+        if not self._last_saved_srt_outputs:
+            srt_path = "/tmp/media.srt"
+            Path(srt_path).write_text("dummy srt", encoding="utf-8")
+            self._last_saved_srt_outputs = [(srt_path, self.media_path)]
         return True
+
+    def _get_current_segments(self):
+        return list(self._segments)
+
+    def _segments_for_srt_output(self, segs):
+        return list(segs or [])
 
     def _schedule_post_generation_roughcut_draft(self, force: bool = False):
         self.roughcut_starts += 1
@@ -100,6 +119,8 @@ class _DummyEditor:
             "timeline_scroll_x": 0.0,
             "timeline_fit_locked": False,
             "playback_center_lock": self._playback_center_lock,
+            "video_visible": bool(self._video_visible),
+            "active_footer_menu_id": str(self._active_footer_menu_id),
         }
 
     def automation_set_playhead(self, sec: float, *, center: bool = False, sync_video: bool = True):
@@ -150,6 +171,37 @@ class _DummyEditor:
             "action": normalized,
             "editor_runtime": self.automation_editor_state_snapshot(),
         }
+
+    def automation_set_video_visible(self, action: str):
+        normalized = str(action or "toggle")
+        if normalized == "toggle":
+            self._video_visible = not self._video_visible
+        elif normalized == "show":
+            self._video_visible = True
+        elif normalized == "hide":
+            self._video_visible = False
+        else:
+            raise ValueError("invalid_video_action")
+        self._active_footer_menu_id = "video" if self._video_visible else ""
+        return {
+            "action": normalized,
+            "video_visible": bool(self._video_visible),
+            "active_footer_menu_id": str(self._active_footer_menu_id),
+            "editor_runtime": self.automation_editor_state_snapshot(),
+        }
+
+    def _auto_export_saved_subtitle_videos(self, *, outputs=None):
+        export_outputs = list(outputs if outputs is not None else self._last_saved_srt_outputs)
+        for _srt_path, target_file in export_outputs:
+            mov_path = Path(target_file).with_name(f"{Path(target_file).stem}_자막소스.mov")
+            mov_path.write_bytes(b"mov")
+
+    def _set_stt_mode_enabled(self, enabled: bool):
+        self._stt_mode_enabled = bool(enabled)
+        self._stt_state = "ready_to_listen" if enabled else "disabled"
+
+    def _toggle_stt_mode(self):
+        self._set_stt_mode_enabled(not self._stt_mode_enabled)
 
     def automation_select_segment(
         self,
@@ -202,6 +254,16 @@ class _DummyEditor:
         selected = self.automation_select_segment(line=line, start_sec=start_sec, at_playhead=at_playhead)
         idx = self._segment_index()
         seg = self._segments[idx]
+        selection_source = "requested"
+        if not float(seg["start"]) + 0.05 < float(self._playhead_sec) < float(seg["end"]) - 0.05:
+            fallback_idx = self._segment_index(at_playhead=True)
+            if fallback_idx is not None and fallback_idx != idx:
+                fallback = self._segments[fallback_idx]
+                if float(fallback["start"]) + 0.05 < float(self._playhead_sec) < float(fallback["end"]) - 0.05:
+                    selected = self.automation_select_segment(at_playhead=True)
+                    idx = fallback_idx
+                    seg = self._segments[idx]
+                    selection_source = "playhead_fallback"
         if not float(seg["start"]) + 0.05 < float(self._playhead_sec) < float(seg["end"]) - 0.05:
             raise ValueError("smart_split_unavailable")
         self._inline_edit_active = True
@@ -212,6 +274,7 @@ class _DummyEditor:
             "line": int(seg["line"]),
             "start": float(seg["start"]),
             "split_sec": float(self._split_pending_sec),
+            "selection_source": selection_source,
             "selected": selected,
             "editor_runtime": self.automation_editor_state_snapshot(),
         }
@@ -328,6 +391,10 @@ class _DummyOwner:
         self.applied_settings = []
         self.settings = {}
         self.dictionary_dialog_opened = 0
+        self.settings_dialog_opened = 0
+        self.speaker_dialog_opened = 0
+        self.personalization_actions = []
+        self._automation_active_dialog = None
         self._correction_dictionary_dialog = None
         self.backend = SimpleNamespace(
             _active=False,
@@ -429,6 +496,18 @@ class _DummyOwner:
         self._correction_dictionary_dialog = _DummyVisibleDialog()
         return self._correction_dictionary_dialog
 
+    def _run_personalization_idle_jobs_now(self):
+        self.personalization_actions.append("run-now")
+        return {"started": True, "action": "run-now"}
+
+    def _pause_personalization_idle_jobs(self):
+        self.personalization_actions.append("pause")
+        return {"paused": True}
+
+    def _resume_personalization_idle_jobs(self):
+        self.personalization_actions.append("resume")
+        return {"resumed": True}
+
 
 class _DummyPixmap:
     def __init__(self, *, save_ok: bool = True, width: int = 640, height: int = 360):
@@ -459,6 +538,21 @@ class _DummyVisibleDialog:
 
     def isVisible(self):
         return self._visible
+
+    def setModal(self, visible: bool):
+        self._modal = bool(visible)
+
+    def show(self):
+        self._visible = True
+
+    def raise_(self):
+        return None
+
+    def activateWindow(self):
+        return None
+
+    def close(self):
+        self._visible = False
 
     def grab(self):
         return self._pixmap
@@ -499,6 +593,45 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(owner._editor_widget.save_calls, 1)
         self.assertEqual(owner.saved_project, 0)
+
+    def test_save_subtitles_command_returns_saved_outputs(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "save-subtitles"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "subtitles_saved")
+        self.assertEqual(result["data"]["count"], 1)
+        self.assertTrue(result["data"]["outputs"][0]["exists"])
+
+    def test_export_subtitles_command_writes_requested_path(self):
+        owner = _DummyOwner()
+        with tempfile.TemporaryDirectory() as tmp:
+            export_path = Path(tmp) / "manual_export.srt"
+
+            result = execute_app_command(owner, {"command": "export-subtitles", "path": str(export_path)})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "subtitles_exported")
+        self.assertEqual(result["data"]["output"]["path"], str(export_path))
+        self.assertTrue(result["data"]["output"]["exists"])
+
+    def test_export_subtitle_video_command_writes_mov_outputs(self):
+        owner = _DummyOwner()
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "demo.mp4"
+            media_path.write_bytes(b"video")
+            srt_path = Path(tmp) / "demo.srt"
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\n테스트\n", encoding="utf-8")
+            owner._editor_widget.media_path = str(media_path)
+            owner._editor_widget._last_saved_srt_outputs = [(str(srt_path), str(media_path))]
+
+            result = execute_app_command(owner, {"command": "export-subtitle-video"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "subtitle_videos_exported")
+        self.assertEqual(result["data"]["count"], 1)
+        self.assertTrue(result["data"]["outputs"][0]["mov_output"]["exists"])
 
     def test_start_current_pipeline_rejects_duplicate_processing_toggle(self):
         owner = _DummyOwner()
@@ -553,8 +686,8 @@ class AppCommandBridgeTests(unittest.TestCase):
                 )
 
         self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])
         self.assertEqual(owner.multiclip_start_calls, [{"files": files, "folder": tmp}])
-        self.assertEqual(owner._editor_widget.start_clicks, 1)
         self.assertEqual(result["message"], "multiclip_started")
         self.assertEqual(result["data"]["mode"], "fast")
         self.assertEqual(result["data"]["stt_quality_preset"], "fast")
@@ -601,6 +734,7 @@ class AppCommandBridgeTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])
         self.assertTrue(owner.backend._force_no_reuse_once)
         self.assertFalse(owner.backend._force_reuse_existing_multiclip_subtitles_once)
         self.assertEqual(owner.multiclip_start_calls[0]["files"], [str(first), str(second)])
@@ -670,6 +804,7 @@ class AppCommandBridgeTests(unittest.TestCase):
 
     def test_dispatch_status_command_falls_back_without_waiting_for_busy_ui_thread(self):
         owner = _DummyOwner()
+        owner.backend._active = True
         app_thread = object()
         current_thread = object()
         fake_app = SimpleNamespace(thread=lambda: app_thread)
@@ -682,6 +817,114 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["accepted"])
         self.assertTrue(result["data"]["status_snapshot_fallback"])
         self.assertIn("backend_active", result["data"])
+
+    def test_dispatch_status_command_skips_signal_when_busy_owner_has_no_cache(self):
+        owner = _DummyOwner()
+        owner._editor_widget.sm.state = "ST_PROC"
+        owner._runtime_resource_snapshot = {"active_labels": ["pipeline"], "pressure_stage": "warning"}
+        app_thread = object()
+        current_thread = object()
+        fake_app = SimpleNamespace(thread=lambda: app_thread)
+        signal = SimpleNamespace(emit=lambda *_args, **_kwargs: self.fail("status signal should be skipped while busy"))
+        owner._sig_external_app_command = signal
+
+        with patch("ui.main.app_command_bridge.QApplication.instance", return_value=fake_app):
+            with patch("ui.main.app_command_bridge.QThread.currentThread", return_value=current_thread):
+                result = dispatch_app_command(owner, {"command": "guided-subtitle-status"}, timeout_sec=1.0)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["data"]["status_snapshot_fallback"])
+        self.assertEqual(result["data"]["editor_state"], "ST_PROC")
+        self.assertIsInstance(result["data"]["guided_snapshot_run"], dict)
+
+    def test_dispatch_status_command_caches_busy_fallback_snapshot(self):
+        owner = _DummyOwner()
+        owner._editor_widget.sm.state = "ST_PROC"
+        owner._runtime_resource_snapshot = {"active_labels": ["pipeline"], "pressure_stage": "warning"}
+        app_thread = object()
+        current_thread = object()
+        fake_app = SimpleNamespace(thread=lambda: app_thread)
+        signal = SimpleNamespace(emit=lambda *_args, **_kwargs: self.fail("status signal should be skipped while busy"))
+        owner._sig_external_app_command = signal
+
+        with patch("ui.main.app_command_bridge.QApplication.instance", return_value=fake_app):
+            with patch("ui.main.app_command_bridge.QThread.currentThread", return_value=current_thread):
+                first = dispatch_app_command(owner, {"command": "status"}, timeout_sec=1.0)
+                second = dispatch_app_command(owner, {"command": "ping"}, timeout_sec=1.0)
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(second["message"], "pong")
+        self.assertEqual(second["data"]["editor_state"], "ST_PROC")
+        self.assertTrue(second["data"]["status_snapshot_fallback"])
+
+    def test_dispatch_status_command_reuses_stale_cache_while_busy(self):
+        owner = _DummyOwner()
+        owner._editor_widget.sm.state = "ST_PROC"
+        owner._runtime_resource_snapshot = {"active_labels": ["pipeline"], "pressure_stage": "warning"}
+        app_thread = object()
+        current_thread = object()
+        fake_app = SimpleNamespace(thread=lambda: app_thread)
+        signal = SimpleNamespace(emit=lambda *_args, **_kwargs: self.fail("busy stale cache should avoid signal"))
+        owner._sig_external_app_command = signal
+        app_bridge._store_status_snapshot(owner, {"editor_state": "ST_PROC", "backend_active": True, "guided_snapshot_run": {"active": True}})
+
+        with patch("ui.main.app_command_bridge.QApplication.instance", return_value=fake_app):
+            with patch("ui.main.app_command_bridge.QThread.currentThread", return_value=current_thread):
+                with patch("ui.main.app_command_bridge._peek_status_snapshot_cache") as peek_cache:
+                    peek_cache.side_effect = [
+                        None,
+                        (1.75, {"editor_state": "ST_PROC", "backend_active": True, "guided_snapshot_run": {"active": True}}),
+                    ]
+                    with patch("ui.main.app_command_bridge._status_fallback_snapshot") as fallback_snapshot:
+                        result = dispatch_app_command(owner, {"command": "status"}, timeout_sec=1.0)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["data"]["status_snapshot_fallback"])
+        self.assertEqual(result["data"]["status_snapshot_age_sec"], 1.75)
+        self.assertTrue(result["data"]["guided_snapshot_run"]["active"])
+        fallback_snapshot.assert_not_called()
+
+    def test_dispatch_status_command_does_not_reuse_overdue_stale_cache_while_busy(self):
+        owner = _DummyOwner()
+        owner._editor_widget.sm.state = "ST_PROC"
+        owner._runtime_resource_snapshot = {"active_labels": ["pipeline"], "pressure_stage": "warning"}
+        app_thread = object()
+        current_thread = object()
+        fake_app = SimpleNamespace(thread=lambda: app_thread)
+        signal = SimpleNamespace(emit=lambda *_args, **_kwargs: self.fail("overdue stale cache should still avoid signal"))
+        owner._sig_external_app_command = signal
+
+        with patch("ui.main.app_command_bridge.QApplication.instance", return_value=fake_app):
+            with patch("ui.main.app_command_bridge.QThread.currentThread", return_value=current_thread):
+                with patch("ui.main.app_command_bridge._peek_status_snapshot_cache") as peek_cache:
+                    peek_cache.side_effect = [
+                        None,
+                        None,
+                    ]
+                    with patch("ui.main.app_command_bridge._status_fallback_snapshot", return_value={"editor_state": "ST_PROC", "guided_snapshot_run": {"active": True}}) as fallback_snapshot:
+                        result = dispatch_app_command(owner, {"command": "guided-subtitle-status"}, timeout_sec=1.0)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["editor_state"], "ST_PROC")
+        self.assertTrue(result["data"]["guided_snapshot_run"]["active"])
+        fallback_snapshot.assert_called_once()
+
+    def test_guided_subtitle_run_primes_status_cache_for_follow_up_polling(self):
+        owner = _DummyOwner()
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "demo.mp4"
+            media_path.write_bytes(b"video")
+
+            result = execute_app_command(owner, {"command": "guided-subtitle-run", "path": str(media_path)})
+
+        self.assertTrue(result["ok"])
+        cached_entry = app_bridge._peek_status_snapshot_cache(owner, max_age_sec=None)
+        self.assertIsNotNone(cached_entry)
+        _age, snapshot = cached_entry
+        self.assertTrue(snapshot["editor_open"])
+        self.assertEqual(snapshot["editor_media_path"], str(media_path))
+        self.assertIn("guided_snapshot_run", snapshot)
 
     def test_dispatch_non_status_command_still_reports_timeout_when_ui_thread_does_not_reply(self):
         owner = _DummyOwner()
@@ -748,6 +991,27 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(owner._editor_widget._playing)
         self.assertTrue(result["data"]["editor_runtime"]["playback_center_lock"])
 
+    def test_editor_video_hide_command_updates_visibility(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "editor-video", "options": {"action": "hide"}})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "editor_video_hide")
+        self.assertFalse(owner._editor_widget._video_visible)
+        self.assertFalse(result["data"]["video_visible"])
+        self.assertEqual(result["data"]["editor_runtime"]["active_footer_menu_id"], "")
+
+    def test_editor_stt_mode_command_enables_editor_stt_mode(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "editor-stt-mode", "options": {"action": "enable"}})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "editor_stt_mode_updated")
+        self.assertTrue(owner._editor_widget._stt_mode_enabled)
+        self.assertEqual(result["data"]["state"], "ready_to_listen")
+
     def test_editor_move_segment_left_command_can_preselect_line(self):
         owner = _DummyOwner()
         owner._editor_widget._playhead_sec = 0.4
@@ -790,6 +1054,33 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(owner._editor_widget._inline_edit_active)
         self.assertAlmostEqual(owner._editor_widget._split_pending_sec, 1.5)
         self.assertEqual(result["data"]["editor_runtime"]["inline_edit_mode"], "smart_split")
+        self.assertEqual(result["data"]["selection_source"], "requested")
+
+    def test_editor_begin_smart_split_command_falls_back_to_playhead_segment(self):
+        owner = _DummyOwner()
+        owner._editor_widget._playhead_sec = 1.5
+
+        result = execute_app_command(
+            owner,
+            {"command": "editor-begin-smart-split", "options": {"line": 0}},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["line"], 1)
+        self.assertEqual(result["data"]["selection_source"], "playhead_fallback")
+
+    def test_editor_begin_smart_split_failure_returns_runtime_snapshot(self):
+        owner = _DummyOwner()
+        owner._editor_widget._playhead_sec = 0.0
+
+        result = execute_app_command(
+            owner,
+            {"command": "editor-begin-smart-split", "options": {"line": 0}},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "smart_split_unavailable")
+        self.assertIn("editor_runtime", result["data"])
 
     def test_editor_set_inline_cursor_command_updates_runtime_snapshot(self):
         owner = _DummyOwner()
@@ -803,6 +1094,15 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(owner._editor_widget._inline_cursor, 2)
         self.assertEqual(result["data"]["editor_runtime"]["inline_edit_cursor"], 2)
         self.assertEqual(result["data"]["editor_runtime"]["inline_edit_text"], "둘째 줄")
+
+    def test_editor_set_inline_cursor_failure_returns_runtime_snapshot(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "editor-set-inline-cursor", "options": {"position": 2}})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "inline_edit_inactive")
+        self.assertIn("editor_runtime", result["data"])
 
     def test_editor_commit_inline_edit_command_finishes_pending_split(self):
         owner = _DummyOwner()
@@ -864,6 +1164,86 @@ class AppCommandBridgeTests(unittest.TestCase):
                 self.assertTrue(os.path.isfile(saved_path))
                 self.assertEqual(result["data"]["width"], 640)
                 self.assertEqual(result["data"]["height"], 360)
+
+    def test_open_settings_command_shows_nonmodal_dialog(self):
+        owner = _DummyOwner()
+
+        class _FakeSettingsDialog(_DummyVisibleDialog):
+            def __init__(self, *_args, **_kwargs):
+                super().__init__()
+                owner.settings_dialog_opened += 1
+
+        with patch("ui.settings.settings_dialog.SettingsDialog", _FakeSettingsDialog):
+            result = execute_app_command(owner, {"command": "open-settings"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "settings_visible")
+        self.assertEqual(owner.settings_dialog_opened, 1)
+        self.assertIsNotNone(owner._automation_active_dialog)
+
+    def test_open_speaker_settings_command_shows_nonmodal_dialog(self):
+        owner = _DummyOwner()
+
+        class _FakeSpeakerDialog(_DummyVisibleDialog):
+            def __init__(self, *_args, **_kwargs):
+                super().__init__()
+                owner.speaker_dialog_opened += 1
+
+        with patch("ui.settings.settings_dialog.SpeakerDialog", _FakeSpeakerDialog):
+            result = execute_app_command(owner, {"command": "open-speaker-settings"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "speaker_settings_visible")
+        self.assertEqual(owner.speaker_dialog_opened, 1)
+
+    def test_capture_active_dialog_command_saves_dialog_snapshot(self):
+        owner = _DummyOwner()
+        owner._automation_active_dialog = _DummyVisibleDialog()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "dialog.png"
+            result = execute_app_command(owner, {"command": "capture-active-dialog", "path": str(target)})
+            self.assertTrue(target.is_file())
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "active_dialog_snapshot_captured")
+
+    def test_close_active_dialog_command_hides_dialog(self):
+        owner = _DummyOwner()
+        owner._automation_active_dialog = _DummyVisibleDialog()
+
+        result = execute_app_command(owner, {"command": "close-active-dialog"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "active_dialog_closed")
+        self.assertIsNone(owner._automation_active_dialog)
+
+    def test_personalization_idle_command_dispatches_requested_action(self):
+        owner = _DummyOwner()
+
+        def _fake_start_background(_owner, *, action, runner):
+            result = dict(runner() or {})
+            return {
+                "active": True,
+                "active_action": action,
+                "last_action": action,
+                "last_result": result,
+            }
+
+        with patch("ui.main.app_command_bridge._start_background_personalization_action", side_effect=_fake_start_background):
+            paused = execute_app_command(owner, {"command": "personalization-idle", "options": {"action": "pause"}})
+            resumed = execute_app_command(owner, {"command": "personalization-idle", "options": {"action": "resume"}})
+            started = execute_app_command(owner, {"command": "personalization-idle", "options": {"action": "run-now"}})
+
+        self.assertTrue(paused["ok"])
+        self.assertTrue(resumed["ok"])
+        self.assertTrue(started["ok"])
+        self.assertTrue(paused["queued"])
+        self.assertTrue(resumed["queued"])
+        self.assertTrue(started["queued"])
+        self.assertEqual(paused["message"], "personalization_idle_pause_accepted")
+        self.assertEqual(resumed["message"], "personalization_idle_resume_accepted")
+        self.assertEqual(started["message"], "personalization_idle_run_now_accepted")
+        self.assertEqual(owner.personalization_actions, ["pause", "resume", "run-now"])
 
     def test_capture_snapshot_command_uses_explicit_path_and_appends_png_extension(self):
         owner = _DummyOwner()

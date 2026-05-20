@@ -22,6 +22,7 @@ ai_subtitle_studio/
 ├── AGENTS.md
 ├── CODEMAP.md
 ├── File_structure.txt
+├── NEW_CHAT_PROMPT.md
 ├── README.md
 ├── RELEASE_v03.24.02.md
 ├── RELEASE_v03.24.03.md
@@ -72,11 +73,15 @@ ai_subtitle_studio/
 ├── projects/
 ├── test video/
 ├── test_case.md
+├── test_result.md
 ├── tests/
 │   ├── conftest.py
 │   ├── test_app_command_bridge.py
 │   ├── test_app_command_protocol.py
+│   ├── test_app_command_server.py
+│   ├── test_automation_command_client.py
 │   ├── test_benchmark_mode_profiles.py
+│   ├── test_debug_guided_subtitle_memory.py
 │   ├── test_editor_canvas_state.py
 │   ├── test_editor_open_layout.py
 │   ├── test_editor_split_undo.py
@@ -84,7 +89,9 @@ ai_subtitle_studio/
 │   ├── test_project_assets.py
 │   ├── test_project_context.py
 │   ├── test_project_runtime_capture.py
+│   ├── test_qa_suite_runner.py
 │   ├── test_queue_dispatch.py
+│   ├── test_remote_verify_actions.py
 │   ├── test_runtime_eta.py
 │   ├── test_timeline_hit_targets.py
 │   ├── test_timeline_paint_passes.py
@@ -95,6 +102,7 @@ ai_subtitle_studio/
 ├── tools/
 │   ├── appctl.py
 │   ├── apply_runtime_optimization_profile.py
+│   ├── automation_command_client.py
 │   ├── benchmark_apple_silicon_scheduler.py
 │   ├── benchmark_dense_flow_cut_boundary.py
 │   ├── benchmark_llm_model_variants.py
@@ -106,7 +114,9 @@ ai_subtitle_studio/
 │   ├── benchmark_tiniping_timing_ideas.py
 │   ├── build_native_extensions.py
 │   ├── check_maintenance_budget.py
+│   ├── debug_guided_subtitle_memory.py
 │   ├── overnight_optimize.py
+│   ├── qa_suite_runner.py
 │   ├── remote_verify.py
 │   └── verify_full_media_pipeline.py
 ├── ui/

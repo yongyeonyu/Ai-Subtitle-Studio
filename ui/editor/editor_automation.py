@@ -278,6 +278,11 @@ class EditorAutomationMixin:
                 split_pending_sec = None
         inline_edit_mode = "smart_split" if split_pending_sec is not None else ("plain" if bool(getattr(canvas, "_edit_active", False)) else "")
         inline_edit_text, inline_edit_cursor = self._automation_inline_editor_state()
+        video_player = getattr(self, "video_player", None)
+        try:
+            video_visible = bool(video_player is not None and video_player.isVisible())
+        except Exception:
+            video_visible = False
         return {
             "playhead_sec": playhead,
             "shadow_playhead_sec": None if getattr(canvas, "shadow_playhead_sec", None) is None else float(getattr(canvas, "shadow_playhead_sec", 0.0) or 0.0),
@@ -303,6 +308,8 @@ class EditorAutomationMixin:
             "timeline_scroll_x": timeline_scroll_x,
             "timeline_fit_locked": bool(getattr(timeline, "_fit_to_view_locked", False)) if timeline is not None else False,
             "playback_center_lock": bool(getattr(timeline, "_playback_center_lock", False)) if timeline is not None else False,
+            "video_visible": video_visible,
+            "active_footer_menu_id": str(getattr(self, "_active_footer_menu_id", "") or ""),
         }
 
     def automation_set_playhead(self, sec: float, *, center: bool = False, sync_video: bool = True) -> dict[str, Any]:
@@ -377,6 +384,30 @@ class EditorAutomationMixin:
         return {
             "timeline_pps": float(getattr(getattr(timeline, "canvas", None), "pps", 0.0) or 0.0),
             "editor_runtime": self.automation_editor_state_snapshot(),
+        }
+
+    def automation_set_video_visible(self, action: str) -> dict[str, Any]:
+        toggler = getattr(self, "_toggle_video", None)
+        if not callable(toggler):
+            raise ValueError("video_toggle_unavailable")
+        state = self.automation_editor_state_snapshot()
+        visible = bool(state.get("video_visible"))
+        normalized = str(action or "toggle").strip().lower() or "toggle"
+        if normalized not in {"toggle", "show", "hide"}:
+            raise ValueError("invalid_video_action")
+        should_toggle = (
+            normalized == "toggle"
+            or (normalized == "show" and not visible)
+            or (normalized == "hide" and visible)
+        )
+        if should_toggle:
+            toggler()
+        runtime = self.automation_editor_state_snapshot()
+        return {
+            "action": normalized,
+            "video_visible": bool(runtime.get("video_visible")),
+            "active_footer_menu_id": str(runtime.get("active_footer_menu_id", "") or ""),
+            "editor_runtime": runtime,
         }
 
     def automation_set_playback_state(self, action: str) -> dict[str, Any]:
@@ -587,6 +618,24 @@ class EditorAutomationMixin:
         )
         if active is None:
             raise ValueError("segment_not_found")
+        selection_source = "requested"
+        playhead = self._automation_playhead_sec()
+
+        def _ready_for_segment(seg: dict[str, Any] | None) -> bool:
+            if seg is None:
+                return False
+            try:
+                start = float(seg.get("start", 0.0) or 0.0)
+                end = float(seg.get("end", 0.0) or 0.0)
+                return start + 0.05 < playhead < end - 0.05
+            except Exception:
+                return False
+
+        if not _ready_for_segment(active):
+            fallback = self._automation_locate_segment(rows=rows, line=None, start_sec=None, at_playhead=True)
+            if fallback is not None and fallback != active and _ready_for_segment(fallback):
+                active = fallback
+                selection_source = "playhead_fallback"
         canvas = self._automation_canvas()
         starter = getattr(canvas, "start_inline_edit", None) if canvas is not None else None
         if not callable(starter):
@@ -606,6 +655,7 @@ class EditorAutomationMixin:
         return {
             "line": int(active.get("line", 0) or 0),
             "start": float(active.get("start", 0.0) or 0.0),
+            "selection_source": selection_source,
             "split_sec": float(getattr(canvas, "_pending_split_sec", 0.0) or 0.0) if canvas is not None else 0.0,
             "editor_runtime": self.automation_editor_state_snapshot(),
         }

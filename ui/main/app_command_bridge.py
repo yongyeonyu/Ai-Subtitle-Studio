@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 
 from PyQt6.QtCore import QThread
@@ -16,8 +17,10 @@ from core.runtime import config
 from core.runtime.logger import get_logger
 from core.settings import load_settings, save_settings
 from core.settings_simplifier import apply_simple_operation_mode
+from ui.main.app_command_bridge_handlers import handle_command as _handle_bridge_command
 
 _STATUS_SNAPSHOT_CACHE_TTL_SEC = 0.35
+_STATUS_BUSY_STALE_REUSE_SEC = 2.5
 _STATUS_SNAPSHOT_CACHE_LOCK = threading.Lock()
 _STATUS_SNAPSHOT_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
 _STATUS_COMMANDS = {"ping", "status", "guided-subtitle-status"}
@@ -200,6 +203,73 @@ def _snapshot_output_path(command_payload: dict[str, Any]) -> str:
     return os.path.join(output_dir, filename)
 
 
+def _file_result(path: str) -> dict[str, Any]:
+    normalized = _normalize_path(path)
+    exists = bool(normalized) and os.path.isfile(normalized)
+    return {
+        "path": normalized,
+        "exists": exists,
+        "bytes": int(os.path.getsize(normalized)) if exists else 0,
+    }
+
+
+def _saved_srt_outputs(editor: Any) -> list[tuple[str, str]]:
+    outputs: list[tuple[str, str]] = []
+    for raw in list(getattr(editor, "_last_saved_srt_outputs", []) or []):
+        if not isinstance(raw, (list, tuple)) or not raw:
+            continue
+        srt_path = _normalize_path(raw[0])
+        target_file = _normalize_path(raw[1] if len(raw) > 1 else raw[0])
+        if not srt_path:
+            continue
+        outputs.append((srt_path, target_file or srt_path))
+    if outputs:
+        return outputs
+    media_path = _normalize_path(getattr(editor, "media_path", "") or "")
+    preferred_single = getattr(editor, "_preferred_single_srt_output_path", None)
+    fallback_srt = ""
+    if callable(preferred_single):
+        try:
+            fallback_srt = _normalize_path(preferred_single(media_path or None))
+        except TypeError:
+            fallback_srt = _normalize_path(preferred_single())
+        except Exception:
+            fallback_srt = ""
+    if not fallback_srt and media_path:
+        try:
+            from core.path_manager import get_srt_path
+
+            fallback_srt = _normalize_path(get_srt_path(media_path))
+        except Exception:
+            fallback_srt = ""
+    if fallback_srt and os.path.isfile(fallback_srt):
+        outputs.append((fallback_srt, media_path or fallback_srt))
+    return outputs
+
+
+def _subtitle_video_output_path(target_file: str) -> str:
+    normalized = _normalize_path(target_file)
+    if not normalized:
+        return ""
+    safe_name = os.path.basename(normalized)
+    return os.path.join(
+        os.path.dirname(normalized),
+        f"{os.path.splitext(safe_name)[0]}_자막소스.mov",
+    )
+
+
+def _current_editor_srt_segments(editor: Any) -> list[dict[str, Any]]:
+    getter = getattr(editor, "_get_current_segments", None)
+    if not callable(getter):
+        return []
+    segs = list(getter() or [])
+    formatter = getattr(editor, "_segments_for_srt_output", None)
+    if callable(formatter):
+        formatted = formatter(segs)
+        return list(formatted or [])
+    return segs
+
+
 def _capture_window_snapshot(owner: Any, command_payload: dict[str, Any]) -> dict[str, Any]:
     path = _snapshot_output_path(command_payload)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -292,6 +362,33 @@ def _bring_to_front(owner: Any) -> None:
         lambda: getattr(owner, "activateWindow", lambda: None)(),
         default=None,
     )
+
+
+def _set_active_automation_dialog(owner: Any, dialog: Any) -> Any:
+    try:
+        setattr(owner, "_automation_active_dialog", dialog)
+    except Exception:
+        pass
+    return dialog
+
+
+def _active_automation_dialog(owner: Any) -> Any:
+    for candidate in (
+        getattr(owner, "_automation_active_dialog", None),
+        getattr(owner, "_correction_dictionary_dialog", None),
+    ):
+        if candidate is not None and bool(getattr(candidate, "isVisible", lambda: False)()):
+            return candidate
+    return None
+
+
+def _show_dialog_nonmodal(owner: Any, dialog: Any) -> Any:
+    if dialog is None:
+        return None
+    _set_active_automation_dialog(owner, dialog)
+    _bridge_best_effort("dialog setModal", lambda: getattr(dialog, "setModal", lambda *_: None)(False), default=None)
+    _bring_to_front(dialog)
+    return dialog
 
 
 def _recent_logs_snapshot(limit: int = 40) -> list[str]:
@@ -420,6 +517,66 @@ def _editor_runtime_snapshot(editor: Any) -> dict[str, Any]:
     )
 
 
+def _personalization_scalar_dict(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    scalars: dict[str, Any] = {}
+    for key, raw in list(value.items()):
+        if isinstance(raw, (str, int, float, bool)) or raw is None:
+            scalars[str(key)] = raw
+    return scalars
+
+
+def _personalization_runtime_snapshot(owner: Any) -> dict[str, Any]:
+    thread = getattr(owner, "_automation_personalization_idle_thread", None)
+    active = bool(thread is not None and thread.is_alive())
+    return {
+        "foreground_busy_until_ms": int(getattr(owner, "_lora_foreground_busy_until_ms", 0) or 0),
+        "foreground_busy_reason": str(getattr(owner, "_lora_foreground_busy_reason", "") or ""),
+        "active": active,
+        "active_action": str(getattr(owner, "_automation_personalization_idle_active_action", "") or ""),
+        "last_action": str(getattr(owner, "_automation_personalization_idle_last_action", "") or ""),
+        "last_error": str(getattr(owner, "_automation_personalization_idle_last_error", "") or ""),
+        "started_at_ms": int(getattr(owner, "_automation_personalization_idle_started_at_ms", 0) or 0),
+        "finished_at_ms": int(getattr(owner, "_automation_personalization_idle_finished_at_ms", 0) or 0),
+        "last_result": _personalization_scalar_dict(getattr(owner, "_automation_personalization_idle_last_result", {})),
+    }
+
+
+def _start_background_personalization_action(owner: Any, *, action: str, runner: Any) -> dict[str, Any]:
+    thread = getattr(owner, "_automation_personalization_idle_thread", None)
+    if thread is not None and thread.is_alive():
+        return _personalization_runtime_snapshot(owner)
+    setattr(owner, "_automation_personalization_idle_last_action", str(action or ""))
+    setattr(owner, "_automation_personalization_idle_active_action", str(action or ""))
+    setattr(owner, "_automation_personalization_idle_last_error", "")
+    setattr(owner, "_automation_personalization_idle_last_result", {})
+    setattr(owner, "_automation_personalization_idle_started_at_ms", int(time.time() * 1000))
+    setattr(owner, "_automation_personalization_idle_finished_at_ms", 0)
+
+    def _worker() -> None:
+        result: dict[str, Any] = {}
+        error = ""
+        try:
+            result = dict(runner() or {})
+        except Exception as exc:
+            error = str(exc)
+            get_logger().log(f"⚠️ 개인화 idle 자동화 작업 실패 [{action}]: {exc}")
+        setattr(owner, "_automation_personalization_idle_last_result", result)
+        setattr(owner, "_automation_personalization_idle_last_error", error)
+        setattr(owner, "_automation_personalization_idle_finished_at_ms", int(time.time() * 1000))
+        setattr(owner, "_automation_personalization_idle_active_action", "")
+
+    worker = threading.Thread(
+        target=_worker,
+        name=f"automation-personalization-{str(action or 'idle')}",
+        daemon=True,
+    )
+    setattr(owner, "_automation_personalization_idle_thread", worker)
+    worker.start()
+    return _personalization_runtime_snapshot(owner)
+
+
 def _editor_aux_counts(editor: Any) -> dict[str, int]:
     empty = {
         "stt_preview_segment_count": 0,
@@ -499,6 +656,12 @@ def _status_snapshot(owner: Any) -> dict[str, Any]:
             default={},
         )
     recent_logs, recent_stage_logs = _recent_log_payload()
+    editor_stt = {
+        "enabled": bool(getattr(editor, "_stt_mode_enabled", False)) if editor is not None else False,
+        "state": str(getattr(editor, "_stt_state", "") or "") if editor is not None else "",
+        "recording": bool(getattr(editor, "_stt_recording", False)) if editor is not None else False,
+        "vad_running": bool(getattr(editor, "_stt_vad_running", False)) if editor is not None else False,
+    }
     return {
         "editor_open": bool(editor is not None),
         "editor_media_path": str(getattr(editor, "media_path", "") or "") if editor is not None else "",
@@ -509,8 +672,10 @@ def _status_snapshot(owner: Any) -> dict[str, Any]:
         "auto_processing_active": bool(getattr(owner, "_auto_processing_active", False)),
         "editor_runtime": _editor_runtime_snapshot(editor),
         "editor_aux_counts": _editor_aux_counts(editor),
+        "editor_stt": editor_stt,
         "guided_snapshot_run": guided_state,
         "queue_runtime": _queue_runtime_snapshot(owner),
+        "personalization_runtime": _personalization_runtime_snapshot(owner),
         "runtime_resource": _runtime_resource_snapshot(owner),
         "recent_logs": recent_logs,
         "recent_stage_logs": recent_stage_logs,
@@ -531,17 +696,25 @@ def _peek_status_snapshot_cache(owner: Any, *, max_age_sec: float | None = None)
     return age, dict(snapshot or {})
 
 
+def _store_status_snapshot(owner: Any, snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    data = dict(snapshot or {})
+    with _STATUS_SNAPSHOT_CACHE_LOCK:
+        _STATUS_SNAPSHOT_CACHE[id(owner)] = (time.monotonic(), dict(data))
+    return data
+
+
+def _status_result(command: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+    message = "pong" if command == "ping" else ""
+    return build_command_result(command, ok=True, accepted=True, message=message, data=snapshot)
+
+
 def _cached_status_snapshot(owner: Any) -> dict[str, Any]:
     cached_entry = _peek_status_snapshot_cache(owner, max_age_sec=_STATUS_SNAPSHOT_CACHE_TTL_SEC)
     if cached_entry is not None:
         _age, snapshot = cached_entry
         return snapshot
-    now = time.monotonic()
-    owner_key = id(owner)
     snapshot = _status_snapshot(owner)
-    with _STATUS_SNAPSHOT_CACHE_LOCK:
-        _STATUS_SNAPSHOT_CACHE[owner_key] = (now, dict(snapshot))
-    return snapshot
+    return _store_status_snapshot(owner, snapshot)
 
 
 def _clear_status_snapshot_cache(owner: Any | None = None) -> None:
@@ -585,6 +758,14 @@ def _status_fallback_snapshot(owner: Any) -> dict[str, Any]:
         data["editor_runtime"] = {}
     if not isinstance(data.get("guided_snapshot_run"), dict):
         data["guided_snapshot_run"] = {}
+    if not data["guided_snapshot_run"]:
+        guided_getter = getattr(owner, "_automation_guided_snapshot_state_payload", None)
+        if callable(guided_getter):
+            data["guided_snapshot_run"] = _bridge_best_effort(
+                "guided snapshot fallback state",
+                lambda: dict(guided_getter() or {}),
+                default={},
+            )
     if not isinstance(data.get("queue_runtime"), dict):
         data["queue_runtime"] = {}
     if not isinstance(data.get("runtime_resource"), dict):
@@ -605,6 +786,28 @@ def _status_fallback_snapshot(owner: Any) -> dict[str, Any]:
     return data
 
 
+def _status_signal_should_defer_to_fallback(owner: Any) -> bool:
+    editor = getattr(owner, "_editor_widget", None)
+    try:
+        if str(getattr(getattr(editor, "sm", None), "state", "") or "") == "ST_PROC":
+            return True
+    except Exception:
+        pass
+    try:
+        if bool(getattr(getattr(owner, "backend", None), "_active", False)):
+            return True
+    except Exception:
+        pass
+    try:
+        if bool(getattr(owner, "_auto_processing_active", False)):
+            return True
+    except Exception:
+        pass
+    runtime_resource = _runtime_resource_snapshot(owner)
+    active_labels = [str(label or "").strip().lower() for label in list(runtime_resource.get("active_labels") or [])]
+    return any(label in {"pipeline", "editor"} for label in active_labels)
+
+
 def _fast_status_command_result(owner: Any, payload: dict[str, Any], *, timeout_sec: float = 0.08) -> dict[str, Any]:
     # status/ping은 읽기 전용 진단 경로다.
     # 여기서 일반 명령처럼 UI 스레드를 길게 기다리면 automation 전체가 멈춘 것처럼 보인다.
@@ -613,9 +816,17 @@ def _fast_status_command_result(owner: Any, payload: dict[str, Any], *, timeout_
     cached_entry = _peek_status_snapshot_cache(owner, max_age_sec=_STATUS_SNAPSHOT_CACHE_TTL_SEC)
     if cached_entry is not None:
         _age, snapshot = cached_entry
-        if command == "ping":
-            return build_command_result(command, ok=True, accepted=True, message="pong", data=snapshot)
-        return build_command_result(command, ok=True, accepted=True, data=snapshot)
+        return _status_result(command, snapshot)
+    if _status_signal_should_defer_to_fallback(owner):
+        stale_entry = _peek_status_snapshot_cache(owner, max_age_sec=_STATUS_BUSY_STALE_REUSE_SEC)
+        if stale_entry is not None:
+            age, snapshot = stale_entry
+            stale_snapshot = dict(snapshot or {})
+            stale_snapshot["status_snapshot_fallback"] = True
+            stale_snapshot["status_snapshot_age_sec"] = round(float(age), 3)
+            return _status_result(command, stale_snapshot)
+        fallback = _store_status_snapshot(owner, _status_fallback_snapshot(owner))
+        return _status_result(command, fallback)
     signal = getattr(owner, "_sig_external_app_command", None)
     state: dict[str, Any] | None = None
     if hasattr(signal, "emit"):
@@ -629,10 +840,11 @@ def _fast_status_command_result(owner: Any, payload: dict[str, Any], *, timeout_
     if state is not None and state["event"].wait(quick_timeout):
         result = _signal_state_result(state)
         if result is not None:
+            if isinstance(result.get("data"), dict):
+                _store_status_snapshot(owner, result.get("data"))
             return result
-    fallback = _status_fallback_snapshot(owner)
-    message = "pong" if command == "ping" else ""
-    return build_command_result(command, ok=True, accepted=True, message=message, data=fallback)
+    fallback = _store_status_snapshot(owner, _status_fallback_snapshot(owner))
+    return _status_result(command, fallback)
 
 
 def _editor_pipeline_start_callback(owner: Any, media_path: str, *, is_auto_start: bool = False):
@@ -653,11 +865,32 @@ def execute_app_command(owner: Any, payload: dict[str, Any] | None) -> dict[str,
     command = command_payload.get("command", "")
     logger = get_logger()
 
-    def ok(*, message: str = "", data: dict[str, Any] | None = None, queued: bool = False) -> dict[str, Any]:
-        return build_command_result(command, ok=True, accepted=True, queued=queued, message=message, data=data)
+    def ok(
+        *,
+        message: str = "",
+        data: dict[str, Any] | None = None,
+        queued: bool = False,
+        accepted: bool = True,
+    ) -> dict[str, Any]:
+        return build_command_result(command, ok=True, accepted=accepted, queued=queued, message=message, data=data)
 
-    def fail(error: str, *, message: str = "") -> dict[str, Any]:
-        return build_command_result(command, ok=False, accepted=False, error=error, message=message)
+    def fail(
+        error: str,
+        *,
+        message: str = "",
+        data: dict[str, Any] | None = None,
+        accepted: bool = False,
+        queued: bool = False,
+    ) -> dict[str, Any]:
+        return build_command_result(
+            command,
+            ok=False,
+            accepted=accepted,
+            queued=queued,
+            error=error,
+            message=message,
+            data=data,
+        )
 
     if command == "ping":
         return ok(message="pong", data=_cached_status_snapshot(owner))
@@ -669,547 +902,51 @@ def execute_app_command(owner: Any, payload: dict[str, Any] | None) -> dict[str,
         return ok(data=_cached_status_snapshot(owner))
 
     _clear_status_snapshot_cache(owner)
-
-    if command == "editor-set-playhead":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        options = dict(command_payload.get("options") or {})
-        sec = _command_option_float(options, "sec")
-        if sec is None:
-            return fail("invalid_playhead_sec")
-        setter = getattr(editor, "automation_set_playhead", None)
-        if not callable(setter):
-            return fail("editor_automation_unavailable")
-        try:
-            data = dict(
-                setter(
-                    sec,
-                    center=_command_option_bool(options, "center", default=False),
-                    sync_video=_command_option_bool(options, "sync_video", default=True),
-                )
-                or {}
-            )
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_playhead_set", data=data)
-
-    if command == "editor-pin-shadow-playhead":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        pinner = getattr(editor, "automation_pin_shadow_playhead", None)
-        if not callable(pinner):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        try:
-            data = dict(pinner(sec=_command_option_float(options, "sec")) or {})
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_shadow_playhead_pinned", data=data)
-
-    if command == "editor-clear-shadow-playhead":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        clearer = getattr(editor, "automation_clear_shadow_playhead", None)
-        if not callable(clearer):
-            return fail("editor_automation_unavailable")
-        try:
-            data = dict(clearer() or {})
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_shadow_playhead_cleared", data=data)
-
-    if command == "editor-zoom-max":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        zoomer = getattr(editor, "automation_zoom_max", None)
-        if not callable(zoomer):
-            return fail("editor_automation_unavailable")
-        try:
-            data = dict(zoomer() or {})
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_zoom_max_applied", data=data)
-
-    if command == "editor-playback":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        player = getattr(editor, "automation_set_playback_state", None)
-        if not callable(player):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        action = str(options.get("action", "toggle") or "toggle")
-        try:
-            data = dict(player(action) or {})
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message=f"editor_playback_{action}", data=data)
-
-    if command == "editor-select-segment":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        selector = getattr(editor, "automation_select_segment", None)
-        if not callable(selector):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        try:
-            data = dict(
-                selector(
-                    line=_command_option_int(options, "line"),
-                    start_sec=_command_option_float(options, "start_sec"),
-                    at_playhead=_command_option_bool(options, "at_playhead", default=False),
-                    center=_command_option_bool(options, "center", default=False),
-                    sync_playhead=_command_option_bool(options, "sync_playhead", default=False),
-                )
-                or {}
-            )
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_segment_selected", data=data)
-
-    if command == "editor-begin-smart-split":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        starter = getattr(editor, "automation_begin_smart_split_at_playhead", None)
-        if not callable(starter):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        try:
-            data = dict(
-                starter(
-                    line=_command_option_int(options, "line"),
-                    start_sec=_command_option_float(options, "start_sec"),
-                    at_playhead=_command_option_bool(options, "at_playhead", default=False),
-                )
-                or {}
-            )
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_smart_split_mode_started", data=data)
-
-    if command == "editor-set-inline-cursor":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        mover = getattr(editor, "automation_set_inline_edit_cursor", None)
-        if not callable(mover):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        position = _command_option_int(options, "position")
-        if position is None:
-            return fail("invalid_inline_cursor_position")
-        try:
-            data = dict(mover(position) or {})
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_inline_cursor_set", data=data)
-
-    if command == "editor-commit-inline-edit":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        committer = getattr(editor, "automation_commit_inline_edit", None)
-        if not callable(committer):
-            return fail("editor_automation_unavailable")
-        try:
-            data = dict(committer() or {})
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_inline_edit_committed", data=data)
-
-    if command == "editor-smart-split":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        splitter = getattr(editor, "automation_smart_split_at_playhead", None)
-        if not callable(splitter):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        try:
-            selected = _select_editor_segment_from_options(editor, options)
-            data = dict(splitter() or {})
-            if selected:
-                data.setdefault("selected", dict(selected))
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_smart_split_done", data=data)
-
-    if command in {"editor-move-segment-left", "editor-move-segment-right"}:
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        mover = getattr(editor, "automation_move_segment_boundary_to_playhead", None)
-        if not callable(mover):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        edge = "left" if command.endswith("left") else "right"
-        try:
-            selected = _select_editor_segment_from_options(editor, options)
-            data = dict(mover(edge) or {})
-            if selected:
-                data.setdefault("selected", dict(selected))
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message=f"editor_segment_{edge}_moved", data=data)
-
-    if command == "editor-move-diamond":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        mover = getattr(editor, "automation_move_diamond_to_playhead", None)
-        if not callable(mover):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        try:
-            selected = _select_editor_segment_from_options(editor, options)
-            data = dict(mover(side=str(options.get("side", "closest") or "closest")) or {})
-            if selected:
-                data.setdefault("selected", dict(selected))
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_diamond_moved", data=data)
-
-    if command == "editor-merge-diamond":
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        merger = getattr(editor, "automation_merge_diamond", None)
-        if not callable(merger):
-            return fail("editor_automation_unavailable")
-        options = dict(command_payload.get("options") or {})
-        try:
-            selected = _select_editor_segment_from_options(editor, options)
-            data = dict(merger(side=str(options.get("side", "closest") or "closest")) or {})
-            if selected:
-                data.setdefault("selected", dict(selected))
-        except ValueError as exc:
-            return fail(str(exc))
-        _bring_to_front(owner)
-        return ok(message="editor_diamond_merged", data=data)
-
-    if command in {"capture-snapshot", "snapshot"}:
-        logger.log("🤖 자동화 명령 수신: capture-snapshot")
-        async_requested = bool(command_payload.get("options", {}).get("async", True))
-        has_async_capture = callable(getattr(owner, "_automation_request_async_snapshot_capture", None))
-        snapshot_result = (
-            _queue_window_snapshot(owner, command_payload)
-            if async_requested and has_async_capture
-            else _capture_window_snapshot(owner, command_payload)
-        )
-        if not snapshot_result.get("ok"):
-            return fail(str(snapshot_result.get("error", "snapshot_failed")), message=str(snapshot_result.get("message", "")))
-        return ok(
-            message="snapshot_queued" if snapshot_result.get("queued") else "snapshot_captured",
-            data=snapshot_result.get("data"),
-            queued=bool(snapshot_result.get("queued", False)),
-        )
-
-    if command == "capture-dictionary-snapshot":
-        logger.log("🤖 자동화 명령 수신: capture-dictionary-snapshot")
-        dialog = getattr(owner, "_correction_dictionary_dialog", None)
-        if dialog is None or not bool(getattr(dialog, "isVisible", lambda: False)()):
-            return fail("dictionary_not_visible")
-        snapshot_result = _capture_widget_snapshot(dialog, command_payload)
-        if not snapshot_result.get("ok"):
-            return fail(str(snapshot_result.get("error", "snapshot_failed")), message=str(snapshot_result.get("message", "")))
-        return ok(message="dictionary_snapshot_captured", data=snapshot_result.get("data"))
-
-    if command == "show-home":
-        logger.log("🤖 자동화 명령 수신: show-home")
-        owner.show_home()
-        _bring_to_front(owner)
-        return ok(message="home_visible")
-
-    if command == "open-dictionary":
-        logger.log("🤖 자동화 명령 수신: open-dictionary")
-        opener = getattr(owner, "_show_main_correction_dictionary_nonmodal", None)
-        if not callable(opener):
-            return fail("dictionary_open_unavailable")
-        opener()
-        _bring_to_front(owner)
-        return ok(message="dictionary_visible")
-
-    if command == "open-project":
-        path = _normalize_path(command_payload.get("path"))
-        if not _existing_file(path):
-            return fail("project_not_found", message=path)
-        opener = getattr(owner, "_open_project_file", None)
-        if not callable(opener):
-            return fail("project_open_unavailable")
-        logger.log(f"🤖 자동화 명령 수신: open-project {os.path.basename(path)}")
-        if not bool(opener(path)):
-            return fail("project_open_failed", message=path)
-        _bring_to_front(owner)
-        return ok(message="project_opened", data={"path": path})
-
-    if command == "open-srt":
-        path = _normalize_path(command_payload.get("path"))
-        if not _existing_file(path):
-            return fail("srt_not_found", message=path)
-        logger.log(f"🤖 자동화 명령 수신: open-srt {os.path.basename(path)}")
-        owner._open_srt_in_editor(path)
-        _bring_to_front(owner)
-        return ok(message="srt_opened", data={"path": path})
-
-    if command == "open-media":
-        path = _normalize_path(command_payload.get("path"))
-        if not _existing_file(path):
-            return fail("media_not_found", message=path)
-        backend = getattr(owner, "backend", None)
-        starter = getattr(backend, "start_pipeline", None) if backend is not None else None
-        if not callable(starter):
-            return fail("pipeline_start_unavailable")
-        logger.log(f"🤖 자동화 명령 수신: open-media {os.path.basename(path)}")
-        opened = owner.open_editor_for_file_and_wait(
-            path,
-            _noop,
-            _editor_pipeline_start_callback(owner, path, is_auto_start=True),
-            _noop,
-            _noop,
-            False,
-        )
-        if not opened:
-            return fail("media_open_failed", message=path)
-        _bring_to_front(owner)
-        return ok(message="media_opened", data={"path": path})
-
-    if command == "start-multiclip":
-        backend = getattr(owner, "backend", None)
-        starter = getattr(backend, "start_multiclip_pipeline", None) if backend is not None else None
-        if not callable(starter):
-            return fail("multiclip_start_unavailable")
-        editor = getattr(owner, "_editor_widget", None)
-        state = str(getattr(getattr(editor, "sm", None), "state", "") or "") if editor is not None else ""
-        if state == "ST_PROC" or bool(getattr(backend, "_active", False)):
-            return fail("already_processing")
-        files, folder = _resolve_multiclip_files(command_payload)
-        if command_payload.get("folder") or (
-            command_payload.get("path") and not command_payload.get("paths")
-        ):
-            requested_folder = _normalize_path(command_payload.get("folder") or command_payload.get("path"))
-            if requested_folder and not _existing_dir(requested_folder):
-                return fail("queue_folder_missing", message=requested_folder)
-        if not files:
-            return fail("multiclip_files_missing")
-        if len(files) < 2:
-            return fail("multiclip_requires_multiple_files", message=str(files[0]))
-
-        options = dict(command_payload.get("options") or {})
-        reuse_policy = _normalize_multiclip_reuse_policy(options.get("reuse_existing"))
-        if not reuse_policy:
-            return fail("invalid_reuse_existing_option", message=str(options.get("reuse_existing", "")))
-        existing_candidates = _multiclip_existing_srt_candidates(files)
-        if existing_candidates and reuse_policy == "ask":
-            names = ", ".join(os.path.basename(path) for path in existing_candidates[:3])
-            return fail("existing_subtitles_confirmation_required", message=names)
-
-        mode_value = str(options.get("mode") or "").strip()
-        applied_settings = None
-        if mode_value:
-            try:
-                applied_settings = _apply_automation_mode_override(owner, mode_value)
-            except Exception as exc:
-                return fail("mode_apply_failed", message=str(exc))
-
-        if reuse_policy == "yes":
-            setattr(backend, "_force_reuse_existing_multiclip_subtitles_once", True)
-            setattr(backend, "_force_no_reuse_once", False)
-        elif reuse_policy == "no":
-            setattr(backend, "_force_reuse_existing_multiclip_subtitles_once", False)
-            setattr(backend, "_force_no_reuse_once", True)
-        else:
-            setattr(backend, "_force_reuse_existing_multiclip_subtitles_once", False)
-            setattr(backend, "_force_no_reuse_once", False)
-
-        try:
-            from ui.project.project_session_runtime import set_runtime_multiclip_state
-
-            set_runtime_multiclip_state(
-                owner,
-                list(files),
-                [],
-                project_boundary_rows=None,
-                emit_boundary_signal=False,
-            )
-        except Exception as exc:
-            return fail("multiclip_runtime_prepare_failed", message=str(exc))
-
-        logger.log(
-            f"🤖 자동화 명령 수신: start-multiclip {len(files)}개"
-            + (f" / {normalize_mode(mode_value)}" if mode_value else "")
-            + f" / reuse={reuse_policy}"
-        )
-        starter(list(files), folder=folder or None)
-        editor = _wait_for_editor(owner, files[0], timeout_sec=5.0)
-        if editor is None:
-            return fail("multiclip_editor_timeout", message=os.path.basename(files[0]))
-        if not _auto_start_editor(editor):
-            return fail("pipeline_start_unavailable")
-        _bring_to_front(owner)
-        data = {
-            "count": len(files),
-            "files": list(files),
-            "folder": folder,
-            "reuse_existing": reuse_policy,
-            "existing_subtitle_candidates": [os.path.basename(path) for path in existing_candidates],
-        }
-        if applied_settings:
-            data["mode"] = str(applied_settings.get("simple_operation_mode", "") or "")
-            data["stt_quality_preset"] = str(applied_settings.get("stt_quality_preset", "") or "")
-        return ok(message="multiclip_started", data=data)
-
-    if command == "guided-subtitle-run":
-        path = _normalize_path(command_payload.get("path"))
-        if not _existing_file(path):
-            return fail("media_not_found", message=path)
-        backend = getattr(owner, "backend", None)
-        pipeline_starter = getattr(backend, "start_pipeline", None) if backend is not None else None
-        if not callable(pipeline_starter):
-            return fail("pipeline_start_unavailable")
-        editor = getattr(owner, "_editor_widget", None)
-        state = str(getattr(getattr(editor, "sm", None), "state", "") or "") if editor is not None else ""
-        if state == "ST_PROC":
-            return fail("already_processing")
-        logger.log(f"🤖 자동화 명령 수신: guided-subtitle-run {os.path.basename(path)}")
-        opened = owner.open_editor_for_file_and_wait(
-            path,
-            _noop,
-            _editor_pipeline_start_callback(owner, path, is_auto_start=True),
-            _noop,
-            _noop,
-            False,
-        )
-        if not opened:
-            return fail("media_open_failed", message=path)
-        begin_run = getattr(owner, "_automation_begin_guided_subtitle_run", None)
-        capture_run = getattr(owner, "_automation_capture_guided_snapshot", None)
-        snapshot_dir = ""
-        snapshots: list[dict[str, Any]] = []
-        if callable(begin_run):
-            state_payload = begin_run(path, snapshot_dir=str(command_payload.get("options", {}).get("snapshot_dir", "") or ""))
-            snapshot_dir = str((state_payload or {}).get("snapshot_dir", "") or "")
-        if callable(capture_run):
-            opened_snapshot = capture_run("opened", stage_text="opened", force=True)
-            if isinstance(opened_snapshot, dict) and opened_snapshot:
-                snapshots.append(dict(opened_snapshot))
-        editor = getattr(owner, "_editor_widget", None)
-        starter = getattr(editor, "_on_start_clicked", None) if editor is not None else None
-        if not callable(starter):
-            return fail("pipeline_start_unavailable")
-        starter()
-        if callable(capture_run):
-            started_snapshot = capture_run("pipeline-started", stage_text="pipeline_started", force=True)
-            if isinstance(started_snapshot, dict) and started_snapshot:
-                snapshots.append(dict(started_snapshot))
-        _bring_to_front(owner)
-        return ok(
-            message="guided_subtitle_started",
-            data={
-                "path": path,
-                "snapshot_dir": snapshot_dir,
-                "snapshots": snapshots,
-                "status": _status_snapshot(owner),
-            },
-        )
-
-    if command == "queue-files":
-        files = [_normalize_path(path) for path in command_payload.get("paths", [])]
-        files = [path for path in files if _existing_file(path)]
-        if not files:
-            return fail("queue_files_missing")
-        folder = os.path.dirname(files[0])
-        logger.log(f"🤖 자동화 명령 수신: queue-files {len(files)}개")
-        owner._start_queue_mode(files, folder=folder, source="automation")
-        _bring_to_front(owner)
-        return ok(message="queue_started", data={"count": len(files), "folder": folder})
-
-    if command == "queue-folder":
-        folder = _normalize_path(command_payload.get("folder") or command_payload.get("path"))
-        if not folder or not os.path.isdir(folder):
-            return fail("queue_folder_missing", message=folder)
-        files = ordered_media_files(folder)
-        if not files:
-            return fail("queue_folder_empty", message=folder)
-        logger.log(f"🤖 자동화 명령 수신: queue-folder {os.path.basename(folder)} / {len(files)}개")
-        owner._start_queue_mode(files, folder=folder, source="automation")
-        _bring_to_front(owner)
-        return ok(message="queue_started", data={"count": len(files), "folder": folder})
-
-    if command == "save-project":
-        logger.log("🤖 자동화 명령 수신: save-project")
-        project_path = str(getattr(owner, "_current_project_path", "") or "")
-        if project_path:
-            saver = getattr(owner, "_save_current_project", None)
-            if not callable(saver):
-                return fail("project_save_unavailable")
-            saver()
-            return ok(message="project_saved", data={"path": project_path})
-        editor = getattr(owner, "_editor_widget", None)
-        save_handler = getattr(editor, "_on_save", None) if editor is not None else None
-        if not callable(save_handler):
-            return fail("nothing_to_save")
-        try:
-            saved = bool(save_handler(skip_auto_next=True))
-        except TypeError:
-            saved = bool(save_handler())
-        if not saved:
-            return fail("save_declined")
-        return ok(message="editor_saved")
-
-    if command == "start-current-pipeline":
-        logger.log("🤖 자동화 명령 수신: start-current-pipeline")
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        state = str(getattr(getattr(editor, "sm", None), "state", "") or "")
-        if state == "ST_PROC":
-            return fail("already_processing")
-        starter = getattr(editor, "_on_start_clicked", None)
-        if not callable(starter):
-            return fail("pipeline_start_unavailable")
-        starter()
-        _bring_to_front(owner)
-        return ok(message="pipeline_started", data={"state_before": state})
-
-    if command == "start-current-roughcut":
-        logger.log("🤖 자동화 명령 수신: start-current-roughcut")
-        editor = getattr(owner, "_editor_widget", None)
-        if editor is None:
-            return fail("editor_missing")
-        state = str(getattr(getattr(editor, "sm", None), "state", "") or "")
-        if state == "ST_PROC":
-            return fail("already_processing")
-        starter = getattr(editor, "_schedule_post_generation_roughcut_draft", None)
-        if not callable(starter):
-            return fail("roughcut_start_unavailable")
-        starter(force=True)
-        _bring_to_front(owner)
-        return ok(
-            message="roughcut_started",
-            data={
-                "state_before": state,
-                "media_path": str(getattr(editor, "media_path", "") or ""),
-            },
-        )
-
+    helpers = SimpleNamespace(
+        active_automation_dialog=_active_automation_dialog,
+        apply_automation_mode_override=_apply_automation_mode_override,
+        bring_to_front=_bring_to_front,
+        bridge_best_effort=_bridge_best_effort,
+        capture_widget_snapshot=_capture_widget_snapshot,
+        capture_window_snapshot=_capture_window_snapshot,
+        command_option_bool=_command_option_bool,
+        command_option_float=_command_option_float,
+        command_option_int=_command_option_int,
+        current_editor_srt_segments=_current_editor_srt_segments,
+        editor_pipeline_start_callback=_editor_pipeline_start_callback,
+        editor_runtime_snapshot=_editor_runtime_snapshot,
+        existing_dir=_existing_dir,
+        existing_file=_existing_file,
+        file_result=_file_result,
+        multiclip_existing_srt_candidates=_multiclip_existing_srt_candidates,
+        noop=_noop,
+        normalize_mode=normalize_mode,
+        normalize_multiclip_reuse_policy=_normalize_multiclip_reuse_policy,
+        normalize_path=_normalize_path,
+        ordered_media_files=ordered_media_files,
+        queue_runtime_snapshot=_queue_runtime_snapshot,
+        queue_window_snapshot=_queue_window_snapshot,
+        resolve_multiclip_files=_resolve_multiclip_files,
+        saved_srt_outputs=_saved_srt_outputs,
+        select_editor_segment_from_options=_select_editor_segment_from_options,
+        set_active_automation_dialog=_set_active_automation_dialog,
+        show_dialog_nonmodal=_show_dialog_nonmodal,
+        start_background_personalization_action=_start_background_personalization_action,
+        status_snapshot=_status_snapshot,
+        store_status_snapshot=_store_status_snapshot,
+        subtitle_video_output_path=_subtitle_video_output_path,
+    )
+    result = _handle_bridge_command(
+        owner,
+        command_payload,
+        command,
+        ok=ok,
+        fail=fail,
+        logger=logger,
+        helpers=helpers,
+    )
+    if result is not None:
+        return result
     return fail("unknown_command", message=command)
 
 

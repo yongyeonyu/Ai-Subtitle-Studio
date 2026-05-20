@@ -21,6 +21,9 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `ui/main/app_command_bridge.py`: automation/appctl command execution inside the running app.
 - `tools/appctl.py`: external command-line entry point for remote app control.
 - `tools/remote_verify.py`: higher-level remote verification runner and artifact capture.
+- `tools/qa_suite_runner.py`: official one-command QA runner for `quick`, `major`, and `full` profiles.
+- `tools/automation_command_client.py`: retry-aware command client used by appctl and verification helpers for read-only status/ping surfaces.
+- `tools/debug_guided_subtitle_memory.py`: guided subtitle repeat-run memory/status debugger for Macau/X5/Tinyping performance investigations.
 - `tools/overnight_optimize.py`: compact baseline/check runner that writes long-run artifacts under `output/manual_verification/latest/`.
 - `tools/benchmark_tiniping_mode_search.py`: CLI entry point for Tiniping mode search and regression-pack generation.
 - `tools/benchmark_tiniping_timing_ideas.py`: Tiniping timing-idea benchmark runner for reference-aligned timing experiments.
@@ -84,6 +87,8 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 ## Native And Performance
 
 - `native/macos/AIStudioNative/`: Swift-native package for shared macOS-first core logic.
+- `native/macos/AIStudioNative/Sources/AIStudioCore/TimelineEditing*.swift`: split Swift timeline core; models/contracts, drag geometry, magnet passes, preview/STT selection, and persistence/serialization now live in separate files.
+- `native/macos/AIStudioNative/Sources/AIStudioCore/RuntimeETAEstimator*.swift`: split Swift ETA core; public API, request parsing, prediction math, and store persistence are separated for smaller native migration seams.
 - `core/native/_native_cut_boundary.cpp`: native cut-boundary scan/alignment hot loop used behind Python parity checks.
 - `core/native/_native_stt_lattice.cpp`, `core/native_stt_lattice.py`, `core/audio/stt_lattice_service.py`: native-backed STT lattice helpers with Python fallback and parity tests.
 - `core/native/_native_stt_recheck.cpp`, `core/native_stt_recheck.py`, `core/audio/stt_recheck_service.py`: native-backed STT recheck candidate helpers with Python fallback and parity tests.
@@ -96,6 +101,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `core/media_info.py`: ffprobe normalization, media-probe cache keys, and copy-safe probe result helpers.
 - `core/native_swift_media_info.py`, `core/native_swift_pipeline_status.py`: native bridge entry points for media probe/status hot paths.
 - `core/runtime/memory_manager.py`: runtime RSS snapshots plus streaming disk-cache accounting/pruning.
+- `core/runtime/memory_trim_summary.py`: per-stage trim rollup helper for repeated subtitle-generation memory diagnostics.
 
 ## Hot Verification Map
 
@@ -111,7 +117,11 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
   - `tests/test_project_segment_reload.py`
 - App automation and remote control:
   - `tests/test_app_command_bridge.py`
+  - `tests/test_app_command_server.py`
   - `tests/test_app_command_protocol.py`
+  - `tests/test_automation_command_client.py`
+  - `tests/test_remote_verify_actions.py`
+  - `tests/test_qa_suite_runner.py`
 - Media probe/cache performance:
   - `tests/test_media_info_cache.py`
 - Full-media verification summaries:

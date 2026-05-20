@@ -47,7 +47,7 @@ class AccuracyPolicyTests(unittest.TestCase):
         self.assertEqual(settings["stt_quality_preset"], "balanced")
         self.assertIn("사용 안함", settings["selected_model"])
         self.assertEqual(settings["selected_llm_provider"], "none")
-        self.assertFalse(settings["stt_ensemble_enabled"])
+        self.assertTrue(settings["stt_ensemble_enabled"])
         self.assertTrue(settings["autopilot_enabled"])
         self.assertFalse(settings["operation_mode_choices_visible"])
         self.assertEqual(settings["cut_boundary_policy_mode"], "hybrid")
@@ -90,7 +90,31 @@ class AccuracyPolicyTests(unittest.TestCase):
         self.assertEqual(settings["stt_quality_preset"], "fast")
         self.assertIn("사용 안함", settings["selected_model"])
         self.assertEqual(settings["selected_llm_provider"], "none")
-        self.assertFalse(settings["stt_ensemble_enabled"])
+        self.assertTrue(settings["stt_ensemble_enabled"])
+
+    def test_auto_runtime_preserves_explicit_sidebar_llm_overrides(self):
+        settings = apply_accuracy_first_runtime_settings(
+            {
+                "simple_operation_mode": "auto",
+                "auto_start_mode": "balanced",
+                "stt_quality_preset": "balanced",
+                "selected_model": "gemma4:e4b",
+                "selected_llm_provider": "ollama",
+                "subtitle_llm_user_selected": True,
+                "roughcut_llm_enabled": True,
+                "roughcut_llm_use_override": True,
+                "roughcut_llm_provider": "ollama",
+                "roughcut_llm_model": "exaone3.5:7.8b",
+            }
+        )
+
+        self.assertEqual(settings["selected_model"], "gemma4:e4b")
+        self.assertEqual(settings["selected_llm_provider"], "ollama")
+        self.assertTrue(settings["subtitle_llm_runtime_enabled"])
+        self.assertTrue(settings["roughcut_llm_enabled"])
+        self.assertTrue(settings["roughcut_llm_use_override"])
+        self.assertEqual(settings["roughcut_llm_provider"], "ollama")
+        self.assertEqual(settings["roughcut_llm_model"], "exaone3.5:7.8b")
 
     def test_policy_can_be_disabled_for_manual_compatibility(self):
         settings = apply_accuracy_first_runtime_settings(

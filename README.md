@@ -123,6 +123,47 @@ TARGET_APP="$HOME/Applications/AI Subtitle Studio.app" \
 
 The same flows are available as double-click scripts in `packaging/macos/`.
 
+## One-command QA Runner
+
+The repository now has one official automation entrypoint for repeatable UX verification:
+
+```bash
+./venv/bin/python tools/qa_suite_runner.py quick
+./venv/bin/python tools/qa_suite_runner.py major
+./venv/bin/python tools/qa_suite_runner.py full
+```
+
+Profiles:
+
+- `quick`: app bootstrap plus minimal editor smoke.
+- `major`: Macau UX regression set.
+- `full`: `major` plus Tinyping 60-second `fast` / `auto` / `high`.
+
+Artifacts are written under `output/manual_verification/latest/qa_suite_<profile>_*` and include:
+
+- `suite_manifest.json`
+- `suite_result.json`
+- `suite_result.md`
+
+Current verified baseline:
+
+- `quick`: `qa_suite_quick_20260520_174600`
+- `major`: `qa_suite_major_20260520_183244`
+- `full`: `qa_suite_full_20260520_193515`
+- latest bundle-refreshed `full`: `qa_suite_full_20260520_210149`
+
+Operational rules:
+
+- `major` and `full` assume the current-code macOS app bundle is available at `dist/macos/AI Subtitle Studio.app`.
+- If automation commands or editor automation behavior changed, regenerate the bundle first:
+
+```bash
+./packaging/macos/build_app_bundle.sh
+```
+
+- `editor_compact_macau` is fixture-adaptive: it resolves playhead and diamond boundaries from live editor status instead of assuming a fixed timestamp.
+- `full` parses the final JSON line from `verify_full_media_pipeline.py`, so progress logs in stdout do not invalidate the suite result.
+
 ## Project Data
 
 Local runtime data is intentionally not treated as source code.

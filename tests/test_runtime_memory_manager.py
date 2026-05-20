@@ -58,6 +58,31 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
         self.assertTrue(first)
         memory_manager._RUNTIME_TRIM_CALLABLES = None
 
+    def test_trim_runtime_memory_caches_records_action_costs_and_failures(self):
+        def _ok_action():
+            return None
+
+        def _bad_action():
+            raise RuntimeError("trim boom")
+
+        with patch("core.runtime.memory_manager._runtime_trim_callables", return_value=[
+            ("test.ok", _ok_action),
+            ("test.bad", _bad_action),
+        ]), patch("core.runtime.memory_manager.gc.collect", return_value=0), \
+             patch(
+                 "core.native_macos_memory.native_allocator_pressure_relief",
+                 return_value={"ok": False},
+             ):
+            result = memory_manager.trim_runtime_memory_caches(stage="critical", include_gpu=False)
+
+        self.assertEqual(result["stage"], "critical")
+        self.assertIn("test.ok", result["actions"])
+        self.assertIn("gc.collect", result["actions"])
+        self.assertGreaterEqual(result["elapsed_ms"], 0.0)
+        self.assertTrue(any(item["action"] == "test.ok" and item["ok"] for item in result["action_timings"]))
+        self.assertTrue(any(item["action"] == "test.bad" and not item["ok"] for item in result["action_timings"]))
+        self.assertTrue(any(item["action"] == "test.bad" for item in result["failures"]))
+
     def test_native_prune_callable_is_resolved_once(self):
         memory_manager._NATIVE_PRUNE_CALLABLE = memory_manager._NATIVE_PRUNE_CALLABLE_UNSET
         first = memory_manager._native_prune_callable()
@@ -332,6 +357,35 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
             self.assertEqual(events, [("critical", "critical")])
             self.assertTrue((Path(tmp) / "latest.json").exists())
 
+    def test_manager_poll_can_defer_trim_while_runtime_work_is_busy(self):
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 1 * 1024 ** 3,
+            "available_memory_ratio": 0.06,
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "cpu_load_ratio": 0.25,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("core.runtime.memory_manager.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.memory_manager.process_rss_bytes", return_value=14 * 1024 ** 3), \
+                 patch.object(RuntimeMemoryManager, "_maybe_trim") as maybe_trim, \
+                 patch.object(RuntimeMemoryManager, "_maybe_report_leak") as maybe_report_leak, \
+                 patch("core.runtime.memory_manager.gc.collect") as gc_collect:
+                manager = RuntimeMemoryManager(
+                    settings={"runtime_memory_tracemalloc_enabled": False},
+                    diagnostics_dir=tmp,
+                    cache_paths=[],
+                )
+                result = manager.poll(allow_trim=False)
+
+            self.assertEqual(result["pressure_stage"], "critical")
+            self.assertEqual(result["trim_deferred_reason"], "busy_runtime_work")
+            maybe_trim.assert_not_called()
+            maybe_report_leak.assert_not_called()
+            gc_collect.assert_not_called()
+
     def test_manager_poll_stays_idle_when_memory_is_healthy(self):
         snapshot = {
             "memory_bytes": 16 * 1024 ** 3,
@@ -491,6 +545,112 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
         self.assertTrue(result["checkpoint_auto_cleanup"])
         self.assertTrue(result["checkpoint_auto_include_gpu"])
         trim.assert_called_with(stage="critical", include_gpu=True)
+
+    def test_subtitle_generation_guard_records_trim_cooldown_skip(self):
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 512 * 1024 ** 2,
+            "available_memory_ratio": 0.03,
+            "memory_pressure_stage": "critical",
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "cpu_load_ratio": 0.12,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("core.runtime.memory_manager.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.memory_manager.process_rss_bytes", return_value=512 * 1024 ** 2), \
+                 patch("core.runtime.memory_manager.trim_runtime_memory_caches", return_value={"actions": ["trim"]}) as trim:
+                guard = SubtitleGenerationMemoryGuard(
+                    settings={
+                        "runtime_memory_tracemalloc_enabled": False,
+                        "macos_memory_trim_runtime_caches_enabled": False,
+                        "subtitle_generation_memory_checkpoint_interval_ms": 0,
+                        "subtitle_generation_gpu_trim_cooldown_sec": 20,
+                    },
+                    diagnostics_dir=tmp,
+                    cache_paths=[],
+                )
+                guard._last_gpu_trim_at = time.time()
+                result = guard.checkpoint(
+                    "save_export_done",
+                    include_gpu=False,
+                    cleanup=False,
+                    force=True,
+                )
+
+        self.assertTrue(result["stage_trim_requested"])
+        self.assertEqual(result["stage_trim_skipped_reason"], "cooldown")
+        self.assertGreater(result["stage_trim_cooldown_remaining_sec"], 0)
+        self.assertEqual(result["stage_trim_summary"]["requested_count"], 1)
+        self.assertEqual(result["stage_trim_summary"]["skipped_count"], 1)
+        self.assertEqual(result["stage_trim_summary"]["skipped_by_reason"]["cooldown"], 1)
+        trim.assert_not_called()
+
+    def test_subtitle_generation_guard_accumulates_trim_summary_by_stage_family(self):
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 512 * 1024 ** 2,
+            "available_memory_ratio": 0.03,
+            "memory_pressure_stage": "critical",
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "cpu_load_ratio": 0.12,
+        }
+        trim_results = [
+            {
+                "actions": ["warmup.trim"],
+                "elapsed_ms": 2.0,
+                "action_timings": [{"action": "warmup.trim", "elapsed_ms": 1.0, "ok": True}],
+                "failures": [],
+            },
+            {
+                "actions": ["gc.collect"],
+                "elapsed_ms": 9.5,
+                "action_timings": [{"action": "gc.collect", "elapsed_ms": 3.0, "ok": True}],
+                "failures": [],
+            },
+            {
+                "actions": ["mlx.core.clear_cache"],
+                "elapsed_ms": 14.25,
+                "action_timings": [{"action": "mlx.core.clear_cache", "elapsed_ms": 7.0, "ok": False}],
+                "failures": [{"action": "mlx.core.clear_cache", "error_type": "RuntimeError", "message": "boom"}],
+            },
+        ]
+        trim_iter = iter(trim_results)
+
+        def _next_trim(*_args, **_kwargs):
+            try:
+                return next(trim_iter)
+            except StopIteration:
+                return trim_results[-1]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("core.runtime.memory_manager.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.memory_manager.process_rss_bytes", return_value=512 * 1024 ** 2), \
+                 patch("core.runtime.memory_manager.trim_runtime_memory_caches", side_effect=_next_trim):
+                guard = SubtitleGenerationMemoryGuard(
+                    settings={
+                        "runtime_memory_tracemalloc_enabled": False,
+                        "subtitle_generation_memory_checkpoint_interval_ms": 0,
+                        "subtitle_generation_gpu_trim_cooldown_sec": 0,
+                    },
+                    diagnostics_dir=tmp,
+                    cache_paths=[],
+                )
+                guard.checkpoint("cut_prescan_done", cleanup=True, force=True)
+                result = guard.checkpoint("stt_transcribe_chunk:1/13", include_gpu=False, cleanup=True, force=True)
+
+        summary = result["stage_trim_summary"]
+        self.assertEqual(summary["executed_count"], 2)
+        self.assertEqual(summary["requested_count"], 2)
+        self.assertEqual(summary["total_failure_count"], 1)
+        self.assertEqual(summary["slowest_stage_key"], "stt_transcribe_chunk")
+        self.assertEqual(summary["stages"]["cut_prescan_done"]["executed_count"], 1)
+        self.assertEqual(summary["stages"]["stt_transcribe_chunk"]["executed_count"], 1)
+        self.assertEqual(summary["actions"]["gc.collect"]["count"], 1)
+        self.assertEqual(summary["actions"]["mlx.core.clear_cache"]["failure_count"], 1)
 
 
 if __name__ == "__main__":

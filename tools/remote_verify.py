@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.automation.app_command_protocol import build_command_payload, send_command_to_app
+from core.automation.app_command_protocol import build_command_payload
+from tools.automation_command_client import send_app_command_with_readiness_retry
 
 
 def _default_output_dir(label: str) -> Path:
@@ -28,7 +29,7 @@ def _safe_slug(text: str) -> str:
 
 def _send(command: str, *, timeout: float, path: str = "", options: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = build_command_payload(command, path=path, options=dict(options or {}))
-    return send_command_to_app(payload, timeout_sec=float(timeout))
+    return send_app_command_with_readiness_retry(payload, timeout_sec=float(timeout))
 
 
 def _wait_for_snapshot(path: str, *, timeout_sec: float = 6.0) -> bool:
@@ -87,6 +88,9 @@ def _record_step(
         "options": dict(options or {}),
     }
     if command:
+        # 편집 명령은 UI 상태를 바꾸므로 재시도하지 않는다.
+        # 대신 직전에 status fast-path로 app bridge 준비 상태를 확인해 중복 실행 위험을 피한다.
+        entry["preflight_status"] = _capture_status(max(1.0, min(float(timeout or 1.0), 4.0)))
         try:
             entry["result"] = _send(command, timeout=timeout, path=path, options=options)
         except OSError as exc:
@@ -107,6 +111,115 @@ def _selection_options(args: argparse.Namespace) -> dict[str, Any]:
         "center": bool(args.select_center),
         "sync_playhead": bool(args.select_sync_playhead),
     }
+
+
+def _action_snapshot_path(output_dir: Path, action: str) -> str:
+    return str(output_dir / f"{_safe_slug(action)}.png")
+
+
+def _editor_action_spec(
+    action: str,
+    args: argparse.Namespace,
+    selection: dict[str, Any],
+    output_dir: Path,
+) -> dict[str, Any] | None:
+    if action == "snapshot":
+        return {"command": "", "options": {}, "snapshot": True, "path": ""}
+    selection_commands = {
+        "smart-split": "editor-smart-split",
+        "begin-smart-split": "editor-begin-smart-split",
+        "move-segment-left": "editor-move-segment-left",
+        "move-segment-right": "editor-move-segment-right",
+    }
+    if action in selection_commands:
+        return {"command": selection_commands[action], "options": dict(selection), "snapshot": False, "path": ""}
+    if action == "set-inline-cursor":
+        return {"command": "editor-set-inline-cursor", "options": {"position": args.cursor_pos}, "snapshot": False, "path": ""}
+    if action == "commit-inline-edit":
+        return {"command": "editor-commit-inline-edit", "options": {}, "snapshot": False, "path": ""}
+    if action in {"play", "playback-play"}:
+        return {"command": "editor-playback", "options": {"action": "play"}, "snapshot": False, "path": ""}
+    if action in {"pause", "playback-pause"}:
+        return {"command": "editor-playback", "options": {"action": "pause"}, "snapshot": False, "path": ""}
+    if action in {"save", "save-project"}:
+        return {"command": "save-project", "options": {}, "snapshot": False, "path": ""}
+    if action in {"video-show", "video-hide", "video-toggle"}:
+        return {
+            "command": "editor-video",
+            "options": {"action": action.split("-", 1)[1]},
+            "snapshot": False,
+            "path": "",
+        }
+    if action in {"stt-enable", "stt-disable", "stt-toggle"}:
+        return {
+            "command": "editor-stt-mode",
+            "options": {"action": action.split("-", 1)[1]},
+            "snapshot": False,
+            "path": "",
+        }
+    if action in {"open-dictionary", "open-settings", "open-speaker-settings", "close-active-dialog"}:
+        return {"command": action, "options": {}, "snapshot": False, "path": ""}
+    if action == "capture-active-dialog":
+        return {
+            # 팝업 증거는 전체 창 스냅샷과 분리해 단계별 PNG를 남긴다.
+            "command": "capture-active-dialog",
+            "options": {},
+            "snapshot": False,
+            "path": _action_snapshot_path(output_dir, action),
+        }
+    if action in {"capture-dictionary", "capture-dictionary-snapshot"}:
+        return {
+            "command": "capture-dictionary-snapshot",
+            "options": {},
+            "snapshot": False,
+            "path": _action_snapshot_path(output_dir, "capture-dictionary"),
+        }
+    if action in {"lora-run-now", "lora-pause", "lora-resume"}:
+        return {
+            "command": "personalization-idle",
+            "options": {"action": action.split("-", 1)[1]},
+            "snapshot": False,
+            "path": "",
+        }
+    if action in {"move-diamond", "merge-diamond"}:
+        options = dict(selection)
+        options["side"] = str(args.diamond_side or "closest")
+        command = "editor-move-diamond" if action == "move-diamond" else "editor-merge-diamond"
+        return {"command": command, "options": options, "snapshot": False, "path": ""}
+    return None
+
+
+def _record_editor_action(
+    report: dict[str, Any],
+    output_dir: Path,
+    action: str,
+    *,
+    args: argparse.Namespace,
+    selection: dict[str, Any],
+) -> None:
+    spec = _editor_action_spec(action, args, selection, output_dir)
+    if spec is None:
+        report.setdefault("steps", []).append(
+            {
+                "name": action,
+                "command": "",
+                "result": {"ok": False, "error": "unknown_action", "message": action, "data": {}},
+            }
+        )
+        return
+    if bool(spec.get("snapshot")):
+        _record_step(report, output_dir, action, timeout=args.timeout, snapshot=True)
+        return
+    _record_step(
+        report,
+        output_dir,
+        action,
+        timeout=args.timeout,
+        snapshot=args.snapshot_each_step,
+        command=str(spec.get("command", "") or ""),
+        path=str(spec.get("path", "") or ""),
+        options=dict(spec.get("options") or {}),
+    )
 
 
 def _write_report_files(output_dir: Path, report: dict[str, Any]) -> None:
@@ -210,107 +323,7 @@ def _run_editor_sequence(args: argparse.Namespace) -> int:
         action = str(raw_action or "").strip().lower()
         if not action:
             continue
-        if action == "smart-split":
-            _record_step(
-                report,
-                output_dir,
-                action,
-                timeout=args.timeout,
-                snapshot=args.snapshot_each_step,
-                command="editor-smart-split",
-                options=selection,
-            )
-            continue
-        if action == "begin-smart-split":
-            _record_step(
-                report,
-                output_dir,
-                action,
-                timeout=args.timeout,
-                snapshot=args.snapshot_each_step,
-                command="editor-begin-smart-split",
-                options=selection,
-            )
-            continue
-        if action == "set-inline-cursor":
-            _record_step(
-                report,
-                output_dir,
-                action,
-                timeout=args.timeout,
-                snapshot=args.snapshot_each_step,
-                command="editor-set-inline-cursor",
-                options={"position": args.cursor_pos},
-            )
-            continue
-        if action == "commit-inline-edit":
-            _record_step(
-                report,
-                output_dir,
-                action,
-                timeout=args.timeout,
-                snapshot=args.snapshot_each_step,
-                command="editor-commit-inline-edit",
-            )
-            continue
-        if action == "move-segment-left":
-            _record_step(
-                report,
-                output_dir,
-                action,
-                timeout=args.timeout,
-                snapshot=args.snapshot_each_step,
-                command="editor-move-segment-left",
-                options=selection,
-            )
-            continue
-        if action == "move-segment-right":
-            _record_step(
-                report,
-                output_dir,
-                action,
-                timeout=args.timeout,
-                snapshot=args.snapshot_each_step,
-                command="editor-move-segment-right",
-                options=selection,
-            )
-            continue
-        if action == "move-diamond":
-            move_options = dict(selection)
-            move_options["side"] = str(args.diamond_side or "closest")
-            _record_step(
-                report,
-                output_dir,
-                action,
-                timeout=args.timeout,
-                snapshot=args.snapshot_each_step,
-                command="editor-move-diamond",
-                options=move_options,
-            )
-            continue
-        if action == "merge-diamond":
-            merge_options = dict(selection)
-            merge_options["side"] = str(args.diamond_side or "closest")
-            _record_step(
-                report,
-                output_dir,
-                action,
-                timeout=args.timeout,
-                snapshot=args.snapshot_each_step,
-                command="editor-merge-diamond",
-                options=merge_options,
-            )
-            continue
-        if action == "snapshot":
-            _record_step(report, output_dir, action, timeout=args.timeout, snapshot=True)
-            continue
-        report.setdefault("steps", []).append(
-            {
-                "name": action,
-                "command": "",
-                "result": {"ok": False, "error": "unknown_action", "message": action, "data": {}},
-            }
-        )
+        _record_editor_action(report, output_dir, action, args=args, selection=selection)
 
     report["final_status"] = _capture_status(args.timeout)
     _write_report_files(output_dir, report)
@@ -348,7 +361,7 @@ def _parser() -> argparse.ArgumentParser:
         "--actions",
         nargs="*",
         default=[],
-        help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split move-segment-left move-segment-right move-diamond merge-diamond snapshot",
+        help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split play pause save-project move-segment-left move-segment-right move-diamond merge-diamond video-show video-hide video-toggle stt-enable stt-disable stt-toggle open-dictionary open-settings open-speaker-settings capture-active-dialog capture-dictionary close-active-dialog lora-run-now lora-pause lora-resume snapshot",
     )
     editor.add_argument("--snapshot-each-step", action="store_true")
     return parser

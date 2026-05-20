@@ -510,7 +510,7 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "selected_whisper_model_secondary": turbo_model,
             "selected_model": TINIPING_SUBTITLE_LLM_MODEL,
             "selected_llm_provider": "ollama",
-            "subtitle_llm_user_selected": True,
+            "subtitle_llm_user_selected": False,
             "stt_candidate_scoring_enabled": True,
             **_ffmpeg_silero_relaxed_audio_mapping(),
             **_mode_locked_vad_mapping("precise"),

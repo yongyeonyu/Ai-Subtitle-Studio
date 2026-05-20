@@ -176,6 +176,13 @@ git diff --check --
   --diamond-side right \
   --snapshot-each-step \
   --output-dir output/manual_verification/latest/major_editor_ux
+
+./venv/bin/python tools/remote_verify.py --timeout 4 editor-sequence \
+  --label major_menu_stt_lora \
+  --open-project "/Users/u_mo_c/Downloads/ai_subtitle_studio/projects/DJI_20260217224203_0075_D.aissproj" \
+  --settle-sec 1.0 \
+  --actions open-dictionary capture-dictionary close-active-dialog open-settings capture-active-dialog close-active-dialog open-speaker-settings capture-active-dialog close-active-dialog stt-enable stt-disable lora-run-now lora-pause lora-resume snapshot \
+  --output-dir output/manual_verification/latest/major_menu_stt_lora
 ```
 
 에디터 UX 핵심 조작 체크리스트:
@@ -518,3 +525,135 @@ git diff --check --
 - 새 native path가 추가되면 parity test 이름을 `Coverage Matrix`에 추가한다.
 - 새 fixture가 안정화되면 `Fixture Registry`에 추가한다.
 - UI/UX 변경을 허용받은 경우 기준선 snapshot을 새로 만든다.
+
+## 요청 기반 추가 UX 테스트 케이스 (자동 확장 정책 포함)
+
+아래 항목이 `test_case.md`에 없으면 실행 즉시 항목을 추가한 뒤 full test에 반영한다.
+
+1. 자막 열기 후 자막 에디터 기능
+- 방법: `open-srt`로 타임스탬프 파일 열기 → 에디터 진입 여부 확인 → 편집 가능한 모드 진입 확인.
+- 통과: `editor_open=true`, `editor_media_path`에 SRT 경로 기록, 즉시 에디터 UI 스냅샷 저장.
+- 실패 시: `action`를 `검토필요`로 분리하고 `ACTION_ITEMS.md`에 메뉴얼 검토 요청.
+
+2. 영상 열기 후 자막 생성 (fast/auto/high)
+- 방법: 마카오 5개 또는 티니핑 60초 구간 기반 fixture에서 각 모드 `start-current-pipeline` 실행.
+- 통과: `tinyping_full_verify.json` 결과 status=ok, final segment 개수 유효.
+- 실패 시: `pipeline/roughcut` 로그와 `start_current_pipeline.json`을 함께 보존.
+
+3. 멀티클립 열기 후 자막 생성
+- 방법: 3~5개 영상의 `queue-files` 실행 후 큐 완료/실패 상태를 실시간 모니터링.
+- 통과: `status.status_snapshot_fallback` 없이 모든 row가 done 또는 명시적 에러 처리.
+- 실패 시: `queued_until_main_window_ready`/`app_unreachable` 포함 여부를 분리 분석.
+- 고도화: `start accepted`, 앱 내부 처리 로그, `all_done` 수렴, 최종 queue row snapshot을 각각 분리한 4단계 assertion으로 쪼갠다.
+
+4. 화면 간 전환(홈, 에디터, 러프컷, 숏폼)
+- 방법: `show-home`, `open-project`, `open-media`, `start-current-roughcut` 순차 실행.
+- 통과: 각 화면 전환마다 스냅샷 저장 및 `editor_state`/`editor_open` 상태 변화가 정상.
+- 실패 시: 화면별 `status` 및 스냅샷 실패 원인을 `notes`에 기록.
+
+5. 모든 메뉴 1회 및 LoRA 시작/종료
+- 방법: 열린 상태에서 사전/셋팅/딕셔너리/화자/LoRA 시작·종료 명령을 각 1회 실행.
+- 통과: 명령 응답이 ok이고 메뉴 화면이 최소 1회 이상 캡처됨.
+- 실패 시: `command`, `error`, `message`를 메뉴별로 분리해 action item 등록.
+- 권장 자동화: `remote_verify --actions open-dictionary capture-dictionary close-active-dialog open-settings capture-active-dialog close-active-dialog open-speaker-settings capture-active-dialog close-active-dialog stt-enable stt-disable lora-run-now lora-pause lora-resume snapshot`
+- 고도화: settings/speaker/dictionary popup 캡처, STT on/off status diff, `personalization-idle run-now`, `pause`, `resume`를 별도 케이스로 나누고 LoRA는 앱 로그 증거도 함께 수집한다.
+
+6. 시작/종료 테스트
+- 방법: 앱 실행 직후 `status` 후 종료 신호(quit) 실행, 재실행 시 자동복구 확인.
+- 통과: 종료 요청 후 앱 상태가 종료되고, 재실행 시 UI가 정상으로 돌아와 fixture를 다시 열 수 있음.
+- 실패 시: 종료 전후 로그 타임라인으로 크래시/락 원인 분기.
+
+7. 프로젝트 저장, 자막 저장, 자막 출력, 자막 영상 출력
+- 방법: `open-project` → `save-project` → `save-subtitles` → `export-subtitles <artifact/export.srt>` → `export-subtitle-video` → 최종 snapshot 저장.
+- 통과: project, saved SRT, manual export SRT, subtitle MOV가 모두 존재하고 bytes가 0보다 크다. 가능하면 project/MOV는 mtime 또는 bytes 변화도 함께 남긴다.
+- 실패 시: `unknown_command`, `subtitle_outputs_missing`, render 실패를 분리하고 각 단계 stdout/json을 별도 artifact로 남긴다.
+- 고도화: `변경사항이 없습니다` 경로에서도 기존 SRT 경로를 역추론해 파일 검증을 계속하고, final status의 `status_snapshot_fallback` 관측 여부를 같이 기록한다.
+
+8. 자막 에디터 기능(단축키, 기본 조작)
+- 방법: `editor-set-playhead`, `editor-select-segment`, `editor-begin-smart-split`, `editor-set-inline-cursor`, `editor-commit-inline-edit` 실행.
+- 통과: 7개 핵심 조작이 연쇄 성공하고 스냅샷에서 편집 컨텍스트가 반영.
+- 실패 시: 실패 단계 하나씩 분리해 재실행 루프 추가.
+- 고도화: 액션 실행 전 `smart_split_ready`, `inline_edit_active`, `active_seg_line`을 status로 먼저 확인해 precondition failure와 실제 기능 실패를 분리한다.
+- 고도화: `open-project` 직후 최소 2초, `set-playhead` 직후 최소 1초 settle을 두고 compact action path와 status-heavy path를 분리한다. command 사이에 초기화가 겹치면 playhead가 `0.0`으로 되감길 수 있다.
+
+9. 자막 세그먼트 에디터/팝업 메뉴
+- 방법: 선별 시퀀스(`editor-select-segment`, `editor-move-segment-left/right`, `editor-move-diamond`, `editor-merge-diamond`) + 팝업 메뉴 호출/닫기.
+- 통과: 메뉴가 열리고 닫히며 시각적 편집 컨텍스트 반영.
+- 실패 시: 팝업 호출 명령 유무부터 검증하도록 test_case 자체를 확장.
+
+10. 임의 편집 후 컷 경계 및 플레이헤드 확인
+- 방법: 재생 헤드 이동 → 세그먼트 분할/이동/병합 전후 playhead/segment_count/gap_count 비교.
+- 통과: 경계값이 음수/누락/역전되지 않음.
+- 실패 시: `set-playhead` 직후와 작업 후 diff를 artifact로 저장.
+
+11. 지디오 재생 + 비디오 메뉴
+- 방법: play/pause/seek 및 비디오 메뉴 열기/닫기를 반복 실행.
+- 통과: 각 동작 후 status의 playback/log 상태가 즉시 갱신.
+- 실패 시: `playback_play`, `playback_pause` 타임아웃 원인 기록.
+
+12. 화자 관련 메뉴 테스트
+- 방법: 화자 패널/트랙 설정 토글 후 자막/타임라인 반응 점검.
+- 통과: 화자 토글이 세그먼트 라벨에 반영.
+- 실패 시: 화자 메뉴 자체의 command id와 응답을 우선 분리.
+
+13. STT 모드 테스트
+- 방법: STT1/2, 다중모드 전환 메뉴 또는 설정에서 모드 변경 후 동일 구간 생성 결과 비교.
+- 통과: 모드별 산출물(`final.srt`/메타) 비교에 기대값이 존재.
+- 실패 시: 모드 토글 경로가 불명확하면 커맨드 레이어까지 명세 추가.
+- 고도화: 토글 직후 `editor_stt.enabled/state/recording/vad_running` status diff를 남기고, 녹음 시작/정지 시나리오와 단순 토글 시나리오를 분리한다.
+- 고도화: LoRA `run-now/pause/resume`는 즉시 ack와 settle 후 status를 분리 기록한다. 직후 status가 fallback이면 3초 후 재조회해 최종 runtime(`active`, `last_action`, `last_result`)을 따로 남긴다.
+
+### 테스트 케이스 자동 추가 규칙
+
+- 실행 중 항목이 빠진 경우 해당 항목을 먼저 `test_case.md`에 추가하고, 테스트를 즉시 1회 이상 실행한다.
+- 항목은 실패, 검토 필요, 통과를 각각 별도 라인에 남기고 다음 실행에서 회귀 판정 근거로 재사용한다.
+
+### 테스트 케이스 고도화 메모 - 2026-05-20
+
+- 장시간 작업은 `accepted 응답`과 `실제 완료/중단 상태`를 분리 기록한다. 예: 멀티클립, LoRA.
+- 편집 시퀀스는 precondition snapshot(`smart_split_ready`, `inline_edit_active`) 없이 바로 실패로 합치지 않는다.
+- popup/overlay는 command 결과만 보지 말고 실제 PNG 저장 여부까지 통과 조건에 포함한다.
+- 저장/내보내기는 파일 존재성 검증이 없으면 통과로 올리지 않는다.
+- 저장 생략 경로도 실패로 뭉개지지 않게 기존 SRT/MOV 경로 fallback과 실제 파일 stat을 같이 남긴다.
+
+### One-command QA runner 실행 레시피 - 2026-05-20
+
+1. `quick`
+- 방법: `./venv/bin/python tools/qa_suite_runner.py quick`
+- 목적: app bootstrap과 editor smoke를 한 번에 확인한다.
+- 통과: `suite_result.json`의 `failed_count=0`
+- 산출물: `output/manual_verification/latest/qa_suite_quick_*`
+
+2. `major`
+- 방법: `./venv/bin/python tools/qa_suite_runner.py major`
+- 목적: Macau UX 핵심 회귀 4개를 한 번에 확인한다.
+- 포함 시나리오:
+  - `editor_compact_macau`
+  - `video_menu_macau`
+  - `save_export_macau`
+  - `menu_stt_lora_macau`
+- 통과: `scenario_count=4`, `failed_count=0`
+- 산출물: `output/manual_verification/latest/qa_suite_major_*`
+
+3. `full`
+- 방법: `./venv/bin/python tools/qa_suite_runner.py full`
+- 목적: `major` + Tinyping 60초 `fast/auto/high`를 한 번에 확인한다.
+- 포함 시나리오:
+  - Macau UX 4개
+  - `tinyping_fast_60s`
+  - `tinyping_auto_60s`
+  - `tinyping_high_60s`
+- 통과: `scenario_count=7`, `failed_count=0`
+- 산출물: `output/manual_verification/latest/qa_suite_full_*`
+
+4. 현재 runner 안정화 규칙
+- app sequence는 `major/full`에서 scenario 시작 전 app prepare를 수행한다.
+- 실행체는 최신 workspace 코드가 반영된 `dist/macos/AI Subtitle Studio.app`를 우선 사용한다.
+- `editor_compact_macau`는 고정 `1.5초` 대신 현재 `editor_runtime.active_segment`에서 동적 playhead를 계산한다.
+- `move_diamond`/`merge_diamond`는 현재 `diamond_left/right`의 `boundary_sec`를 기준으로 command를 조립한다.
+- `full_media`는 stdout 전체가 아니라 마지막 JSON line을 우선 파싱한다.
+
+5. 고도화 메모
+- 큰 command surface 변경 뒤에는 `packaging/macos/build_app_bundle.sh`로 bundle을 먼저 갱신한다.
+- `suite_result.json`, `suite_result.md`, `suite_manifest.json`을 같은 artifact 폴더에서 함께 보관한다.
+- `full`에서 실패가 나면 먼저 `app_sequence` 실패인지 `Tinyping full_media` 실패인지 분리하고, `full_media`는 `result_path`와 `logs/run.stdout`를 같이 본다.

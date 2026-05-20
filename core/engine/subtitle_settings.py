@@ -21,8 +21,11 @@ def get_local_dataset_corrections() -> dict:
 
 def get_selected_llm() -> str:
     settings = _get_user_settings()
-    if settings.get("subtitle_llm_runtime_enabled") is False:
+    runtime_enabled = settings.get("subtitle_llm_runtime_enabled")
+    if runtime_enabled is False:
         return "사용 안함 (모드 정책)"
+    if runtime_enabled is True:
+        return settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
     try:
         from core.mode_policy import MODE_TOOL_STACKS, selected_mode_from_settings
 

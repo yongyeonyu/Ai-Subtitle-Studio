@@ -197,7 +197,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_dictionary_button_exists_in_global_menu_and_home_shortcuts(self):
+    def test_dictionary_button_stays_in_global_menu_without_restoring_home_shortcuts(self):
         window = MainWindow()
         try:
             window.show_home()
@@ -209,7 +209,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 for button in window.home_page.findChildren(QToolButton)
                 if button.text()
             ]
-            self.assertIn("사전", home_texts)
+            self.assertIn("프로젝트 정보", home_texts)
+            self.assertNotIn("사전", home_texts)
         finally:
             window.close()
             window.deleteLater()
@@ -1561,6 +1562,42 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_sidebar_model_selection_persists_user_llm_overrides_in_auto_mode(self):
+        window = MainWindow()
+        saved = {}
+        try:
+            base_settings = {
+                "simple_operation_mode": "auto",
+                "subtitle_mode": "auto",
+                "auto_start_mode": "balanced",
+                "stt_quality_preset": "balanced",
+            }
+            with mock.patch("ui.home_sidebar._runtime_load_settings", return_value=base_settings), \
+                 mock.patch("ui.home_sidebar._runtime_save_settings", side_effect=lambda data: saved.update(data)):
+                window._apply_sidebar_model_selection(
+                    {
+                        "selected_model": "gemma4:e4b",
+                        "selected_llm_provider": "ollama",
+                        "roughcut_llm_enabled": True,
+                        "roughcut_llm_use_override": True,
+                        "roughcut_llm_provider": "ollama",
+                        "roughcut_llm_model": "exaone3.5:7.8b",
+                    }
+                )
+
+            self.assertEqual(saved["selected_model"], "gemma4:e4b")
+            self.assertEqual(saved["selected_llm_provider"], "ollama")
+            self.assertTrue(saved["subtitle_llm_user_selected"])
+            self.assertTrue(saved["subtitle_llm_runtime_enabled"])
+            self.assertTrue(saved["roughcut_llm_enabled"])
+            self.assertTrue(saved["roughcut_llm_use_override"])
+            self.assertEqual(saved["roughcut_llm_provider"], "ollama")
+            self.assertEqual(saved["roughcut_llm_model"], "exaone3.5:7.8b")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_global_menu_stays_at_workspace_bottom_in_editor(self):
         from ui.editor.editor_widget import EditorWidget
 
@@ -1907,6 +1944,155 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertTrue(editor._post_generation_models_release_requested)
             self.assertFalse(editor._post_generation_models_released)
             schedule_gc.assert_called_once_with(editor=editor, delay_ms=450)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_post_generation_gc_retries_model_release_when_flags_still_pending(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        editor._post_generation_models_release_requested = True
+        editor._post_generation_models_released = False
+        release_calls = []
+        single_shot_calls = []
+        callbacks = []
+
+        def _fake_single_shot(delay_ms, callback):
+            single_shot_calls.append(int(delay_ms))
+            callbacks.append(callback)
+            if len(single_shot_calls) == 1:
+                callback()
+
+        try:
+            window._editor_widget = editor
+            with (
+                mock.patch("ui.main.main_runtime_cleanup.QTimer.singleShot", side_effect=_fake_single_shot),
+                mock.patch.object(window, "_clear_runtime_memory_caches") as clear_runtime,
+                mock.patch.object(
+                    window,
+                    "_release_ai_models_for_editor_mode",
+                    side_effect=lambda **kwargs: release_calls.append(kwargs),
+                ),
+            ):
+                window._schedule_post_generation_gc(editor=editor, delay_ms=0)
+
+            clear_runtime.assert_called_once_with(include_gpu=True)
+            self.assertEqual(
+                release_calls,
+                [{"force": True, "preserve_roughcut_status": True, "ollama_timeout_sec": 1.2}],
+            )
+            self.assertEqual(single_shot_calls[:2], [0, 1600])
+            self.assertTrue(window._post_generation_gc_scheduled)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_post_generation_gc_stops_retry_after_release_finishes(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        editor._post_generation_models_release_requested = True
+        editor._post_generation_models_released = False
+        single_shot_calls = []
+
+        def _fake_single_shot(delay_ms, callback):
+            single_shot_calls.append(int(delay_ms))
+            callback()
+
+        try:
+            window._editor_widget = editor
+            with (
+                mock.patch("ui.main.main_runtime_cleanup.QTimer.singleShot", side_effect=_fake_single_shot),
+                mock.patch.object(window, "_clear_runtime_memory_caches") as clear_runtime,
+                mock.patch.object(
+                    window,
+                    "_release_ai_models_for_editor_mode",
+                    side_effect=lambda **kwargs: setattr(editor, "_post_generation_models_released", True),
+                ) as release_models,
+            ):
+                window._schedule_post_generation_gc(editor=editor, delay_ms=0)
+
+            clear_runtime.assert_called_once_with(include_gpu=True)
+            release_models.assert_called_once_with(
+                force=True,
+                preserve_roughcut_status=True,
+                ollama_timeout_sec=1.2,
+            )
+            self.assertEqual(single_shot_calls, [0])
+            self.assertFalse(window._post_generation_gc_scheduled)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_runtime_memory_poll_defers_trim_while_editor_ai_is_busy(self):
+        window = MainWindow()
+
+        class _Editor(QWidget):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self._is_ai_processing = True
+                self.sm = SimpleNamespace(is_locked=True, state="ST_PROC")
+
+        editor = _Editor(window)
+
+        class _Manager:
+            def __init__(self):
+                self.calls = []
+
+            def poll(self, *, allow_trim=True):
+                self.calls.append(bool(allow_trim))
+                return {"pressure_stage": "critical"}
+
+        manager = _Manager()
+        try:
+            window._editor_widget = editor
+            window._runtime_memory_manager = manager
+            window._poll_runtime_memory_manager()
+            self.assertEqual(manager.calls, [False])
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_runtime_memory_poll_allows_trim_when_editor_is_idle(self):
+        window = MainWindow()
+
+        class _Editor(QWidget):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self._is_ai_processing = False
+                self.sm = SimpleNamespace(is_locked=False, state="ST_IDLE")
+
+        editor = _Editor(window)
+
+        class _Manager:
+            def __init__(self):
+                self.calls = []
+
+            def poll(self, *, allow_trim=True):
+                self.calls.append(bool(allow_trim))
+                return {"pressure_stage": "normal"}
+
+        manager = _Manager()
+        try:
+            window._editor_widget = editor
+            window._runtime_memory_manager = manager
+            window._poll_runtime_memory_manager()
+            self.assertEqual(manager.calls, [True])
         finally:
             window._editor_widget = None
             editor.close()

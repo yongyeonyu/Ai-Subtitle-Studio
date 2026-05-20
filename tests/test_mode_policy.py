@@ -83,7 +83,7 @@ class ModePolicyTests(unittest.TestCase):
         self.assertTrue(high["deep_timing_adjustment_enabled"])
         self.assertEqual(high["subtitle_lora_quality_buckets"], ["high"])
 
-    def test_mode_tool_stack_overrides_subtitle_llm_by_quality_mode(self):
+    def test_user_selected_subtitle_llm_can_override_fast_and_auto_runtime(self):
         fast = apply_mode_runtime_settings(
             {
                 "subtitle_mode": "fast",
@@ -112,14 +112,14 @@ class ModePolicyTests(unittest.TestCase):
         self.assertEqual(fast["selected_model"], "custom-llm")
         self.assertEqual(auto["selected_model"], "custom-llm")
         self.assertEqual(high["selected_model"], "custom-llm")
-        self.assertFalse(fast["subtitle_llm_runtime_enabled"])
-        self.assertFalse(auto["subtitle_llm_runtime_enabled"])
+        self.assertTrue(fast["subtitle_llm_runtime_enabled"])
+        self.assertTrue(auto["subtitle_llm_runtime_enabled"])
         self.assertTrue(high["subtitle_llm_runtime_enabled"])
-        self.assertFalse(fast["mode_policy_snapshot"]["llm"]["subtitle_enabled"])
-        self.assertFalse(auto["mode_policy_snapshot"]["llm"]["subtitle_enabled"])
+        self.assertTrue(fast["mode_policy_snapshot"]["llm"]["subtitle_enabled"])
+        self.assertTrue(auto["mode_policy_snapshot"]["llm"]["subtitle_enabled"])
         self.assertTrue(high["mode_policy_snapshot"]["llm"]["subtitle_enabled"])
-        self.assertFalse(fast["mode_policy_snapshot"]["subtitle_tool_stack"]["llm"])
-        self.assertFalse(auto["mode_policy_snapshot"]["subtitle_tool_stack"]["llm"])
+        self.assertTrue(fast["mode_policy_snapshot"]["subtitle_tool_stack"]["llm"])
+        self.assertTrue(auto["mode_policy_snapshot"]["subtitle_tool_stack"]["llm"])
         self.assertTrue(high["mode_policy_snapshot"]["subtitle_tool_stack"]["llm"])
 
     def test_simple_mode_switch_preserves_user_selected_models(self):
@@ -140,7 +140,7 @@ class ModePolicyTests(unittest.TestCase):
         self.assertEqual(settings["selected_whisper_model"], "user-stt1")
         self.assertEqual(settings["selected_whisper_model_secondary"], "user-stt2")
         self.assertEqual(settings["selected_model"], "custom-llm")
-        self.assertFalse(settings["subtitle_llm_runtime_enabled"])
+        self.assertTrue(settings["subtitle_llm_runtime_enabled"])
 
     def test_current_user_model_choices_override_stale_saved_mode_defaults(self):
         settings = apply_mode_runtime_settings(
@@ -208,7 +208,7 @@ class ModePolicyTests(unittest.TestCase):
         self.assertTrue(settings["stt_ensemble_enabled"])
         self.assertFalse(settings["stt_ensemble_user_selected"])
 
-    def test_selected_llm_is_effective_only_in_high_mode(self):
+    def test_selected_llm_is_effective_when_user_override_is_saved(self):
         from core.engine import subtitle_settings
 
         auto = apply_mode_runtime_settings(
@@ -229,7 +229,7 @@ class ModePolicyTests(unittest.TestCase):
         )
 
         with mock.patch("core.engine.subtitle_settings._get_user_settings", return_value=auto):
-            self.assertIn("사용 안함", subtitle_settings.get_selected_llm())
+            self.assertEqual(subtitle_settings.get_selected_llm(), "custom-llm")
         with mock.patch("core.engine.subtitle_settings._get_user_settings", return_value=high):
             self.assertEqual(subtitle_settings.get_selected_llm(), "custom-llm")
 

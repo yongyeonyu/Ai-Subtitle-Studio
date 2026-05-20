@@ -11,7 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.automation.app_command_protocol import build_command_payload, send_command_to_app
+from core.automation.app_command_protocol import build_command_payload
+from tools.automation_command_client import (
+    command_is_read_only,
+    result_is_waiting_for_app,
+    send_app_command_with_readiness_retry,
+)
 
 
 def _add_editor_selection_args(parser: argparse.ArgumentParser) -> None:
@@ -36,7 +41,16 @@ def _parser() -> argparse.ArgumentParser:
     capture_dictionary_snapshot.add_argument("path", nargs="?")
     sub.add_parser("show-home")
     sub.add_parser("open-dictionary")
+    sub.add_parser("open-settings")
+    sub.add_parser("open-speaker-settings")
+    capture_active_dialog = sub.add_parser("capture-active-dialog")
+    capture_active_dialog.add_argument("path", nargs="?")
+    sub.add_parser("close-active-dialog")
     sub.add_parser("save-project")
+    sub.add_parser("save-subtitles")
+    export_subtitles = sub.add_parser("export-subtitles")
+    export_subtitles.add_argument("path", nargs="?")
+    sub.add_parser("export-subtitle-video")
     sub.add_parser("start-current-pipeline")
     sub.add_parser("start-current-roughcut")
     editor_set_playhead = sub.add_parser("editor-set-playhead")
@@ -52,6 +66,12 @@ def _parser() -> argparse.ArgumentParser:
 
     editor_playback = sub.add_parser("editor-playback")
     editor_playback.add_argument("action", choices=["play", "pause", "toggle"], nargs="?", default="toggle")
+
+    editor_video = sub.add_parser("editor-video")
+    editor_video.add_argument("action", choices=["show", "hide", "toggle"], nargs="?", default="toggle")
+
+    editor_stt_mode = sub.add_parser("editor-stt-mode")
+    editor_stt_mode.add_argument("action", choices=["enable", "disable", "toggle"], nargs="?", default="toggle")
 
     editor_select_segment = sub.add_parser("editor-select-segment")
     _add_editor_selection_args(editor_select_segment)
@@ -105,6 +125,9 @@ def _parser() -> argparse.ArgumentParser:
 
     queue_files = sub.add_parser("queue-files")
     queue_files.add_argument("paths", nargs="+")
+
+    personalization_idle = sub.add_parser("personalization-idle")
+    personalization_idle.add_argument("action", choices=["run-now", "pause", "resume"], nargs="?", default="run-now")
     return parser
 
 
@@ -120,9 +143,26 @@ def _editor_selection_options(args: argparse.Namespace) -> dict:
 
 def _payload_from_args(args: argparse.Namespace) -> dict:
     command = str(args.command or "")
-    if command in {"open-project", "open-srt", "open-media", "queue-folder", "capture-snapshot", "snapshot", "capture-dictionary-snapshot"}:
+    if command in {
+        "open-project",
+        "open-srt",
+        "open-media",
+        "queue-folder",
+        "capture-snapshot",
+        "snapshot",
+        "capture-dictionary-snapshot",
+        "capture-active-dialog",
+        "export-subtitles",
+    }:
         return build_command_payload(command, path=args.path)
-    if command == "open-dictionary":
+    if command in {
+        "open-dictionary",
+        "open-settings",
+        "open-speaker-settings",
+        "close-active-dialog",
+        "save-subtitles",
+        "export-subtitle-video",
+    }:
         return build_command_payload(command)
     if command == "guided-subtitle-run":
         return build_command_payload(command, path=args.path, options={"snapshot_dir": str(args.snapshot_dir or "")})
@@ -144,6 +184,10 @@ def _payload_from_args(args: argparse.Namespace) -> dict:
     if command == "editor-zoom-max":
         return build_command_payload(command)
     if command == "editor-playback":
+        return build_command_payload(command, options={"action": str(args.action or "toggle")})
+    if command == "editor-video":
+        return build_command_payload(command, options={"action": str(args.action or "toggle")})
+    if command == "editor-stt-mode":
         return build_command_payload(command, options={"action": str(args.action or "toggle")})
     if command in {
         "editor-select-segment",
@@ -171,6 +215,8 @@ def _payload_from_args(args: argparse.Namespace) -> dict:
                 "reuse_existing": str(args.reuse_existing or "ask"),
             },
         )
+    if command == "personalization-idle":
+        return build_command_payload(command, options={"action": str(args.action or "run-now")})
     return build_command_payload(command)
 
 
@@ -178,11 +224,14 @@ def main() -> int:
     args = _parser().parse_args()
     payload = _payload_from_args(args)
     try:
-        result = send_command_to_app(payload, timeout_sec=float(args.timeout or 8.0))
+        result = send_app_command_with_readiness_retry(payload, timeout_sec=float(args.timeout or 8.0))
     except OSError as exc:
         print(json.dumps({"ok": False, "error": "app_unreachable", "message": str(exc)}, ensure_ascii=False))
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    command = str(payload.get("command", "") or "")
+    if command_is_read_only(command) and result_is_waiting_for_app(result):
+        return 1
     return 0 if result.get("ok") else 1
 
 

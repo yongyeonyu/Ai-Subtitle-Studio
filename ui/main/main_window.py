@@ -695,7 +695,7 @@ class MainWindow(
         run_nonfatal_ui_step(
             "메모리 관리자 폴링",
             "manager.poll",
-            manager.poll,
+            lambda: manager.poll(allow_trim=not bool(self._is_editor_ai_busy(getattr(self, "_editor_widget", None)) or self._is_backend_ai_busy())),
         )
 
     def _poll_runtime_resource_coordinator(self):

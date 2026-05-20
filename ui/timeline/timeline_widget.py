@@ -890,7 +890,6 @@ class TimelineWidget(QWidget):
         if owner is None:
             owner = self
         dialog = QInputDialog(owner)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dialog.setWindowTitle("편집 창 시간")
         dialog.setInputMode(QInputDialog.InputMode.IntInput)
         dialog.setLabelText(
@@ -905,6 +904,7 @@ class TimelineWidget(QWidget):
         dialog.setStyleSheet(settings_dialog_stylesheet())
         try:
             if dialog.exec():
+                # exec() 종료 직후에도 값을 읽어야 하므로 자동 삭제를 켜지 않는다.
                 selected_seconds = float(dialog.intValue())
                 self._apply_edit_window_seconds(selected_seconds, center_sec=center_sec)
                 self._save_preferred_edit_window_seconds(selected_seconds)

@@ -156,7 +156,9 @@ def mode_model_snapshot(settings: dict[str, Any] | None) -> dict[str, Any]:
     }
     model = str(snapshot.get("selected_model") or "").strip()
     provider = str(snapshot.get("selected_llm_provider") or "").strip().lower()
-    if "selected_model" in snapshot:
+    if "subtitle_llm_user_selected" in data:
+        snapshot["subtitle_llm_user_selected"] = bool(data.get("subtitle_llm_user_selected"))
+    elif "selected_model" in snapshot:
         snapshot["subtitle_llm_user_selected"] = bool(model and "사용 안함" not in model and provider != "none")
     return snapshot
 

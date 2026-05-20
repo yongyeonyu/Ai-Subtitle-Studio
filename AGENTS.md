@@ -46,6 +46,7 @@ Keep these five files non-overlapping:
 Optional support file:
 
 - `CODEMAP.md`: concise responsibility map, hot paths, entry points, and targeted verification map. It is not a full tree and it must not duplicate release history or backlog text.
+- `NEW_CHAT_PROMPT.md`: user-facing Korean continuation prompt for a fresh chat. Refresh it whenever the verified QA baseline, current priority, or next action materially changes.
 
 ## Release Handoff Rules
 
@@ -72,15 +73,16 @@ When the user says `새로운 채팅하자` or equivalent, treat it as a formal 
 Required workflow:
 
 1. Refresh `AGENTS.md` first if the current chat materially changed durable continuation facts, test rules, fix status, or next steps.
-2. Do not rewrite `ACTION_ITEMS.md` unless the remaining priority queue itself changed.
-3. Reply to the user in Korean, but keep repository documents in English.
-4. Provide a ready-to-paste new-chat prompt plus a compact handoff summary.
-5. The handoff summary must be token-efficient but detailed:
+2. Refresh `NEW_CHAT_PROMPT.md` when current priorities, runner status, active risks, or the recommended next task changed.
+3. Do not rewrite `ACTION_ITEMS.md` unless the remaining priority queue itself changed.
+4. Reply to the user in Korean, but keep repository documents in English.
+5. Provide a ready-to-paste new-chat prompt plus a compact handoff summary.
+6. The handoff summary must be token-efficient but detailed:
    - prefer short declarative lines over prose;
    - include only current facts, verified fixes, active risks, exact test assets, and next actions;
    - avoid praise, repetition, long narrative history, and already-obsolete branches;
    - include concrete file paths, commands, and validation results when they matter.
-6. If a restart point or runtime issue was debugged in the current chat, explicitly state:
+7. If a restart point or runtime issue was debugged in the current chat, explicitly state:
    - exact root cause;
    - exact files changed;
    - exact tests or real-media checks already run;
@@ -146,6 +148,16 @@ Required workflow:
 - Roughcut Codex state: the Codex roughcut path now uses wider row context, a longer timeout, override-model inheritance fixes, and a clean fallback to local-rule drafts when the Codex CLI times out.
 - Automation state: `tools/appctl.py`, `ui/main/app_command_bridge.py`, and `ui/editor/editor_automation.py` now expose deterministic editor actions such as playhead moves, smart split staging/commit, segment-edge movement, diamond movement, shadow-playhead control, current roughcut start, and multiclip start; use these before relying on fragile UI-only interaction when real-app verification is needed.
 - Verification artifact state: compact real-app verification output should be written under `output/manual_verification/latest/` first, then optionally copied into a named sibling folder when a preserved archive is useful.
+- QA runner state: `tools/qa_suite_runner.py` is now the official one-command automation entrypoint. Verified real-app baselines are `qa_suite_quick_20260520_174600`, `qa_suite_major_20260520_183244`, `qa_suite_full_20260520_193515`, and the latest bundle-refreshed rerun `qa_suite_full_20260520_210149`.
+- QA runner completion state: the automation program core is considered complete for the current scope. Implementation, real-app verification, result documentation, and README/AGENTS handoff are in place; future work should be treated as maintenance or recipe expansion when new UX or commands are added.
+- QA runner maintenance rule: when a new UX flow, popup, automation command, or export path is added, update `test_case.md`, `tools/qa_suite_runner.py`, `tests/test_qa_suite_runner.py`, and `README.md` together. Keep the test-case description in Korean.
+- QA runner execution rule: `major` and `full` should run against the current-code bundle at `dist/macos/AI Subtitle Studio.app`. If command surface or editor automation changed, regenerate the bundle first with `./packaging/macos/build_app_bundle.sh`.
+- Latest QA rerun state: on 2026-05-20, after `./packaging/macos/build_app_bundle.sh`, `./venv/bin/python tools/qa_suite_runner.py full` passed again with `scenario_count=7`, `failed_count=0`; artifact root is `output/manual_verification/latest/qa_suite_full_20260520_210149`.
+- Help/QA planning state: Action Item 28 now tracks the beginner-first help rebuild plus chapter-to-QA mapping. The next durable output should be a file/function-to-QA coverage matrix, a rewritten help structure with real snapshots, and a `quick` / `major` / `full` profile mapping for each chapter.
+- Help-doc state: there is no standalone root `help/` directory yet. Current user guidance is still spread across `README.md`, `test_case.md`, and `test_result.md`.
+- Known help-to-QA coverage gaps: current runner coverage is strong for compact editor, video menu, save/export, menu/STT/LoRA, and Tinyping full-media flows, but beginner-help parity is still missing or not explicitly mapped for `show-home`, `open-srt`, `open-media`, direct pipeline/roughcut start, multiclip and queue entry flows, `editor-pin-shadow-playhead`, `editor-clear-shadow-playhead`, `editor-zoom-max`, and explicit `editor-select-segment`.
+- Current QA/open-risk state: the official runner currently passes, but Action Item 12 remains open because busy-state `ping` / `guided-subtitle-status` responsiveness can still degrade during separate repeated-generation debug runs even when the suite passes.
+- Current optimization focus: the highest-value unresolved performance work is still Action Items 15, 16, and 18: duplicated state/lazy hydration, repeated-generation `critical` memory pressure, and stage-trim cost attribution.
 - Restart reliability state: restarting subtitle generation from a completed single-file editor now detects a dead backend pipeline thread and falls back to a fresh `start_pipeline(..., is_auto_start=True)` instead of signaling a dead thread; this was verified with the short Macau fixture after cache reset and app relaunch.
 - Restart verification state: after relaunch, `open-media` + `start-current-pipeline` on `/Users/u_mo_c/Downloads/마카오테스트/DJI_20260217224203_0075_D.MP4` re-entered cut-boundary, VAD, STT prep, and STT1/STT2 stages; command/status snapshot calls can still time out under heavy main-thread load, so terminal logs remain the primary truth source during active generation.
 - Smart split state: normal double-click Enter remains plain inline edit, while smart split is now a right-click split mode that arms the playhead, visually marks the target segment, locks diamond/segment-length editing, and commits on Enter using the current text cursor plus the armed playhead time.
@@ -159,7 +171,7 @@ Required workflow:
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Refactor state: the longest subtitle/project/editor/runtime modules were split by responsibility into `core.audio.transcribe_worker_io`, `core.engine.subtitle_segment_filter`, `core.engine.subtitle_accuracy_utils`, `core.pipeline.cut_boundary_cache`, and `ui.editor.editor_segments_bulk_load` so future native migration work has smaller seams.
-- Verification state: `v04.00.11` release verification now covers repeated-generation memory-pressure cleanup, STT/native optimization seams, video subtitle overlay context, `compileall`, `git diff --check`, focused unit sweeps, and a real Macau app snapshot. Full release verification details are in `RELEASE_v04.00.11.md`.
+- Verification state: `v04.00.11` release verification now covers repeated-generation memory-pressure cleanup, STT/native optimization seams, app-command/QA runner automation, MPS trim deferral, video subtitle overlay context, `compileall`, `git diff --check`, focused unit sweeps, current-code full QA, and real Macau app snapshots. Full release verification details are in `RELEASE_v04.00.11.md`.
 - Latest runtime reliability state: personalization full-learning stop/exit now keeps cancellation responsive through import and index rebuild phases, and current remaining work explicitly tracks the unresolved `QTableWidget` stylesheet parse warning on `MainWindow`-heavy paths.
 - Latest regression checkpoint: on 2026-05-20, `./venv/bin/python -m unittest tests.test_video_player_widget tests.test_timeline_playhead_fit tests.test_editor_video_context_window tests.test_project_segment_reload tests.test_runtime_memory_manager tests.test_media_processor_overlap tests.test_action_item_runtime_services tests.test_ollama_provider tests.test_app_command_bridge tests.test_cut_boundary_verify_strategy tests.test_stt_lattice_service tests.test_stt_recheck_service tests.test_timeline_paint_passes tests.test_qml_popup_guard -q`, `./venv/bin/python -m compileall -q core ui tests tools`, `git diff --check -- core ui tests tools ACTION_ITEMS.md NATIVE_LIB_PLAN.md idea_item.md test_case.md waste_action_item.md`, and a live Macau project overlay snapshot were run for `v04.00.11`.
 

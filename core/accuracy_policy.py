@@ -145,6 +145,26 @@ PRESERVE_EXPLICIT_KEYS = {
 }
 
 
+def _explicit_route_overrides(settings: dict | None) -> dict:
+    settings = dict(settings or {})
+    overrides = {
+        key: deepcopy(settings[key])
+        for key in PRESERVE_EXPLICIT_KEYS
+        if key in settings
+    }
+    model = str(settings.get("selected_model", "") or "").strip()
+    provider = str(settings.get("selected_llm_provider", "") or "").strip().lower()
+    if bool(settings.get("subtitle_llm_user_selected")) and model and "사용 안함" not in model and provider != "none":
+        overrides.update(
+            {
+                "selected_model": model,
+                "selected_llm_provider": provider,
+                "subtitle_llm_user_selected": True,
+            }
+        )
+    return overrides
+
+
 def accuracy_first_defaults() -> dict:
     return deepcopy(ACCURACY_FIRST_DEFAULTS)
 
@@ -175,11 +195,7 @@ def apply_accuracy_first_runtime_settings(settings: dict | None) -> dict:
     if not bool(out.get("accuracy_first_mode", True)):
         return _apply_apple_m_runtime_plan(out)
 
-    explicit_values = {
-        key: deepcopy(out[key])
-        for key in PRESERVE_EXPLICIT_KEYS
-        if key in out
-    }
+    explicit_values = _explicit_route_overrides(out)
 
     preset_key = normalize_stt_quality_key(out.get("stt_quality_preset") or "balanced")
     auto_start_key = normalize_stt_quality_key(out.get("auto_start_mode") or preset_key)
@@ -196,6 +212,7 @@ def apply_accuracy_first_runtime_settings(settings: dict | None) -> dict:
             out.update(deepcopy(AUTO_SPEED_SAFE_RUNTIME_OVERRIDES))
         elif simple_mode not in {"precise", "정밀", "accuracy", "high"}:
             out.update(deepcopy(LIGHTWEIGHT_RUNTIME_CAP_OVERRIDES))
+        out.update(deepcopy(explicit_values))
         out["stt_quality_preset"] = preset_key
         out["auto_start_mode"] = auto_start_key
         out["_speed_safe_auto_profile"] = "03.21.auto_speed_safe.v1"

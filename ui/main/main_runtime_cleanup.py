@@ -529,6 +529,17 @@ class MainRuntimeCleanupMixin:
         except Exception:
             return False
 
+    def _post_generation_release_retry_needed(self, editor=None) -> bool:
+        target_editor = editor if editor is not None else getattr(self, "_editor_widget", None)
+        if target_editor is None:
+            return False
+        try:
+            requested = bool(getattr(target_editor, "_post_generation_models_release_requested", False))
+            released = bool(getattr(target_editor, "_post_generation_models_released", False))
+            return requested and not released
+        except Exception:
+            return False
+
     def _schedule_post_generation_gc(self, *, editor=None, delay_ms: int = 1600) -> None:
         if bool(getattr(self, "_post_generation_gc_scheduled", False)):
             return
@@ -543,6 +554,22 @@ class MainRuntimeCleanupMixin:
                 "post generation runtime cache clear",
                 lambda: self._clear_runtime_memory_caches(include_gpu=True),
             )
+            if self._post_generation_release_retry_needed(editor):
+                # Warm-session slowdown shows up when the first async release
+                # request is missed and the next generation starts with stale
+                # STT/LLM residency still attached to the finished run.
+                _run_cleanup_step(
+                    "post generation model release retry",
+                    lambda: self._release_ai_models_for_editor_mode(
+                        force=True,
+                        preserve_roughcut_status=True,
+                        ollama_timeout_sec=1.2,
+                    ),
+                )
+                if self._post_generation_release_retry_needed(editor) or bool(
+                    getattr(self, "_editor_ai_release_in_progress", False)
+                ):
+                    self._schedule_post_generation_gc(editor=editor, delay_ms=1600)
 
         QTimer.singleShot(max(0, int(delay_ms)), _run_gc)
 

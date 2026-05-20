@@ -51,6 +51,10 @@ A Python function family may move into native library form only when all items a
   `TimelineEditing.swift` -> geometry, magnet, undo, and serialization files.
   `NativePolicyEngine.swift` -> scoring, retrieval, and decision files.
   `RuntimeETAEstimator.swift` -> persistence and prediction files.
+  Progress: 2026-05-20 `TimelineEditing.swift` 분해 1차 완료. public contract는 `TimelineEditingModels.swift`, geometry/drag는 `TimelineEditingDrag.swift`, magnet은 `TimelineEditingMagnet.swift`, preview/STT selection은 `TimelineEditingPreviewSelection.swift`, undo/SRT load/fingerprint는 `TimelineEditingPersistence.swift`로 이동했다.
+  Progress: 2026-05-20 `RuntimeETAEstimator.swift` 분해 1차 완료. public API는 얇게 유지하고 `RuntimeETAEstimatorModels.swift`, `RuntimeETAEstimatorPrediction.swift`, `RuntimeETAEstimatorRequest.swift`, `RuntimeETAEstimatorStore.swift`로 request/prediction/persistence 책임을 분리했다.
+  Progress: 2026-05-20 `swift test` 38개 통과, current-code bundle rebuilt, 마카오 직접 파이프라인 검증 `output/manual_verification/latest/20260520_native_swift_split_macau_high_verify` 완료.
+  Next: `NativePolicyEngine.swift`만 남은 oversized Swift core split 대상으로 유지한다.
   Promote only if: Swift tests stay green and Python bridge contracts do not change.
   Verification: `swift test` in `native/macos/AIStudioNative`.
 
@@ -63,7 +67,9 @@ A Python function family may move into native library form only when all items a
 - [ ] 6. Runtime 캐시 정리 native 경로의 경량화
   Scope: `core/native_swift_runtime_cache.py` 및 호출측 정리 호출 빈도.
   Current note: 2026-05-20 마카오/X5 10회 반복에서는 Python checkpoint cleanup을 더 느슨하게 하는 것만으로는 X5가 빨라지지 않았다.
-  다음 패스는 cleanup 완화보다 native bridge 호출 수와 elapsed를 먼저 계측해야 한다.
+  Progress: 2026-05-20 `tools/verify_full_media_pipeline.py`가 `stage_trim_total_elapsed_ms`, `stage_trim_executed_count`, `stage_trim_slowest_stage`를 repeat artifact에 실을 수 있게 되어, 이후 Swift runtime cache prune 호출 수/elapsed를 같은 형식으로 비교할 수 있다.
+  Progress: 2026-05-20 실앱 마카오 run에서는 `stt_optimizer_threads_done` 직후 trim summary가 `executed_count=1`, `total_elapsed_ms=14.669`로 찍혔고, 종료 직후 남아 있던 `Ollama`/`WhisperKitPersistentWorker` residency는 2초 settle 뒤 RSS가 크게 줄었다. 현재 우선순위는 native trim 호출 자체보다 warm-session에서 `critical`을 만드는 residency/압축메모리 조건 재현이다.
+  다음 패스는 cleanup 완화보다 `stage_trim.elapsed_ms`, `stage_trim.action_timings`, `stage_trim.failures`로 native bridge 호출 수와 elapsed를 먼저 계측해야 한다.
   Success: 연속 실행에서 동일 경로 정리 요청이 중복되는 동안 Swift 호출 오버헤드가 낮아지고,
   동일한 기능 요구 대비 브리지 비용이 증가하지 않는다.
   Verification: 반복 10회 벤치에서 `memory_manager` 정리 로그 및 전체 pipeline 평균 시간 비교.

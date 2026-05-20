@@ -55,12 +55,13 @@ class QueuePanelWidget(QWidget):
         self.queue_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.queue_table.setShowGrid(True)
         self.queue_table.setGridStyle(Qt.PenStyle.SolidLine)
+        # Keep this QSS syntactically strict; Qt logs parser warnings for unmatched braces during startup.
         self.queue_table.setStyleSheet(
             f"QTableWidget {{ background: {COLORS['surface']}; color: {COLORS['text']}; "
             f"border: 1px solid {COLORS['separator']}; border-radius: 6px; font-size: 11px; gridline-color: #3A4650; }} "
             "QTableWidget::item { padding: 2px 8px; } "
             f"QHeaderView::section {{ background: {COLORS['surface_alt']}; color: {COLORS['muted']}; "
             "border: none; border-right: 1px solid #3A4650; "
-            "border-bottom: 1px solid #3A4650; padding: 3px 8px; }}"
+            "border-bottom: 1px solid #3A4650; padding: 3px 8px; }"
         )
         layout.addWidget(self.queue_table)

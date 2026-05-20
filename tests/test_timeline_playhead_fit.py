@@ -2238,6 +2238,84 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_time_window_dialog_reads_selected_value_before_dialog_deletion(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 240.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+            timeline.show_time_window_seconds(10.0, center_sec=82.0)
+
+            class _DeletingIfConfiguredDialog:
+                class InputMode:
+                    IntInput = object()
+
+                def __init__(self, _owner):
+                    self._delete_on_close = False
+
+                def setAttribute(self, attr, enabled):
+                    if attr == Qt.WidgetAttribute.WA_DeleteOnClose:
+                        self._delete_on_close = bool(enabled)
+
+                def setWindowTitle(self, *_args):
+                    return None
+
+                def setInputMode(self, *_args):
+                    return None
+
+                def setLabelText(self, *_args):
+                    return None
+
+                def setIntRange(self, *_args):
+                    return None
+
+                def setIntStep(self, *_args):
+                    return None
+
+                def setIntValue(self, *_args):
+                    return None
+
+                def setOkButtonText(self, *_args):
+                    return None
+
+                def setCancelButtonText(self, *_args):
+                    return None
+
+                def setStyleSheet(self, *_args):
+                    return None
+
+                def exec(self):
+                    return True
+
+                def intValue(self):
+                    if self._delete_on_close:
+                        raise RuntimeError("wrapped C/C++ object of type QInputDialog has been deleted")
+                    return 12
+
+                def releaseMouse(self):
+                    return None
+
+                def releaseKeyboard(self):
+                    return None
+
+                def deleteLater(self):
+                    return None
+
+            with patch("ui.timeline.timeline_widget.QInputDialog", _DeletingIfConfiguredDialog), \
+                 patch.object(timeline, "_apply_edit_window_seconds") as apply_mock, \
+                 patch.object(timeline, "_save_preferred_edit_window_seconds") as save_mock:
+                timeline._show_time_window_seconds_dialog()
+
+            apply_mock.assert_called_once()
+            save_mock.assert_called_once_with(12.0)
+        finally:
+            timeline.close()
+
     def test_time_window_dialog_restore_releases_toolbar_mouse_grab(self):
         timeline = TimelineWidget()
         try:

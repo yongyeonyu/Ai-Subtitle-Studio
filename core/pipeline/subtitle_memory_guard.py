@@ -7,6 +7,13 @@ from core.runtime.logger import get_logger
 from core.settings import load_settings
 
 
+def _log_memory_guard_nonfatal(step: str, exc: BaseException) -> None:
+    try:
+        get_logger().log(f"  ⚠️ [자막 메모리] {step} 실패: {type(exc).__name__}: {exc}")
+    except (OSError, RuntimeError, ValueError):
+        pass
+
+
 def create_subtitle_generation_memory_guard(owner: Any, target_file, queue_index: int):
     """Create the per-generation memory guard without bloating the pipeline loop."""
     try:
@@ -25,8 +32,8 @@ def create_subtitle_generation_memory_guard(owner: Any, target_file, queue_index
                 status += f" · {subtitle_stage}"
             try:
                 owner._emit_processing_stage(qi, status)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_memory_guard_nonfatal("stage status emit", exc)
 
         guard = SubtitleGenerationMemoryGuard(
             settings=settings,
@@ -39,10 +46,7 @@ def create_subtitle_generation_memory_guard(owner: Any, target_file, queue_index
         )
         return guard
     except Exception as exc:
-        try:
-            get_logger().log(f"  ⚠️ [자막 메모리] 단계별 감시 준비 실패: {exc}")
-        except Exception:
-            pass
+        _log_memory_guard_nonfatal("단계별 감시 준비", exc)
         return None
 
 
@@ -63,7 +67,8 @@ def subtitle_generation_memory_checkpoint(
             cleanup=cleanup,
             force=force,
         )
-    except Exception:
+    except Exception as exc:
+        _log_memory_guard_nonfatal(f"checkpoint {stage}", exc)
         return {}
 
 

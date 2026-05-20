@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterator
 
 from core.performance import atomic_write_json, current_resource_snapshot
 from core.runtime import config
+from core.runtime.memory_trim_summary import record_stage_trim_summary
 
 _DISK_USAGE_CACHE_MAX_AGE_SEC = 15.0
 _RUNTIME_DISK_USAGE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
@@ -33,6 +34,18 @@ _RUNTIME_TRIM_TARGETS = (
 _RUNTIME_TRIM_CALLABLES: list[tuple[str, Callable[[], Any]]] | None = None
 _NATIVE_PRUNE_CALLABLE_UNSET = object()
 _NATIVE_PRUNE_CALLABLE: Callable[..., dict[str, Any] | None] | None | object = _NATIVE_PRUNE_CALLABLE_UNSET
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000.0, 3)
+
+
+def _trim_failure_record(action: str, exc: BaseException) -> dict[str, str]:
+    return {
+        "action": str(action or "unknown"),
+        "error_type": type(exc).__name__,
+        "message": str(exc)[:180],
+    }
 
 
 def _coerce_float(value: object, default: float, *, min_value: float | None = None, max_value: float | None = None) -> float:
@@ -530,26 +543,54 @@ def _runtime_trim_callables() -> list[tuple[str, Callable[[], Any]]]:
 
 
 def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = False) -> dict[str, Any]:
+    trim_started = time.perf_counter()
     stage_text = str(stage or "warning").strip().lower()
     actions: list[str] = []
+    action_timings: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
     settings: dict[str, Any] = {}
     try:
         from core.settings import load_settings
 
         settings = dict(load_settings() or {})
-    except Exception:
+    except Exception as exc:
+        failures.append(_trim_failure_record("core.settings.load_settings", exc))
         settings = {}
     for action_name, func in _runtime_trim_callables():
+        action_started = time.perf_counter()
         try:
             func()
             actions.append(action_name)
-        except Exception:
+            action_timings.append({
+                "action": action_name,
+                "elapsed_ms": _elapsed_ms(action_started),
+                "ok": True,
+            })
+        except Exception as exc:
+            action_timings.append({
+                "action": action_name,
+                "elapsed_ms": _elapsed_ms(action_started),
+                "ok": False,
+            })
+            failures.append(_trim_failure_record(action_name, exc))
             continue
+    gc_started = time.perf_counter()
     try:
         gc.collect()
         actions.append("gc.collect")
-    except Exception:
-        pass
+        action_timings.append({
+            "action": "gc.collect",
+            "elapsed_ms": _elapsed_ms(gc_started),
+            "ok": True,
+        })
+    except Exception as exc:
+        action_timings.append({
+            "action": "gc.collect",
+            "elapsed_ms": _elapsed_ms(gc_started),
+            "ok": False,
+        })
+        failures.append(_trim_failure_record("gc.collect", exc))
+    relief_started = time.perf_counter()
     try:
         from core.native_macos_memory import native_allocator_pressure_relief
 
@@ -557,11 +598,28 @@ def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = Fa
         if relief.get("ok"):
             released_mb = round(float(relief.get("released_bytes", 0) or 0) / float(1024 ** 2), 2)
             actions.append(f"macos.malloc_zone_pressure_relief:{released_mb}MB")
-    except Exception:
-        pass
+            action_timings.append({
+                "action": "macos.malloc_zone_pressure_relief",
+                "elapsed_ms": _elapsed_ms(relief_started),
+                "ok": True,
+            })
+        else:
+            action_timings.append({
+                "action": "macos.malloc_zone_pressure_relief",
+                "elapsed_ms": _elapsed_ms(relief_started),
+                "ok": False,
+            })
+    except Exception as exc:
+        action_timings.append({
+            "action": "macos.malloc_zone_pressure_relief",
+            "elapsed_ms": _elapsed_ms(relief_started),
+            "ok": False,
+        })
+        failures.append(_trim_failure_record("macos.malloc_zone_pressure_relief", exc))
     if include_gpu:
         torch_module = sys.modules.get("torch")
         if torch_module is not None:
+            mps_started = time.perf_counter()
             try:
                 from core.audio.torch_acceleration import allow_mps_empty_cache
 
@@ -570,8 +628,19 @@ def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = Fa
                 if allow_mps_empty_cache() and callable(empty_cache):
                     empty_cache()
                     actions.append("torch.mps.empty_cache")
-            except Exception:
-                pass
+                    action_timings.append({
+                        "action": "torch.mps.empty_cache",
+                        "elapsed_ms": _elapsed_ms(mps_started),
+                        "ok": True,
+                    })
+            except Exception as exc:
+                action_timings.append({
+                    "action": "torch.mps.empty_cache",
+                    "elapsed_ms": _elapsed_ms(mps_started),
+                    "ok": False,
+                })
+                failures.append(_trim_failure_record("torch.mps.empty_cache", exc))
+            cuda_started = time.perf_counter()
             try:
                 cuda = getattr(torch_module, "cuda", None)
                 if cuda is not None and callable(getattr(cuda, "is_available", None)) and cuda.is_available():
@@ -579,18 +648,45 @@ def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = Fa
                     if callable(empty_cache):
                         empty_cache()
                         actions.append("torch.cuda.empty_cache")
-            except Exception:
-                pass
+                        action_timings.append({
+                            "action": "torch.cuda.empty_cache",
+                            "elapsed_ms": _elapsed_ms(cuda_started),
+                            "ok": True,
+                        })
+            except Exception as exc:
+                action_timings.append({
+                    "action": "torch.cuda.empty_cache",
+                    "elapsed_ms": _elapsed_ms(cuda_started),
+                    "ok": False,
+                })
+                failures.append(_trim_failure_record("torch.cuda.empty_cache", exc))
         mlx_core = sys.modules.get("mlx.core")
         if mlx_core is not None:
+            mlx_started = time.perf_counter()
             try:
                 clear_cache = getattr(mlx_core, "clear_cache", None)
                 if callable(clear_cache):
                     clear_cache()
                     actions.append("mlx.core.clear_cache")
-            except Exception:
-                pass
-    return {"stage": stage_text, "actions": actions}
+                    action_timings.append({
+                        "action": "mlx.core.clear_cache",
+                        "elapsed_ms": _elapsed_ms(mlx_started),
+                        "ok": True,
+                    })
+            except Exception as exc:
+                action_timings.append({
+                    "action": "mlx.core.clear_cache",
+                    "elapsed_ms": _elapsed_ms(mlx_started),
+                    "ok": False,
+                })
+                failures.append(_trim_failure_record("mlx.core.clear_cache", exc))
+    return {
+        "stage": stage_text,
+        "actions": actions,
+        "elapsed_ms": _elapsed_ms(trim_started),
+        "action_timings": action_timings,
+        "failures": failures,
+    }
 
 
 class SubtitleGenerationMemoryGuard:
@@ -632,6 +728,7 @@ class SubtitleGenerationMemoryGuard:
         self._last_gpu_trim_at = 0.0
         self._last_notice_key = ""
         self._last_snapshot: dict[str, Any] = {}
+        self._stage_trim_summary: dict[str, Any] = {}
 
     def checkpoint(
         self,
@@ -664,15 +761,39 @@ class SubtitleGenerationMemoryGuard:
         should_cleanup = bool(explicit_cleanup or critical_pressure)
         snapshot["checkpoint_auto_cleanup"] = bool(critical_pressure and not cleanup)
         snapshot["checkpoint_auto_include_gpu"] = bool(critical_pressure and not include_gpu)
+        snapshot["stage_trim_requested"] = bool(should_cleanup or should_gpu_trim)
         if should_cleanup or should_gpu_trim:
-            if explicit_cleanup or (now - self._last_gpu_trim_at) >= self.gpu_trim_cooldown_sec:
+            elapsed_since_trim = now - self._last_gpu_trim_at
+            can_trim_now = explicit_cleanup or elapsed_since_trim >= self.gpu_trim_cooldown_sec
+            if can_trim_now:
+                # Keep trim cost visible so repeated-run slowdown can be traced to a concrete stage/action.
                 trim_result = trim_runtime_memory_caches(
                     stage=pressure_stage if pressure_stage != "normal" else "stage",
                     include_gpu=bool(include_gpu or critical_pressure),
                 )
                 snapshot["stage_trim"] = trim_result
+                snapshot["stage_trim_skipped_reason"] = ""
                 if include_gpu or critical_pressure:
                     self._last_gpu_trim_at = now
+            else:
+                snapshot["stage_trim_skipped_reason"] = "cooldown"
+                snapshot["stage_trim_cooldown_remaining_sec"] = round(
+                    max(0.0, self.gpu_trim_cooldown_sec - elapsed_since_trim),
+                    3,
+                )
+        else:
+            snapshot["stage_trim_skipped_reason"] = "not_requested"
+        # Repeat-run slowdown is easier to compare when per-chunk stage names roll up
+        # into stable family totals inside the latest generation snapshot.
+        self._stage_trim_summary = record_stage_trim_summary(
+            self._stage_trim_summary,
+            stage=self.stage,
+            pressure_stage=pressure_stage,
+            trim_requested=bool(snapshot.get("stage_trim_requested")),
+            trim_result=snapshot.get("stage_trim") if isinstance(snapshot.get("stage_trim"), dict) else None,
+            skipped_reason=str(snapshot.get("stage_trim_skipped_reason", "") or ""),
+        )
+        snapshot["stage_trim_summary"] = dict(self._stage_trim_summary)
 
         self._last_snapshot = dict(snapshot)
         self._write_generation_snapshot(snapshot)
@@ -859,11 +980,18 @@ class RuntimeMemoryManager:
         snapshot["pressure_stage"] = self._pressure_stage(snapshot)
         return snapshot
 
-    def poll(self) -> dict[str, Any]:
+    def poll(self, *, allow_trim: bool = True) -> dict[str, Any]:
         snapshot = self.collect_snapshot()
+        stage = str(snapshot.get("pressure_stage", "normal") or "normal")
+        if stage != "normal" and not allow_trim:
+            snapshot["trim_deferred_reason"] = "busy_runtime_work"
         self._history.append(snapshot)
         self._write_latest_snapshot(snapshot)
-        stage = str(snapshot.get("pressure_stage", "normal") or "normal")
+        if stage != "normal" and not allow_trim:
+            # Active torch/MPS work can still be encoding GPU graphs here; defer
+            # gc/cache trim until the next idle poll to avoid racing live tensors.
+            self._last_stage = stage
+            return snapshot
         if stage != "normal":
             self._maybe_trim(stage, snapshot)
             self._maybe_report_leak(snapshot)

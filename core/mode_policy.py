@@ -148,12 +148,30 @@ def _disable_subtitle_llm_settings(
     configured_model: str = "",
     configured_provider: str = "",
     preserve_configured_model: bool = False,
+    allow_runtime: bool = False,
 ) -> None:
     has_configured_model = bool(configured_model and "사용 안함" not in configured_model)
     if preserve_configured_model and has_configured_model:
         out["selected_model"] = configured_model
         out["selected_llm_provider"] = configured_provider or "ollama"
         out["subtitle_llm_user_selected"] = True
+        if allow_runtime:
+            out.update(
+                {
+                    "subtitle_llm_runtime_enabled": True,
+                    "subtitle_llm_mode_disabled": False,
+                    "subtitle_llm_effective_model": configured_model,
+                    "subtitle_llm_macro_chunk_enabled": False,
+                    "llm_confidence_gate_enabled": False,
+                    "llm_candidate_policy_enabled": False,
+                    "llm_minimize_enabled": False,
+                    "subtitle_tool_stack_reason": (
+                        f"{mode_label(mode)} mode keeps the default lightweight route, "
+                        "but a user-selected subtitle LLM override is enabled."
+                    ),
+                }
+            )
+            return
     else:
         out["selected_model"] = "사용 안함 (Whisper 단독 진행)"
         out["selected_llm_provider"] = "none"
@@ -170,6 +188,52 @@ def _disable_subtitle_llm_settings(
             "subtitle_tool_stack_reason": MODE_TOOL_STACKS[mode]["reason"],
         }
     )
+
+
+def _subtitle_llm_user_override_active(settings: dict[str, Any] | None) -> bool:
+    settings = settings or {}
+    model = str(settings.get("selected_model", "") or "").strip()
+    provider = str(settings.get("selected_llm_provider", "") or "").strip().lower()
+    if not model or "사용 안함" in model or provider == "none":
+        return False
+    return _safe_bool(settings.get("subtitle_llm_user_selected"), False)
+
+
+def _resolve_subtitle_llm_enabled(settings: dict[str, Any], tool_stack: dict[str, Any]) -> bool:
+    runtime_enabled = settings.get("subtitle_llm_runtime_enabled", None)
+    enabled = (
+        bool(tool_stack.get("llm")) and _llm_enabled(settings, prefix="subtitle")
+        if runtime_enabled is None
+        else _safe_bool(runtime_enabled, False) and _llm_enabled(settings, prefix="subtitle")
+    )
+    if enabled and not bool(tool_stack.get("llm")):
+        tool_stack["llm"] = True
+        tool_stack["macro_llm"] = True
+        if "llm" not in list(tool_stack.get("tools") or []):
+            tool_stack["tools"] = [*list(tool_stack.get("tools") or []), "llm"]
+    return enabled
+
+
+def _fast_auto_llm_policy(mode: str, subtitle_enabled: bool, roughcut_enabled: bool) -> dict[str, Any]:
+    fast = mode == "fast"
+    default_reason = (
+        "Fast mode is LoRA-only for subtitle post-processing; subtitle LLM is disabled."
+        if fast
+        else "Auto mode stops at LoRA + Deep; subtitle LLM is reserved for High mode."
+    )
+    override_reason = (
+        "Fast mode keeps the default subtitle path on LoRA only, but the user-selected subtitle LLM override is active."
+        if fast
+        else "Auto mode keeps the default LoRA + Deep path, but the user-selected subtitle LLM override is active."
+    )
+    return {
+        "subtitle_enabled": bool(subtitle_enabled),
+        "subtitle_default": False,
+        "lightweight_only": bool(fast),
+        "roughcut_enabled": bool(roughcut_enabled),
+        "state": "user-selected" if subtitle_enabled else "skipped",
+        "reason": override_reason if subtitle_enabled else default_reason,
+    }
 
 
 def _llm_enabled(settings: dict[str, Any], *, prefix: str = "subtitle") -> bool:
@@ -228,7 +292,7 @@ def resolve_mode_policy(
     tool_stack = _tool_stack_for_mode(mode)
     audio_value, audio_state, audio_reason = _audio_value(settings, mode)
     vad_value, vad_state, vad_reason = _vad_value(settings, mode)
-    subtitle_llm_enabled = bool(tool_stack.get("llm")) and _llm_enabled(settings, prefix="subtitle")
+    subtitle_llm_enabled = _resolve_subtitle_llm_enabled(settings, tool_stack)
     roughcut_llm_enabled = _llm_enabled(settings, prefix="roughcut")
     lora_ok = _safe_bool(lora_available, True)
 
@@ -335,14 +399,7 @@ def resolve_mode_policy(
                 "decoder": "adaptive-fast",
                 "reason": "Fast mode keeps Komix STT1 as the main route and only uses selective STT2 rescue on risky spans.",
             },
-            "llm": {
-                "subtitle_enabled": False,
-                "subtitle_default": False,
-                "lightweight_only": True,
-                "roughcut_enabled": bool(roughcut_llm_enabled),
-                "state": "skipped",
-                "reason": "Fast mode is LoRA-only for subtitle post-processing; subtitle LLM is disabled.",
-            },
+            "llm": _fast_auto_llm_policy("fast", subtitle_llm_enabled, roughcut_llm_enabled),
             "lora": {
                 "enabled": lora_ok,
                 "buckets": ["high"],
@@ -451,14 +508,7 @@ def resolve_mode_policy(
                 "decoder": "adaptive",
                 "reason": "Auto mode uses STT1 first, then applies selective STT2 rescue and Deep output selection on uncertain spans.",
             },
-            "llm": {
-                "subtitle_enabled": False,
-                "subtitle_default": False,
-                "lightweight_only": False,
-                "roughcut_enabled": bool(roughcut_llm_enabled),
-                "state": "skipped",
-                "reason": "Auto mode stops at LoRA + Deep; subtitle LLM is reserved for High mode.",
-            },
+            "llm": _fast_auto_llm_policy("auto", subtitle_llm_enabled, roughcut_llm_enabled),
             "lora": {
                 "enabled": lora_ok,
                 "buckets": ["high"],
@@ -616,9 +666,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
     base_provider = str(base.get("selected_llm_provider", "") or "").strip()
     base_has_subtitle_llm = bool(base_model and "사용 안함" not in base_model)
     base_explicit_model = "selected_model" in base and base_has_subtitle_llm
-    explicit_subtitle_llm = _safe_bool(base.get("subtitle_llm_user_selected"), False) or (
-        base_has_subtitle_llm and "selected_llm_provider" not in base
-    )
+    explicit_subtitle_llm = _subtitle_llm_user_override_active(base)
     use_saved_quality_preset = not _safe_bool(base.get("_ignore_saved_quality_preset_once"), False)
     out = (
         dict(base)
@@ -708,6 +756,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
             configured_model=base_model,
             configured_provider=base_provider,
             preserve_configured_model=base_explicit_model,
+            allow_runtime=explicit_subtitle_llm,
         )
     elif mode == "high":
         out.update(
@@ -740,6 +789,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
             configured_model=base_model,
             configured_provider=base_provider,
             preserve_configured_model=base_explicit_model,
+            allow_runtime=explicit_subtitle_llm,
         )
 
     out["subtitle_tool_stack"] = _tool_stack_for_mode(mode)

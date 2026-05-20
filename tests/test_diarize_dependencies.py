@@ -33,6 +33,25 @@ class DiarizeDependencyTests(unittest.TestCase):
 
         logger.log.assert_called_once()
 
+    def test_diarization_runtime_settings_disable_gpu_on_macos_by_default(self):
+        with patch("core.audio.diarize.platform.system", return_value="Darwin"), \
+             patch.dict("core.audio.diarize.os.environ", {}, clear=False):
+            result = diarize._diarization_runtime_settings({"audio_torch_gpu_enabled": True, "keep": "value"})
+
+        self.assertFalse(result["audio_torch_gpu_enabled"])
+        self.assertEqual(result["keep"], "value")
+
+    def test_diarization_runtime_settings_respects_explicit_gpu_opt_in(self):
+        with patch("core.audio.diarize.platform.system", return_value="Darwin"), \
+             patch.dict(
+                 "core.audio.diarize.os.environ",
+                 {"AI_SUBTITLE_STUDIO_ENABLE_GPU_SPEAKER_DIARIZATION": "1"},
+                 clear=False,
+             ):
+            result = diarize._diarization_runtime_settings({"audio_torch_gpu_enabled": True})
+
+        self.assertTrue(result["audio_torch_gpu_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

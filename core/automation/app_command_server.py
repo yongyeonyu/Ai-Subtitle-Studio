@@ -11,11 +11,15 @@ from core.automation.app_command_protocol import (
     encode_command_result,
 )
 
+_CONCURRENT_READ_COMMANDS = {"ping", "status", "guided-subtitle-status"}
+
 
 class LocalAppCommandServer:
     def __init__(self, sock: socket.socket):
         self._socket = sock
         self._lock = threading.Lock()
+        self._send_lock = threading.Lock()
+        self._handler_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         self._pending: list[dict[str, Any]] = []
@@ -61,11 +65,20 @@ class LocalAppCommandServer:
                 raw, addr = self._socket.recvfrom(APP_COMMAND_BUFFER_SIZE)
             except OSError:
                 return
-            result = self._dispatch(raw)
-            try:
+            threading.Thread(
+                target=self._handle_request,
+                args=(raw, addr),
+                daemon=True,
+                name="app-command-request",
+            ).start()
+
+    def _handle_request(self, raw: bytes, addr: tuple[str, int]) -> None:
+        result = self._dispatch(raw)
+        try:
+            with self._send_lock:
                 self._socket.sendto(encode_command_result(result), addr)
-            except OSError:
-                continue
+        except OSError:
+            return
 
     def _dispatch(self, raw: bytes) -> dict[str, Any]:
         payload = decode_command_payload(raw)
@@ -84,7 +97,12 @@ class LocalAppCommandServer:
                     message="queued_until_main_window_ready",
                 )
         try:
-            result = handler(payload)
+            # Keep status/ping diagnostics readable while a slow automation command is busy.
+            if command in _CONCURRENT_READ_COMMANDS:
+                result = handler(payload)
+            else:
+                with self._handler_lock:
+                    result = handler(payload)
         except Exception as exc:
             return build_command_result(
                 command,

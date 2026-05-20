@@ -242,19 +242,29 @@ def _summary_markdown(payload: dict[str, Any]) -> str:
                 f"- Native memory pressure: `{runtime_warning}`",
             ]
         )
+    trim_summary = dict(((payload.get("subtitle_generation_monitor_after") or {}).get("stage_trim_summary")) or {})
+    if trim_summary:
+        lines.extend(
+            [
+                f"- Stage trim executed: `{trim_summary.get('executed_count')}`",
+                f"- Stage trim total elapsed: `{trim_summary.get('total_elapsed_ms')}` ms",
+                f"- Stage trim slowest stage: `{trim_summary.get('slowest_stage_key')}`",
+                f"- Stage trim slowest elapsed: `{trim_summary.get('slowest_stage_elapsed_ms')}` ms",
+            ]
+        )
     error = str(payload.get("error") or "").strip()
     if error:
         lines.extend(["", "## Error", "", "```text", error, "```"])
     return "\n".join(lines) + "\n"
 
 
-def _summary_metrics(payload: dict[str, Any]) -> dict[str, Any]:
+def summary_metrics(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload.get("result") or {})
     completion = dict(payload.get("completion_report") or {})
     self_review = dict(payload.get("self_review_summary") or {})
     variant = dict(payload.get("variant_score") or {})
     readability = dict(result.get("readability") or {})
-    return {
+    metrics = {
         "pipeline_elapsed_sec": result.get("elapsed_sec"),
         "raw_segment_count": result.get("raw_segments"),
         "final_segment_count": result.get("final_segments"),
@@ -271,6 +281,18 @@ def _summary_metrics(payload: dict[str, Any]) -> dict[str, Any]:
             4,
         ),
     }
+    trim_summary = dict(((payload.get("subtitle_generation_monitor_after") or {}).get("stage_trim_summary")) or {})
+    if trim_summary:
+        metrics.update({
+            "stage_trim_requested_count": trim_summary.get("requested_count"),
+            "stage_trim_executed_count": trim_summary.get("executed_count"),
+            "stage_trim_skipped_count": trim_summary.get("skipped_count"),
+            "stage_trim_total_elapsed_ms": trim_summary.get("total_elapsed_ms"),
+            "stage_trim_total_failure_count": trim_summary.get("total_failure_count"),
+            "stage_trim_slowest_stage": trim_summary.get("slowest_stage_key"),
+            "stage_trim_slowest_stage_elapsed_ms": trim_summary.get("slowest_stage_elapsed_ms"),
+        })
+    return metrics
 
 
 def _run_single_verification(
@@ -464,7 +486,7 @@ def _run_single_verification(
         payload["peak_rss_bytes"] = int(sampler.peak_rss_bytes or 0)
         payload["total_elapsed_sec"] = round(time.perf_counter() - started, 3)
         payload["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        payload["summary_metrics"] = _summary_metrics(payload)
+        payload["summary_metrics"] = summary_metrics(payload)
         _write_json(result_path, payload)
         _write_text(summary_path, _summary_markdown(payload))
         _progress(
@@ -495,7 +517,7 @@ def _run_single_verification(
         payload["peak_rss_bytes"] = int(sampler.peak_rss_bytes or 0)
         payload["total_elapsed_sec"] = round(time.perf_counter() - started, 3)
         payload["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        payload["summary_metrics"] = _summary_metrics(payload)
+        payload["summary_metrics"] = summary_metrics(payload)
         _write_json(result_path, payload)
         _write_text(summary_path, _summary_markdown(payload))
         _progress(
@@ -517,6 +539,10 @@ def _build_repeat_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
     elapsed = [float(v) for v in elapsed if isinstance(v, (int, float))]
     final_segments = [item.get("summary_metrics", {}).get("final_segment_count") for item in runs]
     final_segments = [int(v) for v in final_segments if isinstance(v, (int, float))]
+    trim_elapsed = [item.get("summary_metrics", {}).get("stage_trim_total_elapsed_ms") for item in runs]
+    trim_elapsed = [float(v) for v in trim_elapsed if isinstance(v, (int, float))]
+    trim_exec = [item.get("summary_metrics", {}).get("stage_trim_executed_count") for item in runs]
+    trim_exec = [int(v) for v in trim_exec if isinstance(v, (int, float))]
     summary = {
         "run_count": len(runs),
         "pipeline_elapsed_sec": {
@@ -531,6 +557,18 @@ def _build_repeat_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "min": min(final_segments) if final_segments else None,
             "max": max(final_segments) if final_segments else None,
         },
+        "stage_trim_total_elapsed_ms": {
+            "list": trim_elapsed,
+            "avg": round(sum(trim_elapsed) / len(trim_elapsed), 3) if trim_elapsed else None,
+            "min": min(trim_elapsed) if trim_elapsed else None,
+            "max": max(trim_elapsed) if trim_elapsed else None,
+        },
+        "stage_trim_executed_count": {
+            "list": trim_exec,
+            "avg": round(sum(trim_exec) / len(trim_exec), 3) if trim_exec else None,
+            "min": min(trim_exec) if trim_exec else None,
+            "max": max(trim_exec) if trim_exec else None,
+        },
         "run_paths": [item.get("result_path") for item in runs],
     }
     return summary
@@ -544,7 +582,7 @@ def _emit_repeat_summary(output_root: Path, runs: list[dict[str, Any]]) -> None:
         **summary,
     })
     lines = [
-        "run_index,pipeline_elapsed_sec,total_elapsed_sec,final_segments,raw_segments,avg_stt_score",
+        "run_index,pipeline_elapsed_sec,total_elapsed_sec,final_segments,raw_segments,avg_stt_score,stage_trim_total_elapsed_ms,stage_trim_executed_count,stage_trim_slowest_stage",
     ]
     for item in runs:
         metrics = item.get("summary_metrics") or {}
@@ -559,6 +597,9 @@ def _emit_repeat_summary(output_root: Path, runs: list[dict[str, Any]]) -> None:
                         metrics.get("final_segment_count"),
                         metrics.get("raw_segment_count"),
                         metrics.get("avg_stt_score"),
+                        metrics.get("stage_trim_total_elapsed_ms"),
+                        metrics.get("stage_trim_executed_count"),
+                        metrics.get("stage_trim_slowest_stage"),
                     ],
                 )
             )

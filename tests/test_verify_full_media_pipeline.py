@@ -26,3 +26,26 @@ def test_summary_metrics_exposes_top_level_quality_and_performance_fields():
         "output_variant_score": 74.4,
         "readability_score": 99.1,
     }
+
+
+def test_summary_metrics_exposes_stage_trim_rollup_when_monitor_snapshot_exists():
+    payload = {
+        "result": {},
+        "subtitle_generation_monitor_after": {
+            "stage_trim_summary": {
+                "requested_count": 4,
+                "executed_count": 2,
+                "skipped_count": 2,
+                "total_elapsed_ms": 18.5,
+                "total_failure_count": 1,
+                "slowest_stage_key": "subtitle_optimize_done",
+                "slowest_stage_elapsed_ms": 11.0,
+            }
+        },
+    }
+
+    metrics = summary_metrics(payload)
+
+    assert metrics["stage_trim_total_elapsed_ms"] == 18.5
+    assert metrics["stage_trim_executed_count"] == 2
+    assert metrics["stage_trim_slowest_stage"] == "subtitle_optimize_done"
