@@ -84,6 +84,7 @@ def editor_session_row_counts(editor: Any) -> dict[str, int] | None:
         return None
     try:
         return {
+            "final_subtitle_segment_count": _row_count_value(getattr(session, "final_segments", None)),
             "stt_preview_segment_count": _row_count_value(getattr(session, "stt_preview_segments", None)),
             "voice_activity_segment_count": _row_count_value(getattr(session, "voice_activity_segments", None)),
             "provisional_cut_boundary_count": _row_count_value(getattr(session, "provisional_boundaries", None)),

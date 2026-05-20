@@ -24,21 +24,26 @@
 - 유지 후보: `candidate1`
 - 유지 이유: subtitle quality를 유지하면서 X5 평균 시간이 가장 안정적이었다.
 - 최신 실행 브랜치: `opt/one-shot-quality-speed-20260521-0228`
-- 최신 완료 배치: Phase 1 observability/app-command reliability
-- 최신 산출물: `output/manual_verification/latest/idea_full_execute_20260521-0228/summary.md`
+- 최신 완료 배치: Phase 2/3/5.5 small execution batch
+- 최신 산출물: `output/manual_verification/latest/idea_full_execute_20260521-0821/summary.md`
 - 최신 검증:
-  - `tests.test_runtime_stage_metrics`, `tests.test_app_command_server`, `tests.test_app_command_bridge`, `tests.test_runtime_memory_manager`, `tests.test_automation_command_client`, `tests.test_runtime_multi_process`: `119 tests OK`
+  - `tests.test_action_item_runtime_services`, `tests.test_project_runtime_capture`, `tests.test_runtime_multi_process`, `tests.test_media_processor_overlap`, `tests.test_ollama_provider`, `tests.test_timeline_hit_targets`, `tests.test_timeline_render_cache`: `248 tests OK`
   - `tools/check_maintenance_budget.py --json`: `ok=true`
-  - `tools/qa_suite_runner.py full`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_full_20260521_024927`
+  - `tools/qa_suite_runner.py quick`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_quick_20260521_082403`
+  - `tools/qa_suite_runner.py major`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_major_20260521_082424`
+  - `tools/qa_suite_runner.py full`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_full_20260521_082856`
 - 최신 측정:
-  - Macau fast r3: `7.618s` -> `7.608s`, final segment `5 -> 5`
-  - X5 fast 60s r3: `9.856s` -> `9.973s`, final segment `17 -> 17` (`+~1.2%` noise/watch; 속도 알고리즘으로 주장 금지)
-  - Tinyping fast 60s: total `23.020s` -> `21.815s`, final/raw `18/15 -> 18/15`
-  - Tinyping auto 60s: total `46.588s` -> `41.904s`, final/raw `18/15 -> 18/15`
-  - Tinyping high 60s: total `29.372s` -> `18.675s`, final/raw `16/16 -> 16/16`
+  - Macau fast smoke: total `8.064s`, pipeline `7.556s`, final/raw `5/3`, peak RSS `370835456`, stage trim failure `0`
+  - X5 60s modes: `mode_high_piecewise_drift` quality winner `40.920s`, quality `72.989`, readability `94.568`, timing MAE `0.6455`
+  - X5 60s speed/quality tradeoff: `mode_fast` `9.809s`, quality `71.514`, readability `93.057`, timing MAE `0.7347`
+  - Tinyping fast 60s: total `22.326s`, pipeline `9.804s`, final/raw `18/15`
+  - Tinyping auto 60s: total `44.152s`, pipeline `9.833s`, final/raw `18/15`
+  - Tinyping high 60s: total `19.526s`, pipeline `19.431s`, final/raw `16/16`
 - 현재 선택:
-  - 기존 품질 보존 파이프라인 + compact stage/resource observability 유지.
-  - aggressive quarter-parallel STT/LLM, native deterministic batch 승격은 parity 구현과 X5/Tinyping 품질 게이트 전까지 채택하지 않는다.
+  - 기존 `candidate1` 품질 보존 파이프라인을 유지한다.
+  - 이번 배치의 stage-owned STT/LLM resource policy, quarter prescan metadata, opaque 2D inline editor 안정화는 채택한다.
+  - X5 60s에서 품질 단독 1위는 `mode_high_piecewise_drift`, 속도/품질 균형은 `mode_fast`가 유리하다. 단, 10회 반복 평균/p95 전까지 기본 알고리즘 자동 승격은 하지 않는다.
+  - aggressive quarter-parallel STT/LLM, native deterministic batch 승격은 parity 구현과 X5/Tinyping 반복 품질 게이트 전까지 채택하지 않는다.
 - 이전 현재 기준:
   - Macau avg `6.770`, min `6.604`, max `7.240`
   - X5 avg `61.252`, min `60.705`, max `62.201`
@@ -96,6 +101,11 @@ Work:
 - release 시점이 `stt_transcribe_chunk`, `subtitle_optimize_done`, `save_export_done` 전후 어디인지 artifact로 기록.
 - Swift runtime cache cleanup 호출 수와 elapsed 중복 제거.
 
+2026-05-21 partial done:
+- `StageOwnedResourcePolicy`를 공용 audio runtime service로 추가하고 STT collect worker reuse, STT warm worker, Ollama keep-alive/warmup 정책이 같은 pressure-stage 판단을 보게 했다.
+- critical stage에서는 STT collect worker 재사용 금지, warm worker release, LLM residency 해제를 같은 policy로 결정한다.
+- host memory 상태에 흔들리지 않도록 관련 unit test는 normal/critical snapshot을 명시한다.
+
 QA:
 - `tests.test_media_processor_overlap`
 - `tests.test_runtime_memory_manager`
@@ -125,6 +135,10 @@ Work:
 - final commit barrier 유지: 전체 timing/gap/final pass는 기존 순서로 확정.
 - VAD는 torch/MPS 위험을 피하고 Core ML/ONNX/ANE 또는 stable CPU path로 격리.
 - resource scheduler가 CPU/GPU/ANE/memory pressure를 보고 STT2/LLM parallel width를 조절.
+
+2026-05-21 partial done:
+- cut-boundary 1/4 quarter plan metadata와 Apple M runtime plan flag를 추가했다.
+- 아직 STT/LLM quarter-overlap execution은 켜지지 않았다. 품질 barrier와 X5/Tinyping 반복 검증 전까지 계획/계측 단계로 둔다.
 
 Quality gate:
 - X5 reference accuracy가 baseline보다 나빠지면 폐기.
@@ -186,11 +200,14 @@ Already done:
 - 2026-05-21 1차 구현 완료: 메인 타임라인과 미니맵을 `QWidget + QPainter` 2D 단일 렌더러로 고정했다.
 - 완료 범위: `TimelineCanvasBase` / `GlobalCanvasBase`를 QWidget 경로로 고정, timeline render backend `qwidget-2d` 기록, scenegraph/QML timeline body 비활성화, playhead overlay는 상태 호환 객체로만 유지하고 실제 렌더링은 canvas paint pass로 단일화, playhead/shadow/active dirty update는 full canvas repaint로 전환.
 - 완료 검증: `tests.test_timeline_hit_targets`, `tests.test_timeline_playhead_fit`, `tests.test_timeline_render_cache`.
+- 2026-05-21 2차 구현 완료: 자막 세그먼트 인라인 편집기를 opaque `QWidget`으로 분리하고, segment fill과 같은 배경을 가진 단일 child editor로 고정했다.
+- 완료 범위: 투명 child editor를 제거하고, 편집 중 canvas segment text와 editor text가 겹쳐 그려지지 않도록 geometry/style sync path를 정리했다.
+- 완료 검증: `tests.test_timeline_hit_targets`, `tests.test_timeline_render_cache`, 공식 `quick/major/full` QA.
 
 Remaining follow-up:
 - editor rendering inventory를 만든다: `TimelineCanvas`, `TimelineWidget`, `timeline_paint`, `timeline_global`, inline subtitle editor, playhead overlay compatibility object, segment creation/drag handles, cut-boundary diamonds, waveform/minimap, STT preview lanes.
 - 모든 에디터 paint는 single 2D owner 원칙으로 정리한다. 같은 시각 요소를 QML overlay, child widget, scenegraph, canvas paint가 동시에 그리지 않게 한다.
-- inline subtitle editing은 macOS 합성 깨짐을 피하기 위해 opaque Qt child widget 또는 canvas-owned 2D edit renderer 중 하나로 고정한다. 투명 child widget, 반투명 native text box, segment text와 editor text 동시 paint는 금지한다.
+- inline subtitle editing은 opaque Qt child widget 경로로 고정했다. 남은 작업은 다른 편집 표면에 투명 child widget/segment text 동시 paint가 남아 있는지 inventory로 확인하는 것이다.
 - playhead, shadow playhead, selected segment, hover handle, cut diamond는 한 paint pass에서 z-order를 고정한다. 클릭/드래그/키보드 이동은 색상/모드를 렌더러가 재해석하지 않고 canonical state만 읽는다.
 - 성능은 2D 단일 owner를 유지한 상태에서만 최적화한다: dirty-rect band repaint, pre-rendered waveform pixmap/cache, `QStaticText`/text layout cache, devicePixelRatio-aware backing pixmap, hover/playhead-only repaint band를 순서대로 측정한다.
 - 실제 Macau project/app visual smoke로 재생, 스크럽, 확대/축소, inline 편집, 자막 드래그, 자막 생성 후 잔상 여부를 스냅샷으로 확인한다.

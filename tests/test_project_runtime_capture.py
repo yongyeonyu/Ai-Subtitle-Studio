@@ -224,6 +224,7 @@ class ProjectRuntimeCaptureTests(unittest.TestCase):
         self.assertEqual(
             editor_session_row_counts(editor),
             {
+                "final_subtitle_segment_count": 0,
                 "stt_preview_segment_count": 1,
                 "voice_activity_segment_count": 1,
                 "provisional_cut_boundary_count": 1,

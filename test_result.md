@@ -1,5 +1,41 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## idea_item Phase 2/3/5.5 실행 배치 - 2026-05-21 08:21~08:31
+
+- 브랜치: `opt/one-shot-quality-speed-20260521-0228`
+- 코드 반영:
+  - STT/LLM memory pressure 판단을 `StageOwnedResourcePolicy`로 통합.
+  - critical memory에서 STT collect worker 재사용, STT warm worker, LLM residency를 같은 정책으로 정리.
+  - Apple M cut-boundary quarter prescan metadata/plan flag 추가.
+  - 타임라인 인라인 자막 편집기를 opaque `QWidget` 파일로 분리해 macOS 합성 잔상/겹침 위험을 줄임.
+- 단위/가드:
+  - `py_compile`: pass
+  - `tools/check_maintenance_budget.py --json`: `ok=true`
+  - targeted unit: `248 tests OK`
+  - `git diff --check`: pass
+- 공식 QA:
+  - `quick`: pass, `output/manual_verification/latest/qa_suite_quick_20260521_082403`
+  - `major`: pass, `output/manual_verification/latest/qa_suite_major_20260521_082424`
+  - `full`: pass, `output/manual_verification/latest/qa_suite_full_20260521_082856`
+- `full` scenario 요약:
+  - `editor_compact_macau`: pass
+  - `video_menu_macau`: pass
+  - `save_export_macau`: pass
+  - `menu_stt_lora_macau`: pass
+  - `tinyping_fast_60s`: pass (`total_elapsed_sec=22.326`, `pipeline_elapsed_sec=9.804`, `final/raw=18/15`)
+  - `tinyping_auto_60s`: pass (`total_elapsed_sec=44.152`, `pipeline_elapsed_sec=9.833`, `final/raw=18/15`)
+  - `tinyping_high_60s`: pass (`total_elapsed_sec=19.526`, `pipeline_elapsed_sec=19.431`, `final/raw=16/16`)
+- 실제 미디어 벤치:
+  - Macau fast: `total_elapsed_sec=8.064`, `pipeline_elapsed_sec=7.556`, `final/raw=5/3`, `stage_trim_total_failure_count=0`
+  - X5 60s modes artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_082610/benchmark_results.md`
+  - X5 품질 1위: `mode_high_piecewise_drift`, `40.920s`, quality `72.989`, readability `94.568`
+  - X5 속도/품질 균형 후보: `mode_fast`, `9.809s`, quality `71.514`, readability `93.057`
+- 분류:
+  - 최종 실패 없음.
+  - 최초 `quick`의 `app_bootstrap_failed`는 stale live app duplicate launcher로 인한 environment issue였고, stale process 종료 후 재실행 pass.
+- 산출물:
+  - `output/manual_verification/latest/idea_full_execute_20260521-0821/summary.md`
+
 ## v04.00.12 릴리즈 후보 full QA - 2026-05-21 02:23~02:25
 
 - 사전 조치:

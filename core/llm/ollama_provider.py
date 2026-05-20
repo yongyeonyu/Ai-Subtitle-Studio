@@ -16,6 +16,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from core.audio.audio_runtime_services import current_memory_pressure_stage, stage_owned_resource_policy
+
 try:
     import ollama as _ollama_py  # type: ignore
 except Exception:  # pragma: no cover - optional dependency fallback.
@@ -118,30 +120,15 @@ def _ollama_keep_alive(value: int | float | str | None) -> str | float | None:
 
 
 def _runtime_memory_pressure_stage() -> str:
-    try:
-        from core.performance import current_resource_snapshot
-
-        snapshot = current_resource_snapshot()
-    except Exception:
-        return "normal"
-    if not isinstance(snapshot, dict):
-        return "normal"
-    stage = str(snapshot.get("memory_pressure_stage") or snapshot.get("pressure_stage") or "").strip().lower()
-    if stage in {"warning", "critical"}:
-        return stage
-    native = snapshot.get("native_memory") if isinstance(snapshot, dict) else None
-    if isinstance(native, dict):
-        stage = str(native.get("pressure_stage") or native.get("memory_pressure_stage") or "").strip().lower()
-        if stage in {"warning", "critical"}:
-            return stage
-    return "normal"
+    return current_memory_pressure_stage({})
 
 
 def _effective_ollama_keep_alive(value: int | float | str | None) -> str | float | None:
     normalized = _ollama_keep_alive(value)
     if normalized in (None, 0, 0.0, "0"):
         return normalized
-    if _runtime_memory_pressure_stage() == "critical":
+    policy = stage_owned_resource_policy({}, pressure_stage=_runtime_memory_pressure_stage())
+    if not policy.keep_llm_resident:
         # Critical pressure means LLM residency is more likely to trigger
         # compression/swap than help the next request, so unload after this call.
         return 0
@@ -758,7 +745,8 @@ def warmup_model(model: str, logger=None, timeout: float = _WARMUP_TIMEOUT_SEC) 
     with _WARM_LOCK:
         if model in _WARMED:
             return
-        if _runtime_memory_pressure_stage() == "critical":
+        policy = stage_owned_resource_policy({}, pressure_stage=_runtime_memory_pressure_stage())
+        if not policy.keep_llm_resident:
             _WARMED.add(model)
             if logger:
                 logger.log(f"⏭️ Ollama 워밍업 건너뜀: 메모리 critical 상태라 모델 상주를 막습니다 ({model})")

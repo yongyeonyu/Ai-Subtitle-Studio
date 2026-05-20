@@ -2,7 +2,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.audio.audio_runtime_services import plan_audio_route_workers
+from core.audio.audio_runtime_services import (
+    memory_pressure_stage_from_snapshot,
+    plan_audio_route_workers,
+    stage_owned_resource_policy,
+)
 from core.pipeline.cut_boundary_strategy import CutBoundaryCandidateStrategy, CutBoundaryPrescanStrategy
 from core.pipeline.single_pipeline_plan import (
     PipelineProgressCoordinator,
@@ -49,6 +53,8 @@ class ActionItemRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(settings["cut_boundary_backend_policy"], "fast")
         self.assertEqual(settings["scan_cut_follower_stream_start_percent"], 25)
         self.assertTrue(settings["scan_cut_realtime_preview_enabled"])
+        self.assertTrue(settings["scan_cut_parallel_quarter_enabled"])
+        self.assertEqual(settings["scan_cut_parallel_quarter_count"], 4)
 
     def test_single_pipeline_iteration_plan_normalizes_cut_rows_and_hard_cuts(self):
         plan = build_single_pipeline_iteration_plan(
@@ -156,6 +162,41 @@ class ActionItemRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(plan.max_workers, 2)
         self.assertEqual(plan.scheduler["audio_chunk_route_max_workers"], 2)
         self.assertEqual(plan.reductions_label, "memory_pressure,audio_route_cap")
+
+    def test_stage_owned_resource_policy_releases_stt_and_llm_only_under_critical(self):
+        normal = stage_owned_resource_policy({}, pressure_stage="normal")
+        warning = stage_owned_resource_policy({}, pressure_stage="warning")
+        critical = stage_owned_resource_policy({}, pressure_stage="critical")
+
+        self.assertTrue(normal.allow_stt_collect_worker_reuse)
+        self.assertTrue(normal.keep_llm_resident)
+        self.assertEqual(warning.warm_pool_label, "reduced")
+        self.assertTrue(warning.keep_stt_worker_warm)
+        self.assertFalse(critical.allow_stt_collect_worker_reuse)
+        self.assertFalse(critical.keep_stt_worker_warm)
+        self.assertFalse(critical.keep_llm_resident)
+        self.assertTrue(critical.include_gpu_on_release)
+
+    def test_memory_pressure_stage_from_snapshot_uses_configurable_thresholds(self):
+        settings = {
+            "runtime_memory_warning_ratio": 0.25,
+            "runtime_memory_critical_ratio": 0.10,
+            "macos_memory_warning_reserve_gb": 4.0,
+            "macos_memory_critical_reserve_gb": 1.0,
+        }
+
+        self.assertEqual(
+            memory_pressure_stage_from_snapshot({"available_memory_ratio": 0.20}, settings),
+            "warning",
+        )
+        self.assertEqual(
+            memory_pressure_stage_from_snapshot({"available_memory_ratio": 0.08}, settings),
+            "critical",
+        )
+        self.assertEqual(
+            memory_pressure_stage_from_snapshot({"native_memory": {"pressure_stage": "critical"}}, settings),
+            "critical",
+        )
 
     def test_project_session_rows_uses_targeted_view_without_full_project_hydration(self):
         class _Session:

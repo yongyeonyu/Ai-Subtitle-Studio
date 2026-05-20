@@ -38,3 +38,11 @@
 - 앱 자동화 status/ping payload에 상세 stage history를 무제한 싣지 않는다.
   - 이유: 앱 명령은 UDP 응답이고 `APP_COMMAND_BUFFER_SIZE=65535` 제한이 있다. recent logs, guided snapshot 상태, editor runtime에 stage detail까지 길게 붙이면 응답 자체가 흔들릴 수 있다.
   - 다음 원칙: status/guided-subtitle-status에는 compact `resources + recent_events`만 싣고, full stage breakdown은 artifact나 별도 디버그 명령으로 분리한다.
+
+- QA runner의 `app_bootstrap_failed`를 곧바로 code regression으로 보지 않는다.
+  - 이유: 2026-05-21 `quick` 첫 실행은 이미 떠 있던 unreachable live app 때문에 duplicate launcher가 종료된 environment issue였다.
+  - 다음 원칙: `AI Subtitle Studio is already running` 또는 `app_unreachable`가 함께 보이면 `pgrep/ps`로 stale app을 확인하고 정리한 뒤 같은 profile만 재실행한다.
+
+- STT/LLM warm 유지 테스트는 host memory 상태에 의존하지 않게 만든다.
+  - 이유: 실제 Mac의 memory pressure가 warning/critical이면 정책상 warm worker/LLM residency가 꺼져 테스트가 비결정적으로 흔들릴 수 있다.
+  - 다음 원칙: warm 유지/해제 unit test는 `current_resource_snapshot`을 normal 또는 critical로 명시 patch하고, 실제 memory pressure는 integration artifact에서 확인한다.

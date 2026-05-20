@@ -209,6 +209,8 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("scan_cut_pioneer_cpu_max_workers", BENCH_LOCKED_CUT_PIONEER_WORKERS)
     set_opt("scan_cut_follower_cpu_max_workers", BENCH_LOCKED_CUT_FOLLOWER_WORKERS)
     set_opt("scan_cut_follower_outer_splits", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
+    set_opt("scan_cut_parallel_quarter_enabled", True)
+    set_opt("scan_cut_parallel_quarter_count", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
     set_opt("scan_cut_pioneer_worker_overlap_steps", 1)
     set_opt("scan_cut_cv2_threads_per_worker", 1)
     set_opt("scan_cut_follower_stream_start_percent", stream_start_percent)
@@ -258,6 +260,7 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         "cut_pioneer_workers": BENCH_LOCKED_CUT_PIONEER_WORKERS,
         "cut_follower_workers": BENCH_LOCKED_CUT_FOLLOWER_WORKERS,
         "cut_follower_outer_splits": BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS,
+        "quarter_parallel_count": BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS,
         "llm_workers": min(llm_workers, 4),
         "llm_resource_max": llm_workers,
         "local_llm_workers": local_llm_workers,

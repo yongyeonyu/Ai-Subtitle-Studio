@@ -55,6 +55,21 @@ def _to_bool(value: Any, fallback: bool) -> bool:
     return bool(fallback)
 
 
+def cut_boundary_quarter_parallel_plan(settings: dict | None) -> dict[str, Any]:
+    data = dict(settings or {})
+    enabled = _to_bool(data.get("scan_cut_parallel_quarter_enabled"), True)
+    split_count = _to_int(
+        data.get("scan_cut_parallel_quarter_count", data.get("scan_cut_follower_outer_splits", 4)),
+        4,
+    )
+    split_count = max(1, min(4, split_count))
+    return {
+        "enabled": bool(enabled and split_count > 1),
+        "slice_count": split_count,
+        "reason": "quarter_parallel_cut_boundary_prescan" if split_count == 4 else "parallel_cut_boundary_prescan",
+    }
+
+
 def fast_cut_boundary_prescan_settings(settings: dict | None) -> dict:
     """Return benchmark-stable settings for temporary cut-boundary prescan.
 
@@ -98,6 +113,9 @@ def fast_cut_boundary_prescan_settings(settings: dict | None) -> dict:
     tuned["scan_cut_follower_cpu_max_workers"] = 4
     tuned["scan_cut_follower_outer_splits"] = 4
     tuned["scan_cut_pioneer_worker_overlap_steps"] = 1
+    quarter_plan = cut_boundary_quarter_parallel_plan(tuned)
+    tuned["scan_cut_parallel_quarter_enabled"] = bool(quarter_plan["enabled"])
+    tuned["scan_cut_parallel_quarter_count"] = int(quarter_plan["slice_count"])
 
     # Start follower verification while the pioneer is still scanning, in small
     # batches so visible provisional lines turn into verified lines quickly.
@@ -184,6 +202,7 @@ def cut_boundary_adaptive_prescan_plan(settings: dict | None, files: list[str] |
     long_4k = bool(enabled and long_media and (is_4k or (width_unknown and duration_sec >= max(1200.0, min_duration))))
 
     if long_4k:
+        quarter_plan = cut_boundary_quarter_parallel_plan(settings)
         if native_streaming_enabled:
             stream_start = _to_int(
                 settings.get("scan_cut_long4k_native_follower_stream_start_percent", settings.get("scan_cut_follower_stream_start_percent", 25))
@@ -220,6 +239,7 @@ def cut_boundary_adaptive_prescan_plan(settings: dict | None, files: list[str] |
                 "follower_start_delay_sec": 0.0,
                 "provisional_sample_step_sec": max(1.0, min(16.0, provisional_step_sec)),
                 "pioneer_sequential_decode": False,
+                "quarter_parallel": quarter_plan,
                 "has_preview_proxy": bool(has_preview_proxy),
                 "duration_sec": duration_sec,
                 "width": width,
@@ -251,6 +271,7 @@ def cut_boundary_adaptive_prescan_plan(settings: dict | None, files: list[str] |
             "follower_start_delay_sec": max(0.0, min(10.0, start_delay)),
             "provisional_sample_step_sec": max(1.0, min(16.0, provisional_step_sec)),
             "pioneer_sequential_decode": False,
+            "quarter_parallel": quarter_plan,
             "has_preview_proxy": bool(has_preview_proxy),
             "duration_sec": duration_sec,
             "width": width,
@@ -279,6 +300,7 @@ def cut_boundary_adaptive_prescan_plan(settings: dict | None, files: list[str] |
         "follower_start_delay_sec": 0.0,
         "provisional_sample_step_sec": max(0.5, min(4.0, provisional_step_sec)),
         "pioneer_sequential_decode": False,
+        "quarter_parallel": cut_boundary_quarter_parallel_plan(settings),
         "has_preview_proxy": bool(has_preview_proxy),
         "duration_sec": duration_sec,
         "width": width,
@@ -288,5 +310,6 @@ def cut_boundary_adaptive_prescan_plan(settings: dict | None, files: list[str] |
 
 __all__ = [
     "cut_boundary_adaptive_prescan_plan",
+    "cut_boundary_quarter_parallel_plan",
     "fast_cut_boundary_prescan_settings",
 ]

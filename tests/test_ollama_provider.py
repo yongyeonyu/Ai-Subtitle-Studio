@@ -203,7 +203,8 @@ class OllamaWarmupTest(unittest.TestCase):
     def test_warmup_auto_starts_ollama_before_request(self):
         logger = _Logger()
 
-        with mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=False) as ensure_mock, \
+        with mock.patch("core.performance.current_resource_snapshot", return_value={"memory_pressure_stage": "normal"}), \
+             mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=False) as ensure_mock, \
              mock.patch("core.llm.ollama_provider.urllib.request.urlopen") as urlopen_mock:
             ollama_provider.warmup_model("gemma4:e4b", logger=logger, timeout=0.01)
 

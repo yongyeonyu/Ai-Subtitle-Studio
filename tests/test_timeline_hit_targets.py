@@ -2347,8 +2347,10 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertGreaterEqual(editor.geometry().top(), SUBTITLE_TOP)
             self.assertLessEqual(editor.geometry().bottom(), SUBTITLE_BOT)
             self.assertLessEqual(editor.geometry().height(), (SUBTITLE_BOT - SUBTITLE_TOP))
-            self.assertTrue(editor.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
-            self.assertIn("background: transparent", editor.styleSheet())
+            self.assertFalse(editor.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+            self.assertTrue(editor.viewport().testAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent))
+            self.assertIn("background: #", editor.styleSheet())
+            self.assertNotIn("background: transparent", editor.styleSheet())
         finally:
             canvas.close()
             canvas.deleteLater()

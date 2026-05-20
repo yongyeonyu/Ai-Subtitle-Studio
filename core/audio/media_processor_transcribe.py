@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.audio import stt_rescue
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
+from core.audio.audio_runtime_services import current_memory_pressure_stage, stage_owned_resource_policy
 from core.audio.stt_recheck_service import (
     apply_word_precision_segments as apply_word_precision_segments_via_service,
     apply_recheck_selection_to_tracks as apply_recheck_selection_to_tracks_via_service,
@@ -77,78 +78,7 @@ _parse_worker_json_line = parse_worker_json_line
 def _stt_memory_pressure_stage(settings: dict | None) -> str:
     """Return the current memory pressure stage for STT reuse decisions."""
 
-    def _float_value(value, default: float) -> float:
-        try:
-            if value is None or value == "":
-                return default
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    try:
-        from core.performance import current_resource_snapshot
-
-        snapshot = current_resource_snapshot(dict(settings or {}))
-    except Exception:
-        return "normal"
-    # Keep STT worker reuse decisions tied to configurable pressure policy so
-    # benchmarked thresholds are testable without changing user-visible default
-    # behavior.
-    warning_ratio = _float_value(
-        (settings or {}).get("runtime_memory_warning_ratio", (settings or {}).get("macos_memory_warning_ratio", 0.20)),
-        0.20,
-    )
-    critical_ratio = _float_value(
-        (settings or {}).get("runtime_memory_critical_ratio", (settings or {}).get("macos_memory_critical_ratio", 0.12)),
-        0.12,
-    )
-    warning_reserve_gb = _float_value((settings or {}).get("macos_memory_warning_reserve_gb", 3.0), 3.0)
-    critical_reserve_gb = _float_value((settings or {}).get("macos_memory_critical_reserve_gb", 1.5), 1.5)
-    warning_compressed_ratio = _float_value(
-        (
-            (settings or {}).get("runtime_memory_warning_compressed_ratio")
-            if (settings or {}).get("runtime_memory_warning_compressed_ratio") is not None
-            else (settings or {}).get("macos_memory_warning_compressed_ratio", 0.22)
-        ),
-        0.22,
-    )
-    critical_compressed_ratio = _float_value(
-        (
-            (settings or {}).get("runtime_memory_critical_compressed_ratio")
-            if (settings or {}).get("runtime_memory_critical_compressed_ratio") is not None
-            else (settings or {}).get("macos_memory_critical_compressed_ratio", 0.30)
-        ),
-        0.30,
-    )
-    stage = str(snapshot.get("memory_pressure_stage", "") or "").strip().lower()
-    if stage in {"warning", "critical"}:
-        return stage
-    if warning_ratio <= critical_ratio:
-        warning_ratio, critical_ratio = critical_ratio, warning_ratio
-    if warning_reserve_gb <= critical_reserve_gb:
-        warning_reserve_gb, critical_reserve_gb = critical_reserve_gb, warning_reserve_gb
-    if warning_compressed_ratio <= critical_compressed_ratio:
-        warning_compressed_ratio, critical_compressed_ratio = (
-            critical_compressed_ratio,
-            warning_compressed_ratio,
-        )
-    native = snapshot.get("native_memory")
-    if isinstance(native, dict):
-        stage = str(native.get("pressure_stage", "") or "").strip().lower()
-        if stage in {"warning", "critical"}:
-            return stage
-    available_ratio = _float_value(snapshot.get("available_memory_ratio"), 1.0)
-    available_gb = _float_value(snapshot.get("available_memory_bytes"), 0.0) / float(1024 ** 3)
-    warning_compressed = _float_value(snapshot.get("compressed_memory_ratio", 0.0), 0.0)
-    if available_ratio <= critical_ratio or (available_gb > 0 and available_gb <= critical_reserve_gb):
-        return "critical"
-    if warning_compressed >= critical_compressed_ratio:
-        return "critical"
-    if warning_compressed >= warning_compressed_ratio:
-        return "warning"
-    if available_ratio <= warning_ratio or (available_gb > 0 and available_gb <= warning_reserve_gb):
-        return "warning"
-    return "normal"
+    return current_memory_pressure_stage(settings)
 
 
 def _clean_whisper_word_text(text: str) -> str:
@@ -272,10 +202,10 @@ class VideoProcessorTranscribeMixin:
             effective_settings.update(dict(settings_overrides))
         reuse_worker = self._stt_persistent_runtime_reuse_enabled(effective_settings)
         pressure_stage = _stt_memory_pressure_stage(effective_settings)
-        if reuse_worker and pressure_stage == "critical":
-            # STT warm reuse is faster only while memory has headroom. Under
-            # critical macOS pressure it keeps WhisperKit/MLX processes resident
-            # across chunks and generation time grows from compression/swap.
+        resource_policy = stage_owned_resource_policy(effective_settings, pressure_stage=pressure_stage)
+        if reuse_worker and not resource_policy.allow_stt_collect_worker_reuse:
+            # Stage-owned resource policy keeps STT reuse fast only while macOS
+            # has enough memory headroom for persistent WhisperKit/MLX workers.
             reuse_worker = False
         cache_key = f"{self.language}|{str(model or '').strip()}"
         worker = None
@@ -371,7 +301,8 @@ class VideoProcessorTranscribeMixin:
             settings = {}
         keep_warm = (not force_stop) and self._stt_persistent_runtime_reuse_enabled(settings)
         pressure_stage = _stt_memory_pressure_stage(settings)
-        if keep_warm and pressure_stage == "critical":
+        resource_policy = stage_owned_resource_policy(settings, pressure_stage=pressure_stage)
+        if keep_warm and not resource_policy.keep_stt_worker_warm:
             # Do not preserve STT worker UI/runtime behavior here. This is a
             # performance guard: a warm worker that saves startup time can make
             # later subtitles slower when system memory is already critical.
@@ -418,7 +349,7 @@ class VideoProcessorTranscribeMixin:
         # Only the expensive GPU cache clear is needed under hard pressure.
         # Keeping this warning stage lightweight reduces per-run overhead while
         # preserving steady-state latency under normal/mild memory pressure.
-        clear_audio_model_memory_caches(include_gpu=pressure_stage == "critical")
+        clear_audio_model_memory_caches(include_gpu=resource_policy.include_gpu_on_release)
         try:
             get_logger().log(f"🧹 [{log_label}] 음성인식 모델/가속기 메모리 정리 완료")
         except Exception:
