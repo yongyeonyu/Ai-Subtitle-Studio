@@ -16,9 +16,16 @@ from core.runtime.memory_manager import (
     runtime_disk_cache_usage,
     unregister_runtime_cache_path,
 )
+from core.runtime.stage_metrics import reset_stage_metrics, snapshot_stage_metrics
 
 
 class RuntimeMemoryManagerTests(unittest.TestCase):
+    def setUp(self):
+        reset_stage_metrics()
+
+    def tearDown(self):
+        reset_stage_metrics()
+
     def test_process_rss_bytes_reuses_psutil_process_object(self):
         class FakeMemory:
             rss = 12345
@@ -651,6 +658,10 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
         self.assertEqual(summary["stages"]["stt_transcribe_chunk"]["executed_count"], 1)
         self.assertEqual(summary["actions"]["gc.collect"]["count"], 1)
         self.assertEqual(summary["actions"]["mlx.core.clear_cache"]["failure_count"], 1)
+        metrics = snapshot_stage_metrics(max_events=10)
+        self.assertIn("stt1", metrics["resources"])
+        self.assertGreaterEqual(metrics["resources"]["stt1"]["stage_done_count"], 1)
+        self.assertIn("stage_trim_elapsed_ms", metrics["recent_events"][-1]["metrics"])
 
 
 if __name__ == "__main__":

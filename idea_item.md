@@ -23,6 +23,22 @@
 
 - 유지 후보: `candidate1`
 - 유지 이유: subtitle quality를 유지하면서 X5 평균 시간이 가장 안정적이었다.
+- 최신 실행 브랜치: `opt/one-shot-quality-speed-20260521-0228`
+- 최신 완료 배치: Phase 1 observability/app-command reliability
+- 최신 산출물: `output/manual_verification/latest/idea_full_execute_20260521-0228/summary.md`
+- 최신 검증:
+  - `tests.test_runtime_stage_metrics`, `tests.test_app_command_server`, `tests.test_app_command_bridge`, `tests.test_runtime_memory_manager`, `tests.test_automation_command_client`, `tests.test_runtime_multi_process`: `119 tests OK`
+  - `tools/check_maintenance_budget.py --json`: `ok=true`
+  - `tools/qa_suite_runner.py full`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_full_20260521_024927`
+- 최신 측정:
+  - Macau fast r3: `7.618s` -> `7.608s`, final segment `5 -> 5`
+  - X5 fast 60s r3: `9.856s` -> `9.973s`, final segment `17 -> 17` (`+~1.2%` noise/watch; 속도 알고리즘으로 주장 금지)
+  - Tinyping fast 60s: total `23.020s` -> `21.815s`, final/raw `18/15 -> 18/15`
+  - Tinyping auto 60s: total `46.588s` -> `41.904s`, final/raw `18/15 -> 18/15`
+  - Tinyping high 60s: total `29.372s` -> `18.675s`, final/raw `16/16 -> 16/16`
+- 현재 선택:
+  - 기존 품질 보존 파이프라인 + compact stage/resource observability 유지.
+  - aggressive quarter-parallel STT/LLM, native deterministic batch 승격은 parity 구현과 X5/Tinyping 품질 게이트 전까지 채택하지 않는다.
 - 이전 현재 기준:
   - Macau avg `6.770`, min `6.604`, max `7.240`
   - X5 avg `61.252`, min `60.705`, max `62.201`
@@ -40,49 +56,6 @@
 - Artifact root: `output/manual_verification/latest/idea_full_execute_<timestamp>/`
 
 ## One-Shot Execution Order
-
-### Phase 0. Preflight, Branch, Baseline
-
-Goal:
-- Dirty worktree를 보존하고 실행 전 기준선을 다시 만든다.
-- 폐기 아이디어와 lesson을 먼저 걸러 같은 실험을 반복하지 않는다.
-
-Work:
-- `git status --short --branch` 기록.
-- `waste_action_item.md`와 `lesson_n_learned.md`를 읽고 금지 후보 목록을 summary 초안에 기록.
-- 실행 브랜치 생성: `opt/one-shot-quality-speed-YYYYMMDD-HHMM`.
-- stale bundle 의심 시 `./packaging/macos/build_app_bundle.sh`.
-- Macau, X5, Tinyping current baseline 측정.
-
-QA:
-- `git diff --check -- .`
-- `./venv/bin/python tools/qa_suite_runner.py quick`
-- Macau fast 3회.
-
-Commit:
-- 코드 변경이 없으면 커밋하지 않는다.
-
-### Phase 1. Observability And App-Command Reliability
-
-Goal:
-- 병렬화 전에 status, timing, resource metric을 신뢰 가능하게 만든다.
-
-Work:
-- `guided-subtitle-status`와 `ping`이 generation/save/export 중에도 관측 가능하도록 command server와 bridge fast path 안정화.
-- stage metric 추가: `stage_ready`, `stage_start`, `stage_done`, `stage_wait_ms`, `worker_busy_ms`, `worker_idle_ms`, `queue_depth`.
-- resource label 추가: `stt1`, `stt2`, `vad`, `llm`, `cut`, `score`, `save`, `render`.
-- memory trim metric 연결: `stage_trim.elapsed_ms`, `stage_trim.action_timings`, `stage_trim.failures`.
-- native bridge metric 연결: `payload_bytes`, `encode_ms`, `native_ms`, `decode_ms`.
-
-QA:
-- `tests.test_app_command_server`
-- `tests.test_app_command_bridge`
-- `tests.test_automation_command_client`
-- runtime memory manager / trim summary tests.
-- Macau repeated guided run 3회 with `guided_status_history.jsonl`.
-
-Commit:
-- `perf: instrument stage resources and command responsiveness`
 
 ### Phase 2. Canonical State Ownership
 

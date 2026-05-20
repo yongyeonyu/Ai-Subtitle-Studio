@@ -32,3 +32,9 @@
 - 최적화 중 UI/UX를 같이 손대지 않는다.
   - 이유: 성능 회귀와 UI 변경이 섞이면 원인 분리가 어려워지고 사용자가 명시하지 않은 UX 변경이 된다.
   - 다음 원칙: UI/UX 변경이 필요해 보이면 별도 owner-decision item으로 남기고 승인 전에는 구현하지 않는다.
+
+### 2026-05-21
+
+- 앱 자동화 status/ping payload에 상세 stage history를 무제한 싣지 않는다.
+  - 이유: 앱 명령은 UDP 응답이고 `APP_COMMAND_BUFFER_SIZE=65535` 제한이 있다. recent logs, guided snapshot 상태, editor runtime에 stage detail까지 길게 붙이면 응답 자체가 흔들릴 수 있다.
+  - 다음 원칙: status/guided-subtitle-status에는 compact `resources + recent_events`만 싣고, full stage breakdown은 artifact나 별도 디버그 명령으로 분리한다.

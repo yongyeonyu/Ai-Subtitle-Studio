@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.runtime.logger import get_logger
+from core.runtime.stage_metrics import record_stage_done, reset_stage_metrics
 import ui.main.app_command_bridge as app_bridge
 from ui.main.app_command_bridge import dispatch_app_command, execute_app_command
 
@@ -564,6 +565,7 @@ class AppCommandBridgeTests(unittest.TestCase):
         if callable(clearer):
             clearer()
         app_bridge._clear_status_snapshot_cache()
+        reset_stage_metrics()
 
     def test_open_project_command_uses_path_based_helper(self):
         owner = _DummyOwner()
@@ -755,8 +757,29 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["data"]["editor_open"])
         self.assertEqual(result["data"]["editor_runtime"]["segment_count"], 2)
         self.assertEqual(result["data"]["runtime_resource"]["rss_gb"], 1.25)
+        self.assertIn("stage_metrics", result["data"])
+        self.assertIn("stage_metrics", result["data"]["runtime_resource"])
         self.assertIn("status log line", result["data"]["recent_logs"])
         self.assertIn("🎯 자막 생성 중", result["data"]["recent_stage_logs"])
+
+    def test_status_snapshot_includes_stage_metrics_for_bottleneck_debugging(self):
+        owner = _DummyOwner()
+        record_stage_done(
+            "app_command:guided-subtitle-status",
+            resource_label="automation",
+            wait_ms=3.5,
+            worker_busy_ms=2.0,
+            queue_depth=1,
+            ok=True,
+        )
+
+        result = execute_app_command(owner, {"command": "guided-subtitle-status"})
+
+        self.assertTrue(result["ok"])
+        metrics = result["data"]["stage_metrics"]
+        self.assertGreaterEqual(metrics["event_count"], 1)
+        self.assertIn("automation", metrics["resources"])
+        self.assertEqual(metrics["resources"]["automation"]["max_queue_depth"], 1)
 
     def test_status_command_reuses_short_ttl_snapshot_for_polling(self):
         owner = _DummyOwner()

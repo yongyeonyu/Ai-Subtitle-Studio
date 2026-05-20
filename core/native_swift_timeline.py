@@ -3,12 +3,14 @@ from __future__ import annotations
 import atexit
 import subprocess
 import threading
+import time
 from typing import Any
 
 import numpy as np
 
 from core.native_json import dumps_json_bytes, dumps_json_text, json_default, loads_json, loads_json_output, write_jsonl_line
 from core.native_swift_subtitle import find_native_cli_path, native_swift_runtime_enabled
+from core.runtime.stage_metrics import _elapsed_ms, record_native_bridge_metric
 
 _WORKER: subprocess.Popen | None = None
 _WORKER_LOCK = threading.Lock()
@@ -95,17 +97,38 @@ def _run_json_command(command: str, payload: dict[str, Any], *, timeout: float =
     cli = find_native_cli_path()
     if cli is None:
         return None
+    encode_ms = 0.0
+    payload_bytes = 0
+    started = time.perf_counter()
+    decode_ms = 0.0
+    ok = False
     try:
+        encode_started = time.perf_counter()
+        encoded = dumps_json_bytes(payload, compact=True)
+        encode_ms = _elapsed_ms(encode_started)
+        payload_bytes = len(encoded)
         proc = subprocess.run(
             [str(cli), command],
-            input=dumps_json_bytes(payload, compact=True),
+            input=encoded,
             check=True,
             capture_output=True,
             timeout=timeout,
         )
+        decode_started = time.perf_counter()
         decoded = loads_json_output(proc.stdout, default={})
+        decode_ms = _elapsed_ms(decode_started)
+        ok = isinstance(decoded, dict)
     except Exception:
         return None
+    finally:
+        record_native_bridge_metric(
+            f"timeline:{command}",
+            payload_bytes=payload_bytes,
+            encode_ms=encode_ms,
+            native_ms=_elapsed_ms(started),
+            decode_ms=decode_ms,
+            ok=ok,
+        )
     return decoded if isinstance(decoded, dict) else None
 
 
@@ -136,13 +159,27 @@ def _request_worker(task: str, payload: dict[str, Any]) -> dict[str, Any] | None
         return None
     request = dict(payload)
     request["task"] = task
+    encode_started = time.perf_counter()
     try:
         encoded = dumps_json_text(request, compact=True, default=json_default)
     except Exception:
         return None
+    encode_ms = _elapsed_ms(encode_started)
+    payload_bytes = len(encoded.encode("utf-8"))
+    started = time.perf_counter()
+    decode_ms = 0.0
+    ok = False
     with _WORKER_LOCK:
         worker = _start_worker(cli)
         if worker is None or worker.stdin is None or worker.stdout is None:
+            record_native_bridge_metric(
+                f"timeline-jsonl:{task}",
+                payload_bytes=payload_bytes,
+                encode_ms=encode_ms,
+                native_ms=_elapsed_ms(started),
+                decode_ms=decode_ms,
+                ok=False,
+            )
             return None
         try:
             write_jsonl_line(worker.stdin, encoded)
@@ -151,13 +188,25 @@ def _request_worker(task: str, payload: dict[str, Any]) -> dict[str, Any] | None
             if not line:
                 stop_timeline_layout_worker()
                 return None
+            decode_started = time.perf_counter()
             decoded = loads_json(line)
+            decode_ms = _elapsed_ms(decode_started)
             if not isinstance(decoded, dict) or decoded.get("error"):
                 return None
+            ok = True
             return decoded
         except Exception:
             stop_timeline_layout_worker()
             return None
+        finally:
+            record_native_bridge_metric(
+                f"timeline-jsonl:{task}",
+                payload_bytes=payload_bytes,
+                encode_ms=encode_ms,
+                native_ms=_elapsed_ms(started),
+                decode_ms=decode_ms,
+                ok=ok,
+            )
 
 
 def build_segment_layout_via_swift(

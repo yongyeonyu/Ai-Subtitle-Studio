@@ -749,3 +749,34 @@
 - 해석:
   - 이번 run에서는 `app_sequence`와 `full_media` 모두 집계 문제 없이 바로 통과했다.
   - 따라서 현재 기준 official one-command QA runner는 최신 번들 상태에서 `full`까지 재통과한 상태다.
+
+## 아이디어 통합 실행 Phase 1 - 2026-05-21 02:49
+
+- 실행 범위:
+  - `idea_item.md` Phase 1: stage/resource observability 및 app-command 응답성 계측
+  - 자막 품질 게이트, 모델 선택, UI/UX 동작은 변경하지 않음
+- 코드 변경 요약:
+  - `core/runtime/stage_metrics.py` 추가
+  - `ping/status/guided-subtitle-status` 경로에 compact stage metric 노출
+  - app command server의 wait/busy/queue_depth 계측
+  - memory trim summary와 selected Swift native bridge encode/native/decode metric 연결
+- 벤치마크 산출물:
+  - `output/manual_verification/latest/idea_full_execute_20260521-0228/summary.md`
+- 성능 비교:
+  - Macau fast r3: `7.618s` -> `7.608s`, final segment `5 -> 5`
+  - X5 fast 60s r3: `9.856s` -> `9.973s`, final segment `17 -> 17`
+  - Tinyping fast 60s: total `23.020s` -> `21.815s`, final/raw `18/15 -> 18/15`
+  - Tinyping auto 60s: total `46.588s` -> `41.904s`, final/raw `18/15 -> 18/15`
+  - Tinyping high 60s: total `29.372s` -> `18.675s`, final/raw `16/16 -> 16/16`
+- 해석:
+  - X5의 `+~1.2%`는 observability-only 변경의 noise/watch로 보고, 속도 개선 알고리즘으로 주장하지 않는다.
+  - Tinyping 개선은 cache/warm-state 영향이 섞여 있어 회귀 비교 기준으로만 사용한다.
+  - aggressive quarter-parallel STT/LLM 및 native deterministic batch 승격은 아직 parity 구현/품질 게이트 전이므로 채택하지 않았다.
+- 검증:
+  - `./venv/bin/python -m unittest tests.test_runtime_stage_metrics tests.test_app_command_server tests.test_app_command_bridge tests.test_runtime_memory_manager tests.test_automation_command_client tests.test_runtime_multi_process -q`
+    - 결과: `119 tests OK`
+  - `./venv/bin/python tools/check_maintenance_budget.py --json`
+    - 결과: `ok=true`
+  - `./venv/bin/python tools/qa_suite_runner.py full`
+    - 결과: `failed_count=0`
+    - 산출물: `output/manual_verification/latest/qa_suite_full_20260521_024927`

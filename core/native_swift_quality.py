@@ -3,11 +3,13 @@ from __future__ import annotations
 import atexit
 import subprocess
 import threading
+import time
 from typing import Any
 
 from core.native_json import dumps_json_text, json_default, loads_json, loads_json_output, write_jsonl_line
 from core.native_swift_subtitle import find_native_cli_path
 from core.runtime.config import IS_MAC
+from core.runtime.stage_metrics import _elapsed_ms, record_native_bridge_metric
 from core.runtime.setting_utils import KOREAN_FALSE_VALUES, env_bool as _env_bool, positive_int as _positive_int, setting_bool as _setting_bool
 
 _WORKER: subprocess.Popen | None = None
@@ -41,6 +43,7 @@ def evaluate_quality_batch_via_swift(
     cli = find_native_cli_path()
     if cli is None:
         return None
+    encode_started = time.perf_counter()
     try:
         payload = dumps_json_text(
             {"segments": segments, "settings": settings or {}},
@@ -49,10 +52,12 @@ def evaluate_quality_batch_via_swift(
         )
     except Exception:
         return None
+    encode_ms = _elapsed_ms(encode_started)
+    payload_bytes = len(payload.encode("utf-8"))
 
-    decoded = _request_worker(cli, payload)
+    decoded = _request_worker(cli, payload, payload_bytes=payload_bytes, encode_ms=encode_ms)
     if decoded is None:
-        decoded = _request_one_shot(cli, payload, len(segments))
+        decoded = _request_one_shot(cli, payload, len(segments), payload_bytes=payload_bytes, encode_ms=encode_ms)
     if decoded is None:
         return None
 
@@ -89,10 +94,21 @@ def _start_worker(cli: Any) -> subprocess.Popen | None:
     return _WORKER
 
 
-def _request_worker(cli: Any, payload: str) -> dict[str, Any] | None:
+def _request_worker(cli: Any, payload: str, *, payload_bytes: int = 0, encode_ms: float = 0.0) -> dict[str, Any] | None:
+    started = time.perf_counter()
+    decode_ms = 0.0
+    ok = False
     with _WORKER_LOCK:
         worker = _start_worker(cli)
         if worker is None or worker.stdin is None or worker.stdout is None:
+            record_native_bridge_metric(
+                "quality-score-jsonl-worker",
+                payload_bytes=payload_bytes,
+                encode_ms=encode_ms,
+                native_ms=_elapsed_ms(started),
+                decode_ms=decode_ms,
+                ok=False,
+            )
             return None
         try:
             write_jsonl_line(worker.stdin, payload)
@@ -101,16 +117,38 @@ def _request_worker(cli: Any, payload: str) -> dict[str, Any] | None:
             if not line:
                 _stop_worker()
                 return None
+            decode_started = time.perf_counter()
             decoded = loads_json(line)
+            decode_ms = _elapsed_ms(decode_started)
             if decoded.get("error"):
                 return None
+            ok = True
             return decoded
         except Exception:
             _stop_worker()
             return None
+        finally:
+            record_native_bridge_metric(
+                "quality-score-jsonl-worker",
+                payload_bytes=payload_bytes,
+                encode_ms=encode_ms,
+                native_ms=_elapsed_ms(started),
+                decode_ms=decode_ms,
+                ok=ok,
+            )
 
 
-def _request_one_shot(cli: Any, payload: str, count: int) -> dict[str, Any] | None:
+def _request_one_shot(
+    cli: Any,
+    payload: str,
+    count: int,
+    *,
+    payload_bytes: int = 0,
+    encode_ms: float = 0.0,
+) -> dict[str, Any] | None:
+    started = time.perf_counter()
+    decode_ms = 0.0
+    ok = False
     try:
         proc = subprocess.run(
             [str(cli), "quality-score-json"],
@@ -119,9 +157,22 @@ def _request_one_shot(cli: Any, payload: str, count: int) -> dict[str, Any] | No
             capture_output=True,
             timeout=max(10.0, min(90.0, 2.0 + count * 0.02)),
         )
-        return loads_json_output(proc.stdout, default={})
+        decode_started = time.perf_counter()
+        decoded = loads_json_output(proc.stdout, default={})
+        decode_ms = _elapsed_ms(decode_started)
+        ok = True
+        return decoded
     except Exception:
         return None
+    finally:
+        record_native_bridge_metric(
+            "quality-score-json",
+            payload_bytes=payload_bytes,
+            encode_ms=encode_ms,
+            native_ms=_elapsed_ms(started),
+            decode_ms=decode_ms,
+            ok=ok,
+        )
 
 
 def _stop_worker() -> None:

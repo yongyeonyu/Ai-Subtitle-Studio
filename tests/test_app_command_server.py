@@ -10,10 +10,12 @@ from core.automation.app_command_protocol import (
     encode_command_payload,
 )
 from core.automation.app_command_server import LocalAppCommandServer
+from core.runtime.stage_metrics import reset_stage_metrics, snapshot_stage_metrics
 
 
 class LocalAppCommandServerTests(unittest.TestCase):
     def setUp(self):
+        reset_stage_metrics()
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._server_socket.bind(("127.0.0.1", 0))
         self._server = LocalAppCommandServer(self._server_socket)
@@ -28,6 +30,7 @@ class LocalAppCommandServerTests(unittest.TestCase):
                 sock.close()
             except OSError:
                 pass
+        reset_stage_metrics()
 
     def _client(self, *, timeout_sec: float) -> socket.socket:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -115,6 +118,34 @@ class LocalAppCommandServerTests(unittest.TestCase):
         self.assertTrue(first_result["ok"])
         self.assertTrue(second_result["ok"])
         self.assertFalse(overlapped.is_set())
+
+    def test_command_server_records_wait_busy_and_queue_metrics(self):
+        release_first = threading.Event()
+        first_entered = threading.Event()
+
+        def handler(payload: dict) -> dict:
+            command = str(payload.get("command", ""))
+            if command == "editor-smart-split":
+                first_entered.set()
+                release_first.wait(1.0)
+            return build_command_result(command, ok=True)
+
+        self._server.set_handler(handler)
+        first_client = self._client(timeout_sec=1.0)
+        status_client = self._client(timeout_sec=1.0)
+
+        self._send(first_client, "editor-smart-split")
+        self.assertTrue(first_entered.wait(0.5))
+        self._send(status_client, "guided-subtitle-status")
+        self.assertTrue(self._recv(status_client)["ok"])
+        release_first.set()
+        self.assertTrue(self._recv(first_client)["ok"])
+
+        metrics = snapshot_stage_metrics(max_events=20)
+        self.assertIn("automation", metrics["resources"])
+        self.assertGreaterEqual(metrics["resources"]["automation"]["stage_ready_count"], 2)
+        self.assertGreaterEqual(metrics["resources"]["automation"]["stage_done_count"], 2)
+        self.assertGreaterEqual(metrics["resources"]["automation"]["max_queue_depth"], 1)
 
 
 if __name__ == "__main__":

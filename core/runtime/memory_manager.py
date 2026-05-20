@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterator
 from core.performance import atomic_write_json, current_resource_snapshot
 from core.runtime import config
 from core.runtime.memory_trim_summary import record_stage_trim_summary
+from core.runtime.stage_metrics import classify_resource_label, record_stage_done
 
 _DISK_USAGE_CACHE_MAX_AGE_SEC = 15.0
 _RUNTIME_DISK_USAGE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
@@ -794,6 +795,20 @@ class SubtitleGenerationMemoryGuard:
             skipped_reason=str(snapshot.get("stage_trim_skipped_reason", "") or ""),
         )
         snapshot["stage_trim_summary"] = dict(self._stage_trim_summary)
+        # Generation memory trim is a repeated-run hot path; publish the exact
+        # stage/resource cost so status polling can separate useful work from cleanup overhead.
+        trim_payload = snapshot.get("stage_trim") if isinstance(snapshot.get("stage_trim"), dict) else {}
+        record_stage_done(
+            f"memory_checkpoint:{self.stage}",
+            resource_label=classify_resource_label(self.stage, fallback="memory"),
+            ok=not bool((trim_payload or {}).get("failures")),
+            metrics={
+                "pressure_stage": pressure_stage,
+                "stage_trim_requested": bool(snapshot.get("stage_trim_requested")),
+                "stage_trim_elapsed_ms": float((trim_payload or {}).get("elapsed_ms", 0.0) or 0.0),
+                "stage_trim_failure_count": len(list((trim_payload or {}).get("failures") or [])),
+            },
+        )
 
         self._last_snapshot = dict(snapshot)
         self._write_generation_snapshot(snapshot)

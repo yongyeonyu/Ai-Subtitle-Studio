@@ -15,6 +15,7 @@ from core.mode_policy import normalize_mode
 from core.project.project_runtime_capture import count_editor_project_aux_state
 from core.runtime import config
 from core.runtime.logger import get_logger
+from core.runtime.stage_metrics import snapshot_stage_metrics
 from core.settings import load_settings, save_settings
 from core.settings_simplifier import apply_simple_operation_mode
 from ui.main.app_command_bridge_handlers import handle_command as _handle_bridge_command
@@ -457,7 +458,10 @@ def _recent_log_payload(
 
 def _runtime_resource_snapshot(owner: Any) -> dict[str, Any]:
     snapshot = getattr(owner, "_runtime_resource_snapshot", None)
-    return dict(snapshot or {}) if isinstance(snapshot, dict) else {}
+    data = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
+    if "stage_metrics" not in data:
+        data["stage_metrics"] = snapshot_stage_metrics(max_events=8, include_stages=False)
+    return data
 
 
 def _queue_runtime_snapshot(owner: Any) -> dict[str, Any]:
@@ -677,6 +681,7 @@ def _status_snapshot(owner: Any) -> dict[str, Any]:
         "queue_runtime": _queue_runtime_snapshot(owner),
         "personalization_runtime": _personalization_runtime_snapshot(owner),
         "runtime_resource": _runtime_resource_snapshot(owner),
+        "stage_metrics": snapshot_stage_metrics(max_events=8, include_stages=False),
         "recent_logs": recent_logs,
         "recent_stage_logs": recent_stage_logs,
     }
@@ -770,6 +775,11 @@ def _status_fallback_snapshot(owner: Any) -> dict[str, Any]:
         data["queue_runtime"] = {}
     if not isinstance(data.get("runtime_resource"), dict):
         data["runtime_resource"] = _runtime_resource_snapshot(owner)
+    else:
+        runtime_resource = dict(data.get("runtime_resource") or {})
+        runtime_resource["stage_metrics"] = snapshot_stage_metrics(max_events=8, include_stages=False)
+        data["runtime_resource"] = runtime_resource
+    data["stage_metrics"] = snapshot_stage_metrics(max_events=8, include_stages=False)
     if not isinstance(data.get("editor_aux_counts"), dict):
         data["editor_aux_counts"] = {
             "stt_preview_segment_count": 0,

@@ -3,12 +3,14 @@ from __future__ import annotations
 import atexit
 import subprocess
 import threading
+import time
 from typing import Any
 
 from core.native_json import dumps_json_bytes, dumps_json_text, json_default, loads_json, loads_json_output, write_jsonl_line
 from core.native_swift_subtitle import find_native_cli_path
 from core.runtime.config import IS_MAC
 from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
+from core.runtime.stage_metrics import _elapsed_ms, record_native_bridge_metric
 from core.runtime.setting_utils import KOREAN_FALSE_VALUES, env_bool as _env_bool, setting_bool as _setting_bool
 
 _WORKER: subprocess.Popen | None = None
@@ -70,13 +72,27 @@ def _request_worker(task: str, payload: dict[str, Any]) -> dict[str, Any] | None
         return None
     request = dict(payload)
     request["task"] = task
+    encode_started = time.perf_counter()
     try:
         encoded = dumps_json_text(request, compact=True, default=json_default)
     except Exception:
         return None
+    encode_ms = _elapsed_ms(encode_started)
+    payload_bytes = len(encoded.encode("utf-8"))
+    started = time.perf_counter()
+    decode_ms = 0.0
+    ok = False
     with _WORKER_LOCK:
         worker = _start_worker(cli)
         if worker is None or worker.stdin is None or worker.stdout is None:
+            record_native_bridge_metric(
+                f"policy-jsonl:{task}",
+                payload_bytes=payload_bytes,
+                encode_ms=encode_ms,
+                native_ms=_elapsed_ms(started),
+                decode_ms=decode_ms,
+                ok=False,
+            )
             return None
         try:
             write_jsonl_line(worker.stdin, encoded)
@@ -85,21 +101,41 @@ def _request_worker(task: str, payload: dict[str, Any]) -> dict[str, Any] | None
             if not line:
                 _stop_worker()
                 return None
+            decode_started = time.perf_counter()
             decoded = loads_json(line)
+            decode_ms = _elapsed_ms(decode_started)
             if not isinstance(decoded, dict) or decoded.get("error"):
                 return None
+            ok = True
             return decoded
         except Exception:
             _stop_worker()
             return None
+        finally:
+            record_native_bridge_metric(
+                f"policy-jsonl:{task}",
+                payload_bytes=payload_bytes,
+                encode_ms=encode_ms,
+                native_ms=_elapsed_ms(started),
+                decode_ms=decode_ms,
+                ok=ok,
+            )
 
 
 def _request_one_shot(command: str, payload: dict[str, Any], timeout: float = 20.0) -> dict[str, Any] | None:
     cli = find_native_cli_path()
     if cli is None:
         return None
+    encode_ms = 0.0
+    payload_bytes = 0
+    started = time.perf_counter()
+    decode_ms = 0.0
+    ok = False
     try:
+        encode_started = time.perf_counter()
         encoded = dumps_json_bytes(payload, compact=True, default=json_default)
+        encode_ms = _elapsed_ms(encode_started)
+        payload_bytes = len(encoded)
         proc = subprocess.run(
             [str(cli), command],
             input=encoded,
@@ -107,10 +143,22 @@ def _request_one_shot(command: str, payload: dict[str, Any], timeout: float = 20
             capture_output=True,
             timeout=timeout,
         )
+        decode_started = time.perf_counter()
         decoded = loads_json_output(proc.stdout, default={})
-        return decoded if isinstance(decoded, dict) and not decoded.get("error") else None
+        decode_ms = _elapsed_ms(decode_started)
+        ok = isinstance(decoded, dict) and not bool(decoded.get("error"))
+        return decoded if ok else None
     except Exception:
         return None
+    finally:
+        record_native_bridge_metric(
+            f"policy:{command}",
+            payload_bytes=payload_bytes,
+            encode_ms=encode_ms,
+            native_ms=_elapsed_ms(started),
+            decode_ms=decode_ms,
+            ok=ok,
+        )
 
 
 def build_llm_candidate_options_via_swift(
