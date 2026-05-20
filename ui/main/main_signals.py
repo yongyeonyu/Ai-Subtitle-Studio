@@ -684,7 +684,13 @@ class SignalHandlersMixin:
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
             missing=len(names),
         )
-        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        if not self._can_show_startup_required_models_dialog():
+            # 시작 직후 경고 모달은 사용자 안내보다 크래시 위험이 더 컸다.
+            # 여기서 무조건 QMessageBox로 되돌리지 말고, 창이 안정된 뒤 별도 UX가 필요하면
+            # 그때 명시적으로 설계해서 추가한다.
+            get_logger().log(
+                "ℹ️ 시작 직후 Qt modal 충돌을 피하기 위해 필수 AI 모델 경고 팝업은 생략합니다. 설정 > AI 엔진 설정 > 모델 관리에서 확인하세요."
+            )
             return
 
         QMessageBox.warning(
@@ -694,3 +700,28 @@ class SignalHandlersMixin:
             + "\n".join(f"- {name}" for name in names)
             + "\n\n설정 > AI 엔진 설정 > 모델 관리에서 설치 상태를 확인하세요."
         )
+
+    def _can_show_startup_required_models_dialog(self) -> bool:
+        # 이 체크는 "팝업을 보여줄지"만 판단한다.
+        # 임의 UI/UX 변경 지점이 아니라, 시작 안정성을 지키는 안전장치다.
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return False
+        app = QApplication.instance()
+        if app is None:
+            return False
+        try:
+            if app.thread() != QThread.currentThread():
+                return False
+        except Exception:
+            return False
+        try:
+            if not self.isVisible():
+                return False
+            if not self.isActiveWindow():
+                return False
+        except Exception:
+            return False
+        try:
+            return self.windowHandle() is not None
+        except Exception:
+            return False

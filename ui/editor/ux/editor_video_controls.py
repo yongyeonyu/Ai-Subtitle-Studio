@@ -269,7 +269,23 @@ class EditorVideoControlsMixin:
         seg = self._segment_for_start_sec(start_sec)
         if not seg or not self._segment_needs_manual_review(seg):
             return
+        pending_action = self._consume_pending_timeline_review_action()
+        if pending_action in {"primary", "delete"}:
+            self._apply_timeline_review_menu_action(seg, pending_action)
+            return
         self._show_timeline_review_menu(seg, gpos)
+
+    def _consume_pending_timeline_review_action(self) -> str:
+        canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+        if canvas is None:
+            return ""
+        try:
+            action = str(getattr(canvas, "_pending_timeline_review_action", "") or "").strip()
+        except Exception:
+            action = ""
+        if hasattr(canvas, "_pending_timeline_review_action"):
+            delattr(canvas, "_pending_timeline_review_action")
+        return action
 
     def _segment_for_start_sec(self, start_sec: float) -> dict | None:
         try:
@@ -322,8 +338,14 @@ class EditorVideoControlsMixin:
                 },
             ],
         )
+        self._apply_timeline_review_menu_action(seg, chosen)
+
+    def _apply_timeline_review_menu_action(self, seg: dict, chosen: str) -> None:
         line = int(seg.get("line", -1))
         if chosen == "primary":
+            quality = dict(seg.get("quality") or {})
+            flags = set(str(flag) for flag in (quality.get("flags") or ()))
+            manually_confirmed = bool(quality.get("manual_confirmed")) or "manual_confirmed" in flags
             if manually_confirmed:
                 self._mark_review_segment_temporary(line)
             else:

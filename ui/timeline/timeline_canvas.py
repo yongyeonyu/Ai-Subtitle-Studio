@@ -63,6 +63,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     sig_smart_split         = pyqtSignal(int, float, bool)
     sig_speech_result       = pyqtSignal(str)
     speaker_changed         = pyqtSignal(int, str)
+    drag_live_cut_async_result = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -80,6 +81,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self._ime_preedit = ""
         self.sig_speech_result.connect(self._on_speech_result)
+        self.drag_live_cut_async_result.connect(self._on_drag_live_cut_async_result)
         self._is_listening = False
         self._listening_line: int | None = None
         self._mic_waveform_samples: list[float] = []

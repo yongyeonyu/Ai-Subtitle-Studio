@@ -516,3 +516,13 @@ class EditorSegmentsSttSelectionFlowMixin:
             key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
         )
         self.timeline.update_segments(combined, self._active_seg_start, total_dur)
+        # 실시간 드래프트가 타임라인에만 남지 않도록 같은 window를 비디오 overlay에도 바로 반영한다.
+        video_context = getattr(self, "_video_subtitle_live_preview_context", None)
+        apply_video_context = getattr(self, "_apply_video_context_segments", None)
+        if callable(video_context) and callable(apply_video_context):
+            try:
+                live_context = video_context()
+                if live_context is not None:
+                    apply_video_context(live_context)
+            except Exception:
+                pass

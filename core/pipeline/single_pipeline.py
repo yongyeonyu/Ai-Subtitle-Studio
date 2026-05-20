@@ -32,6 +32,7 @@ from core.pipeline.subtitle_memory_guard import (
 )
 from core.pipeline.single_pipeline_plan import (
     PipelineProgressCoordinator,
+    SinglePipelineActionSession,
     build_single_pipeline_iteration_plan,
 )
 from ui.queue.queue_formatting import (
@@ -76,19 +77,17 @@ class SinglePipelineMixin:
                 get_logger().log("⚠️ 생성 완료 안전장치: active 플래그가 먼저 내려가도 완료 확정을 이어갑니다.")
             except Exception:
                 pass
-        emitted = False
         try:
-            emitted = bool(self._ui_emit("_sig_finalize_generation_complete", str(reason or "backend_done")))
+            return self._pipeline_progress_coordinator().emit_generation_completion_ready(
+                queue_index,
+                str(reason or "backend_done"),
+            )
         except Exception as exc:
             try:
                 get_logger().log(f"⚠️ 생성 완료 시그널 emit 실패: {exc}")
             except Exception:
                 pass
-        try:
-            self._ui_emit("_sig_update_queue", queue_index, "저장 준비 중", "", "", "")
-        except Exception:
-            pass
-        return emitted
+            return False
 
     def _emit_processing_preview_segments(
         self,
@@ -273,18 +272,18 @@ class SinglePipelineMixin:
 
     def _run_all(self):
         total_files = len(self.files_to_process)
+        coordinator = self._pipeline_progress_coordinator()
 
         try:
             for i, target_file in enumerate(self.files_to_process):
                 if not self._active:
                     return
 
-                self._ui_emit("_sig_update_queue", i, "⏳ 오디오 추출 중", "", "", "")
-                self._ui_emit("_sig_update_queue_header", i + 1, total_files, 0, "")
+                coordinator.emit_queue_item_start(i, total_files)
 
                 self._process_one(target_file, i)
 
-            self._ui_emit("_sig_update_queue_header", total_files, total_files, 100, "")
+            coordinator.emit_queue_header(total_files, total_files, 100, "")
 
             if bool(self._ui_attr("_is_auto_pipeline", False)):
                 self._send_ntfy_notification(
@@ -335,40 +334,22 @@ class SinglePipelineMixin:
         self._subtitle_generation_memory_checkpoint(memory_guard, "backup_done", force=True)
 
         # ── 이벤트/콜백 ──
-        edit_event = threading.Event()
-        start_event = threading.Event()
+        action_session = SinglePipelineActionSession()
+        edit_event = action_session.edit_event
+        start_event = action_session.start_event
         self._edit_event = edit_event
         self._start_event = start_event
-        final_segments = []
-        action_state = ["wait"]
-        self._action_state = action_state
+        self._action_state = action_session.state_ref
 
-        def on_save(segs):
-            nonlocal final_segments
-            final_segments = segs
-            action_state[0] = "next"
-            start_event.set()
-            edit_event.set()
-
-        def on_start():
+        def _record_start():
             if getattr(self, "is_first_start", True):
                 self.pipeline_start_time = time.time()
                 self.is_first_start = False
-            action_state[0] = "start"
-            start_event.set()
 
-        def on_prev():
-            action_state[0] = "prev"
-            start_event.set()
-            edit_event.set()
-
-        def on_exit(segs):
-            nonlocal final_segments
-            final_segments = segs
-            action_state[0] = "exit"
-            self.stop()
-            start_event.set()
-            edit_event.set()
+        on_save, on_start, on_prev, on_exit = action_session.callbacks(
+            start_hook=_record_start,
+            stop_hook=self.stop,
+        )
 
         # 변경: 첫 파일은 수동, 이후 파일은 자동 진행
         is_auto_mode = getattr(self, "is_auto_start", False) or (
@@ -386,23 +367,25 @@ class SinglePipelineMixin:
         ):
             raise Exception("USER_EXIT")
 
-        if is_auto_mode and not getattr(self, "_individual_queue_mode", False):
+        if is_auto_mode:
             threading.Timer(0.05, on_start).start()
 
+        get_logger().log("⏳ 자막 생성 시작 신호 대기: 에디터 시작 액션을 기다리는 중")
         start_event.wait()
-        if action_state[0] == "prev":
+        get_logger().log(f"▶️ 자막 생성 시작 액션 수신: {action_session.action_state}")
+        if action_session.action_state == "prev":
             self._ui_call("request_show_home")
             raise Exception("USER_PREV")
-        if action_state[0] == "exit":
+        if action_session.action_state == "exit":
             self._ui_call("request_show_home")
             raise Exception("USER_EXIT")
-        if action_state[0] == "next":
+        if action_session.action_state == "next":
             return
-        if action_state[0] == "restart":
+        if action_session.action_state == "restart":
             self._handle_restart(target_file)
-            action_state[0] = "start"
+            action_session.action_state = "start"
 
-        if action_state[0] == "start":
+        if action_session.action_state == "start":
             try:
                 ui = self._ui_object()
                 project_path = str(getattr(ui, "_current_project_path", "") or "") if ui is not None else ""
@@ -421,6 +404,7 @@ class SinglePipelineMixin:
                         media_paths=media_files,
                         srt_path=get_srt_path(media_files[0]),
                         user_settings=editor_settings,
+                        prefill_analysis_artifacts=False,
                     )
                     attach_project_session(
                         ui,
@@ -470,8 +454,7 @@ class SinglePipelineMixin:
                 )
             startup_diagnostic = {}
             try:
-                # ✅ 순서 고정:
-                # 컷 경계/주제없음 중분류가 먼저 확정된 뒤 STT1/STT2가 시작되어야 한다.
+                # ✅ 컷 경계 캐시/초기 결과는 먼저 반영하되, 장기 prescan은 STT를 무한정 막지 않는다.
                 if hasattr(self, "_wait_cut_boundary_prescan_before_stt"):
                     self._subtitle_generation_memory_checkpoint(memory_guard, "cut_prescan_wait")
                     self._wait_cut_boundary_prescan_before_stt()
@@ -554,8 +537,8 @@ class SinglePipelineMixin:
                 self._subtitle_generation_memory_checkpoint(
                     memory_guard,
                     "audio_extract_done",
-                    include_gpu=True,
-                    cleanup=True,
+                    # 핵심: 정상 메모리 구간에서는 바로 캐시 정리를 피하고 다음 단계에서 가드가
+                    # 압박 상태를 보고 필요할 때만 정리하도록 위임한다.
                     force=True,
                 )
             finally:
@@ -572,11 +555,11 @@ class SinglePipelineMixin:
 
             if not res:
                 get_logger().log("❌ 오디오 추출 실패")
-                self._ui_emit("_sig_update_queue", queue_index, "❌ 오류", "", "", "")
+                self._pipeline_progress_coordinator().emit_item_error(queue_index)
 
-                if action_state[0] == "restart":
+                if action_session.action_state == "restart":
                     get_logger().log("\n🔄 재시작합니다...")
-                    action_state[0] = "next"
+                    action_session.action_state = "next"
                     continue
 
                 return
@@ -632,14 +615,14 @@ class SinglePipelineMixin:
                         total_files=len(self.files_to_process),
                     )
                 if expected_time > 0:
-                    self._ui_emit(
-                        "_sig_update_queue",
-                        queue_index, "자막 생성 중", str(expected_time), "", "",
+                    self._pipeline_progress_coordinator().emit_generation_started(
+                        queue_index,
+                        str(expected_time),
                     )
                 else:
-                    self._ui_emit(
-                        "_sig_update_queue",
-                        queue_index, "자막 생성 중", "예상불가", "", "",
+                    self._pipeline_progress_coordinator().emit_generation_started(
+                        queue_index,
+                        "예상불가",
                     )
                 process_start_time = time.time()
             except Exception:
@@ -738,13 +721,14 @@ class SinglePipelineMixin:
                             f"stt_transcribe_chunk:{c_idx}/{t_total}",
                         )
                 finally:
+                    # STT 완료 직후 강제 cleanup은 비필수 구간에서 성능 오버헤드가 된다.
+                    # critical 상태에서는 MemoryGuard의 압박 기반 정리를 따르게 둔다.
                     if hasattr(self, "video_processor"):
                         self.video_processor.stage_callback = None
                     self._subtitle_generation_memory_checkpoint(
                         memory_guard,
                         "stt_transcribe_done",
-                        include_gpu=True,
-                        cleanup=True,
+                        include_gpu=False,
                         force=True,
                     )
                     _preview_opt_queue.put(_preview_opt_sentinel)
@@ -924,27 +908,21 @@ class SinglePipelineMixin:
                     last_t_total = t_total
 
                     if t_total > 0:
-                        overall_pct = int(
-                            ((queue_index + (c_idx / t_total)) / total_files) * 100
+                        self._pipeline_progress_coordinator().emit_chunk_progress(
+                            queue_index=queue_index,
+                            total_files=total_files,
+                            chunk_index=c_idx,
+                            chunk_total=t_total,
                         )
                     else:
-                        overall_pct = int((queue_index / total_files) * 100)
-
-                    self._ui_emit("_sig_update_status", c_idx, t_total)
-
-                    try:
-                        self._ui_emit(
-                            "_sig_update_queue_header",
-                            queue_index + 1, total_files, overall_pct, "",
+                        self._pipeline_progress_coordinator().emit_chunk_progress(
+                            queue_index=queue_index,
+                            total_files=total_files,
+                            chunk_index=0,
+                            chunk_total=0,
                         )
-                    except Exception:
-                        pass
 
                     if not chunk_segs:
-                        try:
-                            self._ui_emit("_sig_update_status", c_idx, t_total)
-                        except Exception:
-                            pass
                         continue
 
                     seg_buffer.extend(chunk_segs)
@@ -978,7 +956,7 @@ class SinglePipelineMixin:
                         )
                         _flush_buffer()
 
-                self._ui_emit("_sig_update_status", last_t_total, last_t_total)
+                self._pipeline_progress_coordinator().emit_chunk_status(last_t_total, last_t_total)
 
             def do_optimize():
                 try:
@@ -1014,7 +992,8 @@ class SinglePipelineMixin:
                 memory_guard,
                 "stt_optimizer_threads_done",
                 include_gpu=True,
-                cleanup=True,
+                # 핵심: STT/LLM 완료 직후의 정리는 기존 호출마다 강제되던 비용이다.
+                # warning/critical 스테이지에서만 MemoryGuard가 trim을 트리거한다.
                 force=True,
             )
 
@@ -1064,9 +1043,8 @@ class SinglePipelineMixin:
                 nonlocal_final = align_stt_candidates_to_subtitle_segments(nonlocal_final)
 
                 def _auto_proceed(_final_segments=nonlocal_final):
-                    nonlocal final_segments
-                    final_segments = _final_segments
-                    action_state[0] = "next"
+                    action_session.final_segments = list(_final_segments or [])
+                    action_session.action_state = "next"
                     edit_event.set()
 
                 auto_delay = 0.35 if getattr(self, "_individual_queue_mode", False) else 0.05
@@ -1074,17 +1052,17 @@ class SinglePipelineMixin:
 
             edit_event.wait()
 
-            if action_state[0] == "restart":
+            if action_session.action_state == "restart":
                 self._handle_restart(target_file)
-                action_state[0] = "next"
+                action_session.action_state = "next"
                 continue
 
             if not self._active:
                 return
-            if action_state[0] == "prev":
+            if action_session.action_state == "prev":
                 self._ui_call("request_show_home")
                 raise Exception("USER_PREV")
-            if action_state[0] == "exit":
+            if action_session.action_state == "exit":
                 self._ui_call("request_show_home")
                 raise Exception("USER_EXIT")
 
@@ -1093,18 +1071,22 @@ class SinglePipelineMixin:
                 self._active = False
                 return
             self._subtitle_generation_memory_checkpoint(memory_guard, "save_export_start", force=True)
-            self._save_and_export(target_file, queue_index, final_segments, is_auto_mode)
+            self._save_and_export(
+                target_file,
+                queue_index,
+                list(action_session.final_segments or []),
+                is_auto_mode,
+            )
             self._subtitle_generation_memory_checkpoint(
                 memory_guard,
                 "save_export_done",
-                include_gpu=True,
-                cleanup=True,
+                # 핵심: 저장 직후의 강제 정리를 생략해 반복 run에서 불필요한 캐시 churn을 줄인다.
                 force=True,
             )
 
-            if action_state[0] == "restart":
+            if action_session.action_state == "restart":
                 self._handle_restart(target_file)
-                action_state[0] = "start"
+                action_session.action_state = "start"
                 continue
             break
 
@@ -1114,7 +1096,7 @@ class SinglePipelineMixin:
             except Exception:
                 pass
 
-        if action_state[0] == "exit" or not getattr(self, "_active", True):
+        if action_session.action_state == "exit" or not getattr(self, "_active", True):
             try:
                 if self._ui_is_alive():
                     self._ui_call("request_show_home")

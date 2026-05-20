@@ -14,6 +14,19 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.audio import stt_rescue
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
+from core.audio.stt_recheck_service import (
+    apply_word_precision_segments as apply_word_precision_segments_via_service,
+    apply_recheck_selection_to_tracks as apply_recheck_selection_to_tracks_via_service,
+    low_score_recheck_overrides as low_score_recheck_overrides_via_service,
+    low_score_recheck_ranges as build_low_score_recheck_ranges,
+    normalize_scored_tracks as normalize_scored_tracks_via_service,
+    prepare_and_collect_recheck_segments as prepare_and_collect_recheck_segments_via_service,
+    precision_pass_overrides as precision_pass_overrides_via_service,
+    resolve_precision_model as resolve_precision_model_via_service,
+    selective_secondary_recheck_ranges as build_selective_secondary_recheck_ranges,
+    selective_secondary_recheck_overrides as selective_secondary_recheck_overrides_via_service,
+    word_precision_ranges as build_word_precision_ranges,
+)
 from core.audio.stt_runtime_policy import (
     ensemble_scheduler_context,
     ensemble_scheduler_suffix,
@@ -61,6 +74,83 @@ from core.subtitle_quality.vad_alignment_checker import annotate_segment_vad_ali
 _parse_worker_json_line = parse_worker_json_line
 
 
+def _stt_memory_pressure_stage(settings: dict | None) -> str:
+    """Return the current memory pressure stage for STT reuse decisions."""
+
+    def _float_value(value, default: float) -> float:
+        try:
+            if value is None or value == "":
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    try:
+        from core.performance import current_resource_snapshot
+
+        snapshot = current_resource_snapshot(dict(settings or {}))
+    except Exception:
+        return "normal"
+    # Keep STT worker reuse decisions tied to configurable pressure policy so
+    # benchmarked thresholds are testable without changing user-visible default
+    # behavior.
+    warning_ratio = _float_value(
+        (settings or {}).get("runtime_memory_warning_ratio", (settings or {}).get("macos_memory_warning_ratio", 0.20)),
+        0.20,
+    )
+    critical_ratio = _float_value(
+        (settings or {}).get("runtime_memory_critical_ratio", (settings or {}).get("macos_memory_critical_ratio", 0.12)),
+        0.12,
+    )
+    warning_reserve_gb = _float_value((settings or {}).get("macos_memory_warning_reserve_gb", 3.0), 3.0)
+    critical_reserve_gb = _float_value((settings or {}).get("macos_memory_critical_reserve_gb", 1.5), 1.5)
+    warning_compressed_ratio = _float_value(
+        (
+            (settings or {}).get("runtime_memory_warning_compressed_ratio")
+            if (settings or {}).get("runtime_memory_warning_compressed_ratio") is not None
+            else (settings or {}).get("macos_memory_warning_compressed_ratio", 0.22)
+        ),
+        0.22,
+    )
+    critical_compressed_ratio = _float_value(
+        (
+            (settings or {}).get("runtime_memory_critical_compressed_ratio")
+            if (settings or {}).get("runtime_memory_critical_compressed_ratio") is not None
+            else (settings or {}).get("macos_memory_critical_compressed_ratio", 0.30)
+        ),
+        0.30,
+    )
+    stage = str(snapshot.get("memory_pressure_stage", "") or "").strip().lower()
+    if stage in {"warning", "critical"}:
+        return stage
+    if warning_ratio <= critical_ratio:
+        warning_ratio, critical_ratio = critical_ratio, warning_ratio
+    if warning_reserve_gb <= critical_reserve_gb:
+        warning_reserve_gb, critical_reserve_gb = critical_reserve_gb, warning_reserve_gb
+    if warning_compressed_ratio <= critical_compressed_ratio:
+        warning_compressed_ratio, critical_compressed_ratio = (
+            critical_compressed_ratio,
+            warning_compressed_ratio,
+        )
+    native = snapshot.get("native_memory")
+    if isinstance(native, dict):
+        stage = str(native.get("pressure_stage", "") or "").strip().lower()
+        if stage in {"warning", "critical"}:
+            return stage
+    available_ratio = _float_value(snapshot.get("available_memory_ratio"), 1.0)
+    available_gb = _float_value(snapshot.get("available_memory_bytes"), 0.0) / float(1024 ** 3)
+    warning_compressed = _float_value(snapshot.get("compressed_memory_ratio", 0.0), 0.0)
+    if available_ratio <= critical_ratio or (available_gb > 0 and available_gb <= critical_reserve_gb):
+        return "critical"
+    if warning_compressed >= critical_compressed_ratio:
+        return "critical"
+    if warning_compressed >= warning_compressed_ratio:
+        return "warning"
+    if available_ratio <= warning_ratio or (available_gb > 0 and available_gb <= warning_reserve_gb):
+        return "warning"
+    return "normal"
+
+
 def _clean_whisper_word_text(text: str) -> str:
     cleaned = strip_stt_control_tokens(str(text or ""))
     cleaned = re.sub(r"\s+", " ", cleaned, flags=re.UNICODE).strip()
@@ -100,6 +190,12 @@ class VideoProcessorTranscribeMixin:
     _ensemble_scheduler_suffix = staticmethod(ensemble_scheduler_suffix)
     _clone_ensemble_chunk_dir = staticmethod(clone_ensemble_chunk_dir)
     _whisper_worker_options = staticmethod(whisper_worker_options)
+
+    @staticmethod
+    def _annotate_stt_candidates(segments, **kwargs):
+        from core.audio.stt_candidate_scorer import annotate_stt_candidates
+
+        return annotate_stt_candidates(segments, **kwargs)
 
     def _load_audio_route_hints(self, chunk_dir: str) -> dict[str, dict]:
         route_json = os.path.join(str(chunk_dir or ""), "audio_routes.json")
@@ -158,31 +254,6 @@ class VideoProcessorTranscribeMixin:
             updated.append(out)
         return updated
 
-    def _route_hint_recheck_ranges(self, primary_segments: list[dict], settings: dict | None = None) -> list[stt_rescue.SttRecheckRange]:
-        ranges: list[stt_rescue.SttRecheckRange] = []
-        for primary in primary_segments or []:
-            if not bool(primary.get("stt_route_secondary_recheck_hint")):
-                continue
-            text = str(primary.get("text", "") or "").strip()
-            if not text:
-                continue
-            start = max(0.0, float(primary.get("start", 0.0) or 0.0))
-            end = max(float(primary.get("end", start) or start), start + 0.1)
-            score = self._segment_score_100(primary)
-            ranges.append(
-                stt_rescue.SttRecheckRange(
-                    start=round(start, 3),
-                    end=round(end, 3),
-                    primary_score=round(score, 2),
-                    secondary_score=0.0,
-                    primary_text=text,
-                    secondary_text="",
-                    primary=dict(primary),
-                    secondary={},
-                )
-            )
-        return stt_rescue.budget_recheck_ranges(ranges, settings) if ranges else []
-
     def _collect_transcribe_result(
         self,
         chunk_dir: str,
@@ -200,6 +271,12 @@ class VideoProcessorTranscribeMixin:
         if settings_overrides:
             effective_settings.update(dict(settings_overrides))
         reuse_worker = self._stt_persistent_runtime_reuse_enabled(effective_settings)
+        pressure_stage = _stt_memory_pressure_stage(effective_settings)
+        if reuse_worker and pressure_stage == "critical":
+            # STT warm reuse is faster only while memory has headroom. Under
+            # critical macOS pressure it keeps WhisperKit/MLX processes resident
+            # across chunks and generation time grows from compression/swap.
+            reuse_worker = False
         cache_key = f"{self.language}|{str(model or '').strip()}"
         worker = None
         transient_worker = True
@@ -293,6 +370,12 @@ class VideoProcessorTranscribeMixin:
         except Exception:
             settings = {}
         keep_warm = (not force_stop) and self._stt_persistent_runtime_reuse_enabled(settings)
+        pressure_stage = _stt_memory_pressure_stage(settings)
+        if keep_warm and pressure_stage == "critical":
+            # Do not preserve STT worker UI/runtime behavior here. This is a
+            # performance guard: a warm worker that saves startup time can make
+            # later subtitles slower when system memory is already critical.
+            keep_warm = False
 
         def _alive(proc) -> bool:
             try:
@@ -325,8 +408,17 @@ class VideoProcessorTranscribeMixin:
                 pass
             return
 
+        if pressure_stage == "critical" and (own_alive or child_alive):
+            try:
+                get_logger().log(f"🧹 [{log_label}] 메모리 critical: STT persistent worker 재사용 중단")
+            except Exception:
+                pass
+
         self.stop_transcribe()
-        clear_audio_model_memory_caches(include_gpu=True)
+        # Only the expensive GPU cache clear is needed under hard pressure.
+        # Keeping this warning stage lightweight reduces per-run overhead while
+        # preserving steady-state latency under normal/mild memory pressure.
+        clear_audio_model_memory_caches(include_gpu=pressure_stage == "critical")
         try:
             get_logger().log(f"🧹 [{log_label}] 음성인식 모델/가속기 메모리 정리 완료")
         except Exception:
@@ -361,17 +453,18 @@ class VideoProcessorTranscribeMixin:
         from core.audio.stt_candidate_scorer import filter_scored_stt_candidates
 
         keep_score = self._stt_candidate_keep_score(settings)
-        normalized: dict[str, list[dict]] = {}
-        for label in ("STT1", "STT2"):
-            original = [dict(seg) for seg in (tracks.get(label, []) or []) if isinstance(seg, dict)]
-            filtered = filter_scored_stt_candidates(original, min_score=keep_score)
-            dropped = len(original) - len(filtered)
+        normalized, dropped_counts = normalize_scored_tracks_via_service(
+            tracks,
+            keep_score=keep_score,
+            filter_fn=lambda items, min_score: filter_scored_stt_candidates(items, min_score=min_score),
+        )
+        for label, filtered in normalized.items():
+            dropped = int(dropped_counts.get(label, 0))
             if dropped > 0:
                 get_logger().log(
                     f"  🧹 [STT 정리] {label} 저품질 후보 {dropped}개 제외 "
                     f"(유지 기준 {keep_score:.0f}점)"
                 )
-            normalized[label] = filtered
         return normalized
     def _ensemble_preview_callback(self, label: str, preview_callback):
         if not callable(preview_callback):
@@ -448,133 +541,18 @@ class VideoProcessorTranscribeMixin:
                 return path
         return ""
 
-    def _missing_voice_recheck_ranges(
-        self,
-        chunk_dir: str,
-        primary_segments: list[dict],
-        vad_segments: list[dict],
-        settings: dict,
-        existing_count: int = 0,
-    ) -> list[stt_rescue.SttRecheckRange]:
-        if not vad_segments:
-            return []
-        limit = max(0, stt_rescue.max_recheck_segments(settings) - max(0, int(existing_count or 0)))
-        if limit <= 0:
-            return []
-        min_duration = max(0.2, self._setting_float(settings, "stt_missing_voice_min_duration_sec", 0.55))
-        candidates: list[stt_rescue.SttRecheckRange] = []
-        for vad in vad_segments:
-            if not isinstance(vad, dict):
-                continue
-            start = max(0.0, self._setting_float(vad, "start", 0.0))
-            end = max(start, self._setting_float(vad, "end", start))
-            if (end - start) < min_duration:
-                continue
-            covered = False
-            for seg in primary_segments or []:
-                if not str(seg.get("text") or "").strip():
-                    continue
-                overlap = max(0.0, min(end, float(seg.get("end", 0.0) or 0.0)) - max(start, float(seg.get("start", 0.0) or 0.0)))
-                if overlap / max(0.001, end - start) >= 0.18:
-                    covered = True
-                    break
-            if covered:
-                continue
-            source_path = self._chunk_path_covering_time(chunk_dir, (start + end) / 2.0)
-            if not source_path:
-                continue
-            synthetic = {
-                "start": start,
-                "end": end,
-                "text": "",
-                "score": 0.0,
-                "chunk_path": source_path,
-                "asr_metadata": {"chunk_path": source_path, "missing_voice_candidate": True},
-            }
-            candidates.append(
-                stt_rescue.SttRecheckRange(
-                    start=round(start, 3),
-                    end=round(end, 3),
-                    primary_score=0.0,
-                    secondary_score=0.0,
-                    primary_text="",
-                    secondary_text="",
-                    primary=synthetic,
-                    secondary={},
-                )
-            )
-            if len(candidates) >= limit:
-                break
-        return candidates
-
     def _word_precision_ranges(
         self,
         segments: list[dict],
         settings: dict,
     ) -> list[stt_rescue.SttRecheckRange]:
-        if not self._setting_bool(settings, "stt_word_timestamps_precision_enabled", True):
-            return []
-        limit = max(
-            1,
-            min(
-                200,
-                int(self._setting_float(settings, "stt_word_timestamps_precision_max_segments", 24)),
-            ),
+        return build_word_precision_ranges(
+            segments,
+            settings,
+            needs_precision_fn=self._segment_needs_word_precision,
+            score_fn=self._segment_score_100,
+            has_score_fn=self._segment_has_score,
         )
-        prioritized: list[tuple[tuple[float, float, float], stt_rescue.SttRecheckRange]] = []
-        for seg in segments or []:
-            if not self._segment_needs_word_precision(seg, settings):
-                continue
-            start = max(0.0, self._setting_float(seg, "start", 0.0))
-            end = max(start + 0.1, self._setting_float(seg, "end", start))
-            score = round(self._segment_score_100(seg), 2)
-            quality = dict(seg.get("quality") or {})
-            flags = {str(flag) for flag in (quality.get("flags") or ())}
-            priority = 0.0
-            if any(bool(seg.get(key)) for key in ("editor_selected", "selected", "precision_review", "needs_review")):
-                priority += 100.0
-            label = str(quality.get("confidence_label") or "").strip().lower()
-            if label == "red":
-                priority += 40.0
-            elif label == "yellow":
-                priority += 20.0
-            if flags.intersection({"outside_vad_speech", "high_cps", "short_duration_long_text"}):
-                priority += 15.0
-            if flags.intersection({"word_timestamps_missing"}):
-                priority += 5.0
-            if self._segment_has_score(seg):
-                priority += max(0.0, 100.0 - score) / 4.0
-            item = stt_rescue.SttRecheckRange(
-                start=round(start, 3),
-                end=round(end, 3),
-                primary_score=score,
-                secondary_score=0.0,
-                primary_text=str(seg.get("text") or "").strip(),
-                secondary_text="",
-                primary=dict(seg),
-                secondary={},
-            )
-            prioritized.append(((-priority, score, start), item))
-        prioritized.sort(key=lambda pair: pair[0])
-        max_audio_sec = max(
-            10.0,
-            min(
-                1800.0,
-                self._setting_float(settings, "stt_word_timestamps_precision_max_audio_sec", 90.0),
-            ),
-        )
-        selected: list[stt_rescue.SttRecheckRange] = []
-        selected_sec = 0.0
-        for _priority, item in prioritized:
-            duration = max(0.05, float(item.end or 0.0) - float(item.start or 0.0))
-            if len(selected) >= limit:
-                break
-            if selected and selected_sec + duration > max_audio_sec:
-                continue
-            selected.append(item)
-            selected_sec += duration
-        selected.sort(key=lambda item: (item.start, item.end))
-        return selected
 
     def _apply_word_precision_segments(
         self,
@@ -583,99 +561,41 @@ class VideoProcessorTranscribeMixin:
         ranges: list[stt_rescue.SttRecheckRange],
         settings: dict,
     ) -> tuple[list[dict], int]:
-        if not base_segments or not precision_segments or not ranges:
-            return base_segments, 0
-        keep_text = self._setting_bool(settings, "stt_word_timestamps_precision_keep_text", True)
-        min_similarity = max(
-            0.0,
-            min(1.0, self._setting_float(settings, "stt_word_timestamps_precision_min_similarity", 0.18)),
-        )
-        max_timing_shift = max(
-            0.05,
-            self._setting_float(settings, "stt_word_timestamps_precision_max_timing_shift_sec", 0.55),
-        )
-        min_duration_ratio = max(
-            0.05,
-            self._setting_float(settings, "stt_word_timestamps_precision_min_duration_ratio", 0.45),
-        )
-        max_duration_ratio = max(
-            min_duration_ratio,
-            self._setting_float(settings, "stt_word_timestamps_precision_max_duration_ratio", 1.8),
-        )
         try:
             from core.audio.stt_ensemble import text_similarity
         except Exception:
             text_similarity = None
+        return apply_word_precision_segments_via_service(
+            base_segments=base_segments,
+            precision_segments=precision_segments,
+            ranges=ranges,
+            settings=settings,
+            score_fn=self._segment_score_100,
+            text_similarity_fn=text_similarity,
+        )
 
-        applied = 0
-        updated: list[dict] = []
-        for seg in base_segments:
-            if not any(self._segment_overlaps_range(seg, item.start, item.end) for item in ranges):
-                updated.append(seg)
-                continue
-            candidates = [
-                dict(candidate)
-                for candidate in precision_segments
-                if candidate.get("words") and self._segment_overlaps_range(candidate, float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0))
-            ]
-            if not candidates:
-                updated.append(seg)
-                continue
-            candidates.sort(
-                key=lambda candidate: (
-                    self._segment_score_100(candidate),
-                    len(candidate.get("words") or []),
-                ),
-                reverse=True,
-            )
-            chosen = candidates[0]
-            if callable(text_similarity):
-                similarity = float(text_similarity(str(seg.get("text") or ""), str(chosen.get("text") or "")) or 0.0)
-            else:
-                similarity = 1.0 if str(seg.get("text") or "").strip() == str(chosen.get("text") or "").strip() else 0.5
-            if similarity < min_similarity:
-                updated.append(seg)
-                continue
-            original_start = float(seg.get("start", 0.0) or 0.0)
-            original_end = float(seg.get("end", original_start) or original_start)
-            out = dict(seg)
-            words = [dict(word) for word in (chosen.get("words") or [])]
-            new_start = float(words[0].get("start", chosen.get("start", original_start)) or original_start)
-            new_end = float(words[-1].get("end", chosen.get("end", original_end)) or original_end)
-            if new_end <= new_start + 0.05:
-                updated.append(seg)
-                continue
-            edge_shift = max(abs(new_start - original_start), abs(new_end - original_end))
-            original_duration = max(0.05, original_end - original_start)
-            new_duration = max(0.05, new_end - new_start)
-            duration_ratio = new_duration / original_duration
-            if edge_shift > max_timing_shift:
-                updated.append(seg)
-                continue
-            if original_duration >= 0.2 and not (min_duration_ratio <= duration_ratio <= max_duration_ratio):
-                updated.append(seg)
-                continue
-            out["words"] = words
-            out["start"] = new_start
-            out["end"] = new_end
-            if not keep_text and str(chosen.get("text") or "").strip():
-                out["text"] = str(chosen.get("text") or "").strip()
-            meta = dict(out.get("asr_metadata") or {})
-            meta["selective_word_timestamps"] = {
-                "enabled": True,
-                "source": str(chosen.get("stt_selected_source") or chosen.get("stt_ensemble_source") or "STT1"),
-                "similarity": round(similarity, 6),
-                "kept_original_text": bool(keep_text),
-                "edge_shift": round(edge_shift, 4),
-                "duration_ratio": round(duration_ratio, 4),
-                "range_start": round(original_start, 3),
-                "range_end": round(original_end, 3),
-            }
-            out["asr_metadata"] = meta
-            out["stt_word_precision_applied"] = True
-            updated.append(out)
-            applied += 1
-        return updated, applied
+    def _apply_post_parse_refinements(
+        self,
+        chunk_dir: str,
+        segments: list[dict],
+        settings: dict,
+        vad_strict: list[dict],
+        primary_model: str,
+    ) -> list[dict]:
+        refined = self._recheck_primary_low_score_with_secondary(
+            chunk_dir,
+            segments,
+            settings,
+            vad_strict,
+            primary_model,
+        )
+        return self._recheck_word_timestamps_for_precision(
+            chunk_dir,
+            refined,
+            settings,
+            vad_strict,
+            primary_model,
+        )
 
     def _recheck_word_timestamps_for_precision(
         self,
@@ -705,60 +625,31 @@ class VideoProcessorTranscribeMixin:
         precision_dir = os.path.join(chunk_dir, "_stt_word_precision")
         shutil.rmtree(precision_dir, ignore_errors=True)
         os.makedirs(precision_dir, exist_ok=True)
-        prepared: list[dict] = []
-        for idx, item in enumerate(ranges):
-            clip = self._prepare_recheck_clip(item, precision_dir, idx, settings)
-            if clip:
-                prepared.append(clip)
-        if not prepared:
-            return segments
-
-        configured_precision_model = str(settings.get("stt_word_timestamps_precision_model") or "").strip()
-        selected_primary_model = str(settings.get("selected_whisper_model") or "").strip()
-        model = configured_precision_model or selected_primary_model or str(primary_model or "").strip()
-        overrides = {
-            "stt_ensemble_enabled": False,
-            "stt_selective_secondary_recheck_enabled": False,
-            "stt_candidate_scoring_enabled": True,
-            "runtime_backend_autotune_enabled": False,
-            "stt_backend_policy": "quality",
-            "stt_quality_preset": "precise",
-            "stt_rescue_whisper_mode": True,
-            "stt_primary_fast_native_enabled": False,
-            "stt_npu_prefer_enabled": False,
-            "whisperkit_native_auto_enabled": False,
-            "stt_word_timestamp_precision_pass": True,
-            "stt_word_timestamps_mode": "always",
-            "stt_word_timestamps_default_enabled": True,
-            "stt_word_timestamps_precision_enabled": True,
-            "w_none_temp_max": 0.0,
-            "whisper_chunk_overlap_sec": 0.0,
-        }
-        precision_segments = self._collect_transcribe_result(
-            precision_dir,
-            model,
-            is_single=False,
+        batch = prepare_and_collect_recheck_segments_via_service(
+            ranges=ranges,
+            out_dir=precision_dir,
+            settings=settings,
+            prepare_clip_fn=self._prepare_recheck_clip,
+            collect_fn=self._collect_transcribe_result,
+            model=resolve_precision_model_via_service(settings, primary_model=primary_model),
             label="STT-단어정밀",
-            settings_overrides=overrides,
+            settings_overrides=precision_pass_overrides_via_service(),
+            annotate_fn=self._annotate_stt_candidates,
+            annotate_source="WORD_PRECISION",
+            vad_segments=vad_strict,
+            peer_segments=segments,
+            is_single=False,
         )
-        if not precision_segments:
+        if not batch.prepared_clips:
             return segments
-        try:
-            from core.audio.stt_candidate_scorer import annotate_stt_candidates
-
-            precision_segments = annotate_stt_candidates(
-                precision_segments,
-                source="WORD_PRECISION",
-                peer_segments=segments,
-                vad_segments=vad_strict,
-                settings=settings,
-            )
-        except Exception as exc:
-            get_logger().log(f"  ⚠️ [단어 타임태그] 정밀 구간 점수 계산 실패: {exc}")
+        if not batch.collected_segments:
+            return segments
+        if batch.annotate_error:
+            get_logger().log(f"  ⚠️ [단어 타임태그] 정밀 구간 점수 계산 실패: {batch.annotate_error}")
 
         updated, applied = self._apply_word_precision_segments(
             segments,
-            precision_segments,
+            batch.collected_segments,
             ranges,
             settings,
         )
@@ -776,10 +667,11 @@ class VideoProcessorTranscribeMixin:
         if not stt_rescue.enabled(settings):
             return results
 
-        ranges = stt_rescue.find_low_score_recheck_ranges(
+        ranges = build_low_score_recheck_ranges(
             results.get("STT1", []),
             results.get("STT2", []),
             settings,
+            score_fn=self._segment_score_100,
         )
         if not ranges:
             return results
@@ -792,90 +684,58 @@ class VideoProcessorTranscribeMixin:
 
         rescue_dir = os.path.join(chunk_dir, "_stt_recheck")
         os.makedirs(rescue_dir, exist_ok=True)
-        prepared: list[dict] = []
-        for idx, item in enumerate(ranges):
-            clip = self._prepare_recheck_clip(item, rescue_dir, idx, settings)
-            if clip:
-                prepared.append(clip)
-        if not prepared:
+        batch = prepare_and_collect_recheck_segments_via_service(
+            ranges=ranges,
+            out_dir=rescue_dir,
+            settings=settings,
+            prepare_clip_fn=self._prepare_recheck_clip,
+            collect_fn=self._collect_transcribe_result,
+            model=str(settings.get("stt_low_score_recheck_model") or primary_model or "").strip() or primary_model,
+            label="STT-재검사",
+            settings_overrides=low_score_recheck_overrides_via_service(),
+            annotate_fn=self._annotate_stt_candidates,
+            annotate_source="RECHECK",
+            vad_segments=vad_strict,
+            is_single=False,
+        )
+        if not batch.prepared_clips:
             get_logger().log("  ⚠️ [STT 재검사] 재검사용 WAV 생성 실패로 기존 후보를 유지합니다.")
             return results
-
-        rescue_model = str(settings.get("stt_low_score_recheck_model") or primary_model or "").strip() or primary_model
-        overrides = {
-            "stt_ensemble_enabled": False,
-            "stt_candidate_scoring_enabled": True,
-            "stt_quality_preset": "precise",
-            "stt_rescue_whisper_mode": True,
-            "w_none_temp_max": 0.0,
-            "whisper_chunk_overlap_sec": 0.0,
-        }
-        rescue_segments = self._collect_transcribe_result(
-            rescue_dir,
-            rescue_model,
-            is_single=False,
-            label="STT-재검사",
-            settings_overrides=overrides,
-        )
-        if not rescue_segments:
+        if not batch.collected_segments:
             get_logger().log("  ⚠️ [STT 재검사] 재인식 결과가 비어 있어 기존 후보를 유지합니다.")
             return results
+        if batch.annotate_error:
+            get_logger().log(f"  ⚠️ [STT 재검사] 재검사 점수 계산 실패: {batch.annotate_error}")
 
-        try:
-            from core.audio.stt_candidate_scorer import annotate_stt_candidates
-
-            rescue_segments = annotate_stt_candidates(
-                rescue_segments,
-                source="RECHECK",
-                vad_segments=vad_strict,
-                settings=settings,
+        applied = apply_recheck_selection_to_tracks_via_service(
+            prepared_clips=batch.prepared_clips,
+            rescue_segments=batch.collected_segments,
+            settings=settings,
+            replacement_is_better_fn=stt_rescue.replacement_is_better,
+            mark_segments_fn=stt_rescue.mark_rescue_segments,
+            base_tracks={
+                "STT1": results.get("STT1", []),
+                "STT2": results.get("STT2", []),
+            },
+            decorate_segment_fn=lambda seg: {
+                **seg,
+                "stt_selected_source": "RECHECK",
+                "stt_ensemble_source": "RECHECK",
+            },
+        )
+        for item in applied.selection.skipped_ranges:
+            get_logger().log(
+                "  ↩️ [STT 재검사] 개선 부족으로 기존 후보 유지 "
+                f"({item.start:.2f}-{item.end:.2f}s, STT1 {item.primary_score:.1f}, STT2 {item.secondary_score:.1f})"
             )
-        except Exception as exc:
-            get_logger().log(f"  ⚠️ [STT 재검사] 재검사 점수 계산 실패: {exc}")
 
-        applied_ranges: list[stt_rescue.SttRecheckRange] = []
-        applied_segments: list[dict] = []
-        for clip in prepared:
-            item = clip["range"]
-            start = float(clip["start"])
-            end = float(clip["end"])
-            subset = [
-                dict(seg)
-                for seg in rescue_segments
-                if self._segment_overlaps_range(seg, start, end)
-            ]
-            if not stt_rescue.replacement_is_better(subset, item, settings):
-                get_logger().log(
-                    "  ↩️ [STT 재검사] 개선 부족으로 기존 후보 유지 "
-                    f"({item.start:.2f}-{item.end:.2f}s, STT1 {item.primary_score:.1f}, STT2 {item.secondary_score:.1f})"
-                )
-                continue
-            marked = stt_rescue.mark_rescue_segments(subset, item)
-            for seg in marked:
-                seg["stt_selected_source"] = "RECHECK"
-                seg["stt_ensemble_source"] = "RECHECK"
-            applied_ranges.append(item)
-            applied_segments.extend(marked)
-
-        if not applied_segments:
+        if not applied.selection.applied_segments:
             get_logger().log("  ↩️ [STT 재검사] 교체할 만큼 좋아진 구간이 없어 기존 후보를 유지합니다.")
             return results
 
-        def _keep_existing(seg: dict) -> bool:
-            return not any(self._segment_overlaps_range(seg, item.start, item.end) for item in applied_ranges)
-
-        reapplied_segments = [dict(seg) for seg in applied_segments]
-        for seg in reapplied_segments:
-            seg["stt_selected_source"] = "RECHECK"
-            seg["stt_ensemble_source"] = "RECHECK"
-        updated = {
-            "STT1": [seg for seg in results.get("STT1", []) if _keep_existing(seg)] + applied_segments,
-            "STT2": [seg for seg in results.get("STT2", []) if _keep_existing(seg)] + reapplied_segments,
-        }
-        updated["STT1"].sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
-        updated["STT2"].sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
-        get_logger().log(f"  ✅ [STT 재검사] {len(applied_ranges)}개 저점 구간을 재인식 결과로 교체했습니다.")
-        return updated
+        updated = dict(applied.merged_tracks or {})
+        get_logger().log(f"  ✅ [STT 재검사] {len(applied.selection.applied_ranges)}개 저점 구간을 재인식 결과로 교체했습니다.")
+        return {"STT1": list(updated.get("STT1", [])), "STT2": list(updated.get("STT2", []))}
 
     def _selective_secondary_recheck_enabled(self, settings: dict, primary_model: str) -> bool:
         if not stt_rescue.enabled(settings):
@@ -913,9 +773,7 @@ class VideoProcessorTranscribeMixin:
         secondary_model = str(settings.get("selected_whisper_model_secondary") or "").strip()
         context_label = "선택 STT2 재검사" if self._stt_selective_ensemble_enabled(settings) else "Fast STT2 재검사"
         try:
-            from core.audio.stt_candidate_scorer import annotate_stt_candidates
-
-            scored_primary = annotate_stt_candidates(
+            scored_primary = self._annotate_stt_candidates(
                 [dict(seg) for seg in chunk_segs if isinstance(seg, dict)],
                 source="STT1",
                 vad_segments=vad_strict,
@@ -925,29 +783,13 @@ class VideoProcessorTranscribeMixin:
             get_logger().log(f"  ⚠️ [{context_label}] STT1 점수 계산 실패: {exc}")
             return chunk_segs
 
-        ranges = stt_rescue.find_primary_low_score_recheck_ranges(scored_primary, settings)
-        missing_ranges = self._missing_voice_recheck_ranges(
-            chunk_dir,
-            scored_primary,
-            vad_strict,
-            settings,
-            existing_count=len(ranges),
+        ranges, raw_range_count = build_selective_secondary_recheck_ranges(
+            primary_segments=scored_primary,
+            vad_segments=vad_strict,
+            settings=settings,
+            score_fn=self._segment_score_100,
+            chunk_path_for_time=lambda target_sec: self._chunk_path_covering_time(chunk_dir, target_sec),
         )
-        if missing_ranges:
-            ranges = list(ranges) + missing_ranges
-        hinted_ranges = self._route_hint_recheck_ranges(scored_primary, settings)
-        if hinted_ranges:
-            existing_keys = {
-                (round(float(item.start), 2), round(float(item.end), 2))
-                for item in ranges
-            }
-            for item in hinted_ranges:
-                key = (round(float(item.start), 2), round(float(item.end), 2))
-                if key not in existing_keys:
-                    ranges.append(item)
-                    existing_keys.add(key)
-        raw_range_count = len(ranges)
-        ranges = stt_rescue.budget_recheck_ranges(ranges, settings)
         if raw_range_count > len(ranges):
             get_logger().log(
                 f"  ⚡ [{context_label}] STT2 재검사 예산 적용: {raw_range_count}개 → {len(ranges)}개"
@@ -964,87 +806,58 @@ class VideoProcessorTranscribeMixin:
         rescue_dir = os.path.join(chunk_dir, "_fast_stt2_recheck")
         shutil.rmtree(rescue_dir, ignore_errors=True)
         os.makedirs(rescue_dir, exist_ok=True)
-        prepared: list[dict] = []
-        for idx, item in enumerate(ranges):
-            clip = self._prepare_recheck_clip(item, rescue_dir, idx, settings)
-            if clip:
-                prepared.append(clip)
-        if not prepared:
-            return scored_primary
-
-        overrides = {
-            "stt_ensemble_enabled": False,
-            "stt_candidate_scoring_enabled": True,
-            "stt_quality_preset": "precise",
-            "stt_rescue_whisper_mode": True,
-            "stt_selective_secondary_recheck_enabled": False,
-            "stt_word_timestamp_precision_pass": False,
-            "stt_word_timestamps_mode": "off",
-            "stt_word_timestamps_default_enabled": False,
-            "stt_word_timestamps_precision_enabled": False,
-            "w_none_temp_max": 0.0,
-            "whisper_chunk_overlap_sec": 0.0,
-        }
-        rescue_segments = self._collect_transcribe_result(
-            rescue_dir,
-            secondary_model,
-            is_single=False,
+        batch = prepare_and_collect_recheck_segments_via_service(
+            ranges=ranges,
+            out_dir=rescue_dir,
+            settings=settings,
+            prepare_clip_fn=self._prepare_recheck_clip,
+            collect_fn=self._collect_transcribe_result,
+            model=secondary_model,
             label="Fast-STT2",
-            settings_overrides=overrides,
+            settings_overrides=selective_secondary_recheck_overrides_via_service(),
+            annotate_fn=self._annotate_stt_candidates,
+            annotate_source="STT2",
+            vad_segments=vad_strict,
+            peer_segments=scored_primary,
+            is_single=False,
         )
-        if not rescue_segments:
+        if not batch.prepared_clips:
             return scored_primary
+        if not batch.collected_segments:
+            return scored_primary
+        if batch.annotate_error:
+            get_logger().log(f"  ⚠️ [{context_label}] STT2 점수 계산 실패: {batch.annotate_error}")
 
-        try:
-            rescue_segments = annotate_stt_candidates(
-                rescue_segments,
-                source="STT2",
-                peer_segments=scored_primary,
-                vad_segments=vad_strict,
-                settings=settings,
-            )
-        except Exception as exc:
-            get_logger().log(f"  ⚠️ [{context_label}] STT2 점수 계산 실패: {exc}")
+        applied = apply_recheck_selection_to_tracks_via_service(
+            prepared_clips=batch.prepared_clips,
+            rescue_segments=batch.collected_segments,
+            settings=settings,
+            replacement_is_better_fn=stt_rescue.replacement_is_better,
+            mark_segments_fn=stt_rescue.mark_rescue_segments,
+            base_tracks={"primary": scored_primary},
+            decorate_segment_fn=lambda seg: {
+                **seg,
+                "stt_selected_source": "STT2",
+                "stt_ensemble_source": "STT2_SELECTIVE_RECHECK",
+                "stt_preview_source": "STT2",
+                "stt_source": "STT2",
+            },
+            retention_ratios={"primary": float(settings.get("stt_selective_recheck_min_segment_retention_ratio", 0.9) or 0.9)},
+        )
 
-        applied_ranges: list[stt_rescue.SttRecheckRange] = []
-        applied_segments: list[dict] = []
-        for clip in prepared:
-            item = clip["range"]
-            start = float(clip["start"])
-            end = float(clip["end"])
-            subset = [
-                dict(seg)
-                for seg in rescue_segments
-                if self._segment_overlaps_range(seg, start, end)
-            ]
-            if not stt_rescue.replacement_is_better(subset, item, settings):
-                continue
-            marked = stt_rescue.mark_rescue_segments(subset, item)
-            for seg in marked:
-                seg["stt_selected_source"] = "STT2"
-                seg["stt_ensemble_source"] = "STT2_SELECTIVE_RECHECK"
-                seg["stt_preview_source"] = "STT2"
-                seg["stt_source"] = "STT2"
-            applied_ranges.append(item)
-            applied_segments.extend(marked)
-
-        if not applied_segments:
+        if not applied.selection.applied_segments:
             get_logger().log(f"  ↩️ [{context_label}] 개선된 저점 구간이 없어 STT1 결과를 유지합니다.")
             return scored_primary
 
-        def _keep_existing(seg: dict) -> bool:
-            return not any(self._segment_overlaps_range(seg, item.start, item.end) for item in applied_ranges)
-
-        updated = [seg for seg in scored_primary if _keep_existing(seg)] + applied_segments
-        updated.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
-        retention_ratio = float(settings.get("stt_selective_recheck_min_segment_retention_ratio", 0.9) or 0.9)
-        if scored_primary and len(updated) < max(1, int(len(scored_primary) * retention_ratio)):
+        if applied.merged_tracks is None:
+            candidate_updated = list(applied.preview_tracks.get("primary", []))
             get_logger().log(
                 f"  ↩️ [{context_label}] STT2 보강 결과가 원본 세그먼트를 과도하게 줄여 "
-                f"STT1 유지 ({len(scored_primary)}개 → {len(updated)}개)"
+                f"STT1 유지 ({len(scored_primary)}개 → {len(candidate_updated)}개)"
             )
             return scored_primary
-        get_logger().log(f"  ✅ [{context_label}] 저점 구간 {len(applied_ranges)}개를 STT2 결과로 보강했습니다.")
+        updated = list((applied.merged_tracks or {}).get("primary", []))
+        get_logger().log(f"  ✅ [{context_label}] 저점 구간 {len(applied.selection.applied_ranges)}개를 STT2 결과로 보강했습니다.")
         return updated
 
     def _transcribe_selective_ensemble(
@@ -1127,9 +940,7 @@ class VideoProcessorTranscribeMixin:
                 primary_model,
             )
             try:
-                from core.audio.stt_candidate_scorer import annotate_stt_candidates
-
-                primary_segments = annotate_stt_candidates(
+                primary_segments = self._annotate_stt_candidates(
                     primary_segments,
                     source="STT1_SELECTIVE",
                     vad_segments=vad_strict,
@@ -1818,14 +1629,7 @@ class VideoProcessorTranscribeMixin:
                             dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
                             vad_segments=vad_strict,
                         )
-                        chunk_segs = self._recheck_primary_low_score_with_secondary(
-                            chunk_dir,
-                            chunk_segs,
-                            s,
-                            vad_strict,
-                            target_model,
-                        )
-                        chunk_segs = self._recheck_word_timestamps_for_precision(
+                        chunk_segs = self._apply_post_parse_refinements(
                             chunk_dir,
                             chunk_segs,
                             s,
@@ -1955,14 +1759,7 @@ class VideoProcessorTranscribeMixin:
                         dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
                         vad_segments=vad_strict,
                     )
-                    chunk_segs = self._recheck_primary_low_score_with_secondary(
-                        chunk_dir,
-                        chunk_segs,
-                        s,
-                        vad_strict,
-                        target_model,
-                    )
-                    chunk_segs = self._recheck_word_timestamps_for_precision(
+                    chunk_segs = self._apply_post_parse_refinements(
                         chunk_dir,
                         chunk_segs,
                         s,

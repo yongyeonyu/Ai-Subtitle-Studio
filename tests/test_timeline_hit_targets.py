@@ -2,6 +2,7 @@
 # Phase: PHASE2
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -274,6 +275,42 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertGreater(border_color.green(), 160)
             self.assertGreater(border_color.green(), border_color.red())
             self.assertGreater(border_color.green(), border_color.blue())
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_editing_segment_renders_playhead_behind_subtitle_band(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(420, canvas.height())
+            canvas.pps = 120.0
+            canvas.total_duration = 4.0
+            canvas.playhead_sec = 1.8
+            canvas.segments = [
+                {"start": 1.0, "end": 2.8, "text": "", "line": 0},
+            ]
+            canvas.show()
+            self.app.processEvents()
+
+            sample_y = SUBTITLE_TOP + 18
+            playhead_x = canvas._x(canvas.playhead_sec)
+            neighbor_x = playhead_x + 6
+
+            image = canvas.grab().toImage()
+            normal_playhead_px = image.pixelColor(playhead_x, sample_y).name()
+            normal_neighbor_px = image.pixelColor(neighbor_x, sample_y).name()
+
+            canvas._edit_active = True
+            canvas._edit_line = 0
+            canvas.update()
+            self.app.processEvents()
+
+            image = canvas.grab().toImage()
+            editing_playhead_px = image.pixelColor(playhead_x, sample_y).name()
+            editing_neighbor_px = image.pixelColor(neighbor_x, sample_y).name()
+
+            self.assertNotEqual(normal_playhead_px, normal_neighbor_px)
+            self.assertEqual(editing_playhead_px, editing_neighbor_px)
         finally:
             canvas.close()
             canvas.deleteLater()
@@ -2163,14 +2200,35 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.close()
             canvas.deleteLater()
 
-    def test_review_segment_right_click_emits_review_menu_request(self):
+    def test_review_segment_right_click_menu_merges_review_actions_into_first_menu(self):
+        canvas = self._canvas()
+        canvas.resize(420, canvas.height())
+        canvas.segments[0]["quality"] = {"confidence_label": "red", "flags": ["high_cps"]}
+        captured = {}
+
+        def _capture_menu(_owner, _gpos, items):
+            captured["labels"] = [str(item.get("label", "")) for item in items]
+            return None
+
+        with patch("ui.timeline.timeline_input.show_context_menu", side_effect=_capture_menu):
+            QTest.mouseClick(
+                canvas,
+                Qt.MouseButton.RightButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(canvas._x(1.5), SEG_TOP + 10),
+            )
+
+        self.assertEqual(captured["labels"], ["자막 확정", "자막 분할", "자막 삭제"])
+        self.assertNotIn("검토 메뉴", captured["labels"])
+
+    def test_review_segment_right_click_emits_primary_review_action_request(self):
         canvas = self._canvas()
         canvas.resize(420, canvas.height())
         canvas.segments[0]["quality"] = {"confidence_label": "red", "flags": ["high_cps"]}
         emitted = []
         canvas.seg_right_clicked.connect(lambda start, _pos: emitted.append(start))
 
-        with patch("ui.timeline.timeline_input.show_context_menu", return_value="review"):
+        with patch("ui.timeline.timeline_input.show_context_menu", return_value="primary"):
             QTest.mouseClick(
                 canvas,
                 Qt.MouseButton.RightButton,
@@ -2181,7 +2239,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(emitted, [1.0])
         self.assertFalse(canvas._edit_active)
 
-    def test_confirmed_segment_right_click_emits_review_menu_request(self):
+    def test_confirmed_segment_right_click_emits_primary_review_action_request(self):
         canvas = self._canvas()
         canvas.resize(420, canvas.height())
         canvas.segments[0]["quality"] = {
@@ -2192,7 +2250,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         emitted = []
         canvas.seg_right_clicked.connect(lambda start, _pos: emitted.append(start))
 
-        with patch("ui.timeline.timeline_input.show_context_menu", return_value="review"):
+        with patch("ui.timeline.timeline_input.show_context_menu", return_value="primary"):
             QTest.mouseClick(
                 canvas,
                 Qt.MouseButton.RightButton,
@@ -2436,6 +2494,32 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_timeline_review_action_from_canvas_bypasses_second_popup(self):
+        editor = _ReviewEditor()
+        try:
+            editor.text_edit.setPlainText("삭제할 자막")
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(
+                SubtitleBlockData(
+                    "00",
+                    1.0,
+                    quality={"confidence_label": "red", "flags": ["high_cps"]},
+                )
+            )
+            editor._segments = [
+                {"line": 0, "start": 1.0, "end": 2.0, "text": "삭제할 자막", "quality": {"confidence_label": "red", "flags": ["high_cps"]}}
+            ]
+            editor.timeline = SimpleNamespace(canvas=SimpleNamespace(_pending_timeline_review_action="delete"))
+
+            with patch("ui.editor.editor_video_controls.show_context_menu") as menu:
+                editor._on_timeline_seg_right_clicked(1.0, QPoint())
+
+            self.assertEqual(editor.deleted_lines, [0])
+            menu.assert_not_called()
+            self.assertFalse(hasattr(editor.timeline.canvas, "_pending_timeline_review_action"))
+        finally:
+            editor.text_edit.close()
+
     def test_yellow_diamond_drag_emits_both_adjacent_segment_updates(self):
         canvas = self._canvas()
         try:
@@ -2540,22 +2624,23 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas._detect_live_cut_boundary_record = Mock(
                 return_value={"local_sec": 1.23, "frame": 123, "score": 40.0}
             )
+            canvas._schedule_drag_live_cut_async = Mock()
             canvas._drag_edge = "diamond"
             canvas._drag_diamond_pair = (0, 1)
             canvas._drag_diamond_orig = 2.0
 
             candidates = canvas._drag_live_cut_snap_candidates(2.19, edge="diamond")
 
-            self.assertEqual(len(candidates), 1)
-            self.assertEqual(candidates[0]["kind"], "cut_live")
-            self.assertAlmostEqual(candidates[0]["time"], 2.23)
-            canvas._detect_live_cut_boundary_record.assert_called_once()
-            call = canvas._detect_live_cut_boundary_record.call_args
-            self.assertEqual(call.args, (__file__, 1.19, 100.0))
-            self.assertEqual(call.kwargs.get("direction"), 1)
-            self.assertAlmostEqual(call.kwargs.get("search_start_local_sec"), 0.19, places=2)
-            self.assertAlmostEqual(call.kwargs.get("search_end_local_sec"), 1.19, places=2)
-            self.assertAlmostEqual(canvas._drag_shadow_playhead_sec or 0.0, 2.23, places=4)
+            self.assertEqual(candidates, [])
+            canvas._detect_live_cut_boundary_record.assert_not_called()
+            canvas._schedule_drag_live_cut_async.assert_called_once()
+            request = canvas._schedule_drag_live_cut_async.call_args.args[0]
+            self.assertEqual(request["media_path"], os.path.abspath(__file__))
+            self.assertEqual(request["direction"], 1)
+            self.assertAlmostEqual(request["origin_local_sec"], 1.0, places=2)
+            self.assertAlmostEqual(request["target_local_sec"], 1.19, places=2)
+            self.assertAlmostEqual(request["search_start_local_sec"], 1.0, places=2)
+            self.assertAlmostEqual(request["search_end_local_sec"], 1.19, places=2)
         finally:
             canvas.deleteLater()
 
@@ -2574,6 +2659,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas._detect_live_cut_boundary_record = Mock(
                 return_value={"local_sec": 1.66, "frame": 166, "score": 31.0}
             )
+            canvas._schedule_drag_live_cut_async = Mock()
             canvas._drag_edge = "diamond"
             canvas._drag_diamond_pair = (0, 1)
             canvas._drag_diamond_orig = 2.0
@@ -2581,11 +2667,94 @@ class TimelineHitTargetTests(unittest.TestCase):
 
             candidates = canvas._drag_live_cut_snap_candidates(1.70, edge="diamond")
 
+            self.assertEqual(candidates, [])
+            canvas._detect_live_cut_boundary_record.assert_not_called()
+            request = canvas._schedule_drag_live_cut_async.call_args.args[0]
+            self.assertEqual(request["direction"], -1)
+            self.assertAlmostEqual(request["search_start_local_sec"], 1.70, places=2)
+            self.assertAlmostEqual(request["search_end_local_sec"], 2.0, places=2)
+            self.assertEqual(request["origin_frame"], 200)
+            self.assertEqual(request["target_frame"], 170)
+        finally:
+            canvas.deleteLater()
+
+    def test_live_cut_snap_returns_cached_async_candidate_without_blocking(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas._resolve_active_context = Mock(
+                return_value={
+                    "clip_file": __file__,
+                    "local_sec": 1.30,
+                    "clip_start": 1.0,
+                    "fps": 100.0,
+                }
+            )
+            canvas._schedule_drag_live_cut_async = Mock()
+            canvas._detect_live_cut_boundary_record = Mock()
+            canvas._drag_edge = "diamond"
+            canvas._drag_diamond_pair = (0, 1)
+            canvas._drag_diamond_orig = 2.0
+            canvas._drag_live_cut_async_candidate = {
+                "time": 2.23,
+                "kind": "cut_live",
+                "source": {
+                    "media_path": __file__,
+                    "local_sec": 1.23,
+                    "clip_start": 1.0,
+                    "fps": 100.0,
+                    "frame": 123,
+                },
+            }
+
+            candidates = canvas._drag_live_cut_snap_candidates(2.30, edge="diamond")
+
             self.assertEqual(len(candidates), 1)
-            call = canvas._detect_live_cut_boundary_record.call_args
-            self.assertEqual(call.kwargs.get("direction"), -1)
-            self.assertAlmostEqual(call.kwargs.get("search_start_local_sec"), 1.70, places=2)
-            self.assertAlmostEqual(call.kwargs.get("search_end_local_sec"), 2.70, places=2)
+            self.assertEqual(candidates[0]["kind"], "cut_live")
+            self.assertAlmostEqual(candidates[0]["time"], 2.23)
+            canvas._detect_live_cut_boundary_record.assert_not_called()
+            canvas._schedule_drag_live_cut_async.assert_called_once()
+            self.assertAlmostEqual(canvas._drag_shadow_playhead_sec or 0.0, 2.23, places=4)
+        finally:
+            canvas.deleteLater()
+
+    def test_live_cut_async_result_reapplies_current_diamond_drag(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas._drag_edge = "diamond"
+            canvas._drag_diamond_pair = (0, 1)
+            canvas._drag_diamond_orig = 2.0
+            canvas._drag_last_delta = 0.30
+            canvas._drag_live_cut_session_id = 7
+            canvas._drag_live_cut_async_busy = True
+            canvas._apply_drag = Mock()
+
+            canvas._on_drag_live_cut_async_result(
+                {
+                    "session_id": 7,
+                    "token": 1,
+                    "request": {
+                        "media_path": __file__,
+                        "fps": 100.0,
+                        "clip_start": 1.0,
+                        "direction": 1,
+                        "search_start_local_sec": 1.0,
+                        "search_end_local_sec": 1.30,
+                        "score_start_frame": 99,
+                        "search_start_frame": 100,
+                        "search_end_frame": 130,
+                        "signature": (__file__, 100.0, 100, 130, 100, 130),
+                    },
+                    "candidate": {"local_sec": 1.23, "frame": 123, "score": 42.0},
+                    "scores": [(42.0, 123)],
+                }
+            )
+
+            self.assertFalse(canvas._drag_live_cut_async_busy)
+            self.assertEqual((canvas._drag_live_cut_async_candidate or {}).get("kind"), "cut_live")
+            self.assertAlmostEqual(canvas._drag_live_cut_async_candidate["time"], 2.23)
+            canvas._apply_drag.assert_called_once_with(0.30)
         finally:
             canvas.deleteLater()
 

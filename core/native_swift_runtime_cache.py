@@ -7,6 +7,19 @@ from core.native_swift_subtitle import native_swift_runtime_enabled, request_nat
 from core.runtime.config import IS_MAC
 
 
+_NORMALIZED_CACHE: dict[tuple[str, ...], tuple[str, ...]] = {}
+
+
+def _normalized_paths(paths: list[str | Path]) -> list[str]:
+    key = tuple(str(Path(path)) for path in paths)
+    if key in _NORMALIZED_CACHE:
+        return list(_NORMALIZED_CACHE[key])
+    normalized = sorted({str(Path(path).resolve(strict=False)) for path in paths})
+    tuple_value = tuple(normalized)
+    _NORMALIZED_CACHE[key] = tuple_value
+    return list(tuple_value)
+
+
 def _enabled() -> bool:
     if not IS_MAC:
         return False
@@ -24,7 +37,7 @@ def prune_runtime_disk_caches_via_swift(
     decoded = request_native_core_task(
         "runtime_disk_cache_prune",
         {
-            "paths": [str(Path(path)) for path in paths],
+            "paths": _normalized_paths(paths),
             "target_total_bytes": max(0, int(target_total_bytes or 0)),
         },
     )

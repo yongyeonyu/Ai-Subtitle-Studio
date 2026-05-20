@@ -84,9 +84,20 @@ class TimelineInputMixin:
     def _show_segment_context_menu(self, seg: dict, gpos, *, click_x: int, click_y: int) -> None:
         if not isinstance(seg, dict):
             return
+        if hasattr(self, "_pending_timeline_review_action"):
+            del self._pending_timeline_review_action
         items = []
         if self._segment_needs_manual_review(seg):
-            items.append({"id": "review", "label": "검토 메뉴", "accent": COLORS["warning"]})
+            quality = dict(seg.get("quality") or {})
+            flags = set(str(flag) for flag in (quality.get("flags") or ()))
+            manually_confirmed = bool(quality.get("manual_confirmed")) or "manual_confirmed" in flags
+            items.append(
+                {
+                    "id": "primary",
+                    "label": "임시자막" if manually_confirmed else "자막 확정",
+                    "accent": "#34C759",
+                }
+            )
         items.append(
             {
                 "id": "split",
@@ -95,8 +106,18 @@ class TimelineInputMixin:
                 "accent": COLORS["warning"],
             }
         )
+        if self._segment_needs_manual_review(seg):
+            items.append(
+                {
+                    "id": "delete",
+                    "label": "자막 삭제",
+                    "danger": True,
+                    "accent": "#FF453A",
+                }
+            )
         chosen = show_context_menu(self, gpos, items)
-        if chosen == "review":
+        if chosen in {"primary", "delete"}:
+            self._pending_timeline_review_action = str(chosen)
             self.seg_right_clicked.emit(float(seg.get("start", 0.0) or 0.0), gpos)
             return
         if chosen == "split":

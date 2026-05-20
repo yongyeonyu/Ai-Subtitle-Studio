@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.10-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
-Last-Updated: 2026-05-19
+Document-Version: 04.00.11-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_11_RELEASED
+Last-Updated: 2026-05-20
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,13 +19,13 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.10"
-document_version: "04.00.10-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_10_RELEASED"
+app_version: "04.00.11"
+document_version: "04.00.11-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_11_RELEASED"
 next_phase: null
 active_item_count: 16
 commit_policy: "Commit only when the user explicitly asks."
-product_priority: "Accuracy before speed."
+product_priority: "Accuracy before speed; optimize generation time only with behavior-preserving changes."
 native_plan: "NATIVE_LIB_PLAN.md"
 ```
 
@@ -87,21 +87,18 @@ native_plan: "NATIVE_LIB_PLAN.md"
   Success: no giant helper-installer functions remain on the active cut-boundary path.
   Verification: cut-boundary unit tests plus Macau visual smoke.
 
-- [ ] 13. Split `core/pipeline/single_pipeline.py` into planner and progress coordinator.
-  Scope: separate media-processing decisions from queue/header updates, autosave, project writes, and UI callbacks.
-  Success: subtitle generation behavior is unchanged while execution planning becomes testable without UI state.
-  Verification: pipeline tests plus Macau generation smoke.
-
 - [ ] 14. Split audio processing into durable services.
   Scope: extraction, chunking, transcription, VAD, cache decisions, worker pooling, retry policy, and resource cleanup.
-  Success: common subprocess/worker cleanup policy is shared and persistent worker ownership is explicit.
+  Success: common subprocess/worker cleanup policy is shared and persistent worker ownership is explicit; memory-pressure worker reuse decisions stay test-covered.
+  Next: keep the current accepted `candidate1` cleanup policy, then inspect stage-level trim cost and STT/LLM worker residency before loosening more cleanup calls.
   Verification: audio/STT tests plus X5 or Tinyping slice when subtitle accuracy can be affected.
 
 ### P1 - Performance, Memory, And Tooling
 
 - [ ] 15. Reduce duplicated segment/project state and lazy-hydrate large assets.
   Scope: editor/timeline/STT/save payload duplication, candidate lattices, preview rows, quality payloads, and large text assets.
-  Success: project open/save does not eagerly copy large optional tracks until a lane/panel needs them.
+  Success: project open/save and subtitle generation do not eagerly copy or retain large optional tracks until a lane/panel needs them.
+  Next: use `output/runtime_monitor/latest.json` and `output/memory_monitor/subtitle_generation_latest.json` to confirm whether repeated generation still reaches `critical` after STT worker cleanup.
   Verification: project load/save tests plus memory snapshot on Tinyping when relevant.
 
 - [ ] 16. Wire maintenance-budget checks into CI or the release checklist.
@@ -114,24 +111,31 @@ native_plan: "NATIVE_LIB_PLAN.md"
   Success: removable dead code is deleted only after static and dynamic wiring checks.
   Verification: targeted symbol scan plus QML/offscreen smoke where applicable.
 
+- [ ] 18. Stage별 trim 비용을 계측해서 다음 반복 최적화 후보를 좁힌다.
+  Scope: `core/runtime/memory_manager.py`, `core/pipeline/single_pipeline.py`, `output/runtime_monitor/latest.json`, `output/memory_monitor/subtitle_generation_latest.json`
+  Assumption: 현재는 cleanup 완화 자체보다 `어느 stage trim이 실제 느린지`가 더 중요한 병목 정보다.
+  Success: `cut_prescan_done`, `subtitle_optimize_done`, `stt_optimizer_threads_done`, `save_export_done` 주변의 trim 횟수와 비용을
+  마카오/X5 반복 벤치에 연결해서 다음 후보를 숫자로 선택할 수 있을 것.
+  Verification: 마카오/X5 10회 반복 + stage별 trim 로그 비교.
+
 ### P1 - Native Library Queue
 
-- [ ] 18. Benchmark native media-info normalization against the current cached Python path.
+- [ ] 19. Benchmark native media-info normalization against the current cached Python path.
   Scope: only probe-result normalization and cache-key shaping, not full ffprobe orchestration.
   Success: native path is kept only if it is equal or faster on real project open/save benchmarks.
   Details: see `NATIVE_LIB_PLAN.md`.
 
-- [ ] 19. Prepare cut-boundary scoring/alignment loops for native migration.
+- [ ] 20. Prepare cut-boundary scoring/alignment loops for native migration.
   Scope: isolate deterministic numeric loops after the cut-boundary Python refactor lands.
   Success: Swift/C++ path has parity tests and Python fallback before becoming default.
   Details: see `NATIVE_LIB_PLAN.md`.
 
-- [ ] 20. Prepare subtitle candidate scoring and sequence smoothing for native migration.
+- [ ] 21. Prepare subtitle candidate scoring and sequence smoothing for native migration.
   Scope: STT candidate scoring, lattice overlap scoring, subtitle timing, and word resegmenting hot loops.
   Success: native path improves or matches accuracy/speed and does not change final subtitle quality.
   Verification: X5 accuracy slice.
 
-- [ ] 21. Split oversized Swift core files before adding more native features.
+- [ ] 22. Split oversized Swift core files before adding more native features.
   Scope: `TimelineEditing.swift`, `NativePolicyEngine.swift`, and `RuntimeETAEstimator.swift`.
   Success: geometry, magnet, undo, serialization, scoring, retrieval, decision, persistence, and prediction responsibilities are separated.
   Verification: `swift test` in `native/macos/AIStudioNative`.

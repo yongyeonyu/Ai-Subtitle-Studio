@@ -11,6 +11,8 @@ Rectangle {
     property bool playing: false
     property bool scanPrevActive: false
     property bool scanNextActive: false
+    property int contentLeftInset: 0
+    property int contentRightInset: 0
 
     signal playRequested()
     signal prevFrameRequested()
@@ -18,9 +20,9 @@ Rectangle {
     signal prevScanRequested()
     signal nextScanRequested()
 
-    color: "#151C20"
+    color: "transparent"
     radius: 12
-    border.width: 1
+    border.width: 0
     border.color: "#2D3942"
 
     function buttonBackground(active, primary) {
@@ -40,12 +42,6 @@ Rectangle {
     }
 
     TextMetrics {
-        id: frameTextMetrics
-        font: frameTextItem.font
-        text: root.frameText
-    }
-
-    TextMetrics {
         id: infoTextMetrics
         font: infoTextItem.font
         text: (root.infoText || "").replace(/\n/g, " | ")
@@ -54,9 +50,9 @@ Rectangle {
     Row {
         id: controlRow
         anchors.left: parent.left
-        anchors.leftMargin: 8
+        anchors.leftMargin: root.contentLeftInset + 8
         anchors.verticalCenter: parent.verticalCenter
-        height: parent.height - 16
+        height: 32
         spacing: root.gap
 
         Rectangle {
@@ -179,7 +175,7 @@ Rectangle {
         Rectangle {
             id: frameBadge
             visible: root.frameText.length > 0
-            width: visible ? Math.ceil(frameTextMetrics.boundingRect.width) + 24 : 0
+            width: visible ? 124 : 0
             height: 32
             radius: 9
             color: "#132831"
@@ -202,19 +198,19 @@ Rectangle {
         anchors.left: controlRow.right
         anchors.leftMargin: root.gap
         anchors.right: parent.right
-        anchors.rightMargin: 8
+        anchors.rightMargin: root.contentRightInset + 8
         anchors.verticalCenter: parent.verticalCenter
-        height: parent.height - 16
+        height: 32
 
         Rectangle {
             id: infoBadge
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             width: Math.max(
-                210,
+                160,
                 Math.min(
                     Math.ceil(infoTextMetrics.boundingRect.width) + 28,
-                    Math.max(210, Math.floor(parent.width * 0.34))
+                    Math.max(160, Math.floor(parent.width * 0.24))
                 )
             )
             height: 32

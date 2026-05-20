@@ -173,6 +173,19 @@ class EditorTimelineVideoMixin(
         if sync_playhead and (not is_playing) and hasattr(self, 'timeline') and hasattr(self.timeline, 'set_playhead'):
             self._reset_playhead_smoothing(seg["start"])
             self.timeline.set_playhead(seg["start"])
+            # 선택/자동화 경로도 비디오 overlay가 같은 자막 시간을 즉시 보도록 맞춘다.
+            player_widget = getattr(self, "video_player", None)
+            if player_widget is not None and hasattr(player_widget, "set_subtitle_display_time"):
+                local_sec = float(seg.get("start", 0.0) or 0.0)
+                if hasattr(self, "_global_to_local_sec"):
+                    try:
+                        local_sec = float(self._global_to_local_sec(local_sec))
+                    except Exception:
+                        local_sec = float(seg.get("start", 0.0) or 0.0)
+                try:
+                    player_widget.set_subtitle_display_time(local_sec)
+                except Exception:
+                    pass
         line_num = seg.get("line", 0)
         self._highlighter.set_current_line(line_num)
         remember_repeat_segment = getattr(self, "_remember_repeat_segment", None)
@@ -317,6 +330,40 @@ class EditorTimelineVideoMixin(
     # Timeline Segment Events
     # ---------------------------------------------------------
 
+    def _segment_from_timeline_canvas_click(self, line_num, click_sec: float):
+        canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+        rows = list(getattr(canvas, "segments", []) or []) if canvas is not None else []
+        if not rows:
+            return None
+        best: tuple[tuple[int, float], dict] | None = None
+        try:
+            line_key = int(line_num)
+        except Exception:
+            line_key = -1
+        for seg in rows:
+            if not isinstance(seg, dict) or seg.get("is_gap"):
+                continue
+            try:
+                start = self._snap_to_frame(float(seg.get("start", 0.0) or 0.0))
+                end = self._snap_to_frame(float(seg.get("end", start) or start))
+                seg_line = int(seg.get("line", -1))
+            except Exception:
+                continue
+            contains_click = start <= click_sec < end
+            near_start = abs(start - click_sec) <= 0.15
+            score = None
+            if seg_line == line_key and (contains_click or near_start):
+                score = (0, abs(start - click_sec))
+            elif contains_click:
+                score = (1, abs(start - click_sec))
+            elif near_start:
+                score = (2, abs(start - click_sec))
+            if score is None:
+                continue
+            if best is None or score < best[0]:
+                best = (score, seg)
+        return best[1] if best is not None else None
+
     def _segment_for_timeline_click(self, line_num, start_sec, cache: dict | None = None):
         try:
             click_sec = self._snap_to_frame(float(start_sec or 0.0))
@@ -341,6 +388,10 @@ class EditorTimelineVideoMixin(
         time_seg = find_segment_at_lookup(cache, click_sec, skip_gap=False)
         if time_seg is None:
             time_seg = self._nearest_segment_start_match(cache, click_sec, tolerance=0.15)
+        canvas_seg = self._segment_from_timeline_canvas_click(line_num, click_sec)
+
+        if isinstance(canvas_seg, dict):
+            return canvas_seg
 
         if isinstance(line_seg, dict):
             try:

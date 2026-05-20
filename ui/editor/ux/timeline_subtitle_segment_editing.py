@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 import os
+import threading
 import time
 
-from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtCore import QPoint, QRect, Qt, QTimer
 from PyQt6.QtGui import QCursor, QPolygon
 
 from core.coerce import safe_float as _as_float
@@ -40,6 +41,194 @@ from ui.timeline.timeline_constants import (
     SEG_TOP,
     SEGMENT_HANDLE_MIN_WIDTH,
 )
+
+
+def _live_cut_candidates_from_scores_standalone(scored: list[tuple[float, int]], fps: float) -> list[dict]:
+    clean_scores: list[tuple[float, int]] = []
+    for score, frame_no in list(scored or []):
+        try:
+            clean_scores.append((float(score), int(frame_no)))
+        except Exception:
+            continue
+    if not clean_scores:
+        return []
+
+    values = sorted(float(score) for score, _frame in clean_scores)
+    mid = len(values) // 2
+    median_score = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2.0
+    threshold = max(12.0, median_score + 7.0)
+    strong_scored = [(float(score), int(frame_no)) for score, frame_no in clean_scores if float(score) >= threshold]
+    if not strong_scored:
+        top_score, top_frame = max(clean_scores, key=lambda item: item[0])
+        if float(top_score) >= 18.0:
+            strong_scored.append((float(top_score), int(top_frame)))
+    if not strong_scored:
+        return []
+
+    cluster_gap = max(1, int(round(max(1.0, float(fps or 30.0)) * 0.04)))
+    strong_scored.sort(key=lambda item: item[1])
+    clustered: list[tuple[float, int]] = []
+    cluster_scores: list[tuple[float, int]] = []
+    for score, frame_no in strong_scored:
+        if not cluster_scores or frame_no - cluster_scores[-1][1] <= cluster_gap:
+            cluster_scores.append((score, frame_no))
+            continue
+        clustered.append(max(cluster_scores, key=lambda item: item[0]))
+        cluster_scores = [(score, frame_no)]
+    if cluster_scores:
+        clustered.append(max(cluster_scores, key=lambda item: item[0]))
+
+    return [
+        {
+            "local_sec": float(frame_no) / max(1.0, float(fps or 30.0)),
+            "frame": int(frame_no),
+            "score": round(float(score), 3),
+            "median_score": round(float(median_score), 3),
+            "score_margin": round(float(score) - float(median_score), 3),
+            "score_ratio": round(float(score) / max(1.0, float(median_score)), 3),
+        }
+        for score, frame_no in clustered
+    ]
+
+
+def _select_live_cut_candidate_from_scores_standalone(
+    scored: list[tuple[float, int]],
+    fps: float,
+    *,
+    search_start_frame: int,
+    search_end_frame: int,
+    origin_frame: int,
+    target_frame: int,
+    direction: int,
+) -> dict | None:
+    candidates = _live_cut_candidates_from_scores_standalone(scored, fps)
+    if not candidates:
+        return None
+    lo = min(int(search_start_frame), int(search_end_frame))
+    hi = max(int(search_start_frame), int(search_end_frame))
+    origin_exclusion_frames = max(2, int(round(max(1.0, float(fps or 30.0)) * 0.025)))
+    filtered: list[dict] = []
+    for item in candidates:
+        try:
+            frame_no = int(item.get("frame", -1))
+        except Exception:
+            continue
+        if frame_no < lo or frame_no > hi:
+            continue
+        if int(direction) >= 0 and frame_no <= int(origin_frame) + origin_exclusion_frames:
+            continue
+        if int(direction) < 0 and frame_no >= int(origin_frame) - origin_exclusion_frames:
+            continue
+        filtered.append(item)
+    if not filtered:
+        return None
+    return max(
+        filtered,
+        key=lambda item: (
+            float(item.get("score", 0.0) or 0.0),
+            -abs(int(item.get("frame", target_frame)) - int(target_frame)),
+        ),
+    )
+
+
+def _open_live_cut_capture_standalone(media_path: str, cv2_mod, *, use_gpu: bool):
+    if use_gpu and hasattr(cv2_mod, "CAP_PROP_HW_ACCELERATION"):
+        try:
+            params = [
+                int(cv2_mod.CAP_PROP_HW_ACCELERATION),
+                int(getattr(cv2_mod, "VIDEO_ACCELERATION_ANY", 1)),
+            ]
+            cap = cv2_mod.VideoCapture(media_path, int(getattr(cv2_mod, "CAP_FFMPEG", 0)), params)
+            if cap is not None and cap.isOpened():
+                return cap
+            if cap is not None:
+                cap.release()
+        except Exception:
+            pass
+    return cv2_mod.VideoCapture(media_path)
+
+
+def _compute_live_cut_boundary_scores_standalone(
+    media_path: str,
+    search_start_frame: int,
+    search_end_frame: int,
+    *,
+    use_gpu: bool = True,
+) -> list[tuple[float, int]]:
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return []
+
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        np = None
+
+    media_path = os.path.abspath(os.path.expanduser(str(media_path or "")))
+    if not media_path or not os.path.exists(media_path):
+        return []
+    first_frame = max(0, int(search_start_frame))
+    last_frame = max(first_frame + 2, int(search_end_frame))
+
+    cap = _open_live_cut_capture_standalone(media_path, cv2, use_gpu=bool(use_gpu))
+    try:
+        if not cap or not cap.isOpened():
+            return []
+        if use_gpu:
+            try:
+                if bool(cv2.ocl.haveOpenCL()):
+                    cv2.ocl.setUseOpenCL(True)
+            except Exception:
+                pass
+
+        frames: list[tuple[int, object, object]] = []
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(first_frame))
+        for frame_no in range(first_frame, last_frame + 1):
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            try:
+                height, width = frame.shape[:2]
+                if height <= 0 or width <= 0:
+                    continue
+                target_w = 96
+                target_h = max(18, min(54, int(round(height * target_w / max(1, width)))))
+                small = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                frames.append((int(frame_no), gray, small))
+            except Exception:
+                continue
+        if len(frames) < 3:
+            return []
+
+        frame_numbers = [int(frame_no) for frame_no, _gray, _color in frames]
+        gray_frames = [gray for _frame_no, gray, _color in frames]
+        color_frames = [color for _frame_no, _gray, color in frames]
+        if _native_live_cut_scores is not None:
+            native_scores = _native_live_cut_scores(gray_frames, color_frames, frame_numbers)
+            if isinstance(native_scores, list):
+                return [(float(score), int(frame_no)) for score, frame_no in native_scores]
+
+        if np is None:
+            return []
+        scored: list[tuple[float, int]] = []
+        for prev, cur in zip(frames, frames[1:]):
+            _prev_no, prev_gray, prev_color = prev
+            cur_no, cur_gray, cur_color = cur
+            try:
+                gray_score = float(np.mean(np.abs(cur_gray.astype(np.int16) - prev_gray.astype(np.int16))))
+                color_score = float(np.mean(np.abs(cur_color.astype(np.int16) - prev_color.astype(np.int16))))
+                scored.append((max(gray_score, color_score * 0.85), int(cur_no)))
+            except Exception:
+                continue
+        return scored
+    finally:
+        try:
+            cap.release()
+        except Exception:
+            pass
+
 
 class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
     def _clear_pending_center_drag(self) -> None:
@@ -354,6 +543,10 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         self._clear_active_gaps_for_segment_drag()
         self._drag_snap_candidates_cache = self._drag_snap_candidates()
         self._drag_last_paint_rect = self._drag_visual_rect()
+        if edge == "diamond":
+            self._begin_drag_live_cut_session()
+        else:
+            self._finish_drag_live_cut_session(clear_shadow=False)
         if edge != "center":
             self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
 
@@ -541,6 +734,10 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         self._set_drag_merge_preview_pair(pair)
 
     def _apply_drag(self, delta):
+        try:
+            self._drag_last_delta = float(delta or 0.0)
+        except Exception:
+            self._drag_last_delta = 0.0
         _legacy_apply_timing_drag(self, delta)
         preview_sec = self._timing_drag_preview_sec() if hasattr(self, "_timing_drag_preview_sec") else None
         if preview_sec is not None:
@@ -858,6 +1055,324 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             if settings.get("subtitle_diamond_live_cut_snap_enabled") is False:
                 return False
         return True
+
+    def _drag_live_cut_settings(self) -> dict:
+        settings: dict = {}
+        for owner in self._iter_live_cut_snap_owners():
+            owner_settings = getattr(owner, "settings", None)
+            if isinstance(owner_settings, dict):
+                settings.update(owner_settings)
+        return settings
+
+    def _drag_live_cut_async_delay_ms(self) -> int:
+        settings = self._drag_live_cut_settings()
+        raw = settings.get(
+            "subtitle_diamond_live_cut_snap_async_delay_ms",
+            settings.get("timeline_live_cut_snap_async_delay_ms", 45),
+        )
+        try:
+            return max(8, min(180, int(raw)))
+        except Exception:
+            return 45
+
+    def _drag_live_cut_gpu_enabled(self) -> bool:
+        settings = self._drag_live_cut_settings()
+        if "subtitle_diamond_live_cut_snap_gpu_enabled" in settings:
+            return bool(settings.get("subtitle_diamond_live_cut_snap_gpu_enabled"))
+        return bool(settings.get("timeline_live_cut_snap_gpu_enabled", True))
+
+    def _begin_drag_live_cut_session(self) -> None:
+        self._drag_live_cut_session_id = int(getattr(self, "_drag_live_cut_session_id", 0) or 0) + 1
+        self._drag_live_cut_pending_request = None
+        self._drag_live_cut_async_candidate = None
+        self._drag_live_cut_async_busy = False
+        self._drag_live_cut_async_token = 0
+        self._drag_live_cut_last_completed_signature = None
+        self._set_drag_live_cut_shadow(None)
+
+    def _finish_drag_live_cut_session(self, *, clear_shadow: bool = True) -> None:
+        self._drag_live_cut_session_id = int(getattr(self, "_drag_live_cut_session_id", 0) or 0) + 1
+        timer = getattr(self, "_drag_live_cut_async_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        self._drag_live_cut_pending_request = None
+        self._drag_live_cut_async_candidate = None
+        self._drag_live_cut_async_busy = False
+        self._drag_live_cut_last_completed_signature = None
+        if clear_shadow:
+            self._set_drag_live_cut_shadow(None)
+
+    def _build_drag_live_cut_async_request(self, global_sec: float, ctx: dict) -> dict | None:
+        try:
+            media_path = os.path.abspath(os.path.expanduser(str(ctx.get("media_path") or "")))
+        except Exception:
+            media_path = ""
+        if not media_path:
+            return None
+        fps = max(1.0, float(ctx.get("fps") or self._get_fps()))
+        clip_start = float(ctx.get("clip_start", 0.0) or 0.0)
+        target_local_sec = max(0.0, float(ctx.get("local_sec", 0.0) or 0.0))
+        origin_global = getattr(self, "_drag_diamond_orig", None)
+        if origin_global is None:
+            origin_global = self._current_diamond_boundary_sec()
+        try:
+            origin_local_sec = max(0.0, float(origin_global if origin_global is not None else global_sec) - clip_start)
+        except Exception:
+            origin_local_sec = target_local_sec
+
+        frame_sec = 1.0 / fps
+        if target_local_sec > origin_local_sec + frame_sec:
+            direction = 1
+        elif target_local_sec < origin_local_sec - frame_sec:
+            direction = -1
+        else:
+            direction = self._live_cut_drag_direction(float(global_sec or 0.0))
+
+        search_start_local_sec = min(origin_local_sec, target_local_sec)
+        search_end_local_sec = max(origin_local_sec, target_local_sec)
+        search_start_frame = max(0, int(round(search_start_local_sec * fps)))
+        search_end_frame = max(search_start_frame, int(round(search_end_local_sec * fps)))
+        if search_end_frame - search_start_frame < 2:
+            return None
+        origin_frame = max(0, int(round(origin_local_sec * fps)))
+        target_frame = max(0, int(round(target_local_sec * fps)))
+        score_start_frame = max(0, search_start_frame - 1)
+        session_id = int(getattr(self, "_drag_live_cut_session_id", 0) or 0)
+        return {
+            "media_path": media_path,
+            "fps": fps,
+            "clip_start": clip_start,
+            "target_global_sec": self._snap_to_frame(float(global_sec or 0.0)),
+            "target_local_sec": target_local_sec,
+            "origin_local_sec": origin_local_sec,
+            "search_start_local_sec": round(search_start_local_sec, 4),
+            "search_end_local_sec": round(search_end_local_sec, 4),
+            "score_start_frame": score_start_frame,
+            "search_start_frame": search_start_frame,
+            "search_end_frame": search_end_frame,
+            "origin_frame": origin_frame,
+            "target_frame": target_frame,
+            "direction": int(direction),
+            "session_id": session_id,
+            "signature": (
+                media_path,
+                round(fps, 3),
+                search_start_frame,
+                search_end_frame,
+                origin_frame,
+                target_frame,
+            ),
+        }
+
+    def _drag_live_cut_cached_candidates(self, request: dict) -> list[dict]:
+        candidate = getattr(self, "_drag_live_cut_async_candidate", None)
+        if not isinstance(candidate, dict):
+            return []
+        source = candidate.get("source")
+        if not isinstance(source, dict):
+            return []
+        try:
+            if os.path.abspath(str(source.get("media_path") or "")) != str(request.get("media_path") or ""):
+                return []
+            fps = max(1.0, float(request.get("fps") or self._get_fps()))
+            source_fps = max(1.0, float(source.get("fps") or fps))
+            frame_no = int(source.get("frame"))
+            search_start_frame = int(request.get("search_start_frame", 0))
+            search_end_frame = int(request.get("search_end_frame", search_start_frame))
+            origin_frame = int(request.get("origin_frame", 0))
+            direction = int(request.get("direction", 1))
+            target_global_sec = float(request.get("target_global_sec", 0.0) or 0.0)
+            cut_sec = self._snap_to_frame(float(candidate.get("time", 0.0) or 0.0))
+        except Exception:
+            return []
+        if abs(source_fps - fps) > 0.01:
+            return []
+        if frame_no < min(search_start_frame, search_end_frame) or frame_no > max(search_start_frame, search_end_frame):
+            return []
+        exclusion = max(2, int(round(fps * 0.025)))
+        if direction >= 0 and frame_no <= origin_frame + exclusion:
+            return []
+        if direction < 0 and frame_no >= origin_frame - exclusion:
+            return []
+        span_sec = abs(float(request.get("search_end_local_sec", 0.0) or 0.0) - float(request.get("search_start_local_sec", 0.0) or 0.0))
+        max_distance = max(0.20, min(1.0, span_sec + (2.0 / fps)))
+        if abs(cut_sec - self._snap_to_frame(target_global_sec)) > max_distance:
+            return []
+        cached = dict(candidate)
+        cached["time"] = cut_sec
+        self._set_drag_live_cut_shadow(cut_sec)
+        return [cached]
+
+    def _schedule_drag_live_cut_async(self, request: dict) -> None:
+        signature = request.get("signature")
+        if signature is not None and signature == getattr(self, "_drag_live_cut_last_completed_signature", None):
+            return
+        pending = getattr(self, "_drag_live_cut_pending_request", None)
+        if isinstance(pending, dict) and pending.get("signature") == signature:
+            return
+        self._drag_live_cut_pending_request = dict(request)
+        if bool(getattr(self, "_drag_live_cut_async_busy", False)):
+            return
+        timer = getattr(self, "_drag_live_cut_async_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._start_drag_live_cut_async_worker)
+            self._drag_live_cut_async_timer = timer
+        try:
+            active = bool(timer.isActive())
+        except Exception:
+            active = False
+        if not active:
+            timer.start(self._drag_live_cut_async_delay_ms())
+
+    def _start_drag_live_cut_async_worker(self) -> None:
+        if bool(getattr(self, "_drag_live_cut_async_busy", False)):
+            return
+        request = getattr(self, "_drag_live_cut_pending_request", None)
+        if not isinstance(request, dict):
+            return
+        self._drag_live_cut_pending_request = None
+        self._drag_live_cut_async_busy = True
+        token = int(getattr(self, "_drag_live_cut_async_token", 0) or 0) + 1
+        self._drag_live_cut_async_token = token
+        use_gpu = self._drag_live_cut_gpu_enabled()
+        signal = getattr(self, "drag_live_cut_async_result", None)
+
+        def _run() -> None:
+            payload = {
+                "session_id": int(request.get("session_id", 0) or 0),
+                "token": token,
+                "request": request,
+                "candidate": None,
+                "scores": [],
+            }
+            try:
+                scores = _compute_live_cut_boundary_scores_standalone(
+                    str(request.get("media_path") or ""),
+                    int(request.get("score_start_frame", request.get("search_start_frame", 0)) or 0),
+                    int(request.get("search_end_frame", 0) or 0),
+                    use_gpu=use_gpu,
+                )
+                payload["scores"] = scores
+                payload["candidate"] = _select_live_cut_candidate_from_scores_standalone(
+                    scores,
+                    float(request.get("fps", 30.0) or 30.0),
+                    search_start_frame=int(request.get("search_start_frame", 0) or 0),
+                    search_end_frame=int(request.get("search_end_frame", 0) or 0),
+                    origin_frame=int(request.get("origin_frame", 0) or 0),
+                    target_frame=int(request.get("target_frame", 0) or 0),
+                    direction=int(request.get("direction", 1) or 1),
+                )
+            except Exception as exc:
+                payload["error"] = str(exc)
+            try:
+                if signal is not None:
+                    signal.emit(payload)
+            except Exception:
+                pass
+
+        thread = threading.Thread(target=_run, name="timeline-live-cut-snap", daemon=True)
+        thread.start()
+
+    def _cache_drag_live_cut_scores(self, request: dict, scores: list[tuple[float, int]]) -> None:
+        if not isinstance(request, dict) or not scores:
+            return
+        cache = getattr(self, "_live_cut_snap_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._live_cut_snap_cache = cache
+        try:
+            media_path = str(request.get("media_path") or "")
+            fps = max(1.0, float(request.get("fps") or self._get_fps()))
+            first_frame = int(request.get("score_start_frame", request.get("search_start_frame", 0)) or 0)
+            last_frame = int(request.get("search_end_frame", first_frame) or first_frame)
+        except Exception:
+            return
+        key = ("drag_async", media_path, round(fps, 3), first_frame, last_frame)
+        cache[key] = {
+            "path": media_path,
+            "fps": fps,
+            "first_frame": first_frame,
+            "last_frame": last_frame,
+            "scores": list(scores),
+            "search_start_local_sec": float(request.get("search_start_local_sec", 0.0) or 0.0),
+            "search_end_local_sec": float(request.get("search_end_local_sec", 0.0) or 0.0),
+        }
+        if len(cache) > 160:
+            try:
+                cache.pop(next(iter(cache)))
+            except (StopIteration, RuntimeError, TypeError):
+                pass
+
+    def _on_drag_live_cut_async_result(self, payload: dict) -> None:
+        if not isinstance(payload, dict):
+            return
+        try:
+            session_id = int(payload.get("session_id", -1))
+            current_session_id = int(getattr(self, "_drag_live_cut_session_id", 0) or 0)
+        except Exception:
+            return
+        if session_id != current_session_id:
+            return
+        self._drag_live_cut_async_busy = False
+        request = payload.get("request")
+        if not isinstance(request, dict):
+            return
+        scores = payload.get("scores")
+        if isinstance(scores, list):
+            self._cache_drag_live_cut_scores(request, scores)
+        self._drag_live_cut_last_completed_signature = request.get("signature")
+        if str(getattr(self, "_drag_edge", "") or "") != "diamond":
+            self._finish_drag_live_cut_session(clear_shadow=True)
+            return
+
+        candidate = payload.get("candidate")
+        if isinstance(candidate, dict):
+            try:
+                fps = max(1.0, float(request.get("fps") or self._get_fps()))
+                clip_start = float(request.get("clip_start", 0.0) or 0.0)
+                local_cut_sec = float(candidate.get("local_sec", 0.0) or 0.0)
+                cut_sec = self._snap_to_frame(clip_start + max(0.0, local_cut_sec))
+                source = dict(candidate)
+                source.update(
+                    {
+                        "media_path": str(request.get("media_path") or ""),
+                        "local_sec": local_cut_sec,
+                        "clip_start": clip_start,
+                        "fps": fps,
+                        "direction": int(request.get("direction", 1) or 1),
+                        "search_start_local_sec": float(request.get("search_start_local_sec", 0.0) or 0.0),
+                        "search_end_local_sec": float(request.get("search_end_local_sec", 0.0) or 0.0),
+                        "async": True,
+                    }
+                )
+                self._drag_live_cut_async_candidate = {"time": cut_sec, "kind": "cut_live", "source": source}
+                self._set_drag_live_cut_shadow(cut_sec)
+                if getattr(self, "_drag_diamond_pair", None) is not None:
+                    self._apply_drag(float(getattr(self, "_drag_last_delta", 0.0) or 0.0))
+            except Exception:
+                self._drag_live_cut_async_candidate = None
+                self._set_drag_live_cut_shadow(None)
+        else:
+            self._drag_live_cut_async_candidate = None
+            self._set_drag_live_cut_shadow(None)
+
+        if isinstance(getattr(self, "_drag_live_cut_pending_request", None), dict):
+            timer = getattr(self, "_drag_live_cut_async_timer", None)
+            if timer is None:
+                timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._start_drag_live_cut_async_worker)
+                self._drag_live_cut_async_timer = timer
+            try:
+                if not timer.isActive():
+                    timer.start(8)
+            except Exception:
+                pass
 
     def _playhead_auto_cut_magnet_enabled(self) -> bool:
         for owner in self._iter_live_cut_snap_owners():
@@ -1254,58 +1769,16 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         if not media_path:
             self._set_drag_live_cut_shadow(None)
             return []
-        fps = max(1.0, float(ctx.get("fps") or self._get_fps()))
-        direction = self._live_cut_drag_direction(float(global_sec or 0.0))
-        search_start_local_sec, search_end_local_sec = self._live_cut_search_window_secs(
-            float(ctx.get("local_sec", 0.0) or 0.0),
-            direction,
-        )
-        detected = self._detect_live_cut_boundary_record(
-            media_path,
-            float(ctx.get("local_sec", 0.0) or 0.0),
-            fps,
-            direction=direction,
-            search_start_local_sec=search_start_local_sec,
-            search_end_local_sec=search_end_local_sec,
-        )
-        if detected is None:
+        request = self._build_drag_live_cut_async_request(global_sec, ctx)
+        if not isinstance(request, dict):
             self._set_drag_live_cut_shadow(None)
             return []
-        if isinstance(detected, dict):
-            local_cut_sec = detected.get("local_sec")
-            source = dict(detected)
-        else:
-            local_cut_sec = detected
-            source = {}
-        try:
-            local_cut_sec = float(local_cut_sec)
-        except Exception:
-            self._set_drag_live_cut_shadow(None)
-            return []
-        clip_start = float(ctx.get("clip_start", 0.0) or 0.0)
-        cut_sec = self._snap_to_frame(clip_start + max(0.0, local_cut_sec))
-        max_distance = max(
-            0.20,
-            min(
-                1.0,
-                abs(float(search_end_local_sec) - float(search_start_local_sec)) + (2.0 / fps),
-            ),
-        )
-        if abs(cut_sec - self._snap_to_frame(float(global_sec or 0.0))) > max_distance:
-            self._set_drag_live_cut_shadow(None)
-            return []
-        source.update(
-            {
-                "media_path": media_path,
-                "local_sec": local_cut_sec,
-                "clip_start": clip_start,
-                "direction": int(direction),
-                "search_start_local_sec": float(search_start_local_sec),
-                "search_end_local_sec": float(search_end_local_sec),
-            }
-        )
-        self._set_drag_live_cut_shadow(cut_sec)
-        return [{"time": cut_sec, "kind": "cut_live", "source": source}]
+        cached = self._drag_live_cut_cached_candidates(request)
+        if cached:
+            self._schedule_drag_live_cut_async(request)
+            return cached
+        self._schedule_drag_live_cut_async(request)
+        return []
 
     def _detect_live_cut_boundary_record(
         self,
@@ -1752,6 +2225,7 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
     def _finish_timing_drag_cleanup(self, dirty: QRect | None = None) -> None:
         preview_rect = self._merge_preview_repaint_rect(getattr(self, "_drag_merge_pair", None))
         self._drag_merge_pair = None
+        self._finish_drag_live_cut_session(clear_shadow=True)
         self._set_drag_live_cut_shadow(None)
         if preview_rect.isValid() and not preview_rect.isEmpty():
             dirty = preview_rect if dirty is None else dirty.united(preview_rect)

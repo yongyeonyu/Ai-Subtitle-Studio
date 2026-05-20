@@ -1,6 +1,6 @@
 <!--
-Document-Version: 04.00.10-codemap
-Last-Updated: 2026-05-19
+Document-Version: 04.00.11-codemap
+Last-Updated: 2026-05-20
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
 -->
@@ -33,6 +33,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 
 - `ui/editor/editor_widget.py`: main editor composition root.
 - `ui/editor/video_player_widget.py`: video player composition root with frame/seek helpers and shared wiring.
+- `ui/editor/video_player_overlay_mixin.py`: video subtitle overlay layout, QWidget/QML fallback ownership, and export-style paint routing.
 - `ui/editor/video_player_transport.py`: transport controls, quick-control-bar sync, frame-step hold, and playback status widgets.
 - `ui/editor/video_player_audio.py`: audio-output creation, route rebinding, and vocal-player lifecycle helpers.
 - `ui/editor/video_player_surface.py`: media-source loading, preview proxy, thumbnail/surface stack, and navigation/shutdown handling.
@@ -84,6 +85,8 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 
 - `native/macos/AIStudioNative/`: Swift-native package for shared macOS-first core logic.
 - `core/native/_native_cut_boundary.cpp`: native cut-boundary scan/alignment hot loop used behind Python parity checks.
+- `core/native/_native_stt_lattice.cpp`, `core/native_stt_lattice.py`, `core/audio/stt_lattice_service.py`: native-backed STT lattice helpers with Python fallback and parity tests.
+- `core/native/_native_stt_recheck.cpp`, `core/native_stt_recheck.py`, `core/audio/stt_recheck_service.py`: native-backed STT recheck candidate helpers with Python fallback and parity tests.
 - `core/subtitle_core_contract.py`, `core/native_swift_subtitle_core.py`, `native/macos/AIStudioNative/Sources/AIStudioCore/SubtitleCore.swift`: subtitle-core contract and current Swift bridge seam for future native migration.
 - `core/native_swift_*.py`: Python bridges into Swift/native functionality.
 - `core/runtime_eta.py`: queue/startup ETA estimation and history.
@@ -102,6 +105,10 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
   - `tests/test_timeline_render_cache.py`
   - `tests/test_editor_split_undo.py`
   - `tests/test_editor_open_layout.py`
+- Video subtitle overlay:
+  - `tests/test_video_player_widget.py`
+  - `tests/test_editor_video_context_window.py`
+  - `tests/test_project_segment_reload.py`
 - App automation and remote control:
   - `tests/test_app_command_bridge.py`
   - `tests/test_app_command_protocol.py`
@@ -169,6 +176,9 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
   - `tools/appctl.py`
   - `tools/remote_verify.py`
 - Timeline editing UX:
+  - `ui/editor/video_player_overlay_mixin.py`
+  - `ui/editor/video_player_subtitles.py`
+  - `ui/editor/editor_segments_timeline_context.py`
   - `ui/timeline/timeline_roughcut_paint.py`
   - `ui/editor/ux/timeline_input.py`
   - `ui/editor/ux/timeline_subtitle_segment_editing.py`

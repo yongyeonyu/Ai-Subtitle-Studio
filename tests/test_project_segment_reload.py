@@ -1025,6 +1025,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.timeline.active_calls[-1], 1.0)
         self.assertEqual(editor.timeline.playhead_calls[-1], (1.0, True))
         self.assertEqual(editor.video_player.seek_calls[-1], 1.0)
+        self.assertIn("미리보기", [seg.get("text", "") for seg in editor.video_player.context_segments])
 
     def test_timestamp_area_recovers_missing_block_user_data_after_srt_like_load(self):
         segments = [
@@ -1324,6 +1325,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             subtitle_drafts = [seg for seg in editor.timeline.updated[0] if seg.get("_live_subtitle_preview")]
             self.assertEqual([seg["text"] for seg in subtitle_drafts], ["문맥 보정 초안"])
             self.assertFalse(any(seg.get("_live_stt_preview") for seg in editor.timeline.updated[0]))
+            self.assertIn("문맥 보정 초안", [seg.get("text", "") for seg in editor.video_player.context_segments])
         finally:
             editor.text_edit.close()
 

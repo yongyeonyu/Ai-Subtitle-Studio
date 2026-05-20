@@ -87,6 +87,19 @@ class EditorVideoContextWindowTests(unittest.TestCase):
         self.assertGreaterEqual(window[0]["start"], 489.0)
         self.assertLessEqual(window[-1]["start"], 522.0)
 
+    def test_video_context_includes_live_preview_segments_while_processing(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "기존", "line": 0},
+        ]
+        editor = _EditorHarness(segments, playhead_sec=5.0)
+        editor._live_editor_preview_segments = [
+            {"start": 5.0, "end": 6.0, "text": "실시간 자막", "line": 1, "_live_subtitle_preview": True}
+        ]
+
+        window = editor._video_subtitle_context_for_player()
+
+        self.assertIn("실시간 자막", [seg["text"] for seg in window])
+
     def test_video_context_reuses_cached_visible_window_for_same_range(self):
         segments = [
             {"start": float(i), "end": float(i) + 0.6, "text": f"seg {i}", "line": i}

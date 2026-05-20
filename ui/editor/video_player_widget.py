@@ -285,9 +285,11 @@ class VideoPlayerWidget(
             self.frame_time_map = frame_map
         total_frames = max(0, int(getattr(frame_map, "total_frames", 0) or 0))
         current_frame = max(0, int(getattr(self, "current_frame", 0) or 0))
+        display_frame = 0
         if total_frames > 0:
             current_frame = min(current_frame, total_frames - 1)
-        return f"F {current_frame} / {total_frames}"
+            display_frame = current_frame + 1
+        return f"F {display_frame} / {total_frames}"
 
     def _update_frame_count_label(self, *, force: bool = False) -> None:
         label = getattr(self, "frame_count_label", None)

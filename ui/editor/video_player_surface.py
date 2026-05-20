@@ -71,6 +71,7 @@ class VideoPlayerSurfaceMixin:
             self.current_time = self.frame_time_map.sec_for_frame(self.current_frame)
         except Exception:
             self.current_frame = 0
+        self._refresh_time_label(force=True)
         self._update_frame_count_label(force=True)
 
     def _apply_loaded_media_state(self):
@@ -858,6 +859,9 @@ class VideoPlayerSurfaceMixin:
         self._source_media_info = {}
         self._source_info_status_text = ""
         self._source_preview_label = ""
+        self.current_time = 0.0
+        self.total_time = 0.0
+        self.current_frame = 0
         try:
             self.set_subtitle_display_time(None, refresh=False)
         except Exception:
@@ -872,6 +876,7 @@ class VideoPlayerSurfaceMixin:
             self._log_video_surface_nonfatal("release_thumbnail_pixmap", exc)
         try:
             self._refresh_source_info_label()
+            self._refresh_time_label(force=True)
             self.frame_count_label.setText("F 0 / 0")
             self.frame_count_label.show()
             self._refresh_source_name_label()

@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.10-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
-Last-Updated: 2026-05-19
+Document-Version: 04.00.11-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_11_RELEASED
+Last-Updated: 2026-05-20
 Updated-By: Codex
 Scope: Shallow actual filesystem map. This file intentionally stays at root depth plus selected first-level entries for high-signal directories.
 Role-Description-Rule: Tree entries must match real paths. Review notes and speculative cleanup notes are not allowed.
@@ -9,9 +9,9 @@ Role-Description-Rule: Tree entries must match real paths. Review notes and spec
 ================================================================================
 AI Subtitle Studio - Shallow Actual File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-19
-Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
-App Version: 04.00.10
+Last Updated: 2026-05-20
+Phase: MAC_NATIVE_APPSTORE_V4_0_11_RELEASED
+App Version: 04.00.11
 Structure Document: File_structure.txt
 Note: This map is intentionally shallow for token-efficient handoff and navigation.
 ================================================================================
@@ -38,6 +38,7 @@ ai_subtitle_studio/
 ├── RELEASE_v04.00.08.md
 ├── RELEASE_v04.00.09.md
 ├── RELEASE_v04.00.10.md
+├── RELEASE_v04.00.11.md
 ├── assets/
 │   └── icons/
 ├── core/
@@ -62,6 +63,7 @@ ai_subtitle_studio/
 │   ├── runtime_eta.py
 │   └── settings.py
 ├── main.py
+├── idea_item.md
 ├── native/
 │   └── macos/
 ├── output/
@@ -69,6 +71,7 @@ ai_subtitle_studio/
 │   └── macos/
 ├── projects/
 ├── test video/
+├── test_case.md
 ├── tests/
 │   ├── conftest.py
 │   ├── test_app_command_bridge.py
@@ -84,6 +87,7 @@ ai_subtitle_studio/
 │   ├── test_queue_dispatch.py
 │   ├── test_runtime_eta.py
 │   ├── test_timeline_hit_targets.py
+│   ├── test_timeline_paint_passes.py
 │   ├── test_tiniping_timing_ideas.py
 │   ├── test_timeline_playhead_fit.py
 │   ├── test_timeline_render_cache.py
@@ -123,4 +127,5 @@ ai_subtitle_studio/
 │   ├── queue_widget.py
 │   ├── responsive_profile.py
 │   └── style.py
+├── waste_action_item.md
 └── voice_data/

@@ -65,20 +65,20 @@ class VideoPlayerSubtitleMixin:
                 return bool(quick_overlay.isHidden())
             except Exception:
                 return False
-        item = self._scene_subtitle_item()
-        if item is not None:
-            try:
-                if item.text() != text:
-                    return True
-                return not bool(item.isVisible())
-            except Exception:
-                return False
         label = getattr(self, "sub_label", None)
         if label is not None:
             try:
                 if label.text() != text:
                     return True
                 return bool(label.isHidden())
+            except Exception:
+                return False
+        item = self._scene_subtitle_item()
+        if item is not None:
+            try:
+                if item.text() != text:
+                    return True
+                return not bool(item.isVisible())
             except Exception:
                 return False
         return False

@@ -895,6 +895,35 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
         editor.timeline.canvas.start_inline_edit.assert_called_once_with(0, 3.0, split_at_playhead=False)
 
+    def test_timeline_double_click_prefers_visible_canvas_segment_over_stale_cache(self):
+        editor = _ClickEditor()
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 2.0, "text": "첫 줄"},
+            {"line": 1, "start": 3.0, "end": 4.0, "text": "둘째 줄"},
+        ]
+        editor._active_seg_start = None
+        editor.applied_contexts = []
+        editor._subtitle_memory_cache = build_segment_lookup(
+            [{"line": 0, "start": 1.0, "end": 2.0, "text": "첫 줄"}]
+        )
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(
+            set_active=Mock(),
+            canvas=SimpleNamespace(
+                start_inline_edit=Mock(),
+                segments=list(editor._segments),
+            ),
+        )
+        editor.video_player = SimpleNamespace(
+            pause_video=Mock(),
+            seek_direct=Mock(),
+        )
+
+        editor._on_timeline_seg_double_clicked(0, 3.0)
+
+        editor.timeline.set_active.assert_called_once_with(3.0)
+        editor.timeline.canvas.start_inline_edit.assert_called_once_with(1, 3.0, split_at_playhead=False)
+
     def test_seg_time_changed_schedules_resize_redraw_without_nameerror(self):
         editor = _DummyTimelineVideoEditor()
         editor.video_fps = 30.0
@@ -2897,6 +2926,27 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         canvas.set_active.assert_not_called()
         editor.timeline.set_active.assert_not_called()
         editor.timeline.set_playhead.assert_not_called()
+
+    def test_paused_segment_sync_updates_video_subtitle_time(self):
+        editor = _DummyTimelineVideoEditor()
+        playing_state = object()
+        paused_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=paused_state),
+        )
+        editor.video_player = SimpleNamespace(media_player=player, set_subtitle_display_time=Mock())
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=4.8),
+            set_active=Mock(),
+            set_playhead=Mock(),
+        )
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+
+        editor._sync_cursor_to_seg({"start": 4.0, "end": 6.0, "line": 3}, ensure_visible=False, move_cursor=False)
+
+        editor.timeline.set_playhead.assert_called_once_with(4.0)
+        editor.video_player.set_subtitle_display_time.assert_called_once_with(4.0)
 
     def test_paused_playhead_sync_uses_idle_timer_interval(self):
         editor = _DummyTimelineVideoEditor()

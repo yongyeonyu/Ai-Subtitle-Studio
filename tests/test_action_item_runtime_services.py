@@ -6,8 +6,10 @@ from core.audio.audio_runtime_services import plan_audio_route_workers
 from core.pipeline.cut_boundary_strategy import CutBoundaryCandidateStrategy, CutBoundaryPrescanStrategy
 from core.pipeline.single_pipeline_plan import (
     PipelineProgressCoordinator,
+    SinglePipelineActionSession,
     build_single_pipeline_iteration_plan,
     hard_cut_seconds_from_rows,
+    pipeline_overall_progress_percent,
 )
 from core.project.project_session_service import editor_session_rows
 
@@ -79,6 +81,66 @@ class ActionItemRuntimeServiceTests(unittest.TestCase):
         self.assertTrue(coordinator.emit_stage(1, "처리 중"))
         self.assertEqual(emissions[0], ("_sig_update_queue", 1, "처리 중", "", "", ""))
         self.assertEqual(emissions[1], ("_sig_editor_processing_stage", "처리 중"))
+
+    def test_pipeline_progress_coordinator_emits_chunk_status_and_header(self):
+        emissions = []
+        coordinator = PipelineProgressCoordinator(lambda *args: emissions.append(args) or True)
+
+        pct = coordinator.emit_chunk_progress(
+            queue_index=1,
+            total_files=4,
+            chunk_index=3,
+            chunk_total=6,
+        )
+
+        self.assertEqual(pct, 37)
+        self.assertEqual(emissions[0], ("_sig_update_status", 3, 6))
+        self.assertEqual(emissions[1], ("_sig_update_queue_header", 2, 4, 37, ""))
+        self.assertEqual(
+            pipeline_overall_progress_percent(
+                queue_index=1,
+                total_files=4,
+                chunk_index=3,
+                chunk_total=6,
+            ),
+            37,
+        )
+
+    def test_single_pipeline_action_session_preserves_legacy_state_refs_and_events(self):
+        started = []
+        stopped = []
+        session = SinglePipelineActionSession()
+        on_save, on_start, on_prev, on_exit = session.callbacks(
+            start_hook=lambda: started.append("start"),
+            stop_hook=lambda: stopped.append("stop"),
+        )
+
+        on_start()
+        self.assertEqual(started, ["start"])
+        self.assertEqual(session.state_ref[0], "start")
+        self.assertTrue(session.start_event.is_set())
+
+        session.edit_event.clear()
+        on_save([{"text": "완료"}])
+        self.assertEqual(session.state_ref[0], "next")
+        self.assertEqual(session.final_segments, [{"text": "완료"}])
+        self.assertTrue(session.edit_event.is_set())
+
+        session.edit_event.clear()
+        session.start_event.clear()
+        on_prev()
+        self.assertEqual(session.state_ref[0], "prev")
+        self.assertTrue(session.edit_event.is_set())
+        self.assertTrue(session.start_event.is_set())
+
+        session.edit_event.clear()
+        session.start_event.clear()
+        on_exit([{"text": "종료"}])
+        self.assertEqual(stopped, ["stop"])
+        self.assertEqual(session.state_ref[0], "exit")
+        self.assertEqual(session.final_segments, [{"text": "종료"}])
+        self.assertTrue(session.edit_event.is_set())
+        self.assertTrue(session.start_event.is_set())
 
     def test_audio_route_worker_plan_applies_route_cap_once(self):
         with patch(

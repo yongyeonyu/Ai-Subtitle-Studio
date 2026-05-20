@@ -113,13 +113,14 @@ class VideoPlayerOverlayMixin:
         try:
             if self.sub_label.text() != text:
                 self.sub_label.setText(text)
-            self.sub_label.setVisible(False)
+            self.sub_label.setVisible(bool(text) and quick_overlay is None)
+            if text and quick_overlay is None:
+                self.sub_label.raise_()
         except Exception:
             pass
         item = self._scene_subtitle_item()
-        if item is not None and quick_overlay is None:
-            item.set_text(text)
-        elif item is not None:
+        # macOS video surfaces can composite above QGraphicsScene items, so the QWidget label is the visible fallback.
+        if item is not None:
             item.set_text("")
         if quick_overlay is not None:
             quick_overlay.set_text(text)

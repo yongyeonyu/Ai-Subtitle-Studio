@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from core.runtime.logger import get_logger
 import ui.main.app_command_bridge as app_bridge
-from ui.main.app_command_bridge import execute_app_command
+from ui.main.app_command_bridge import dispatch_app_command, execute_app_command
 
 
 class _DummyEditor:
@@ -336,6 +336,7 @@ class _DummyOwner:
             _force_no_reuse_once=False,
             _force_reuse_existing_multiclip_subtitles_once=False,
         )
+        self._sig_external_app_command = SimpleNamespace(emit=lambda payload, state=None: None)
         self._editor_widget = _DummyEditor()
         self.last_open_args = None
 
@@ -666,6 +667,34 @@ class AppCommandBridgeTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertAlmostEqual(result["data"]["editor_runtime"]["playhead_sec"], 1.5)
+
+    def test_dispatch_status_command_falls_back_without_waiting_for_busy_ui_thread(self):
+        owner = _DummyOwner()
+        app_thread = object()
+        current_thread = object()
+        fake_app = SimpleNamespace(thread=lambda: app_thread)
+
+        with patch("ui.main.app_command_bridge.QApplication.instance", return_value=fake_app):
+            with patch("ui.main.app_command_bridge.QThread.currentThread", return_value=current_thread):
+                result = dispatch_app_command(owner, {"command": "status"}, timeout_sec=1.0)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["accepted"])
+        self.assertTrue(result["data"]["status_snapshot_fallback"])
+        self.assertIn("backend_active", result["data"])
+
+    def test_dispatch_non_status_command_still_reports_timeout_when_ui_thread_does_not_reply(self):
+        owner = _DummyOwner()
+        app_thread = object()
+        current_thread = object()
+        fake_app = SimpleNamespace(thread=lambda: app_thread)
+
+        with patch("ui.main.app_command_bridge.QApplication.instance", return_value=fake_app):
+            with patch("ui.main.app_command_bridge.QThread.currentThread", return_value=current_thread):
+                result = dispatch_app_command(owner, {"command": "show-home"}, timeout_sec=0.1)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "command_timeout")
 
     def test_editor_set_playhead_command_updates_editor_runtime(self):
         owner = _DummyOwner()

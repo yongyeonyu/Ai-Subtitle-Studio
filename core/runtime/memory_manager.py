@@ -35,6 +35,18 @@ _NATIVE_PRUNE_CALLABLE_UNSET = object()
 _NATIVE_PRUNE_CALLABLE: Callable[..., dict[str, Any] | None] | None | object = _NATIVE_PRUNE_CALLABLE_UNSET
 
 
+def _coerce_float(value: object, default: float, *, min_value: float | None = None, max_value: float | None = None) -> float:
+    try:
+        value_float = float(value)
+    except (TypeError, ValueError):
+        return default
+    if min_value is not None and value_float < min_value:
+        return min_value
+    if max_value is not None and value_float > max_value:
+        return max_value
+    return value_float
+
+
 def process_rss_bytes() -> int:
     global _RSS_PSUTIL_PROCESS, _RSS_PSUTIL_UNAVAILABLE
     if not _RSS_PSUTIL_UNAVAILABLE:
@@ -642,15 +654,24 @@ class SubtitleGenerationMemoryGuard:
         snapshot["checkpoint_cleanup"] = bool(cleanup)
 
         pressure_stage = str(snapshot.get("pressure_stage", "normal") or "normal")
-        should_gpu_trim = include_gpu and pressure_stage in {"warning", "critical"}
-        if cleanup or should_gpu_trim:
-            if cleanup or (now - self._last_gpu_trim_at) >= self.gpu_trim_cooldown_sec:
+        critical_pressure = pressure_stage == "critical"
+        # Critical pressure means the warm caches are already hurting generation
+        # speed. Even if the caller did not request cleanup for this stage, allow
+        # the guard to shed CPU/GPU caches on its cooldown before macOS starts
+        # compressing/swapping more aggressively.
+        should_gpu_trim = (include_gpu or critical_pressure) and pressure_stage in {"warning", "critical"}
+        explicit_cleanup = bool(cleanup)
+        should_cleanup = bool(explicit_cleanup or critical_pressure)
+        snapshot["checkpoint_auto_cleanup"] = bool(critical_pressure and not cleanup)
+        snapshot["checkpoint_auto_include_gpu"] = bool(critical_pressure and not include_gpu)
+        if should_cleanup or should_gpu_trim:
+            if explicit_cleanup or (now - self._last_gpu_trim_at) >= self.gpu_trim_cooldown_sec:
                 trim_result = trim_runtime_memory_caches(
                     stage=pressure_stage if pressure_stage != "normal" else "stage",
-                    include_gpu=bool(include_gpu),
+                    include_gpu=bool(include_gpu or critical_pressure),
                 )
                 snapshot["stage_trim"] = trim_result
-                if include_gpu:
+                if include_gpu or critical_pressure:
                     self._last_gpu_trim_at = now
 
         self._last_snapshot = dict(snapshot)
@@ -719,6 +740,66 @@ class RuntimeMemoryManager:
             256 * 1024 * 1024,
             int(float(self.settings.get("runtime_memory_disk_cache_budget_gb", 12.0) or 12.0) * (1024 ** 3)),
         )
+        # Hot-path memory policy should stay configurable at runtime for repeatable
+        # benchmark experiments without changing user-visible defaults.
+        self.warning_pressure_ratio = _coerce_float(
+            self.settings.get(
+                "runtime_memory_warning_ratio",
+                self.settings.get("macos_memory_warning_ratio", 0.20),
+            ),
+            default=0.20,
+            min_value=0.0,
+            max_value=1.0,
+        )
+        self.critical_pressure_ratio = _coerce_float(
+            self.settings.get(
+                "runtime_memory_critical_ratio",
+                self.settings.get("macos_memory_critical_ratio", 0.12),
+            ),
+            default=0.12,
+            min_value=0.0,
+            max_value=1.0,
+        )
+        self.warning_pressure_reserve_gb = _coerce_float(
+            self.settings.get("macos_memory_warning_reserve_gb", 3.0),
+            default=3.0,
+            min_value=0.0,
+        )
+        self.critical_pressure_reserve_gb = _coerce_float(
+            self.settings.get("macos_memory_critical_reserve_gb", 1.5),
+            default=1.5,
+            min_value=0.0,
+        )
+        self.warning_pressure_compressed_ratio = _coerce_float(
+            # Keep legacy-compressed key compatibility for mixed profile payloads.
+            self.settings.get(
+                "runtime_memory_warning_compressed_ratio",
+                self.settings.get("macos_memory_warning_compressed_ratio", 0.22),
+            ),
+            default=0.22,
+            min_value=0.0,
+            max_value=1.0,
+        )
+        self.critical_pressure_compressed_ratio = _coerce_float(
+            # Keep legacy-compressed key compatibility for mixed profile payloads.
+            self.settings.get(
+                "runtime_memory_critical_compressed_ratio",
+                self.settings.get("macos_memory_critical_compressed_ratio", 0.30),
+            ),
+            default=0.30,
+            min_value=0.0,
+            max_value=1.0,
+        )
+        if self.warning_pressure_ratio > self.critical_pressure_ratio:
+            self.warning_pressure_ratio, self.critical_pressure_ratio = (
+                self.critical_pressure_ratio,
+                self.warning_pressure_ratio,
+            )
+        if self.warning_pressure_reserve_gb < self.critical_pressure_reserve_gb:
+            self.warning_pressure_reserve_gb, self.critical_pressure_reserve_gb = (
+                self.critical_pressure_reserve_gb,
+                self.warning_pressure_reserve_gb,
+            )
         self._trim_callbacks: list[tuple[str, Callable[[str, dict[str, Any]], Any]]] = []
         self._history: deque[dict[str, Any]] = deque(maxlen=32)
         self._last_stage = "normal"
@@ -792,9 +873,9 @@ class RuntimeMemoryManager:
         return snapshot
 
     def prune_disk_caches(self, *, stage: str = "warning") -> dict[str, Any]:
-        target_ratio = 0.72 if stage == "warning" else 0.45
+        target_ratio = self.warning_disk_cache_trim_ratio if stage == "warning" else self.critical_disk_cache_trim_ratio
         if not self.settings.get("macos_memory_cache_prune_enabled", True):
-            target_ratio = 0.85 if stage == "warning" else 0.65
+            target_ratio = self.warning_disk_cache_trim_ratio + 0.15 if stage == "warning" else self.critical_disk_cache_trim_ratio + 0.20
         result = prune_runtime_disk_caches(
             paths=self.cache_paths,
             target_total_bytes=int(self.disk_cache_budget_bytes * target_ratio),
@@ -820,15 +901,34 @@ class RuntimeMemoryManager:
         available_ratio = float(resource.get("available_memory_ratio", 1.0) or 1.0)
         available_gb = float(resource.get("available_memory_bytes", 0) or 0) / float(1024 ** 3)
         rss_ratio = float(snapshot.get("rss_ratio", 0.0) or 0.0)
-        if available_ratio <= 0.12 or available_gb <= 1.5 or rss_ratio >= 0.78:
+        compressed_ratio = float(resource.get("compressed_memory_ratio", 0.0) or resource.get("compressed_ratio", 0.0) or 0.0)
+        if (
+            available_ratio <= self.critical_pressure_ratio
+            or available_gb <= self.critical_pressure_reserve_gb
+            or compressed_ratio >= self.critical_pressure_compressed_ratio
+        ):
             return "critical"
-        if available_ratio <= 0.20 or available_gb <= 3.0 or rss_ratio >= 0.64:
+        if (
+            available_ratio <= self.warning_pressure_ratio
+            or available_gb <= self.warning_pressure_reserve_gb
+            or compressed_ratio >= self.warning_pressure_compressed_ratio
+        ):
             return "warning"
         return "normal"
 
     def _maybe_trim(self, stage: str, snapshot: dict[str, Any]) -> None:
         now = time.time()
-        cooldown = 12.0 if stage == "warning" else 6.0
+        warning_cooldown = _coerce_float(
+            self.settings.get("runtime_memory_warning_trim_cooldown_sec", 12.0),
+            default=12.0,
+            min_value=1.0,
+        )
+        critical_cooldown = _coerce_float(
+            self.settings.get("runtime_memory_critical_trim_cooldown_sec", 6.0),
+            default=6.0,
+            min_value=1.0,
+        )
+        cooldown = warning_cooldown if stage == "warning" else critical_cooldown
         if (now - self._last_trim_at) < cooldown and stage == self._last_stage:
             return
         if self.settings.get("macos_memory_trim_runtime_caches_enabled", True):
@@ -845,10 +945,28 @@ class RuntimeMemoryManager:
         if stage == "critical" or (
             stage == "warning"
             and self.settings.get("macos_memory_cache_prune_enabled", True)
-            and int(snapshot.get("disk_cache_bytes", 0) or 0) > int(self.disk_cache_budget_bytes * 0.72)
+            and int(snapshot.get("disk_cache_bytes", 0) or 0) > int(self.disk_cache_budget_bytes * self.warning_disk_cache_trim_ratio)
         ):
             self.prune_disk_caches(stage=stage)
         self._last_trim_at = now
+
+    @property
+    def warning_disk_cache_trim_ratio(self) -> float:
+        return _coerce_float(
+            self.settings.get("runtime_memory_warning_disk_trim_ratio", 0.72),
+            default=0.72,
+            min_value=0.0,
+            max_value=1.0,
+        )
+
+    @property
+    def critical_disk_cache_trim_ratio(self) -> float:
+        return _coerce_float(
+            self.settings.get("runtime_memory_critical_disk_trim_ratio", 0.45),
+            default=0.45,
+            min_value=0.0,
+            max_value=1.0,
+        )
 
     def _maybe_report_leak(self, snapshot: dict[str, Any]) -> None:
         if not (self._trace_enabled and tracemalloc.is_tracing()):

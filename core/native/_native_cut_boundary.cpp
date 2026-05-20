@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -266,6 +267,10 @@ struct GrayThumb {
     std::vector<BufferView> regions;
 };
 
+struct ColorAverageRow {
+    std::vector<std::array<double, 3>> regions;
+};
+
 struct DeltaSummary {
     double score = 0.0;
     int hits = 0;
@@ -334,6 +339,45 @@ bool parse_gray_rows(PyObject* rows_obj, std::vector<GrayThumb>& out) {
     return true;
 }
 
+bool parse_color_rows(PyObject* rows_obj, std::vector<ColorAverageRow>& out) {
+    PyObject* rows_seq = PySequence_Fast(rows_obj, "color rows must be a sequence");
+    if (rows_seq == nullptr) {
+        return false;
+    }
+
+    const Py_ssize_t frame_count = PySequence_Fast_GET_SIZE(rows_seq);
+    out.reserve(static_cast<size_t>(frame_count));
+    PyObject** frame_items = PySequence_Fast_ITEMS(rows_seq);
+    for (Py_ssize_t frame_index = 0; frame_index < frame_count; ++frame_index) {
+        PyObject* frame_obj = frame_items[frame_index];
+        PyObject* region_seq = PySequence_Fast(frame_obj, "color row frame must be a sequence");
+        if (region_seq == nullptr) {
+            Py_DECREF(rows_seq);
+            return false;
+        }
+        const Py_ssize_t region_count = PySequence_Fast_GET_SIZE(region_seq);
+        PyObject** region_items = PySequence_Fast_ITEMS(region_seq);
+
+        ColorAverageRow row;
+        row.regions.reserve(static_cast<size_t>(region_count));
+        for (Py_ssize_t region_index = 0; region_index < region_count; ++region_index) {
+            double c0 = 0.0;
+            double c1 = 0.0;
+            double c2 = 0.0;
+            if (!read_triplet(region_items[region_index], c0, c1, c2)) {
+                Py_DECREF(region_seq);
+                Py_DECREF(rows_seq);
+                return false;
+            }
+            row.regions.push_back({c0, c1, c2});
+        }
+        Py_DECREF(region_seq);
+        out.push_back(std::move(row));
+    }
+    Py_DECREF(rows_seq);
+    return true;
+}
+
 bool compute_gray_summary(
     const GrayThumb& left,
     const GrayThumb& right,
@@ -376,6 +420,40 @@ bool compute_gray_summary(
         score += ranked[index];
     }
     out.score = score / static_cast<double>(top_n > 0 ? top_n : 1);
+    return true;
+}
+
+bool compute_color_summary(
+    const ColorAverageRow& left,
+    const ColorAverageRow& right,
+    double threshold,
+    double weight_luma,
+    double weight_chroma,
+    DeltaSummary& out
+) {
+    const size_t n = std::min(left.regions.size(), right.regions.size());
+    out.score = 0.0;
+    out.hits = 0;
+    out.deltas.clear();
+    out.deltas.reserve(n);
+    if (n == 0) {
+        return false;
+    }
+
+    double score = 0.0;
+    for (size_t index = 0; index < n; ++index) {
+        const auto& lhs = left.regions[index];
+        const auto& rhs = right.regions[index];
+        const double luma = std::abs(lhs[0] - rhs[0]);
+        const double chroma = (std::abs(lhs[1] - rhs[1]) + std::abs(lhs[2] - rhs[2])) / 2.0;
+        const double delta = (weight_luma * luma) + (weight_chroma * chroma);
+        out.deltas.push_back(delta);
+        if (delta >= threshold) {
+            out.hits += 1;
+        }
+        score += delta;
+    }
+    out.score = score / static_cast<double>(out.deltas.empty() ? 1 : out.deltas.size());
     return true;
 }
 
@@ -893,6 +971,78 @@ PyObject* py_gray_rollback_search(PyObject*, PyObject* args) {
     return out;
 }
 
+PyObject* py_color_window_search(PyObject*, PyObject* args) {
+    PyObject* rows_obj = nullptr;
+    int start_frame = 0;
+    int stop_frame = 0;
+    int window_frames = 1;
+    int step = 1;
+    double threshold = 18.0;
+    int required_regions = 1;
+    double weight_luma = 0.25;
+    double weight_chroma = 0.75;
+    if (!PyArg_ParseTuple(
+            args,
+            "Oiiiididd:color_window_search",
+            &rows_obj,
+            &start_frame,
+            &stop_frame,
+            &window_frames,
+            &step,
+            &threshold,
+            &required_regions,
+            &weight_luma,
+            &weight_chroma)) {
+        return nullptr;
+    }
+
+    std::vector<ColorAverageRow> rows;
+    if (!parse_color_rows(rows_obj, rows)) {
+        return nullptr;
+    }
+    if (rows.empty() || stop_frame < start_frame) {
+        Py_RETURN_NONE;
+    }
+
+    required_regions = std::max(1, required_regions);
+    window_frames = std::max(1, window_frames);
+    step = std::max(1, step);
+
+    RollbackCandidate best;
+    best.mode = "window";
+    best.threshold = threshold;
+    best.stage = 0;
+    const int row_count = static_cast<int>(rows.size());
+    const int effective_stop = std::min(stop_frame, start_frame + row_count - window_frames - 1);
+
+    auto consider = [&](int candidate_frame, const DeltaSummary& summary) {
+        double rank = gray_candidate_norm(summary.score, threshold, summary.hits, required_regions, 0.03);
+        if (!best.has || rank > best.rank || (std::abs(rank - best.rank) < 1e-6 && summary.score > best.score)) {
+            best.has = true;
+            best.frame = candidate_frame;
+            best.score = summary.score;
+            best.regions = summary.hits;
+            best.deltas = summary.deltas;
+            best.mode = "window";
+            best.threshold = threshold;
+            best.rank = rank;
+        }
+    };
+
+    for (int frame_no = start_frame; frame_no <= effective_stop; frame_no += step) {
+        const int index = frame_no - start_frame;
+        if (index < 0 || index + window_frames >= row_count) {
+            continue;
+        }
+        DeltaSummary summary;
+        if (compute_color_summary(rows[static_cast<size_t>(index)], rows[static_cast<size_t>(index + window_frames)], threshold, weight_luma, weight_chroma, summary)) {
+            consider(frame_no, summary);
+        }
+    }
+
+    return rollback_candidate_to_dict(best, false);
+}
+
 PyObject* py_waveform_peaks_f32le(PyObject*, PyObject* args) {
     PyObject* raw_obj = nullptr;
     int sample_rate = 2000;
@@ -1393,6 +1543,7 @@ PyMethodDef methods[] = {
     {"color_avg_delta", py_color_avg_delta, METH_VARARGS, "Compute color average deltas."},
     {"dense_flow_pair_metrics", py_dense_flow_pair_metrics, METH_VARARGS, "Compute dense optical-flow pair metrics without NumPy temporaries."},
     {"gray_rollback_search", py_gray_rollback_search, METH_VARARGS, "Search rollback window densely and refine the cut frame with native C++."},
+    {"color_window_search", py_color_window_search, METH_VARARGS, "Search color-average verification candidates in native C++."},
     {"waveform_peaks_f32le", py_waveform_peaks_f32le, METH_VARARGS, "Downsample f32le PCM bytes into normalized waveform peaks."},
     {"live_cut_scores", py_live_cut_scores, METH_VARARGS, "Compute interactive live-cut adjacent-frame scores in native C++."},
     {"interval_overlaps", py_interval_overlaps, METH_VARARGS, "Compute segment/VAD interval overlaps."},

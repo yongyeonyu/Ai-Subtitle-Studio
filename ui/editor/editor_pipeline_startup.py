@@ -271,6 +271,7 @@ class EditorPipelineStartupMixin(EditorPipelineSafetyMixin):
                 media_paths=media_files,
                 srt_path=get_srt_path(media_files[0]),
                 user_settings=dict(getattr(self, "settings", {}) or {}),
+                prefill_analysis_artifacts=False,
             )
             attach_project_session(
                 main_w,

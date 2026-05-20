@@ -30,6 +30,9 @@ MENU_WIDE_ICON = 16
 MENU_ACTION_ICON = 18
 MENU_TEXT_UNDER_ICON_PADDING = "3px 5px 1px 5px"
 MENU_PANEL_RADIUS = 7
+MENU_LEFT_ACCENT = "#29D7FF"
+MENU_CENTER_ACCENT = "#4AA3FF"
+MENU_RIGHT_ACCENT = "#29D7FF"
 
 
 def panel_visual_height_for_profile(profile) -> int:
@@ -378,13 +381,13 @@ class GlobalMenuBar(QWidget):
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(5)
         for text, icon, slot, color in [
-            ("설정", "settings", self._open_ai, COLORS["accent"]),
-            *([("개인화", "ai", self._open_personalization, COLORS["accent"])] if config.IS_MAC else []),
-            ("화자", "speaker", self._open_speaker, COLORS["purple"]),
-            ("사전", "review", self._open_dictionary, "#64D2FF"),
-            ("비디오", "video", self._toggle_video, COLORS["info"]),
-            ("자막", "export", self._open_export, COLORS["accent"]),
-            ("음성", "mic", self._toggle_stt_mode, COLORS["danger"]),
+            ("설정", "settings", self._open_ai, MENU_LEFT_ACCENT),
+            *([("개인화", "ai", self._open_personalization, MENU_LEFT_ACCENT)] if config.IS_MAC else []),
+            ("화자", "speaker", self._open_speaker, MENU_LEFT_ACCENT),
+            ("사전", "review", self._open_dictionary, MENU_LEFT_ACCENT),
+            ("비디오", "video", self._toggle_video, MENU_LEFT_ACCENT),
+            ("자막", "export", self._open_export, MENU_LEFT_ACCENT),
+            ("음성", "mic", self._toggle_stt_mode, MENU_LEFT_ACCENT),
         ]:
             btn = self._small_button(text, icon, slot, color)
             self._register_qml_button(
@@ -404,14 +407,14 @@ class GlobalMenuBar(QWidget):
         center = QHBoxLayout(self.center_group)
         center.setContentsMargins(0, 0, 0, 0)
         center.setSpacing(6)
-        self.btn_start = self._action_button("시작", "play", self._click_start)
-        self.btn_undo = self._action_button("실행취소", "undo", self._click_undo)
-        self.btn_redo = self._action_button("다시실행", "redo", self._click_redo)
-        self.btn_save = self._action_button("저장", "save", self._click_save)
-        self._register_qml_button(self.btn_start, action_id="center_start", badge="", accent=COLORS["accent"], section="center", kind="primary")
-        self._register_qml_button(self.btn_undo, action_id="center_undo", badge="", accent=COLORS["info"], section="center")
-        self._register_qml_button(self.btn_redo, action_id="center_redo", badge="", accent=COLORS["info"], section="center")
-        self._register_qml_button(self.btn_save, action_id="center_save", badge="", accent=COLORS["accent"], section="center")
+        self.btn_start = self._action_button("시작", "play", self._click_start, accent=MENU_CENTER_ACCENT)
+        self.btn_undo = self._action_button("실행취소", "undo", self._click_undo, accent=MENU_CENTER_ACCENT)
+        self.btn_redo = self._action_button("다시실행", "redo", self._click_redo, accent=MENU_CENTER_ACCENT)
+        self.btn_save = self._action_button("저장", "save", self._click_save, accent=MENU_CENTER_ACCENT)
+        self._register_qml_button(self.btn_start, action_id="center_start", badge="", accent=MENU_CENTER_ACCENT, section="center", kind="primary")
+        self._register_qml_button(self.btn_undo, action_id="center_undo", badge="", accent=MENU_CENTER_ACCENT, section="center")
+        self._register_qml_button(self.btn_redo, action_id="center_redo", badge="", accent=MENU_CENTER_ACCENT, section="center")
+        self._register_qml_button(self.btn_save, action_id="center_save", badge="", accent=MENU_CENTER_ACCENT, section="center")
         for btn in (self.btn_start, self.btn_undo, self.btn_redo, self.btn_save):
             center.addWidget(btn)
         root.addWidget(self.center_group, stretch=0, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -421,14 +424,14 @@ class GlobalMenuBar(QWidget):
         right = QHBoxLayout(self.right_group)
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(5)
-        self.btn_auto_start = self._wide_button("자동", "sliders", self._toggle_auto_start)
-        self.btn_help = self._wide_button("도움말", "help", self._open_help)
-        self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=MENU_CACHE_WIDTH)
-        self.btn_quit = self._wide_button("종료", "power", self._quit, kind="danger")
-        self._register_qml_button(self.btn_cache_clear, action_id="right_cache", badge="", accent="#FF9F0A", section="right")
-        self._register_qml_button(self.btn_auto_start, action_id="right_auto", badge="", accent=COLORS["accent"], section="right")
-        self._register_qml_button(self.btn_help, action_id="right_help", badge="", accent=COLORS["info"], section="right")
-        self._register_qml_button(self.btn_quit, action_id="right_quit", badge="", accent=COLORS["danger"], section="right", kind="danger")
+        self.btn_auto_start = self._wide_button("자동", "sliders", self._toggle_auto_start, accent=MENU_RIGHT_ACCENT)
+        self.btn_help = self._wide_button("도움말", "help", self._open_help, accent=MENU_RIGHT_ACCENT)
+        self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=MENU_CACHE_WIDTH, accent=MENU_RIGHT_ACCENT)
+        self.btn_quit = self._wide_button("종료", "power", self._quit, accent=MENU_RIGHT_ACCENT)
+        self._register_qml_button(self.btn_cache_clear, action_id="right_cache", badge="", accent=MENU_RIGHT_ACCENT, section="right")
+        self._register_qml_button(self.btn_auto_start, action_id="right_auto", badge="", accent=MENU_RIGHT_ACCENT, section="right")
+        self._register_qml_button(self.btn_help, action_id="right_help", badge="", accent=MENU_RIGHT_ACCENT, section="right")
+        self._register_qml_button(self.btn_quit, action_id="right_quit", badge="", accent=MENU_RIGHT_ACCENT, section="right")
         right.addWidget(self.btn_cache_clear)
         right.addWidget(self.btn_auto_start)
         right.addWidget(self.btn_help)
@@ -444,36 +447,70 @@ class GlobalMenuBar(QWidget):
 
         self.refresh()
 
+    def _menu_button_style(self, accent: str, *, checked: bool = False, emphasis: str = "toolbar") -> str:
+        accent = str(accent or COLORS["accent"])
+        if emphasis == "action":
+            bg = "#162432" if checked else "#141E27"
+            hover = "#1B2C3B"
+            pressed = "#10324A"
+            text = "#EEF7FF"
+        else:
+            bg = "#141C23" if checked else "#131A20"
+            hover = "#18232C"
+            pressed = "#0F2D42"
+            text = "#DCEEFF"
+        return (
+            "QToolButton { "
+            f"background: {bg}; color: {text}; border: 1px solid {accent}; "
+            f"border-radius: 10px; padding: {MENU_TEXT_UNDER_ICON_PADDING}; font-size: 11px; font-weight: 700; "
+            "} "
+            f"QToolButton:hover {{ background: {hover}; color: #F7FBFF; border-color: {accent}; }} "
+            f"QToolButton:pressed {{ background: {pressed}; color: #FFFFFF; border: 1px solid {accent}; padding: {MENU_TEXT_UNDER_ICON_PADDING}; }} "
+            "QToolButton:disabled { color: #66727D; background: #11171C; border-color: #22303A; }"
+        )
+
+    def _apply_menu_button_style(self, btn, *, checked: bool = False):
+        accent = str(btn.property("menuAccent") or COLORS["accent"])
+        emphasis = str(btn.property("menuEmphasis") or "toolbar")
+        btn.setStyleSheet(self._menu_button_style(accent, checked=checked, emphasis=emphasis))
+
     def _small_button(self, text, icon_name, slot, color=None):
+        accent = str(color or MENU_LEFT_ACCENT)
         btn = QToolButton()
         btn.setText(text)
-        btn.setIcon(line_icon(icon_name, str(color or COLORS["muted"]), 22))
+        btn.setIcon(line_icon(icon_name, accent, 22))
         btn.setIconSize(QSize(MENU_SMALL_ICON, MENU_SMALL_ICON))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(MENU_SMALL_WIDTH)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(tool_button_style("toolbar", padding=MENU_TEXT_UNDER_ICON_PADDING))
+        btn.setProperty("menuAccent", accent)
+        btn.setProperty("menuEmphasis", "toolbar")
+        self._apply_menu_button_style(btn)
         btn.clicked.connect(slot)
         self._tool_buttons.append(btn)
         return btn
 
-    def _wide_button(self, text, icon_name, slot, *, kind="toolbar", min_width=MENU_WIDE_WIDTH):
+    def _wide_button(self, text, icon_name, slot, *, kind="toolbar", min_width=MENU_WIDE_WIDTH, accent=MENU_RIGHT_ACCENT):
+        accent = str(accent or MENU_RIGHT_ACCENT)
         btn = QToolButton()
         btn.setText(text)
-        btn.setIcon(line_icon(icon_name, "#FF3B30" if kind == "danger" else "#A9B0B7", 22))
+        btn.setIcon(line_icon(icon_name, accent, 22))
         btn.setIconSize(QSize(MENU_WIDE_ICON, MENU_WIDE_ICON))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(min_width)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(tool_button_style(kind, padding=MENU_TEXT_UNDER_ICON_PADDING))
+        btn.setProperty("menuAccent", accent)
+        btn.setProperty("menuEmphasis", "toolbar")
+        self._apply_menu_button_style(btn)
         btn.setProperty("expandedMinWidth", min_width)
         btn.clicked.connect(slot)
         self._tool_buttons.append(btn)
         return btn
 
-    def _action_button(self, text, icon_name, slot):
+    def _action_button(self, text, icon_name, slot, *, accent=MENU_CENTER_ACCENT):
+        accent = str(accent or MENU_CENTER_ACCENT)
         btn = QToolButton()
         btn.setText(text)
         btn.setIcon(line_icon(icon_name, "#F5F7FA", 24))
@@ -482,7 +519,9 @@ class GlobalMenuBar(QWidget):
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(MENU_ACTION_WIDTH)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(tool_button_style("toolbar", padding=MENU_TEXT_UNDER_ICON_PADDING))
+        btn.setProperty("menuAccent", accent)
+        btn.setProperty("menuEmphasis", "action")
+        self._apply_menu_button_style(btn)
         btn.clicked.connect(slot)
         self._tool_buttons.append(btn)
         return btn
@@ -559,17 +598,17 @@ class GlobalMenuBar(QWidget):
         self._sync_quick_shell()
         stt_on = bool(getattr(editor, "_stt_mode_enabled", False)) if editor is not None else False
         if hasattr(self, "btn_stt_mode"):
-            stt_color = COLORS["danger"] if stt_on else COLORS["neutral"]
+            stt_color = "#F5FBFF" if stt_on else MENU_LEFT_ACCENT
             self.btn_stt_mode.setText("음성")
             self.btn_stt_mode.setIcon(line_icon("mic", stt_color, 22))
             self.btn_stt_mode.setToolTip("STT 모드 ON" if stt_on else "STT 모드 OFF")
-            self.btn_stt_mode.setStyleSheet(tool_button_style("toolbar", checked=stt_on, padding=MENU_TEXT_UNDER_ICON_PADDING))
+            self._apply_menu_button_style(self.btn_stt_mode, checked=stt_on)
         main = self.main_window
         auto_on = bool(getattr(main, "_auto_start_on", True))
         self.btn_auto_start.setText("자동")
-        auto_color = COLORS["accent"] if auto_on else COLORS["neutral"]
+        auto_color = "#F5FBFF" if auto_on else MENU_RIGHT_ACCENT
         self.btn_auto_start.setIcon(line_icon("auto", auto_color, 22))
-        self.btn_auto_start.setStyleSheet(tool_button_style("toolbar", checked=auto_on, padding=MENU_TEXT_UNDER_ICON_PADDING))
+        self._apply_menu_button_style(self.btn_auto_start, checked=auto_on)
         self.btn_auto_start.setToolTip("NAS/iCloud 자동시작 ON" if auto_on else "NAS/iCloud 자동시작 OFF")
 
         compact = self._should_icon_only()

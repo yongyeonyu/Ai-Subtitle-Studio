@@ -179,6 +179,24 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_global_menu_uses_grouped_blue_accents(self):
+        from ui.menu_bar import MENU_CENTER_ACCENT, MENU_LEFT_ACCENT, MENU_RIGHT_ACCENT
+
+        window = MainWindow()
+        try:
+            menu = window.global_menu_bar
+            self.assertEqual(menu.btn_stt_mode.property("menuAccent"), MENU_LEFT_ACCENT)
+            self.assertEqual(menu.btn_start.property("menuAccent"), MENU_CENTER_ACCENT)
+            self.assertEqual(menu.btn_help.property("menuAccent"), MENU_RIGHT_ACCENT)
+            self.assertIn(MENU_LEFT_ACCENT, menu.btn_stt_mode.styleSheet())
+            self.assertIn(MENU_CENTER_ACCENT, menu.btn_start.styleSheet())
+            self.assertIn(MENU_RIGHT_ACCENT, menu.btn_help.styleSheet())
+            self.assertIn(MENU_RIGHT_ACCENT, menu.btn_quit.styleSheet())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_dictionary_button_exists_in_global_menu_and_home_shortcuts(self):
         window = MainWindow()
         try:
@@ -360,8 +378,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIsNotNone(quality_row)
             self.assertEqual(quality_row.height(), 24)
             self.assertEqual(getattr(window, "sidebar_subtitle_quality_save_btn", None).text(), "저장")
-            self.assertGreaterEqual(window.sidebar_settings_label.minimumHeight(), 88)
-            self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 122)
+            self.assertGreaterEqual(window.sidebar_settings_label.minimumHeight(), 100)
+            self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 134)
             self.assertFalse(window.sidebar_runtime_label.isVisible())
             quality_combos = list(window.home_page.findChildren(QComboBox))
             workspace_combos = [

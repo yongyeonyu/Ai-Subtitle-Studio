@@ -117,6 +117,37 @@ def _ollama_keep_alive(value: int | float | str | None) -> str | float | None:
     return numeric
 
 
+def _runtime_memory_pressure_stage() -> str:
+    try:
+        from core.performance import current_resource_snapshot
+
+        snapshot = current_resource_snapshot()
+    except Exception:
+        return "normal"
+    if not isinstance(snapshot, dict):
+        return "normal"
+    stage = str(snapshot.get("memory_pressure_stage") or snapshot.get("pressure_stage") or "").strip().lower()
+    if stage in {"warning", "critical"}:
+        return stage
+    native = snapshot.get("native_memory") if isinstance(snapshot, dict) else None
+    if isinstance(native, dict):
+        stage = str(native.get("pressure_stage") or native.get("memory_pressure_stage") or "").strip().lower()
+        if stage in {"warning", "critical"}:
+            return stage
+    return "normal"
+
+
+def _effective_ollama_keep_alive(value: int | float | str | None) -> str | float | None:
+    normalized = _ollama_keep_alive(value)
+    if normalized in (None, 0, 0.0, "0"):
+        return normalized
+    if _runtime_memory_pressure_stage() == "critical":
+        # Critical pressure means LLM residency is more likely to trigger
+        # compression/swap than help the next request, so unload after this call.
+        return 0
+    return normalized
+
+
 def _ollama_client_generate(
     model: str,
     prompt: str,
@@ -135,7 +166,7 @@ def _ollama_client_generate(
         prompt=prompt,
         stream=False,
         format="json" if json_format else None,
-        keep_alive=_ollama_keep_alive(keep_alive),
+        keep_alive=_effective_ollama_keep_alive(keep_alive),
         options={
             "temperature": float(temperature or 0.0),
             "num_predict": int(num_predict or 256),
@@ -418,7 +449,7 @@ def _build_generate_request(
         "prompt": prompt,
         "stream": False,
         "format": "json" if json_format else "",
-        "keep_alive": _ollama_keep_alive(keep_alive),
+        "keep_alive": _effective_ollama_keep_alive(keep_alive),
         "options": {
             "temperature": float(temperature or 0.0),
             "num_predict": int(num_predict or 256),
@@ -727,6 +758,11 @@ def warmup_model(model: str, logger=None, timeout: float = _WARMUP_TIMEOUT_SEC) 
     with _WARM_LOCK:
         if model in _WARMED:
             return
+        if _runtime_memory_pressure_stage() == "critical":
+            _WARMED.add(model)
+            if logger:
+                logger.log(f"⏭️ Ollama 워밍업 건너뜀: 메모리 critical 상태라 모델 상주를 막습니다 ({model})")
+            return
         if not ensure_ollama_server(logger=logger, wait_sec=4.0):
             _WARMED.add(model)
             return
@@ -746,7 +782,7 @@ def warmup_model(model: str, logger=None, timeout: float = _WARMUP_TIMEOUT_SEC) 
                     "model": model,
                     "prompt": " ",
                     "stream": False,
-                    "keep_alive": _ollama_keep_alive(-1),
+                    "keep_alive": _effective_ollama_keep_alive(-1),
                     "options": {
                         "temperature": 0.0,
                         "num_predict": 1,
@@ -804,7 +840,7 @@ def _post_ollama_json(path: str, payload: dict, timeout: float = 2.0) -> dict:
             pass
     normalized_payload = dict(payload or {})
     if "keep_alive" in normalized_payload:
-        normalized_payload["keep_alive"] = _ollama_keep_alive(normalized_payload.get("keep_alive"))
+        normalized_payload["keep_alive"] = _effective_ollama_keep_alive(normalized_payload.get("keep_alive"))
     body = json.dumps(normalized_payload).encode("utf-8")
     req = urllib.request.Request(
         f"http://localhost:11434{path}",

@@ -373,23 +373,57 @@ class PipelineCutBoundaryMixin:
     def _wait_cut_boundary_prescan_before_stt(self):
         """Block backend pipeline thread until cut-boundary prescan is done.
 
-        This does not block the Qt UI thread. It only prevents STT1/STT2 from
-        starting before the absolute cut-boundary middle segments are ready.
+        This does not block the Qt UI thread. It prefers quick cache/initial
+        cut-boundary readiness, but long-running prescan/follower work must not
+        make the Start button look dead.
         """
         try:
-            thread = getattr(self, "_cut_boundary_prescan_thread", None)
-            if thread is not None and thread.is_alive():
-                get_logger().log("  🎬 [컷 경계] STT 시작 전 자동 분석 완료 대기 중...")
-                thread.join()
-                get_logger().log("  ✅ [컷 경계] STT 시작 전 자동 분석 완료")
-                try:
-                    self._ui_emit("_sig_refresh_cut_boundary_placeholder")
-                except Exception:
-                    pass
             try:
                 settings = load_settings()
             except Exception:
                 settings = {}
+
+            def _timeout_setting(key: str, default: float) -> float:
+                try:
+                    value = settings.get(key, default)
+                except Exception:
+                    value = default
+                if value in (None, ""):
+                    value = default
+                try:
+                    return max(0.0, float(value or 0.0))
+                except Exception:
+                    return max(0.0, float(default))
+
+            prescan_timeout_sec = _timeout_setting(
+                "cut_boundary_wait_prescan_before_stt_timeout_sec",
+                3.0,
+            )
+            follower_timeout_sec = _timeout_setting(
+                "cut_boundary_wait_follower_before_stt_timeout_sec",
+                1.0,
+            )
+            thread = getattr(self, "_cut_boundary_prescan_thread", None)
+            if (
+                thread is not None
+                and thread.is_alive()
+                and thread is not threading.current_thread()
+            ):
+                if prescan_timeout_sec > 0.0:
+                    get_logger().log(
+                        f"  🎬 [컷 경계] STT 시작 전 자동 분석 최대 {prescan_timeout_sec:.1f}초 대기 중..."
+                    )
+                    thread.join(timeout=prescan_timeout_sec)
+                if thread.is_alive():
+                    get_logger().log(
+                        "  ⏭️ [컷 경계] 자동 분석이 계속 진행 중이라 STT를 먼저 시작합니다"
+                    )
+                else:
+                    get_logger().log("  ✅ [컷 경계] STT 시작 전 자동 분석 완료")
+                    try:
+                        self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+                    except Exception:
+                        pass
             wait_follower = bool(settings.get("cut_boundary_wait_follower_before_stt", True))
             follower = getattr(self, "_cut_boundary_follower_thread", None)
             if (
@@ -398,13 +432,21 @@ class PipelineCutBoundaryMixin:
                 and follower.is_alive()
                 and follower is not threading.current_thread()
             ):
-                get_logger().log("  🎬 [컷 경계] STT 시작 전 후발대 rollback 검증 완료 대기 중...")
-                follower.join()
-                get_logger().log("  ✅ [컷 경계] 후발대 rollback 검증 완료 후 STT hard cut 확정")
-                try:
-                    self._ui_emit("_sig_refresh_cut_boundary_placeholder")
-                except Exception:
-                    pass
+                if follower_timeout_sec > 0.0:
+                    get_logger().log(
+                        f"  🎬 [컷 경계] STT 시작 전 후발대 rollback 검증 최대 {follower_timeout_sec:.1f}초 대기 중..."
+                    )
+                    follower.join(timeout=follower_timeout_sec)
+                if follower.is_alive():
+                    get_logger().log(
+                        "  ⏭️ [컷 경계] 후발대 rollback 검증은 계속 진행하고 STT를 먼저 시작합니다"
+                    )
+                else:
+                    get_logger().log("  ✅ [컷 경계] 후발대 rollback 검증 완료 후 STT hard cut 확정")
+                    try:
+                        self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+                    except Exception:
+                        pass
         except Exception as exc:
             get_logger().log(f"  ⚠️ [컷 경계] STT 시작 전 대기 실패: {exc}")
 

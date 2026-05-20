@@ -124,6 +124,8 @@ def find_low_score_recheck_ranges(
     primary_segments: list[dict[str, Any]],
     secondary_segments: list[dict[str, Any]],
     settings: dict[str, Any] | None = None,
+    *,
+    apply_budget: bool = True,
 ) -> list[SttRecheckRange]:
     """Find overlapping STT1/STT2 ranges where both candidates are below threshold."""
     limit = threshold(settings)
@@ -169,12 +171,17 @@ def find_low_score_recheck_ranges(
                 secondary=dict(secondary),
             )
         )
-    return budget_recheck_ranges(candidates, settings)
+    if apply_budget:
+        return budget_recheck_ranges(candidates, settings)
+    candidates.sort(key=lambda item: (item.start, item.end))
+    return candidates
 
 
 def find_primary_low_score_recheck_ranges(
     primary_segments: list[dict[str, Any]],
     settings: dict[str, Any] | None = None,
+    *,
+    apply_budget: bool = True,
 ) -> list[SttRecheckRange]:
     """Find STT1-only low-score ranges for selective secondary recheck.
 
@@ -204,7 +211,10 @@ def find_primary_low_score_recheck_ranges(
                 secondary={},
             )
         )
-    return budget_recheck_ranges(candidates, settings)
+    if apply_budget:
+        return budget_recheck_ranges(candidates, settings)
+    candidates.sort(key=lambda item: (item.start, item.end))
+    return candidates
 
 
 def rescue_audio_filter(settings: dict[str, Any] | None = None) -> str:

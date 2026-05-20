@@ -263,10 +263,40 @@ class OllamaWarmupTest(unittest.TestCase):
         self.assertEqual(ollama_provider._ollama_keep_alive("15m"), "15m")
 
     def test_http_generate_request_normalizes_negative_keep_alive(self):
-        request = ollama_provider._build_generate_request("gemma4:e4b", "ping", keep_alive=-1)
+        with mock.patch(
+            "core.performance.current_resource_snapshot",
+            return_value={"memory_pressure_stage": "normal"},
+        ):
+            request = ollama_provider._build_generate_request("gemma4:e4b", "ping", keep_alive=-1)
         payload = json.loads(request.data.decode("utf-8"))
 
         self.assertEqual(payload["keep_alive"], "-1m")
+
+    def test_http_generate_request_unloads_model_under_critical_memory(self):
+        with mock.patch(
+            "core.performance.current_resource_snapshot",
+            return_value={"memory_pressure_stage": "critical"},
+        ):
+            request = ollama_provider._build_generate_request("gemma4:e4b", "ping", keep_alive=-1)
+
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["keep_alive"], 0)
+
+    def test_warmup_model_skips_residency_under_critical_memory(self):
+        logger = _Logger()
+
+        with mock.patch(
+            "core.performance.current_resource_snapshot",
+            return_value={"memory_pressure_stage": "critical"},
+        ), \
+             mock.patch("core.llm.ollama_provider.ensure_ollama_server") as ensure_mock, \
+             mock.patch("core.llm.ollama_provider.urllib.request.urlopen") as urlopen_mock:
+            ollama_provider.warmup_model("gemma4:e4b", logger=logger, timeout=0.01)
+
+        ensure_mock.assert_not_called()
+        urlopen_mock.assert_not_called()
+        self.assertIn("gemma4:e4b", ollama_provider._WARMED)
+        self.assertIn("메모리 critical", "\n".join(logger.lines))
 
     def test_split_text_raises_after_repeated_http_500(self):
         repeated_error = urllib.error.HTTPError(

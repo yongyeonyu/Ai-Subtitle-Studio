@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.10-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_10_RELEASED
-Last-Updated: 2026-05-19
+Document-Version: 04.00.11-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_11_RELEASED
+Last-Updated: 2026-05-20
 Updated-By: Codex
 Purpose: Agent bootstrap, token-efficient navigation, and handoff rules only.
 -->
@@ -93,10 +93,10 @@ Required workflow:
 - Short-video test rule: use `/Users/u_mo_c/Downloads/마카오테스트` for quick smoke tests, short subtitle-generation regressions, and fast UI/runtime verification runs.
 - Long-video test rule: use `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4` for long-running pipeline checks, cache-reset/fresh-run validation, ETA/progress observation, and memory/performance validation on extended media.
 - New-chat rule: when handing off to a fresh chat, keep the user-facing handoff in Korean but compress it for token efficiency; prefer exact paths, commands, verified results, and next actions over narrative explanation.
-- Current app version in code: `04.00.10`
-- Current handoff document version: `04.00.10-mac-native`
-- Latest release checkpoint: `v04.00.10`
-- Current phase: `MAC_NATIVE_APPSTORE_V4_0_10_RELEASED`
+- Current app version in code: `04.00.11`
+- Current handoff document version: `04.00.11-mac-native`
+- Latest release checkpoint: `v04.00.11`
+- Current phase: `MAC_NATIVE_APPSTORE_V4_0_11_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
@@ -159,9 +159,9 @@ Required workflow:
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Refactor state: the longest subtitle/project/editor/runtime modules were split by responsibility into `core.audio.transcribe_worker_io`, `core.engine.subtitle_segment_filter`, `core.engine.subtitle_accuracy_utils`, `core.pipeline.cut_boundary_cache`, and `ui.editor.editor_segments_bulk_load` so future native migration work has smaller seams.
-- Verification state: `v04.00.10` release verification now covers the adaptive-audio/timing/editor regression surface, `compileall`, `git diff --check`, refreshed release handoff files, and a real `test video/X5_시승기_후반` mode benchmark. Full release verification details are in `RELEASE_v04.00.10.md`.
+- Verification state: `v04.00.11` release verification now covers repeated-generation memory-pressure cleanup, STT/native optimization seams, video subtitle overlay context, `compileall`, `git diff --check`, focused unit sweeps, and a real Macau app snapshot. Full release verification details are in `RELEASE_v04.00.11.md`.
 - Latest runtime reliability state: personalization full-learning stop/exit now keeps cancellation responsive through import and index rebuild phases, and current remaining work explicitly tracks the unresolved `QTableWidget` stylesheet parse warning on `MainWindow`-heavy paths.
-- Latest regression checkpoint: on 2026-05-19, `./venv/bin/python -m unittest tests.test_stt_quality_presets tests.test_mode_policy tests.test_ai_settings_runtime_apply tests.test_benchmark_mode_profiles tests.test_audio_presets tests.test_preset_auto_classifier tests.test_media_processor_overlap tests.test_subtitle_engine_settings tests.test_subtitle_line_breaks tests.test_timeline_hit_targets tests.test_tiniping_timing_ideas tests.test_tiniping_mode_search -q`, `./venv/bin/python -m compileall -q main.py core ui tests tools`, `git diff --check -- .`, and `tools/benchmark_subtitle_pipeline_variants.py --suite modes --media test video/X5_시승기_후반.MP4 --reference-srt test video/X5_시승기_후반.srt --start-sec 0 --duration-sec 180 --keep-artifacts` were run for `v04.00.10`.
+- Latest regression checkpoint: on 2026-05-20, `./venv/bin/python -m unittest tests.test_video_player_widget tests.test_timeline_playhead_fit tests.test_editor_video_context_window tests.test_project_segment_reload tests.test_runtime_memory_manager tests.test_media_processor_overlap tests.test_action_item_runtime_services tests.test_ollama_provider tests.test_app_command_bridge tests.test_cut_boundary_verify_strategy tests.test_stt_lattice_service tests.test_stt_recheck_service tests.test_timeline_paint_passes tests.test_qml_popup_guard -q`, `./venv/bin/python -m compileall -q core ui tests tools`, `git diff --check -- core ui tests tools ACTION_ITEMS.md NATIVE_LIB_PLAN.md idea_item.md test_case.md waste_action_item.md`, and a live Macau project overlay snapshot were run for `v04.00.11`.
 
 ## Collaboration Rules
 

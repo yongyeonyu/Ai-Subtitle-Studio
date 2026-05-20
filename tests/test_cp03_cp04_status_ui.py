@@ -763,11 +763,18 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             )
             editor = DummyEditor(main, media_path)
 
-            with patch("ui.editor.editor_pipeline_startup.create_project", return_value=project_path):
+            with patch("ui.editor.editor_pipeline_startup.create_project", return_value=project_path) as create_mock:
                 editor._prepare_cut_boundaries_before_start()
 
         self.assertEqual(backend.calls, [(project_path, [media_path])])
         self.assertEqual(main._current_project_path, project_path)
+        create_mock.assert_called_once_with(
+            name="sample",
+            media_paths=[media_path],
+            srt_path=os.path.join(tmp, "sample.srt"),
+            user_settings={"example": True},
+            prefill_analysis_artifacts=False,
+        )
         self.assertTrue(backend._force_cut_boundary_rescan_once)
         self.assertFalse(backend._cut_boundary_prescan_completed)
 

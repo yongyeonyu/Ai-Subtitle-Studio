@@ -1726,7 +1726,7 @@ class HomeSidebarMixin:
                 "</tr>"
             )
         return (
-            "<table cellspacing='0' cellpadding='0' style='font-size:8px; line-height:100%; margin-top:1px;'>"
+            "<table cellspacing='0' cellpadding='0' style='font-size:9px; line-height:100%; margin-top:1px;'>"
             + "".join(rows)
             + "</table>"
         )

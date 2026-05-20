@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from core.coerce import safe_float as _safe_float
+from core.audio.stt_lattice_service import (
+    candidate_score_100 as _candidate_score_100_via_service,
+    find_best_word_match as _find_best_word_match_via_service,
+    lattice_selection_thresholds,
+)
 from core.media_fingerprint import media_fingerprint_digest
 from core.audio.stt_candidate_scorer import score_stt_candidate
 from core.native_text_similarity import similarity_ratio
@@ -75,14 +80,7 @@ def _word_confidence(word: dict[str, Any], fallback: float = 0.45) -> float:
 
 
 def _candidate_score_100(candidate: dict[str, Any]) -> float:
-    for key in ("stt_score", "score", "confidence", "probability", "avg_confidence"):
-        if candidate.get(key) is None:
-            continue
-        score = _safe_float(candidate.get(key), 0.0)
-        if score <= 1.0:
-            score *= 100.0
-        return max(0.0, min(100.0, score))
-    return float(score_stt_candidate(candidate).get("score", 0.0) or 0.0)
+    return _candidate_score_100_via_service(candidate, score_fn=score_stt_candidate)
 
 
 def _source_label(source: Any, *, default: str = "CURRENT") -> str:
@@ -153,22 +151,6 @@ def _words_from_candidate(candidate: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _word_time_score(left: dict[str, Any], right: dict[str, Any]) -> float:
-    start = max(_safe_float(left.get("start")), _safe_float(right.get("start")))
-    end = min(_safe_float(left.get("end")), _safe_float(right.get("end")))
-    overlap = max(0.0, end - start)
-    span = max(
-        _safe_float(left.get("end")) - _safe_float(left.get("start")),
-        _safe_float(right.get("end")) - _safe_float(right.get("start")),
-        0.05,
-    )
-    overlap_score = overlap / span
-    left_mid = (_safe_float(left.get("start")) + _safe_float(left.get("end"))) / 2.0
-    right_mid = (_safe_float(right.get("start")) + _safe_float(right.get("end"))) / 2.0
-    midpoint_score = max(0.0, 1.0 - abs(left_mid - right_mid) / 0.75)
-    return max(overlap_score, midpoint_score * 0.75)
-
-
 def _protected_word(text: Any) -> bool:
     raw = str(text or "")
     compact = _compact(raw)
@@ -182,20 +164,14 @@ def _protected_word(text: Any) -> bool:
 
 
 def _find_match(anchor: dict[str, Any], words: list[dict[str, Any]], used: set[int], min_match_score: float) -> tuple[int | None, float]:
-    best_idx = None
-    best_score = 0.0
-    for idx, word in enumerate(words):
-        if idx in used:
-            continue
-        temporal = _word_time_score(anchor, word)
-        textual = _similarity(_word_text(anchor), _word_text(word))
-        score = temporal * 0.62 + textual * 0.38
-        if score > best_score:
-            best_idx = idx
-            best_score = score
-    if best_score < min_match_score:
-        return None, best_score
-    return best_idx, best_score
+    similarity_scores = [_similarity(_word_text(anchor), _word_text(word)) for word in list(words or [])]
+    return _find_best_word_match_via_service(
+        anchor,
+        words,
+        used,
+        min_match_score=min_match_score,
+        similarity_scores=similarity_scores,
+    )
 
 
 def collect_stt_lattice_candidates(
@@ -462,9 +438,10 @@ def select_stt_lattice_text(
     if not base_words:
         return None, {"schema": STT_LATTICE_SCHEMA, "model": STT_LATTICE_MODEL_ID, "enabled": False, "reason": "base_words_missing"}
 
-    min_match_score = max(0.1, min(0.95, _safe_float(settings.get("stt_lattice_min_match_score"), 0.42)))
-    replace_margin = max(0.0, min(0.75, _safe_float(settings.get("stt_lattice_replace_margin"), 0.14)))
-    min_confidence = max(0.0, min(1.0, _safe_float(settings.get("stt_lattice_min_confidence"), 0.62)))
+    thresholds = lattice_selection_thresholds(settings)
+    min_match_score = float(thresholds.min_match_score)
+    replace_margin = float(thresholds.replace_margin)
+    min_confidence = float(thresholds.min_confidence)
     used_by_source: dict[str, set[int]] = {}
     selected_words: list[dict[str, Any]] = []
     replacements = 0

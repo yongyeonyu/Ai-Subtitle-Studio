@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import QEventLoop, QObject, QPoint, QRect, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QEventLoop, QObject, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetrics
 from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QVBoxLayout, QWidget
 
@@ -46,6 +46,60 @@ def _platform_name() -> str:
 
 def _widget_parent(parent):
     return parent if isinstance(parent, QWidget) else None
+
+
+def _qt_object_deleted(obj) -> bool:
+    if obj is None:
+        return False
+    try:
+        from PyQt6 import sip
+
+        return bool(sip.isdeleted(obj))
+    except Exception:
+        return False
+
+
+def _can_exec_fallback_message_box(parent_widget) -> bool:
+    # Startup/shutdown 시점에 QWidget 기반 fallback modal을 강제로 만들면
+    # macOS Qt가 QMessageBox 생성 단계에서 abort 날 수 있다.
+    # 여기서는 "보여주기"보다 "죽지 않기"를 우선한다.
+    app = QApplication.instance()
+    if app is None:
+        return False
+    try:
+        if app.thread() != QThread.currentThread():
+            return False
+    except Exception:
+        return False
+    if _qt_object_deleted(parent_widget):
+        return False
+    if parent_widget is not None:
+        try:
+            if parent_widget.thread() != app.thread():
+                return False
+        except Exception:
+            return False
+        try:
+            window = parent_widget.window()
+        except Exception:
+            return False
+        if _qt_object_deleted(window):
+            return False
+        try:
+            if window is not None and not window.isVisible():
+                return False
+        except Exception:
+            return False
+        return True
+    try:
+        visible_windows = [
+            widget
+            for widget in app.topLevelWidgets()
+            if widget is not None and not _qt_object_deleted(widget) and widget.isVisible()
+        ]
+    except Exception:
+        visible_windows = []
+    return bool(visible_windows)
 
 
 def _screen_available_geometry(global_pos: QPoint | None = None) -> QRect:
@@ -351,6 +405,13 @@ def exec_message_box(
         except Exception:
             pass
     if _platform_name() in {"offscreen", "minimal"}:
+        if default and int(buttons) & int(default):
+            return default
+        resolved = _button_bits(buttons)
+        return resolved[0] if resolved else QMessageBox.StandardButton.Ok
+    if not _can_exec_fallback_message_box(parent_widget):
+        # 안전하지 않은 UI 컨텍스트에서는 modal을 억지로 띄우지 않는다.
+        # 자동화/시작 경로는 기본 응답으로 흘려 보내고 상위에서 로그로 추적한다.
         if default and int(buttons) & int(default):
             return default
         resolved = _button_bits(buttons)

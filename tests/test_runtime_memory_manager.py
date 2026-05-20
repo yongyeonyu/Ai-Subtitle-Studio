@@ -457,6 +457,41 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
             self.assertTrue((Path(tmp) / "subtitle_generation_latest.json").exists())
             self.assertTrue(trim.called)
 
+    def test_subtitle_generation_guard_auto_trims_gpu_on_critical_pressure(self):
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 512 * 1024 ** 2,
+            "available_memory_ratio": 0.03,
+            "memory_pressure_stage": "critical",
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "cpu_load_ratio": 0.12,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("core.runtime.memory_manager.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.memory_manager.process_rss_bytes", return_value=512 * 1024 ** 2), \
+                 patch("core.runtime.memory_manager.trim_runtime_memory_caches", return_value={"actions": ["trim"]}) as trim:
+                guard = SubtitleGenerationMemoryGuard(
+                    settings={
+                        "runtime_memory_tracemalloc_enabled": False,
+                        "subtitle_generation_memory_checkpoint_interval_ms": 0,
+                        "subtitle_generation_gpu_trim_cooldown_sec": 0,
+                    },
+                    diagnostics_dir=tmp,
+                    cache_paths=[],
+                )
+                result = guard.checkpoint(
+                    "stt_transcribe_chunk:5/13",
+                    include_gpu=False,
+                    cleanup=False,
+                    force=True,
+                )
+
+        self.assertTrue(result["checkpoint_auto_cleanup"])
+        self.assertTrue(result["checkpoint_auto_include_gpu"])
+        trim.assert_called_with(stage="critical", include_gpu=True)
+
 
 if __name__ == "__main__":
     unittest.main()

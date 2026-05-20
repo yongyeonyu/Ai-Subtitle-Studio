@@ -172,6 +172,39 @@ def color_avg_delta(
         return None
 
 
+def color_window_search(
+    color_rows: Any,
+    *,
+    start_frame: int,
+    stop_frame: int,
+    window_frames: int,
+    step: int,
+    threshold: float,
+    required_regions: int,
+    weight_luma: float,
+    weight_chroma: float,
+) -> dict[str, Any] | None:
+    if not native_cut_boundary_enabled():
+        return None
+    try:
+        values = _native.color_window_search(
+            color_rows,
+            int(start_frame),
+            int(stop_frame),
+            int(window_frames),
+            int(step),
+            float(threshold),
+            int(required_regions or 1),
+            float(weight_luma),
+            float(weight_chroma),
+        )
+        if not isinstance(values, dict):
+            return None
+        return dict(values)
+    except Exception:
+        return None
+
+
 def dense_flow_pair_metrics(
     prev_gray: Any,
     next_gray: Any,

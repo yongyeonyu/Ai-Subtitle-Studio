@@ -256,7 +256,6 @@ class HomeUIMixin(HomeSidebarMixin):
             left_col.addWidget(self._ensure_sidebar_nav_menu())
             left_col.addWidget(self._icloud_btn("iCloud 자동", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
             left_col.addWidget(self._icloud_btn("NAS 자동", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
-            left_col.addWidget(self._editor_shortcuts_row())
             left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=9)
         else:
             left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
@@ -302,7 +301,6 @@ class HomeUIMixin(HomeSidebarMixin):
             version_lbl.setStyleSheet("color: #D1D1D6; font-size: 11px;")
             bottom_bar.addWidget(version_lbl)
         if not is_unified:
-            bottom_bar.addWidget(self._editor_shortcuts_row())
             bottom_bar.addStretch()
         else:
             bottom_bar.addStretch()
@@ -322,7 +320,7 @@ class HomeUIMixin(HomeSidebarMixin):
 
     def _sidebar_status_card(self):
         card = QWidget()
-        card.setMinimumHeight(122)
+        card.setMinimumHeight(218)
         card.setStyleSheet(f"background: {COLORS['surface_alt']}; border: 1px solid {COLORS['separator']}; border-radius: 7px;")
         self._sidebar_status_card_widget = card
         lay = QVBoxLayout(card)
@@ -338,7 +336,7 @@ class HomeUIMixin(HomeSidebarMixin):
             self.sidebar_runtime_label = QLabel("", self.home_page)
         self.sidebar_settings_label.setWordWrap(True)
         self.sidebar_settings_label.setMinimumWidth(0)
-        self.sidebar_settings_label.setMinimumHeight(88)
+        self.sidebar_settings_label.setMinimumHeight(184)
         self.sidebar_settings_label.setTextFormat(Qt.TextFormat.RichText)
         self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
         self.sidebar_runtime_label.setWordWrap(True)

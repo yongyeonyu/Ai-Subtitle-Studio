@@ -1,6 +1,8 @@
 # Version: 03.15.00
 # Phase: PHASE2
+import threading
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.backend_fast import CoreBackendFast
@@ -39,12 +41,98 @@ class _ImmediateThread:
         return None
 
 
+class _JoinableThread:
+    def __init__(self, *, alive=True, auto_finish=False):
+        self._alive = bool(alive)
+        self._auto_finish = bool(auto_finish)
+        self.join_calls = []
+
+    def start(self):
+        return None
+
+    def is_alive(self):
+        return self._alive
+
+    def join(self, timeout=None):
+        self.join_calls.append(timeout)
+        if self._auto_finish:
+            self._alive = False
+        return None
+
+
 class _Signal:
     def __init__(self):
         self.calls = []
 
     def emit(self, *args):
         self.calls.append(args)
+
+
+class _ImmediateTimer:
+    def __init__(self, _delay, callback):
+        self._callback = callback
+
+    def start(self):
+        if callable(self._callback):
+            self._callback()
+
+
+class _ActionEvent:
+    def __init__(self, owner):
+        self._owner = owner
+        self._is_set = False
+
+    def clear(self):
+        self._is_set = False
+
+    def set(self):
+        self._is_set = True
+
+    def wait(self, timeout=None):
+        if self._is_set or getattr(self._owner, "action_state", "") != "wait":
+            return True
+        raise AssertionError("start_event waited before auto-start fired")
+
+
+class _FakeActionSession:
+    def __init__(self):
+        self.action_state = "wait"
+        self.state_ref = [self.action_state]
+        self.final_segments = []
+        self.start_event = _ActionEvent(self)
+        self.edit_event = _ActionEvent(self)
+
+    def callbacks(self, start_hook=None, stop_hook=None):
+        def _sync_state(value):
+            self.action_state = value
+            self.state_ref[0] = value
+
+        def on_save(segs):
+            self.final_segments = list(segs or [])
+            _sync_state("next")
+            self.start_event.set()
+            self.edit_event.set()
+
+        def on_start():
+            if callable(start_hook):
+                start_hook()
+            _sync_state("start")
+            self.start_event.set()
+
+        def on_prev():
+            _sync_state("prev")
+            self.start_event.set()
+            self.edit_event.set()
+
+        def on_exit(segs):
+            self.final_segments = list(segs or [])
+            _sync_state("exit")
+            if callable(stop_hook):
+                stop_hook()
+            self.start_event.set()
+            self.edit_event.set()
+
+        return on_save, on_start, on_prev, on_exit
 
 
 class _DummyUi:
@@ -99,6 +187,92 @@ class IndividualQueueContextTests(unittest.TestCase):
         self.assertFalse(backend._individual_queue_mode)
         self.assertTrue(backend._show_queue_for_current_run)
         self.assertEqual(ui.queued_files, ["/tmp/manual_single.mp4"])
+
+    def test_restart_current_file_unblocks_start_wait_and_edit_wait(self):
+        ui = _DummyUi()
+        backend = CoreBackend(ui)
+        backend._action_state = ["wait"]
+        backend._start_event = threading.Event()
+        backend._edit_event = threading.Event()
+        backend._speaker_map = ["00"]
+
+        backend.restart_current_file()
+
+        self.assertEqual(backend._action_state, ["restart"])
+        self.assertTrue(backend._start_event.is_set())
+        self.assertTrue(backend._edit_event.is_set())
+        self.assertEqual(backend._speaker_map, [])
+
+    def test_wait_cut_boundary_prescan_before_stt_caps_long_prescan_wait(self):
+        ui = _DummyUi()
+        backend = CoreBackend(ui)
+        backend._cut_boundary_prescan_thread = _JoinableThread(alive=True, auto_finish=False)
+        backend._cut_boundary_follower_thread = None
+        emitted = []
+        backend._ui_emit = lambda *args, **kwargs: emitted.append(args) or True
+
+        with patch("core.pipeline.cut_boundary_helpers.load_settings", return_value={}):
+            backend._wait_cut_boundary_prescan_before_stt()
+
+        self.assertEqual(backend._cut_boundary_prescan_thread.join_calls, [3.0])
+        self.assertEqual(emitted, [])
+
+    def test_wait_cut_boundary_prescan_before_stt_refreshes_when_threads_finish_quickly(self):
+        ui = _DummyUi()
+        backend = CoreBackend(ui)
+        backend._cut_boundary_prescan_thread = _JoinableThread(alive=True, auto_finish=True)
+        backend._cut_boundary_follower_thread = _JoinableThread(alive=True, auto_finish=True)
+        emitted = []
+        backend._ui_emit = lambda *args, **kwargs: emitted.append(args) or True
+
+        with patch("core.pipeline.cut_boundary_helpers.load_settings", return_value={}):
+            backend._wait_cut_boundary_prescan_before_stt()
+
+        self.assertEqual(backend._cut_boundary_prescan_thread.join_calls, [3.0])
+        self.assertEqual(backend._cut_boundary_follower_thread.join_calls, [1.0])
+        self.assertEqual(
+            emitted,
+            [
+                ("_sig_refresh_cut_boundary_placeholder",),
+                ("_sig_refresh_cut_boundary_placeholder",),
+            ],
+        )
+
+    def test_single_file_auto_start_does_not_wait_for_second_manual_start(self):
+        ui = _DummyUi()
+        backend = CoreBackend(ui)
+        backend.files_to_process = ["/tmp/auto_single.mp4"]
+        backend.is_auto_start = True
+        backend._individual_queue_mode = True
+        backend._active = True
+        backend.video_processor = SimpleNamespace(
+            clear_fast_mode_overrides=lambda: None,
+            set_auto_audio_tune_overrides=lambda _value: None,
+            stage_callback=None,
+        )
+        backend._backup_existing = lambda *_args, **_kwargs: None
+        backend._subtitle_generation_memory_checkpoint = lambda *_args, **_kwargs: None
+        backend._ui_attr = (
+            lambda name, *_args, **_kwargs: (lambda *_a, **_k: True)
+            if name == "open_editor_for_file_and_wait"
+            else None
+        )
+        backend._ui_call = lambda method, *_args, **_kwargs: True if method == "open_editor_for_file_and_wait" else None
+        backend._ui_emit = lambda *_args, **_kwargs: True
+        backend._ui_object = lambda: SimpleNamespace(
+            _current_project_path="/tmp/existing_project.aissproj",
+            _multiclip_files=["/tmp/auto_single.mp4"],
+            _editor_widget=SimpleNamespace(settings={}),
+        )
+        backend._auto_scan_cut_boundaries_for_start = lambda *_args, **_kwargs: None
+        backend._apply_personalization_runtime_override_for_file = lambda *_args, **_kwargs: {}
+        backend._reload_speaker_settings = lambda: None
+        backend._wait_cut_boundary_prescan_before_stt = lambda: (_ for _ in ()).throw(RuntimeError("auto-start-reached"))
+
+        with patch("core.pipeline.single_pipeline.SinglePipelineActionSession", _FakeActionSession), \
+             patch("core.pipeline.single_pipeline.threading.Timer", _ImmediateTimer):
+            with self.assertRaisesRegex(RuntimeError, "auto-start-reached"):
+                backend._process_one("/tmp/auto_single.mp4", 0)
 
     def test_folder_pipeline_clears_multiclip_context_before_queue_run(self):
         ui = _DummyUi()

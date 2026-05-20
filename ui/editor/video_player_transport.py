@@ -130,9 +130,10 @@ class VideoPlayerTransportMixin:
         self.frame_count_label = _MirrorLabel("F 0 / 0")
         self.frame_count_label.setObjectName("VideoFrameCountLabel")
         self.frame_count_label.setToolTip("현재 프레임 / 전체 프레임")
-        self.frame_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.frame_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.frame_count_label.setWordWrap(False)
-        self.frame_count_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.frame_count_label.setFixedWidth(124)
+        self.frame_count_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.frame_count_label.setStyleSheet(
             "QLabel#VideoFrameCountLabel {"
             " color: #8FE7FF;"
@@ -158,8 +159,8 @@ class VideoPlayerTransportMixin:
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.info_label.setWordWrap(True)
         self.info_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.info_label.setMinimumWidth(210)
-        self.info_label.setMaximumWidth(330)
+        self.info_label.setMinimumWidth(160)
+        self.info_label.setMaximumWidth(250)
         self.info_label.setMinimumHeight(30)
         self.info_label.setStyleSheet(
             "QLabel#VideoSourceMetaLabel {"
@@ -197,6 +198,37 @@ class VideoPlayerTransportMixin:
 
         ctrl_layout.addWidget(self.status_info_container, 1)
         return ctrl
+
+    def _control_bar_video_content_insets(self) -> tuple[int, int]:
+        control = getattr(self, "_control_bar_widget", None)
+        video = getattr(self, "video_container", None)
+        if control is None or video is None:
+            return (0, 0)
+        try:
+            video_bounds = video.rect()
+            video_w = max(1, int(video_bounds.width()))
+            control_w = max(1, int(control.width()))
+            video_rect = self._displayed_video_rect(video_bounds)
+            scale = control_w / video_w
+            left = max(0, int(round(int(video_rect.left()) * scale)))
+            right_src = max(0, video_w - int(video_rect.left()) - int(video_rect.width()))
+            right = max(0, int(round(right_src * scale)))
+            return (left, right)
+        except Exception:
+            return (0, 0)
+
+    def _apply_control_bar_video_content_insets(self) -> tuple[int, int]:
+        left, right = self._control_bar_video_content_insets()
+        layout_getter = getattr(getattr(self, "_control_bar_widget", None), "layout", None)
+        layout = layout_getter() if callable(layout_getter) else None
+        if layout is not None:
+            try:
+                current = layout.contentsMargins()
+                if (current.left(), current.top(), current.right(), current.bottom()) != (left, 0, right, 0):
+                    layout.setContentsMargins(left, 0, right, 0)
+            except Exception:
+                pass
+        return (left, right)
 
     def _frame_step_hold_interval_ms(self) -> int:
         try:
@@ -313,6 +345,29 @@ class VideoPlayerTransportMixin:
             QPushButton:hover {{ background: #303841; }}
             QPushButton:pressed {{ background: #1D2329; }}
         """
+
+    def _format_clock_time(self, sec: float | int | str | None) -> str:
+        try:
+            total_sec = max(0, int(float(sec or 0.0)))
+        except Exception:
+            total_sec = 0
+        minutes, seconds = divmod(total_sec, 60)
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _time_label_text(self) -> str:
+        return (
+            f"{self._format_clock_time(getattr(self, 'current_time', 0.0))} / "
+            f"{self._format_clock_time(getattr(self, 'total_time', 0.0))}"
+        )
+
+    def _refresh_time_label(self, *, force: bool = False) -> None:
+        label = getattr(self, "time_label", None)
+        if label is None:
+            return
+        pos_ms = int(float(getattr(self, "current_time", 0.0) or 0.0) * 1000)
+        if force or abs(pos_ms - int(getattr(self, "_last_time_label_ms", -250) or -250)) >= 250:
+            self._last_time_label_ms = pos_ms
+            label.setText(self._time_label_text())
 
     def _format_probe_fps(self, fps_value) -> str:
         try:
@@ -464,12 +519,14 @@ class VideoPlayerTransportMixin:
         super().resizeEvent(event)
         self._layout_video_overlay()
         self._refresh_source_name_label()
+        self._apply_control_bar_video_content_insets()
         self._sync_quick_control_bar()
 
     def eventFilter(self, obj, event):
         if obj is getattr(self, "_control_bar_widget", None) and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
             quick = getattr(self, "_quick_control_bar", None)
             if quick is not None:
+                self._apply_control_bar_video_content_insets()
                 quick.setGeometry(obj.rect())
                 quick.raise_()
         return super().eventFilter(obj, event)
@@ -517,10 +574,13 @@ class VideoPlayerTransportMixin:
                 info_text = str(info_label.text() or "")
             except Exception:
                 info_text = ""
+        content_left, content_right = self._control_bar_video_content_insets()
         return {
             "timeText": str(getattr(self.time_label, "text", lambda: "")() or ""),
             "infoText": info_text,
             "frameText": str(getattr(self.frame_count_label, "text", lambda: "")() or ""),
+            "contentLeftInset": content_left,
+            "contentRightInset": content_right,
             "sourceNameText": (
                 str(getattr(self.source_name_label, "text", lambda: "")() or "")
                 if not bool(getattr(self.source_name_label, "isHidden", lambda: True)())
@@ -657,6 +717,7 @@ class VideoPlayerTransportMixin:
     def _ui_tick(self):
         self._update_btn()
         self._ensure_source_info_label_visible()
+        self._refresh_time_label()
         if not getattr(self, "_source_ready", True):
             return
         is_playing = self.media_player.playbackState() == self.media_player.PlaybackState.PlayingState
@@ -673,14 +734,6 @@ class VideoPlayerTransportMixin:
             if bool(getattr(self, "_provider_refresh_requested", False)):
                 self._refresh_provider_segments(force=False)
 
-        def format_time(sec):
-            m, s = divmod(int(sec), 60)
-            return f"{m:02d}:{s:02d}"
-
-        pos_ms = int(self.current_time * 1000)
-        if abs(pos_ms - self._last_time_label_ms) >= 250:
-            self._last_time_label_ms = pos_ms
-            self.time_label.setText(f"{format_time(self.current_time)} / {format_time(self.total_time)}")
         self._update_frame_count_label()
         self._refresh_subtitle_now()
 

@@ -1,5 +1,5 @@
-# Version: 04.00.10
-# Phase: PHASE14_MacNativeV4_0_10Release
+# Version: 04.00.11
+# Phase: PHASE14_MacNativeV4_0_11Release
 
 
 # === OS / Platform Detection ===
@@ -13,7 +13,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "04.00.10"
+APP_VERSION = "04.00.11"
 MACBOOK_ONLY_APP = True
 SUPPORTED_OS_NAMES = ("Darwin",)
 APP_STORE_TARGET = True
@@ -172,6 +172,12 @@ DEFAULT_ADV_SETTINGS = {
     "subtitle_generation_memory_guard_enabled": True,
     "subtitle_generation_memory_checkpoint_interval_ms": 3000,
     "subtitle_generation_gpu_trim_cooldown_sec": 8.0,
+    "runtime_memory_warning_ratio": 0.20,
+    "runtime_memory_critical_ratio": 0.12,
+    "runtime_memory_warning_trim_cooldown_sec": 12.0,
+    "runtime_memory_critical_trim_cooldown_sec": 6.0,
+    "runtime_memory_warning_disk_trim_ratio": 0.72,
+    "runtime_memory_critical_disk_trim_ratio": 0.45,
     "macos_memory_warning_reserve_gb": 3.0,
     "macos_memory_critical_reserve_gb": 1.5,
     "macos_memory_compressed_warning_ratio": 0.22,

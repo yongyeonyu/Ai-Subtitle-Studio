@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from core.cut_boundary_verify_strategy import StrictVerifyCandidateStrategy
+
 
 def build_strict_verify_helpers(deps: dict):
     normalize_cut_boundary_level = deps["normalize_cut_boundary_level"]
@@ -14,224 +16,7 @@ def build_strict_verify_helpers(deps: dict):
     _auto_gray_delta_mps = deps["_auto_gray_delta_mps"]
     _auto_color_avg_delta_mps = deps["_auto_color_avg_delta_mps"]
     _mps_available = deps["_mps_available"]
-
-    def _native_gray_rollback_candidates(
-        gray_map: dict,
-        *,
-        lo: int,
-        hi: int,
-        read_hi: int,
-        stages: list[int],
-        region_threshold: float,
-        target_samples: int,
-        gray_required_regions: int,
-        gray_1f_threshold: float,
-        gray_2f_threshold: float,
-        gray_window_required: int,
-        gray_window_threshold: float,
-        peak_bonus_scale: float,
-        peak_contrast_scale: float,
-        peak_sharpness_scale: float,
-    ):
-        try:
-            from core.native_cut_boundary import (
-                gray_rollback_search as _native_gray_rollback_search,
-                native_cut_boundary_enabled as _native_cut_boundary_enabled,
-            )
-        except Exception:
-            return None
-        if not _native_cut_boundary_enabled():
-            return None
-        max_stage = max([1, *(int(stage) for stage in list(stages or [1]))])
-        last_needed = min(int(read_hi), int(hi) + max(2, max_stage))
-        rows = []
-        for frame_no in range(int(lo), int(last_needed) + 1):
-            thumb = gray_map.get(frame_no)
-            if thumb is None:
-                return None
-            rows.append(thumb)
-        return _native_gray_rollback_search(
-            rows,
-            start_frame=int(lo),
-            hi_frame=int(hi),
-            stages=[int(stage) for stage in list(stages or [1])],
-            region_threshold=float(region_threshold),
-            target_samples=int(target_samples or 64),
-            gray_required_regions=int(gray_required_regions or 1),
-            gray_1f_threshold=float(gray_1f_threshold),
-            gray_2f_threshold=float(gray_2f_threshold),
-            gray_window_required=int(gray_window_required or 1),
-            gray_window_threshold=float(gray_window_threshold),
-            peak_bonus_scale=float(peak_bonus_scale),
-            peak_contrast_scale=float(peak_contrast_scale),
-            peak_sharpness_scale=float(peak_sharpness_scale),
-        )
-
-    def _gray_rollback_candidates(
-        gray_map: dict,
-        *,
-        lo: int,
-        hi: int,
-        read_hi: int,
-        stages: list[int],
-        region_threshold: float,
-        target_samples: int,
-        gray_required_regions: int,
-        gray_1f_threshold: float,
-        gray_2f_threshold: float,
-        gray_window_required: int,
-        gray_window_threshold: float,
-        peak_bonus_scale: float,
-        peak_contrast_scale: float,
-        peak_sharpness_scale: float,
-        delta_fn,
-        window_mode: str,
-    ):
-        best_adj = {
-            "frame": None,
-            "score": -1.0,
-            "regions": 0,
-            "deltas": [],
-            "mode": "1f",
-            "threshold": gray_1f_threshold,
-        }
-        best_win = {
-            "frame": None,
-            "score": -1.0,
-            "regions": 0,
-            "deltas": [],
-            "stage": 0,
-            "mode": window_mode,
-        }
-
-        native_out = _native_gray_rollback_candidates(
-            gray_map,
-            lo=lo,
-            hi=hi,
-            read_hi=read_hi,
-            stages=stages,
-            region_threshold=region_threshold,
-            target_samples=target_samples,
-            gray_required_regions=gray_required_regions,
-            gray_1f_threshold=gray_1f_threshold,
-            gray_2f_threshold=gray_2f_threshold,
-            gray_window_required=gray_window_required,
-            gray_window_threshold=gray_window_threshold,
-            peak_bonus_scale=peak_bonus_scale,
-            peak_contrast_scale=peak_contrast_scale,
-            peak_sharpness_scale=peak_sharpness_scale,
-        )
-        if isinstance(native_out, dict):
-            native_adj = native_out.get("best_adj")
-            if isinstance(native_adj, dict) and native_adj.get("frame") is not None:
-                best_adj.update(
-                    {
-                        "frame": int(native_adj.get("frame")),
-                        "score": float(native_adj.get("score", -1.0) or -1.0),
-                        "regions": int(native_adj.get("regions", 0) or 0),
-                        "deltas": list(native_adj.get("deltas") or []),
-                        "mode": str(native_adj.get("mode", "1f") or "1f"),
-                        "threshold": float(native_adj.get("threshold", gray_1f_threshold) or gray_1f_threshold),
-                    }
-                )
-            native_win = native_out.get("best_win")
-            if isinstance(native_win, dict) and native_win.get("frame") is not None:
-                best_win.update(
-                    {
-                        "frame": int(native_win.get("frame")),
-                        "score": float(native_win.get("score", -1.0) or -1.0),
-                        "regions": int(native_win.get("regions", 0) or 0),
-                        "deltas": list(native_win.get("deltas") or []),
-                        "stage": int(native_win.get("stage", 0) or 0),
-                        "mode": window_mode,
-                    }
-                )
-            return best_adj, best_win, True
-
-        def consider_adj(mode, frame_no, score, regions, deltas, threshold):
-            norm = (float(score) / float(threshold or 1.0)) + min(int(regions), gray_required_regions) * 0.03
-            old_norm = (float(best_adj["score"]) / float(best_adj["threshold"] or 1.0)) + min(int(best_adj["regions"]), gray_required_regions) * 0.03
-            if best_adj["frame"] is None or norm > old_norm:
-                best_adj.update(
-                    {
-                        "frame": int(frame_no),
-                        "score": float(score),
-                        "regions": int(regions),
-                        "deltas": list(deltas or []),
-                        "mode": str(mode),
-                        "threshold": float(threshold),
-                    }
-                )
-
-        for frame_no in range(lo, hi + 1):
-            a1 = gray_map.get(frame_no)
-            b1 = gray_map.get(frame_no + 1)
-            if a1 is not None and b1 is not None:
-                score, regions, deltas = delta_fn(
-                    a1,
-                    b1,
-                    region_threshold=region_threshold,
-                    target_samples=target_samples,
-                )
-                consider_adj("1f", frame_no, score, regions, deltas, gray_1f_threshold)
-
-            a2 = gray_map.get(frame_no)
-            b2 = gray_map.get(frame_no + 2)
-            if a2 is not None and b2 is not None:
-                score, regions, deltas = delta_fn(
-                    a2,
-                    b2,
-                    region_threshold=region_threshold,
-                    target_samples=target_samples,
-                )
-                consider_adj("2f", frame_no + 1, score, regions, deltas, gray_2f_threshold)
-
-        cur_lo = lo
-        cur_hi = hi
-        for stage in stages:
-            stage = max(1, int(stage))
-            step = max(1, stage // 2)
-            local_frame = None
-            local_score = -1.0
-            local_regions = 0
-            local_deltas = []
-
-            frame_no = int(cur_lo)
-            while frame_no <= int(cur_hi):
-                a = gray_map.get(frame_no)
-                b = gray_map.get(frame_no + stage)
-                if a is not None and b is not None:
-                    score, regions, deltas = delta_fn(
-                        a,
-                        b,
-                        region_threshold=region_threshold,
-                        target_samples=target_samples,
-                    )
-                    if score > local_score:
-                        local_frame = int(frame_no)
-                        local_score = float(score)
-                        local_regions = int(regions)
-                        local_deltas = list(deltas or [])
-                frame_no += step
-
-            if local_frame is None:
-                continue
-            if local_score > best_win["score"]:
-                best_win.update(
-                    {
-                        "frame": int(local_frame),
-                        "score": float(local_score),
-                        "regions": int(local_regions),
-                        "deltas": list(local_deltas),
-                        "stage": int(stage),
-                        "mode": window_mode,
-                    }
-                )
-
-            cur_lo = max(lo, local_frame - stage)
-            cur_hi = min(hi, local_frame + stage)
-
-        return best_adj, best_win, False
+    candidate_strategy = StrictVerifyCandidateStrategy()
 
     def _auto_dense_flow_cut_check(
         cap,
@@ -579,141 +364,6 @@ def build_strict_verify_helpers(deps: dict):
             "backend": "opencv_dense_optical_flow_window",
         }
 
-    def _strict_candidate_rank(score: float, threshold: float, regions: int, required_regions: int, region_scale: float = 0.03) -> float:
-        safe_threshold = max(1e-6, float(threshold or 0.0))
-        return (float(score or 0.0) / safe_threshold) + min(int(regions or 0), int(required_regions or 1)) * float(region_scale)
-
-    def _strict_provisional_hint(reason: str, *, fps: float, candidates: list[dict]) -> dict:
-        ranked = [dict(item) for item in list(candidates or []) if isinstance(item, dict) and item.get("frame") is not None]
-        if not ranked:
-            return {"passed": False, "reason": reason}
-        ranked.sort(
-            key=lambda item: (
-                float(item.get("rank", -1.0) or -1.0),
-                float(item.get("score", -1.0) or -1.0),
-                int(item.get("regions", 0) or 0),
-            ),
-            reverse=True,
-        )
-        best = ranked[0]
-        frame = int(best.get("frame") or 0)
-        return {
-            "passed": False,
-            "reason": reason,
-            "provisional_frame": frame,
-            "provisional_sec": float(frame / float(max(fps, 1.0))),
-            "provisional_score": float(best.get("score", 0.0) or 0.0),
-            "provisional_regions": int(best.get("regions", 0) or 0),
-            "provisional_mode": str(best.get("mode", "") or ""),
-            "provisional_stage": int(best.get("stage", 0) or 0),
-            "provisional_deltas": list(best.get("deltas") or []),
-            "rollback_relocated": True,
-        }
-
-    def _best_local_color_candidate(
-        color_map: dict,
-        *,
-        center_frame: int,
-        lo: int,
-        hi: int,
-        radius_frames: int,
-        color_threshold: float,
-        color_required_regions: int,
-        weight_luma: float,
-        weight_chroma: float,
-        delta_fn,
-    ) -> dict:
-        best = {"frame": None, "score": -1.0, "regions": 0, "deltas": [], "mode": "color_local", "rank": -1.0}
-        radius_frames = max(1, int(radius_frames or 1))
-        start = max(int(lo), int(center_frame) - radius_frames)
-        stop = min(int(hi), int(center_frame) + radius_frames)
-
-        def _consider(candidate_frame: int, score: float, regions: int, deltas, *, mode: str, threshold: float):
-            closeness = max(0.0, 1.0 - (abs(int(candidate_frame) - int(center_frame)) / float(max(1, radius_frames + 1))))
-            rank = _strict_candidate_rank(score, threshold, regions, color_required_regions) + (closeness * 0.08)
-            if rank > float(best["rank"]) or (
-                abs(rank - float(best["rank"])) < 1e-6 and float(score) > float(best["score"])
-            ):
-                best.update(
-                    {
-                        "frame": int(candidate_frame),
-                        "score": float(score),
-                        "regions": int(regions),
-                        "deltas": list(deltas or []),
-                        "mode": str(mode),
-                        "rank": float(rank),
-                    }
-                )
-
-        for frame_no in range(start, stop + 1):
-            a1 = color_map.get(frame_no)
-            b1 = color_map.get(frame_no + 1)
-            if a1 is not None and b1 is not None:
-                score, regions, deltas = delta_fn(
-                    a1,
-                    b1,
-                    threshold=color_threshold,
-                    weight_luma=weight_luma,
-                    weight_chroma=weight_chroma,
-                )
-                _consider(frame_no, score, regions, deltas, mode="color_local_1f", threshold=color_threshold)
-
-            a2 = color_map.get(frame_no)
-            b2 = color_map.get(frame_no + 2)
-            if a2 is not None and b2 is not None:
-                score, regions, deltas = delta_fn(
-                    a2,
-                    b2,
-                    threshold=color_threshold,
-                    weight_luma=weight_luma,
-                    weight_chroma=weight_chroma,
-                )
-                _consider(frame_no + 1, score, regions, deltas, mode="color_local_2f", threshold=color_threshold * 1.05)
-
-        return best
-
-    def _frame_mean_color_similarity(
-        color_map: dict,
-        *,
-        frame: int,
-    ) -> dict:
-        left = color_map.get(int(frame))
-        right = color_map.get(int(frame) + 1)
-        if (
-            not left
-            or not right
-            or not isinstance(left, (list, tuple))
-            or not isinstance(right, (list, tuple))
-        ):
-            return {"available": False, "score": 0.0, "luma_delta": 0.0, "chroma_delta": 0.0}
-        n = min(len(left), len(right))
-        if n <= 0:
-            return {"available": False, "score": 0.0, "luma_delta": 0.0, "chroma_delta": 0.0}
-        luma_total = 0.0
-        chroma_total = 0.0
-        used = 0
-        for idx in range(n):
-            try:
-                a0, a1, a2 = left[idx]
-                b0, b1, b2 = right[idx]
-                luma = abs(float(a0) - float(b0))
-                chroma = (abs(float(a1) - float(b1)) + abs(float(a2) - float(b2))) / 2.0
-            except Exception:
-                continue
-            luma_total += luma
-            chroma_total += chroma
-            used += 1
-        if used <= 0:
-            return {"available": False, "score": 0.0, "luma_delta": 0.0, "chroma_delta": 0.0}
-        luma_avg = luma_total / float(used)
-        chroma_avg = chroma_total / float(used)
-        return {
-            "available": True,
-            "score": (luma_avg * 0.25) + (chroma_avg * 0.75),
-            "luma_delta": luma_avg,
-            "chroma_delta": chroma_avg,
-        }
-
     def _auto_grid_v3_manual_verify_impl(
         cap,
         cv2_mod,
@@ -823,7 +473,7 @@ def build_strict_verify_helpers(deps: dict):
         peak_bonus_scale = float(settings.get("scan_cut_native_peak_bonus_scale", 0.22) or 0.22)
         peak_contrast_scale = float(settings.get("scan_cut_native_peak_contrast_scale", 0.16) or 0.16)
         peak_sharpness_scale = float(settings.get("scan_cut_native_peak_sharpness_scale", 0.08) or 0.08)
-        best_adj, best_win, _gray_native_used = _gray_rollback_candidates(
+        best_adj, best_win, _gray_native_used = candidate_strategy.gray_rollback_candidates(
             gray_map,
             lo=lo,
             hi=hi,
@@ -865,7 +515,7 @@ def build_strict_verify_helpers(deps: dict):
                     "mode": str(window_mode),
                     "stage": int(best_win.get("stage", 0) or 0),
                     "threshold": float(gray_window_threshold),
-                    "rank": _strict_candidate_rank(best_win["score"], gray_window_threshold, best_win["regions"], gray_window_required, 0.04),
+                    "rank": candidate_strategy.strict_candidate_rank(best_win["score"], gray_window_threshold, best_win["regions"], gray_window_required, 0.04),
                     "kind": "window",
                 }
             )
@@ -879,13 +529,13 @@ def build_strict_verify_helpers(deps: dict):
                     "mode": str(best_adj.get("mode", "gray_adj") or "gray_adj"),
                     "stage": 1,
                     "threshold": float(best_adj["threshold"]),
-                    "rank": _strict_candidate_rank(best_adj["score"], best_adj["threshold"], best_adj["regions"], gray_required_regions),
+                    "rank": candidate_strategy.strict_candidate_rank(best_adj["score"], best_adj["threshold"], best_adj["regions"], gray_required_regions),
                     "kind": "adj",
                 }
             )
 
         if not gray_candidates:
-            return _strict_provisional_hint(
+            return candidate_strategy.strict_provisional_hint(
                 "gray_failed",
                 fps=fps,
                 candidates=[
@@ -896,7 +546,7 @@ def build_strict_verify_helpers(deps: dict):
                         "deltas": best_win.get("deltas"),
                         "mode": window_mode,
                         "stage": int(best_win.get("stage", 0) or 0),
-                        "rank": _strict_candidate_rank(best_win.get("score", -1.0), gray_window_threshold, best_win.get("regions", 0), gray_window_required, 0.04),
+                        "rank": candidate_strategy.strict_candidate_rank(best_win.get("score", -1.0), gray_window_threshold, best_win.get("regions", 0), gray_window_required, 0.04),
                     },
                     {
                         "frame": best_adj.get("frame"),
@@ -905,7 +555,7 @@ def build_strict_verify_helpers(deps: dict):
                         "deltas": best_adj.get("deltas"),
                         "mode": str(best_adj.get("mode", "gray_adj") or "gray_adj"),
                         "stage": 1,
-                        "rank": _strict_candidate_rank(best_adj.get("score", -1.0), best_adj.get("threshold", gray_1f_threshold), best_adj.get("regions", 0), gray_required_regions),
+                        "rank": candidate_strategy.strict_candidate_rank(best_adj.get("score", -1.0), best_adj.get("threshold", gray_1f_threshold), best_adj.get("regions", 0), gray_required_regions),
                     },
                 ],
             )
@@ -962,33 +612,18 @@ def build_strict_verify_helpers(deps: dict):
             settings=settings,
         )
 
-        best_color = {"frame": None, "score": -1.0, "regions": 0, "deltas": [], "rank": -1.0, "mode": "color_window"}
-        step = max(1, color_window_frames // 2)
-        f = color_lo
-        while f <= color_hi:
-            a = color_map.get(f)
-            b = color_map.get(f + color_window_frames)
-            if a is not None and b is not None:
-                score, regions, deltas = color_delta_fn(
-                    a,
-                    b,
-                    threshold=color_threshold,
-                    weight_luma=color_weight_luma,
-                    weight_chroma=color_weight_chroma,
-                )
-                rank = _strict_candidate_rank(score, color_threshold, regions, color_required_regions)
-                if rank > float(best_color["rank"]) or (abs(rank - float(best_color["rank"])) < 1e-6 and float(score) > float(best_color["score"])):
-                    best_color.update(
-                        {
-                            "frame": int(f),
-                            "score": float(score),
-                            "regions": int(regions),
-                            "deltas": list(deltas or []),
-                            "rank": float(rank),
-                            "mode": "color_window",
-                        }
-                    )
-            f += step
+        best_color = candidate_strategy.color_window_candidate(
+            color_map,
+            start_frame=color_lo,
+            stop_frame=color_hi,
+            window_frames=color_window_frames,
+            step=max(1, color_window_frames // 2),
+            threshold=color_threshold,
+            required_regions=color_required_regions,
+            weight_luma=color_weight_luma,
+            weight_chroma=color_weight_chroma,
+            delta_fn=color_delta_fn,
+        )
 
         gray_super_strong_for_color = (
             best_win["frame"] is not None
@@ -1007,7 +642,7 @@ def build_strict_verify_helpers(deps: dict):
         local_color_radius = max(1, int(settings.get("scan_cut_follower_local_color_confirm_frames", max(2, round(fps * 0.12))) or max(2, round(fps * 0.12))))
         gray_color_agreement_frames = max(1, int(settings.get("scan_cut_follower_gray_color_agreement_frames", max(2, round(fps * 0.12))) or max(2, round(fps * 0.12))))
         for candidate in gray_candidates:
-            local_color = _best_local_color_candidate(
+            local_color = candidate_strategy.best_local_color_candidate(
                 color_map,
                 center_frame=int(candidate["frame"]),
                 lo=color_lo,
@@ -1046,11 +681,11 @@ def build_strict_verify_helpers(deps: dict):
                         and (float(top_candidate["joint_rank"]) - float(second_candidate["joint_rank"])) < gray_dominance_margin
                     ):
                         provisional_candidates = list(gray_candidates) + [best_color]
-                        return _strict_provisional_hint("gray_conflict", fps=fps, candidates=provisional_candidates)
+                        return candidate_strategy.strict_provisional_hint("gray_conflict", fps=fps, candidates=provisional_candidates)
                 selected_gray = top_candidate
             else:
                 provisional_candidates = list(gray_candidates) + [best_color]
-                return _strict_provisional_hint("gray_conflict", fps=fps, candidates=provisional_candidates)
+                return candidate_strategy.strict_provisional_hint("gray_conflict", fps=fps, candidates=provisional_candidates)
 
         local_color = dict(selected_gray.get("local_color") or {})
         local_color_pass = bool(selected_gray.get("local_color_pass"))
@@ -1080,7 +715,7 @@ def build_strict_verify_helpers(deps: dict):
             provisional_candidates = list(gray_candidates) + [best_color]
             if local_color:
                 provisional_candidates.append(local_color)
-            return _strict_provisional_hint("color_avg_failed", fps=fps, candidates=provisional_candidates)
+            return candidate_strategy.strict_provisional_hint("color_avg_failed", fps=fps, candidates=provisional_candidates)
 
         flow_check = _auto_dense_flow_cut_check(
             cap,
@@ -1092,7 +727,7 @@ def build_strict_verify_helpers(deps: dict):
         if not flow_check.get("passed", True):
             return {"passed": False, "reason": "dense_flow_motion_reject", "dense_flow": dict(flow_check)}
 
-        same_scene_similarity = _frame_mean_color_similarity(
+        same_scene_similarity = candidate_strategy.frame_mean_color_similarity(
             color_map,
             frame=int(selected_frame if selected_frame is not None else coarse_frame),
         )

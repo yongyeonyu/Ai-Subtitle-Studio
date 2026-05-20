@@ -17,6 +17,18 @@ setup(
             sources=[str(ROOT / "core" / "native" / "_native_cut_boundary.cpp")],
             language="c++",
             extra_compile_args=["-std=c++17", "-O3"],
-        )
+        ),
+        Extension(
+            "core._native_stt_lattice",
+            sources=[str(ROOT / "core" / "native" / "_native_stt_lattice.cpp")],
+            language="c++",
+            extra_compile_args=["-std=c++17", "-O3"],
+        ),
+        Extension(
+            "core._native_stt_recheck",
+            sources=[str(ROOT / "core" / "native" / "_native_stt_recheck.cpp")],
+            language="c++",
+            extra_compile_args=["-std=c++17", "-O3"],
+        ),
     ],
 )

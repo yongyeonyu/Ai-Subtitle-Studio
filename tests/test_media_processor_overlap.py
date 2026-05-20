@@ -40,6 +40,11 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.processor._load_all_settings = lambda: {"stt_persistent_runtime_reuse_enabled": True}
 
         with patch.object(config, "IS_MAC", True), \
+             patch("core.performance.current_resource_snapshot", return_value={
+                 "available_memory_ratio": 0.5,
+                 "available_memory_bytes": 8 * 1024 ** 3,
+                 "memory_pressure_stage": "normal",
+             }), \
              patch.object(self.processor, "stop_transcribe") as stop_transcribe, \
              patch("core.audio.media_processor_transcribe.clear_audio_model_memory_caches") as clear_caches:
             self.processor._release_after_transcribe_job("STT1")
@@ -156,6 +161,51 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             )
 
         self.assertEqual(collect.call_args.args[1], "whisperkit-persistent:large-v3-v20240930_turbo_632MB")
+
+    def test_release_after_transcribe_stops_warm_worker_under_critical_memory(self):
+        class _LiveProc:
+            def poll(self):
+                return None
+
+        proc = _LiveProc()
+        self.processor._whisperkit_runner_proc = proc
+        self.processor._whisper_proc = proc
+        self.processor._load_all_settings = lambda: {"stt_persistent_runtime_reuse_enabled": True}
+
+        with patch.object(config, "IS_MAC", True), \
+             patch("core.performance.current_resource_snapshot", return_value={
+                 "available_memory_ratio": 0.04,
+                 "available_memory_bytes": 512 * 1024 ** 2,
+                 "memory_pressure_stage": "critical",
+             }), \
+             patch.object(self.processor, "stop_transcribe") as stop_transcribe, \
+             patch("core.audio.media_processor_transcribe.clear_audio_model_memory_caches") as clear_caches:
+            self.processor._release_after_transcribe_job("STT1")
+
+        stop_transcribe.assert_called_once()
+        clear_caches.assert_called_once_with(include_gpu=True)
+
+    def test_release_after_transcribe_clears_cpu_only_under_warning_memory(self):
+        class _LiveProc:
+            def poll(self):
+                return None
+
+        proc = _LiveProc()
+        self.processor._whisperkit_runner_proc = proc
+        self.processor._whisper_proc = proc
+        self.processor._load_all_settings = lambda: {
+            "stt_persistent_runtime_reuse_enabled": False,
+        }
+
+        with patch.object(config, "IS_MAC", True),              patch("core.performance.current_resource_snapshot", return_value={
+                 "available_memory_ratio": 0.15,
+                 "available_memory_bytes": 2048 * 1024 ** 2,
+                 "memory_pressure_stage": "warning",
+             }),              patch.object(self.processor, "stop_transcribe") as stop_transcribe,              patch("core.audio.media_processor_transcribe.clear_audio_model_memory_caches") as clear_caches:
+            self.processor._release_after_transcribe_job("STT1")
+
+        stop_transcribe.assert_called_once()
+        clear_caches.assert_called_once_with(include_gpu=False)
 
     def test_audio_route_segment_hints_mark_precision_review_and_secondary_recheck(self):
         item = {"input_path": "/tmp/vad_000_0.000.wav"}
@@ -890,6 +940,71 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
             self.assertEqual(calls, ["STT1", "Fast-STT2"])
             self.assertEqual([seg["text"] for seg in result[0][0]], ["기존 후보", "누락 보강"])
+
+    def test_selective_ensemble_deduplicates_overlapping_route_hint_ranges_before_recheck(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = os.path.join(tmp, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000 * 4)
+            with open(os.path.join(tmp, "vad_strict.json"), "w", encoding="utf-8") as handle:
+                json.dump([], handle)
+
+            prepare_calls = []
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary",
+                "selected_whisper_model_secondary": "secondary",
+                "stt_ensemble_selective_enabled": True,
+                "stt_ensemble_parallel_enabled": False,
+                "stt_low_score_recheck_enabled": True,
+                "stt_low_score_recheck_threshold": 60,
+                "stt_low_score_recheck_max_segments": 4,
+                "stt_word_timestamps_precision_enabled": False,
+                "vad_post_stt_align_enabled": False,
+            }
+
+            def fake_collect(_chunk_dir, _model, *, label, **_kwargs):
+                if label == "STT1":
+                    return [{
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "중복 후보",
+                        "stt_score": 28,
+                        "score": 28,
+                        "stt_route_secondary_recheck_hint": True,
+                        "chunk_path": wav_path,
+                        "asr_metadata": {"chunk_path": wav_path},
+                    }]
+                return [{
+                    "start": 0.0,
+                    "end": 0.9,
+                    "text": "보강 결과",
+                    "stt_score": 94,
+                    "score": 94,
+                    "chunk_path": wav_path,
+                    "asr_metadata": {"chunk_path": wav_path},
+                }]
+
+            self.processor._collect_transcribe_result = fake_collect
+
+            def fake_prepare(item, _out_dir, _idx, _settings):
+                prepare_calls.append((round(item.start, 2), round(item.end, 2)))
+                return {
+                    "range": item,
+                    "path": wav_path,
+                    "start": item.start,
+                    "end": item.end,
+                }
+
+            self.processor._prepare_recheck_clip = fake_prepare
+
+            with patch("core.audio.stt_candidate_scorer.annotate_stt_candidates", side_effect=lambda segments, **_kwargs: segments):
+                result = list(self.processor.transcribe_ensemble(tmp, cleanup_chunk_dir=False))
+
+            self.assertEqual(prepare_calls, [(0.0, 1.0)])
+            self.assertEqual([seg["text"] for seg in result[0][0]], ["보강 결과"])
 
     def test_ensemble_uses_isolated_chunk_dirs_for_each_track(self):
         with tempfile.TemporaryDirectory() as tmp:

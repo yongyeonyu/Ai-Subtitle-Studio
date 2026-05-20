@@ -126,6 +126,24 @@ class MainWindowNonfatalTests(unittest.TestCase):
         finally:
             self._cleanup_window(window)
 
+    def test_required_model_startup_check_skips_modal_until_window_is_active(self):
+        window = self._make_window()
+        try:
+            window._required_model_check_done = False
+            window.isVisible = mock.Mock(return_value=True)
+            window.isActiveWindow = mock.Mock(return_value=False)
+            window.windowHandle = mock.Mock(return_value=object())
+
+            with mock.patch.dict(os.environ, {"QT_QPA_PLATFORM": "cocoa"}):
+                with mock.patch("core.model_manager.get_required_models", return_value=[{"name": "WhisperKit Large V3"}]):
+                    with mock.patch("core.model_manager.get_current_os", return_value="macOS"):
+                        with mock.patch("ui.main.main_signals.QMessageBox.warning") as warning:
+                            window._check_required_models_on_startup()
+
+            warning.assert_not_called()
+        finally:
+            self._cleanup_window(window)
+
     def test_show_home_compacts_hidden_workspace_widgets_when_idle(self):
         window = self._make_window()
         try:

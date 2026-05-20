@@ -60,6 +60,14 @@ A Python function family may move into native library form only when all items a
   Keep in Python: small payloads where cached Python work is cheaper than bridge setup.
   Verification: JSON payload size logs plus targeted benchmark artifacts under `output/manual_verification/latest/`.
 
+- [ ] 6. Runtime 캐시 정리 native 경로의 경량화
+  Scope: `core/native_swift_runtime_cache.py` 및 호출측 정리 호출 빈도.
+  Current note: 2026-05-20 마카오/X5 10회 반복에서는 Python checkpoint cleanup을 더 느슨하게 하는 것만으로는 X5가 빨라지지 않았다.
+  다음 패스는 cleanup 완화보다 native bridge 호출 수와 elapsed를 먼저 계측해야 한다.
+  Success: 연속 실행에서 동일 경로 정리 요청이 중복되는 동안 Swift 호출 오버헤드가 낮아지고,
+  동일한 기능 요구 대비 브리지 비용이 증가하지 않는다.
+  Verification: 반복 10회 벤치에서 `memory_manager` 정리 로그 및 전체 pipeline 평균 시간 비교.
+
 ## Parked Or Rejected For Now
 
 - `core/project/project_model_settings.py`

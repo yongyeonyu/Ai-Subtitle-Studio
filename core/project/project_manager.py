@@ -1064,7 +1064,9 @@ def create_project(
     name: str,
     media_paths: Optional[List[str]] = None,
     srt_path: Optional[str] = None,
-    user_settings: Optional[dict] = None
+    user_settings: Optional[dict] = None,
+    *,
+    prefill_analysis_artifacts: bool = True,
 ) -> str:
     """새 프로젝트 JSON 생성 → 파일 경로 반환"""
     ensure_projects_dir()
@@ -1201,18 +1203,19 @@ def create_project(
             pass
 
     primary_fps = project_primary_fps(project)
-    _prefill_project_cut_boundary_artifacts(
-        project,
-        clips=clips,
-        settings=persisted_user_settings,
-        primary_fps=primary_fps,
-    )
-    _finalize_project_middle_segment_artifacts(
-        project,
-        subtitle_segments=segments,
-        clips=clips,
-        settings=persisted_user_settings,
-    )
+    if prefill_analysis_artifacts:
+        _prefill_project_cut_boundary_artifacts(
+            project,
+            clips=clips,
+            settings=persisted_user_settings,
+            primary_fps=primary_fps,
+        )
+        _finalize_project_middle_segment_artifacts(
+            project,
+            subtitle_segments=segments,
+            clips=clips,
+            settings=persisted_user_settings,
+        )
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(
         project,

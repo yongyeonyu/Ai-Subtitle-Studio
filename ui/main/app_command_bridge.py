@@ -20,6 +20,7 @@ from core.settings_simplifier import apply_simple_operation_mode
 _STATUS_SNAPSHOT_CACHE_TTL_SEC = 0.35
 _STATUS_SNAPSHOT_CACHE_LOCK = threading.Lock()
 _STATUS_SNAPSHOT_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+_STATUS_COMMANDS = {"ping", "status", "guided-subtitle-status"}
 _STAGE_LOG_TOKENS = (
     "오디오 추출",
     "오토 오디오",
@@ -319,6 +320,10 @@ def _recent_stage_logs_snapshot(limit: int = 20) -> list[str]:
     return matched[-size:]
 
 
+def _is_status_command(command: str) -> bool:
+    return str(command or "") in _STATUS_COMMANDS
+
+
 def _recent_log_payload(
     *,
     recent_limit: int = 40,
@@ -512,13 +517,27 @@ def _status_snapshot(owner: Any) -> dict[str, Any]:
     }
 
 
-def _cached_status_snapshot(owner: Any) -> dict[str, Any]:
-    now = time.monotonic()
+def _peek_status_snapshot_cache(owner: Any, *, max_age_sec: float | None = None) -> tuple[float, dict[str, Any]] | None:
     owner_key = id(owner)
+    now = time.monotonic()
     with _STATUS_SNAPSHOT_CACHE_LOCK:
         cached = _STATUS_SNAPSHOT_CACHE.get(owner_key)
-        if cached is not None and (now - cached[0]) <= _STATUS_SNAPSHOT_CACHE_TTL_SEC:
-            return dict(cached[1])
+    if cached is None:
+        return None
+    cached_at, snapshot = cached
+    age = max(0.0, now - float(cached_at or 0.0))
+    if max_age_sec is not None and age > max(0.0, float(max_age_sec)):
+        return None
+    return age, dict(snapshot or {})
+
+
+def _cached_status_snapshot(owner: Any) -> dict[str, Any]:
+    cached_entry = _peek_status_snapshot_cache(owner, max_age_sec=_STATUS_SNAPSHOT_CACHE_TTL_SEC)
+    if cached_entry is not None:
+        _age, snapshot = cached_entry
+        return snapshot
+    now = time.monotonic()
+    owner_key = id(owner)
     snapshot = _status_snapshot(owner)
     with _STATUS_SNAPSHOT_CACHE_LOCK:
         _STATUS_SNAPSHOT_CACHE[owner_key] = (now, dict(snapshot))
@@ -531,6 +550,89 @@ def _clear_status_snapshot_cache(owner: Any | None = None) -> None:
             _STATUS_SNAPSHOT_CACHE.clear()
         else:
             _STATUS_SNAPSHOT_CACHE.pop(id(owner), None)
+
+
+def _status_fallback_snapshot(owner: Any) -> dict[str, Any]:
+    # status는 "완벽한 최신성"보다 "절대 timeout 나지 않는 것"이 더 중요하다.
+    # 메인 스레드가 바쁘면 마지막 known-good snapshot + cheap fields로 즉시 응답한다.
+    cached_entry = _peek_status_snapshot_cache(owner, max_age_sec=None)
+    cached_age = None
+    snapshot = {}
+    if cached_entry is not None:
+        cached_age, snapshot = cached_entry
+    data = dict(snapshot or {})
+    editor = getattr(owner, "_editor_widget", None)
+    editor_state = data.get("editor_state", "")
+    editor_media_path = data.get("editor_media_path", "")
+    try:
+        if not editor_state and editor is not None:
+            editor_state = str(getattr(getattr(editor, "sm", None), "state", "") or "")
+    except Exception:
+        pass
+    try:
+        if not editor_media_path and editor is not None:
+            editor_media_path = str(getattr(editor, "media_path", "") or "")
+    except Exception:
+        pass
+    data["editor_open"] = bool(data.get("editor_open", editor is not None))
+    data["editor_media_path"] = str(editor_media_path or "")
+    data["editor_state"] = str(editor_state or "")
+    data["current_project_path"] = str(data.get("current_project_path", getattr(owner, "_current_project_path", "")) or "")
+    data["current_work_mode"] = str(data.get("current_work_mode", getattr(owner, "_current_work_mode", "")) or "")
+    data["backend_active"] = bool(data.get("backend_active", getattr(getattr(owner, "backend", None), "_active", False)))
+    data["auto_processing_active"] = bool(data.get("auto_processing_active", getattr(owner, "_auto_processing_active", False)))
+    if not isinstance(data.get("editor_runtime"), dict):
+        data["editor_runtime"] = {}
+    if not isinstance(data.get("guided_snapshot_run"), dict):
+        data["guided_snapshot_run"] = {}
+    if not isinstance(data.get("queue_runtime"), dict):
+        data["queue_runtime"] = {}
+    if not isinstance(data.get("runtime_resource"), dict):
+        data["runtime_resource"] = _runtime_resource_snapshot(owner)
+    if not isinstance(data.get("editor_aux_counts"), dict):
+        data["editor_aux_counts"] = {
+            "stt_preview_segment_count": 0,
+            "voice_activity_segment_count": 0,
+            "provisional_cut_boundary_count": 0,
+        }
+    if not isinstance(data.get("recent_logs"), list):
+        data["recent_logs"] = _recent_logs_snapshot(40)
+    if not isinstance(data.get("recent_stage_logs"), list):
+        data["recent_stage_logs"] = _recent_stage_logs_snapshot(20)
+    data["status_snapshot_fallback"] = True
+    if cached_age is not None:
+        data["status_snapshot_age_sec"] = round(float(cached_age), 3)
+    return data
+
+
+def _fast_status_command_result(owner: Any, payload: dict[str, Any], *, timeout_sec: float = 0.08) -> dict[str, Any]:
+    # status/ping은 읽기 전용 진단 경로다.
+    # 여기서 일반 명령처럼 UI 스레드를 길게 기다리면 automation 전체가 멈춘 것처럼 보인다.
+    command_payload = normalize_command_payload(payload)
+    command = command_payload.get("command", "")
+    cached_entry = _peek_status_snapshot_cache(owner, max_age_sec=_STATUS_SNAPSHOT_CACHE_TTL_SEC)
+    if cached_entry is not None:
+        _age, snapshot = cached_entry
+        if command == "ping":
+            return build_command_result(command, ok=True, accepted=True, message="pong", data=snapshot)
+        return build_command_result(command, ok=True, accepted=True, data=snapshot)
+    signal = getattr(owner, "_sig_external_app_command", None)
+    state: dict[str, Any] | None = None
+    if hasattr(signal, "emit"):
+        state = {"event": threading.Event()}
+        try:
+            signal.emit(dict(command_payload), state)
+        except Exception as exc:
+            _log_bridge_nonfatal(f"status signal emit {command}", exc)
+            state = None
+    quick_timeout = min(0.20, max(0.02, float(timeout_sec or 0.08)))
+    if state is not None and state["event"].wait(quick_timeout):
+        result = _signal_state_result(state)
+        if result is not None:
+            return result
+    fallback = _status_fallback_snapshot(owner)
+    message = "pong" if command == "ping" else ""
+    return build_command_result(command, ok=True, accepted=True, message=message, data=fallback)
 
 
 def _editor_pipeline_start_callback(owner: Any, media_path: str, *, is_auto_start: bool = False):
@@ -1142,9 +1244,14 @@ def handle_app_command_signal(owner: Any, payload: dict[str, Any], reply_state: 
 
 
 def dispatch_app_command(owner: Any, payload: dict[str, Any], *, timeout_sec: float = 12.0) -> dict[str, Any]:
+    command = normalize_command_payload(payload).get("command", "")
     app = QApplication.instance()
     if app is not None and QThread.currentThread() == app.thread():
         return execute_app_command(owner, payload)
+    if _is_status_command(command):
+        # 상태 조회만 fast-path를 탄다. 상태 변경 명령까지 여기로 보내면
+        # UI/UX 동작 계약이 바뀌므로 분리 유지한다.
+        return _fast_status_command_result(owner, payload, timeout_sec=min(float(timeout_sec or 12.0), 0.08))
     state: dict[str, Any] = {"event": threading.Event()}
     owner._sig_external_app_command.emit(dict(payload or {}), state)
     timeout = max(0.1, float(timeout_sec or 12.0))

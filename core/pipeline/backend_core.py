@@ -271,6 +271,8 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
     def restart_current_file(self):
         if hasattr(self, "_action_state"):
             self._action_state[0] = "restart"
+        if hasattr(self, "_start_event"):
+            self._start_event.set()
         if hasattr(self, "_edit_event"):
             self._edit_event.set()
         self._speaker_map = []
