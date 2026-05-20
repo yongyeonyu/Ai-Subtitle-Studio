@@ -8,7 +8,7 @@ from core.audio.stt_backend_router import select_stt_backend
 from core.audio.vad_backend_router import select_vad_backend
 from core.cut_boundary_backend_router import apply_cut_boundary_backend_settings, select_cut_boundary_backend
 from core.optimization.profile_store import load_optimization_profile, save_optimization_profile
-from core.optimization.quality_gate import quality_gate_passed
+from core.optimization.quality_gate import quality_gate_passed, subtitle_quality_gate
 from core.optimization.types import OptimizationProfile
 
 
@@ -33,6 +33,25 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
 
         self.assertTrue(quality_gate_passed(baseline, good, task="stt"))
         self.assertFalse(quality_gate_passed(baseline, bad, task="stt"))
+
+    def test_subtitle_quality_gate_rejects_fast_segment_loss(self):
+        baseline = {
+            "quality": {"quality_score": 72.986, "cer": 0.12, "timing_mae_sec": 0.647, "hypothesis_segments": 24},
+            "readability": {"readability_score": 94.59},
+            "final_segments": 24,
+        }
+        candidate = {
+            "quality": {"quality_score": 71.563, "cer": 0.122, "timing_mae_sec": 0.739, "hypothesis_segments": 17},
+            "readability": {"readability_score": 93.088},
+            "final_segments": 17,
+        }
+
+        verdict = subtitle_quality_gate(baseline, candidate)
+
+        self.assertFalse(verdict["passed"])
+        self.assertIn("quality_score_drop", verdict["reasons"])
+        self.assertIn("timing_mae_regression", verdict["reasons"])
+        self.assertIn("segment_retention_drop", verdict["reasons"])
 
     def test_vad_policy_can_choose_fast_or_quality(self):
         self.assertEqual(select_vad_backend("silero", {"vad_backend_policy": "fast"}).provider, "ten_vad")

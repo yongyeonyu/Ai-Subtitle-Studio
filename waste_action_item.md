@@ -27,3 +27,9 @@
   품질: final segment가 `24 -> 17`로 줄고 reference quality가 `72.986 -> 71.563`, timing MAE가 `0.647 -> 0.7392`로 나빠졌다.
   결론: 전체 STT1/STT2 병렬을 High 기본값으로 승격하지 않는다. 병렬 STT는 품질 barrier와 후속 word precision/segment-count 보정이 붙은 새 후보로만 재검토한다.
   artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_083704/benchmark_results.md`
+
+- `native_policy_helper_default_without_parity`: Swift/native LLM candidate, deep rerank, LoRA scoring helper를 speedup만 보고 default 승격하는 방향
+  결과: mini benchmark에서 speedup은 `20x~5000x`로 높게 나왔지만 parity check가 모두 실패했다.
+  품질: LLM candidate count, deep chunks, batch count, LoRA top5 결과가 Python 기준과 맞지 않았다.
+  결론: native policy helper는 parity mismatch가 해소될 때까지 default 승격하지 않는다. adoption report는 `blocked_quality_mismatch`로 표시한다.
+  artifact: `tools/benchmark_native_policy_engine.py --docs 500 --rounds 12 --lora-rounds 2`

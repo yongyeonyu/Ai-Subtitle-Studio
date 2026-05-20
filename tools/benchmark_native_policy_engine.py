@@ -46,6 +46,44 @@ def _speedup(py_sec: float, native_sec: float) -> float:
     return py_sec / native_sec
 
 
+def _adoption_label(speedup: float, *, parity: bool, threshold: float, fallback: str) -> str:
+    if not parity:
+        return "blocked_quality_mismatch"
+    return "native" if float(speedup) >= float(threshold) else fallback
+
+
+def _quality_speed_adoption(
+    *,
+    timings: dict[str, tuple[float, float]],
+    outputs: dict[str, Any],
+) -> tuple[dict[str, float], dict[str, Any], dict[str, str]]:
+    quality_check = {
+        "llm_candidate_count_match": len(outputs.get("llm_py") or []) == len(outputs.get("llm_native") or []),
+        "deep_chunks_match": (outputs.get("deep_py") or ([], {}))[0] == (outputs.get("deep_native") or ([], {}))[0],
+        "llm_batch_count_match": len(outputs.get("llm_batch_py") or []) == len(outputs.get("llm_batch_native") or []),
+        "deep_batch_count_match": len(outputs.get("deep_batch_py") or []) == len(outputs.get("deep_batch_native") or []),
+        "lora_top5_python": [item.get("doc_id") for item in list(outputs.get("lora_py") or [])[:5]],
+        "lora_top5_native": [item.get("doc_id") for item in list(outputs.get("lora_native") or [])[:5]],
+    }
+    speedup = {
+        key: round(_speedup(pair[0], pair[1]), 3)
+        for key, pair in timings.items()
+    }
+    adoption = {
+        "llm_candidates": _adoption_label(speedup["llm"], parity=quality_check["llm_candidate_count_match"], threshold=0.9, fallback="python_small_batch_preferred"),
+        "deep_rerank": _adoption_label(speedup["deep"], parity=quality_check["deep_chunks_match"], threshold=0.9, fallback="python_small_batch_preferred"),
+        "llm_candidates_batch": _adoption_label(speedup["llm_batch"], parity=quality_check["llm_batch_count_match"], threshold=1.0, fallback="python_batch_preferred"),
+        "deep_rerank_batch": _adoption_label(speedup["deep_batch"], parity=quality_check["deep_batch_count_match"], threshold=1.0, fallback="python_batch_preferred"),
+        "lora_scoring": _adoption_label(
+            speedup["lora"],
+            parity=quality_check["lora_top5_python"] == quality_check["lora_top5_native"],
+            threshold=1.0,
+            fallback="python_for_this_index_size",
+        ),
+    }
+    return speedup, quality_check, adoption
+
+
 def _idf(doc_count: int, df: int) -> float:
     return math.log(1.0 + (doc_count - df + 0.5) / (df + 0.5))
 
@@ -303,6 +341,20 @@ def main() -> int:
         args.lora_rounds,
     )
 
+    speedup, quality_check, adoption = _quality_speed_adoption(
+        timings={
+            "llm": (llm_py, llm_native), "deep": (deep_py, deep_native),
+            "llm_batch": (llm_batch_py, llm_batch_native), "deep_batch": (deep_batch_py, deep_batch_native),
+            "lora": (lora_py, lora_native),
+        },
+        outputs={
+            "llm_py": llm_py_out, "llm_native": llm_native_out,
+            "deep_py": deep_py_out, "deep_native": deep_native_out,
+            "llm_batch_py": llm_batch_py_out, "llm_batch_native": llm_batch_native_out,
+            "deep_batch_py": deep_batch_py_out, "deep_batch_native": deep_batch_native_out,
+            "lora_py": lora_py_out, "lora_native": lora_native_out,
+        },
+    )
     report = {
         "ok": True,
         "native_cli": str(cli),
@@ -320,28 +372,9 @@ def main() -> int:
             "lora_python": round(lora_py * 1000, 4),
             "lora_native_swift": round(lora_native * 1000, 4),
         },
-        "speedup": {
-            "llm": round(_speedup(llm_py, llm_native), 3),
-            "deep": round(_speedup(deep_py, deep_native), 3),
-            "llm_batch": round(_speedup(llm_batch_py, llm_batch_native), 3),
-            "deep_batch": round(_speedup(deep_batch_py, deep_batch_native), 3),
-            "lora": round(_speedup(lora_py, lora_native), 3),
-        },
-        "quality_check": {
-            "llm_candidate_count_match": len(llm_py_out or []) == len(llm_native_out or []),
-            "deep_chunks_match": (deep_py_out or ([], {}))[0] == (deep_native_out or ([], {}))[0],
-            "llm_batch_count_match": len(llm_batch_py_out or []) == len(llm_batch_native_out or []),
-            "deep_batch_count_match": len(deep_batch_py_out or []) == len(deep_batch_native_out or []),
-            "lora_top5_python": [item.get("doc_id") for item in list(lora_py_out or [])[:5]],
-            "lora_top5_native": [item.get("doc_id") for item in list(lora_native_out or [])[:5]],
-        },
-        "adoption": {
-            "llm_candidates": "native" if _speedup(llm_py, llm_native) >= 0.9 else "python_small_batch_preferred",
-            "deep_rerank": "native" if _speedup(deep_py, deep_native) >= 0.9 else "python_small_batch_preferred",
-            "llm_candidates_batch": "native" if _speedup(llm_batch_py, llm_batch_native) >= 1.0 else "python_batch_preferred",
-            "deep_rerank_batch": "native" if _speedup(deep_batch_py, deep_batch_native) >= 1.0 else "python_batch_preferred",
-            "lora_scoring": "native" if _speedup(lora_py, lora_native) >= 1.0 else "python_for_this_index_size",
-        },
+        "speedup": speedup,
+        "quality_check": quality_check,
+        "adoption": adoption,
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

@@ -9,6 +9,7 @@ from core.native_swift_policy import (
 )
 from core.native_swift_subtitle import find_native_cli_path
 from core.personalization.lora_retrieval_utils import term_counts, vectorize_lora_text
+from tools.benchmark_native_policy_engine import _adoption_label
 
 
 def _tiny_lora_index() -> dict:
@@ -62,6 +63,18 @@ def _tiny_lora_index() -> dict:
             "avg_doc_len": sum(doc_lengths) / len(doc_lengths),
         },
     }
+
+
+class NativePolicyBenchmarkReportTests(unittest.TestCase):
+    def test_adoption_label_blocks_native_when_parity_fails(self):
+        self.assertEqual(
+            _adoption_label(50.0, parity=False, threshold=1.0, fallback="python"),
+            "blocked_quality_mismatch",
+        )
+        self.assertEqual(
+            _adoption_label(1.2, parity=True, threshold=1.0, fallback="python"),
+            "native",
+        )
 
 
 @unittest.skipUnless(find_native_cli_path(), "AIStudioNativeCLI release binary not available")

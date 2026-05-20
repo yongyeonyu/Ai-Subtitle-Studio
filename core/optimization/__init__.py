@@ -5,7 +5,7 @@ from .profile_store import (
     load_optimization_profile,
     save_optimization_profile,
 )
-from .quality_gate import BackendQualityGate, quality_gate_passed
+from .quality_gate import BackendQualityGate, quality_gate_passed, subtitle_quality_gate
 from .types import BackendCandidate, BenchmarkResult, OptimizationProfile
 
 __all__ = [
@@ -17,4 +17,5 @@ __all__ = [
     "optimization_profile_path",
     "quality_gate_passed",
     "save_optimization_profile",
+    "subtitle_quality_gate",
 ]

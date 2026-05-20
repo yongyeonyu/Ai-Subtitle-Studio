@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## idea_item Phase 4/5/8 품질 게이트 보강 - 2026-05-21 08:46~08:52
+
+- 브랜치: `opt/one-shot-quality-speed-20260521-0228`
+- 코드 반영:
+  - subtitle benchmark quality gate를 `core.optimization.quality_gate.subtitle_quality_gate()`로 추가.
+  - `tools/apply_subtitle_benchmark_quality_gate.py`를 추가해 기존 `benchmark_results.json`에 품질 보존 gate를 사후 적용.
+  - Swift/native policy benchmark가 parity 실패 후보를 `native`로 표시하지 않도록 `blocked_quality_mismatch` 판정을 추가.
+- 단위/가드:
+  - `py_compile`: pass
+  - `tests.test_runtime_optimization_profile`, `tests.test_benchmark_mode_profiles`: `35 tests OK`
+  - `tests.test_native_policy_engine.NativePolicyBenchmarkReportTests`: pass
+  - `tools/check_maintenance_budget.py --json`: `ok=true`
+  - `swift test` (`native/macos/AIStudioNative`): `38 tests`, pass
+  - `tools/qa_suite_runner.py quick`: pass, `output/manual_verification/latest/qa_suite_quick_20260521_085737`
+- 실제 벤치/판정:
+  - X5 STT full-parallel 재검증: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_084657/benchmark_results.json`
+  - 품질 gate 산출물: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_084657/benchmark_quality_gate.md`
+  - 기준 후보: `phase1_serial_selective_stt2`, `28.846s`, quality `72.986`, final `24`
+  - full-parallel 후보: `10.169~10.451s`로 빠르지만 quality `71.563`, final `17`, gate fail
+  - fail 사유: `quality_score_drop`, `readability_score_drop`, `cer_regression`, `timing_mae_regression`, `segment_retention_drop`
+  - Swift/native policy mini benchmark: helper speedup은 컸지만 `quality_check`가 모두 false라 adoption은 `blocked_quality_mismatch`
+- 분류:
+  - full-parallel STT default 승격은 quality regression으로 폐기 유지.
+  - native policy helper default 승격은 parity mismatch로 blocked.
+
 ## idea_item Phase 2/3/5.5 실행 배치 - 2026-05-21 08:21~08:31
 
 - 브랜치: `opt/one-shot-quality-speed-20260521-0228`

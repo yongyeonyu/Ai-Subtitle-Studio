@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from tools.apply_subtitle_benchmark_quality_gate import apply_gate
 from tools.benchmark_subtitle_pipeline_variants import (
     _copy_chunk_dir,
     _compact_text,
@@ -109,6 +110,31 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         high_drift = by_name["mode_high_piecewise_drift"]
         self.assertEqual(high_drift.method, "selective_ensemble")
         self.assertTrue(bool(high_drift.overrides.get("subtitle_timing_piecewise_drift_enabled")))
+
+    def test_quality_gate_tool_keeps_selective_variant_above_fast_loss(self):
+        rows = [
+            {
+                "name": "phase1_parallel_full_stt1_stt2",
+                "elapsed_sec": 10.0,
+                "quality": {"quality_score": 71.563, "cer": 0.122, "timing_mae_sec": 0.739, "hypothesis_segments": 17},
+                "readability": {"readability_score": 93.088},
+                "final_segments": 17,
+            },
+            {
+                "name": "phase1_serial_selective_stt2",
+                "elapsed_sec": 31.0,
+                "quality": {"quality_score": 72.986, "cer": 0.120, "timing_mae_sec": 0.647, "hypothesis_segments": 24},
+                "readability": {"readability_score": 94.590},
+                "final_segments": 24,
+            },
+        ]
+
+        gated = apply_gate({"ranked_results": rows}, baseline_variant="auto")
+        ranked = gated["ranked_results"]
+
+        self.assertEqual(gated["baseline_variant"], "phase1_serial_selective_stt2")
+        self.assertEqual(ranked[0]["name"], "phase1_serial_selective_stt2")
+        self.assertFalse(ranked[1]["quality_gate_passed"])
 
     def test_variant_chunk_settings_use_mode_specific_audio_path(self):
         base = _base_benchmark_settings("current")

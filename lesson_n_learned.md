@@ -50,3 +50,7 @@
 - STT1/STT2 full-parallel이 빠르다고 High 기본값으로 바로 올리지 않는다.
   - 이유: 2026-05-21 X5 60초에서 full-parallel STT는 selective보다 약 3배 빨랐지만 final segment count와 reference quality가 떨어졌다.
   - 다음 원칙: 병렬 STT는 품질 barrier, word precision 보정, segment count 회복 조건이 같이 붙은 후보로만 다시 실험한다.
+
+- native helper benchmark의 speedup만 보고 adoption을 `native`로 표시하지 않는다.
+  - 이유: 2026-05-21 Swift/native policy mini benchmark에서 속도는 크게 빨랐지만 LLM candidate count, deep rerank chunk, batch count, LoRA top5 parity가 맞지 않았다.
+  - 다음 원칙: native adoption report는 speedup과 parity를 동시에 통과해야 `native`로 표시하고, parity 실패는 `blocked_quality_mismatch`로 남긴다.
