@@ -21,3 +21,9 @@
   품질: 자막 결과에는 영향 없음.
   결론: full stage detail은 status 응답 기본값으로 쓰지 않는다. compact `resources + recent_events(8개)`만 노출하고, 상세 비교는 artifact JSON/로그로 남긴다.
   artifact: `output/manual_verification/latest/idea_full_execute_20260521-0228/summary.md`
+
+- `candidate_full_parallel_stt_default`: STT1/WhisperKit과 STT2/MLX를 전체 구간에서 동시에 실행하는 High 기본값 후보
+  결과: X5 60초에서 full-parallel은 `10.387~10.625s`로 selective `31.579~37.752s`보다 빨랐다.
+  품질: final segment가 `24 -> 17`로 줄고 reference quality가 `72.986 -> 71.563`, timing MAE가 `0.647 -> 0.7392`로 나빠졌다.
+  결론: 전체 STT1/STT2 병렬을 High 기본값으로 승격하지 않는다. 병렬 STT는 품질 barrier와 후속 word precision/segment-count 보정이 붙은 새 후보로만 재검토한다.
+  artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_083704/benchmark_results.md`

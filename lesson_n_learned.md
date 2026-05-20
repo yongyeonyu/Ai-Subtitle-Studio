@@ -46,3 +46,7 @@
 - STT/LLM warm 유지 테스트는 host memory 상태에 의존하지 않게 만든다.
   - 이유: 실제 Mac의 memory pressure가 warning/critical이면 정책상 warm worker/LLM residency가 꺼져 테스트가 비결정적으로 흔들릴 수 있다.
   - 다음 원칙: warm 유지/해제 unit test는 `current_resource_snapshot`을 normal 또는 critical로 명시 patch하고, 실제 memory pressure는 integration artifact에서 확인한다.
+
+- STT1/STT2 full-parallel이 빠르다고 High 기본값으로 바로 올리지 않는다.
+  - 이유: 2026-05-21 X5 60초에서 full-parallel STT는 selective보다 약 3배 빨랐지만 final segment count와 reference quality가 떨어졌다.
+  - 다음 원칙: 병렬 STT는 품질 barrier, word precision 보정, segment count 회복 조건이 같이 붙은 후보로만 다시 실험한다.

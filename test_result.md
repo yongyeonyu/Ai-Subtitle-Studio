@@ -30,6 +30,8 @@
   - X5 60s modes artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_082610/benchmark_results.md`
   - X5 품질 1위: `mode_high_piecewise_drift`, `40.920s`, quality `72.989`, readability `94.568`
   - X5 속도/품질 균형 후보: `mode_fast`, `9.809s`, quality `71.514`, readability `93.057`
+  - X5 STT1/STT2 full-parallel narrow benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_083704/benchmark_results.md`
+  - full-parallel STT 판정: `10.387~10.625s`로 빠르지만 quality `71.563`, final segment `17`로 selective quality `72.986`, final segment `24`보다 낮아 기본 승격 폐기
 - 분류:
   - 최종 실패 없음.
   - 최초 `quick`의 `app_bootstrap_failed`는 stale live app duplicate launcher로 인한 environment issue였고, stale process 종료 후 재실행 pass.

@@ -36,6 +36,7 @@
   - Macau fast smoke: total `8.064s`, pipeline `7.556s`, final/raw `5/3`, peak RSS `370835456`, stage trim failure `0`
   - X5 60s modes: `mode_high_piecewise_drift` quality winner `40.920s`, quality `72.989`, readability `94.568`, timing MAE `0.6455`
   - X5 60s speed/quality tradeoff: `mode_fast` `9.809s`, quality `71.514`, readability `93.057`, timing MAE `0.7347`
+  - X5 60s full-parallel STT: `10.387~10.625s`로 빠르지만 quality `71.563`, timing MAE `0.7392`, final `17`이라 High 기본값 승격 폐기
   - Tinyping fast 60s: total `22.326s`, pipeline `9.804s`, final/raw `18/15`
   - Tinyping auto 60s: total `44.152s`, pipeline `9.833s`, final/raw `18/15`
   - Tinyping high 60s: total `19.526s`, pipeline `19.431s`, final/raw `16/16`
@@ -43,6 +44,7 @@
   - 기존 `candidate1` 품질 보존 파이프라인을 유지한다.
   - 이번 배치의 stage-owned STT/LLM resource policy, quarter prescan metadata, opaque 2D inline editor 안정화는 채택한다.
   - X5 60s에서 품질 단독 1위는 `mode_high_piecewise_drift`, 속도/품질 균형은 `mode_fast`가 유리하다. 단, 10회 반복 평균/p95 전까지 기본 알고리즘 자동 승격은 하지 않는다.
+  - 전체 STT1/STT2 full-parallel은 빠르지만 X5 품질과 segment count가 낮아져 기본 승격하지 않는다.
   - aggressive quarter-parallel STT/LLM, native deterministic batch 승격은 parity 구현과 X5/Tinyping 반복 품질 게이트 전까지 채택하지 않는다.
 - 이전 현재 기준:
   - Macau avg `6.770`, min `6.604`, max `7.240`
