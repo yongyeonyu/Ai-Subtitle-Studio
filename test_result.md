@@ -7,6 +7,7 @@
   - Quick: pass, `output/manual_verification/latest/qa_suite_quick_20260521_111623`
 - 코드 반영:
   - `tools/audit_editor_rendering_ownership.py`가 자막 텍스트 QML overlay, video control bar QML, video subtitle QML, timeline scenegraph layer까지 explicit diagnostic/scenegraph gate 뒤에 있는지 확인한다.
+  - timeline paint 순서가 subtitle score, cut diamond, shadow/drag-shadow playhead, final playhead handle 순으로 유지되는지 검사한다.
   - UI/UX 동작 변경 없음. QML/SceneGraph 재유입을 잡는 정적 가드만 확장.
 - 단위/가드:
   - `py_compile`: pass

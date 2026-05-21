@@ -183,6 +183,24 @@ TEXT_RULES: tuple[dict[str, Any], ...] = (
 )
 
 
+ORDER_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "path": "ui/timeline/timeline_paint.py",
+        "owner": "TimelinePaintOrder",
+        "backend": "qwidget-2d-painter-owner",
+        "ordered": (
+            "_draw_subtitle_score_labels(final_stt_segments)",
+            "diamond_pairs = self._diamond_pairs()",
+            "shadow_playhead_sec = getattr(self, \"shadow_playhead_sec\", None)",
+            "drag_shadow_playhead_sec = getattr(self, \"_drag_shadow_playhead_sec\", None)",
+            "include_subtitle_band=not bool(getattr(self, \"_edit_active\", False))",
+            "include_non_subtitle_band=True",
+            "include_handle=True",
+        ),
+    },
+)
+
+
 def audit_editor_rendering_ownership(root: Path | None = None) -> dict[str, Any]:
     root = root or ROOT
     issues: list[dict[str, Any]] = []
@@ -212,6 +230,29 @@ def audit_editor_rendering_ownership(root: Path | None = None) -> dict[str, Any]
         for pattern in rule.get("forbidden", ()):
             if str(pattern) in text:
                 issues.append({"path": rel_path, "owner": rule["owner"], "reason": "forbidden_pattern", "pattern": str(pattern)})
+    for rule in ORDER_RULES:
+        rel_path = str(rule["path"])
+        path = root / rel_path
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        inventory.append(
+            {
+                "path": rel_path,
+                "owner": str(rule["owner"]),
+                "backend": str(rule.get("backend", "qwidget-2d-painter-owner")),
+            }
+        )
+        if not text:
+            issues.append({"path": rel_path, "owner": rule["owner"], "reason": "missing_file"})
+            continue
+        cursor = -1
+        for pattern in rule.get("ordered", ()):
+            index = text.find(str(pattern), cursor + 1)
+            if index < 0:
+                issues.append({"path": rel_path, "owner": rule["owner"], "reason": "missing_ordered", "pattern": str(pattern)})
+                continue
+            if index <= cursor:
+                issues.append({"path": rel_path, "owner": rule["owner"], "reason": "order_regression", "pattern": str(pattern)})
+            cursor = max(cursor, index)
     return {
         "ok": not issues,
         "schema": "ai_subtitle_studio.editor_rendering_ownership_audit.v1",

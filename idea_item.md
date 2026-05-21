@@ -28,7 +28,8 @@
 - 최신 산출물: `output/manual_verification/latest/qa_suite_quick_20260521_111623`
 - 최신 검증:
   - rendering ownership audit 확장: subtitle text QML overlay, video control bar QML, video subtitle QML, timeline scenegraph layer가 explicit diagnostic/scenegraph gate 뒤에 있는지 검사.
-  - `tools/audit_editor_rendering_ownership.py --json`: `ok=true` with 14-owner inventory
+  - paint ordering audit 확장: subtitle score -> diamond -> shadow/drag-shadow playhead -> final playhead handle 순서 고정 검사.
+  - `tools/audit_editor_rendering_ownership.py --json`: `ok=true` with 15-owner inventory
   - `tests.test_editor_rendering_ownership_audit`: `2 tests OK`
   - `tools/qa_suite_runner.py quick`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_quick_20260521_111623`
   - automation-4 검토 항목 재분류/수정: smart split precondition fallback, status UDP compact/minimal fallback, snapshot/export artifact existence check, app runner diamond fallback.
