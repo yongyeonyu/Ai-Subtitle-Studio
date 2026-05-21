@@ -278,7 +278,10 @@ public enum NativePolicyEngine {
             if abs($0.retrievalScore - $1.retrievalScore) > 0.0000001 {
                 return $0.retrievalScore > $1.retrievalScore
             }
-            return $0.quality > $1.quality
+            if abs($0.quality - $1.quality) > 0.0000001 {
+                return $0.quality > $1.quality
+            }
+            return $0.docIndex < $1.docIndex
         }
         let ranked = scored.map { score -> [String: Any] in
             var doc = docs[score.docIndex]

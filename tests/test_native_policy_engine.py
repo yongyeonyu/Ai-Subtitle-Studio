@@ -8,8 +8,9 @@ from core.native_swift_policy import (
     score_lora_docs_via_swift,
 )
 from core.native_swift_subtitle import find_native_cli_path
+from core.personalization.lora_retrieval_scoring import score_lora_docs
 from core.personalization.lora_retrieval_utils import term_counts, vectorize_lora_text
-from tools.benchmark_native_policy_engine import _adoption_label
+from tools.benchmark_native_policy_engine import _adoption_label, _native_policy_benchmark_settings, _synthetic_lora_index
 
 
 def _tiny_lora_index() -> dict:
@@ -75,6 +76,13 @@ class NativePolicyBenchmarkReportTests(unittest.TestCase):
             _adoption_label(1.2, parity=True, threshold=1.0, fallback="python"),
             "native",
         )
+
+    def test_benchmark_native_settings_enable_experimental_gate(self):
+        settings = _native_policy_benchmark_settings({"llm_candidate_policy_enabled": True})
+
+        self.assertTrue(settings["native_swift_policy_experimental_enabled"])
+        self.assertTrue(settings["native_swift_llm_candidate_policy_enabled"])
+        self.assertTrue(settings["native_swift_deep_policy_enabled"])
 
 
 @unittest.skipUnless(find_native_cli_path(), "AIStudioNativeCLI release binary not available")
@@ -193,6 +201,55 @@ class NativePolicyEngineTests(unittest.TestCase):
         self.assertIsNotNone(ranked)
         self.assertEqual(ranked[0]["doc_id"], "bmw")
         self.assertIn("score_breakdown", ranked[0])
+
+    def test_swift_lora_scoring_keeps_python_tie_order(self):
+        query = "BMW X5 고속도로 주행 소음 리뷰 브랜드 모델명 보호"
+        index = _synthetic_lora_index(128)
+        facets = {
+            "scene": "car",
+            "topic": "vehicle_review",
+            "mic_type": "builtin_or_far",
+            "noise_level": "high",
+            "noise_sources": ["engine", "traffic"],
+            "training_focus": ["protect_brand_model_names"],
+            "topic_terms": ["vehicle", "review"],
+        }
+        kinds = {"truth_table", "text_lora_corpus", "multimodal_lora_context", "setting_trials"}
+        quality_buckets = {"green", "yellow"}
+
+        python_ranked = score_lora_docs(
+            index,
+            query,
+            media_path="/training/vehicle_review/clip_0.mp4",
+            media_id="bmw-x5",
+            query_facets=facets,
+            kinds=kinds,
+            quality_buckets=quality_buckets,
+            settings={"native_swift_policy_experimental_enabled": False},
+        )
+        swift_ranked = score_lora_docs_via_swift(
+            index,
+            query,
+            media_path="/training/vehicle_review/clip_0.mp4",
+            media_id="bmw-x5",
+            query_facets=facets,
+            kinds=kinds,
+            quality_buckets=quality_buckets,
+            query_vector=dict(vectorize_lora_text(query)),
+            query_terms=dict(term_counts(query)),
+            media_lookup_keys=["vehicle_review", "clip_0"],
+            settings={
+                "native_swift_policy_experimental_enabled": True,
+                "native_swift_lora_scoring_enabled": True,
+                "native_swift_lora_scoring_min_docs": 1,
+            },
+        )
+
+        self.assertIsNotNone(swift_ranked)
+        self.assertEqual(
+            [item["doc_id"] for item in python_ranked[:8]],
+            [item["doc_id"] for item in swift_ranked[:8]],
+        )
 
 
 if __name__ == "__main__":

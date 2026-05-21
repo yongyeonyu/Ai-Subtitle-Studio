@@ -24,7 +24,7 @@
 - 유지 후보: `candidate1`
 - 유지 이유: subtitle quality를 유지하면서 X5 평균 시간이 가장 안정적이었다.
 - 최신 실행 브랜치: `opt/one-shot-quality-speed-20260521-0228`
-- 최신 완료 배치: Phase 2/3/5.5 small execution batch
+- 최신 완료 배치: Phase 2/3/5/5.5 small execution batch
 - 최신 산출물: `output/manual_verification/latest/idea_full_execute_20260521-0821/summary.md`
 - 최신 검증:
   - `tests.test_action_item_runtime_services`, `tests.test_project_runtime_capture`, `tests.test_runtime_multi_process`, `tests.test_media_processor_overlap`, `tests.test_ollama_provider`, `tests.test_timeline_hit_targets`, `tests.test_timeline_render_cache`: `248 tests OK`
@@ -40,7 +40,7 @@
   - X5 60s quality-gated rerun: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_084657/benchmark_quality_gate.md`
   - Macau fast repeat10: pipeline avg/min/max `7.628s/7.516s/7.854s`, final segment `5` 유지
   - X5 modes repeat10: `mode_fast` avg `10.373s` but gate `0/10`; `mode_high_piecewise_drift` avg `47.811s`, quality `72.989`, gate `10/10`
-  - Swift/native policy mini benchmark: 속도는 빠르지만 parity mismatch라 adoption `blocked_quality_mismatch`
+  - Swift/native policy corrected mini benchmark: parity pass, but Swift helper speedup `< 1.0`; adoption은 `python_*_preferred`
   - Tinyping fast 60s: total `22.326s`, pipeline `9.804s`, final/raw `18/15`
   - Tinyping auto 60s: total `44.152s`, pipeline `9.833s`, final/raw `18/15`
   - Tinyping high 60s: total `19.526s`, pipeline `19.431s`, final/raw `16/16`
@@ -51,7 +51,7 @@
   - 전체 STT1/STT2 full-parallel은 빠르지만 X5 품질과 segment count가 낮아져 기본 승격하지 않는다.
   - benchmark 후보 선택은 `tools/apply_subtitle_benchmark_quality_gate.py`로 품질 gate를 통과한 후보만 승격한다.
   - X5 10회 기준 자막 품질을 유지하는 최종 후보는 `mode_high_piecewise_drift`이다. `mode_fast`는 속도 후보로는 유효하지만 품질 동일 조건의 최종 알고리즘 후보에서는 제외한다.
-  - Swift/native policy helper는 quality/parity check가 모두 통과하기 전까지 기본값으로 승격하지 않는다.
+  - Swift/native policy helper는 parity를 맞췄지만 현재 synthetic 500-doc benchmark에서 Python보다 느려 기본값으로 승격하지 않는다.
   - aggressive quarter-parallel STT/LLM, native deterministic batch 승격은 parity 구현과 X5/Tinyping 반복 품질 게이트 전까지 채택하지 않는다.
 - 이전 현재 기준:
   - Macau avg `6.770`, min `6.604`, max `7.240`
@@ -180,8 +180,10 @@ Work:
 
 2026-05-21 partial done:
 - Swift/native policy benchmark의 adoption 판정을 parity-aware로 수정했다.
-- synthetic benchmark에서 native helper speedup은 컸지만 LLM candidate count, deep chunks, batch count, LoRA top5 parity가 모두 맞지 않아 `blocked_quality_mismatch`로 판정했다.
-- native policy helper는 계속 실험 후보이며, production/default 승격은 row-level parity가 통과한 뒤에만 한다.
+- Swift policy benchmark 설정에 experimental gate를 명시해 실제 Swift helper를 측정하도록 고쳤다.
+- LoRA native scoring tie-break를 `retrieval_score -> quality -> docIndex`로 고정해 Python 상위 순서와 맞췄다.
+- corrected benchmark에서 LLM/deep/batch/LoRA top5 parity는 통과했지만 Swift helper가 Python보다 느려 `python_*_preferred`로 유지했다.
+- native policy helper는 계속 실험 후보이며, production/default 승격은 row-level parity와 speedup이 동시에 통과한 뒤에만 한다.
 
 Stop rules:
 - live Qt object, mutable editor state, subprocess orchestration, model-worker ownership, UI callback은 native로 이동하지 않는다.

@@ -31,8 +31,15 @@
 - `native_policy_helper_default_without_parity`: Swift/native LLM candidate, deep rerank, LoRA scoring helper를 speedup만 보고 default 승격하는 방향
   결과: mini benchmark에서 speedup은 `20x~5000x`로 높게 나왔지만 parity check가 모두 실패했다.
   품질: LLM candidate count, deep chunks, batch count, LoRA top5 결과가 Python 기준과 맞지 않았다.
-  결론: native policy helper는 parity mismatch가 해소될 때까지 default 승격하지 않는다. adoption report는 `blocked_quality_mismatch`로 표시한다.
+  보정: 이후 benchmark 설정이 experimental gate를 켜지 않아 disabled wrapper를 측정한 문제를 고쳤고, LoRA tie-break도 Python 순서에 맞춰 수정했다.
+  결론: speed-only default 승격은 계속 폐기한다. corrected benchmark는 parity를 통과했지만 speedup이 `< 1.0`이라 default 승격하지 않는다.
   artifact: `tools/benchmark_native_policy_engine.py --docs 500 --rounds 12 --lora-rounds 2`
+
+- `native_policy_helper_default_on_500doc_synthetic`: Swift/native LLM candidate, deep rerank, LoRA scoring helper를 corrected 500-doc synthetic benchmark 결과로 default 승격하는 방향
+  결과: corrected benchmark에서 parity는 통과했지만 speedup은 `llm=0.308`, `deep=0.277`, `llm_batch=0.404`, `deep_batch=0.325`, `lora=0.382`.
+  품질: LLM/deep/batch/LoRA top5 parity pass.
+  결론: 현재 bridge/worker overhead가 더 커서 Python 유지. larger real index 또는 batch payload에서 새 speedup 근거가 나오기 전까지 default 승격하지 않는다.
+  artifact: `output/manual_verification/latest/idea_full_execute_20260521-0821/native_policy_parity_20260521_0930.json`
 
 - `mode_fast_as_quality_equivalent_x5_default`: X5 품질 동일 조건에서 `mode_fast`를 최종 기본 알고리즘으로 승격하는 방향
   결과: X5 60초 10회 반복에서 평균 `10.373s`로 빠르지만 quality gate `0/10`.

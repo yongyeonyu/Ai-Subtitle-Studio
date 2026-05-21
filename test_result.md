@@ -1,5 +1,26 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## idea_item Phase 5 native policy parity 보정 - 2026-05-21 09:30
+
+- 브랜치: `opt/one-shot-quality-speed-20260521-0228`
+- 코드 반영:
+  - `tools/benchmark_native_policy_engine.py`가 Swift policy experimental gate를 켠 상태로 native helper를 측정하도록 수정.
+  - LoRA native scoring 동점 정렬을 `retrieval_score -> quality -> docIndex`로 고정해 Python 상위 순서와 맞춤.
+  - benchmark main 함수를 유지보수 가드 기준에 맞게 분리.
+- 단위/가드:
+  - `py_compile`: pass
+  - `tests.test_native_policy_engine`: `7 tests OK`
+  - `tools/check_maintenance_budget.py --json`: `ok=true`
+  - `swift test` (`native/macos/AIStudioNative`): `38 tests`, pass
+  - `tools/qa_suite_runner.py quick`: pass, `output/manual_verification/latest/qa_suite_quick_20260521_093458`
+- 실제 벤치/판정:
+  - artifact: `output/manual_verification/latest/idea_full_execute_20260521-0821/native_policy_parity_20260521_0930.json`
+  - corrected Swift/native policy mini benchmark: LLM/deep/batch/LoRA top5 parity pass
+  - speedup: `llm=0.308`, `deep=0.277`, `llm_batch=0.404`, `deep_batch=0.325`, `lora=0.382`
+  - adoption: `python_small_batch_preferred`, `python_batch_preferred`, `python_for_this_index_size`
+- 분류:
+  - native policy helper default 승격은 parity가 아니라 speed regression으로 계속 blocked.
+
 ## idea_item Phase 4/5/8 품질 게이트 보강 - 2026-05-21 08:46~08:52
 
 - 브랜치: `opt/one-shot-quality-speed-20260521-0228`

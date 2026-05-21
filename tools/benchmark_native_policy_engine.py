@@ -84,6 +84,17 @@ def _quality_speed_adoption(
     return speedup, quality_check, adoption
 
 
+def _native_policy_benchmark_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    # The Swift policy bridge is deliberately experimental-gated; benchmarks must
+    # flip that gate or they only measure a disabled wrapper returning None.
+    return {
+        **settings,
+        "native_swift_policy_experimental_enabled": True,
+        "native_swift_llm_candidate_policy_enabled": True,
+        "native_swift_deep_policy_enabled": True,
+    }
+
+
 def _idf(doc_count: int, df: int) -> float:
     return math.log(1.0 + (doc_count - df + 0.5) / (df + 0.5))
 
@@ -154,18 +165,7 @@ def _synthetic_lora_index(doc_count: int) -> dict[str, Any]:
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Benchmark Swift-native LLM/LoRA/Deep policy helpers.")
-    parser.add_argument("--docs", type=int, default=2500)
-    parser.add_argument("--rounds", type=int, default=80)
-    parser.add_argument("--lora-rounds", type=int, default=8)
-    args = parser.parse_args()
-
-    cli = find_native_cli_path()
-    if cli is None:
-        print(json.dumps({"ok": False, "error": "AIStudioNativeCLI release binary not found. Run swift build -c release."}, ensure_ascii=False))
-        return 2
-
+def _policy_fixture(rounds: int) -> dict[str, Any]:
     text = "오늘은 티니핑 뉴스 어드벤처 전시장에서 촬영을 시작합니다"
     rules = {"end_words": ["습니다"]}
     settings = {
@@ -178,7 +178,6 @@ def main() -> int:
         "native_swift_llm_candidate_policy_enabled": False,
         "native_swift_deep_policy_enabled": False,
     }
-    native_settings = {**settings, "native_swift_llm_candidate_policy_enabled": True, "native_swift_deep_policy_enabled": True}
     profile = {
         "top_score": 92.0,
         "examples": [{"text": "오늘은 티니핑 뉴스 어드벤처 전시장입니다"}],
@@ -189,6 +188,7 @@ def main() -> int:
         ["오늘은 티니핑 뉴스 어드벤처 전시장입니다"],
         ["오늘은 티니핑 뉴스", "어드벤처 전시장입니다"],
     ]
+    native_settings = _native_policy_benchmark_settings(settings)
     batch_items = [
         {
             "id": f"seg-{idx}",
@@ -197,7 +197,7 @@ def main() -> int:
             "rules": rules,
             "settings": native_settings,
         }
-        for idx in range(max(1, args.rounds * 4))
+        for idx in range(max(1, rounds * 4))
     ]
     deep_batch_items = [
         {
@@ -207,8 +207,29 @@ def main() -> int:
             "settings": native_settings,
             "profile": profile,
         }
-        for idx in range(max(1, args.rounds * 4))
+        for idx in range(max(1, rounds * 4))
     ]
+    return {
+        "text": text,
+        "rules": rules,
+        "settings": settings,
+        "native_settings": native_settings,
+        "profile": profile,
+        "candidate_lists": candidate_lists,
+        "batch_items": batch_items,
+        "deep_batch_items": deep_batch_items,
+    }
+
+
+def _bench_llm_deep(args: Any, fixture: dict[str, Any]) -> tuple[dict[str, tuple[float, float]], dict[str, Any]]:
+    text = str(fixture["text"])
+    rules = dict(fixture["rules"])
+    settings = dict(fixture["settings"])
+    native_settings = dict(fixture["native_settings"])
+    profile = dict(fixture["profile"])
+    candidate_lists = list(fixture["candidate_lists"])
+    batch_items = list(fixture["batch_items"])
+    deep_batch_items = list(fixture["deep_batch_items"])
 
     # Warm native worker so the measured number reflects steady-state app usage.
     build_llm_candidate_options_via_swift(text, 10, rules, native_settings)
@@ -272,34 +293,88 @@ def main() -> int:
         lambda: rerank_subtitle_candidates_batch_via_swift(deep_batch_items, settings=native_settings),
         3,
     )
+    return (
+        {
+            "llm": (llm_py, llm_native),
+            "deep": (deep_py, deep_native),
+            "llm_batch": (llm_batch_py, llm_batch_native),
+            "deep_batch": (deep_batch_py, deep_batch_native),
+        },
+        {
+            "llm_py": llm_py_out,
+            "llm_native": llm_native_out,
+            "deep_py": deep_py_out,
+            "deep_native": deep_native_out,
+            "llm_batch_py": llm_batch_py_out,
+            "llm_batch_native": llm_batch_native_out,
+            "deep_batch_py": deep_batch_py_out,
+            "deep_batch_native": deep_batch_native_out,
+        },
+    )
 
-    lora_index = _synthetic_lora_index(max(64, args.docs))
-    query = "BMW X5 고속도로 주행 소음 리뷰 브랜드 모델명 보호"
-    query_vector = vectorize_lora_text(query)
-    query_terms = term_counts(query)
-    query_facets = {
-        "scene": "car",
-        "topic": "vehicle_review",
-        "mic_type": "builtin_or_far",
-        "noise_level": "high",
-        "noise_sources": ["engine", "traffic"],
-        "training_focus": ["protect_brand_model_names"],
-        "topic_terms": ["vehicle", "review"],
+
+def _lora_swift_settings() -> dict[str, Any]:
+    return {
+        "native_swift_policy_experimental_enabled": True,
+        "native_swift_lora_scoring_enabled": True,
+        "native_swift_lora_scoring_min_docs": 1,
     }
-    lora_kinds = {"truth_table", "text_lora_corpus", "multimodal_lora_context", "setting_trials"}
-    lora_buckets = {"green", "yellow"}
+
+
+def _lora_fixture(doc_count: int) -> dict[str, Any]:
+    query = "BMW X5 고속도로 주행 소음 리뷰 브랜드 모델명 보호"
+    return {
+        "index": _synthetic_lora_index(max(64, doc_count)),
+        "query": query,
+        "query_vector": vectorize_lora_text(query),
+        "query_terms": term_counts(query),
+        "query_facets": {
+            "scene": "car",
+            "topic": "vehicle_review",
+            "mic_type": "builtin_or_far",
+            "noise_level": "high",
+            "noise_sources": ["engine", "traffic"],
+            "training_focus": ["protect_brand_model_names"],
+            "topic_terms": ["vehicle", "review"],
+        },
+        "kinds": {"truth_table", "text_lora_corpus", "multimodal_lora_context", "setting_trials"},
+        "quality_buckets": {"green", "yellow"},
+        "media_path": "/training/vehicle_review/clip_0.mp4",
+        "media_id": "bmw-x5",
+        "media_lookup_keys": ["vehicle_review", "clip_0"],
+    }
+
+
+def _score_lora_swift_payload(fixture: dict[str, Any]) -> list[dict[str, Any]] | None:
+    return score_lora_docs_via_swift(
+        fixture["index"],
+        str(fixture["query"]),
+        media_path=str(fixture["media_path"]),
+        media_id=str(fixture["media_id"]),
+        query_facets=dict(fixture["query_facets"]),
+        kinds=fixture["kinds"],
+        quality_buckets=fixture["quality_buckets"],
+        query_vector=dict(fixture["query_vector"]),
+        query_terms=dict(fixture["query_terms"]),
+        media_lookup_keys=list(fixture["media_lookup_keys"]),
+        settings=_lora_swift_settings(),
+    )
+
+
+def _bench_lora(args: Any) -> tuple[tuple[float, float], dict[str, Any], int]:
+    fixture = _lora_fixture(int(args.docs))
     score_lora_docs_via_swift(
-        lora_index,
-        query,
-        media_path="/training/vehicle_review/clip_0.mp4",
-        media_id="bmw-x5",
-        query_facets=query_facets,
-        kinds=lora_kinds,
-        quality_buckets=lora_buckets,
-        query_vector=dict(query_vector),
-        query_terms=dict(query_terms),
-        media_lookup_keys=["vehicle_review", "clip_0"],
-        settings={"native_swift_lora_scoring_enabled": True, "native_swift_lora_scoring_min_docs": 1},
+        fixture["index"],
+        str(fixture["query"]),
+        media_path=str(fixture["media_path"]),
+        media_id=str(fixture["media_id"]),
+        query_facets=dict(fixture["query_facets"]),
+        kinds=fixture["kinds"],
+        quality_buckets=fixture["quality_buckets"],
+        query_vector=dict(fixture["query_vector"]),
+        query_terms=dict(fixture["query_terms"]),
+        media_lookup_keys=list(fixture["media_lookup_keys"]),
+        settings=_lora_swift_settings(),
     )
 
     previous_env = os.environ.get("AI_SUBTITLE_STUDIO_SWIFT_POLICY")
@@ -308,13 +383,13 @@ def main() -> int:
         lora_py, lora_py_out = _bench(
             "lora_python",
             lambda: score_lora_docs(
-                lora_index,
-                query,
-                media_path="/training/vehicle_review/clip_0.mp4",
-                media_id="bmw-x5",
-                query_facets=query_facets,
-                kinds=lora_kinds,
-                quality_buckets=lora_buckets,
+                fixture["index"],
+                str(fixture["query"]),
+                media_path=str(fixture["media_path"]),
+                media_id=str(fixture["media_id"]),
+                query_facets=dict(fixture["query_facets"]),
+                kinds=fixture["kinds"],
+                quality_buckets=fixture["quality_buckets"],
             ),
             args.lora_rounds,
         )
@@ -325,57 +400,61 @@ def main() -> int:
             os.environ["AI_SUBTITLE_STUDIO_SWIFT_POLICY"] = previous_env
     lora_native, lora_native_out = _bench(
         "lora_native",
-        lambda: score_lora_docs_via_swift(
-            lora_index,
-            query,
-            media_path="/training/vehicle_review/clip_0.mp4",
-            media_id="bmw-x5",
-            query_facets=query_facets,
-            kinds=lora_kinds,
-            quality_buckets=lora_buckets,
-            query_vector=dict(query_vector),
-            query_terms=dict(query_terms),
-            media_lookup_keys=["vehicle_review", "clip_0"],
-            settings={"native_swift_lora_scoring_enabled": True, "native_swift_lora_scoring_min_docs": 1},
-        ),
+        lambda: _score_lora_swift_payload(fixture),
         args.lora_rounds,
     )
+    return (lora_py, lora_native), {"lora_py": lora_py_out, "lora_native": lora_native_out}, len(fixture["index"]["docs"])
 
-    speedup, quality_check, adoption = _quality_speed_adoption(
-        timings={
-            "llm": (llm_py, llm_native), "deep": (deep_py, deep_native),
-            "llm_batch": (llm_batch_py, llm_batch_native), "deep_batch": (deep_batch_py, deep_batch_native),
-            "lora": (lora_py, lora_native),
-        },
-        outputs={
-            "llm_py": llm_py_out, "llm_native": llm_native_out,
-            "deep_py": deep_py_out, "deep_native": deep_native_out,
-            "llm_batch_py": llm_batch_py_out, "llm_batch_native": llm_batch_native_out,
-            "deep_batch_py": deep_batch_py_out, "deep_batch_native": deep_batch_native_out,
-            "lora_py": lora_py_out, "lora_native": lora_native_out,
-        },
-    )
-    report = {
+
+def _build_report(
+    *,
+    cli: Path,
+    args: Any,
+    lora_doc_count: int,
+    timings: dict[str, tuple[float, float]],
+    outputs: dict[str, Any],
+) -> dict[str, Any]:
+    speedup, quality_check, adoption = _quality_speed_adoption(timings=timings, outputs=outputs)
+    return {
         "ok": True,
         "native_cli": str(cli),
         "rounds": args.rounds,
-        "lora_docs": len(lora_index["docs"]),
+        "lora_docs": lora_doc_count,
         "median_ms": {
-            "llm_python": round(llm_py * 1000, 4),
-            "llm_native_swift": round(llm_native * 1000, 4),
-            "deep_python": round(deep_py * 1000, 4),
-            "deep_native_swift": round(deep_native * 1000, 4),
-            "llm_batch_python_total": round(llm_batch_py * 1000, 4),
-            "llm_batch_native_swift_total": round(llm_batch_native * 1000, 4),
-            "deep_batch_python_total": round(deep_batch_py * 1000, 4),
-            "deep_batch_native_swift_total": round(deep_batch_native * 1000, 4),
-            "lora_python": round(lora_py * 1000, 4),
-            "lora_native_swift": round(lora_native * 1000, 4),
+            "llm_python": round(timings["llm"][0] * 1000, 4),
+            "llm_native_swift": round(timings["llm"][1] * 1000, 4),
+            "deep_python": round(timings["deep"][0] * 1000, 4),
+            "deep_native_swift": round(timings["deep"][1] * 1000, 4),
+            "llm_batch_python_total": round(timings["llm_batch"][0] * 1000, 4),
+            "llm_batch_native_swift_total": round(timings["llm_batch"][1] * 1000, 4),
+            "deep_batch_python_total": round(timings["deep_batch"][0] * 1000, 4),
+            "deep_batch_native_swift_total": round(timings["deep_batch"][1] * 1000, 4),
+            "lora_python": round(timings["lora"][0] * 1000, 4),
+            "lora_native_swift": round(timings["lora"][1] * 1000, 4),
         },
         "speedup": speedup,
         "quality_check": quality_check,
         "adoption": adoption,
     }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Benchmark Swift-native LLM/LoRA/Deep policy helpers.")
+    parser.add_argument("--docs", type=int, default=2500)
+    parser.add_argument("--rounds", type=int, default=80)
+    parser.add_argument("--lora-rounds", type=int, default=8)
+    args = parser.parse_args()
+
+    cli = find_native_cli_path()
+    if cli is None:
+        print(json.dumps({"ok": False, "error": "AIStudioNativeCLI release binary not found. Run swift build -c release."}, ensure_ascii=False))
+        return 2
+
+    timings, outputs = _bench_llm_deep(args, _policy_fixture(int(args.rounds)))
+    lora_timing, lora_outputs, lora_doc_count = _bench_lora(args)
+    timings["lora"] = lora_timing
+    outputs.update(lora_outputs)
+    report = _build_report(cli=cli, args=args, lora_doc_count=lora_doc_count, timings=timings, outputs=outputs)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 

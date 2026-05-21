@@ -55,6 +55,10 @@
   - 이유: 2026-05-21 Swift/native policy mini benchmark에서 속도는 크게 빨랐지만 LLM candidate count, deep rerank chunk, batch count, LoRA top5 parity가 맞지 않았다.
   - 다음 원칙: native adoption report는 speedup과 parity를 동시에 통과해야 `native`로 표시하고, parity 실패는 `blocked_quality_mismatch`로 남긴다.
 
+- Swift policy helper benchmark는 experimental gate를 실제로 켠 뒤 측정한다.
+  - 이유: `native_swift_policy_experimental_enabled`가 빠지면 wrapper가 `None`으로 빠져 disabled path를 native timing처럼 기록할 수 있다.
+  - 다음 원칙: benchmark fixture에는 experimental gate를 명시하고, LoRA처럼 동점이 많은 scoring은 native sort tie-break까지 Python 기준과 맞춘다.
+
 - Fast 모드 성능 수치를 품질 동일 후보 수치와 섞지 않는다.
   - 이유: 2026-05-21 X5 10회 반복에서 `mode_fast`는 평균 `10.373s`였지만 품질 gate가 `0/10`이었다.
   - 다음 원칙: 최종 알고리즘 선택은 품질 gate 통과 후보끼리만 비교하고, Fast 모드는 별도 속도 모드로 기록한다.
