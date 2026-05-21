@@ -1189,9 +1189,9 @@ def build_subtitle_canvas_vector_state(
             "timeline_frame_rate": fps,
         },
         "renderer": {
-            "preferred": "qt-scenegraph-gpu",
-            "active_surface": "timeline-qopenglwidget",
-            "fallback": "",
+            "preferred": "qt-widgets-qpaint",
+            "active_surface": "timeline-qwidget-2d",
+            "fallback": "qt-scenegraph-explicit-opt-in",
         },
         "segments": objects,
         "gap_segments": gap_objects,

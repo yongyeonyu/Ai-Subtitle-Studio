@@ -24,7 +24,7 @@
 - 유지 후보: `candidate1`
 - 유지 이유: subtitle quality를 유지하면서 X5 평균 시간이 가장 안정적이었다.
 - 최신 실행 브랜치: `opt/one-shot-quality-speed-20260521-0228`
-- 최신 완료 배치: Phase 2/3/5/5.5 small execution batch
+- 최신 완료 배치: Phase 2/3/5/5.5 rendering-default execution batch
 - 최신 산출물: `output/manual_verification/latest/idea_full_execute_20260521-0821/summary.md`
 - 최신 검증:
   - `tests.test_action_item_runtime_services`, `tests.test_project_runtime_capture`, `tests.test_runtime_multi_process`, `tests.test_media_processor_overlap`, `tests.test_ollama_provider`, `tests.test_timeline_hit_targets`, `tests.test_timeline_render_cache`: `248 tests OK`
@@ -47,6 +47,7 @@
 - 현재 선택:
   - 기존 `candidate1` 품질 보존 파이프라인을 유지한다.
   - 이번 배치의 stage-owned STT/LLM resource policy, quarter prescan metadata, opaque 2D inline editor 안정화는 채택한다.
+  - 에디터/타임라인 UI 렌더링 기본값은 Qt Widgets/QPainter 2D로 고정하고, QML/SceneGraph는 explicit opt-in diagnostic으로만 둔다.
   - X5 60s에서 품질 단독 1위는 `mode_high_piecewise_drift`, 속도/품질 균형은 `mode_fast`가 유리하다. 단, 10회 반복 평균/p95 전까지 기본 알고리즘 자동 승격은 하지 않는다.
   - 전체 STT1/STT2 full-parallel은 빠르지만 X5 품질과 segment count가 낮아져 기본 승격하지 않는다.
   - benchmark 후보 선택은 `tools/apply_subtitle_benchmark_quality_gate.py`로 품질 gate를 통과한 후보만 승격한다.
@@ -219,6 +220,9 @@ Already done:
 - 2026-05-21 2차 구현 완료: 자막 세그먼트 인라인 편집기를 opaque `QWidget`으로 분리하고, segment fill과 같은 배경을 가진 단일 child editor로 고정했다.
 - 완료 범위: 투명 child editor를 제거하고, 편집 중 canvas segment text와 editor text가 겹쳐 그려지지 않도록 geometry/style sync path를 정리했다.
 - 완료 검증: `tests.test_timeline_hit_targets`, `tests.test_timeline_render_cache`, 공식 `quick/major/full` QA.
+- 2026-05-21 3차 구현 완료: `ui.gpu_rendering`의 SceneGraph 기본값을 off로 바꾸고, legacy settings의 `editor_rendering_scenegraph_enabled=true`가 새 opt-in flag 없이 QML UI를 되살리지 못하게 했다.
+- 완료 범위: timeline/project renderer metadata를 `timeline-qwidget-2d`로 정리, runtime optimization editor backend를 `qwidget_2d`로 갱신, custom/default settings에서 OpenGL/SceneGraph 기본값을 off로 정리.
+- 완료 검증: `tests.test_gpu_rendering`, `tests.test_project_context`, `tests.test_timeline_render_cache`, 관련 runtime/native tests.
 
 Remaining follow-up:
 - editor rendering inventory를 만든다: `TimelineCanvas`, `TimelineWidget`, `timeline_paint`, `timeline_global`, inline subtitle editor, playhead overlay compatibility object, segment creation/drag handles, cut-boundary diamonds, waveform/minimap, STT preview lanes.

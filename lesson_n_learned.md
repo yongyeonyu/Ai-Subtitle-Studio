@@ -59,6 +59,10 @@
   - 이유: `native_swift_policy_experimental_enabled`가 빠지면 wrapper가 `None`으로 빠져 disabled path를 native timing처럼 기록할 수 있다.
   - 다음 원칙: benchmark fixture에는 experimental gate를 명시하고, LoRA처럼 동점이 많은 scoring은 native sort tie-break까지 Python 기준과 맞춘다.
 
+- Qt Widgets/QPainter 2D 전환에서는 legacy setting true를 그대로 신뢰하지 않는다.
+  - 이유: `editor_rendering_scenegraph_enabled=true`가 user/default settings에 남아 있으면 QML/SceneGraph가 다시 켜져 macOS 합성 잔상과 black surface 위험이 되살아날 수 있다.
+  - 다음 원칙: QML/SceneGraph는 새 opt-in flag나 명시 env가 있을 때만 켜고, 기본 렌더링 owner는 `qwidget-2d`로 유지한다.
+
 - Fast 모드 성능 수치를 품질 동일 후보 수치와 섞지 않는다.
   - 이유: 2026-05-21 X5 10회 반복에서 `mode_fast`는 평균 `10.373s`였지만 품질 gate가 `0/10`이었다.
   - 다음 원칙: 최종 알고리즘 선택은 품질 gate 통과 후보끼리만 비교하고, Fast 모드는 별도 속도 모드로 기록한다.

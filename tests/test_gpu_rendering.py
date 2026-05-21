@@ -44,7 +44,7 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             self.assertFalse(gpu_widgets_enabled("timeline"))
             self.assertEqual(gpu_backend_name("timeline"), "qwidget")
 
-    def test_real_app_defaults_enable_all_ui_gpu(self):
+    def test_real_app_defaults_keep_qwidget_2d_ui(self):
         from ui.gpu_rendering import gpu_backend_name, gpu_runtime_enabled, gpu_widgets_enabled, scenegraph_enabled
         from core.runtime import config
 
@@ -53,8 +53,8 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             self.assertTrue(gpu_runtime_enabled())
             if config.IS_MAC:
                 self.assertFalse(gpu_widgets_enabled())
-                self.assertTrue(scenegraph_enabled("timeline"))
-                self.assertEqual(gpu_backend_name("timeline"), "metal-scenegraph")
+                self.assertFalse(scenegraph_enabled("timeline"))
+                self.assertEqual(gpu_backend_name("timeline"), "qwidget")
             else:
                 self.assertTrue(gpu_widgets_enabled())
                 self.assertEqual(gpu_backend_name(), "opengl-widget")
@@ -92,11 +92,11 @@ class GpuRenderingSafetyTests(unittest.TestCase):
                      "editor_rendering_gpu_scope": "frame",
                      "editor_rendering_gpu_frames": ["timeline"],
                  },
-             ):
+            ):
             self.assertTrue(gpu_runtime_enabled("timeline"))
             if config.IS_MAC:
                 self.assertFalse(gpu_widgets_enabled("timeline"))
-                self.assertTrue(scenegraph_enabled("timeline"))
+                self.assertFalse(scenegraph_enabled("timeline"))
             else:
                 self.assertTrue(gpu_widgets_enabled("timeline"))
             self.assertFalse(gpu_runtime_enabled("editor"))
@@ -116,7 +116,7 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             self.assertTrue(gpu_runtime_enabled("editor"))
             self.assertTrue(gpu_runtime_enabled("video"))
             self.assertFalse(gpu_widgets_enabled("editor"))
-            self.assertTrue(gpu_backend_name("timeline").endswith("-scenegraph"))
+            self.assertEqual(gpu_backend_name("timeline"), "qwidget")
 
     def test_timeline_widgets_use_explicit_gpu_rendering_without_global_experimental_flag(self):
         from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled
@@ -174,7 +174,7 @@ class GpuRenderingSafetyTests(unittest.TestCase):
                 self.assertTrue(gpu_widgets_enabled("timeline"))
                 self.assertEqual(gpu_backend_name("timeline"), "opengl-widget")
 
-    def test_metal_backend_disables_opengl_widgets_but_keeps_scenegraph(self):
+    def test_metal_backend_disables_opengl_widgets_but_allows_explicit_scenegraph(self):
         from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled, scenegraph_enabled
 
         with patch.dict(os.environ, {}, clear=True), \
@@ -185,6 +185,7 @@ class GpuRenderingSafetyTests(unittest.TestCase):
                  return_value={
                      "editor_rendering_gpu_scope": "all",
                      "editor_rendering_opengl_widgets_enabled": True,
+                     "editor_rendering_scenegraph_opt_in_enabled": True,
                      "editor_rendering_scenegraph_enabled": True,
                  },
              ):
@@ -215,7 +216,7 @@ class GpuRenderingSafetyTests(unittest.TestCase):
         ):
             self.assertTrue(scenegraph_enabled("timeline"))
 
-    def test_scenegraph_can_follow_settings_when_gpu_runtime_uses_qwidget_canvas(self):
+    def test_scenegraph_stays_off_without_explicit_scenegraph_setting(self):
         from ui.gpu_rendering import scenegraph_enabled
 
         with patch.dict(os.environ, {}, clear=True), \
@@ -225,6 +226,22 @@ class GpuRenderingSafetyTests(unittest.TestCase):
                  return_value={
                      "editor_rendering_gpu_scope": "all",
                      "editor_rendering_opengl_widgets_enabled": False,
+                 },
+             ):
+            self.assertFalse(scenegraph_enabled("timeline"))
+
+    def test_scenegraph_can_follow_explicit_settings_when_gpu_runtime_uses_qwidget_canvas(self):
+        from ui.gpu_rendering import scenegraph_enabled
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.gpu_rendering._running_under_pytest", return_value=False), \
+             patch(
+                 "ui.gpu_rendering._render_settings",
+                 return_value={
+                     "editor_rendering_gpu_scope": "all",
+                     "editor_rendering_opengl_widgets_enabled": False,
+                     "editor_rendering_scenegraph_opt_in_enabled": True,
+                     "editor_rendering_scenegraph_enabled": True,
                  },
              ):
             self.assertTrue(scenegraph_enabled("timeline"))
@@ -338,10 +355,10 @@ class GpuRenderingSafetyTests(unittest.TestCase):
              patch("ui.gpu_rendering._running_under_pytest", return_value=False), \
              patch("ui.gpu_rendering.config.IS_MAC", True):
             self.assertFalse(gpu_widgets_enabled("editor"))
-            self.assertTrue(scenegraph_enabled("editor"))
-            self.assertEqual(gpu_backend_name("editor"), "metal-scenegraph")
+            self.assertFalse(scenegraph_enabled("editor"))
+            self.assertEqual(gpu_backend_name("editor"), "qwidget")
             self.assertFalse(gpu_widgets_enabled("video"))
-            self.assertEqual(gpu_backend_name("video"), "metal-scenegraph")
+            self.assertEqual(gpu_backend_name("video"), "qwidget")
 
 
 if __name__ == "__main__":

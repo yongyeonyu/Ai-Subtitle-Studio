@@ -1,11 +1,10 @@
 # Version: 03.14.31
 # Phase: PHASE2
-"""Small helpers for GPU-backed Qt widgets.
+"""Small helpers for optional GPU-backed Qt widgets.
 
-The app uses Qt's OpenGL-backed widgets for the heavy custom-rendered surfaces.
-Tests and offscreen runs stay on QWidget unless GPU rendering is explicitly
-requested, because Qt can abort in native platform drivers before Python can
-catch the failure.
+The editor defaults to Qt Widgets/QPainter 2D surfaces.  OpenGL widgets and
+Qt Quick/SceneGraph layers remain explicit diagnostics only, because macOS
+native platform drivers can abort before Python can catch the failure.
 """
 from __future__ import annotations
 
@@ -45,8 +44,8 @@ def _editor_text_scenegraph_allowed(feature_key: str) -> bool:
         return True
     if not bool(getattr(config, "IS_MAC", False)):
         return True
-    # SceneGraph/QQuickWidget on the Metal path is the preferred editor GPU
-    # route. Keep this enabled while still blocking QOpenGLWidget viewports.
+    # SceneGraph/QQuickWidget is allowed only as an explicit diagnostic opt-in;
+    # the default editor surface is the stable QWidget/QPainter path.
     return True
 
 
@@ -153,8 +152,21 @@ def _settings_opengl_widgets_enabled(feature_key: str) -> bool | None:
 
 def _settings_scenegraph_enabled(feature_key: str) -> bool | None:
     settings = _render_settings()
+    scenegraph_opt_in = _setting_bool(
+        settings.get(
+            "editor_rendering_scenegraph_opt_in_enabled",
+            settings.get("gpu_scenegraph_opt_in_enabled"),
+        )
+    )
+
+    def _scenegraph_setting(value) -> bool | None:
+        parsed = _setting_bool(value)
+        if parsed is True and scenegraph_opt_in is not True:
+            return False
+        return parsed
+
     if feature_key:
-        feature_setting = _setting_bool(
+        feature_setting = _scenegraph_setting(
             settings.get(
                 f"editor_rendering_{feature_key}_scenegraph_enabled",
                 settings.get(f"gpu_{feature_key}_scenegraph_enabled"),
@@ -162,7 +174,7 @@ def _settings_scenegraph_enabled(feature_key: str) -> bool | None:
         )
         if feature_setting is not None:
             return feature_setting
-    return _setting_bool(
+    return _scenegraph_setting(
         settings.get(
             "editor_rendering_scenegraph_enabled",
             settings.get("gpu_scenegraph_enabled"),
@@ -294,7 +306,7 @@ def scenegraph_enabled(feature: str | None = None) -> bool:
     setting = _settings_scenegraph_enabled(feature_key)
     if setting is not None:
         return setting
-    return not gpu_widgets_enabled(feature_key)
+    return False
 
 
 def accelerated_widget_base(feature: str | None = None):

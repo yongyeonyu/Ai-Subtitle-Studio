@@ -423,7 +423,7 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(_state_segments(state)[1]["speaker"], "02")
         vector_canvas = state["rendering"]["subtitle_canvas"]
         self.assertEqual(vector_canvas["schema"], SUBTITLE_CANVAS_VECTOR_SCHEMA)
-        self.assertEqual(vector_canvas["renderer"]["active_surface"], "timeline-qopenglwidget")
+        self.assertEqual(vector_canvas["renderer"]["active_surface"], "timeline-qwidget-2d")
         self.assertEqual(vector_canvas["segments"][1]["text"], "둘째 자막")
         self.assertEqual(vector_canvas["segments"][1]["clip"]["index"], 1)
         self.assertEqual(state["workspace"]["last_playhead"], 10.0)

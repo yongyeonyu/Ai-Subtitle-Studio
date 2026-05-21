@@ -1,5 +1,21 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## idea_item Phase 5.5 2D UI 렌더링 기본값 보정 - 2026-05-21 09:42
+
+- 브랜치: `opt/one-shot-quality-speed-20260521-0228`
+- 코드 반영:
+  - `ui.gpu_rendering`에서 QML/SceneGraph UI를 기본 off로 고정하고, explicit env 또는 scenegraph opt-in setting이 있을 때만 허용.
+  - timeline project vector metadata를 `timeline-qwidget-2d`로 정리.
+  - runtime optimization profile과 default/custom settings의 editor backend를 `qwidget_2d` / OpenGL off / SceneGraph off로 정리.
+- 단위/가드:
+  - `py_compile`: pass
+  - `tests.test_gpu_rendering`, `tests.test_project_context`, `tests.test_timeline_render_cache`: pass
+  - `tests.test_runtime_optimization_profile`, `tests.test_native_macos_acceleration`: pass
+  - `tools/check_maintenance_budget.py --json`: `ok=true`
+  - `tools/qa_suite_runner.py quick`: pass, `output/manual_verification/latest/qa_suite_quick_20260521_094413`
+- 분류:
+  - UI/UX 재디자인 없음. macOS 합성 안정화를 위해 렌더링 backend 기본값만 Qt Widgets/QPainter 2D로 고정.
+
 ## idea_item Phase 5 native policy parity 보정 - 2026-05-21 09:30
 
 - 브랜치: `opt/one-shot-quality-speed-20260521-0228`
