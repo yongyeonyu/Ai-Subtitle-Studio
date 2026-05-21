@@ -158,6 +158,7 @@ git diff --check --
   tests.test_timeline_playhead_fit \
   tests.test_timeline_hit_targets \
   tests.test_timeline_paint_passes \
+  tests.test_editor_rendering_ownership_audit \
   tests.test_main_window_nonfatal \
   tests.test_cp03_cp04_status_ui \
   tests.test_sidebar_terminal_layout \
@@ -401,7 +402,7 @@ output/manual_verification/latest/ui_compare/
 | App command/status | `tests.test_app_command_protocol`, `tests.test_app_command_bridge` | `appctl status`, `remote_verify capture` | current screen |
 | Home/sidebar/queue | `tests.test_cp03_cp04_status_ui`, `tests.test_sidebar_terminal_layout`, `tests.test_queue_signal_payloads` | queue-files, progress, completion | home, queue idle, queue processing |
 | Video player | `tests.test_video_player_widget`, `tests.test_audio_display` | play/pause/seek/frame counter | video controls |
-| Timeline paint/layout | `tests.test_timeline_paint_passes`, `tests.test_timeline_render_cache`, `tests.test_timeline_layout_constants` | zoom, scroll, playhead, edge artifact check | timeline full, timeline zoomed |
+| Timeline paint/layout | `tests.test_timeline_paint_passes`, `tests.test_timeline_render_cache`, `tests.test_timeline_layout_constants`, `tests.test_editor_rendering_ownership_audit` | zoom, scroll, playhead, edge artifact check, `tools/audit_editor_rendering_ownership.py --json` | timeline full, timeline zoomed |
 | Segment editing | `tests.test_timeline_playhead_fit`, `tests.test_timeline_hit_targets`, `tests.test_editor_split_undo` | select, double click, split, inline edit, move boundary | selected, inline edit, split menu |
 | Context menu | `tests.test_context_menu_bounds`, `tests.test_popup_dismiss` | right click / menu action automation | context menu |
 | STT/VAD/audio | `tests.test_stt_ensemble`, `tests.test_stt_recheck_service`, `tests.test_stt_vad_ensemble`, `tests.test_media_processor_overlap` | generation smoke | queue processing, editor preview |
@@ -432,6 +433,7 @@ git diff --check --
   tests.test_timeline_playhead_fit \
   tests.test_timeline_hit_targets \
   tests.test_timeline_paint_passes \
+  tests.test_editor_rendering_ownership_audit \
   tests.test_context_menu_bounds \
   tests.test_editor_split_undo \
   tests.test_cp03_cp04_status_ui \

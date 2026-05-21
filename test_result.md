@@ -7,6 +7,7 @@
   - `ui.gpu_rendering`에서 QML/SceneGraph UI를 기본 off로 고정하고, explicit env 또는 scenegraph opt-in setting이 있을 때만 허용.
   - timeline project vector metadata를 `timeline-qwidget-2d`로 정리.
   - runtime optimization profile과 default/custom settings의 editor backend를 `qwidget_2d` / OpenGL off / SceneGraph off로 정리.
+  - `README.md`, `test_case.md`에 qwidget-2d 렌더링 ownership audit 경로를 반영.
 - 단위/가드:
   - `py_compile`: pass
   - `tests.test_gpu_rendering`, `tests.test_project_context`, `tests.test_timeline_render_cache`: pass

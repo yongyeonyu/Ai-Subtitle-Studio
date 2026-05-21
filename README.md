@@ -16,7 +16,7 @@ Accuracy-first desktop subtitle production for long-form video, rough cuts, spea
 
 AI Subtitle Studio is built for one primary outcome: produce highly accurate subtitles on the first pass, even when that takes longer than a fast draft. The goal is to reduce manual correction time by combining STT, audio preprocessing, VAD, cut-boundary alignment, LLM cleanup, subtitle timing rules, LoRA personalization, and project-aware editing in one desktop workflow.
 
-Current development has moved to the macOS native/App Store branch. The app is now Apple Silicon first and macOS-only on this branch: Swift WhisperKit persistent STT is the default primary route, native backend policies are the default for STT, audio extraction, cut-boundary scanning, and editor rendering, and packaging work targets a signed sandboxed macOS `.app`.
+Current development has moved to the macOS native/App Store branch. The app is now Apple Silicon first and macOS-only on this branch: Swift WhisperKit persistent STT is the default primary route, native backend policies are the default for STT, audio extraction, and cut-boundary scanning, editor rendering defaults to Qt Widgets/QPainter 2D, and packaging work targets a signed sandboxed macOS `.app`.
 The macOS packaging scripts under `packaging/macos/` can now build and validate the `.app`, compile the Swift native core and WhisperKit worker, create a local beta `.dmg`, run a batch-style `.command` updater for this Mac, prepare Developer ID notarization, build a signed App Store package, and validate or upload that package once Apple Developer credentials are available.
 
 ## Core Workflows
@@ -32,7 +32,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Subtitle tool stack policy: Fast = LoRA, Auto = LoRA + Deep Learning, High = LoRA + Deep Learning + LLM, STT Mode = VAD + human input + LoRA/Deep/rules.
 - STT Mode portable project state: `stt_mode_state` keeps VAD work segments, raw dictation, rolling windows, and final subtitle mirrors separate from the normal vector subtitle canvas.
 - STT Mode iPad compatibility scope is intentionally limited to project state and STT LoRA/runtime policy bundles; this repository does not implement an iPad app.
-- Stable editor text, video, and timeline render frames with frame-based or whole-editor GPU rendering policy.
+- Stable editor text, video, and timeline render frames default to Qt Widgets/QPainter 2D; OpenGL and Qt Quick/SceneGraph UI layers remain explicit diagnostics only.
 - Subtitle generation completion is driven by backend-finalized, saveable subtitle segments rather than STT progress alone, so completion autosave waits and retries instead of saving an empty timeline.
 - When subtitle generation completes, the Home sidebar progress card appends the final subtitle self-review score next to elapsed versus expected time so queue review can see a quick quality signal without reopening the editor.
 - Editor exit flows ask to save unsaved changes before fast runtime/model cleanup starts.
@@ -50,7 +50,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Word timestamps default to off for fast STT passes, then re-run selectively on low-score, editor-selected, precision-review, or VAD-risk spans.
 - ClearVoice can use a native FFmpeg single-pass path instead of waiting on the slower deep-learning enhancer when the quality-safe preset allows it.
 - OpenAI Codex ChatGPT CLI can be selected as a subscription-backed LLM provider without requiring an API key or Ollama model preflight.
-- Compact QML popup/menu surfaces use outside-click dismissal, hover/press feedback, and Korean-only bottom/global menu labels.
+- Compact popup/menu surfaces use outside-click dismissal, hover/press feedback, and Korean-only bottom/global menu labels.
 - Ten-step engine dashboard: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Runtime sidebar display of the current file's automatic audio-filter and VAD choices, backed by chunk-profile memory, preview self-score guards, and conservative switch confirmation so adaptive audio routing can generalize beyond one benchmark video.
 - Runtime ETA prediction now uses per-variant history with media/FPS/cache features and recent-run weighting, and the active queue row keeps elapsed-versus-expected time updated even before the full backend pipeline clock is ready.
@@ -163,6 +163,11 @@ Operational rules:
 
 - `editor_compact_macau` is fixture-adaptive: it resolves playhead and diamond boundaries from live editor status instead of assuming a fixed timestamp.
 - `full` parses the final JSON line from `verify_full_media_pipeline.py`, so progress logs in stdout do not invalidate the suite result.
+- Editor/timeline rendering ownership can be checked without launching the app:
+
+```bash
+./venv/bin/python tools/audit_editor_rendering_ownership.py --json
+```
 
 ## Project Data
 
