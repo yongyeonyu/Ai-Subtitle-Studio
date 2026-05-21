@@ -30,6 +30,8 @@
   - 기준 후보: `phase1_serial_selective_stt2`, `28.846s`, quality `72.986`, final `24`
   - full-parallel 후보: `10.169~10.451s`로 빠르지만 quality `71.563`, final `17`, gate fail
   - fail 사유: `quality_score_drop`, `readability_score_drop`, `cer_regression`, `timing_mae_regression`, `segment_retention_drop`
+  - Macau fast 10회 반복: `output/manual_verification/latest/idea_full_execute_20260521-0821/macau_fast_repeat10_quality_gate/repeat_summary.json`
+  - Macau fast pipeline avg/min/max: `7.628s / 7.516s / 7.854s`, final segments `5/5/5`
   - Swift/native policy mini benchmark: helper speedup은 컸지만 `quality_check`가 모두 false라 adoption은 `blocked_quality_mismatch`
 - 분류:
   - full-parallel STT default 승격은 quality regression으로 폐기 유지.

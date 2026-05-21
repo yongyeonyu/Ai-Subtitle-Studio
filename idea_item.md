@@ -38,6 +38,7 @@
   - X5 60s speed/quality tradeoff: `mode_fast` `9.809s`, quality `71.514`, readability `93.057`, timing MAE `0.7347`
   - X5 60s full-parallel STT: `10.387~10.625s`로 빠르지만 quality `71.563`, timing MAE `0.7392`, final `17`이라 High 기본값 승격 폐기
   - X5 60s quality-gated rerun: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_084657/benchmark_quality_gate.md`
+  - Macau fast repeat10: pipeline avg/min/max `7.628s/7.516s/7.854s`, final segment `5` 유지
   - Swift/native policy mini benchmark: 속도는 빠르지만 parity mismatch라 adoption `blocked_quality_mismatch`
   - Tinyping fast 60s: total `22.326s`, pipeline `9.804s`, final/raw `18/15`
   - Tinyping auto 60s: total `44.152s`, pipeline `9.833s`, final/raw `18/15`
