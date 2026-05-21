@@ -147,10 +147,9 @@ Artifacts are written under `output/manual_verification/latest/qa_suite_<profile
 
 Current verified baseline:
 
-- `quick`: `qa_suite_quick_20260520_174600`
-- `major`: `qa_suite_major_20260520_183244`
-- `full`: `qa_suite_full_20260520_193515`
-- latest bundle-refreshed `full`: `qa_suite_full_20260520_210149`
+- `quick`: `qa_suite_quick_20260521_111623`
+- `major`: `qa_suite_major_20260521_110523`
+- `full`: `qa_suite_full_20260521_110628`
 
 Operational rules:
 
@@ -165,7 +164,7 @@ Operational rules:
 - `full` parses the final JSON line from `verify_full_media_pipeline.py`, so progress logs in stdout do not invalidate the suite result.
 - `full_media` verification fails spoken/non-trivial slices that return zero raw or final subtitles; a fast empty output is not a valid pass.
 - The runner treats the bundled Python entrypoint at `dist/macos/AI Subtitle Studio.app/Contents/Resources/app/main.py` as an app process when restarting stale bundles.
-- Editor/timeline rendering ownership and qwidget-2d paint inventory can be checked without launching the app:
+- Editor/timeline rendering ownership, QML/SceneGraph opt-in gates, and qwidget-2d paint ordering can be checked without launching the app:
 
 ```bash
 ./venv/bin/python tools/audit_editor_rendering_ownership.py --json

@@ -402,7 +402,7 @@ output/manual_verification/latest/ui_compare/
 | App command/status | `tests.test_app_command_protocol`, `tests.test_app_command_bridge` | `appctl status`, `remote_verify capture` | current screen |
 | Home/sidebar/queue | `tests.test_cp03_cp04_status_ui`, `tests.test_sidebar_terminal_layout`, `tests.test_queue_signal_payloads` | queue-files, progress, completion | home, queue idle, queue processing |
 | Video player | `tests.test_video_player_widget`, `tests.test_audio_display` | play/pause/seek/frame counter | video controls |
-| Timeline paint/layout | `tests.test_timeline_paint_passes`, `tests.test_timeline_render_cache`, `tests.test_timeline_layout_constants`, `tests.test_editor_rendering_ownership_audit` | zoom, scroll, playhead, edge artifact check, qwidget-2d owner inventory, `tools/audit_editor_rendering_ownership.py --json` | timeline full, timeline zoomed |
+| Timeline paint/layout | `tests.test_timeline_paint_passes`, `tests.test_timeline_render_cache`, `tests.test_timeline_layout_constants`, `tests.test_editor_rendering_ownership_audit` | zoom, scroll, playhead, edge artifact check, qwidget-2d owner inventory, QML/SceneGraph opt-in gate, paint-order audit, `tools/audit_editor_rendering_ownership.py --json` | timeline full, timeline zoomed |
 | Segment editing | `tests.test_timeline_playhead_fit`, `tests.test_timeline_hit_targets`, `tests.test_editor_split_undo` | select, double click, split, inline edit, move boundary | selected, inline edit, split menu |
 | Context menu | `tests.test_context_menu_bounds`, `tests.test_popup_dismiss` | right click / menu action automation | context menu |
 | STT/VAD/audio | `tests.test_stt_ensemble`, `tests.test_stt_recheck_service`, `tests.test_stt_vad_ensemble`, `tests.test_media_processor_overlap` | generation smoke | queue processing, editor preview |
@@ -688,7 +688,7 @@ git diff --check --
 - 기존 앱 정리 시 `.app` 실행 파일뿐 아니라 bundled Python main(`dist/macos/AI Subtitle Studio.app/Contents/Resources/app/main.py`)도 기존 앱 프로세스로 본다.
 - zombie/종료 중 PID는 재시작 차단 사유가 아니며, alive process만 restart blocker로 남긴다.
 - `editor_compact_macau`는 고정 `1.5초` 대신 현재 `editor_runtime.active_segment`에서 동적 playhead를 계산한다.
-- `move_diamond`/`merge_diamond`는 현재 `diamond_left/right`의 `boundary_sec`를 기준으로 command를 조립한다.
+- `move_diamond`/`merge_diamond`는 현재 `diamond_left/right`의 `boundary_sec`를 기준으로 command를 조립하고, compact status에서 boundary가 없으면 stale line/side 대신 closest fallback으로 precondition drift를 분리한다.
 - `full_media`는 stdout 전체가 아니라 마지막 JSON line을 우선 파싱한다.
 - `full_media`는 spoken/non-trivial slice에서 `raw_segments=0` 또는 `final_segments=0`이면 실패다. 빈 자막은 속도 개선으로 인정하지 않는다.
 - `tinyping_fast_60s`, `tinyping_auto_60s`, `tinyping_high_60s`는 `result_path`의 `tinyping_full_verify.json`까지 확인하고 `verification_failure_reason`이 비어 있어야 한다.
