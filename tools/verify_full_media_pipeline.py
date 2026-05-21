@@ -39,6 +39,27 @@ DEFAULT_MEDIA = Path("/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드�
 RUNTIME_MONITOR_FILE = ROOT / "output" / "runtime_monitor" / "latest.json"
 MEMORY_MONITOR_FILE = ROOT / "output" / "memory_monitor" / "subtitle_generation_latest.json"
 PROC_PATTERNS = [re.compile(r"\bwhisperkit\b", re.I), re.compile(r"\bmlx\b", re.I), re.compile(r"\bollama\b", re.I)]
+VERIFICATION_SETTING_KEYS = (
+    "subtitle_mode",
+    "selected_model",
+    "selected_llm_provider",
+    "selected_whisper_model",
+    "selected_whisper_model_secondary",
+    "stt_ensemble_enabled",
+    "stt_ensemble_parallel_enabled",
+    "stt_ensemble_selective_enabled",
+    "stt_word_timestamps_mode",
+    "stt_word_timestamps_precision_enabled",
+    "selected_audio_ai",
+    "selected_vad",
+    "runtime_quality_self_review_enabled",
+    "runtime_memory_warning_ratio",
+    "runtime_memory_critical_ratio",
+    "runtime_memory_warning_trim_cooldown_sec",
+    "runtime_memory_critical_trim_cooldown_sec",
+    "runtime_memory_warning_disk_trim_ratio",
+    "runtime_memory_critical_disk_trim_ratio",
+)
 
 
 class _PeakRSSSampler:
@@ -209,6 +230,8 @@ def _summary_markdown(payload: dict[str, Any]) -> str:
         "# Full Media Verification",
         "",
         f"- Created: `{payload.get('created_at')}`",
+        f"- Verification ok: `{payload.get('ok')}`",
+        f"- Verification failure: `{payload.get('verification_failure_reason') or ''}`",
         f"- Media: `{media.get('path')}`",
         f"- Duration: `{media.get('duration_sec')}` sec (`{media.get('len_txt')}`)",
         f"- Mode: `{payload.get('mode')}`",
@@ -258,6 +281,44 @@ def _summary_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def verification_failure_reason(payload: dict[str, Any]) -> str:
+    result = dict(payload.get("result") or {})
+    error = str(payload.get("error") or result.get("error") or "").strip()
+    if error:
+        return f"pipeline_error:{error.splitlines()[-1][:180]}"
+
+    media = dict(payload.get("media") or {})
+    try:
+        target_duration = float(media.get("duration_target_sec") or media.get("duration_sec") or 0.0)
+    except (TypeError, ValueError):
+        target_duration = 0.0
+    try:
+        raw_segments = int(result.get("raw_segments") or 0)
+    except (TypeError, ValueError):
+        raw_segments = 0
+    try:
+        final_segments = int(result.get("final_segments") or 0)
+    except (TypeError, ValueError):
+        final_segments = 0
+    try:
+        vad_segments = int(payload.get("vad_segments") or 0)
+    except (TypeError, ValueError):
+        vad_segments = 0
+    try:
+        audio_chunk_wavs = int(payload.get("audio_chunk_wavs") or 0)
+    except (TypeError, ValueError):
+        audio_chunk_wavs = 0
+
+    # QA hot path: a spoken, non-trivial verification slice must not pass with
+    # zero subtitles, otherwise STT early-exit regressions look like speed wins.
+    if target_duration >= 5.0 and (vad_segments > 0 or audio_chunk_wavs > 0):
+        if raw_segments <= 0:
+            return "empty_subtitle_output:raw_segments_zero"
+        if final_segments <= 0:
+            return "empty_subtitle_output:final_segments_zero"
+    return ""
+
+
 def summary_metrics(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload.get("result") or {})
     completion = dict(payload.get("completion_report") or {})
@@ -295,6 +356,135 @@ def summary_metrics(payload: dict[str, Any]) -> dict[str, Any]:
     return metrics
 
 
+def _build_single_verification_context(
+    media_path: Path,
+    *,
+    mode: str,
+    run_dir: Path,
+    settings_overrides: dict[str, Any] | None,
+    run_index: int | None,
+    start_sec: float,
+    duration_sec: float | None,
+) -> tuple[dict[str, Any], dict[str, Any], Variant, float, float | None]:
+    output_prefix = "full_fast" if mode == "fast" else f"full_{mode}"
+    media_info = dict(probe_media(str(media_path)) or {})
+    duration_total_sec = float(media_info.get("duration", 0.0) or 0.0)
+    base_settings = _base_benchmark_settings("current")
+    if settings_overrides:
+        base_settings.update(settings_overrides)
+    llm_model = str(base_settings.get("selected_model") or "").strip()
+    settings = _mode_profile_settings(base_settings, mode, llm_model=llm_model)
+    method = _mode_profile_method(settings)
+    run_llm = bool(mode == "high" and llm_model and "사용 안함" not in llm_model)
+    run_start = max(0.0, float(start_sec or 0.0))
+    run_end = None
+    if duration_sec and duration_sec > 0.0:
+        run_end = min(duration_total_sec, run_start + float(duration_sec))
+        if duration_total_sec > 0.0 and run_end < run_start:
+            run_end = run_start
+    payload: dict[str, Any] = {
+        "schema": "ai_subtitle_studio.full_media_verify.v1",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "run_index": run_index,
+        "media": {
+            "path": str(media_path),
+            "duration_sec": round(duration_total_sec, 3),
+            "duration_target_sec": None if duration_sec is None else round(float(duration_sec), 3),
+            "start_sec": round(run_start, 3),
+            "width": media_info.get("width"),
+            "height": media_info.get("height"),
+            "fps": media_info.get("fps"),
+            "info_txt": media_info.get("info_txt"),
+            "len_txt": media_info.get("len_txt"),
+        },
+        "mode": mode,
+        "method": method,
+        "run_llm": run_llm,
+        "settings_overrides": settings_overrides,
+        "settings": {key: settings.get(key) for key in VERIFICATION_SETTING_KEYS},
+        "resource_before": current_resource_snapshot({}),
+        "pressure_stages": [],
+        "runtime_stage": None,
+        "process_snapshot_before": _collect_processes(),
+    }
+    runtime_monitor_before = _snapshot_file(RUNTIME_MONITOR_FILE, run_dir, "runtime_monitor_before.json")
+    subtitle_generation_monitor_before = _snapshot_file(MEMORY_MONITOR_FILE, run_dir, "subtitle_generation_monitor_before.json")
+    if runtime_monitor_before is not None:
+        payload["runtime_monitor_before"] = runtime_monitor_before
+        payload["runtime_stage"] = runtime_monitor_before.get("pressure_stage")
+    if subtitle_generation_monitor_before is not None:
+        payload["subtitle_generation_monitor_before"] = subtitle_generation_monitor_before
+    variant = Variant(
+        name=output_prefix,
+        phase="full_media_verify",
+        description=f"Full media verification for {mode} mode",
+        method=method,
+        overrides=dict(settings),
+        run_llm=run_llm,
+    )
+    return payload, settings, variant, run_start, run_end
+
+
+def _finalize_successful_verification_payload(
+    payload: dict[str, Any],
+    *,
+    run_dir: Path,
+    variant: Variant,
+    settings: dict[str, Any],
+    sampler: _PeakRSSSampler,
+    started: float,
+) -> dict[str, Any]:
+    output_segments_path = run_dir / variant.name / "output_segments.json"
+    rows = json.loads(output_segments_path.read_text(encoding="utf-8"))
+    self_review = dict(rows[0].get("subtitle_quality_self_review_summary") or {}) if rows and isinstance(rows[0], dict) else {}
+    payload["self_review_summary"] = self_review
+    payload["completion_report"] = subtitle_completion_report(rows, settings)
+    payload["variant_score"] = subtitle_output_variant_score(rows, settings)
+    payload["resource_after"] = current_resource_snapshot({})
+    payload["process_snapshot_after"] = _collect_processes()
+    payload["runtime_monitor_after"] = _snapshot_file(RUNTIME_MONITOR_FILE, run_dir, "runtime_monitor_after.json")
+    payload["subtitle_generation_monitor_after"] = _snapshot_file(
+        MEMORY_MONITOR_FILE,
+        run_dir,
+        "subtitle_generation_monitor_after.json",
+    )
+    runtime_after = dict(payload.get("runtime_monitor_after") or {})
+    payload["pressure_stages"] = [payload.get("runtime_stage"), runtime_after.get("pressure_stage")]
+    if runtime_after:
+        payload["runtime_stage"] = runtime_after.get("pressure_stage")
+    payload["peak_rss_bytes"] = int(sampler.peak_rss_bytes or 0)
+    payload["total_elapsed_sec"] = round(time.perf_counter() - started, 3)
+    payload["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    payload["summary_metrics"] = summary_metrics(payload)
+    payload["verification_failure_reason"] = verification_failure_reason(payload)
+    payload["ok"] = not bool(payload["verification_failure_reason"])
+    return payload
+
+
+def _finalize_failed_verification_payload(
+    payload: dict[str, Any],
+    *,
+    run_dir: Path,
+    sampler: _PeakRSSSampler,
+    started: float,
+) -> dict[str, Any]:
+    payload["error"] = traceback.format_exc()
+    payload["process_snapshot_after"] = _collect_processes()
+    payload["runtime_monitor_after"] = _snapshot_file(RUNTIME_MONITOR_FILE, run_dir, "runtime_monitor_after_error.json")
+    payload["subtitle_generation_monitor_after"] = _snapshot_file(
+        MEMORY_MONITOR_FILE,
+        run_dir,
+        "subtitle_generation_monitor_after_error.json",
+    )
+    payload["peak_rss_bytes"] = int(sampler.peak_rss_bytes or 0)
+    payload["total_elapsed_sec"] = round(time.perf_counter() - started, 3)
+    payload["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    payload["summary_metrics"] = summary_metrics(payload)
+    payload["verification_failure_reason"] = verification_failure_reason(payload) or "pipeline_exception"
+    payload["ok"] = False
+    return payload
+
+
 def _run_single_verification(
     media_path: Path,
     *,
@@ -313,95 +503,16 @@ def _run_single_verification(
     progress_path = run_dir / "tinyping_full_verify_progress.json"
     result_path = run_dir / "tinyping_full_verify.json"
     summary_path = run_dir / "tinyping_full_verify.md"
-    output_prefix = "full_fast" if mode == "fast" else f"full_{mode}"
-
-    media_info = dict(probe_media(str(media_path)) or {})
-    duration_total_sec = float(media_info.get("duration", 0.0) or 0.0)
-    created_at = datetime.now().isoformat(timespec="seconds")
-    base_settings = _base_benchmark_settings("current")
-    if settings_overrides:
-        base_settings.update(settings_overrides)
-    llm_model = str(base_settings.get("selected_model") or "").strip()
-    settings = _mode_profile_settings(base_settings, mode, llm_model=llm_model)
-    method = _mode_profile_method(settings)
-    run_llm = bool(mode == "high" and llm_model and "사용 안함" not in llm_model)
-    run_start = max(0.0, float(start_sec or 0.0))
-    run_end = None
-    if duration_sec and duration_sec > 0.0:
-        run_end = min(duration_total_sec, run_start + float(duration_sec))
-        if duration_total_sec > 0.0 and run_end < run_start:
-            run_end = run_start
-
-    variant = Variant(
-        name=output_prefix,
-        phase="full_media_verify",
-        description=f"Full media verification for {mode} mode",
-        method=method,
-        overrides=dict(settings),
-        run_llm=run_llm,
+    payload, settings, variant, run_start, run_end = _build_single_verification_context(
+        media_path,
+        mode=mode,
+        run_dir=run_dir,
+        settings_overrides=settings_overrides,
+        run_index=run_index,
+        start_sec=start_sec,
+        duration_sec=duration_sec,
     )
-
     sampler = _PeakRSSSampler()
-    payload: dict[str, Any] = {
-        "schema": "ai_subtitle_studio.full_media_verify.v1",
-        "created_at": created_at,
-        "run_index": run_index,
-        "media": {
-            "path": str(media_path),
-            "duration_sec": round(duration_total_sec, 3),
-            "duration_target_sec": None if duration_sec is None else round(float(duration_sec), 3),
-            "start_sec": round(run_start, 3),
-            "width": media_info.get("width"),
-            "height": media_info.get("height"),
-            "fps": media_info.get("fps"),
-            "info_txt": media_info.get("info_txt"),
-            "len_txt": media_info.get("len_txt"),
-        },
-        "mode": mode,
-        "method": method,
-        "run_llm": run_llm,
-        "settings_overrides": settings_overrides,
-        "settings": {
-            key: settings.get(key)
-            for key in (
-                "subtitle_mode",
-                "selected_model",
-                "selected_llm_provider",
-                "selected_whisper_model",
-                "selected_whisper_model_secondary",
-                "stt_ensemble_enabled",
-                "stt_ensemble_parallel_enabled",
-                "stt_ensemble_selective_enabled",
-                "stt_word_timestamps_mode",
-                "stt_word_timestamps_precision_enabled",
-                "selected_audio_ai",
-                "selected_vad",
-                "runtime_quality_self_review_enabled",
-                "runtime_memory_warning_ratio",
-                "runtime_memory_critical_ratio",
-                "runtime_memory_warning_trim_cooldown_sec",
-                "runtime_memory_critical_trim_cooldown_sec",
-                "runtime_memory_warning_disk_trim_ratio",
-                "runtime_memory_critical_disk_trim_ratio",
-            )
-        },
-        "resource_before": current_resource_snapshot({}),
-        "pressure_stages": [],
-        "runtime_stage": None,
-        "process_snapshot_before": _collect_processes(),
-    }
-    runtime_monitor_before = _snapshot_file(RUNTIME_MONITOR_FILE, run_dir, "runtime_monitor_before.json")
-    subtitle_generation_monitor_before = _snapshot_file(
-        MEMORY_MONITOR_FILE,
-        run_dir,
-        "subtitle_generation_monitor_before.json",
-    )
-    if runtime_monitor_before is not None:
-        payload["runtime_monitor_before"] = runtime_monitor_before
-        payload["runtime_stage"] = runtime_monitor_before.get("pressure_stage")
-    if subtitle_generation_monitor_before is not None:
-        payload["subtitle_generation_monitor_before"] = subtitle_generation_monitor_before
-
     _progress(
         progress_path,
         stage="starting",
@@ -412,7 +523,6 @@ def _run_single_verification(
         target_duration_sec=payload["media"]["duration_target_sec"],
     )
     started = time.perf_counter()
-    chunk_dir = ""
     try:
         sampler.start()
         extractor = VideoProcessor()
@@ -454,39 +564,14 @@ def _run_single_verification(
             reference=[],
         )
         payload["result"] = result
-
-        output_segments_path = run_dir / variant.name / "output_segments.json"
-        rows = json.loads(output_segments_path.read_text(encoding="utf-8"))
-        self_review = {}
-        if rows and isinstance(rows[0], dict):
-            self_review = dict(rows[0].get("subtitle_quality_self_review_summary") or {})
-        completion = subtitle_completion_report(rows, settings)
-        variant_score = subtitle_output_variant_score(rows, settings)
-        payload["self_review_summary"] = self_review
-        payload["completion_report"] = completion
-        payload["variant_score"] = variant_score
-        payload["resource_after"] = current_resource_snapshot({})
-        payload["process_snapshot_after"] = _collect_processes()
-        payload["runtime_monitor_after"] = _snapshot_file(
-            RUNTIME_MONITOR_FILE,
-            run_dir,
-            "runtime_monitor_after.json",
+        payload = _finalize_successful_verification_payload(
+            payload,
+            run_dir=run_dir,
+            variant=variant,
+            settings=settings,
+            sampler=sampler,
+            started=started,
         )
-        payload["subtitle_generation_monitor_after"] = _snapshot_file(
-            MEMORY_MONITOR_FILE,
-            run_dir,
-            "subtitle_generation_monitor_after.json",
-        )
-        payload["pressure_stages"] = [
-            payload.get("runtime_stage"),
-            payload.get("runtime_monitor_after", {}).get("pressure_stage"),
-        ]
-        if payload["runtime_monitor_after"] is not None:
-            payload["runtime_stage"] = payload["runtime_monitor_after"].get("pressure_stage")
-        payload["peak_rss_bytes"] = int(sampler.peak_rss_bytes or 0)
-        payload["total_elapsed_sec"] = round(time.perf_counter() - started, 3)
-        payload["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        payload["summary_metrics"] = summary_metrics(payload)
         _write_json(result_path, payload)
         _write_text(summary_path, _summary_markdown(payload))
         _progress(
@@ -502,22 +587,7 @@ def _run_single_verification(
         )
         return payload
     except Exception:
-        payload["error"] = traceback.format_exc()
-        payload["process_snapshot_after"] = _collect_processes()
-        payload["runtime_monitor_after"] = _snapshot_file(
-            RUNTIME_MONITOR_FILE,
-            run_dir,
-            "runtime_monitor_after_error.json",
-        )
-        payload["subtitle_generation_monitor_after"] = _snapshot_file(
-            MEMORY_MONITOR_FILE,
-            run_dir,
-            "subtitle_generation_monitor_after_error.json",
-        )
-        payload["peak_rss_bytes"] = int(sampler.peak_rss_bytes or 0)
-        payload["total_elapsed_sec"] = round(time.perf_counter() - started, 3)
-        payload["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        payload["summary_metrics"] = summary_metrics(payload)
+        payload = _finalize_failed_verification_payload(payload, run_dir=run_dir, sampler=sampler, started=started)
         _write_json(result_path, payload)
         _write_text(summary_path, _summary_markdown(payload))
         _progress(
@@ -658,10 +728,16 @@ def main() -> int:
 
     _emit_repeat_summary(run_root, runs)
     summary = runs[-1]
+    failed_reasons = [
+        str(item.get("verification_failure_reason") or "").strip()
+        for item in runs
+        if not bool(item.get("ok", False)) or str(item.get("verification_failure_reason") or "").strip()
+    ]
+    ok = not failed_reasons
     print(
         json.dumps(
             {
-                "ok": True,
+                "ok": ok,
                 "mode": summary.get("mode"),
                 "run_count": len(runs),
                 "run_index": summary.get("run_index"),
@@ -673,12 +749,13 @@ def main() -> int:
                 "final_segment_count": (summary.get("summary_metrics") or {}).get("final_segment_count"),
                 "raw_segment_count": (summary.get("summary_metrics") or {}).get("raw_segment_count"),
                 "llm_rollback_count": (summary.get("completion_report") or {}).get("llm_rollback_count"),
+                "failure_reason": failed_reasons[0] if failed_reasons else "",
                 "result_path": runs[0].get("result_path") if runs else None,
             },
             ensure_ascii=False,
         )
     )
-    return 0
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

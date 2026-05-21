@@ -66,3 +66,11 @@
 - Fast 모드 성능 수치를 품질 동일 후보 수치와 섞지 않는다.
   - 이유: 2026-05-21 X5 10회 반복에서 `mode_fast`는 평균 `10.373s`였지만 품질 gate가 `0/10`이었다.
   - 다음 원칙: 최종 알고리즘 선택은 품질 gate 통과 후보끼리만 비교하고, Fast 모드는 별도 속도 모드로 기록한다.
+
+- spoken full-media 검증에서 자막 0개를 pass로 두지 않는다.
+  - 이유: 2026-05-21 `tinyping_auto_60s`가 `raw/final=0/0`인데 verifier verdict가 pass로 집계될 수 있음을 확인했다.
+  - 다음 원칙: VAD/chunk가 있는 non-trivial slice는 raw 또는 final subtitle이 0개면 `empty_subtitle_output:*`로 실패시킨다.
+
+- bundled macOS app은 `.app` 실행 파일만 보고 stale 여부를 판단하지 않는다.
+  - 이유: 실제 runner가 붙는 프로세스는 `dist/macos/AI Subtitle Studio.app/Contents/Resources/app/main.py`를 실행하는 Python일 수 있다.
+  - 다음 원칙: app restart 전에는 bundled Python main process와 zombie/종료 중 PID를 구분하고, alive process만 blocker로 취급한다.

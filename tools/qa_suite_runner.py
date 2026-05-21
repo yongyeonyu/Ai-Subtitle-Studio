@@ -19,6 +19,7 @@ LATEST_DIR = ROOT / "output" / "manual_verification" / "latest"
 DEFAULT_PYTHON = ROOT / "venv" / "bin" / "python"
 APP_MAIN = ROOT / "main.py"
 APP_BUNDLE_EXECUTABLE = ROOT / "dist" / "macos" / "AI Subtitle Studio.app" / "Contents" / "MacOS" / "AI Subtitle Studio"
+APP_BUNDLE_MAIN = ROOT / "dist" / "macos" / "AI Subtitle Studio.app" / "Contents" / "Resources" / "app" / "main.py"
 
 MACAU_PROJECT = ROOT / "projects" / "DJI_20260217224203_0075_D.aissproj"
 TINYPING_MEDIA = Path("/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4")
@@ -274,8 +275,34 @@ def _run_subprocess(command: list[str], *, cwd: Path, stdout_path: Path, stderr_
     return int(result.returncode), _parse_json(result.stdout)
 
 
+def _pid_alive_for_restart(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        import psutil  # type: ignore
+
+        proc = psutil.Process(int(pid))
+        if proc.status() == psutil.STATUS_ZOMBIE:
+            return False
+    except Exception as exc:
+        _ = exc
+    try:
+        result = subprocess.run(["ps", "-o", "stat=", "-p", str(int(pid))], capture_output=True, text=True)
+        if result.returncode == 0 and "Z" in str(result.stdout or ""):
+            return False
+    except Exception as exc:
+        _ = exc
+    return True
+
+
 def _main_app_pids() -> list[int]:
-    patterns = [str(APP_BUNDLE_EXECUTABLE), str(APP_MAIN), "Python main.py"]
+    # QA hot path: bundled macOS launches appear as Python running
+    # Contents/Resources/app/main.py, not as the .app executable itself.
+    patterns = [str(APP_BUNDLE_EXECUTABLE), str(APP_BUNDLE_MAIN), str(APP_MAIN), "Python main.py"]
     seen: set[int] = set()
     pids: list[int] = []
     for pattern in patterns:
@@ -311,12 +338,10 @@ def _wait_for_pids_exit(pids: list[int], *, timeout_sec: float) -> bool:
     while pending and time.monotonic() < deadline:
         finished: set[int] = set()
         for pid in list(pending):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+            # Restart gate hot path: macOS can leave a just-killed bundle Python
+            # as a zombie briefly; that must not poison the next clean app run.
+            if not _pid_alive_for_restart(pid):
                 finished.add(pid)
-            except PermissionError:
-                continue
         pending -= finished
         if pending:
             time.sleep(0.2)

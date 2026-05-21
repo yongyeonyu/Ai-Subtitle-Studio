@@ -652,6 +652,16 @@ class EditorAutomationMixin:
             starter(line_num, start, split_at_playhead=True)
             if not bool(getattr(canvas, "_edit_active", False)) or not hasattr(canvas, "_pending_split_sec"):
                 raise ValueError("smart_split_unavailable")
+            setattr(
+                self,
+                "_automation_last_inline_edit_request",
+                {
+                    "mode": "smart_split",
+                    "line": line_num,
+                    "start": start,
+                    "split_sec": float(getattr(canvas, "_pending_split_sec", playhead) or playhead),
+                },
+            )
         return {
             "line": int(active.get("line", 0) or 0),
             "start": float(active.get("start", 0.0) or 0.0),
@@ -660,9 +670,53 @@ class EditorAutomationMixin:
             "editor_runtime": self.automation_editor_state_snapshot(),
         }
 
+    def _automation_restore_inline_edit_request(self) -> bool:
+        request = getattr(self, "_automation_last_inline_edit_request", None)
+        if not isinstance(request, dict) or str(request.get("mode") or "") != "smart_split":
+            return False
+        try:
+            split_sec = float(request.get("split_sec", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            split_sec = 0.0
+        if split_sec > 0.0:
+            try:
+                self.automation_set_playhead(split_sec, center=False, sync_video=False)
+            except Exception as exc:
+                _ = exc
+        try:
+            self.automation_begin_smart_split_at_playhead(
+                line=int(request.get("line")) if request.get("line") is not None else None,
+                start_sec=float(request.get("start")) if request.get("start") is not None else None,
+                at_playhead=False,
+            )
+        except Exception:
+            return False
+        cursor_position = request.get("cursor")
+        if cursor_position is not None:
+            canvas = self._automation_canvas()
+            editor = getattr(canvas, "_inline_editor", None) if canvas is not None else None
+            if editor is not None:
+                try:
+                    text = str(editor.toPlainText() or "")
+                    cursor = editor.textCursor()
+                    cursor.setPosition(max(0, min(int(cursor_position), len(text))))
+                    editor.setTextCursor(cursor)
+                except Exception as exc:
+                    _ = exc
+        # Automation hot path: app layout/media refresh can steal inline focus
+        # between appctl commands, so keep the last target available for commit.
+        restored = dict(getattr(self, "_automation_last_inline_edit_request", {}) or {})
+        restored.update({key: value for key, value in request.items() if key in {"cursor"}})
+        setattr(self, "_automation_last_inline_edit_request", restored)
+        return True
+
     def automation_set_inline_edit_cursor(self, position: int) -> dict[str, Any]:
         canvas = self._automation_canvas()
         editor = getattr(canvas, "_inline_editor", None) if canvas is not None else None
+        if canvas is None or editor is None or not bool(getattr(canvas, "_edit_active", False)):
+            if self._automation_restore_inline_edit_request():
+                canvas = self._automation_canvas()
+                editor = getattr(canvas, "_inline_editor", None) if canvas is not None else None
         if canvas is None or editor is None or not bool(getattr(canvas, "_edit_active", False)):
             raise ValueError("inline_edit_inactive")
         try:
@@ -680,6 +734,10 @@ class EditorAutomationMixin:
         if callable(sync):
             sync(text_changed=False)
         editor.setFocus()
+        request = getattr(self, "_automation_last_inline_edit_request", None)
+        if isinstance(request, dict):
+            request["cursor"] = target
+            setattr(self, "_automation_last_inline_edit_request", request)
         return {
             "cursor": target,
             "text_length": len(text),
@@ -689,11 +747,15 @@ class EditorAutomationMixin:
     def automation_commit_inline_edit(self) -> dict[str, Any]:
         canvas = self._automation_canvas()
         if canvas is None or not bool(getattr(canvas, "_edit_active", False)):
+            if self._automation_restore_inline_edit_request():
+                canvas = self._automation_canvas()
+        if canvas is None or not bool(getattr(canvas, "_edit_active", False)):
             raise ValueError("inline_edit_inactive")
         committer = getattr(canvas, "_commit_inline_edit_or_split", None)
         if not callable(committer):
             raise ValueError("inline_edit_unavailable")
         committer()
+        setattr(self, "_automation_last_inline_edit_request", None)
         return {
             "editor_runtime": self.automation_editor_state_snapshot(),
         }

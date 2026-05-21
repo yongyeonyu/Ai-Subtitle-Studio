@@ -402,11 +402,12 @@ output/manual_verification/latest/ui_compare/
 | App command/status | `tests.test_app_command_protocol`, `tests.test_app_command_bridge` | `appctl status`, `remote_verify capture` | current screen |
 | Home/sidebar/queue | `tests.test_cp03_cp04_status_ui`, `tests.test_sidebar_terminal_layout`, `tests.test_queue_signal_payloads` | queue-files, progress, completion | home, queue idle, queue processing |
 | Video player | `tests.test_video_player_widget`, `tests.test_audio_display` | play/pause/seek/frame counter | video controls |
-| Timeline paint/layout | `tests.test_timeline_paint_passes`, `tests.test_timeline_render_cache`, `tests.test_timeline_layout_constants`, `tests.test_editor_rendering_ownership_audit` | zoom, scroll, playhead, edge artifact check, `tools/audit_editor_rendering_ownership.py --json` | timeline full, timeline zoomed |
+| Timeline paint/layout | `tests.test_timeline_paint_passes`, `tests.test_timeline_render_cache`, `tests.test_timeline_layout_constants`, `tests.test_editor_rendering_ownership_audit` | zoom, scroll, playhead, edge artifact check, qwidget-2d owner inventory, `tools/audit_editor_rendering_ownership.py --json` | timeline full, timeline zoomed |
 | Segment editing | `tests.test_timeline_playhead_fit`, `tests.test_timeline_hit_targets`, `tests.test_editor_split_undo` | select, double click, split, inline edit, move boundary | selected, inline edit, split menu |
 | Context menu | `tests.test_context_menu_bounds`, `tests.test_popup_dismiss` | right click / menu action automation | context menu |
 | STT/VAD/audio | `tests.test_stt_ensemble`, `tests.test_stt_recheck_service`, `tests.test_stt_vad_ensemble`, `tests.test_media_processor_overlap` | generation smoke | queue processing, editor preview |
 | LLM/LoRA/quality | `tests.test_codex_provider`, `tests.test_subtitle_quality_pipeline`, `tests.test_lora_*` | high mode full media | completion |
+| Full media verifier | `tests.test_verify_full_media_pipeline` | Tinyping fast/auto/high 60s | `tinyping_full_verify.json` |
 | Roughcut | `tests.test_roughcut_*`, `tests.test_editor_roughcut_draft` | post-generation roughcut | roughcut view |
 | Project save/load | `tests.test_project_*`, `tests.test_editor_srt_open_refresh` | open project, save, reopen | editor restored |
 | Settings/dictionary | `tests.test_settings_*`, `tests.test_settings_dictionary` | open settings/dictionary | settings, dictionary |
@@ -605,10 +606,43 @@ git diff --check --
 - 고도화: 토글 직후 `editor_stt.enabled/state/recording/vad_running` status diff를 남기고, 녹음 시작/정지 시나리오와 단순 토글 시나리오를 분리한다.
 - 고도화: LoRA `run-now/pause/resume`는 즉시 ack와 settle 후 status를 분리 기록한다. 직후 status가 fallback이면 3초 후 재조회해 최종 runtime(`active`, `last_action`, `last_result`)을 따로 남긴다.
 
+14. 전체 화면 저장(홈/에디터/세그먼트/메뉴팝업/비디오/러프컷/종료)
+- 방법: `show-home`, `open-project`, `open-srt`, `editor-sequence` 핵심 액션을 순차 실행하고 각 단계마다 `capture-snapshot` 실행.
+- 저장 의무 화면:
+  - 홈: `home.png`
+  - 에디터(프로젝트 열기 후): `editor_after_open_project.png`
+  - 에디터(SRT 열기 후): `editor_after_open_srt.png`
+  - 세그먼트 편집: `editor_segment.png`
+  - 러프컷 후: `roughcut_after_start.png`
+  - 비디오 메뉴: `video_hidden.png`, `video_shown.png`
+  - 메뉴/팝업: `settings_dialog.png`, `speaker_dialog.png`, `dictionary_dialog.png`
+  - 종료 전: `final_home.png`, `final_editor.png`
+- 통과: 위 화면이 모두 생성되고, 각 PNG가 0B가 아닌 유효 파일.
+- 실패 시: 누락 항목은 해당 label로 즉시 `검토필요` 분류하고 `action item`에 등록.
+- 고도화: 최종 홈/에디터 캡처는 `final` 단계에서 1회씩 강제 생성해 전체 UI 저장 리포트를 고정한다.
+- 고도화: `status_snapshot_fallback` 동반 실패는 명령 성공/실패와 분리해 증빙.
+
+### 테스트 케이스 고도화 메모 - 2026-05-21
+
+- 실패 분류 3단계(강제):
+  - 기능 실패: `smart_split_unavailable`, `inline_edit_inactive`, `segment_not_found`처럼 명령 자체 precondition 실패/상태 불일치.
+  - 응답 지연: `command_timeout`, `app_unreachable`처럼 ack 또는 transport 이슈.
+  - 증빙 실패: PNG/파일 생성 지연으로 UI/산출물 증빙이 빠진 경우.
+- 각 실행은 위 3단계 중 어떤 단계인지 기록하고, 같은 항목이라도 단계가 다르면 서로 다른 검토항목으로 분리 등록한다.
+- 멀티클립은 `start accepted/queued`와 `status(row_count, done_rows, all_done)`를 분리해서 판정한다.
+- LoRA/STT 케이스는 모두 `ack`와 `최종 상태 동기화(>=3초 settle)`를 분리 저장한다.
+- 저장/내보내기 케이스는 `project/SRT/MOV 파일 존재성`과 `mtime bytes`를 함께 기록해야 통과로 간주한다.
+- 화면 저장 보강 규칙(최신):
+  - final 단계에 `snapshot-final_home`/`snapshot-final_editor`는 종료 전 강제 1회.
+  - 최종 스냅샷 단계에서 `app_unreachable` 발생 시 즉시 앱 재기동 후 1회 재시도.
+  - 재시도 결과 실패 시에도 최초 실행 evidence와 함께 원인 분류해서 검토요청.
+
 ### 테스트 케이스 자동 추가 규칙
 
 - 실행 중 항목이 빠진 경우 해당 항목을 먼저 `test_case.md`에 추가하고, 테스트를 즉시 1회 이상 실행한다.
 - 항목은 실패, 검토 필요, 통과를 각각 별도 라인에 남기고 다음 실행에서 회귀 판정 근거로 재사용한다.
+- 케이스를 추가할 때는 `실행 의도`, `증거 저장 위치`, `실패 분류`를 최소 1개 문장으로 고정한다.
+
 
 ### 테스트 케이스 고도화 메모 - 2026-05-20
 
@@ -651,9 +685,13 @@ git diff --check --
 4. 현재 runner 안정화 규칙
 - app sequence는 `major/full`에서 scenario 시작 전 app prepare를 수행한다.
 - 실행체는 최신 workspace 코드가 반영된 `dist/macos/AI Subtitle Studio.app`를 우선 사용한다.
+- 기존 앱 정리 시 `.app` 실행 파일뿐 아니라 bundled Python main(`dist/macos/AI Subtitle Studio.app/Contents/Resources/app/main.py`)도 기존 앱 프로세스로 본다.
+- zombie/종료 중 PID는 재시작 차단 사유가 아니며, alive process만 restart blocker로 남긴다.
 - `editor_compact_macau`는 고정 `1.5초` 대신 현재 `editor_runtime.active_segment`에서 동적 playhead를 계산한다.
 - `move_diamond`/`merge_diamond`는 현재 `diamond_left/right`의 `boundary_sec`를 기준으로 command를 조립한다.
 - `full_media`는 stdout 전체가 아니라 마지막 JSON line을 우선 파싱한다.
+- `full_media`는 spoken/non-trivial slice에서 `raw_segments=0` 또는 `final_segments=0`이면 실패다. 빈 자막은 속도 개선으로 인정하지 않는다.
+- `tinyping_fast_60s`, `tinyping_auto_60s`, `tinyping_high_60s`는 `result_path`의 `tinyping_full_verify.json`까지 확인하고 `verification_failure_reason`이 비어 있어야 한다.
 
 5. 고도화 메모
 - 큰 command surface 변경 뒤에는 `packaging/macos/build_app_bundle.sh`로 bundle을 먼저 갱신한다.

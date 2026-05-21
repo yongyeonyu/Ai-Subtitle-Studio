@@ -49,12 +49,73 @@ TEXT_RULES: tuple[dict[str, Any], ...] = (
     {
         "path": "ui/timeline/timeline_paint.py",
         "owner": "TimelinePaintMixin",
-        "required": ("def should_paint_subtitle_segment_text(", "if native_inline_active:", "return False"),
+        "backend": "qwidget-2d-painter-owner",
+        "required": (
+            "def should_paint_subtitle_segment_text(",
+            "if native_inline_active:",
+            "return False",
+            "def _draw_canvas_playhead(",
+            "build_cut_boundary_work_lane_paint_plan(",
+            "build_stt_preview_lane_paint_plan(",
+            "diamond_pairs = self._diamond_pairs()",
+            "shadow_playhead_sec = getattr(self, \"shadow_playhead_sec\", None)",
+        ),
         "forbidden": ("QOpenGLWidget", "QQuickWidget", "make_accelerated_viewport"),
+    },
+    {
+        "path": "ui/timeline/paint_passes.py",
+        "owner": "TimelinePaintPassPlanner",
+        "backend": "qwidget-2d-plan-only",
+        "required": (
+            "The painter still owns drawing",
+            "def build_cut_boundary_work_lane_paint_plan(",
+            "def build_gap_lane_paint_plan(",
+            "def build_stt_preview_lane_paint_plan(",
+            "def build_aggregate_vector_subtitle_paint_plan(",
+        ),
+        "forbidden": ("from PyQt6.QtGui import QPainter", "QPainter(", "QOpenGLWidget", "QQuickWidget", "make_accelerated_viewport"),
+    },
+    {
+        "path": "ui/editor/ux/timeline_input.py",
+        "owner": "TimelineInputHitTargets",
+        "backend": "qwidget-2d-input-only",
+        "required": (
+            "def _handle_polygon(",
+            "def _diamond_pairs(",
+            "def _playhead_handle_hit_rect(",
+            "def _emit_scrub_with_playhead_cut_magnet(",
+            "def _update_drag_visual_rect(",
+            "self.update(dirty)",
+        ),
+        "forbidden": ("QOpenGLWidget", "QQuickWidget", "make_accelerated_viewport", "scenegraph_enabled("),
+    },
+    {
+        "path": "ui/timeline/timeline_waveform.py",
+        "owner": "TimelineWaveformSource",
+        "backend": "waveform-data-source",
+        "required": (
+            "WAVEFORM_CACHE_SCHEMA",
+            "def _downsample_waveform_raw(",
+            "def patch_waveform_buffer(",
+            "class WaveformWorker(QThread):",
+        ),
+        "forbidden": ("from PyQt6.QtGui import QPainter", "QPainter(", "QOpenGLWidget", "QQuickWidget", "make_accelerated_viewport"),
+    },
+    {
+        "path": "ui/timeline/stt_preview_layout.py",
+        "owner": "STTPreviewLaneLayout",
+        "backend": "qwidget-2d-layout-only",
+        "required": (
+            "MAX_STT_PREVIEW_SUBLANES",
+            "def assign_stt_preview_lanes(",
+            "def stt_preview_lane_geometry(",
+        ),
+        "forbidden": ("from PyQt6.QtGui import QPainter", "QPainter(", "QOpenGLWidget", "QQuickWidget", "make_accelerated_viewport"),
     },
     {
         "path": "ui/editor/ux/timeline_inline_text_editor.py",
         "owner": "TimelineInlineTextEdit",
+        "backend": "opaque-qwidget",
         "required": (
             'self.setObjectName("timelineInlineTextEdit")',
             'self.setProperty("timelineInlineEditorRole", "segment-inline-locked")',
@@ -66,6 +127,7 @@ TEXT_RULES: tuple[dict[str, Any], ...] = (
     {
         "path": "ui/gpu_rendering.py",
         "owner": "GpuRenderingGate",
+        "backend": "explicit-diagnostic-gate",
         "required": (
             "explicit diagnostics only",
             "editor_rendering_scenegraph_opt_in_enabled",
@@ -88,7 +150,12 @@ def audit_editor_rendering_ownership(root: Path | None = None) -> dict[str, Any]
             {
                 "path": rel_path,
                 "owner": str(rule["owner"]),
-                "backend": "qwidget-2d" if "timeline" in rel_path or "gpu_rendering" in rel_path else "opaque-qwidget",
+                "backend": str(
+                    rule.get(
+                        "backend",
+                        "qwidget-2d" if "timeline" in rel_path or "gpu_rendering" in rel_path else "opaque-qwidget",
+                    )
+                ),
             }
         )
         if not text:

@@ -19,14 +19,65 @@
 - 반복하면 안 되는 진단/실험/운영 실수는 `lesson_n_learned.md`에 남긴다.
 - 정상 완료된 idea/action/native item은 이 파일에서 삭제한다. 완료 이력은 필요할 때만 `test_result.md`, release note, `output/manual_verification/latest/`, `waste_action_item.md`, 또는 `lesson_n_learned.md`에 남긴다.
 
+## automation-4 검토 요청 항목 (추가/강화 2026-05-21)
+
+- [검토필요] `automation4_full_ux_20260521_101007`: `editor-begin-smart-split`, `editor-set-inline-cursor`, `editor-commit-inline-edit` 실패.
+  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
+  - 실패 원인: `smart_split_unavailable`, `inline_edit_inactive`.
+  - 액션: `editor_runtime.smart_split_ready`/`editor_runtime.inline_edit_active` precondition 실패를 기능 실패와 분리해 기록.
+
+- [검토필요] `automation4_full_ux_20260521_101007`: `editor-move-diamond`, `editor-merge-diamond` 실패.
+  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
+  - 실패 원인: `segment_not_found`.
+  - 액션: compact action 후 `diamond` boundary source와 segment graph를 재확인하는 guard 추가.
+
+- [검토필요] `automation4_full_ux_20260521_101007`: `export-subtitle-video`, `snapshot-after_save_export`, `snapshot-final_home`, `snapshot-final_editor` 실패.
+  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
+  - 실패 원인: 저장 후 상태 수렴 지연/`app_unreachable`/`command_timeout`.
+  - 액션: 저장 산출물 존재성·mtime 검사와 final snapshot 타임아웃 재시도 정책 분리.
+
+- [검토필요] `automation4_full_ux_20260521_101007`: `stt-enable`, `stt-disable`, `lora-run-now`, `lora-pause`, `lora-resume` 실패.
+  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
+  - 실패 원인: command timeout 집중 구간.
+  - 액션: STT/LoRA 명령은 ack-accepted와 settled-status 2단계로 분리.
+
+- [검토필요] `automation4_full_ux_20260521_101007`: `start-multiclip`, `open-home-before-multiclip` 실패.
+  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
+  - 실패 원인: 멀티클립 시작/이동 중 app_unreachable 또는 command timeout.
+  - 액션: 멀티클립은 `start accepted/queued` + `status(row_count, done_rows, all_done)` 분리 판정 표준화.
+
+## automation-4 검토 요청 항목 (2026-05-21)
+
+- [검토필요] `automation4_coverage_run`에서 `editor-move-diamond`, `editor-merge-diamond`가 실패.
+  - 증거: `output/manual_verification/latest/automation4_coverage_run/coverage_summary.json`
+  - 분류: precondition/상태 경계( inline edit + boundary sync ) 영향 가능성.
+  - 액션: `editor_runtime.smart_split_ready`와 `editor_runtime.inline_edit_active` 기준으로 실패 단계별 회귀 패턴 재정의.
+
+- [검토필요] `start-multiclip-fast`, `wait-multiclip-done`가 `app_unreachable`/타임아웃 실패로 종료.
+  - 증거: `output/manual_verification/latest/automation4_coverage_run/coverage_summary.json`
+  - 분류: 통신 타임아웃/상태 수렴 분리 필요.
+  - 액션: `start accepted/queued`와 실제 큐 수렴(`done_rows`, `all_done`)을 분리 판정하는 커맨드 표준 정립.
+
+- [검토필요] `export-subtitle-video`, `snapshot-after_save_export`, `snapshot-final_home`, `snapshot-final_editor` 실패.
+  - 증거: `output/manual_verification/latest/automation4_coverage_run/coverage_summary.json`
+  - 분류: 저장 후 상태 확인 단계에서 응답성 저하.
+  - 액션: 저장 산출물(stat) 기반 검증과 최종 스냅샷 타임아웃 재시도 정책을 고정.
+
 ## Current Baseline Notes
 
 - 유지 후보: `candidate1`
 - 유지 이유: subtitle quality를 유지하면서 X5 평균 시간이 가장 안정적이었다.
 - 최신 실행 브랜치: `opt/one-shot-quality-speed-20260521-0228`
-- 최신 완료 배치: Phase 2/3/5/5.5 rendering-default execution batch
+- 최신 완료 배치: Phase 2/3/5/5.5 rendering-default execution batch + QA verdict hardening
 - 최신 산출물: `output/manual_verification/latest/idea_full_execute_20260521-0821/summary.md`
 - 최신 검증:
+  - `tools/audit_editor_rendering_ownership.py --json`: `ok=true` with TimelineCanvas/GlobalCanvas/TimelineWidget/PaintMixin/PaintPassPlanner/InputHitTargets/WaveformSource/STTPreviewLaneLayout/InlineTextEdit/GpuRenderingGate inventory
+  - `tests.test_editor_rendering_ownership_audit`: `2 tests OK`
+  - `tools/qa_suite_runner.py major`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_major_20260521_102240`
+  - `tools/qa_suite_runner.py full`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_full_20260521_102341`
+  - spoken `full_media` verifier: raw/final subtitle가 0개인 non-trivial slice는 더 이상 pass 처리하지 않는다.
+  - app runner bootstrap: bundled Python main process(`dist/macos/AI Subtitle Studio.app/Contents/Resources/app/main.py`)와 zombie/종료 중 PID를 구분한다.
+  - editor automation: smart split 중 layout/media refresh가 inline edit focus를 훔쳐도 마지막 inline edit request를 복구한다.
   - `tests.test_action_item_runtime_services`, `tests.test_project_runtime_capture`, `tests.test_runtime_multi_process`, `tests.test_media_processor_overlap`, `tests.test_ollama_provider`, `tests.test_timeline_hit_targets`, `tests.test_timeline_render_cache`: `248 tests OK`
   - `tools/check_maintenance_budget.py --json`: `ok=true`
   - `tools/qa_suite_runner.py quick`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_quick_20260521_082403`
@@ -44,6 +95,7 @@
   - Tinyping fast 60s: total `22.326s`, pipeline `9.804s`, final/raw `18/15`
   - Tinyping auto 60s: total `44.152s`, pipeline `9.833s`, final/raw `18/15`
   - Tinyping high 60s: total `19.526s`, pipeline `19.431s`, final/raw `16/16`
+  - Latest full QA Tinyping fast/auto/high 60s: pipeline `9.860s/10.230s/26.262s`, total `22.553s/46.169s/26.364s`, peak RSS `436256768/783925248/1575256064`, final/raw `18/15`, `18/15`, `16/16`
 - 현재 선택:
   - 기존 `candidate1` 품질 보존 파이프라인을 유지한다.
   - 이번 배치의 stage-owned STT/LLM resource policy, quarter prescan metadata, opaque 2D inline editor 안정화는 채택한다.
@@ -225,9 +277,12 @@ Already done:
 - 완료 검증: `tests.test_gpu_rendering`, `tests.test_project_context`, `tests.test_timeline_render_cache`, 관련 runtime/native tests.
 - 2026-05-21 4차 구현 완료: `tools/audit_editor_rendering_ownership.py`를 추가해 TimelineCanvas/GlobalCanvas/TimelineWidget/PaintMixin/inline editor/GPU gate가 qwidget-2d owner 원칙을 어기면 실패하도록 했다.
 - 완료 검증: `tools/audit_editor_rendering_ownership.py --json`, `tests.test_editor_rendering_ownership_audit`.
+- 2026-05-21 5차 구현 완료: 렌더링 inventory 가드를 segment text painter, cut diamond, shadow playhead, STT preview lane planner, waveform data source, timeline input hit target까지 확대했다.
+- 완료 검증: `tools/audit_editor_rendering_ownership.py --json`, `tests.test_editor_rendering_ownership_audit`, 공식 `full` QA `output/manual_verification/latest/qa_suite_full_20260521_102341`.
+- 2026-05-21 6차 구현 완료: `full_media` verifier가 spoken slice의 `raw/final=0/0`을 pass로 오판하지 않게 막고, bundled app process 재시작 감지와 editor inline automation 복구를 추가했다.
+- 완료 검증: `tests.test_qa_suite_runner`, `tests.test_verify_full_media_pipeline`, `tests.test_editor_automation`, 공식 `major/full` QA.
 
 Remaining follow-up:
-- editor rendering inventory coverage를 확대한다: segment creation/drag handles, cut-boundary diamonds, waveform/minimap, STT preview lanes가 동일 paint pass/z-order 원칙을 유지하는지 추가 규칙으로 보강한다.
 - 모든 에디터 paint는 single 2D owner 원칙으로 정리한다. 같은 시각 요소를 QML overlay, child widget, scenegraph, canvas paint가 동시에 그리지 않게 한다.
 - inline subtitle editing은 opaque Qt child widget 경로로 고정했다. 남은 작업은 다른 편집 표면에 투명 child widget/segment text 동시 paint가 남아 있는지 inventory로 확인하는 것이다.
 - playhead, shadow playhead, selected segment, hover handle, cut diamond는 한 paint pass에서 z-order를 고정한다. 클릭/드래그/키보드 이동은 색상/모드를 렌더러가 재해석하지 않고 canonical state만 읽는다.

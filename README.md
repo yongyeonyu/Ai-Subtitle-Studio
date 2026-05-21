@@ -163,7 +163,9 @@ Operational rules:
 
 - `editor_compact_macau` is fixture-adaptive: it resolves playhead and diamond boundaries from live editor status instead of assuming a fixed timestamp.
 - `full` parses the final JSON line from `verify_full_media_pipeline.py`, so progress logs in stdout do not invalidate the suite result.
-- Editor/timeline rendering ownership can be checked without launching the app:
+- `full_media` verification fails spoken/non-trivial slices that return zero raw or final subtitles; a fast empty output is not a valid pass.
+- The runner treats the bundled Python entrypoint at `dist/macos/AI Subtitle Studio.app/Contents/Resources/app/main.py` as an app process when restarting stale bundles.
+- Editor/timeline rendering ownership and qwidget-2d paint inventory can be checked without launching the app:
 
 ```bash
 ./venv/bin/python tools/audit_editor_rendering_ownership.py --json

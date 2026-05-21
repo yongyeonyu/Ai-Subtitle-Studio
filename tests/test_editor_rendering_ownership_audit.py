@@ -12,6 +12,20 @@ class EditorRenderingOwnershipAuditTests(unittest.TestCase):
         self.assertIn("TimelineCanvas", owners)
         self.assertIn("TimelineInlineTextEdit", owners)
         self.assertIn("GpuRenderingGate", owners)
+        self.assertIn("TimelinePaintPassPlanner", owners)
+        self.assertIn("TimelineInputHitTargets", owners)
+        self.assertIn("TimelineWaveformSource", owners)
+        self.assertIn("STTPreviewLaneLayout", owners)
+
+    def test_editor_rendering_ownership_audit_covers_paint_surface_inventory(self):
+        report = audit_editor_rendering_ownership()
+
+        inventory = {item["owner"]: item["backend"] for item in report["inventory"]}
+        self.assertEqual(inventory["TimelinePaintMixin"], "qwidget-2d-painter-owner")
+        self.assertEqual(inventory["TimelinePaintPassPlanner"], "qwidget-2d-plan-only")
+        self.assertEqual(inventory["TimelineInputHitTargets"], "qwidget-2d-input-only")
+        self.assertEqual(inventory["TimelineWaveformSource"], "waveform-data-source")
+        self.assertEqual(inventory["STTPreviewLaneLayout"], "qwidget-2d-layout-only")
 
 
 if __name__ == "__main__":

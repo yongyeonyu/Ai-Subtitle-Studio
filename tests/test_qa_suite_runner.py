@@ -107,6 +107,55 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertEqual(result["mode"], "restart_app_per_scenario")
         restart_app.assert_called_once()
 
+    def test_run_full_media_rejects_verifier_empty_subtitle_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "tinyping_auto_60s"
+            spec = {
+                "id": "tinyping_auto_60s",
+                "type": "full_media",
+                "description": "Tinyping auto verification for 60 seconds.",
+                "output_dir": output_dir,
+                "media": "/tmp/media.mp4",
+                "mode": "auto",
+                "duration_sec": 60.0,
+            }
+            payload = {
+                "ok": False,
+                "mode": "auto",
+                "final_segment_count": 0,
+                "raw_segment_count": 0,
+                "failure_reason": "empty_subtitle_output:raw_segments_zero",
+            }
+            with patch("tools.qa_suite_runner._run_subprocess", return_value=(1, payload)):
+                result = qa_suite_runner._run_full_media(spec, qa_suite_runner.DEFAULT_PYTHON)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failed_step"], "full_media")
+        self.assertEqual(result["result"]["failure_reason"], "empty_subtitle_output:raw_segments_zero")
+
+    def test_main_app_pids_includes_bundle_python_main(self):
+        calls = []
+
+        def _fake_run(argv, capture_output=True, text=True):
+            calls.append(list(argv))
+            pattern = str(argv[-1])
+            stdout = "123\n" if pattern == str(qa_suite_runner.APP_BUNDLE_MAIN) else ""
+            returncode = 0 if stdout else 1
+            return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
+
+        import subprocess
+
+        with patch("tools.qa_suite_runner.subprocess.run", side_effect=_fake_run):
+            pids = qa_suite_runner._main_app_pids()
+
+        self.assertEqual(pids, [123])
+        searched_patterns = [call[-1] for call in calls]
+        self.assertIn(str(qa_suite_runner.APP_BUNDLE_MAIN), searched_patterns)
+
+    def test_wait_for_pids_exit_treats_non_alive_restart_pid_as_finished(self):
+        with patch("tools.qa_suite_runner._pid_alive_for_restart", return_value=False):
+            self.assertTrue(qa_suite_runner._wait_for_pids_exit([123], timeout_sec=0.5))
+
 
 if __name__ == "__main__":
     unittest.main()

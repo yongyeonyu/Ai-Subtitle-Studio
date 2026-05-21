@@ -1,5 +1,144 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## idea_item 최종 실행 QA 가드 보강 및 full 재검증 - 2026-05-21 10:12~10:26
+
+- 실행 모드: Major / Full
+- 결과:
+  - Major: pass, `output/manual_verification/latest/qa_suite_major_20260521_102240`
+  - Full: pass, `output/manual_verification/latest/qa_suite_full_20260521_102341`
+- 최종 `full` scenario:
+  - `editor_compact_macau`: pass
+  - `video_menu_macau`: pass
+  - `save_export_macau`: pass
+  - `menu_stt_lora_macau`: pass
+  - `tinyping_fast_60s`: pass (`total_elapsed_sec=22.553`, `pipeline_elapsed_sec=9.860`, `peak_rss_bytes=436256768`, `final/raw=18/15`)
+  - `tinyping_auto_60s`: pass (`total_elapsed_sec=46.169`, `pipeline_elapsed_sec=10.230`, `peak_rss_bytes=783925248`, `final/raw=18/15`)
+  - `tinyping_high_60s`: pass (`total_elapsed_sec=26.364`, `pipeline_elapsed_sec=26.262`, `peak_rss_bytes=1575256064`, `final/raw=16/16`)
+- 실패 원인 분류 및 조치:
+  - code regression: `verify_full_media_pipeline.py`가 spoken slice에서 `raw/final=0/0`이어도 pass로 집계할 수 있는 문제를 수정. 이후 non-trivial spoken slice는 자막 0개면 `empty_subtitle_output:*`로 실패한다.
+  - environment-bundle issue: stale bundled Python process(`dist/macos/AI Subtitle Studio.app/Contents/Resources/app/main.py`)를 runner가 기존 앱으로 인식하지 못하던 문제를 수정. zombie/종료 중 PID는 restart blocker로 보지 않는다.
+  - code regression: editor automation 중 layout/media refresh가 inline edit focus를 훔치면 `set_inline_cursor`/`commit_inline_edit`가 실패하던 문제를 마지막 smart-split request 복구로 수정.
+- 코드 수정 여부: 있음.
+  - QA verdict hardening, app bundle process restart detection, editor inline automation restore.
+- 문서 반영 여부: 있음.
+  - `test_case.md`, `README.md`, `idea_item.md`, `lesson_n_learned.md`, `waste_action_item.md`에 QA/렌더링/폐기 기준 반영.
+- 남은 위험:
+  - `automation4_full_ux_20260521_101007`의 추가 커버리지 항목은 공식 `major/full`과 별도 성격이라, 전용 automation-4 runner 재실행으로 다시 닫아야 한다.
+  - aggressive quarter-overlap STT/LLM은 품질 barrier 전까지 default로 켜지지 않았다.
+
+## automation-4 전체 UX + 팝업/메뉴/화면저장 보강 실행 - 2026-05-21 10:07~10:11
+
+- 실행 모드: full 기준 커버리지를 유지한 상태에서 팝업/메뉴/화면저장 의무 화면을 모두 통합 수집.
+- 실행 대상:
+  - 실행 폴더 1: `/Users/u_mo_c/Downloads/ai_subtitle_studio/output/manual_verification/latest/qa_suite_full_20260521_100216`
+  - 실행 폴더 2: `/Users/u_mo_c/Downloads/ai_subtitle_studio/output/manual_verification/latest/automation4_full_ux_20260521_101007`
+- 결과 분류:
+  - O: 43
+  - X: 0
+  - 검토필요: 14
+- 검토필요 목록(우선순위별):
+  - editor-begin-smart-split (`smart_split_unavailable`)
+  - editor-set-inline-cursor (`inline_edit_inactive`)
+  - editor-commit-inline-edit (`inline_edit_inactive`)
+  - editor-move-diamond (`segment_not_found`)
+  - editor-merge-diamond (`segment_not_found`)
+  - export-subtitle-video (`command_timeout`)
+  - stt-enable (`command_timeout`)
+  - stt-disable (`command_timeout`)
+  - lora-run-now (`command_timeout`)
+  - lora-pause (`command_timeout`)
+  - lora-resume (`command_timeout`)
+  - start-multiclip (`command_timeout`)
+  - open-home-before-multiclip (`app_unreachable`)
+  - snapshot-after_save_export (`app_unreachable`)
+  - snapshot-final_home (`app_unreachable`)
+- 비고: 본 run은 `command_timeout`과 `app_unreachable`를 기능 실패와 분리해 추적하고, 아래 `idea_item`에 분류별 조치 요청으로 등록.
+- 산출물:
+  - `/Users/u_mo_c/Downloads/ai_subtitle_studio/output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
+  - `/Users/u_mo_c/Downloads/ai_subtitle_studio/output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_steps.jsonl`
+  - `/Users/u_mo_c/Downloads/ai_subtitle_studio/output/manual_verification/latest/automation4_full_ux_20260521_101007/*.png`
+
+### 화면 저장 의무 항목(실행 보강)
+
+- 저장된 핵심 화면:
+  - `home.png`
+  - `editor_after_open_project.png`
+  - `editor_after_open_srt.png`
+  - `editor_segment.png`
+  - `roughcut_after_start.png`
+  - `playback_play.png`
+  - `playback_pause.png`
+  - `settings_dialog.png`
+  - `speaker_dialog.png`
+  - `dictionary_capture2.png`
+  - `dictionary_dialog.png`
+  - `final_home.png`
+  - `final_editor.png`
+  - `video_hidden.png`
+  - `video_shown.png`
+- 미생성 또는 무효(0B) 화면이 확인되면 우선 `검토필요`에서 분리.
+
+## automation-4 full + 화면 저장 커버리지 실행 - 2026-05-21 10:02~10:06
+
+- 실행 모드: full + 보완 커버리지
+- 실행 대상 fixture:
+  - 타이니핑 60초 기준 full: `tools/qa_suite_runner.py full`
+  - 화면 저장/메뉴/러프컷 보강: `/Users/u_mo_c/Downloads/ai_subtitle_studio/output/manual_verification/latest/automation4_coverage_run`
+- 결과 분류:
+  - O: `editor_compact_macau`, `video_menu_macau`, `save_export_macau`, `menu_stt_lora_macau`, `tinyping_fast_60s`, `tinyping_auto_60s`, `tinyping_high_60s`
+  - X: 없음
+  - 검토필요: `editor-move-diamond`, `editor-merge-diamond`, `start-multiclip-fast`, `wait-multiclip-done`, `export-subtitle-video`, `snapshot-after_save_export`, `snapshot-final_home`, `snapshot-final_editor`
+- 핵심 산출물:
+  - `output/manual_verification/latest/qa_suite_full_20260521_100216` (full pass: passed 7/7)
+  - `output/manual_verification/latest/automation4_coverage_run/coverage_summary.json`
+  - `output/manual_verification/latest/automation4_coverage_run/*.png`
+- 안되는 항목 분류:
+  - 기능 동작/상태 분리 필요: `editor-move-diamond`, `editor-merge-diamond`, `export-subtitle-video`
+  - 통신/타임아웃 의심: `start-multiclip-fast`, `wait-multiclip-done`, `snapshot-after_save_export`, `snapshot-final_home`, `snapshot-final_editor`
+- 검토 요청:
+  - 위 8개 항목은 `idea_item.md`에 검토 요청 항목으로 등록했다.
+
+### 참고
+
+- 자동으로 저장된 메뉴/상태 화면:
+  - `automation4_coverage_run/home.png`
+  - `automation4_coverage_run/editor_after_open_project.png`
+  - `automation4_coverage_run/editor_after_open_srt.png`
+  - `automation4_coverage_run/editor_segment.png`
+  - `automation4_coverage_run/settings_capture.png`
+  - `automation4_coverage_run/speaker_capture.png`
+  - `automation4_coverage_run/dictionary_capture.png`
+  - `automation4_coverage_run/dictionary_capture2.png`
+  - `automation4_coverage_run/playback_play.png`
+  - `automation4_coverage_run/playback_pause.png`
+  - `automation4_coverage_run/roughcut_after_start.png`
+  - `automation4_coverage_run/video_hidden.png`
+  - `automation4_coverage_run/video_shown.png`
+
+## idea_item 최종 full QA 및 렌더링 inventory 가드 - 2026-05-21 09:52
+
+- 브랜치: `opt/one-shot-quality-speed-20260521-0228`
+- 코드 반영:
+  - `tools/audit_editor_rendering_ownership.py` coverage를 segment text painter, cut diamond, shadow playhead, STT preview lane plan, waveform data source, timeline input hit target까지 확장.
+  - 동작/UI 레이아웃 변경 없음. 기존 Qt Widgets/QPainter 2D 기본값을 벗어나는 회귀를 잡는 가드만 추가.
+- 단위/가드:
+  - `py_compile`: pass
+  - `tools/audit_editor_rendering_ownership.py --json`: `ok=true`
+  - `tests.test_editor_rendering_ownership_audit`: `2 tests OK`
+- 공식 QA:
+  - `tools/qa_suite_runner.py full`: pass, `output/manual_verification/latest/qa_suite_full_20260521_095045`
+- `full` scenario 요약:
+  - `editor_compact_macau`: pass
+  - `video_menu_macau`: pass
+  - `save_export_macau`: pass
+  - `menu_stt_lora_macau`: pass
+  - `tinyping_fast_60s`: pass (`total_elapsed_sec=22.291`, `pipeline_elapsed_sec=9.875`, `final/raw=18/15`)
+  - `tinyping_auto_60s`: pass (`total_elapsed_sec=44.681`, `pipeline_elapsed_sec=9.908`, `final/raw=18/15`)
+  - `tinyping_high_60s`: pass (`total_elapsed_sec=18.856`, `pipeline_elapsed_sec=18.763`, `final/raw=16/16`)
+- 분류:
+  - 실패 없음.
+  - code regression/fixture drift/environment-bundle issue 없음.
+
 ## idea_item Phase 5.5 2D UI 렌더링 기본값 보정 - 2026-05-21 09:42
 
 - 브랜치: `opt/one-shot-quality-speed-20260521-0228`

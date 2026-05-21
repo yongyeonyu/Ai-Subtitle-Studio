@@ -46,3 +46,9 @@
   품질: quality `71.514`, final segment `17`로 기준 `mode_high_piecewise_drift` quality `72.989`, final segment `24`보다 낮았다.
   결론: `mode_fast`는 Fast 모드 속도 후보로는 유지하되, 품질 동일 조건의 최종 기본 알고리즘으로 승격하지 않는다.
   artifact: `output/manual_verification/latest/idea_full_execute_20260521-0821/x5_modes_repeat10_quality_gate/repeat_summary.md`
+
+- `empty_subtitle_output_as_speed_pass`: `full_media`에서 자막 0개 산출을 빠른 pass로 집계하는 방향
+  결과: `qa_suite_full_20260521_100107`에서 `tinyping_auto_60s`가 `raw/final=0/0`인데 pass로 보일 수 있었다.
+  품질: 실제 자막 산출이 없으므로 품질 보존 조건을 만족하지 않는다.
+  결론: spoken/non-trivial slice의 raw 또는 final subtitle 0개는 무조건 실패다. 속도 개선 후보로 취급하지 않는다.
+  artifact: `output/manual_verification/latest/qa_suite_full_20260521_100107`
