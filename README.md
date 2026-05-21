@@ -149,7 +149,7 @@ Current verified baseline:
 
 - `quick`: `qa_suite_quick_20260521_113130`
 - `major`: `qa_suite_major_20260521_110523`
-- `full`: `qa_suite_full_20260521_110628`
+- `full`: `qa_suite_full_20260521_113718`
 
 Operational rules:
 

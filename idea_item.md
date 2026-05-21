@@ -25,7 +25,7 @@
 - 유지 이유: subtitle quality를 유지하면서 X5 평균 시간이 가장 안정적이었다.
 - 최신 실행 브랜치: `opt/one-shot-quality-speed-20260521-0228`
 - 최신 완료 배치: 2D rendering ownership inventory + automation command QA hardening
-- 최신 산출물: `output/manual_verification/latest/qa_suite_quick_20260521_111623`
+- 최신 산출물: `output/manual_verification/latest/qa_suite_full_20260521_113718`
 - 최신 검증:
   - rendering ownership audit 확장: subtitle text QML overlay, video control bar QML, video subtitle QML, timeline scenegraph layer가 explicit diagnostic/scenegraph gate 뒤에 있는지 검사.
   - paint ordering audit 확장: subtitle score -> diamond -> shadow/drag-shadow playhead -> final playhead handle 순서 고정 검사.
@@ -62,7 +62,7 @@
   - Tinyping fast 60s: total `22.326s`, pipeline `9.804s`, final/raw `18/15`
   - Tinyping auto 60s: total `44.152s`, pipeline `9.833s`, final/raw `18/15`
   - Tinyping high 60s: total `19.526s`, pipeline `19.431s`, final/raw `16/16`
-  - Latest full QA Tinyping fast/auto/high 60s: pipeline `9.843s/10.523s/25.465s`, total `22.229s/43.163s/25.561s`, peak RSS `431652864/761839616/813219840`, final/raw `18/15`, `18/15`, `16/16`
+  - Latest full QA Tinyping fast/auto/high 60s: pipeline `10.015s/9.993s/25.596s`, total `22.563s/43.851s/25.689s`, peak RSS `460652544/788611072/1299939328`, final/raw `18/15`, `18/15`, `16/16`
 - 현재 선택:
   - 기존 `candidate1` 품질 보존 파이프라인을 유지한다.
   - 이번 배치의 stage-owned STT/LLM resource policy, quarter prescan metadata, opaque 2D inline editor 안정화는 채택한다.
@@ -339,6 +339,11 @@ Work:
 - 반복 금지 lesson은 `lesson_n_learned.md`에 정리.
 - 정상 완료된 실행 항목은 `idea_item.md`, `ACTION_ITEMS.md`, `NATIVE_LIB_PLAN.md`에서 삭제한다.
 - App Store Connect upload blocker와 future iPadOS reuse는 blocked/future lane으로만 기록.
+
+Already done:
+- 2026-05-21 최종 선택 완료: X5 10회 품질 gate를 기준으로 `mode_high_piecewise_drift`를 품질 동일 최종 후보로 고정했다.
+- 완료 범위: `mode_fast`, STT1/STT2 full-parallel, native policy helper default 승격 후보는 `waste_action_item.md` 기준으로 폐기 유지. Qt Widgets/QPainter 2D editor rendering과 status/QA hardening은 채택 유지.
+- 완료 검증: 공식 `full` QA `output/manual_verification/latest/qa_suite_full_20260521_113718`, 최종 요약 `output/manual_verification/latest/idea_full_execute_20260521-1137/summary.md`.
 
 Mandatory QA:
 - `./venv/bin/python tools/qa_suite_runner.py quick`

@@ -1,5 +1,28 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Phase 8 최종 full QA 및 알고리즘 선택 - 2026-05-21 11:37~11:39
+
+- 실행 모드: Full
+- 결과:
+  - Full: pass, `output/manual_verification/latest/qa_suite_full_20260521_113718`
+  - 최종 요약: `output/manual_verification/latest/idea_full_execute_20260521-1137/summary.md`
+- 최종 `full` scenario:
+  - `editor_compact_macau`: pass
+  - `video_menu_macau`: pass
+  - `save_export_macau`: pass
+  - `menu_stt_lora_macau`: pass
+  - `tinyping_fast_60s`: pass (`total_elapsed_sec=22.563`, `pipeline_elapsed_sec=10.015`, `peak_rss_bytes=460652544`, `final/raw=18/15`)
+  - `tinyping_auto_60s`: pass (`total_elapsed_sec=43.851`, `pipeline_elapsed_sec=9.993`, `peak_rss_bytes=788611072`, `final/raw=18/15`)
+  - `tinyping_high_60s`: pass (`total_elapsed_sec=25.689`, `pipeline_elapsed_sec=25.596`, `peak_rss_bytes=1299939328`, `final/raw=16/16`)
+- 최종 선택:
+  - X5 10회 품질 gate를 기준으로 품질 동일 최종 후보는 `mode_high_piecewise_drift`.
+  - `mode_fast`는 빠르지만 품질 gate 실패로 기본 알고리즘 승격 제외.
+  - STT1/STT2 full-parallel과 native policy helper default 승격은 `waste_action_item.md` 기준으로 폐기 유지.
+- 코드 수정 여부: 없음. 최종 검증/문서 정리.
+- 문서 반영 여부: 있음. `idea_item.md`, `README.md`, `test_result.md`.
+- 남은 위험:
+  - Tinyping long high 1회와 별도 UI snapshot diff 자동화는 시간상 이번 최종 full에는 포함하지 못했다.
+
 ## Phase 7 도움말 QA coverage 매핑 - 2026-05-21 11:35
 
 - 실행 모드: Targeted
