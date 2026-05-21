@@ -25,6 +25,36 @@ TEXT_RULES: tuple[dict[str, Any], ...] = (
         "forbidden": ("QOpenGLWidget", "QQuickWidget", "accelerated_widget_base", "make_accelerated_viewport"),
     },
     {
+        "path": "ui/timeline/timeline_canvas.py",
+        "owner": "TimelineSingleOwnerPlayheadInvalidation",
+        "backend": "qwidget-2d-full-canvas-repaint",
+        "required": (
+            "def set_playhead(self, sec):",
+            "def set_shadow_playhead(self, sec) -> bool:",
+            "def set_drag_shadow_playhead(self, sec) -> bool:",
+            "def _update_dirty_rect(self, rect: QRect):",
+        ),
+        "required_count": (
+            {
+                "pattern": "if self._timeline_uses_single_owner_2d():",
+                "min": 4,
+            },
+            {
+                "pattern": "self.update()\n            return",
+                "min": 1,
+            },
+            {
+                "pattern": "self.update()\n            return True",
+                "min": 2,
+            },
+            {
+                "pattern": "self.update()\n            self._notify_scenegraph_layer()\n            return",
+                "min": 1,
+            },
+        ),
+        "forbidden": ("QOpenGLWidget", "QQuickWidget", "accelerated_widget_base", "make_accelerated_viewport"),
+    },
+    {
         "path": "ui/timeline/timeline_global.py",
         "owner": "GlobalCanvas",
         "required": (
@@ -227,6 +257,21 @@ def audit_editor_rendering_ownership(root: Path | None = None) -> dict[str, Any]
         for pattern in rule.get("required", ()):
             if str(pattern) not in text:
                 issues.append({"path": rel_path, "owner": rule["owner"], "reason": "missing_required", "pattern": str(pattern)})
+        for spec in rule.get("required_count", ()):
+            pattern = str(spec["pattern"])
+            minimum = int(spec.get("min", 1))
+            actual = text.count(pattern)
+            if actual < minimum:
+                issues.append(
+                    {
+                        "path": rel_path,
+                        "owner": rule["owner"],
+                        "reason": "insufficient_required_count",
+                        "pattern": pattern,
+                        "expected_min": minimum,
+                        "actual": actual,
+                    }
+                )
         for pattern in rule.get("forbidden", ()):
             if str(pattern) in text:
                 issues.append({"path": rel_path, "owner": rule["owner"], "reason": "forbidden_pattern", "pattern": str(pattern)})

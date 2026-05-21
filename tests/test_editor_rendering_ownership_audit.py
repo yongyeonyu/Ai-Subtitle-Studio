@@ -21,6 +21,7 @@ class EditorRenderingOwnershipAuditTests(unittest.TestCase):
         self.assertIn("VideoSubtitleOverlayQmlGate", owners)
         self.assertIn("TimelineSceneGraphLayerGate", owners)
         self.assertIn("TimelinePaintOrder", owners)
+        self.assertIn("TimelineSingleOwnerPlayheadInvalidation", owners)
 
     def test_editor_rendering_ownership_audit_covers_paint_surface_inventory(self):
         report = audit_editor_rendering_ownership()
@@ -36,6 +37,14 @@ class EditorRenderingOwnershipAuditTests(unittest.TestCase):
         self.assertEqual(inventory["VideoSubtitleOverlayQmlGate"], "explicit-diagnostic-gate")
         self.assertEqual(inventory["TimelineSceneGraphLayerGate"], "explicit-scenegraph-gate")
         self.assertEqual(inventory["TimelinePaintOrder"], "qwidget-2d-painter-owner")
+        self.assertEqual(inventory["TimelineSingleOwnerPlayheadInvalidation"], "qwidget-2d-full-canvas-repaint")
+
+    def test_single_owner_playhead_invalidation_stays_full_canvas_repaint(self):
+        report = audit_editor_rendering_ownership()
+
+        self.assertTrue(report["ok"], report["issues"])
+        owners = {item["owner"] for item in report["inventory"]}
+        self.assertIn("TimelineSingleOwnerPlayheadInvalidation", owners)
 
 
 if __name__ == "__main__":

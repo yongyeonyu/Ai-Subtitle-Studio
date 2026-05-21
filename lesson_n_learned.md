@@ -82,3 +82,7 @@
 - compact editor QA에서 stale line/side selection을 기능 실패로 단정하지 않는다.
   - 이유: smart split 후 segment가 아주 짧아지면 이전 `--line 1 --side right` 명령은 현재 graph와 맞지 않아 `diamond_pair_missing`을 만들 수 있다.
   - 다음 원칙: 자동화 runner는 현재 status에 boundary pair가 없으면 stale line을 버리고 `closest` diamond로 복구한다. 실제 기능 회귀는 editor runtime pair가 있는 상태에서 재현될 때만 본다.
+
+- playhead/shadow playhead repaint를 성급히 dirty-strip 최적화로 되돌리지 않는다.
+  - 이유: 사용자가 보고한 타임라인 잔상/텍스트 겹침은 부분 repaint와 다중 paint owner가 섞일 때 재발하기 쉽다. 현재 single-owner 2D 경로는 전체 canvas repaint로 잔상 안정성을 우선한다.
+  - 다음 원칙: playhead-only dirty rect는 Macau visual smoke에서 잔상 없음이 증명될 때만 별도 실험으로 열고, 기본 경로는 `TimelineSingleOwnerPlayheadInvalidation` audit가 지키는 full canvas repaint를 유지한다.

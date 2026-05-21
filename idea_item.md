@@ -248,11 +248,14 @@ Already done:
 - 완료 검증: `tools/audit_editor_rendering_ownership.py --json`, `tests.test_editor_rendering_ownership_audit`, 공식 `full` QA `output/manual_verification/latest/qa_suite_full_20260521_102341`.
 - 2026-05-21 6차 구현 완료: `full_media` verifier가 spoken slice의 `raw/final=0/0`을 pass로 오판하지 않게 막고, bundled app process 재시작 감지와 editor inline automation 복구를 추가했다.
 - 완료 검증: `tests.test_qa_suite_runner`, `tests.test_verify_full_media_pipeline`, `tests.test_editor_automation`, 공식 `major/full` QA.
+- 2026-05-21 7차 구현 완료: single-owner 2D에서 playhead/shadow/drag-shadow/dirty update가 full canvas repaint를 유지하는 audit를 추가했다.
+- 완료 범위: `TimelineSingleOwnerPlayheadInvalidation` inventory로 플레이헤드 잔상 방지 경로를 고정하고, `dirty-rect band repaint`는 실제 visual proof 전까지 default로 되돌리지 않도록 가드했다.
+- 완료 검증: `tests.test_editor_rendering_ownership_audit`, `tests.test_timeline_render_cache`, `tools/audit_editor_rendering_ownership.py --json`.
 
 Remaining follow-up:
 - 모든 에디터 paint는 single 2D owner 원칙으로 정리한다. 같은 시각 요소를 QML overlay, child widget, scenegraph, canvas paint가 동시에 그리지 않게 한다.
 - playhead, shadow playhead, selected segment, hover handle, cut diamond는 한 paint pass에서 z-order를 고정한다. 클릭/드래그/키보드 이동은 색상/모드를 렌더러가 재해석하지 않고 canonical state만 읽는다.
-- 성능은 2D 단일 owner를 유지한 상태에서만 최적화한다: dirty-rect band repaint, pre-rendered waveform pixmap/cache, `QStaticText`/text layout cache, devicePixelRatio-aware backing pixmap, hover/playhead-only repaint band를 순서대로 측정한다.
+- 성능은 2D 단일 owner를 유지한 상태에서만 최적화한다: pre-rendered waveform pixmap/cache, `QStaticText`/text layout cache, devicePixelRatio-aware backing pixmap을 순서대로 측정한다. playhead-only dirty-rect band repaint는 잔상 방지 visual proof가 있을 때만 별도 실험으로 다시 연다.
 - 실제 Macau project/app visual smoke로 재생, 스크럽, 확대/축소, inline 편집, 자막 드래그, 자막 생성 후 잔상 여부를 스냅샷으로 확인한다.
 
 Quality/UX gate:

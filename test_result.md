@@ -1,5 +1,22 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## 2D 플레이헤드 잔상 방지 repaint 가드 - 2026-05-21 11:20
+
+- 실행 모드: Targeted
+- 결과:
+  - 단위/가드: pass
+- 코드 반영:
+  - `tools/audit_editor_rendering_ownership.py`에 `TimelineSingleOwnerPlayheadInvalidation` inventory를 추가했다.
+  - single-owner 2D 경로에서 playhead, shadow playhead, drag-shadow playhead, dirty update가 full canvas repaint를 유지하는지 검사한다.
+  - UI/UX 동작 변경 없음. 잔상 방지를 위해 이미 적용된 repaint 정책이 부분 repaint 최적화로 되돌아가지 않게 막는 회귀 가드다.
+- 단위/가드:
+  - `py_compile`: pass
+  - `tools/audit_editor_rendering_ownership.py --json`: `ok=true`
+  - `tests.test_editor_rendering_ownership_audit tests.test_timeline_render_cache`: `38 tests OK`
+- 분류:
+  - 실패 없음.
+  - code regression/fixture drift/environment-bundle issue 없음.
+
 ## 2D 렌더링 ownership inventory 가드 확장 - 2026-05-21 11:16
 
 - 실행 모드: Quick
