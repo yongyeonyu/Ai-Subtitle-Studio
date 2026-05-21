@@ -33,3 +33,9 @@
   품질: LLM candidate count, deep chunks, batch count, LoRA top5 결과가 Python 기준과 맞지 않았다.
   결론: native policy helper는 parity mismatch가 해소될 때까지 default 승격하지 않는다. adoption report는 `blocked_quality_mismatch`로 표시한다.
   artifact: `tools/benchmark_native_policy_engine.py --docs 500 --rounds 12 --lora-rounds 2`
+
+- `mode_fast_as_quality_equivalent_x5_default`: X5 품질 동일 조건에서 `mode_fast`를 최종 기본 알고리즘으로 승격하는 방향
+  결과: X5 60초 10회 반복에서 평균 `10.373s`로 빠르지만 quality gate `0/10`.
+  품질: quality `71.514`, final segment `17`로 기준 `mode_high_piecewise_drift` quality `72.989`, final segment `24`보다 낮았다.
+  결론: `mode_fast`는 Fast 모드 속도 후보로는 유지하되, 품질 동일 조건의 최종 기본 알고리즘으로 승격하지 않는다.
+  artifact: `output/manual_verification/latest/idea_full_execute_20260521-0821/x5_modes_repeat10_quality_gate/repeat_summary.md`

@@ -39,6 +39,7 @@
   - X5 60s full-parallel STT: `10.387~10.625s`로 빠르지만 quality `71.563`, timing MAE `0.7392`, final `17`이라 High 기본값 승격 폐기
   - X5 60s quality-gated rerun: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_084657/benchmark_quality_gate.md`
   - Macau fast repeat10: pipeline avg/min/max `7.628s/7.516s/7.854s`, final segment `5` 유지
+  - X5 modes repeat10: `mode_fast` avg `10.373s` but gate `0/10`; `mode_high_piecewise_drift` avg `47.811s`, quality `72.989`, gate `10/10`
   - Swift/native policy mini benchmark: 속도는 빠르지만 parity mismatch라 adoption `blocked_quality_mismatch`
   - Tinyping fast 60s: total `22.326s`, pipeline `9.804s`, final/raw `18/15`
   - Tinyping auto 60s: total `44.152s`, pipeline `9.833s`, final/raw `18/15`
@@ -49,6 +50,7 @@
   - X5 60s에서 품질 단독 1위는 `mode_high_piecewise_drift`, 속도/품질 균형은 `mode_fast`가 유리하다. 단, 10회 반복 평균/p95 전까지 기본 알고리즘 자동 승격은 하지 않는다.
   - 전체 STT1/STT2 full-parallel은 빠르지만 X5 품질과 segment count가 낮아져 기본 승격하지 않는다.
   - benchmark 후보 선택은 `tools/apply_subtitle_benchmark_quality_gate.py`로 품질 gate를 통과한 후보만 승격한다.
+  - X5 10회 기준 자막 품질을 유지하는 최종 후보는 `mode_high_piecewise_drift`이다. `mode_fast`는 속도 후보로는 유효하지만 품질 동일 조건의 최종 알고리즘 후보에서는 제외한다.
   - Swift/native policy helper는 quality/parity check가 모두 통과하기 전까지 기본값으로 승격하지 않는다.
   - aggressive quarter-parallel STT/LLM, native deterministic batch 승격은 parity 구현과 X5/Tinyping 반복 품질 게이트 전까지 채택하지 않는다.
 - 이전 현재 기준:
