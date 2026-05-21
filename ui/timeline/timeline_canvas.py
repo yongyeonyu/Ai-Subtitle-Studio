@@ -188,6 +188,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._line_segment_index_cache: dict[int, dict] = {}
         self._editable_segments_cache_key = None
         self._editable_segments_cache: list[tuple[int, dict]] = []
+        self._timeline_nonfatal_warning_keys: set[str] = set()
         self._editable_segment_pos_cache_key = None
         self._editable_segment_pos_cache: dict[int, int] = {}
         self._speaker_hit_rect_cache_key = None
@@ -646,8 +647,12 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             if rect.isValid() and not rect.isEmpty():
                 self.update(rect)
                 return
-        except (RuntimeError, AttributeError, TypeError, ValueError):
-            pass
+        except (RuntimeError, AttributeError, TypeError, ValueError) as exc:
+            self._log_timeline_nonfatal_once(
+                "viewport_region_fallback",
+                f"타임라인 viewport clip 계산 실패, full repaint로 복구합니다: {exc}",
+            )
+        # viewport clip 계산이 실패해도 잔상을 남기지 않도록 전체 canvas를 다시 그린다.
         self.update()
 
     @staticmethod
@@ -925,7 +930,11 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 float(getattr(self, "total_duration", 0.0) or 0.0),
             )
             self._voice_activity_segments_external = False
-        except Exception:
+        except Exception as exc:
+            self._log_timeline_nonfatal_once(
+                "voice_activity_refresh_failed",
+                f"타임라인 음성 활동 lane 갱신 실패, 빈 lane으로 복구합니다: {exc}",
+            )
             self.voice_activity_segments = []
             self._voice_activity_segments_external = False
 
@@ -1506,6 +1515,21 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def _timeline_uses_single_owner_2d(self) -> bool:
         return bool(getattr(self, "_single_owner_2d_renderer", True))
+
+    def _log_timeline_nonfatal_once(self, key: str, message: str) -> None:
+        warning_keys = getattr(self, "_timeline_nonfatal_warning_keys", None)
+        if warning_keys is None:
+            warning_keys = set()
+            self._timeline_nonfatal_warning_keys = warning_keys
+        if key in warning_keys:
+            return
+        warning_keys.add(key)
+        try:
+            from core.runtime.logger import get_logger
+
+            get_logger().log(f"⚠️ {message}", level="WARN", stage="timeline")
+        except (RuntimeError, ImportError, AttributeError, TypeError, ValueError):
+            return
 
     def _update_dirty_rect(self, rect: QRect):
         if self._timeline_uses_single_owner_2d():

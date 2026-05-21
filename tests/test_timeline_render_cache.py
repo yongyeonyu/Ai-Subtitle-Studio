@@ -56,6 +56,15 @@ class _FakeScenegraphLayer:
         self.raise_calls += 1
 
 
+class _UpdateRecordingTimelineCanvas(TimelineCanvas):
+    def __init__(self):
+        self.update_calls = []
+        super().__init__()
+
+    def update(self, *args):  # type: ignore[override]
+        self.update_calls.append(args)
+
+
 class TimelineRenderCacheTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -76,6 +85,34 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertLess(len(visible), 10)
             self.assertTrue(all(float(item["end"]) >= 200.0 and float(item["start"]) <= 208.0 for item in visible))
             self.assertEqual(canvas._paint_last_visible_counts["segments"], len(visible))
+        finally:
+            canvas.close()
+
+    def test_viewport_region_fallback_logs_once_and_repaints_full_canvas(self):
+        canvas = _UpdateRecordingTimelineCanvas()
+        try:
+            canvas._viewport_paint_clip = Mock(side_effect=ValueError("bad clip"))
+            canvas._log_timeline_nonfatal_once = Mock()
+
+            canvas._update_viewport_region()
+
+            canvas._log_timeline_nonfatal_once.assert_called_once()
+            self.assertIn((), canvas.update_calls)
+        finally:
+            canvas.close()
+
+    def test_voice_activity_refresh_failure_logs_once_and_recovers_empty_lane(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.segments = [{"start": 0.0, "end": 1.0, "text": "a"}]
+            canvas._log_timeline_nonfatal_once = Mock()
+
+            with patch("ui.timeline.timeline_analysis.voice_activity_segments_for_editor", side_effect=RuntimeError("bad vad")):
+                canvas._refresh_voice_activity_segments()
+
+            canvas._log_timeline_nonfatal_once.assert_called_once()
+            self.assertEqual(canvas.voice_activity_segments, [])
+            self.assertFalse(canvas._voice_activity_segments_external)
         finally:
             canvas.close()
 

@@ -288,6 +288,11 @@ Work:
 - 코드 리뷰 persona: Apple Silicon/macOS senior developer.
 - QA 리뷰 persona: 꼼꼼한 품질 테스트 엔지니어.
 
+Already done:
+- 2026-05-21 1차 구현 완료: 타임라인 viewport clip fallback과 voice-activity lane refresh 실패를 silent fallback에서 one-shot nonfatal warning + 기존 복구 동작으로 바꿨다.
+- 완료 범위: 예외 시 전체 repaint 또는 빈 lane 복구는 유지하고, 실패 원인만 `timeline` stage WARN 로그로 남긴다.
+- 완료 검증: `tests.test_timeline_render_cache`, `tests.test_editor_rendering_ownership_audit`, `tools/check_maintenance_budget.py --json`, 공식 `quick` QA `output/manual_verification/latest/qa_suite_quick_20260521_113130`.
+
 QA:
 - `tools/check_maintenance_budget.py --json`
 - targeted symbol scan.

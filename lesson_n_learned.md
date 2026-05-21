@@ -86,3 +86,7 @@
 - playhead/shadow playhead repaint를 성급히 dirty-strip 최적화로 되돌리지 않는다.
   - 이유: 사용자가 보고한 타임라인 잔상/텍스트 겹침은 부분 repaint와 다중 paint owner가 섞일 때 재발하기 쉽다. 현재 single-owner 2D 경로는 전체 canvas repaint로 잔상 안정성을 우선한다.
   - 다음 원칙: playhead-only dirty rect는 Macau visual smoke에서 잔상 없음이 증명될 때만 별도 실험으로 열고, 기본 경로는 `TimelineSingleOwnerPlayheadInvalidation` audit가 지키는 full canvas repaint를 유지한다.
+
+- UI hot path fallback은 조용히 삼키지 말고 한 번만 원인을 남긴다.
+  - 이유: viewport clip 또는 voice-activity lane refresh 실패는 사용자가 보는 잔상/누락으로 이어질 수 있지만, 매 프레임 로그를 찍으면 편집 성능이 흔들린다.
+  - 다음 원칙: 복구 가능한 UI 예외는 기존 복구 동작을 유지하되, key별 one-shot nonfatal WARN으로 남기고 반복 로그는 막는다.

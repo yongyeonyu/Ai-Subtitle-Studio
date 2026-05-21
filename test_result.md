@@ -1,5 +1,25 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Phase 6 타임라인 silent fallback 로그화 - 2026-05-21 11:26
+
+- 실행 모드: Targeted
+- 결과:
+  - 단위/가드: pass
+  - Quick: pass, `output/manual_verification/latest/qa_suite_quick_20260521_113130`
+- 코드 반영:
+  - `TimelineCanvas`의 viewport clip 실패와 voice-activity lane refresh 실패가 더 이상 조용히 묻히지 않고 key별 one-shot WARN으로 남는다.
+  - 복구 동작은 유지했다. viewport clip 실패 시 full canvas repaint, voice-activity 실패 시 빈 lane 복구.
+  - UI/UX 동작 변경 없음. 장애 원인 관측성만 보강.
+- 단위/가드:
+  - `py_compile`: pass
+  - `tests.test_timeline_render_cache tests.test_editor_rendering_ownership_audit`: `40 tests OK`
+  - `tools/check_maintenance_budget.py --json`: `ok=true`
+  - `tools/qa_suite_runner.py quick`: pass
+  - `git diff --check`: pass
+- 분류:
+  - 실패 없음.
+  - code regression/fixture drift/environment-bundle issue 없음.
+
 ## 2D 플레이헤드 잔상 방지 repaint 가드 - 2026-05-21 11:20
 
 - 실행 모드: Targeted
