@@ -14,6 +14,16 @@
   - `tools/check_maintenance_budget.py --json`: `ok=true`
   - `swift test` (`native/macos/AIStudioNative`): `38 tests`, pass
   - `tools/qa_suite_runner.py quick`: pass, `output/manual_verification/latest/qa_suite_quick_20260521_085737`
+  - `tools/qa_suite_runner.py major`: pass, `output/manual_verification/latest/qa_suite_major_20260521_085853`
+  - `tools/qa_suite_runner.py full`: pass, `output/manual_verification/latest/qa_suite_full_20260521_085937`
+- `full` scenario 요약:
+  - `editor_compact_macau`: pass
+  - `video_menu_macau`: pass
+  - `save_export_macau`: pass
+  - `menu_stt_lora_macau`: pass
+  - `tinyping_fast_60s`: pass (`total_elapsed_sec=22.659`, `pipeline_elapsed_sec=10.020`, `final/raw=18/15`)
+  - `tinyping_auto_60s`: pass (`total_elapsed_sec=47.412`, `pipeline_elapsed_sec=10.206`, `final/raw=18/15`)
+  - `tinyping_high_60s`: pass (`total_elapsed_sec=27.063`, `pipeline_elapsed_sec=26.965`, `final/raw=16/16`)
 - 실제 벤치/판정:
   - X5 STT full-parallel 재검증: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_084657/benchmark_results.json`
   - 품질 gate 산출물: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_084657/benchmark_quality_gate.md`
