@@ -16,6 +16,10 @@ class EditorRenderingOwnershipAuditTests(unittest.TestCase):
         self.assertIn("TimelineInputHitTargets", owners)
         self.assertIn("TimelineWaveformSource", owners)
         self.assertIn("STTPreviewLaneLayout", owners)
+        self.assertIn("SubtitleTextEditQmlOverlayGate", owners)
+        self.assertIn("VideoControlBarQmlGate", owners)
+        self.assertIn("VideoSubtitleOverlayQmlGate", owners)
+        self.assertIn("TimelineSceneGraphLayerGate", owners)
 
     def test_editor_rendering_ownership_audit_covers_paint_surface_inventory(self):
         report = audit_editor_rendering_ownership()
@@ -26,6 +30,10 @@ class EditorRenderingOwnershipAuditTests(unittest.TestCase):
         self.assertEqual(inventory["TimelineInputHitTargets"], "qwidget-2d-input-only")
         self.assertEqual(inventory["TimelineWaveformSource"], "waveform-data-source")
         self.assertEqual(inventory["STTPreviewLaneLayout"], "qwidget-2d-layout-only")
+        self.assertEqual(inventory["SubtitleTextEditQmlOverlayGate"], "explicit-diagnostic-gate")
+        self.assertEqual(inventory["VideoControlBarQmlGate"], "explicit-scenegraph-gate")
+        self.assertEqual(inventory["VideoSubtitleOverlayQmlGate"], "explicit-diagnostic-gate")
+        self.assertEqual(inventory["TimelineSceneGraphLayerGate"], "explicit-scenegraph-gate")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,21 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## 2D 렌더링 ownership inventory 가드 확장 - 2026-05-21 11:16
+
+- 실행 모드: Quick
+- 결과:
+  - Quick: pass, `output/manual_verification/latest/qa_suite_quick_20260521_111623`
+- 코드 반영:
+  - `tools/audit_editor_rendering_ownership.py`가 자막 텍스트 QML overlay, video control bar QML, video subtitle QML, timeline scenegraph layer까지 explicit diagnostic/scenegraph gate 뒤에 있는지 확인한다.
+  - UI/UX 동작 변경 없음. QML/SceneGraph 재유입을 잡는 정적 가드만 확장.
+- 단위/가드:
+  - `py_compile`: pass
+  - `tools/audit_editor_rendering_ownership.py --json`: `ok=true`
+  - `tests.test_editor_rendering_ownership_audit`: `2 tests OK`
+- 분류:
+  - 실패 없음.
+  - code regression/fixture drift/environment-bundle issue 없음.
+
 ## automation-4 검토 항목 회수 및 full 재검증 - 2026-05-21 11:02~11:08
 
 - 실행 모드: Major / Full

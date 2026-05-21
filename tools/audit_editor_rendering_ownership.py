@@ -122,7 +122,52 @@ TEXT_RULES: tuple[dict[str, Any], ...] = (
             "WA_TranslucentBackground, False",
             "WA_OpaquePaintEvent",
         ),
-        "forbidden": ("QOpenGLWidget", "QQuickWidget"),
+        "forbidden": ("QOpenGLWidget", "QQuickWidget", "WA_TranslucentBackground, True"),
+    },
+    {
+        "path": "ui/editor/ux/subtitle_text_edit.py",
+        "owner": "SubtitleTextEditQmlOverlayGate",
+        "backend": "explicit-diagnostic-gate",
+        "required": (
+            "AI_SUBTITLE_EDITOR_TEXT_QML",
+            "explicit diagnostic opt-in",
+            'if not scenegraph_enabled("editor"):',
+            "from PyQt6.QtQuickWidgets import QQuickWidget",
+        ),
+        "forbidden": ("QQuickWidget(self)\n            layer.show()\n            return layer",),
+    },
+    {
+        "path": "ui/editor/video_player_transport.py",
+        "owner": "VideoControlBarQmlGate",
+        "backend": "explicit-scenegraph-gate",
+        "required": (
+            'if not scenegraph_enabled("video"):',
+            "from PyQt6.QtQuickWidgets import QQuickWidget",
+            "quick = QQuickWidget(parent)",
+        ),
+        "forbidden": ("quick = QQuickWidget(parent)\n            quick.show()",),
+    },
+    {
+        "path": "ui/editor/video_overlay_widgets.py",
+        "owner": "VideoSubtitleOverlayQmlGate",
+        "backend": "explicit-diagnostic-gate",
+        "required": (
+            "AI_SUBTITLE_ENABLE_QML_VIDEO_SUBTITLE_OVERLAY",
+            'if not scenegraph_enabled("video"):',
+            "from PyQt6.QtQuickWidgets import QQuickWidget",
+        ),
+        "forbidden": ("return cls(qml_path, parent)\n\n    def __init__",),
+    },
+    {
+        "path": "ui/timeline/timeline_scenegraph.py",
+        "owner": "TimelineSceneGraphLayerGate",
+        "backend": "explicit-scenegraph-gate",
+        "required": (
+            "class TimelineSceneGraphLayer:",
+            'return scenegraph_enabled("timeline") and QML_PATH.exists()',
+            "self.widget.setVisible(False)",
+        ),
+        "forbidden": ("TimelineSceneGraphLayer(", "self.widget.show()"),
     },
     {
         "path": "ui/gpu_rendering.py",

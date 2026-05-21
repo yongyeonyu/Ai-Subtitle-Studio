@@ -24,9 +24,13 @@
 - 유지 후보: `candidate1`
 - 유지 이유: subtitle quality를 유지하면서 X5 평균 시간이 가장 안정적이었다.
 - 최신 실행 브랜치: `opt/one-shot-quality-speed-20260521-0228`
-- 최신 완료 배치: automation-4 command responsiveness + smart split/diamond QA hardening
-- 최신 산출물: `output/manual_verification/latest/qa_suite_full_20260521_110628`
+- 최신 완료 배치: 2D rendering ownership inventory + automation command QA hardening
+- 최신 산출물: `output/manual_verification/latest/qa_suite_quick_20260521_111623`
 - 최신 검증:
+  - rendering ownership audit 확장: subtitle text QML overlay, video control bar QML, video subtitle QML, timeline scenegraph layer가 explicit diagnostic/scenegraph gate 뒤에 있는지 검사.
+  - `tools/audit_editor_rendering_ownership.py --json`: `ok=true` with 14-owner inventory
+  - `tests.test_editor_rendering_ownership_audit`: `2 tests OK`
+  - `tools/qa_suite_runner.py quick`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_quick_20260521_111623`
   - automation-4 검토 항목 재분류/수정: smart split precondition fallback, status UDP compact/minimal fallback, snapshot/export artifact existence check, app runner diamond fallback.
   - `tests.test_app_command_server`, `tests.test_app_command_bridge`, `tests.test_qa_suite_runner`: `73 tests OK`
   - `tests/test_editor_automation.py tests/test_remote_verify_actions.py`: `8 passed`
@@ -246,7 +250,6 @@ Already done:
 
 Remaining follow-up:
 - 모든 에디터 paint는 single 2D owner 원칙으로 정리한다. 같은 시각 요소를 QML overlay, child widget, scenegraph, canvas paint가 동시에 그리지 않게 한다.
-- inline subtitle editing은 opaque Qt child widget 경로로 고정했다. 남은 작업은 다른 편집 표면에 투명 child widget/segment text 동시 paint가 남아 있는지 inventory로 확인하는 것이다.
 - playhead, shadow playhead, selected segment, hover handle, cut diamond는 한 paint pass에서 z-order를 고정한다. 클릭/드래그/키보드 이동은 색상/모드를 렌더러가 재해석하지 않고 canonical state만 읽는다.
 - 성능은 2D 단일 owner를 유지한 상태에서만 최적화한다: dirty-rect band repaint, pre-rendered waveform pixmap/cache, `QStaticText`/text layout cache, devicePixelRatio-aware backing pixmap, hover/playhead-only repaint band를 순서대로 측정한다.
 - 실제 Macau project/app visual smoke로 재생, 스크럽, 확대/축소, inline 편집, 자막 드래그, 자막 생성 후 잔상 여부를 스냅샷으로 확인한다.
