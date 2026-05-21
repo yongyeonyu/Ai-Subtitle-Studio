@@ -98,6 +98,26 @@ class WorkspaceMixin:
                 self._fit_timeline_on_start(editor)
                 return
 
+            def _current_playhead() -> float:
+                try:
+                    canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
+                    return float(getattr(canvas, "playhead_sec", 0.0) or 0.0)
+                except Exception:
+                    return 0.0
+
+            scheduled_playhead = _current_playhead()
+
+            def _external_seek_override() -> tuple[float | None, bool]:
+                try:
+                    if int(getattr(editor, "_external_playhead_seek_revision", 0) or 0) <= 0:
+                        return None, True
+                    return (
+                        float(getattr(editor, "_external_playhead_seek_sec", 0.0) or 0.0),
+                        bool(getattr(editor, "_external_playhead_seek_sync_video", True)),
+                    )
+                except Exception:
+                    return None, True
+
             def _apply():
                 try:
                     splitter_sizes = workspace.get("splitter_sizes", [])
@@ -111,8 +131,28 @@ class WorkspaceMixin:
                     if hasattr(self, "_apply_log_visible"):
                         self._apply_log_visible(bool(workspace.get("terminal_visible", False)))
 
-                    playhead = workspace.get("last_playhead", 0.0)
-                    if playhead > 0:
+                    try:
+                        playhead = float(workspace.get("last_playhead", 0.0) or 0.0)
+                    except Exception:
+                        playhead = 0.0
+                    current_playhead = _current_playhead()
+                    external_seek, external_sync_video = _external_seek_override()
+                    # Deferred open restore must not undo a user/automation seek that landed before this timer fires.
+                    playhead_was_changed = abs(current_playhead - scheduled_playhead) > 0.05
+                    target_center = external_seek if external_seek is not None else (current_playhead if playhead_was_changed else playhead)
+                    if external_seek is not None:
+                        local_seek = external_seek
+                        localizer = getattr(editor, "_global_to_local_sec", None)
+                        if callable(localizer):
+                            try:
+                                local_seek = float(localizer(external_seek) or 0.0)
+                            except Exception:
+                                local_seek = external_seek
+                        if external_sync_video and hasattr(editor, "video_player"):
+                            editor.video_player.seek(local_seek)
+                        if hasattr(editor, "timeline"):
+                            editor.timeline.set_playhead(external_seek)
+                    elif playhead > 0 and not playhead_was_changed:
                         if hasattr(editor, "video_player"):
                             editor.video_player.seek(playhead)
                         if hasattr(editor, "timeline"):
@@ -127,12 +167,12 @@ class WorkspaceMixin:
                         if hasattr(editor.timeline, "show_time_window_seconds"):
                             editor.timeline.show_time_window_seconds(
                                 preferred_seconds,
-                                center_sec=playhead if playhead > 0 else None,
+                                center_sec=target_center if target_center > 0 else None,
                             )
                         elif hasattr(editor.timeline, "fit_to_view"):
                             editor.timeline.fit_to_view()
-                            if playhead > 0:
-                                editor.timeline.center_to_sec(playhead, smooth=False)
+                            if target_center > 0:
+                                editor.timeline.center_to_sec(target_center, smooth=False)
 
                     block_num = workspace.get("last_cursor_block", 0)
                     if block_num > 0 and hasattr(editor, "text_edit"):

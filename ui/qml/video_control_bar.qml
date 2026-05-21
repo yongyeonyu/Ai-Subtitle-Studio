@@ -47,6 +47,12 @@ Rectangle {
         text: (root.infoText || "").replace(/\n/g, " | ")
     }
 
+    TextMetrics {
+        id: sourceTextMetrics
+        font: sourceText.font
+        text: (root.sourceNameText || "").replace(/\n/g, " ")
+    }
+
     Row {
         id: controlRow
         anchors.left: parent.left
@@ -200,7 +206,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.rightMargin: root.contentRightInset + 8
         anchors.verticalCenter: parent.verticalCenter
-        height: 32
+        height: 36
 
         Rectangle {
             id: infoBadge
@@ -213,7 +219,7 @@ Rectangle {
                     Math.max(160, Math.floor(parent.width * 0.24))
                 )
             )
-            height: 32
+            height: 36
             radius: 9
             color: "#1A2127"
             border.width: 1
@@ -238,11 +244,17 @@ Rectangle {
 
         Rectangle {
             id: sourceBadge
-            anchors.left: infoBadge.right
-            anchors.leftMargin: root.gap
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            height: 32
+            visible: root.sourceNameText.length > 0
+            width: visible ? Math.max(
+                156,
+                Math.min(
+                    Math.ceil(sourceTextMetrics.boundingRect.width) + 28,
+                    Math.max(156, Math.floor(parent.width * 0.22))
+                )
+            ) : 0
+            height: 36
             radius: 9
             color: "#182126"
             border.width: 1
@@ -250,15 +262,17 @@ Rectangle {
             clip: true
             Text {
                 id: sourceText
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
+                anchors.fill: parent
                 anchors.leftMargin: 12
-                anchors.right: parent.right
                 anchors.rightMargin: 12
+                anchors.topMargin: 4
+                anchors.bottomMargin: 4
                 text: root.sourceNameText
                 color: "#EAF2F8"
                 font.pixelSize: 10
                 font.bold: true
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                maximumLineCount: 2
                 elide: Text.ElideRight
                 horizontalAlignment: Text.AlignRight
                 verticalAlignment: Text.AlignVCenter

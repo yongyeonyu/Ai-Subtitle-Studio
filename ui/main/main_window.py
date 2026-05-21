@@ -843,6 +843,8 @@ class MainWindow(
             QTimer.singleShot(0, menu.refresh)
         if hasattr(self, "_sync_project_info_button_height"):
             QTimer.singleShot(0, self._sync_project_info_button_height)
+        if hasattr(self, "_sync_sidebar_status_card_height"):
+            QTimer.singleShot(0, self._sync_sidebar_status_card_height)
         if hasattr(self, "_sync_sidebar_terminal_panel_height"):
             QTimer.singleShot(0, self._sync_sidebar_terminal_panel_height)
 

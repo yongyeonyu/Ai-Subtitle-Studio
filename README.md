@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.12-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.12-30D158?style=for-the-badge)](RELEASE_v04.00.12.md)
+[![App Version](https://img.shields.io/badge/app-04.00.13-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.13-30D158?style=for-the-badge)](RELEASE_v04.00.13.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -27,7 +27,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - iCloud and NAS background processing.
 - Fast/Auto/High Mode policy shared across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - `core/mode_manager.py` now owns the single user-facing Fast/Auto/High/STT abstraction, while per-mode persistence keeps only user-selected STT1/STT2 and subtitle/roughcut LLM model identities.
-- Tiniping benchmark-locked mode defaults now pin STT1/STT2, audio filter, VAD, LoRA bucket, Deep selector, and timing-anchor behavior from the 티니핑 0~3분 sweep plus the later long-window validation runs; High now keeps a 120-second rolling STT window with 8-second overlap and 4-second hysteresis.
+- Tiniping benchmark-locked mode defaults now pin STT1/STT2, audio filter, VAD, LoRA bucket, Deep selector, and timing-anchor behavior from the 티니핑 0~3분 sweep plus the later long-window validation runs; High now keeps a 180-second rolling STT window with 8-second overlap and 4-second hysteresis.
 - STT model menus now show `[Fast]`, `[Auto]`, and `[High]` tags on the benchmark-winning STT1/STT2 model combinations.
 - Subtitle tool stack policy: Fast = LoRA, Auto = LoRA + Deep Learning, High = LoRA + Deep Learning + LLM, STT Mode = VAD + human input + LoRA/Deep/rules.
 - STT Mode portable project state: `stt_mode_state` keeps VAD work segments, raw dictation, rolling windows, and final subtitle mirrors separate from the normal vector subtitle canvas.
@@ -137,7 +137,7 @@ Profiles:
 
 - `quick`: app bootstrap plus minimal editor smoke.
 - `major`: Macau UX regression set.
-- `full`: `major` plus Tinyping 60-second `fast` / `auto` / `high`.
+- `full`: `major` plus X5 3-minute High rolling-window verification.
 
 Artifacts are written under `output/manual_verification/latest/qa_suite_<profile>_*` and include:
 
@@ -149,7 +149,7 @@ Current verified baseline:
 
 - `quick`: `qa_suite_quick_20260521_121518`
 - `major`: `qa_suite_major_20260521_121601`
-- `full`: `qa_suite_full_20260521_121658`
+- `full`: `qa_suite_full_20260522_081710`
 
 Operational rules:
 
@@ -208,10 +208,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.12` |
-| Latest release checkpoint | `v04.00.12` |
-| Handoff document version | `04.00.12-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_12_RELEASED` |
+| App version in code | `04.00.13` |
+| Latest release checkpoint | `v04.00.13` |
+| Handoff document version | `04.00.13-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_13_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -242,7 +242,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.12.md`](RELEASE_v04.00.12.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.13.md`](RELEASE_v04.00.13.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

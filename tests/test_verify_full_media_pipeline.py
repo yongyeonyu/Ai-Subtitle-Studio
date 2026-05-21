@@ -1,4 +1,6 @@
-from tools.verify_full_media_pipeline import summary_metrics, verification_failure_reason
+import cProfile
+
+from tools.verify_full_media_pipeline import _profile_stats_rows, summary_metrics, verification_failure_reason
 
 
 def test_summary_metrics_exposes_top_level_quality_and_performance_fields():
@@ -76,3 +78,19 @@ def test_verification_failure_reason_allows_empty_trivial_slice_without_vad():
     }
 
     assert verification_failure_reason(payload) == ""
+
+
+def test_profile_stats_rows_reports_cumulative_hot_functions():
+    def _busy_function():
+        return sum(range(50))
+
+    profiler = cProfile.Profile()
+    profiler.enable()
+    for _ in range(5):
+        _busy_function()
+    profiler.disable()
+
+    rows = _profile_stats_rows(profiler, limit=20)
+
+    assert any(row["function"] == "_busy_function" for row in rows)
+    assert all("cumulative_time_sec" in row for row in rows)

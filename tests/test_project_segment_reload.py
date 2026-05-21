@@ -133,6 +133,16 @@ class _QueueTimer:
         self.stopped = True
 
 
+class _RecordingQueueTimer(_QueueTimer):
+    def __init__(self):
+        super().__init__()
+        self.start_calls = []
+
+    def start(self, ms):
+        self.started = True
+        self.start_calls.append(int(ms))
+
+
 class _ActiveQueueTimer(_QueueTimer):
     def __init__(self):
         super().__init__()
@@ -900,7 +910,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         kwargs["restore_workspace_callback"]()
         self.assertEqual(owner.restore_workspace_calls, [(owner._editor_widget, owner._current_project_path)])
 
-    def test_native_open_media_bootstrap_stages_video_then_waveform(self):
+    def test_native_open_media_bootstrap_defers_waveform_until_start(self):
         owner = type("Owner", (), {"_editor_widget": None, "_multiclip_boundaries": []})()
         editor = _BootstrapEditor()
         owner._editor_widget = editor
@@ -913,9 +923,11 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=_run_now):
             project_open_native_module.schedule_native_open_editor_media(owner, editor, "/tmp/clip.mp4")
 
-        self.assertEqual(delays, [72, 260])
+        self.assertEqual(delays, [72])
         self.assertEqual(editor.load_calls, [("/tmp/clip.mp4", False, True)])
-        self.assertEqual(editor.timeline.waveform_paths, ["/tmp/clip.mp4"])
+        self.assertEqual(editor.timeline.waveform_paths, [])
+        self.assertEqual(getattr(editor, "_deferred_open_waveform_path", ""), "/tmp/clip.mp4")
+        self.assertFalse(getattr(editor, "_deferred_open_waveform_loaded", True))
 
     def test_native_open_media_bootstrap_skips_stale_editor(self):
         owner = type("Owner", (), {"_editor_widget": None, "_multiclip_boundaries": []})()
@@ -1300,6 +1312,41 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             block_data = editor.text_edit.document().begin().userData()
             self.assertIsInstance(block_data, SubtitleBlockData)
             self.assertTrue(block_data.live_preview)
+        finally:
+            editor.text_edit.close()
+
+    def test_first_live_stt_preview_flushes_immediately_even_with_preview_timer(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        editor._live_editor_preview_timer = _RecordingQueueTimer()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "첫 실시간 자막", "stt_preview_source": "STT1"}
+            ])
+
+            self.assertIn("첫 실시간 자막", editor.text_edit.toPlainText())
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+            self.assertEqual(editor._live_editor_preview_timer.start_calls, [])
+        finally:
+            editor.text_edit.close()
+
+    def test_followup_live_stt_preview_uses_timer_after_first_draft_is_visible(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        editor._live_editor_preview_timer = _RecordingQueueTimer()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "첫 자막", "stt_preview_source": "STT1"}
+            ])
+            editor._live_editor_preview_timer = _RecordingQueueTimer()
+
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "갱신된 자막", "stt_preview_source": "STT1"}
+            ])
+
+            self.assertEqual(editor._live_editor_preview_timer.start_calls, [18])
+            self.assertIn("첫 자막", editor.text_edit.toPlainText())
+            self.assertNotIn("갱신된 자막", editor.text_edit.toPlainText())
         finally:
             editor.text_edit.close()
 

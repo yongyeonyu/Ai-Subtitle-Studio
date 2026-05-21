@@ -22,18 +22,15 @@ class QASuiteRunnerTests(unittest.TestCase):
             ],
         )
 
-    def test_build_scenarios_full_adds_tinyping_modes(self):
+    def test_build_scenarios_full_adds_x5_rolling_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
             scenarios = qa_suite_runner.build_scenarios("full", Path(tmp))
 
-        self.assertEqual(
-            [item["id"] for item in scenarios[-3:]],
-            [
-                "tinyping_fast_60s",
-                "tinyping_auto_60s",
-                "tinyping_high_60s",
-            ],
-        )
+        self.assertEqual(scenarios[-1]["id"], "x5_high_rolling_180s")
+        self.assertEqual(scenarios[-1]["type"], "full_media")
+        self.assertEqual(scenarios[-1]["mode"], "high")
+        self.assertEqual(scenarios[-1]["duration_sec"], 180.0)
+        self.assertIn("X5_", Path(scenarios[-1]["media"]).name)
 
     def test_run_suite_writes_manifest_and_result_files(self):
         def _fake_run_scenario(spec, _python_bin):
@@ -109,15 +106,15 @@ class QASuiteRunnerTests(unittest.TestCase):
 
     def test_run_full_media_rejects_verifier_empty_subtitle_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "tinyping_auto_60s"
+            output_dir = Path(tmp) / "x5_high_rolling_180s"
             spec = {
-                "id": "tinyping_auto_60s",
+                "id": "x5_high_rolling_180s",
                 "type": "full_media",
-                "description": "Tinyping auto verification for 60 seconds.",
+                "description": "X5 high-mode 3-minute rolling-window verification.",
                 "output_dir": output_dir,
                 "media": "/tmp/media.mp4",
-                "mode": "auto",
-                "duration_sec": 60.0,
+                "mode": "high",
+                "duration_sec": 180.0,
             }
             payload = {
                 "ok": False,

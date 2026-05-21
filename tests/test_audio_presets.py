@@ -307,6 +307,22 @@ class AudioPresetTests(unittest.TestCase):
         self.assertNotEqual(locked.get("selected_audio_ai"), "clearvoice")
         self.assertEqual(locked.get("selected_vad"), "silero")
 
+    def test_media_processor_runtime_overrides_survive_apple_m_plan(self):
+        processor = VideoProcessor()
+        processor._fast_mode_overrides = {
+            "stt_selective_secondary_recheck_enabled": False,
+            "stt_word_timestamps_mode": "off",
+            "stt_word_timestamps_precision_enabled": False,
+        }
+
+        with mock.patch.object(config, "IS_APPLE_SILICON", True), \
+             mock.patch.object(config, "DATASET_DIR", "/tmp/missing-settings-dir"):
+            settings = processor._load_all_settings()
+
+        self.assertFalse(settings["stt_selective_secondary_recheck_enabled"])
+        self.assertEqual(settings["stt_word_timestamps_mode"], "off")
+        self.assertFalse(settings["stt_word_timestamps_precision_enabled"])
+
     def test_media_processor_uses_ffmpeg_and_cleanup_preset_fields(self):
         processor = VideoProcessor()
         settings = apply_audio_preset({}, "야외")

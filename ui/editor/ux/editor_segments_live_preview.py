@@ -780,15 +780,35 @@ class EditorSegmentsLivePreviewMixin:
                 float(seg.get("end", seg.get("start", 0.0)) or 0.0),
             )
         )
+        # 첫 실시간 드래프트는 debounce를 기다리지 않고 바로 보여 줘야
+        # 사용자가 "생성이 시작됐다"는 피드백을 가장 빨리 받는다.
+        immediate_flush = self._should_flush_live_editor_preview_immediately(drafts)
         self._live_editor_preview_queue = drafts
         self._live_editor_preview_stage_label = str(stage_label or "").strip()
         self._live_editor_preview_pending = bool(drafts)
+        if immediate_flush:
+            self._flush_live_editor_preview_queue()
+            return
         timer = getattr(self, "_live_editor_preview_timer", None)
         if timer is not None and hasattr(timer, "start"):
             if not timer.isActive():
                 timer.start(self._live_append_reschedule_delay_ms(len(drafts)))
         else:
             self._flush_live_editor_preview_queue()
+
+    def _should_flush_live_editor_preview_immediately(self, drafts: list[dict]) -> bool:
+        if not drafts:
+            return False
+        if not self._processing_live_editor_preview_enabled():
+            return False
+        if list(getattr(self, "_live_editor_preview_segments", []) or []):
+            return False
+        pending_queue = [
+            seg
+            for seg in list(getattr(self, "_live_editor_preview_queue", []) or [])
+            if isinstance(seg, dict) and str(seg.get("text", "") or "").strip()
+        ]
+        return not pending_queue
 
     def _focus_editor_block_for_processing_segment(self, payload: dict | None, *, prefer_last: bool = False) -> bool:
         data = dict(payload or {})

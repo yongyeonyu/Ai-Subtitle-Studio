@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QTimer
+from PyQt6.QtCore import QPoint, Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QCheckBox, QComboBox, QTableWidgetItem, QWidget, QMessageBox, QPushButton, QToolButton
 
 from ui.main.main_window import MainWindow
@@ -442,6 +442,38 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
         finally:
             window.close()
             window.deleteLater()
+            self.app.processEvents()
+
+    def test_generation_progress_nav_text_body_is_transparent(self):
+        from ui.sidebar.home_sidebar_nav_widget import HomeSidebarNavWidget
+
+        nav = HomeSidebarNavWidget()
+        try:
+            nav.set_items(
+                [
+                    {
+                        "id": "generation_status",
+                        "title": "자막 생성 | STT",
+                        "badge": "AI",
+                        "accent": "#00D46A",
+                        "progressVisible": True,
+                        "progressPercent": 62,
+                        "progressText": "62%",
+                        "fillColor": "#153A25",
+                        "height": 42,
+                    }
+                ]
+            )
+            self.app.processEvents()
+
+            body = nav.findChild(QWidget, "ProgressTextBody")
+            self.assertIsNotNone(body)
+            self.assertFalse(body.autoFillBackground())
+            self.assertTrue(body.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+            self.assertIn("background: transparent", body.styleSheet())
+        finally:
+            nav.close()
+            nav.deleteLater()
             self.app.processEvents()
 
     def test_pipeline_model_column_uses_terminal_style_font(self):
@@ -1737,6 +1769,49 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertGreaterEqual(terminal.height(), 128)
             self.assertLessEqual(terminal.height(), 188)
             self.assertGreater(queue_panel.height(), terminal.height())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_status_card_aligns_to_editor_guides_when_targets_exist(self):
+        window = MainWindow()
+        try:
+            window._unified_dashboard = True
+            window.resize(2048, 1258)
+            window._build_home_content()
+            window.show()
+            self.app.processEvents()
+
+            queue_panel = getattr(window, "sidebar_queue_panel", None)
+            status_card = getattr(window, "_sidebar_status_card_widget", None)
+            terminal = getattr(window, "sidebar_terminal_panel", None)
+            slot = getattr(window, "_project_info_button_slot", None)
+            self.assertIsNotNone(queue_panel)
+            self.assertIsNotNone(status_card)
+            self.assertIsNotNone(terminal)
+            self.assertIsNotNone(slot)
+
+            queue_top = queue_panel.mapTo(window, QPoint(0, 0)).y()
+            slot_top = slot.mapTo(window, QPoint(0, 0)).y()
+            target_bottom = slot_top - 128 - (APP_PANEL_GAP * 2)
+            target_top = target_bottom - 223
+            self.assertGreaterEqual(target_top - queue_top - APP_PANEL_GAP, 134)
+
+            window._sidebar_status_alignment_targets = lambda: (target_top, target_bottom)
+            window._sync_sidebar_status_card_height()
+            self.app.processEvents()
+
+            status_top = status_card.mapTo(window, QPoint(0, 0)).y()
+            status_bottom = status_card.mapTo(window, QPoint(0, status_card.height())).y()
+            queue_bottom = queue_panel.mapTo(window, QPoint(0, queue_panel.height())).y()
+            terminal_top = terminal.mapTo(window, QPoint(0, 0)).y()
+
+            self.assertEqual(status_top, target_top)
+            self.assertEqual(status_bottom, target_bottom)
+            self.assertEqual(status_top - queue_bottom, 0)
+            self.assertEqual(terminal_top - status_bottom, APP_PANEL_GAP)
+            self.assertEqual(status_card.height(), 223)
         finally:
             window.close()
             window.deleteLater()

@@ -263,12 +263,78 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
         return True
 
     def _schedule_generation_completion_autosave(self, *, delay_ms: int = 650, attempt: int = 0) -> None:
-        self._generation_completion_autosave_pending = False
-        return
+        if bool(getattr(self, "_generation_completion_autosave_done", False)):
+            self._generation_completion_autosave_pending = False
+            return
+        if bool(getattr(self, "_generation_completion_autosave_pending", False)) and int(attempt or 0) <= 0:
+            return
+        self._generation_completion_autosave_pending = True
+
+        def run_autosave() -> None:
+            self._run_generation_completion_autosave(attempt=int(attempt or 0))
+
+        single_shot = getattr(self, "_pipeline_single_shot", None)
+        if callable(single_shot):
+            single_shot(int(delay_ms), run_autosave)
+        else:
+            QTimer.singleShot(int(delay_ms), run_autosave)
 
     def _run_generation_completion_autosave(self, attempt: int = 0) -> None:
         self._generation_completion_autosave_pending = False
-        return
+        if bool(getattr(self, "_generation_completion_autosave_done", False)):
+            return
+
+        if not self._has_saveable_generation_segments():
+            recovered = bool(
+                self._pipeline_best_effort(
+                    self._recover_generation_segments_from_backend_backup,
+                    label="생성 완료 autosave 전 최종 자막 복구",
+                    default=False,
+                    log=False,
+                )
+            )
+            if not recovered and int(attempt or 0) < 20:
+                if int(attempt or 0) in {0, 3, 8, 15}:
+                    get_logger().log("⏳ 생성 완료 저장 대기: final 자막 세그먼트 반영을 기다립니다.")
+                self._schedule_generation_completion_autosave(delay_ms=500, attempt=int(attempt or 0) + 1)
+                return
+            if not self._has_saveable_generation_segments():
+                get_logger().log("⚠️ 생성 완료 저장 보류: 저장 가능한 final 자막 세그먼트가 없습니다.")
+                return
+
+        saver = getattr(self, "_on_save", None)
+        if not callable(saver):
+            return
+        try:
+            # 생성 완료 autosave는 프로젝트/SRT만 확정하고, 뒤따라오는 러프컷 LLM 예약은 취소하지 않는다.
+            saved = bool(
+                saver(
+                    skip_auto_next=True,
+                    schedule_analysis_refresh=False,
+                    queue_learning=False,
+                    auto_export=False,
+                    force=True,
+                    cancel_post_generation_roughcut=False,
+                )
+            )
+        except TypeError:
+            saved = bool(
+                saver(
+                    skip_auto_next=True,
+                    schedule_analysis_refresh=False,
+                    queue_learning=False,
+                    auto_export=False,
+                )
+            )
+        except Exception as exc:
+            get_logger().log(f"⚠️ 생성 완료 저장 실패: {exc}")
+            saved = False
+        if saved:
+            self._generation_completion_autosave_done = True
+            get_logger().log("💾 생성 완료 자막 자동 저장 완료")
+            return
+        if int(attempt or 0) < 5:
+            self._schedule_generation_completion_autosave(delay_ms=800, attempt=int(attempt or 0) + 1)
 
     def _schedule_post_generation_model_release(self):
         """자막 생성 완료 후 남아 있는 AI/STT/LLM 모델 언로드를 예약한다."""

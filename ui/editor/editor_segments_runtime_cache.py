@@ -38,16 +38,31 @@ class EditorSegmentsRuntimeCacheMixin:
             fps=getattr(self, "video_fps", 30.0),
             preserve_order=True,
         )
-        if log_changes and (len(clamped) != len(rows) or any(
+        changed = len(clamped) != len(rows) or any(
             abs(float(before.get("start", 0.0) or 0.0) - float(after.get("start", 0.0) or 0.0)) > 1e-6
             or abs(float(before.get("end", 0.0) or 0.0) - float(after.get("end", 0.0) or 0.0)) > 1e-6
             for before, after in zip(rows, clamped)
-        )):
-            get_logger().log(
-                "[세그먼트정리] "
-                f"clip={total_duration:.3f}s input={len(rows)} output={len(clamped)} "
-                "클립 길이 초과 세그먼트를 정리했습니다."
+        )
+        if log_changes and changed:
+            log_key = (
+                round(float(total_duration), 3),
+                len(rows),
+                len(clamped),
+                round(float(rows[-1].get("end", 0.0) or 0.0), 3) if rows else 0.0,
+                round(float(clamped[-1].get("end", 0.0) or 0.0), 3) if clamped else 0.0,
             )
+            now = time.monotonic()
+            last_key = getattr(self, "_last_segment_clip_log_key", None)
+            last_at = float(getattr(self, "_last_segment_clip_log_at", 0.0) or 0.0)
+            # repaint/status 경로에서 같은 초과 세그먼트를 반복 정리하므로 로그만 dedupe해서 진행 상태를 오염시키지 않는다.
+            if log_key != last_key or now - last_at > 30.0:
+                self._last_segment_clip_log_key = log_key
+                self._last_segment_clip_log_at = now
+                get_logger().log(
+                    "[세그먼트정리] "
+                    f"clip={total_duration:.3f}s input={len(rows)} output={len(clamped)} "
+                    "클립 길이 초과 세그먼트를 정리했습니다."
+                )
         for line, seg in enumerate(clamped):
             seg["line"] = line
         return clamped

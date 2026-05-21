@@ -18,7 +18,7 @@ from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail, thumbna
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
-from core.video_preview_proxy import preview_proxy_path_for, register_preview_proxy_created
+from core.video_preview_proxy import existing_preview_proxy_for, preview_proxy_is_valid, preview_proxy_path_for, register_preview_proxy_created
 from ui.editor.video_overlay_widgets import (
     ThumbnailLabel,
     SubtitleLabel,
@@ -235,10 +235,13 @@ class VideoPlayerSurfaceMixin:
         self._proxy_playback_path = path
         if not self._preview_proxy_enabled() or not self._is_video_file(path):
             return path
+        if bool(getattr(self, "_defer_preview_proxy_build", False)):
+            return path
         proxy_path = self._proxy_path_for(path)
-        if proxy_path and os.path.exists(proxy_path):
-            self._proxy_playback_path = proxy_path
-            return proxy_path
+        existing_proxy = existing_preview_proxy_for(path)
+        if existing_proxy:
+            self._proxy_playback_path = existing_proxy
+            return existing_proxy
         if proxy_path:
             self._start_proxy_build(path, proxy_path)
             if self._source_needs_preview_proxy() and self._wait_for_preview_proxy_enabled():
@@ -353,6 +356,13 @@ class VideoPlayerSurfaceMixin:
         except OSError as exc:
             self._log_video_surface_nonfatal("promote_proxy_build", exc)
             return
+        if not preview_proxy_is_valid(dst):
+            self._log_video_surface_nonfatal("validate_proxy_build", RuntimeError("invalid preview proxy"))
+            try:
+                os.remove(dst)
+            except OSError:
+                pass
+            return
         try:
             register_preview_proxy_created(dst)
         except Exception as exc:
@@ -430,7 +440,13 @@ class VideoPlayerSurfaceMixin:
                     self._source_width = 0
                     self._source_height = 0
                     self._log_video_surface_nonfatal("probe_media", exc)
-            playback_path = self._playback_path_for(path)
+            previous_defer_proxy = bool(getattr(self, "_defer_preview_proxy_build", False))
+            self._defer_preview_proxy_build = bool(defer_probe) or previous_defer_proxy
+            try:
+                # Initial editor-open should not launch ffmpeg proxy work before the user presses Start.
+                playback_path = self._playback_path_for(path)
+            finally:
+                self._defer_preview_proxy_build = previous_defer_proxy
             self._pending_media_source_path = playback_path
             self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
             self._media_source_loaded = False

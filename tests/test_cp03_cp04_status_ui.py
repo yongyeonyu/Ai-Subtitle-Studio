@@ -675,6 +675,10 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             def _prepare_cut_boundaries_before_start(self):
                 self.calls.append(("prescan", self.sm.state, self.sm._button_text, self.sm._status_msg))
 
+            def _load_deferred_open_waveform(self):
+                self.calls.append(("waveform", self.sm.state, self.sm._status_msg))
+                return True
+
             def _execute_pipeline_logic(self, is_restart):
                 self.calls.append(("execute", self.sm.state, self.sm._button_text, self.sm._status_msg))
 
@@ -687,6 +691,9 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             editor._start_pipeline(is_restart=False)
 
         prescan = [item for item in editor.calls if item[0] == "prescan"][0]
+        waveform_index = [idx for idx, item in enumerate(editor.calls) if item[0] == "waveform"][0]
+        prescan_index = [idx for idx, item in enumerate(editor.calls) if item[0] == "prescan"][0]
+        self.assertLess(waveform_index, prescan_index)
         self.assertEqual(prescan[1], SubtitleStateManager.ST_PROC)
         self.assertIn("정지", prescan[2])
         self.assertIn("시작 준비", prescan[3])

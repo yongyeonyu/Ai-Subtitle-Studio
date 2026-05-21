@@ -4,7 +4,7 @@ import json
 import os
 
 from PyQt6.QtCore import QEvent, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtGui import QColor, QFontMetrics, QImage
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
 from core.runtime import config
@@ -32,6 +32,10 @@ class _MirrorLabel(QLabel):
 
 
 class VideoPlayerTransportMixin:
+    _CONTROL_BADGE_HEIGHT = 36
+    _SOURCE_INFO_BADGE_MAX_WIDTH = 220
+    _SOURCE_NAME_BADGE_MAX_WIDTH = 200
+
     def _log_video_transport_nonfatal(self, stage: str, exc: Exception) -> None:
         try:
             get_logger().log(f"⚠️ [video-transport:{stage}] {type(exc).__name__}: {exc}")
@@ -148,7 +152,7 @@ class VideoPlayerTransportMixin:
         self.status_info_container = QWidget(ctrl)
         self.status_info_container.setObjectName("VideoStatusInfoContainer")
         self.status_info_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.status_info_container.setFixedHeight(30)
+        self.status_info_container.setFixedHeight(self._CONTROL_BADGE_HEIGHT)
         status_layout = QHBoxLayout(self.status_info_container)
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(uniform_gap)
@@ -158,42 +162,42 @@ class VideoPlayerTransportMixin:
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.info_label.setWordWrap(True)
         self.info_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.info_label.setMinimumWidth(160)
-        self.info_label.setMaximumWidth(250)
-        self.info_label.setMinimumHeight(30)
+        self.info_label.setMinimumWidth(152)
+        self.info_label.setMaximumWidth(self._SOURCE_INFO_BADGE_MAX_WIDTH)
+        self.info_label.setFixedHeight(self._CONTROL_BADGE_HEIGHT)
         self.info_label.setStyleSheet(
             "QLabel#VideoSourceMetaLabel {"
             " color: #A9B0B7;"
             " background: #1A2127;"
             " border: 1px solid #2D3942;"
             " border-radius: 9px;"
-            " padding: 1px 12px 0 12px;"
+            " padding: 2px 10px 1px 10px;"
             " font-size: 9px;"
             "}"
         )
         status_layout.addWidget(self.info_label, 0)
+        status_layout.addStretch(1)
 
         self.source_name_label = _MirrorLabel("")
         self.source_name_label.setObjectName("VideoSourceNameLabel")
         self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.source_name_label.setWordWrap(False)
-        self.source_name_label.setMinimumWidth(0)
-        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.source_name_label.setMinimumHeight(30)
+        self.source_name_label.setWordWrap(True)
+        self.source_name_label.setMinimumWidth(152)
+        self.source_name_label.setMaximumWidth(self._SOURCE_NAME_BADGE_MAX_WIDTH)
+        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.source_name_label.setFixedHeight(self._CONTROL_BADGE_HEIGHT)
         self.source_name_label.setStyleSheet(
             "QLabel#VideoSourceNameLabel {"
             " color: #EAF2F8;"
             " background: #182126;"
             " border: 1px solid #2F4852;"
             " border-radius: 9px;"
-            " padding: 0 12px;"
+            " padding: 2px 10px 1px 10px;"
             " font-size: 10px;"
             " font-weight: 700;"
             "}"
         )
-        status_layout.addWidget(self.source_name_label, 1)
-        status_layout.setStretch(0, 0)
-        status_layout.setStretch(1, 1)
+        status_layout.addWidget(self.source_name_label, 0)
 
         ctrl_layout.addWidget(self.status_info_container, 1)
         return ctrl
@@ -511,14 +515,59 @@ class VideoPlayerTransportMixin:
         if label is None:
             return
         name = str(getattr(self, "_source_display_name", "") or "")
-        label.setText(name)
+        label.setText(self._format_source_name_badge_text(label, name))
         label.setToolTip(name)
+
+    def _badge_text_width(self, label: QLabel, *, fallback_width: int) -> int:
+        width = int(getattr(label, "width", lambda: 0)() or 0)
+        if width <= 0:
+            try:
+                max_width = int(label.maximumWidth() or 0)
+                if 0 < max_width < 16777215:
+                    width = max_width
+            except Exception:
+                width = 0
+        if width <= 0:
+            width = int(fallback_width or 0)
+        return max(64, width - 22)
+
+    def _format_source_name_badge_text(self, label: QLabel, name: str) -> str:
+        text = str(name or "").replace("\n", " ").strip()
+        if not text:
+            return ""
+        metrics = QFontMetrics(label.font())
+        available = self._badge_text_width(label, fallback_width=self._SOURCE_NAME_BADGE_MAX_WIDTH)
+        if metrics.horizontalAdvance(text) <= available:
+            return text
+
+        break_chars = " _-./|"
+        best: tuple[int, str, str] | None = None
+        for index in range(1, len(text)):
+            first = text[:index]
+            second = text[index:]
+            if not first or not second:
+                continue
+            if metrics.horizontalAdvance(first) > available:
+                continue
+            second_elided = metrics.elidedText(second, Qt.TextElideMode.ElideRight, available)
+            balance = abs(metrics.horizontalAdvance(first) - metrics.horizontalAdvance(second_elided))
+            penalty = 0 if text[index - 1] in break_chars or text[index] in break_chars else 24
+            score = balance + penalty
+            if best is None or score < best[0]:
+                best = (score, first, second_elided)
+        if best is None:
+            split_at = max(1, min(len(text) - 1, len(text) // 2))
+            first = metrics.elidedText(text[:split_at], Qt.TextElideMode.ElideRight, available)
+            second = metrics.elidedText(text[split_at:], Qt.TextElideMode.ElideRight, available)
+            return f"{first}\n{second}"
+        return f"{best[1]}\n{best[2]}"
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._layout_video_overlay()
-        self._refresh_source_name_label()
         self._apply_control_bar_video_content_insets()
+        self._refresh_source_info_label()
+        self._refresh_source_name_label()
         self._sync_quick_control_bar()
 
     def eventFilter(self, obj, event):
@@ -656,9 +705,15 @@ class VideoPlayerTransportMixin:
         self.frame_step_requested.emit(step)
 
     def toggle_play(self):
+        source_prepared = False
         if not getattr(self, "_source_ready", True):
             self._pending_autoplay = True
-            return
+            # macOS/QMediaPlayer can miss LoadedMedia after long STT/LLM runs; recover if the source is already bound.
+            if not self._ensure_media_source_loaded():
+                return
+            self._source_ready = True
+            self._pending_autoplay = False
+            source_prepared = True
         starting = self.media_player.playbackState() != self.media_player.PlaybackState.PlayingState
         if starting:
             prepare_repeat = getattr(self, "_repeat_play_prepare_callback", None)
@@ -668,7 +723,7 @@ class VideoPlayerTransportMixin:
                 except Exception as exc:
                     self._log_video_transport_nonfatal("prepare_repeat_playback", exc)
         self._ensure_audio_outputs()
-        if not self._ensure_media_source_loaded():
+        if not source_prepared and not self._ensure_media_source_loaded():
             self._pending_autoplay = True
             return
         self._hide_thumbnail()

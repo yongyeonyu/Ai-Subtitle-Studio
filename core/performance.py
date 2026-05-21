@@ -422,6 +422,15 @@ def runtime_scheduler_reserve_cores(
         "exit",
     }:
         return 0
+    benchmark_profile = str(settings.get("benchmark_runtime_profile") or "").strip().lower()
+    full_core_requested = benchmark_profile == "apple_m_full_core_throughput" or _setting_bool(
+        settings.get("apple_m_full_core_aggressive_enabled"),
+        False,
+    )
+    if full_core_requested:
+        # Explicit benchmark mode: the user asked to saturate cores, so worker
+        # ceilings may consume the usual interactive reserve outside manual LoRA.
+        return 0
     if task_text in interactive_tasks:
         return max(1 if logical > 1 else 0, configured)
     return min(configured, 1)

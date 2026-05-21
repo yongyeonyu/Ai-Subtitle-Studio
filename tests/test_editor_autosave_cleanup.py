@@ -499,7 +499,7 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertFalse(window._auto_processing_active)
         self.assertGreaterEqual(window._restore_normal_cursor.call_count, 1)
 
-    def test_backend_generation_finalizer_marks_complete_without_auto_save(self):
+    def test_backend_generation_finalizer_autosaves_after_final_segments_exist(self):
         editor = _CompletionEditor()
 
         with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
@@ -507,10 +507,12 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
             editor._finalize_generation_from_backend(reason="duplicate")
 
         editor.sm.complete_ai.assert_called_once()
-        editor._flush_pending_segment_queue_now.assert_called_once()
-        editor._on_save.assert_not_called()
+        self.assertGreaterEqual(editor._flush_pending_segment_queue_now.call_count, 1)
+        editor._on_save.assert_called_once()
+        self.assertFalse(editor._on_save.call_args.kwargs["cancel_post_generation_roughcut"])
+        self.assertTrue(editor._on_save.call_args.kwargs["force"])
         self.assertTrue(editor._process_completed_finalized)
-        self.assertFalse(getattr(editor, "_generation_completion_autosave_done", False))
+        self.assertTrue(getattr(editor, "_generation_completion_autosave_done", False))
 
     def test_stt_progress_complete_does_not_finalize_before_backend_finalizer(self):
         editor = _CompletionEditor()
@@ -545,7 +547,7 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual(editor.sm.update_progress.call_args_list[-1].args[3], "⏳ 최종 자막 반영 중...")
         single_shot.assert_called_once()
 
-    def test_generation_completion_autosave_is_disabled(self):
+    def test_generation_completion_autosave_waits_when_segments_are_missing(self):
         editor = _CompletionEditor()
         editor._get_current_segments = Mock(return_value=[])
         editor._segment_queue = []
@@ -555,8 +557,22 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
             editor._run_generation_completion_autosave(attempt=0)
 
         editor._on_save.assert_not_called()
-        single_shot.assert_not_called()
-        self.assertFalse(getattr(editor, "_generation_completion_autosave_pending", False))
+        single_shot.assert_called_once()
+        self.assertTrue(getattr(editor, "_generation_completion_autosave_pending", False))
+
+    def test_generation_completion_autosave_forces_save_without_canceling_roughcut(self):
+        editor = _CompletionEditor()
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
+            editor._schedule_generation_completion_autosave(delay_ms=1)
+
+        editor._on_save.assert_called_once()
+        kwargs = editor._on_save.call_args.kwargs
+        self.assertTrue(kwargs["force"])
+        self.assertFalse(kwargs["cancel_post_generation_roughcut"])
+        self.assertFalse(kwargs["queue_learning"])
+        self.assertFalse(kwargs["auto_export"])
+        self.assertTrue(editor._generation_completion_autosave_done)
 
     def test_backend_generation_finalizer_recovers_missing_segments_from_backend_backup(self):
         editor = _CompletionEditor()
@@ -571,7 +587,7 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
         editor.append_segments.assert_called_once()
         editor.sm.complete_ai.assert_called_once()
-        editor._on_save.assert_not_called()
+        editor._on_save.assert_called_once()
         self.assertTrue(editor._process_completed_finalized)
         self.assertEqual(editor._segment_state[0]["text"], "복구된 자막")
 

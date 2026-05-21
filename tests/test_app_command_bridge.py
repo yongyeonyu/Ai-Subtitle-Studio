@@ -20,6 +20,7 @@ class _DummyEditor:
         self.start_clicks = 0
         self.save_calls = 0
         self.roughcut_starts = 0
+        self.roughcut_manual = False
         self._on_start_callback = None
         self._playhead_sec = 0.0
         self._shadow_playhead_sec = None
@@ -66,6 +67,10 @@ class _DummyEditor:
     def _schedule_post_generation_roughcut_draft(self, force: bool = False):
         self.roughcut_starts += 1
         self.roughcut_force = bool(force)
+
+    def _run_manual_roughcut_llm_from_global_canvas(self):
+        self.roughcut_manual = True
+        self._schedule_post_generation_roughcut_draft(force=True)
 
     def _segment_index(self, *, line: int | None = None, at_playhead: bool = False):
         if line is not None:
@@ -653,6 +658,7 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["message"], "roughcut_started")
         self.assertEqual(owner._editor_widget.roughcut_starts, 1)
+        self.assertTrue(owner._editor_widget.roughcut_manual)
         self.assertTrue(owner._editor_widget.roughcut_force)
 
     def test_open_media_wires_real_pipeline_start_callback(self):

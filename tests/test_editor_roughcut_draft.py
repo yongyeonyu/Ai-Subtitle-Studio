@@ -116,6 +116,41 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertFalse(editor._roughcut_draft_pending)
         editor.get_segments.assert_not_called()
 
+    def test_foreground_activity_does_not_log_cancel_after_roughcut_done(self):
+        class _Timer:
+            def __init__(self):
+                self.active = True
+                self.stopped = False
+
+            def isActive(self):
+                return self.active
+
+            def stop(self):
+                self.active = False
+                self.stopped = True
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 2
+                self._roughcut_draft_status = "done"
+                self._roughcut_draft_thread = None
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+        editor = _Editor()
+        logger = mock.Mock()
+
+        with mock.patch("ui.editor.editor_roughcut_draft.get_logger", return_value=logger):
+            cancelled = editor._cancel_post_generation_roughcut_draft(reason="편집 시작")
+
+        self.assertFalse(cancelled)
+        self.assertFalse(editor._roughcut_draft_pending)
+        self.assertTrue(editor._roughcut_draft_timer.stopped)
+        logger.log.assert_not_called()
+
     def test_manual_save_cancel_blocks_delayed_auto_schedule_single_shot(self):
         class _Timer:
             def __init__(self):
@@ -240,6 +275,24 @@ class EditorRoughcutDraftTests(unittest.TestCase):
 
         self.assertEqual(editor.cancel_reasons, ["편집 시작"])
         self.assertGreater(getattr(editor, "_last_editor_foreground_activity_at", 0.0), 0.0)
+
+    def test_clip_duration_clamp_logs_repeated_change_once(self):
+        class _Editor(EditorSegmentsRuntimeCacheMixin):
+            video_fps = 30.0
+
+            def _segment_clip_total_duration(self) -> float:
+                return 1.0
+
+        editor = _Editor()
+        rows = [{"start": 0.0, "end": 2.0, "text": "tail"}]
+        logger = mock.Mock()
+
+        with mock.patch("ui.editor.editor_segments_runtime_cache.get_logger", return_value=logger), \
+             mock.patch("ui.editor.editor_segments_runtime_cache.time.monotonic", return_value=10.0):
+            editor._clamp_segments_to_clip_duration(rows)
+            editor._clamp_segments_to_clip_duration(rows)
+
+        logger.log.assert_called_once()
 
     def test_manual_global_roughcut_saves_then_schedules_llm(self):
         class _Editor(EditorRoughcutDraftMixin):
@@ -896,6 +949,63 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertTrue(result.segments)
         self.assertEqual(len(segments), 6)
 
+    def test_short_post_generation_autorun_logs_local_draft_reason_without_llm_thread(self):
+        class _Signal:
+            def __init__(self):
+                self.calls = []
+
+            def emit(self, result, segments, payload):
+                self.calls.append((result, segments, payload))
+
+        class _Main:
+            _multiclip_files = []
+            _multiclip_boundaries = []
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self.settings = {
+                    "editor_roughcut_draft_enabled": True,
+                    "selected_llm_provider": "openai",
+                    "selected_model": "roughcut-ready",
+                    "roughcut_llm_enabled": True,
+                    "roughcut_major_min_subtitle_count": 5,
+                }
+                self._roughcut_draft_status = "idle"
+                self._roughcut_draft_thread = None
+                self._roughcut_draft_generation = 0
+                self._roughcut_llm_cooldown_until = 0.0
+                self.sig_roughcut_draft_ready = _Signal()
+                self.video_player = None
+                self.media_path = "/tmp/source.mp4"
+                self._main = _Main()
+
+            def window(self):
+                return self._main
+
+            def _draft_settings_snapshot(self):
+                return dict(self.settings)
+
+            def _get_current_segments(self):
+                return _segments(2)
+
+        editor = _Editor()
+        logger = mock.Mock()
+
+        with mock.patch("ui.editor.editor_roughcut_draft.get_logger", return_value=logger), \
+             mock.patch("ui.editor.editor_roughcut_draft.threading.Thread") as thread_cls, \
+             mock.patch("core.roughcut.run_editor_roughcut_llm_draft") as run_llm:
+            editor._run_post_generation_roughcut_draft()
+
+        thread_cls.assert_not_called()
+        run_llm.assert_not_called()
+        self.assertEqual(len(editor.sig_roughcut_draft_ready.calls), 1)
+        _result, segments, payload = editor.sig_roughcut_draft_ready.calls[0]
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(payload["refinement_source"], "local_after_generation")
+        logged = "\n".join(str(call.args[0]) for call in logger.log.call_args_list if call.args)
+        self.assertIn("최소 기준 5개 미만", logged)
+        self.assertNotIn("러프컷 LLM 후처리 시작", logged)
+
     def test_post_generation_released_local_llm_uses_local_draft_without_thread(self):
         class _Signal:
             def __init__(self):
@@ -1328,6 +1438,76 @@ class EditorRoughcutDraftTests(unittest.TestCase):
             [row["major_id"] for row in getattr(editor, "_preliminary_middle_segments")],
             [segment.major_id for segment in result.segments],
         )
+
+    def test_local_post_generation_draft_clears_finished_thread(self):
+        class _Main:
+            def __init__(self):
+                self._current_project_path = "/tmp/editor-post-generation-local.aistudio"
+                self._roughcut_widget = None
+                self._editor_roughcut_result = None
+                self._multiclip_boundaries = []
+                self._auto_processing_active = True
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self, main):
+                self._main = main
+                self._roughcut_draft_generation = 0
+                self._roughcut_draft_thread = object()
+                self._roughcut_draft_status = "running"
+                self._last_roughcut_draft_major_count = None
+                self.settings = {}
+                self.media_path = "/tmp/source.mp4"
+                self.sm = SimpleNamespace(is_locked=True, state="ST_PROC", complete_ai=mock.Mock())
+                self.timeline = SimpleNamespace(
+                    canvas=SimpleNamespace(
+                        _editor_processing_input_locked=True,
+                        setProperty=mock.Mock(),
+                    ),
+                    set_playhead_busy=mock.Mock(),
+                    set_playback_center_lock=mock.Mock(),
+                )
+
+            def window(self):
+                return self._main
+
+            def _draft_settings_snapshot(self):
+                return dict(self.settings)
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _redraw_timeline(self):
+                pass
+
+            def _release_ai_models_after_roughcut_draft(self):
+                pass
+
+        segments = _segments(6)
+        result = build_editor_roughcut_draft_result(segments, settings={"roughcut_major_min_subtitle_count": 2})
+        candidate = build_editor_roughcut_candidate_payload(
+            result,
+            source_segments=segments,
+            settings={},
+            source_path="/tmp/source.mp4",
+            source_media="현재 에디터",
+            media_files=["/tmp/source.mp4"],
+            clip_boundaries=[],
+            editor_mode="single",
+        )
+        candidate["_generation"] = 0
+        candidate["refinement_source"] = "local_after_generation_runtime_released"
+
+        main = _Main()
+        editor = _Editor(main)
+
+        with mock.patch("ui.editor.editor_roughcut_draft.QTimer.singleShot", side_effect=lambda _delay, callback: callback()), \
+             mock.patch("core.project.project_manager.save_project_roughcut_state"), \
+             mock.patch("core.project.project_io.read_project_file", return_value={"roughcut_state": {}}), \
+             mock.patch("ui.editor.editor_roughcut_draft.os.path.exists", return_value=False):
+            editor._apply_post_generation_roughcut_draft(result, segments, candidate)
+
+        self.assertEqual(editor._roughcut_draft_status, "done")
+        self.assertIsNone(editor._roughcut_draft_thread)
 
     def test_chunked_editor_draft_merges_llm_chunks_using_global_subtitle_ids(self):
         from core.roughcut.editor_draft import run_editor_roughcut_llm_draft

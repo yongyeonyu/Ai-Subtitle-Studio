@@ -22,7 +22,7 @@ APP_BUNDLE_EXECUTABLE = ROOT / "dist" / "macos" / "AI Subtitle Studio.app" / "Co
 APP_BUNDLE_MAIN = ROOT / "dist" / "macos" / "AI Subtitle Studio.app" / "Contents" / "Resources" / "app" / "main.py"
 
 MACAU_PROJECT = ROOT / "projects" / "DJI_20260217224203_0075_D.aissproj"
-TINYPING_MEDIA = Path("/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4")
+X5_MEDIA = ROOT / "test video" / "X5_시승기_후반.MP4"
 
 
 def _default_output_dir(profile: str) -> Path:
@@ -214,17 +214,16 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
         )
 
     if normalized == "full":
-        for mode in ("fast", "auto", "high"):
-            scenarios.append(
-                _full_media(
-                    f"tinyping_{mode}_60s",
-                    output_root / f"tinyping_{mode}_60s",
-                    media=str(TINYPING_MEDIA),
-                    mode=mode,
-                    duration_sec=60.0,
-                    description=f"Tinyping {mode} verification for 60 seconds.",
-                )
+        scenarios.append(
+            _full_media(
+                "x5_high_rolling_180s",
+                output_root / "x5_high_rolling_180s",
+                media=str(X5_MEDIA),
+                mode="high",
+                duration_sec=180.0,
+                description="X5 high-mode 3-minute rolling-window verification.",
             )
+        )
 
     return scenarios
 

@@ -182,6 +182,11 @@ class HomeSidebarNavWidget(QWidget):
             row.addWidget(badge, alignment=Qt.AlignmentFlag.AlignVCenter)
             if progress_visible:
                 body = QWidget(button)
+                body.setObjectName("ProgressTextBody")
+                # 진행률 fill은 부모 MenuButton 배경이므로 텍스트 컨테이너가 덮어 그리지 않게 둔다.
+                body.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                body.setAutoFillBackground(False)
+                body.setStyleSheet("background: transparent; border: none;")
                 body_layout = QVBoxLayout(body)
                 body_layout.setContentsMargins(0, 0, 0, 0)
                 body_layout.setSpacing(0)

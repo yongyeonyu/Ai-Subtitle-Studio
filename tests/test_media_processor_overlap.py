@@ -6,6 +6,7 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import wave
 from types import SimpleNamespace
@@ -260,6 +261,34 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["audio_strategy"], "clean_voice")
 
+    def test_window_chunk_dir_clips_boundary_wav_to_window_range(self):
+        with tempfile.TemporaryDirectory() as chunk_dir:
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(10)
+                wf.writeframes(struct.pack("<" + "h" * 100, *range(100)))
+
+            window_dir = self.processor._build_window_chunk_dir(
+                chunk_dir,
+                [{"idx": 0, "input_path": wav_path, "ov_start_offset": 0.0, "duration": 10.0}],
+                window_index=0,
+                total_windows=1,
+                window_range={"start": 2.0, "end": 5.0},
+                vad_segments=[],
+            )
+            clipped_path = os.path.join(window_dir, "vad_000_2.000.wav")
+
+            with wave.open(clipped_path, "rb") as clipped:
+                self.assertEqual(clipped.getframerate(), 10)
+                self.assertEqual(clipped.getnframes(), 30)
+                frames = clipped.readframes(30)
+            samples = struct.unpack("<" + "h" * 30, frames)
+
+        self.assertEqual(samples[0], 20)
+        self.assertEqual(samples[-1], 49)
+
     def test_native_batch_refine_routes_precision_rechecks_after_full_stt1_pass(self):
         with tempfile.TemporaryDirectory() as chunk_dir:
             for idx, start in enumerate((0.0, 2.0)):
@@ -474,6 +503,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertEqual(precise["ff_chunk"], 120)
         self.assertEqual(precise["whisper_chunk_overlap_sec"], 8.0)
         self.assertTrue(precise["stt_windowed_finalize_enabled"])
+        self.assertEqual(precise["stt_window_sec"], 180.0)
 
     def test_windowed_finalize_allows_long_overlap_for_mode_chunks(self):
         overlap = self.processor._chunk_overlap_sec({
@@ -864,6 +894,242 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertFalse(calls[1][1]["stt_word_timestamps_precision_enabled"])
             self.assertEqual(result[0][0][0]["text"], "보강 후보")
             self.assertEqual(result[0][0][0]["stt_ensemble_source"], "STT2_SELECTIVE_RECHECK")
+
+    def test_window_parallel_uses_aggressive_cap_for_three_minute_windows(self):
+        with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
+             patch("core.audio.media_processor_transcribe.runtime_parallel_worker_plan", return_value=(4, {})) as planner:
+            workers, _meta = self.processor._stt_quarter_parallel_window_workers({}, 4)
+
+        self.assertEqual(workers, 4)
+        self.assertEqual(planner.call_args.kwargs["maximum"], 4)
+        self.assertEqual(planner.call_args.kwargs["requested"], 4)
+
+    def test_window_parallel_caps_shorter_windows_to_guard_quality(self):
+        with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
+             patch("core.audio.media_processor_transcribe.runtime_parallel_worker_plan", return_value=(2, {})) as planner:
+            workers, _meta = self.processor._stt_quarter_parallel_window_workers(
+                {"stt_window_sec": 90.0},
+                4,
+            )
+
+        self.assertEqual(workers, 2)
+        self.assertEqual(planner.call_args.kwargs["requested"], 2)
+
+    def test_window_parallel_can_be_disabled_explicitly(self):
+        with patch("core.audio.media_processor_transcribe.runtime_parallel_worker_plan") as planner:
+            workers, meta = self.processor._stt_quarter_parallel_window_workers(
+                {"stt_window_parallel_enabled": False},
+                4,
+            )
+
+        self.assertEqual(workers, 1)
+        self.assertEqual(meta, {})
+        planner.assert_not_called()
+
+    def test_window_isolated_worker_can_run_stt_ensemble_inside_each_window(self):
+        calls: list[dict] = []
+
+        def fake_ensemble(worker, window_chunk_dir, **kwargs):
+            calls.append({
+                "window_chunk_dir": window_chunk_dir,
+                "settings": dict(getattr(worker, "_fast_mode_overrides", {}) or {}),
+                "kwargs": dict(kwargs),
+            })
+            yield ([{"start": 0.0, "end": 1.0, "text": "ensemble-window"}], 1, 1)
+
+        with patch.object(type(self.processor), "transcribe_ensemble", fake_ensemble), \
+             patch.object(type(self.processor), "transcribe", side_effect=AssertionError("single STT path should not run")), \
+             patch.object(type(self.processor), "release_runtime_models", return_value=None):
+            rows = self.processor._collect_window_transcribe_segments_isolated(
+                "/tmp/window_ensemble",
+                settings={"stt_window_ensemble_enabled": True},
+                target_end_sec=180.0,
+                is_single=False,
+                model_override=None,
+                log_label="TEST",
+                use_ensemble=True,
+            )
+
+        self.assertEqual(rows[0]["text"], "ensemble-window")
+        self.assertEqual(calls[0]["window_chunk_dir"], "/tmp/window_ensemble")
+        self.assertTrue(calls[0]["settings"]["stt_window_ensemble_enabled"])
+        self.assertFalse(calls[0]["kwargs"]["_allow_window_rolling"])
+
+    def test_windowed_quarter_parallel_preserves_final_commit_order(self):
+        window_ranges = [
+            {"start": 0.0, "end": 60.0},
+            {"start": 55.0, "end": 115.0},
+            {"start": 110.0, "end": 170.0},
+            {"start": 165.0, "end": 225.0},
+        ]
+        items = [{"input_path": f"chunk_{idx}.wav", "ov_start_offset": idx * 55.0, "duration": 55.0} for idx in range(4)]
+        settings = {
+            "stt_windowed_finalize_enabled": True,
+            "stt_window_sec": 60.0,
+            "stt_quarter_parallel_experiment_enabled": True,
+            "stt_quarter_parallel_count": 4,
+            "stt_quarter_parallel_max_workers": 2,
+        }
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+        finalize_order: list[int] = []
+
+        self.processor._windowed_span_ranges = lambda _items, _settings: list(window_ranges)
+        self.processor._window_items_for_range = lambda _items, start, _end: [dict(_items[int(start // 55.0)])]
+        self.processor._clip_vad_segments_to_window = lambda *_args, **_kwargs: []
+        self.processor._build_window_chunk_dir = (
+            lambda _base, _items, *, window_index, **_kwargs: f"/tmp/window_{window_index}"
+        )
+
+        def fake_collect(window_chunk_dir, **_kwargs):
+            nonlocal active, max_active
+            window_index = int(str(window_chunk_dir).rsplit("_", 1)[-1])
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.02)
+                return [{"start": window_index * 55.0, "end": window_index * 55.0 + 10.0, "text": f"w{window_index}"}]
+            finally:
+                with lock:
+                    active -= 1
+
+        def fake_finalize(window_segments, _window_range, _settings, *, window_index, **_kwargs):
+            finalize_order.append(window_index)
+            return list(window_segments)
+
+        self.processor._collect_window_transcribe_segments_isolated = fake_collect
+        self.processor._apply_windowed_span_finalize = fake_finalize
+
+        with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
+             patch("core.audio.media_processor_transcribe.runtime_parallel_worker_plan", return_value=(2, {})):
+            result = list(self.processor._transcribe_with_windowed_spans(
+                "/tmp/chunks",
+                items,
+                settings,
+                vad_strict=[],
+                target_end_sec=None,
+                is_single=False,
+                model_override=None,
+                log_label="TEST",
+            ))
+
+        self.assertGreaterEqual(max_active, 2)
+        self.assertEqual(finalize_order, [0, 1, 2, 3])
+        self.assertEqual([idx for _segments, idx, _total in result], [1, 2, 3, 4])
+        self.assertEqual([segments[0]["text"] for segments, _idx, _total in result], ["w0", "w1", "w2", "w3"])
+
+    def test_windowed_quarter_parallel_passes_ensemble_flag_to_window_workers(self):
+        window_ranges = [
+            {"start": 0.0, "end": 60.0},
+            {"start": 55.0, "end": 115.0},
+        ]
+        items = [{"input_path": f"chunk_{idx}.wav", "ov_start_offset": idx * 55.0, "duration": 55.0} for idx in range(2)]
+        settings = {
+            "stt_windowed_finalize_enabled": True,
+            "stt_window_sec": 60.0,
+            "stt_window_ensemble_enabled": True,
+            "stt_quarter_parallel_count": 4,
+            "stt_quarter_parallel_max_workers": 2,
+        }
+        use_ensemble_flags: list[bool] = []
+
+        self.processor._windowed_span_ranges = lambda _items, _settings: list(window_ranges)
+        self.processor._window_items_for_range = lambda _items, start, _end: [dict(_items[int(start // 55.0)])]
+        self.processor._clip_vad_segments_to_window = lambda *_args, **_kwargs: []
+        self.processor._build_window_chunk_dir = (
+            lambda _base, _items, *, window_index, **_kwargs: f"/tmp/window_{window_index}"
+        )
+        self.processor._collect_window_transcribe_segments_isolated = (
+            lambda _window_chunk_dir, **kwargs: (
+                use_ensemble_flags.append(bool(kwargs.get("use_ensemble"))) or
+                [{"start": 0.0, "end": 1.0, "text": "ok"}]
+            )
+        )
+        self.processor._apply_windowed_span_finalize = (
+            lambda window_segments, _window_range, _settings, **_kwargs: list(window_segments)
+        )
+
+        with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
+             patch("core.audio.media_processor_transcribe.runtime_parallel_worker_plan", return_value=(2, {})):
+            list(self.processor._transcribe_with_windowed_spans(
+                "/tmp/chunks",
+                items,
+                settings,
+                vad_strict=[],
+                target_end_sec=None,
+                is_single=False,
+                model_override=None,
+                log_label="TEST",
+                use_ensemble_windows=True,
+            ))
+
+        self.assertEqual(use_ensemble_flags, [True, True])
+
+    def test_windowed_quarter_parallel_streams_first_ready_window_without_waiting_for_tail(self):
+        window_ranges = [
+            {"start": 0.0, "end": 60.0},
+            {"start": 55.0, "end": 115.0},
+        ]
+        items = [{"input_path": f"chunk_{idx}.wav", "ov_start_offset": idx * 55.0, "duration": 55.0} for idx in range(2)]
+        settings = {
+            "stt_windowed_finalize_enabled": True,
+            "stt_window_sec": 60.0,
+            "stt_quarter_parallel_experiment_enabled": True,
+            "stt_quarter_parallel_count": 4,
+            "stt_quarter_parallel_max_workers": 2,
+        }
+        first_ready = threading.Event()
+        release_tail = threading.Event()
+        first_result: list[tuple[list[dict], int, int]] = []
+
+        self.processor._windowed_span_ranges = lambda _items, _settings: list(window_ranges)
+        self.processor._window_items_for_range = lambda _items, start, _end: [dict(_items[int(start // 55.0)])]
+        self.processor._clip_vad_segments_to_window = lambda *_args, **_kwargs: []
+        self.processor._build_window_chunk_dir = (
+            lambda _base, _items, *, window_index, **_kwargs: f"/tmp/window_{window_index}"
+        )
+
+        def fake_collect(window_chunk_dir, **_kwargs):
+            window_index = int(str(window_chunk_dir).rsplit("_", 1)[-1])
+            if window_index == 0:
+                first_ready.set()
+                return [{"start": 0.0, "end": 10.0, "text": "w0"}]
+            first_ready.wait(timeout=1.0)
+            release_tail.wait(timeout=1.0)
+            return [{"start": 55.0, "end": 65.0, "text": "w1"}]
+
+        self.processor._collect_window_transcribe_segments_isolated = fake_collect
+        self.processor._apply_windowed_span_finalize = (
+            lambda window_segments, _window_range, _settings, **_kwargs: list(window_segments)
+        )
+
+        with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
+             patch("core.audio.media_processor_transcribe.runtime_parallel_worker_plan", return_value=(2, {})):
+            generator = self.processor._transcribe_with_windowed_spans(
+                "/tmp/chunks",
+                items,
+                settings,
+                vad_strict=[],
+                target_end_sec=None,
+                is_single=False,
+                model_override=None,
+                log_label="TEST",
+            )
+
+            consumer = threading.Thread(target=lambda: first_result.append(next(generator)))
+            consumer.start()
+            first_ready.wait(timeout=1.0)
+            consumer.join(timeout=0.2)
+            self.assertFalse(consumer.is_alive())
+            self.assertEqual(first_result[0][1], 1)
+            self.assertEqual(first_result[0][0][0]["text"], "w0")
+
+            release_tail.set()
+            tail = list(generator)
+            consumer.join(timeout=1.0)
+        self.assertEqual([idx for _segments, idx, _total in tail], [2])
 
     def test_chunk_sort_key_uses_timeline_offset_not_filename_order(self):
         names = [

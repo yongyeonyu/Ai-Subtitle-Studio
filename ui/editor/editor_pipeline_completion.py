@@ -129,7 +129,7 @@ class EditorPipelineCompletionMixin:
             self._roughcut_draft_auto_schedule_epoch = int(
                 getattr(self, "_roughcut_draft_auto_schedule_epoch", 0) or 0
             ) + 1
-            self._roughcut_draft_pending = True
+            # 내부 완료 동기화가 editor activity로 기록될 수 있어, 실제 timer가 발화할 때 pending을 세운다.
             self._pipeline_single_shot(900, lambda: roughcut(force=True))
         self._pipeline_single_shot(200, self._post_completion_sync)
         self._schedule_generation_completion_autosave(delay_ms=650)

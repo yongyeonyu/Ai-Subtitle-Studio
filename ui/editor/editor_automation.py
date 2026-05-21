@@ -308,6 +308,28 @@ class EditorAutomationMixin:
             video_visible = bool(video_player is not None and video_player.isVisible())
         except Exception:
             video_visible = False
+        media_player = getattr(video_player, "media_player", None) if video_player is not None else None
+        playback_state = "unknown"
+        if media_player is not None:
+            try:
+                state = media_player.playbackState()
+                states = getattr(media_player, "PlaybackState", None)
+                if states is not None and state == getattr(states, "PlayingState", None):
+                    playback_state = "playing"
+                elif states is not None and state == getattr(states, "StoppedState", None):
+                    playback_state = "stopped"
+                else:
+                    playback_state = "paused"
+            except Exception:
+                playback_state = "unknown"
+        try:
+            video_position_ms = int(media_player.position() or 0) if media_player is not None and hasattr(media_player, "position") else 0
+        except Exception:
+            video_position_ms = 0
+        try:
+            video_duration_ms = int(media_player.duration() or 0) if media_player is not None and hasattr(media_player, "duration") else 0
+        except Exception:
+            video_duration_ms = 0
         return {
             "playhead_sec": playhead,
             "shadow_playhead_sec": None if getattr(canvas, "shadow_playhead_sec", None) is None else float(getattr(canvas, "shadow_playhead_sec", 0.0) or 0.0),
@@ -334,6 +356,14 @@ class EditorAutomationMixin:
             "timeline_fit_locked": bool(getattr(timeline, "_fit_to_view_locked", False)) if timeline is not None else False,
             "playback_center_lock": bool(getattr(timeline, "_playback_center_lock", False)) if timeline is not None else False,
             "video_visible": video_visible,
+            "video_playback_state": playback_state,
+            "video_backend": str(getattr(media_player, "backend_name", "") or "qt") if media_player is not None else "",
+            "video_source_path": str(getattr(video_player, "_current_source_path", "") or "") if video_player is not None else "",
+            "video_pending_source_path": str(getattr(video_player, "_pending_media_source_path", "") or "") if video_player is not None else "",
+            "video_source_ready": bool(getattr(video_player, "_source_ready", False)) if video_player is not None else False,
+            "video_media_source_loaded": bool(getattr(video_player, "_media_source_loaded", False)) if video_player is not None else False,
+            "video_position_ms": video_position_ms,
+            "video_duration_ms": video_duration_ms,
             "active_footer_menu_id": str(getattr(self, "_active_footer_menu_id", "") or ""),
         }
 
@@ -349,6 +379,12 @@ class EditorAutomationMixin:
         resetter = getattr(self, "_reset_playhead_smoothing", None)
         if callable(resetter):
             resetter(target)
+        try:
+            self._external_playhead_seek_revision = int(getattr(self, "_external_playhead_seek_revision", 0) or 0) + 1
+            self._external_playhead_seek_sec = target
+            self._external_playhead_seek_sync_video = bool(sync_video)
+        except Exception:
+            pass
         timeline.set_playhead(target)
         if center and hasattr(timeline, "center_to_sec"):
             timeline.center_to_sec(target, smooth=False)

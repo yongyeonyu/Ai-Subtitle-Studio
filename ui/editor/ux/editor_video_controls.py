@@ -191,6 +191,25 @@ class EditorVideoControlsMixin:
             self._schedule_timeline()
         QTimer.singleShot(100, init_video)
 
+    def _load_deferred_open_waveform(self, *, reason: str = "") -> bool:
+        path = str(getattr(self, "_deferred_open_waveform_path", "") or "").strip()
+        if not path or bool(getattr(self, "_deferred_open_waveform_loaded", False)):
+            return False
+        if bool(getattr(self.window(), "_multiclip_boundaries", []) or []):
+            return False
+        timeline = getattr(self, "timeline", None)
+        loader = getattr(timeline, "load_waveform", None) if timeline is not None else None
+        if not callable(loader):
+            return False
+        self._deferred_open_waveform_loaded = True
+        try:
+            # 영상 오픈 직후가 아니라 Start 이후에 UI용 waveform 준비를 시작해 첫 입력 지연을 줄인다.
+            loader(path)
+            return True
+        except Exception:
+            self._deferred_open_waveform_loaded = False
+            return False
+
     def _load_queue_clip_media_staged(self, path: str, *, auto_start: bool = False):
         """Queue mode startup: show the new clip waveform first, then video thumbnail."""
         path = str(path or "")

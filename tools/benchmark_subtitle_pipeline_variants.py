@@ -30,6 +30,10 @@ from core.native_text_similarity import character_error_rate, similarity_ratio  
 from core.performance import hardware_profile  # noqa: E402
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin  # noqa: E402
 from core.runtime import config  # noqa: E402
+from core.runtime.multi_process import (  # noqa: E402
+    APPLE_M_FULL_CORE_THROUGHPUT_PROFILE,
+    apply_apple_m_subtitle_pipeline_plan,
+)
 from core.settings_profiles import materialize_user_settings  # noqa: E402
 from core.speaker_profile_settings import automatic_speaker_ceiling, speaker_diarization_auto_enabled  # noqa: E402
 
@@ -651,6 +655,28 @@ def _mode_profile_method(settings: dict[str, Any]) -> str:
     return "stt1_only"
 
 
+def _high_full_core_throughput_settings(mode_settings: dict[str, Any]) -> dict[str, Any]:
+    settings = dict(mode_settings)
+    settings.update(
+        {
+            "benchmark_runtime_profile": APPLE_M_FULL_CORE_THROUGHPUT_PROFILE,
+            "apple_m_full_core_aggressive_enabled": True,
+            "apple_m_aggressive_full_parallel_stt_enabled": False,
+            "apple_m_pipeline_respect_manual_worker_settings": False,
+            "stt_window_ensemble_enabled": True,
+            "stt_window_parallel_enabled": True,
+            "stt_window_parallel_aggressive_enabled": True,
+            "stt_window_sec": 180.0,
+            "stt_quarter_parallel_count": 4,
+            "stt_quarter_parallel_max_workers": 4,
+            "stt_ensemble_parallel_enabled": False,
+            "stt_ensemble_selective_enabled": True,
+            "stt_selective_secondary_recheck_enabled": True,
+        }
+    )
+    return apply_apple_m_subtitle_pipeline_plan(settings)
+
+
 def benchmark_mode_profiles(base_settings: dict[str, Any], *, llm_model: str = "") -> list[Variant]:
     labels = {
         "fast": "Fast 모드 실제 설정(STT1 + LoRA 중심)으로 실행합니다.",
@@ -734,6 +760,17 @@ def benchmark_mode_profiles(base_settings: dict[str, Any], *, llm_model: str = "
                 )
             )
         if mode == "high":
+            high_full_core_settings = _high_full_core_throughput_settings(mode_settings)
+            variants.append(
+                Variant(
+                    name="mode_high_full_core_overlap",
+                    phase="mode_profile",
+                    description="High 품질 경로를 유지하면서 3분 STT 창, 컷 경계, 네이티브/LLM worker를 full-core opt-in으로 겹쳐 실행합니다.",
+                    method=_mode_profile_method(high_full_core_settings),
+                    overrides=high_full_core_settings,
+                    run_llm=run_llm,
+                )
+            )
             high_drift_settings = dict(mode_settings)
             high_drift_settings.update(
                 {

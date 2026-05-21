@@ -15,6 +15,9 @@ from core.runtime.stage_metrics import _elapsed_ms, record_stage_done, record_st
 
 _CONCURRENT_READ_COMMANDS = {"ping", "status", "guided-subtitle-status"}
 _UDP_SAFE_RESULT_BYTES = min(APP_COMMAND_BUFFER_SIZE - 1024, 60000)
+_UDP_COMPACT_READ_BYTES = 8192
+_UDP_COMPACT_RESULT_BYTES = 8192
+_READ_HANDLER_TIMEOUT_SEC = 1.0
 
 
 def _trim_text_items(values: Any, *, limit: int = 8, max_chars: int = 220) -> list[str]:
@@ -65,6 +68,14 @@ def _compact_editor_runtime(value: Any) -> dict[str, Any]:
         "timeline_fit_locked",
         "playback_center_lock",
         "video_visible",
+        "video_playback_state",
+        "video_backend",
+        "video_source_path",
+        "video_pending_source_path",
+        "video_source_ready",
+        "video_media_source_loaded",
+        "video_position_ms",
+        "video_duration_ms",
         "active_footer_menu_id",
     ):
         if key in data:
@@ -84,10 +95,10 @@ def _compact_editor_runtime(value: Any) -> dict[str, Any]:
     return compact
 
 
-def _compact_status_data(value: Any, *, encoded_bytes: int) -> dict[str, Any]:
+def _compact_status_data(value: Any, *, encoded_bytes: int, send_fallback: bool = False) -> dict[str, Any]:
     data = dict(value or {}) if isinstance(value, dict) else {}
     queue = dict(data.get("queue_runtime") or {}) if isinstance(data.get("queue_runtime"), dict) else {}
-    return {
+    compact = {
         "status_response_truncated": True,
         "status_response_original_bytes": int(encoded_bytes),
         "editor_open": bool(data.get("editor_open", False)),
@@ -113,13 +124,21 @@ def _compact_status_data(value: Any, *, encoded_bytes: int) -> dict[str, Any]:
         "recent_logs": _trim_text_items(data.get("recent_logs"), limit=8, max_chars=180),
         "recent_stage_logs": _trim_text_items(data.get("recent_stage_logs"), limit=8, max_chars=180),
     }
+    if send_fallback:
+        compact["status_response_send_fallback"] = True
+    return compact
 
 
-def _compact_result_for_udp(result: dict[str, Any], *, encoded_bytes: int) -> dict[str, Any]:
+def _compact_result_for_udp(
+    result: dict[str, Any],
+    *,
+    encoded_bytes: int,
+    send_fallback: bool = False,
+) -> dict[str, Any]:
     command = str(result.get("command", "") or "")
     data = result.get("data") if isinstance(result.get("data"), dict) else {}
     compact_data = (
-        _compact_status_data(data, encoded_bytes=encoded_bytes)
+        _compact_status_data(data, encoded_bytes=encoded_bytes, send_fallback=send_fallback)
         if command in _CONCURRENT_READ_COMMANDS
         else {"response_truncated": True, "response_original_bytes": int(encoded_bytes)}
     )
@@ -166,8 +185,10 @@ class LocalAppCommandServer:
         self._lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._handler_lock = threading.Lock()
+        self._read_cache_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        self._last_read_results: dict[str, dict[str, Any]] = {}
         self._pending: list[dict[str, Any]] = []
         self._closed = False
 
@@ -222,6 +243,16 @@ class LocalAppCommandServer:
         result = self._dispatch(raw)
         try:
             encoded = encode_command_result(result)
+            command = str(result.get("command", "") or "")
+            compact_limit = (
+                _UDP_COMPACT_READ_BYTES
+                if command in _CONCURRENT_READ_COMMANDS
+                else _UDP_COMPACT_RESULT_BYTES
+            )
+            if len(encoded) > compact_limit:
+                # 자동화 응답은 중간 크기 payload도 먼저 compact해 UDP fallback/timeout 오인을 피한다.
+                result = _compact_result_for_udp(result, encoded_bytes=len(encoded))
+                encoded = encode_command_result(result)
             if len(encoded) > _UDP_SAFE_RESULT_BYTES:
                 # UDP automation hot path: oversized status payloads fail at
                 # sendto() and look like app_unreachable. Send a compact status
@@ -238,6 +269,16 @@ class LocalAppCommandServer:
                     # UDP send failure is usually EMSGSIZE under heavy status
                     # payloads. Reply with a tiny health packet so automation
                     # records "truncated" instead of a misleading app timeout.
+                    if command in _CONCURRENT_READ_COMMANDS:
+                        fallback_result = _compact_result_for_udp(
+                            result,
+                            encoded_bytes=len(encoded),
+                            send_fallback=True,
+                        )
+                        fallback = encode_command_result(fallback_result)
+                        if len(fallback) <= _UDP_SAFE_RESULT_BYTES:
+                            self._socket.sendto(fallback, addr)
+                            return
                     minimal = encode_command_result(_minimal_result_for_udp(result, encoded_bytes=len(encoded)))
                     self._socket.sendto(minimal, addr)
         except OSError:
@@ -277,7 +318,6 @@ class LocalAppCommandServer:
                 )
                 return result
         try:
-            # Keep status/ping diagnostics readable while a slow automation command is busy.
             if command in _CONCURRENT_READ_COMMANDS:
                 record_stage_start(
                     stage_name,
@@ -286,7 +326,7 @@ class LocalAppCommandServer:
                     queue_depth=self._pending_depth(),
                 )
                 handler_started = time.perf_counter()
-                result = handler(payload)
+                result = self._dispatch_read_with_timeout(command, payload, handler)
             else:
                 lock_started = time.perf_counter()
                 self._handler_lock.acquire()
@@ -320,6 +360,9 @@ class LocalAppCommandServer:
             )
         if not isinstance(result, dict):
             result = build_command_result(command, ok=True, accepted=True)
+        result_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        if command in _CONCURRENT_READ_COMMANDS and not bool(result_data.get("status_handler_timeout", False)):
+            self._remember_read_result(command, result)
         record_stage_done(
             stage_name,
             resource_label="automation",
@@ -329,6 +372,68 @@ class LocalAppCommandServer:
             metrics={"accepted": bool(result.get("accepted", True)), "queued": bool(result.get("queued", False))},
         )
         return result
+
+    def _remember_read_result(self, command: str, result: dict[str, Any]) -> None:
+        with self._read_cache_lock:
+            self._last_read_results[str(command or "")] = dict(result or {})
+
+    def _cached_read_result(self, command: str) -> dict[str, Any] | None:
+        with self._read_cache_lock:
+            cached = self._last_read_results.get(str(command or ""))
+            if cached is None and command == "guided-subtitle-status":
+                cached = self._last_read_results.get("status")
+            return dict(cached or {}) if cached else None
+
+    def _read_timeout_result(self, command: str) -> dict[str, Any]:
+        cached = self._cached_read_result(command)
+        if isinstance(cached, dict) and cached:
+            data = dict(cached.get("data") or {}) if isinstance(cached.get("data"), dict) else {}
+            data["status_handler_timeout"] = True
+            data["status_response_cached"] = True
+            cached["data"] = data
+            cached["command"] = command
+            cached["message"] = str(cached.get("message") or "status_handler_timeout")
+            return cached
+        return build_command_result(
+            command,
+            ok=True,
+            accepted=True,
+            message="pong" if command == "ping" else "status_handler_timeout",
+            data={
+                "status_handler_timeout": True,
+                "status_response_cached": False,
+            },
+        )
+
+    def _dispatch_read_with_timeout(
+        self,
+        command: str,
+        payload: dict[str, Any],
+        handler: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        done = threading.Event()
+        box: dict[str, Any] = {}
+
+        def call_handler() -> None:
+            try:
+                result = handler(payload)
+                if isinstance(result, dict):
+                    box["result"] = result
+                    self._remember_read_result(command, result)
+                else:
+                    box["result"] = build_command_result(command, ok=True, accepted=True)
+            except Exception as exc:
+                box["exc"] = exc
+            finally:
+                done.set()
+
+        # status/ping은 생성 hot path 중에도 살아 있어야 하므로 handler가 막히면 캐시로 즉시 답한다.
+        threading.Thread(target=call_handler, daemon=True, name=f"app-command-read:{command}").start()
+        if done.wait(_READ_HANDLER_TIMEOUT_SEC):
+            if "exc" in box:
+                raise box["exc"]
+            return dict(box.get("result") or build_command_result(command, ok=True, accepted=True))
+        return self._read_timeout_result(command)
 
     def _pending_depth(self) -> int:
         with self._lock:

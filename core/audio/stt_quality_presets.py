@@ -517,7 +517,7 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             **_high_runtime_detail_mapping(),
             **_pipeline_mapping(120, 8.0, 2),
             **_windowed_stt_mapping(
-                window_sec=120.0,
+                window_sec=180.0,
                 overlap_sec=8.0,
                 hysteresis_sec=4.0,
                 max_boundary_shift_sec=0.10,

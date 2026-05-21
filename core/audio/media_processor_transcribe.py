@@ -10,7 +10,7 @@ import re
 import shutil
 import threading
 import wave
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.audio import stt_rescue
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
@@ -255,8 +255,8 @@ class VideoProcessorTranscribeMixin:
             if hasattr(self, attr):
                 try:
                     setattr(worker, attr, getattr(self, attr))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    get_logger().log(f"  ⚠️ [STT window] worker state copy skipped ({attr}): {exc}")
         worker._fast_mode_overrides = dict(effective_settings or {}) if effective_settings else None
         result: list[dict] = []
         try:
@@ -984,6 +984,7 @@ class VideoProcessorTranscribeMixin:
                     is_single=is_single,
                     model_override=None,
                     log_label="STT-ENSEMBLE",
+                    use_ensemble_windows=self._setting_bool(s, "stt_window_ensemble_enabled", False),
                     preview_callback=preview_callback,
                 )
             except Exception:
@@ -2047,6 +2048,25 @@ class VideoProcessorTranscribeMixin:
                 clipped.append(clipped_seg)
         return clipped
 
+    @staticmethod
+    def _write_window_wav_slice(
+        source: str,
+        dest: str,
+        *,
+        start_offset_sec: float,
+        duration_sec: float,
+    ) -> None:
+        with wave.open(source, "rb") as reader:
+            params = reader.getparams()
+            rate = max(1, int(reader.getframerate() or 1))
+            start_frame = max(0, int(round(float(start_offset_sec) * rate)))
+            frame_count = max(1, int(round(float(duration_sec) * rate)))
+            reader.setpos(min(start_frame, max(0, reader.getnframes())))
+            frames = reader.readframes(frame_count)
+        with wave.open(dest, "wb") as writer:
+            writer.setparams(params)
+            writer.writeframes(frames)
+
     def _build_window_chunk_dir(
         self,
         base_chunk_dir: str,
@@ -2063,15 +2083,52 @@ class VideoProcessorTranscribeMixin:
         shutil.rmtree(window_dir, ignore_errors=True)
         os.makedirs(window_dir, exist_ok=True)
 
+        window_start = float(window_range.get("start", 0.0) or 0.0)
+        window_end = float(window_range.get("end", window_start) or window_start)
+        route_outputs_by_source: dict[str, str] = {}
+        clipped_count = 0
         for item in list(window_items or []):
             source = os.path.abspath(str(item.get("input_path") or ""))
             if not source or not os.path.exists(source):
                 continue
-            link_name = os.path.join(window_dir, os.path.basename(source))
-            try:
-                os.symlink(source, link_name)
-            except Exception:
-                shutil.copy2(source, link_name)
+            item_start = float(item.get("ov_start_offset", 0.0) or 0.0)
+            item_duration = float(item.get("duration", 0.0) or 0.0)
+            if item_duration <= 0.001:
+                item_duration = self._wav_duration(source) or 0.001
+            item_duration = max(0.001, item_duration)
+            item_end = item_start + item_duration
+            clip_start = max(window_start, item_start)
+            clip_end = min(window_end, item_end)
+            if clip_end < clip_start + 0.001:
+                continue
+            full_chunk = clip_start <= item_start + 0.005 and clip_end >= item_end - 0.005
+            if full_chunk:
+                link_name = os.path.join(window_dir, os.path.basename(source))
+                try:
+                    os.symlink(source, link_name)
+                except Exception:
+                    shutil.copy2(source, link_name)
+            else:
+                # Window workers must see clipped audio, otherwise quarter windows
+                # re-transcribe the whole parent chunk and lose the speed benefit.
+                clipped_count += 1
+                item_idx = int(item.get("idx", clipped_count - 1) or 0)
+                link_name = os.path.join(window_dir, f"vad_{item_idx:03d}_{clip_start:.3f}.wav")
+                try:
+                    self._write_window_wav_slice(
+                        source,
+                        link_name,
+                        start_offset_sec=clip_start - item_start,
+                        duration_sec=clip_end - clip_start,
+                    )
+                except Exception as exc:
+                    get_logger().log(f"  ⚠️ [STT window] WAV slice 실패, 원본 청크를 사용합니다: {exc}")
+                    link_name = os.path.join(window_dir, os.path.basename(source))
+                    try:
+                        os.symlink(source, link_name)
+                    except Exception:
+                        shutil.copy2(source, link_name)
+            route_outputs_by_source[os.path.basename(source)] = link_name
 
         clipped_vad = list(vad_segments or [])
         if clipped_vad:
@@ -2082,12 +2139,15 @@ class VideoProcessorTranscribeMixin:
             try:
                 with open(route_json, "r", encoding="utf-8") as handle:
                     route_rows = json.load(handle)
-                wanted = {os.path.basename(str(item.get("input_path") or "")) for item in list(window_items or [])}
-                clipped_routes = [
-                    dict(row)
-                    for row in list(route_rows or [])
-                    if os.path.basename(str((row or {}).get("path") or "")) in wanted
-                ]
+                wanted = set(route_outputs_by_source)
+                clipped_routes = []
+                for row in list(route_rows or []):
+                    source_name = os.path.basename(str((row or {}).get("path") or ""))
+                    if source_name not in wanted:
+                        continue
+                    out_row = dict(row)
+                    out_row["path"] = route_outputs_by_source.get(source_name, out_row.get("path"))
+                    clipped_routes.append(out_row)
                 if clipped_routes:
                     with open(os.path.join(window_dir, "audio_routes.json"), "w", encoding="utf-8") as handle:
                         json.dump(clipped_routes, handle, ensure_ascii=False, indent=2)
@@ -2099,6 +2159,7 @@ class VideoProcessorTranscribeMixin:
             "start": round(float(window_range.get("start", 0.0) or 0.0), 3),
             "end": round(float(window_range.get("end", 0.0) or 0.0), 3),
             "chunk_count": int(len(window_items or [])),
+            "clipped_chunk_count": int(clipped_count),
         }
         with open(os.path.join(window_dir, "window_meta.json"), "w", encoding="utf-8") as handle:
             json.dump(window_meta, handle, ensure_ascii=False, indent=2)
@@ -2127,6 +2188,234 @@ class VideoProcessorTranscribeMixin:
         ):
             collected.extend([dict(seg) for seg in (chunk_segs or [])])
         return collected
+
+    def _collect_window_transcribe_segments_isolated(
+        self,
+        window_chunk_dir: str,
+        *,
+        settings: dict,
+        target_end_sec: float | None,
+        is_single: bool,
+        model_override: str | None,
+        log_label: str,
+        use_ensemble: bool = False,
+    ) -> list[dict]:
+        worker = type(self)()
+        worker.language = self.language
+        worker._fast_mode_overrides = dict(settings or {})
+        for attr in (
+            "hard_cut_boundaries",
+            "_cut_boundary_provisional_rows",
+            "_audio_cut_boundary_rows",
+            "_saved_cut_boundaries",
+        ):
+            if hasattr(self, attr):
+                try:
+                    setattr(worker, attr, getattr(self, attr))
+                except Exception as exc:
+                    get_logger().log(f"  ⚠️ [STT window] worker state copy skipped ({attr}): {exc}")
+        collected: list[dict] = []
+        try:
+            if use_ensemble:
+                # Long-video hot path: each 3 minute window can preserve STT1/STT2
+                # quality policy while outer windows run in parallel.
+                iterator = worker.transcribe_ensemble(
+                    window_chunk_dir,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    cleanup_chunk_dir=True,
+                    _allow_window_rolling=False,
+                )
+            else:
+                iterator = worker.transcribe(
+                    window_chunk_dir,
+                    is_fast_mode=False,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    model_override=model_override,
+                    cleanup_chunk_dir=True,
+                    log_label=log_label,
+                    preview_callback=None,
+                    _allow_window_rolling=False,
+                )
+            for chunk_segs, _idx, _total in iterator:
+                collected.extend([dict(seg) for seg in (chunk_segs or [])])
+        finally:
+            try:
+                worker.release_runtime_models()
+            except Exception as exc:
+                get_logger().log(f"  ⚠️ [STT window] isolated worker cleanup failed: {exc}")
+        return collected
+
+    def _stt_quarter_parallel_window_workers(self, settings: dict, total_windows: int) -> tuple[int, dict]:
+        window_parallel_enabled = bool(
+            settings.get(
+                "stt_window_parallel_enabled",
+                settings.get("stt_quarter_parallel_experiment_enabled", True),
+            )
+        )
+        if total_windows < 2 or not window_parallel_enabled:
+            return 1, {}
+        pressure_stage = _stt_memory_pressure_stage(settings)
+        if pressure_stage == "critical":
+            get_logger().log("  🧵 [STT 1/4 병렬] 메모리 critical 상태라 병렬 창 처리를 건너뜁니다.")
+            return 1, {"memory_pressure_stage": pressure_stage}
+        quarter_count = int(settings.get("stt_quarter_parallel_count", 4) or 4)
+        window_sec = float(settings.get("stt_window_sec", 180.0) or 180.0)
+        aggressive_default = bool(settings.get("stt_window_parallel_aggressive_enabled", True))
+        # 3분 window는 X5 품질 gate를 통과한 구조라 normal 상태에서만 worker cap을 넓힙니다.
+        if "stt_quarter_parallel_max_workers" in settings:
+            default_max = quarter_count
+        elif aggressive_default and pressure_stage == "normal" and window_sec >= 180.0:
+            default_max = quarter_count
+        else:
+            default_max = 2
+        manual_max = int(settings.get("stt_quarter_parallel_max_workers", default_max) or default_max)
+        requested = max(1, min(total_windows, quarter_count, manual_max))
+        workers, scheduler_meta = runtime_parallel_worker_plan(
+            settings=settings,
+            task="stt_window",
+            requested=requested,
+            workload=total_windows,
+            minimum=1,
+            maximum=min(4, total_windows),
+            reserve_task="stt",
+        )
+        return max(1, int(workers or 1)), dict(scheduler_meta or {})
+
+    def _windowed_span_payloads(
+        self,
+        items: list[dict],
+        window_ranges: list[dict],
+        vad_strict: list[dict] | None,
+    ) -> list[dict]:
+        payloads: list[dict] = []
+        for window_index, window_range in enumerate(window_ranges):
+            window_start = float(window_range.get("start", 0.0) or 0.0)
+            window_end = float(window_range.get("end", 0.0) or 0.0)
+            payloads.append(
+                {
+                    "window_index": window_index,
+                    "window_range": window_range,
+                    "window_items": self._window_items_for_range(items, window_start, window_end),
+                    "clipped_vad": self._clip_vad_segments_to_window(vad_strict, window_start, window_end),
+                }
+            )
+        return payloads
+
+    def _drain_committed_window_results(
+        self,
+        payloads: list[dict],
+        window_results: dict[int, list[dict]],
+        settings: dict,
+        *,
+        next_window_index: int,
+        previous_end: float,
+        total_windows: int,
+        log_label: str,
+        preview_callback=None,
+    ) -> tuple[list[tuple[list[dict], int, int]], int, float]:
+        committed_batches: list[tuple[list[dict], int, int]] = []
+        while next_window_index < len(payloads):
+            payload = payloads[next_window_index]
+            window_index = int(payload["window_index"])
+            if window_index not in window_results:
+                break
+            window_range = dict(payload["window_range"])
+            clipped_vad = list(payload["clipped_vad"] or [])
+            # 병렬 수집 후에도 확정은 시간 순서로만 수행해야 overlap dedupe 품질이 유지됩니다.
+            committed = self._apply_windowed_span_finalize(
+                window_results.pop(window_index, []),
+                window_range,
+                settings,
+                window_index=window_index,
+                total_windows=total_windows,
+                previous_end=previous_end,
+                vad_segments=clipped_vad,
+            )
+            if committed:
+                previous_end = float(committed[-1].get("end", previous_end) or previous_end)
+                if callable(preview_callback):
+                    try:
+                        preview_callback(committed, log_label)
+                    except Exception as exc:
+                        get_logger().log(f"  ⚠️ [{log_label}] window preview callback failed: {exc}")
+            get_logger().log(
+                f"  💾 [{log_label}] 창 {window_index + 1}/{total_windows} 확정 "
+                f"세그먼트 {len(committed)}개"
+            )
+            committed_batches.append((committed, window_index + 1, total_windows))
+            next_window_index += 1
+        return committed_batches, next_window_index, previous_end
+
+    def _transcribe_windowed_spans_parallel(
+        self,
+        chunk_dir: str,
+        payloads: list[dict],
+        settings: dict,
+        *,
+        parallel_workers: int,
+        total_windows: int,
+        target_end_sec: float | None,
+        is_single: bool,
+        model_override: str | None,
+        log_label: str,
+        use_ensemble_windows: bool = False,
+        preview_callback=None,
+    ):
+        def _run_window(payload: dict) -> tuple[int, list[dict]]:
+            window_index = int(payload["window_index"])
+            window_range = dict(payload["window_range"])
+            window_items = list(payload["window_items"] or [])
+            clipped_vad = list(payload["clipped_vad"] or [])
+            if not window_items:
+                return window_index, []
+            get_logger().log(
+                f"  🪟 [{log_label}] 창 {window_index + 1}/{total_windows} "
+                f"{float(window_range.get('start', 0.0) or 0.0):.1f}s~"
+                f"{float(window_range.get('end', 0.0) or 0.0):.1f}s "
+                f"(청크 {len(window_items)}개)"
+            )
+            window_chunk_dir = self._build_window_chunk_dir(
+                chunk_dir,
+                window_items,
+                window_index=window_index,
+                total_windows=total_windows,
+                window_range=window_range,
+                vad_segments=clipped_vad,
+            )
+            window_label = f"{log_label}-window-{window_index + 1}/{total_windows}"
+            return window_index, self._collect_window_transcribe_segments_isolated(
+                window_chunk_dir,
+                settings=settings,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                model_override=model_override,
+                log_label=window_label,
+                use_ensemble=use_ensemble_windows,
+            )
+
+        window_results: dict[int, list[dict]] = {}
+        next_window_index = 0
+        previous_end = 0.0
+        with ThreadPoolExecutor(max_workers=parallel_workers, thread_name_prefix="stt-window") as executor:
+            futures = [executor.submit(_run_window, payload) for payload in payloads]
+            for future in as_completed(futures):
+                window_index, window_segments = future.result()
+                window_results[window_index] = window_segments
+                # 앞 창이 끝나는 즉시 확정/하류 최적화로 넘겨 later window STT와 겹치게 한다.
+                ready_batches, next_window_index, previous_end = self._drain_committed_window_results(
+                    payloads,
+                    window_results,
+                    settings,
+                    next_window_index=next_window_index,
+                    previous_end=previous_end,
+                    total_windows=total_windows,
+                    log_label=log_label,
+                    preview_callback=preview_callback,
+                )
+                for committed, ordinal, total in ready_batches:
+                    yield committed, ordinal, total
 
     def _apply_windowed_span_finalize(
         self,
@@ -2205,6 +2494,7 @@ class VideoProcessorTranscribeMixin:
         is_single: bool,
         model_override: str | None,
         log_label: str,
+        use_ensemble_windows: bool = False,
         preview_callback=None,
     ):
         window_ranges = self._windowed_span_ranges(items, settings)
@@ -2230,7 +2520,34 @@ class VideoProcessorTranscribeMixin:
             f"🪟 [{log_label}] 롤링 STT 창 활성화: {total_windows}개 창 · "
             f"window {float(settings.get('stt_window_sec', 180.0) or 180.0):.1f}초 · "
             f"overlap {overlap_sec:.1f}초 · hysteresis {hysteresis_sec:.1f}초"
+            + (" · 창별 STT1/STT2 앙상블" if use_ensemble_windows else "")
         )
+
+        parallel_workers, scheduler_meta = self._stt_quarter_parallel_window_workers(settings, total_windows)
+        if parallel_workers > 1:
+            suffix = self._ensemble_scheduler_suffix(scheduler_meta, "windowed")
+            get_logger().log(
+                f"  🧵 [{log_label}] STT rolling window 병렬 활성화: "
+                f"{parallel_workers}개 워커{suffix}"
+            )
+            try:
+                yield from self._transcribe_windowed_spans_parallel(
+                    chunk_dir,
+                    self._windowed_span_payloads(items, window_ranges, vad_strict),
+                    settings,
+                    parallel_workers=parallel_workers,
+                    total_windows=total_windows,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    model_override=model_override,
+                    log_label=log_label,
+                    use_ensemble_windows=use_ensemble_windows,
+                    preview_callback=preview_callback,
+                )
+                return
+            except Exception as exc:
+                # 병렬 worker 실패 시 같은 창/품질 규칙의 serial 경로로 되돌려 생성 실패를 막습니다.
+                get_logger().log(f"  ⚠️ [{log_label}] STT rolling window 병렬 실패, serial로 재시도: {exc}")
 
         previous_end = 0.0
         for window_index, window_range in enumerate(window_ranges):

@@ -34,6 +34,7 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
                 "mode_auto_piecewise_drift",
                 "mode_auto_adaptive_split_drift",
                 "mode_high",
+                "mode_high_full_core_overlap",
                 "mode_high_piecewise_drift",
             },
         )
@@ -107,6 +108,18 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertTrue(bool(high.overrides.get("deep_subtitle_policy_enabled")))
         self.assertFalse(bool(high.overrides.get("subtitle_bundle_use_provisional_cuts")))
 
+        high_full_core = by_name["mode_high_full_core_overlap"]
+        self.assertEqual(high_full_core.method, "selective_ensemble")
+        self.assertEqual(high_full_core.overrides.get("benchmark_runtime_profile"), "apple_m_full_core_throughput")
+        self.assertTrue(bool(high_full_core.overrides.get("apple_m_full_core_aggressive_enabled")))
+        self.assertTrue(bool(high_full_core.overrides.get("stt_window_ensemble_enabled")))
+        self.assertTrue(bool(high_full_core.overrides.get("stt_window_parallel_enabled")))
+        self.assertEqual(high_full_core.overrides.get("stt_window_sec"), 180.0)
+        self.assertEqual(high_full_core.overrides.get("stt_quarter_parallel_count"), 4)
+        self.assertEqual(high_full_core.overrides.get("stt_quarter_parallel_max_workers"), 4)
+        self.assertTrue(bool(high_full_core.overrides.get("stt_ensemble_selective_enabled")))
+        self.assertFalse(bool(high_full_core.overrides.get("stt_ensemble_parallel_enabled")))
+
         high_drift = by_name["mode_high_piecewise_drift"]
         self.assertEqual(high_drift.method, "selective_ensemble")
         self.assertTrue(bool(high_drift.overrides.get("subtitle_timing_piecewise_drift_enabled")))
@@ -147,6 +160,7 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         auto_drift_settings = _variant_chunk_settings(base, by_name["mode_auto_piecewise_drift"].overrides)
         auto_split_drift_settings = _variant_chunk_settings(base, by_name["mode_auto_adaptive_split_drift"].overrides)
         high_settings = _variant_chunk_settings(base, by_name["mode_high"].overrides)
+        high_full_core_settings = _variant_chunk_settings(base, by_name["mode_high_full_core_overlap"].overrides)
         high_drift_settings = _variant_chunk_settings(base, by_name["mode_high_piecewise_drift"].overrides)
 
         self.assertTrue(bool(auto_settings.get("audio_chunk_routing_enabled")))
@@ -160,6 +174,7 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(_chunk_extraction_signature(auto_settings), _chunk_extraction_signature(auto_drift_settings))
         self.assertEqual(_chunk_extraction_signature(auto_split_settings), _chunk_extraction_signature(auto_split_drift_settings))
         self.assertNotEqual(base_sig, _chunk_extraction_signature(high_settings))
+        self.assertNotEqual(_chunk_extraction_signature(high_settings), _chunk_extraction_signature(high_full_core_settings))
         self.assertEqual(_chunk_extraction_signature(high_settings), _chunk_extraction_signature(high_drift_settings))
 
     def test_variant_chunk_signature_ignores_packaging_only_changes(self):

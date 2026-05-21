@@ -610,9 +610,11 @@ class EditorSaveManagerMixin:
         queue_learning: bool = True,
         allow_project_create: bool = True,
         auto_export: bool | None = None,
+        force: bool = False,
+        cancel_post_generation_roughcut: bool = True,
     ):
         cancel_roughcut = getattr(self, "_cancel_post_generation_roughcut_draft", None)
-        if callable(cancel_roughcut):
+        if bool(cancel_post_generation_roughcut) and callable(cancel_roughcut):
             try:
                 cancel_roughcut(reason="수동 저장")
             except Exception as exc:
@@ -621,7 +623,7 @@ class EditorSaveManagerMixin:
             str(getattr(self, "_saved_segments_signature", "") or "").strip()
             or str(self._current_project_path_for_dirty_check() or "").strip()
         )
-        if has_saved_reference:
+        if has_saved_reference and not bool(force):
             try:
                 if not self._has_unsaved_changes():
                     self._mark_save_completed(touch_saved_time=False)

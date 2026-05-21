@@ -37,6 +37,7 @@ def schedule_native_open_editor_media(
     primary_delay_ms: int = 72,
     waveform_delay_ms: int = 260,
     prefer_fast_first_paint: bool = True,
+    defer_waveform_until_start: bool = True,
 ) -> None:
     """Show the editor shell first, then hydrate media in a staged way."""
     path = str(media_path or "").strip()
@@ -87,8 +88,15 @@ def schedule_native_open_editor_media(
         except Exception as exc:
             get_logger().log(f"⚠️ 에디터 지연 미디어 로드 실패: {exc}")
             return
-        if prefer_fast_first_paint:
+        if prefer_fast_first_paint and not defer_waveform_until_start:
             QTimer.singleShot(max(0, int(waveform_delay_ms)), _load_waveform)
+        elif prefer_fast_first_paint:
+            # Waveform is editor convenience data; keep media-open snappy and load it after Start.
+            try:
+                setattr(editor, "_deferred_open_waveform_path", path)
+                setattr(editor, "_deferred_open_waveform_loaded", False)
+            except Exception:
+                pass
 
     QTimer.singleShot(max(0, int(primary_delay_ms)), _load_primary)
 

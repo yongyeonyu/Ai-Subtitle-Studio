@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.runtime.multi_process import (
+    APPLE_M_FULL_CORE_THROUGHPUT_PROFILE,
     RuntimeResourceCoordinator,
     _ACCELERATION_CALLOUTS_UNSET,
     _runtime_acceleration_callouts,
@@ -15,6 +16,7 @@ from core.runtime.multi_process import (
     runtime_llm_worker_plan,
     runtime_parallel_worker_plan,
 )
+from core.performance import runtime_scheduler_reserve_cores
 
 
 class _Logger:
@@ -103,6 +105,13 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(settings["scan_cut_follower_stream_batch_size"], 16)
         self.assertFalse(settings["scan_cut_follower_mps_enabled"])
         self.assertFalse(settings["stt_ensemble_parallel_enabled"])
+        self.assertTrue(settings["stt_window_parallel_enabled"])
+        self.assertTrue(settings["stt_window_parallel_aggressive_enabled"])
+        self.assertEqual(settings["stt_quarter_parallel_count"], 4)
+        self.assertEqual(settings["stt_quarter_parallel_max_workers"], 4)
+        self.assertEqual(settings["cut_boundary_wait_prescan_before_stt_timeout_sec"], 1.0)
+        self.assertFalse(settings["cut_boundary_wait_follower_before_stt"])
+        self.assertEqual(settings["cut_boundary_wait_follower_before_stt_timeout_sec"], 0.0)
         self.assertEqual(settings["stt_word_timestamps_mode"], "selective")
         self.assertEqual(settings["llm_threads_resource_max"], 5)
         self.assertEqual(settings["local_ollama_llm_max_workers"], 2)
@@ -148,12 +157,77 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(settings["scan_cut_parallel_quarter_count"], 4)
         self.assertEqual(settings["scan_cut_follower_stream_start_percent"], 25)
         self.assertEqual(settings["scan_cut_follower_stream_batch_size"], 16)
+        self.assertTrue(settings["stt_window_parallel_enabled"])
+        self.assertEqual(settings["stt_quarter_parallel_max_workers"], 4)
+        self.assertFalse(settings["cut_boundary_wait_follower_before_stt"])
         self.assertEqual(settings["stt_primary_gpu_slots"], 1)
         self.assertEqual(settings["stt_npu_coreml_slots"], 1)
         self.assertEqual(settings["stt_accelerator_distribution"], "gpu+npu+cpu")
         self.assertTrue(plan["native_cpp_llm_macro_groups"])
         self.assertEqual(plan["native_swift_quality_min_segments"], 64)
         self.assertEqual(plan["native_swift_common_split_min_items"], 1000)
+
+    def test_apply_apple_m_full_core_profile_saturates_workers_without_changing_quality_window(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "brand_string": "Apple M5",
+            "chip_name": "Apple M5",
+            "chip_generation": 5,
+            "chip_tier": "base",
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "gpu_cores": 10,
+            "neural_engine_cores": 16,
+            "memory_bytes": 16 * 1024 ** 3,
+        }
+        with patch("core.runtime.multi_process.config.IS_APPLE_SILICON", True), \
+             patch("core.runtime.multi_process.hardware_profile", return_value=snapshot), \
+             patch("core.performance.hardware_profile", return_value=snapshot):
+            settings = apply_apple_m_subtitle_pipeline_plan({
+                "subtitle_mode": "high",
+                "benchmark_runtime_profile": APPLE_M_FULL_CORE_THROUGHPUT_PROFILE,
+                "stt_window_sec": 180.0,
+            })
+            reserve = runtime_scheduler_reserve_cores(settings, task="stt")
+
+        self.assertEqual(settings["runtime_scheduler_reserve_cores"], 0)
+        self.assertEqual(reserve, 0)
+        self.assertEqual(settings["runtime_native_threads"], 10)
+        self.assertEqual(settings["io_workers"], 10)
+        self.assertEqual(settings["audio_chunk_route_max_workers"], 10)
+        self.assertEqual(settings["ffmpeg_filter_threads"], 10)
+        self.assertEqual(settings["llm_threads_resource_max"], 8)
+        self.assertTrue(settings["stt_window_ensemble_enabled"])
+        self.assertTrue(settings["stt_window_parallel_enabled"])
+        self.assertEqual(settings["stt_window_sec"], 180.0)
+        self.assertEqual(settings["stt_quarter_parallel_count"], 4)
+        self.assertEqual(settings["stt_quarter_parallel_max_workers"], 4)
+        self.assertTrue(settings["stt_ensemble_selective_enabled"])
+        self.assertFalse(settings["stt_ensemble_parallel_enabled"])
+        self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["full_core_aggressive"])
+        self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["stt_window_ensemble"])
+
+    def test_apply_apple_m_full_core_profile_keeps_full_parallel_stt_explicit(self):
+        snapshot = {
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+        }
+        with patch("core.runtime.multi_process.config.IS_APPLE_SILICON", True), \
+             patch("core.runtime.multi_process.hardware_profile", return_value=snapshot):
+            settings = apply_apple_m_subtitle_pipeline_plan({
+                "apple_m_full_core_aggressive_enabled": True,
+                "apple_m_aggressive_full_parallel_stt_enabled": True,
+            })
+
+        self.assertTrue(settings["stt_ensemble_parallel_enabled"])
+        self.assertFalse(settings["stt_ensemble_selective_enabled"])
+        self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["full_parallel_stt_experiment"])
 
     def test_apply_apple_m_subtitle_pipeline_plan_can_be_disabled(self):
         original = {"apple_m_pipeline_parallel_enabled": False, "io_workers": 2}

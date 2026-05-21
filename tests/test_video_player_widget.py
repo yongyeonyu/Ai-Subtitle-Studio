@@ -391,11 +391,35 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
                 self.assertEqual(playback_path, src)
                 self.assertEqual(widget._proxy_playback_path, src)
-                popen.assert_called_once()
-                command = popen.call_args.args[0]
+                ffmpeg_calls = [
+                    call for call in popen.call_args_list
+                    if call.args and call.args[0] and os.path.basename(str(call.args[0][0])) == "ffmpeg"
+                ]
+                self.assertEqual(len(ffmpeg_calls), 1)
+                command = ffmpeg_calls[0].args[0]
                 self.assertIn("-c:v", command)
                 self.assertIn(command[command.index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
                 self.assertIn("force_original_aspect_ratio=decrease", " ".join(command))
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_deferred_probe_load_does_not_start_preview_proxy_build(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                src = os.path.join(tmp, "sample.mp4")
+                with open(src, "wb") as f:
+                    f.write(b"video")
+
+                with patch.object(widget, "_preview_proxy_enabled", return_value=True), \
+                     patch.object(widget, "_start_proxy_build") as start_proxy_build, \
+                     patch.object(widget, "_schedule_initial_thumbnail_prepare"):
+                    widget.load(src, [], defer_probe=True)
+
+                self.assertEqual(widget._pending_media_source_path, src)
+                start_proxy_build.assert_not_called()
         finally:
             widget.close()
             widget.deleteLater()
@@ -626,8 +650,9 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             label = widget.source_name_label
             self.assertFalse(label.isHidden())
             self.assertEqual(label.toolTip(), os.path.basename(path))
-            self.assertEqual(label.text(), os.path.basename(path))
-            self.assertFalse(label.wordWrap())
+            self.assertIn("\n", label.text())
+            self.assertEqual(label.text().replace("\n", ""), os.path.basename(path))
+            self.assertTrue(label.wordWrap())
             self.assertIn("border-radius: 9px", label.styleSheet())
             self.assertIs(label.parentWidget(), widget.status_info_container)
             self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
@@ -636,7 +661,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(control_layout.stretch(0), 0)
             self.assertEqual(control_layout.stretch(1), 1)
             self.assertEqual(control_layout.spacing(), 6)
-            self.assertEqual(widget.info_label.maximumWidth(), 250)
+            self.assertEqual(widget.info_label.maximumWidth(), 220)
+            self.assertEqual(widget.source_name_label.maximumWidth(), 200)
         finally:
             widget.close()
             widget.deleteLater()
@@ -1215,6 +1241,34 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             play_mock.assert_called_once()
             self.assertEqual(widget.current_frame, 249)
             self.assertAlmostEqual(widget.current_time, 9.96, places=2)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_toggle_play_recovers_when_source_ready_flag_is_stale(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget.total_time = 12.0
+            widget.set_frame_rate(30.0)
+            widget.current_time = 3.0
+            widget._source_ready = False
+            widget._pending_autoplay = False
+
+            with patch.object(widget, "_ensure_media_source_loaded", return_value=True) as ensure_loaded, \
+                 patch.object(widget, "_refresh_provider_segments"), \
+                 patch.object(widget, "_hide_thumbnail"), \
+                 patch.object(widget.media_player, "playbackState", return_value=QMediaPlayer.PlaybackState.PausedState), \
+                 patch.object(widget.media_player, "setPosition") as set_position, \
+                 patch.object(widget.media_player, "play") as play_mock, \
+                 patch.object(widget, "_ensure_audio_outputs"):
+                widget.toggle_play()
+
+            ensure_loaded.assert_called_once()
+            set_position.assert_called_once_with(3000)
+            play_mock.assert_called_once()
+            self.assertTrue(widget._source_ready)
+            self.assertFalse(widget._pending_autoplay)
         finally:
             widget.close()
             widget.deleteLater()

@@ -587,10 +587,14 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             if isinstance(runtime_tune, dict) and runtime_tune:
                 data.update(auto_audio_settings_only(runtime_tune))
         # Legacy override hook kept for compatibility with older batch callers.
+        # Apply overrides before and after the Apple Silicon plan so bench flags
+        # can shape the plan, but pass-specific STT/LLM disable flags still win.
         overrides = getattr(self, '_fast_mode_overrides', None)
         if overrides and isinstance(overrides, dict):
             data.update(overrides)
         data = apply_apple_m_subtitle_pipeline_plan(data)
+        if overrides and isinstance(overrides, dict):
+            data.update(overrides)
         return data
 
     def clear_fast_mode_overrides(self):

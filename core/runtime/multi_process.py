@@ -34,6 +34,7 @@ from core.runtime.setting_utils import setting_bool as _setting_bool
 BENCH_LOCKED_CUT_PIONEER_WORKERS = 4
 BENCH_LOCKED_CUT_FOLLOWER_WORKERS = 4
 BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS = 4
+APPLE_M_FULL_CORE_THROUGHPUT_PROFILE = "apple_m_full_core_throughput"
 _ACCELERATION_CALLOUTS_UNSET = object()
 _ACCELERATION_CALLOUTS: tuple[Callable[[], bool], Callable[..., dict[str, Any]]] | object = _ACCELERATION_CALLOUTS_UNSET
 
@@ -78,6 +79,15 @@ def _core_topology_counts(profile: dict[str, Any] | None = None) -> tuple[int, i
     performance = max(1, min(performance, logical))
     efficiency = max(0, min(efficiency, max(0, logical - performance)))
     return logical, physical, performance, efficiency
+
+
+def _apple_m_full_core_aggressive_requested(settings: dict[str, Any] | None = None) -> bool:
+    data = dict(settings or {})
+    benchmark_profile = str(data.get("benchmark_runtime_profile") or "").strip().lower()
+    return bool(
+        _setting_bool(data.get("apple_m_full_core_aggressive_enabled"), False)
+        or benchmark_profile == APPLE_M_FULL_CORE_THROUGHPUT_PROFILE
+    )
 
 
 def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -138,7 +148,11 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     stt_primary_slots = _positive_int(chip_pipeline.get("stt_primary_slots"), 1)
     npu_slots = _positive_int(chip_npu.get("coreml_slots"), 0)
 
-    respect_manual = _setting_bool(merged.get("apple_m_pipeline_respect_manual_worker_settings"), False)
+    full_core_aggressive = _apple_m_full_core_aggressive_requested(merged)
+    respect_manual = (
+        _setting_bool(merged.get("apple_m_pipeline_respect_manual_worker_settings"), False)
+        and not full_core_aggressive
+    )
 
     def set_opt(key: str, value: Any, *, manual_zero_is_auto: bool = True) -> None:
         if respect_manual and key in merged:
@@ -184,6 +198,10 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         word_ts_max_audio_sec = 70.0
     set_opt("stt_ensemble_selective_enabled", False)
     set_opt("stt_ensemble_parallel_enabled", False)
+    set_opt("stt_window_parallel_enabled", True)
+    set_opt("stt_window_parallel_aggressive_enabled", True)
+    set_opt("stt_quarter_parallel_count", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
+    set_opt("stt_quarter_parallel_max_workers", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
     set_opt("stt_word_timestamps_mode", word_ts_mode)
     set_opt("stt_word_timestamps_default_enabled", False)
     set_opt("stt_word_timestamps_precision_enabled", word_ts_enabled)
@@ -216,6 +234,11 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("scan_cut_follower_stream_start_percent", stream_start_percent)
     set_opt("scan_cut_follower_stream_batch_size", max(BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS, stream_batch_size))
     set_opt("scan_cut_follower_stream_min_interval_sec", 0.75)
+    # Follower rollback can keep refining while STT starts from pioneer cuts.
+    # Avoid burning a second of idle wall time on Apple Silicon startup.
+    set_opt("cut_boundary_wait_prescan_before_stt_timeout_sec", 1.0)
+    set_opt("cut_boundary_wait_follower_before_stt", False)
+    set_opt("cut_boundary_wait_follower_before_stt_timeout_sec", 0.0)
     # The follower verifier compares many tiny thumbnail grids. On Apple
     # Silicon this micro-kernel is usually faster on CPU unless the user
     # explicitly opts into MPS for benchmarking, so keep the default off but
@@ -241,6 +264,39 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("local_ollama_llm_max_workers", local_llm_workers)
     set_opt("roughcut_llm_threads_auto_enabled", True)
     set_opt("roughcut_llm_threads_resource_max", max(1, min(4, performance)))
+
+    if full_core_aggressive:
+        full_core_workers = max(1, logical)
+        full_core_llm_workers = max(1, min(logical, max(4, performance + min(efficiency, 4))))
+        full_parallel_stt = _setting_bool(merged.get("apple_m_aggressive_full_parallel_stt_enabled"), False)
+
+        # Opt-in benchmark hot path: use every logical core while keeping the
+        # quality-safe 3 minute STT window and selective STT2 rescue by default.
+        set_opt("benchmark_runtime_profile", APPLE_M_FULL_CORE_THROUGHPUT_PROFILE)
+        set_opt("runtime_scheduler_reserve_cores", 0)
+        set_opt("runtime_native_threads", full_core_workers)
+        set_opt("io_workers", full_core_workers)
+        set_opt("audio_chunk_route_max_workers", full_core_workers)
+        set_opt("ffmpeg_filter_threads", full_core_workers)
+        set_opt("ff_threads", full_core_workers)
+        set_opt("subtitle_native_prepass_workers", full_core_workers)
+        set_opt("subtitle_native_prepass_workers_resource_max", full_core_workers)
+        set_opt("llm_workers", min(full_core_llm_workers, 6))
+        set_opt("llm_threads_resource_max", full_core_llm_workers)
+        set_opt("roughcut_llm_threads_resource_max", full_core_llm_workers)
+        set_opt("stt_window_ensemble_enabled", True)
+        set_opt("stt_window_parallel_enabled", True)
+        set_opt("stt_window_parallel_aggressive_enabled", True)
+        set_opt("stt_quarter_parallel_count", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
+        set_opt("stt_quarter_parallel_max_workers", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
+        if full_parallel_stt:
+            set_opt("stt_ensemble_parallel_enabled", True)
+            set_opt("stt_ensemble_selective_enabled", False)
+            set_opt("stt_selective_secondary_recheck_enabled", False)
+        else:
+            set_opt("stt_ensemble_parallel_enabled", False)
+            set_opt("stt_ensemble_selective_enabled", True)
+            set_opt("stt_selective_secondary_recheck_enabled", True)
 
     set_opt("editor_live_stt_preview_follow_video_enabled", False)
     set_opt("editor_live_stt_preview_follow_interval_sec", 2.0)
@@ -270,6 +326,9 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         "native_swift_quality_min_segments": int(native_overrides["native_swift_quality_scoring_min_segments"]),
         "native_swift_common_split_min_items": int(native_overrides["native_swift_common_split_min_items"]),
         "native_backend_plan": mac_native_backend_plan(merged),
+        "full_core_aggressive": bool(full_core_aggressive),
+        "stt_window_ensemble": bool(merged.get("stt_window_ensemble_enabled", False)),
+        "full_parallel_stt_experiment": bool(merged.get("apple_m_aggressive_full_parallel_stt_enabled", False)),
     }
     return merged
 

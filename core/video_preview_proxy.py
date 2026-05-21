@@ -7,9 +7,11 @@ reuse an existing proxy to avoid repeatedly decoding very large 4K/HEVC files.
 """
 
 import os
+import subprocess
 from typing import Any
 
 from core.media_fingerprint import media_fingerprint_digest
+from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 from core.runtime import config
 from core.runtime.memory_manager import register_runtime_cache_path, prune_runtime_disk_caches, scaled_runtime_cache_budget_bytes
 
@@ -64,6 +66,50 @@ def register_preview_proxy_created(
     return prune_preview_proxy_cache(settings=settings, target_total_bytes=target_total_bytes)
 
 
+def preview_proxy_is_valid(path: str, *, timeout_sec: float = 2.5) -> bool:
+    path = str(path or "")
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        if os.path.getsize(path) < 4096:
+            return False
+    except OSError:
+        return False
+    try:
+        result = subprocess.run(
+            [
+                ffprobe_binary(),
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nokey=1:noprint_wrappers=1",
+                path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=max(0.2, float(timeout_sec or 2.5)),
+            **hidden_subprocess_kwargs(strip_qt=True),
+        )
+    except Exception:
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        return float(str(result.stdout or "").strip().splitlines()[0]) > 0.0
+    except Exception:
+        return False
+
+
+def _discard_invalid_preview_proxy(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def existing_preview_proxy_for(path: str) -> str:
     if not path:
         return ""
@@ -71,7 +117,13 @@ def existing_preview_proxy_for(path: str) -> str:
         proxy = preview_proxy_path_for(path)
     except Exception:
         return ""
-    return proxy if proxy and os.path.exists(proxy) else ""
+    if not proxy or not os.path.exists(proxy):
+        return ""
+    if preview_proxy_is_valid(proxy):
+        return proxy
+    # 깨진 mp4 캐시는 QMediaPlayer를 duration=0 상태로 묶어 재생을 막으므로 즉시 폐기한다.
+    _discard_invalid_preview_proxy(proxy)
+    return ""
 
 
 def cut_boundary_scan_source(path: str, settings: dict | None = None) -> str:
@@ -87,6 +139,7 @@ def cut_boundary_scan_source(path: str, settings: dict | None = None) -> str:
 __all__ = [
     "cut_boundary_scan_source",
     "existing_preview_proxy_for",
+    "preview_proxy_is_valid",
     "preview_proxy_cache_budget_bytes",
     "preview_proxy_cache_dir",
     "preview_proxy_path_for",

@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.12-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_12_RELEASED
-Last-Updated: 2026-05-21
+Document-Version: 04.00.13-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_13_RELEASED
+Last-Updated: 2026-05-22
 Updated-By: Codex
 Purpose: Short agent bootstrap and execution rules only.
 -->
@@ -10,8 +10,8 @@ Purpose: Short agent bootstrap and execution rules only.
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.00.12`
-- Latest release checkpoint: `v04.00.12`
+- App version in code: `04.00.13`
+- Latest release checkpoint: `v04.00.13`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -61,13 +61,13 @@ Completed item rule:
 - Latest known full QA pass: `output/manual_verification/latest/qa_suite_full_20260521_022256`.
 - Current optimization plan: `idea_item.md`, section `2026-05-20 최종 통합 실행 계획: ACTION_ITEMS + NATIVE_LIB_PLAN 전체`.
 - When the owner says `아이디어 전부 실행해`, execute that integrated plan in phase order with branch, commits, QA gates, rollback notes, `waste_action_item.md`, and `lesson_n_learned.md`.
-- Latest release focus: editor/timeline stability, manual-save roughcut suppression, single-owner 2D timeline rendering, safe space/playhead shortcuts, and clean app close handling.
+- Latest release focus: Apple Silicon selective STT2/runtime override hardening, X5 High regression closure, single-owner 2D timeline rendering, and clean app close handling.
 
 ## Fixtures
 
 - Macau quick/smoke: `/Users/u_mo_c/Downloads/마카오테스트`
 - X5 accuracy: `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video/X5_시승기_후반.MP4` plus sibling `.srt`
-- Tinyping long-flow: `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4`
+- Tinyping long-flow: `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4` (manual only; excluded from default QA unless explicitly requested)
 - Store verification artifacts under `output/manual_verification/latest/`.
 
 ## Operating Rules
@@ -93,9 +93,9 @@ Completed item rule:
 
 - Before proposing or executing performance ideas, read `idea_item.md`, `waste_action_item.md`, and `lesson_n_learned.md`.
 - Do not re-propose rejected ideas from `waste_action_item.md` unless new measurements clearly invalidate the old rejection.
-- If an `idea_item.md` experiment is slower, lower quality, less stable, or only wins on a short fixture while regressing X5/Tinyping, append it to `waste_action_item.md` with hypothesis, change, metrics, quality result, artifact path, and rejection reason.
+- If an `idea_item.md` experiment is slower, lower quality, less stable, or only wins on a short fixture while regressing X5, append it to `waste_action_item.md` with hypothesis, change, metrics, quality result, artifact path, and rejection reason.
 - Record repeat-prevention lessons in `lesson_n_learned.md` whenever a mistake pattern, false diagnosis, risky shortcut, or ineffective optimization should not be repeated.
-- Do not treat short Macau speed gains as sufficient. Check X5 and Tinyping when quality or long-flow performance can be affected.
+- Do not treat short Macau speed gains as sufficient. Check X5 3-minute rolling verification when quality or rolling-window performance can be affected. Run Tinyping only when the owner explicitly requests long-flow validation.
 - After a normal successful idea/action/native item completion, remove that completed item from `idea_item.md`, `ACTION_ITEMS.md`, or `NATIVE_LIB_PLAN.md` so those files show only remaining executable work.
 
 ## Release Rules

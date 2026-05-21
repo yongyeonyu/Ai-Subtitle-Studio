@@ -1,5 +1,113 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.00.13 selective STT2 recursion regression release - 2026-05-22
+
+- 실행 모드: Targeted + X5 High real-media + Full
+- 결과:
+  - Targeted: pass
+  - X5 High 3-minute: pass, `output/manual_verification/latest/20260522_x5_high_release_regression_fix`
+  - Full: pass, `output/manual_verification/latest/qa_suite_full_20260522_081710`
+- 수정/확인 항목:
+  - Apple Silicon runtime plan 적용 후 `_fast_mode_overrides`를 다시 반영하도록 바꿔 pass-specific STT disable override가 살아남게 했다.
+  - 그 결과 `선택 STT2 재검사`가 `_fast_stt2_recheck` 내부에서 자기 자신을 다시 재기동하던 재귀 경로를 차단했다.
+  - UI/UX, 라벨, 레이아웃, 단축키, 자막 품질 정책은 변경하지 않았다.
+- 단위/가드:
+  - `./venv/bin/python -m unittest tests.test_audio_presets tests.test_media_processor_overlap.MediaProcessorOverlapTests.test_native_batch_refine_routes_precision_rechecks_after_full_stt1_pass -q`: pass (`49 tests OK`)
+  - `./venv/bin/python -m py_compile core/audio/media_processor.py tests/test_audio_presets.py`: pass
+  - `git diff --check -- core/audio/media_processor.py tests/test_audio_presets.py`: pass
+- 실영상 검증:
+  - `./venv/bin/python tools/verify_full_media_pipeline.py --media '/Users/u_mo_c/Downloads/ai_subtitle_studio/test video/X5_시승기_후반.MP4' --mode high --duration-sec 180 --output-dir output/manual_verification/latest/20260522_x5_high_release_regression_fix`
+  - 결과: pass
+  - 요약: `total_elapsed_sec=182.697`, `pipeline_elapsed_sec=168.115`, `peak_rss_bytes=652050432`, `final/raw=54/52`
+  - 이전 실패 원인인 `_fast_stt2_recheck/.../_fast_stt2_recheck/...` 중첩과 `Failed to load audio: Interrupted system call`이 재발하지 않았다.
+- full QA:
+  - `./packaging/macos/build_app_bundle.sh`: pass
+  - `./venv/bin/python tools/qa_suite_runner.py full`: pass
+  - scenario count `5`, failed `0`
+- 분류:
+  - code regression: Apple Silicon runtime plan이 pass-specific STT override를 덮어써 recursive selective recheck를 유발.
+  - fixture drift: 없음.
+  - environment-bundle issue: 없음.
+- 코드 수정 여부: 있음.
+- 문서 반영 여부: 있음. `RELEASE_v04.00.13.md`, `README.md`, `AGENTS.md`, `test_result.md`.
+- 남은 위험:
+  - long High 경로는 여전히 memory pressure `critical`에 들어갈 수 있으므로, 이후 최적화는 메모리 압박과 STT2/word precision wall-clock을 별도로 다뤄야 한다.
+
+## QA fixture rule update - 2026-05-21
+
+- 실행 모드: Targeted
+- 결과: pass
+- 변경/확인 항목:
+  - `tools/qa_suite_runner.py full`에서 기본 full-media 시나리오를 Tinyping 60초 fast/auto/high 3건에서 X5 high 3분 rolling 1건으로 변경.
+  - Tinyping은 기본 QA에서 제외하고, 사용자가 명시 요청한 long-flow 수동 검증으로만 사용하도록 `AGENTS.md`, `test_case.md`, `README.md` 규칙을 갱신.
+- 단위/가드:
+  - `./venv/bin/python -m unittest tests.test_qa_suite_runner -q`: pass
+  - `./venv/bin/python -m py_compile tools/qa_suite_runner.py tests/test_qa_suite_runner.py`: pass
+  - `git diff --check -- tools/qa_suite_runner.py tests/test_qa_suite_runner.py test_case.md README.md AGENTS.md`: pass
+- 실영상 검증:
+  - 실행하지 않음. 이번 변경은 runner 구성/문서 규칙 변경이며, 무거운 Tinyping 검증은 기본 테스트에서 제외했다.
+
+## 영상 오픈 전처리 지연 축소 - 2026-05-21 21:52~21:55
+
+- 실행 모드: Targeted + 실앱 Tinyping open-media smoke
+- 결과: pass
+- 수정/확인 항목:
+  - 영상 오픈 직후 720p HEVC preview proxy ffmpeg 빌드를 시작하지 않도록 했다.
+  - single media waveform 로드는 영상 오픈 직후가 아니라 `시작` 클릭 후 파이프라인 시작 피드백이 표시된 다음 시작하도록 미뤘다.
+  - 자막 품질/STT/LLM/VAD 알고리즘은 변경하지 않았다.
+- 단위/가드:
+  - `tests.test_project_segment_reload.ProjectSegmentReloadTests.test_native_open_media_bootstrap_defers_waveform_until_start`: pass
+  - `tests.test_video_player_widget.VideoPlayerWidgetTests.test_deferred_probe_load_does_not_start_preview_proxy_build`: pass
+  - `tests.test_cp03_cp04_status_ui.Cp03Cp04StatusUiTests.test_start_pipeline_marks_processing_before_cut_prescan`: pass
+  - 관련 6 targeted tests: pass
+  - `py_compile`: pass
+  - `git diff --check`: pass
+- 실앱 검증:
+  - Tinyping `open-media` 응답 `0.284s`.
+  - 시작 전 `preview_720p_hevc` / waveform 관련 ffmpeg 프로세스 없음.
+  - 비디오 source는 원본 MP4로 로드되고 `video_duration_ms=1450265` 확인.
+- 저장 위치:
+  - `output/manual_verification/latest/media_open_before_start_deferred_prep.png`
+- 분류:
+  - code regression: 없음. 시작 전 불필요한 UI 편의 준비 작업을 지연시킨 UX/performance 개선.
+  - fixture drift: 없음.
+  - environment-bundle issue: 없음.
+- 코드 수정 여부: 있음.
+- 문서 반영 여부: 있음. `test_result.md`.
+- 남은 위험:
+  - 시작 직후 waveform worker가 자막 생성과 겹칠 수 있으므로, 장시간 high benchmark에서 리소스 경합이 보이면 waveform을 생성 완료 후 idle로 더 늦추는 후속 후보가 된다.
+
+## 비디오 재생/오픈 직후 플레이헤드 레이스 회귀 수정 - 2026-05-21 21:09~21:11
+
+- 실행 모드: Targeted + 실앱 Tinyping project smoke
+- 결과: pass
+- 수정/확인 항목:
+  - 손상된 720p HEVC preview proxy cache가 있으면 QMediaPlayer duration이 `0`으로 떨어져 생성 후 재생이 멈출 수 있던 문제를 수정했다.
+  - 프로젝트 오픈 직후 `editor-set-playhead`가 들어오면 지연 workspace restore가 저장된 마지막 위치로 다시 덮던 race를 수정했다.
+  - `status` / `guided-subtitle-status`는 새 코드 재시작 후 `editor_runtime.video_*` 진단값을 정상 반환했다.
+- 단위/가드:
+  - `tests.test_video_preview_proxy`, 관련 `tests.test_video_player_widget`: pass
+  - `tests.test_workspace_restore`: pass
+  - `tests.test_app_command_bridge`: pass (`60 tests OK`)
+  - `py_compile`: pass
+  - `git diff --check`: pass
+- 실앱 검증:
+  - Tinyping project open 후 즉시 `editor-set-playhead 977.91 --center`.
+  - 1.2초 후 `playhead_sec=977.910267`, `video_position_ms=977910`, `video_duration_ms=1450281`.
+  - 이어서 재생 확인: `977.91s -> 978.39s`로 진행.
+- 저장 위치:
+  - `output/manual_verification/latest/video_playback_after_generation_fixed.png`
+  - `output/manual_verification/latest/open_project_set_playhead_race_fixed.png`
+- 분류:
+  - code regression: preview proxy cache validation 누락, open-project 지연 restore와 즉시 seek race.
+  - fixture drift: 없음.
+  - environment-bundle issue: 없음.
+- 코드 수정 여부: 있음.
+- 문서 반영 여부: 있음. `test_result.md`.
+- 남은 위험:
+  - 생성 직후 아주 바쁜 STT/LLM 구간의 status fallback은 생존성 우선 정책을 유지한다. 상세 최신성은 command별 직접 응답과 artifact로 확인한다.
+  - `idea_item.md` active queue는 현재 없음.
+
 ## idea_item 전체 실행 재검증 및 큐 종료 - 2026-05-21 12:15~12:19
 
 - 실행 모드: Quick / Major / Full + Macau/X5/Tinyping benchmark
@@ -1185,3 +1293,59 @@
   - `./venv/bin/python tools/qa_suite_runner.py full`
     - 결과: `failed_count=0`
     - 산출물: `output/manual_verification/latest/qa_suite_full_20260521_024927`
+
+## STT rolling window 병렬 실험 - 2026-05-21 13:48
+
+- 실행 범위:
+  - 기존 High+piecewise drift 품질 경로 유지
+  - rolling STT window의 최종 확정 순서는 유지하고, window 수집을 guarded default로 병렬화
+  - window chunk dir가 전체 부모 청크를 재인식하지 않도록 경계 WAV를 실제 window 범위로 slice
+- X5 180초 STT-only 비교:
+  - baseline `mode_high_piecewise_drift`: `106.515s`, quality `77.315`, raw/final `60/57`
+  - 기존 rolling window 병렬 경로: `94.293s`, quality `77.315`, raw/final `60/57`
+  - 기본 High 경로 재검증: `94.614s`, quality `77.315`, raw/final `60/57`
+  - 개선: 약 `11.5%` faster, 품질/세그먼트 수 동일
+  - 적용 정책: `stt_window_parallel_enabled` 기본 활성화, 메모리 `critical` 또는 병렬 worker 실패 시 serial fallback, 기본 자동 병렬도는 2워커
+- 폐기 확인:
+  - forced 60초 quarter window는 `128.951s`, quality `75.351`, raw/final `79/71`로 느리고 품질이 낮아 `waste_action_item.md`에 기록
+- 산출물:
+  - 요약 복사본: `output/manual_verification/latest/stt_window_parallel_20260521_1348/summary.md`
+  - baseline: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_134359/benchmark_results.json`
+  - forced 60초 폐기: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_134130/benchmark_results.json`
+  - 기존 rolling window 병렬 검증: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_134652/benchmark_results.json`
+  - 기본 High 경로 재검증: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_140147/benchmark_results.json`
+- 검증:
+  - `./venv/bin/python -m unittest tests.test_media_processor_overlap -q`
+    - 결과: `73 tests OK`
+  - `./venv/bin/python -m py_compile core/audio/media_processor_transcribe.py tests/test_media_processor_overlap.py`
+    - 결과: OK
+  - `./venv/bin/python tools/check_maintenance_budget.py --json`
+    - 결과: `ok=true`
+  - `git diff --check -- core/audio/media_processor_transcribe.py tests/test_media_processor_overlap.py idea_item.md waste_action_item.md test_result.md output/manual_verification/latest/stt_window_parallel_20260521_1348/summary.md`
+    - 결과: OK
+  - `./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high_piecewise_drift --duration-sec 180 --llm-model '사용 안함 (benchmark)' --keep-artifacts`
+    - 결과: `94.614s`, quality `77.315`, raw/final `60/57`
+
+## STT resource aggressive X5 검증 - 2026-05-21 14:08
+
+- 실행 범위:
+  - X5 180초 STT-only에서 리소스 사용량을 늘리는 window 후보를 비교
+  - 폐기된 forced 60초 quarter는 반복하지 않음
+  - 자막 품질/세그먼트 수를 기준으로 채택 여부 판단
+- 비교:
+  - 이전 guarded default: `94.614s`, quality `77.315`, raw/final `60/57`
+  - 90초 aggressive window workers: `130.741s`, quality `76.587`, raw/final `69/69`
+  - 180초 three-minute window: `57.711s`, quality `79.049`, raw/final `52/53`
+  - 적용 후 공식 runner 재검증: `58.490s`, quality `79.049`, raw/final `52/53`
+  - X5 전체 404.137초 공식 runner: `157.540s`, quality `74.588`, raw/final `110/106`
+- 판정:
+  - 90초 aggressive window는 느리고 과분할되어 `waste_action_item.md`에 폐기 기록
+  - High 기본 rolling STT window를 `180초`로 변경
+  - 긴 영상에서는 180초 window 수가 2개 이상일 때 normal memory에서 최대 4개 worker까지 병렬 수집하도록 조정
+  - X5 전체에서는 180초 window 3개가 실제로 3 worker 병렬 실행됨
+  - 병렬 전체 실행 중 pressure `critical`이 발생해 일부 persistent worker가 자동 정리되었으므로, 더 공격적인 worker cap 증가는 보류
+- 산출물:
+  - 요약: `output/manual_verification/latest/stt_resource_aggressive_20260521_140857/summary.md`
+  - 원본 JSON: `.codex_work/benchmarks/stt_resource_aggressive/20260521_140857/benchmark_results.json`
+  - 공식 runner JSON: `output/manual_verification/latest/stt_resource_aggressive_20260521_140857/official_benchmark_results.json`
+  - X5 전체 runner JSON: `output/manual_verification/latest/stt_resource_aggressive_20260521_140857/x5_full_benchmark_results.json`

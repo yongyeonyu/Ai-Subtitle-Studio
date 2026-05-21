@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QMessageBox, QCheckBox,
     QToolButton, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtCore import Qt, QTimer, QSize, QPoint
 from PyQt6.QtGui import QIcon, QColor
 
 from core.runtime import config
@@ -313,7 +313,9 @@ class HomeUIMixin(HomeSidebarMixin):
             layout.addLayout(bottom_bar)
         if is_unified:
             self._sync_project_info_button_height()
+            QTimer.singleShot(0, self._sync_sidebar_status_card_height)
             QTimer.singleShot(0, self._sync_sidebar_terminal_panel_height)
+            QTimer.singleShot(120, self._sync_sidebar_status_card_height)
             QTimer.singleShot(120, self._sync_sidebar_terminal_panel_height)
         self._ensure_watchdog_timer()
 
@@ -348,9 +350,95 @@ class HomeUIMixin(HomeSidebarMixin):
         self._refresh_sidebar_engine_info()
         if hasattr(self, "_refresh_sidebar_runtime_monitor"):
             self._refresh_sidebar_runtime_monitor()
-        lay.addWidget(self._create_sidebar_subtitle_quality_row(card))
+        quality_row = self._create_sidebar_subtitle_quality_row(card)
+        self._sidebar_subtitle_quality_row_widget = quality_row
+        lay.addWidget(quality_row)
         lay.addWidget(self.sidebar_settings_label)
         return card
+
+    def _sidebar_status_alignment_targets(self):
+        if not bool(getattr(self, "_unified_dashboard", False)):
+            return None
+        editor = getattr(self, "_editor_widget", None)
+        timeline = getattr(editor, "timeline", None) if editor is not None else None
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if canvas is None or not canvas.isVisible():
+            return None
+        try:
+            from ui.timeline.timeline_constants import RULER_H, WAVE_H, VOICE_ACTIVITY_TOP
+
+            canvas_top = int(canvas.mapTo(self, QPoint(0, 0)).y())
+        except Exception:
+            return None
+        guide_top = canvas_top + RULER_H + WAVE_H + 5
+        guide_bottom = canvas_top + VOICE_ACTIVITY_TOP
+        if guide_bottom <= guide_top:
+            return None
+        return guide_top, guide_bottom
+
+    def _sync_sidebar_status_card_height(self):
+        def _restore_defaults(queue_panel, status_card, settings_label):
+            queue_min = int(queue_panel.property("_sidebar_default_min_height") or 134)
+            status_min = int(status_card.property("_sidebar_default_min_height") or 218)
+            label_min = int(settings_label.property("_sidebar_default_min_height") or 184)
+            queue_panel.setMinimumHeight(queue_min)
+            queue_panel.setMaximumHeight(16777215)
+            status_card.setMinimumHeight(status_min)
+            status_card.setMaximumHeight(16777215)
+            settings_label.setMinimumHeight(label_min)
+            settings_label.setMaximumHeight(16777215)
+
+        def _sync():
+            if not bool(getattr(self, "_unified_dashboard", False)):
+                return
+            home_page = getattr(self, "home_page", None)
+            queue_panel = getattr(self, "sidebar_queue_panel", None)
+            status_card = getattr(self, "_sidebar_status_card_widget", None)
+            settings_label = getattr(self, "sidebar_settings_label", None)
+            quality_row = getattr(self, "_sidebar_subtitle_quality_row_widget", None)
+            if home_page is None or queue_panel is None or status_card is None or settings_label is None:
+                return
+            layout = home_page.layout()
+            if layout is None:
+                return
+            if queue_panel.property("_sidebar_default_min_height") in (None, 0):
+                queue_panel.setProperty("_sidebar_default_min_height", int(queue_panel.minimumHeight() or 134))
+            if status_card.property("_sidebar_default_min_height") in (None, 0):
+                status_card.setProperty("_sidebar_default_min_height", int(status_card.minimumHeight() or 218))
+            if settings_label.property("_sidebar_default_min_height") in (None, 0):
+                settings_label.setProperty("_sidebar_default_min_height", int(settings_label.minimumHeight() or 184))
+            targets = self._sidebar_status_alignment_targets()
+            if not targets:
+                _restore_defaults(queue_panel, status_card, settings_label)
+                return
+            target_top, target_bottom = targets
+            queue_top = int(queue_panel.mapTo(self, QPoint(0, 0)).y())
+            queue_min = int(queue_panel.property("_sidebar_default_min_height") or 134)
+            desired_queue_height = max(queue_min, target_top - queue_top)
+            desired_status_height = max(
+                int(status_card.property("_sidebar_default_min_height") or 218),
+                target_bottom - target_top,
+            )
+            # Editor timeline guide lines stay visually stable on macOS only if the
+            # sidebar stack uses the same vertical anchors as the painter canvas.
+            queue_panel.setFixedHeight(desired_queue_height)
+            status_card.setFixedHeight(desired_status_height)
+            if quality_row is not None:
+                margins = status_card.layout().contentsMargins()
+                spacing = int(status_card.layout().spacing())
+                quality_height = max(0, int(quality_row.height() or quality_row.sizeHint().height() or 24))
+                label_height = max(
+                    int(settings_label.property("_sidebar_default_min_height") or 184),
+                    desired_status_height - margins.top() - margins.bottom() - spacing - quality_height,
+                )
+                settings_label.setFixedHeight(label_height)
+            layout.invalidate()
+            layout.activate()
+            home_page.updateGeometry()
+            if hasattr(self, "_sync_sidebar_terminal_panel_height"):
+                self._sync_sidebar_terminal_panel_height()
+
+        run_nonfatal_ui_step("사이드바 상태 카드", "height sync", _sync)
 
     def _sync_sidebar_terminal_panel_height(self):
         def _sync():

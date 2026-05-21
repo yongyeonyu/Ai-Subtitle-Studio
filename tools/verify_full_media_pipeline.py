@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import cProfile
 import json
 import os
+import pstats
 import re
 import shutil
 import sys
@@ -12,6 +14,7 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
+from io import StringIO
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,7 @@ from core.audio.media_processor import VideoProcessor  # noqa: E402
 from core.engine.subtitle_accuracy_pipeline import subtitle_completion_report, subtitle_output_variant_score  # noqa: E402
 from core.media_info import probe_media  # noqa: E402
 from core.performance import current_resource_snapshot  # noqa: E402
+from core.runtime.multi_process import apply_apple_m_subtitle_pipeline_plan  # noqa: E402
 from core.runtime.memory_manager import process_rss_bytes  # noqa: E402
 from tools.benchmark_subtitle_pipeline_variants import (  # noqa: E402
     Variant,
@@ -59,6 +63,18 @@ VERIFICATION_SETTING_KEYS = (
     "runtime_memory_critical_trim_cooldown_sec",
     "runtime_memory_warning_disk_trim_ratio",
     "runtime_memory_critical_disk_trim_ratio",
+    "benchmark_runtime_profile",
+    "apple_m_full_core_aggressive_enabled",
+    "apple_m_aggressive_full_parallel_stt_enabled",
+    "stt_window_ensemble_enabled",
+    "stt_window_parallel_enabled",
+    "stt_quarter_parallel_count",
+    "stt_quarter_parallel_max_workers",
+    "runtime_scheduler_reserve_cores",
+    "runtime_native_threads",
+    "io_workers",
+    "audio_chunk_route_max_workers",
+    "llm_threads_resource_max",
 )
 
 
@@ -150,6 +166,53 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 def _write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def _profile_stats_rows(profile: cProfile.Profile, *, limit: int = 80) -> list[dict[str, Any]]:
+    stats = pstats.Stats(profile)
+    rows: list[dict[str, Any]] = []
+    for (filename, line_no, func_name), values in stats.stats.items():
+        primitive_calls, total_calls, total_time, cumulative_time, _callers = values
+        rows.append(
+            {
+                "file": filename,
+                "line": int(line_no),
+                "function": func_name,
+                "primitive_calls": int(primitive_calls),
+                "total_calls": int(total_calls),
+                "total_time_sec": round(float(total_time), 6),
+                "cumulative_time_sec": round(float(cumulative_time), 6),
+            }
+        )
+    rows.sort(key=lambda item: (float(item["cumulative_time_sec"]), float(item["total_time_sec"])), reverse=True)
+    return rows[: max(1, int(limit or 80))]
+
+
+def _write_profile_artifacts(run_dir: Path, profile: cProfile.Profile, *, limit: int = 80) -> dict[str, Any]:
+    profile_path = run_dir / "function_profile.pstats"
+    top_json_path = run_dir / "function_profile_top.json"
+    top_txt_path = run_dir / "function_profile_top.txt"
+    profile.dump_stats(str(profile_path))
+    rows = _profile_stats_rows(profile, limit=limit)
+    _write_json(
+        top_json_path,
+        {
+            "schema": "ai_subtitle_studio.function_profile.v1",
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "sort": "cumulative_time_sec",
+            "limit": max(1, int(limit or 80)),
+            "rows": rows,
+        },
+    )
+    stream = StringIO()
+    pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(max(1, int(limit or 80)))
+    _write_text(top_txt_path, stream.getvalue())
+    return {
+        "pstats_path": str(profile_path),
+        "top_json_path": str(top_json_path),
+        "top_txt_path": str(top_txt_path),
+        "top_rows": rows[:10],
+    }
 
 
 def _progress(path: Path, *, stage: str, status: str = "running", **extra: Any) -> None:
@@ -374,6 +437,7 @@ def _build_single_verification_context(
         base_settings.update(settings_overrides)
     llm_model = str(base_settings.get("selected_model") or "").strip()
     settings = _mode_profile_settings(base_settings, mode, llm_model=llm_model)
+    settings = apply_apple_m_subtitle_pipeline_plan(settings)
     method = _mode_profile_method(settings)
     run_llm = bool(mode == "high" and llm_model and "사용 안함" not in llm_model)
     run_start = max(0.0, float(start_sec or 0.0))
@@ -494,6 +558,8 @@ def _run_single_verification(
     run_index: int | None = None,
     start_sec: float = 0.0,
     duration_sec: float | None = None,
+    profile_functions: bool = False,
+    profile_top: int = 80,
 ) -> dict[str, Any]:
     run_dir = output_root
     if run_index is not None and run_index > 0:
@@ -513,6 +579,7 @@ def _run_single_verification(
         duration_sec=duration_sec,
     )
     sampler = _PeakRSSSampler()
+    profiler = cProfile.Profile() if profile_functions else None
     _progress(
         progress_path,
         stage="starting",
@@ -525,6 +592,8 @@ def _run_single_verification(
     started = time.perf_counter()
     try:
         sampler.start()
+        if profiler is not None:
+            profiler.enable()
         extractor = VideoProcessor()
         _bind_processor_settings(extractor, settings)
         _progress(progress_path, stage="audio_extract", media=str(media_path), mode=mode, run_index=run_index)
@@ -563,6 +632,13 @@ def _run_single_verification(
             base_settings=settings,
             reference=[],
         )
+        if profiler is not None:
+            profiler.disable()
+            payload["function_profile"] = _write_profile_artifacts(
+                run_dir,
+                profiler,
+                limit=profile_top,
+            )
         payload["result"] = result
         payload = _finalize_successful_verification_payload(
             payload,
@@ -587,6 +663,16 @@ def _run_single_verification(
         )
         return payload
     except Exception:
+        if profiler is not None:
+            try:
+                profiler.disable()
+                payload["function_profile"] = _write_profile_artifacts(
+                    run_dir,
+                    profiler,
+                    limit=profile_top,
+                )
+            except Exception:
+                pass
         payload = _finalize_failed_verification_payload(payload, run_dir=run_dir, sampler=sampler, started=started)
         _write_json(result_path, payload)
         _write_text(summary_path, _summary_markdown(payload))
@@ -688,6 +774,8 @@ def main() -> int:
     parser.add_argument("--settings-json", default=None, help="Path to JSON file with benchmark setting overrides.")
     parser.add_argument("--setting", action="append", default=[], help="Additional setting override in key=value format.")
     parser.add_argument("--run-prefix", default="")
+    parser.add_argument("--profile-functions", action="store_true", help="Write cProfile function hot-path artifacts for this real-media run.")
+    parser.add_argument("--profile-top", type=int, default=80, help="Number of function profiler rows to keep.")
     args = parser.parse_args()
 
     media = Path(args.media).expanduser()
@@ -717,6 +805,8 @@ def main() -> int:
             run_index=index if repeat_count > 1 else None,
             start_sec=start_sec,
             duration_sec=duration_sec,
+            profile_functions=bool(args.profile_functions),
+            profile_top=max(1, int(args.profile_top or 80)),
         )
         run_payload["result_path"] = str(
             (

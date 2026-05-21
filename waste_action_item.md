@@ -58,3 +58,21 @@
   품질: quality `71.514`, readability `93.057`, timing MAE `0.7347`, final segment `17`로 `mode_high_piecewise_drift`의 quality `72.989`, readability `94.568`, timing MAE `0.6455`, final segment `24`보다 낮았다.
   결론: 같은 X5 reference 조건에서는 `mode_fast`를 품질 동일 기본 알고리즘으로 반복 제안하지 않는다. Fast 모드 속도 후보로만 유지한다.
   artifact: `output/manual_verification/latest/idea_full_execute_20260521-rerun/x5_modes_repeat10_current/repeat_summary.md`
+
+- `forced_60s_quarter_window_default`: High rolling STT를 강제로 60초 창 4개로 쪼개 병렬 실행하는 방향
+  결과: X5 180초 STT-only에서 `mode_high_piecewise_drift` `106.515s` 대비 forced 60초 quarter는 `128.951s`로 느렸다.
+  품질: quality `77.315 -> 75.351`, final segment `57 -> 71`, raw segment `60 -> 79`로 과분할/품질 저하가 발생했다.
+  결론: window 크기를 품질 기준과 다르게 줄여 1/4 분할을 강제하지 않는다. 기존 rolling window 크기를 유지한 guarded 병렬 수집만 사용한다.
+  artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260521_134130/benchmark_results.md`
+
+- `high_90s_aggressive_window_workers`: High rolling STT를 90초 창 3개로 줄여 더 많은 worker를 동시에 쓰는 방향
+  결과: X5 180초 STT-only에서 현재 기본 `94.614s` 대비 `130.741s`로 느렸다.
+  품질: quality `77.315 -> 76.587`, final segment `57 -> 69`, raw segment `60 -> 69`로 과분할/품질 저하가 발생했다.
+  결론: 리소스 사용량을 늘리기 위해 window를 90초로 줄이지 않는다. X5에서는 180초 window가 더 빠르고 품질도 높다.
+  artifact: `.codex_work/benchmarks/stt_resource_aggressive/20260521_140857/benchmark_results.json`
+
+- `high_default_full_core_aggressive_short_fixture`: High 기본 preset에 Apple Silicon full-core aggressive benchmark profile을 바로 넣는 방향
+  결과: 마카오 42초 smoke에서 3분 rolling window 이득은 없고, selective STT2 재검사 동안 MLX worker 재기동이 반복되어 실행 시간이 비정상적으로 늘어졌다.
+  품질: 완료 전 중단. short fixture 기준 안정성/메모리 보호 실패로 판단.
+  결론: full-core aggressive는 기본 High preset에 넣지 않는다. 필요하면 benchmark override 또는 긴 영상 전용 실험으로만 사용한다.
+  artifact: `output/manual_verification/latest/20260521_macau_high_full_core_after_item1`

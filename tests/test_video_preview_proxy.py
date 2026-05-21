@@ -17,7 +17,8 @@ class VideoPreviewProxyTests(unittest.TestCase):
             media_path = os.path.join(tmp, "source movie.mp4")
             with open(media_path, "wb") as handle:
                 handle.write(b"media")
-            with patch("core.video_preview_proxy.config.DATASET_DIR", tmp):
+            with patch("core.video_preview_proxy.config.DATASET_DIR", tmp), \
+                 patch("core.video_preview_proxy.preview_proxy_is_valid", return_value=True):
                 proxy_path = preview_proxy_path_for(media_path)
                 os.makedirs(os.path.dirname(proxy_path), exist_ok=True)
                 with open(proxy_path, "wb") as handle:
@@ -25,6 +26,21 @@ class VideoPreviewProxyTests(unittest.TestCase):
 
                 self.assertEqual(existing_preview_proxy_for(media_path), proxy_path)
                 self.assertEqual(cut_boundary_scan_source(media_path, {}), proxy_path)
+
+    def test_existing_preview_proxy_discards_invalid_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "source movie.mp4")
+            with open(media_path, "wb") as handle:
+                handle.write(b"media")
+            with patch("core.video_preview_proxy.config.DATASET_DIR", tmp), \
+                 patch("core.video_preview_proxy.preview_proxy_is_valid", return_value=False):
+                proxy_path = preview_proxy_path_for(media_path)
+                os.makedirs(os.path.dirname(proxy_path), exist_ok=True)
+                with open(proxy_path, "wb") as handle:
+                    handle.write(b"broken proxy")
+
+                self.assertEqual(existing_preview_proxy_for(media_path), "")
+                self.assertFalse(os.path.exists(proxy_path))
 
     def test_cut_boundary_scan_source_can_be_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:

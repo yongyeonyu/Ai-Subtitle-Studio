@@ -25,8 +25,8 @@
 - `주요 test해줘`, `주요기능 점검`, `major test`: Major Test 실행.
 - `full test해줘`, `전체 테스트`, `릴리즈 전 테스트`: Full Test 실행.
 - `이전 버전과 ui 일치 확인해줘`: UI Snapshot Compare 실행.
-- 영상 선택이 없으면 기본값은 Quick/Major는 `마카오`, Full은 `티니핑`이다.
-- 사용자가 `마카오`, `x5`, `티니핑`을 지정하면 해당 fixture를 우선 사용한다.
+- 영상 선택이 없으면 기본값은 Quick/Major는 `마카오`, Full은 `X5 3분 rolling`이다.
+- 사용자가 `마카오`, `x5`, `티니핑`을 지정하면 해당 fixture를 우선 사용한다. 단, 티니핑은 기본 QA에서 제외하고 명시 요청이 있을 때만 long-flow 수동 검증으로 실행한다.
 
 ## Fixture Registry
 
@@ -46,7 +46,7 @@
 
 ### Tinyping Long-Flow Fixture
 
-용도: 긴 영상, generation, roughcut, ETA, queue, memory, completion, editor restore.
+용도: 긴 영상, generation, roughcut, ETA, queue, memory, completion, editor restore. 기본 QA에서는 제외하며, 사용자가 티니핑을 명시했을 때만 수동 long-flow 검증으로 사용한다.
 
 - Project: `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.aissproj`
 - Video: `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4`
@@ -231,7 +231,7 @@ git diff --check --
 3. 전체 unit/integration test 또는 실패 범위를 분리한 full sweep.
 4. 선택한 fixture로 full media pipeline 검증.
 5. Macau 5개 영상 멀티클립/큐 UX 검증.
-6. Tinyping long-flow 또는 X5 accuracy fixture 검증.
+6. X5 3분 rolling high fixture 검증. Tinyping long-flow는 사용자가 명시 요청한 경우에만 별도로 실행한다.
 7. 모든 주요 UI 화면 snapshot 저장.
 8. 이전 기준선과 snapshot compare.
 9. 무단 UI 차이 원복.
@@ -249,9 +249,10 @@ Full media command:
 
 ```bash
 ./venv/bin/python tools/verify_full_media_pipeline.py \
-  --media "/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4" \
+  --media "/Users/u_mo_c/Downloads/ai_subtitle_studio/test video/X5_시승기_후반.MP4" \
   --mode high \
-  --output-dir output/manual_verification/latest/full_media_tinyping
+  --duration-sec 180 \
+  --output-dir output/manual_verification/latest/full_media_x5_rolling_180s
 ```
 
 X5 accuracy command:
@@ -407,7 +408,7 @@ output/manual_verification/latest/ui_compare/
 | Context menu | `tests.test_context_menu_bounds`, `tests.test_popup_dismiss` | right click / menu action automation | context menu |
 | STT/VAD/audio | `tests.test_stt_ensemble`, `tests.test_stt_recheck_service`, `tests.test_stt_vad_ensemble`, `tests.test_media_processor_overlap` | generation smoke | queue processing, editor preview |
 | LLM/LoRA/quality | `tests.test_codex_provider`, `tests.test_subtitle_quality_pipeline`, `tests.test_lora_*` | high mode full media | completion |
-| Full media verifier | `tests.test_verify_full_media_pipeline` | Tinyping fast/auto/high 60s | `tinyping_full_verify.json` |
+| Full media verifier | `tests.test_verify_full_media_pipeline` | X5 high rolling 180s | verifier JSON |
 | Roughcut | `tests.test_roughcut_*`, `tests.test_editor_roughcut_draft` | post-generation roughcut | roughcut view |
 | Project save/load | `tests.test_project_*`, `tests.test_editor_srt_open_refresh` | open project, save, reopen | editor restored |
 | Settings/dictionary | `tests.test_settings_*`, `tests.test_settings_dictionary` | open settings/dictionary | settings, dictionary |
@@ -539,9 +540,9 @@ git diff --check --
 - 통과: `editor_open=true`, `editor_media_path`에 SRT 경로 기록, 즉시 에디터 UI 스냅샷 저장.
 - 실패 시: `action`를 `검토필요`로 분리하고 `ACTION_ITEMS.md`에 메뉴얼 검토 요청.
 
-2. 영상 열기 후 자막 생성 (fast/auto/high)
-- 방법: 마카오 5개 또는 티니핑 60초 구간 기반 fixture에서 각 모드 `start-current-pipeline` 실행.
-- 통과: `tinyping_full_verify.json` 결과 status=ok, final segment 개수 유효.
+2. 영상 열기 후 자막 생성
+- 방법: 마카오 smoke 또는 X5 3분 high rolling fixture에서 `start-current-pipeline` 실행.
+- 통과: verifier JSON 결과 status=ok, final segment 개수 유효.
 - 실패 시: `pipeline/roughcut` 로그와 `start_current_pipeline.json`을 함께 보존.
 
 3. 멀티클립 열기 후 자막 생성
@@ -674,13 +675,11 @@ git diff --check --
 
 3. `full`
 - 방법: `./venv/bin/python tools/qa_suite_runner.py full`
-- 목적: `major` + Tinyping 60초 `fast/auto/high`를 한 번에 확인한다.
+- 목적: `major` + X5 3분 High rolling window 생성 검증을 한 번에 확인한다.
 - 포함 시나리오:
   - Macau UX 4개
-  - `tinyping_fast_60s`
-  - `tinyping_auto_60s`
-  - `tinyping_high_60s`
-- 통과: `scenario_count=7`, `failed_count=0`
+  - `x5_high_rolling_180s`
+- 통과: `scenario_count=5`, `failed_count=0`
 - 산출물: `output/manual_verification/latest/qa_suite_full_*`
 
 4. 현재 runner 안정화 규칙
@@ -692,9 +691,9 @@ git diff --check --
 - `move_diamond`/`merge_diamond`는 현재 `diamond_left/right`의 `boundary_sec`를 기준으로 command를 조립하고, compact status에서 boundary가 없으면 stale line/side 대신 closest fallback으로 precondition drift를 분리한다.
 - `full_media`는 stdout 전체가 아니라 마지막 JSON line을 우선 파싱한다.
 - `full_media`는 spoken/non-trivial slice에서 `raw_segments=0` 또는 `final_segments=0`이면 실패다. 빈 자막은 속도 개선으로 인정하지 않는다.
-- `tinyping_fast_60s`, `tinyping_auto_60s`, `tinyping_high_60s`는 `result_path`의 `tinyping_full_verify.json`까지 확인하고 `verification_failure_reason`이 비어 있어야 한다.
+- `x5_high_rolling_180s`는 `result_path`의 verifier JSON까지 확인하고 `verification_failure_reason`이 비어 있어야 한다.
 
 5. 고도화 메모
 - 큰 command surface 변경 뒤에는 `packaging/macos/build_app_bundle.sh`로 bundle을 먼저 갱신한다.
 - `suite_result.json`, `suite_result.md`, `suite_manifest.json`을 같은 artifact 폴더에서 함께 보관한다.
-- `full`에서 실패가 나면 먼저 `app_sequence` 실패인지 `Tinyping full_media` 실패인지 분리하고, `full_media`는 `result_path`와 `logs/run.stdout`를 같이 본다.
+- `full`에서 실패가 나면 먼저 `app_sequence` 실패인지 `X5 full_media` 실패인지 분리하고, `full_media`는 `result_path`와 `logs/run.stdout`를 같이 본다.

@@ -1,6 +1,7 @@
 import socket
 import threading
 import unittest
+from unittest import mock
 
 from core.automation.app_command_protocol import (
     APP_COMMAND_BUFFER_SIZE,
@@ -177,7 +178,97 @@ class LocalAppCommandServerTests(unittest.TestCase):
         self.assertEqual(result["data"]["editor_state"], "ST_EDITING")
         self.assertLess(len(result["data"]["recent_logs"]), len(huge_logs))
 
-    def test_status_send_failure_falls_back_to_minimal_packet(self):
+    def test_medium_status_payload_is_compacted_before_send(self):
+        medium_logs = ["상태 로그 " + ("x" * 700) for _ in range(16)]
+
+        def handler(payload: dict) -> dict:
+            command = str(payload.get("command", ""))
+            return build_command_result(
+                command,
+                ok=True,
+                data={
+                    "editor_open": True,
+                    "editor_state": "ST_PROC",
+                    "editor_runtime": {"segment_count": 413, "playhead_sec": 1450.2},
+                    "runtime_resource": {"pressure_stage": "warning", "rss_gb": 0.42},
+                    "recent_logs": medium_logs,
+                },
+            )
+
+        self._server.set_handler(handler)
+        status_client = self._client(timeout_sec=1.0)
+
+        self._send(status_client, "status")
+        result = self._recv(status_client)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["data"]["status_response_truncated"])
+        self.assertEqual(result["data"]["editor_state"], "ST_PROC")
+        self.assertEqual(result["data"]["editor_runtime"]["segment_count"], 413)
+        self.assertLess(len(encode_command_result(result)), 8192)
+
+    def test_stateful_guided_run_payload_is_compacted_before_send(self):
+        large_rows = [{"status": "처리 중", "info": "x" * 800} for _ in range(20)]
+
+        def handler(payload: dict) -> dict:
+            command = str(payload.get("command", ""))
+            return build_command_result(
+                command,
+                ok=True,
+                accepted=True,
+                message="guided_subtitle_started",
+                data={"rows": large_rows, "snapshot": "x" * 12000},
+            )
+
+        self._server.set_handler(handler)
+        client = self._client(timeout_sec=1.0)
+
+        self._send(client, "guided-subtitle-run", path="/tmp/media.mp4")
+        result = self._recv(client)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["message"], "guided_subtitle_started")
+        self.assertTrue(result["data"]["response_truncated"])
+        self.assertNotIn("response_send_fallback", result["data"])
+        self.assertLess(len(encode_command_result(result)), 8192)
+
+    def test_status_handler_timeout_returns_cached_result(self):
+        release_second = threading.Event()
+        call_count = 0
+
+        def handler(payload: dict) -> dict:
+            nonlocal call_count
+            call_count += 1
+            command = str(payload.get("command", ""))
+            if call_count == 1:
+                return build_command_result(
+                    command,
+                    ok=True,
+                    data={"editor_state": "ST_PROC", "runtime_resource": {"pressure_stage": "warning"}},
+                )
+            release_second.wait(1.0)
+            return build_command_result(command, ok=True, data={"editor_state": "late"})
+
+        self._server.set_handler(handler)
+        first_client = self._client(timeout_sec=1.0)
+        second_client = self._client(timeout_sec=1.0)
+
+        self._send(first_client, "status")
+        first = self._recv(first_client)
+        self.assertEqual(first["data"]["editor_state"], "ST_PROC")
+
+        with mock.patch("core.automation.app_command_server._READ_HANDLER_TIMEOUT_SEC", 0.05):
+            self._send(second_client, "status")
+            second = self._recv(second_client)
+
+        release_second.set()
+        self.assertTrue(second["ok"])
+        self.assertTrue(second["data"]["status_handler_timeout"])
+        self.assertTrue(second["data"]["status_response_cached"])
+        self.assertEqual(second["data"]["editor_state"], "ST_PROC")
+
+    def test_status_send_failure_falls_back_to_compact_packet(self):
         class _FakeSocket:
             def __init__(self):
                 self.sent: list[bytes] = []
@@ -200,7 +291,8 @@ class LocalAppCommandServerTests(unittest.TestCase):
         result = decode_command_result(fake_socket.sent[-1])
         self.assertTrue(result["ok"])
         self.assertTrue(result["data"]["status_response_send_fallback"])
-        self.assertLess(len(encode_command_result(result)), 1024)
+        self.assertTrue(result["data"]["status_response_truncated"])
+        self.assertLess(len(encode_command_result(result)), 4096)
 
 
 if __name__ == "__main__":

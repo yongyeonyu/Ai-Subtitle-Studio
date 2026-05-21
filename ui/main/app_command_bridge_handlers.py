@@ -698,10 +698,15 @@ def _handle_pipeline_command(
             starter()
             helpers.bring_to_front(owner)
             return ok(message="pipeline_started", data={"state_before": state})
-        starter = getattr(editor, "_schedule_post_generation_roughcut_draft", None)
+        manual_starter = getattr(editor, "_run_manual_roughcut_llm_from_global_canvas", None)
+        starter = manual_starter if callable(manual_starter) else getattr(editor, "_schedule_post_generation_roughcut_draft", None)
         if not callable(starter):
             return fail("roughcut_start_unavailable")
-        starter(force=True)
+        if callable(manual_starter):
+            # Automation roughcut must match the toolbar manual run so stale auto-cancel epochs cannot block it.
+            starter()
+        else:
+            starter(force=True)
         helpers.bring_to_front(owner)
         return ok(message="roughcut_started", data={"state_before": state, "media_path": str(getattr(editor, "media_path", "") or "")})
     return None
