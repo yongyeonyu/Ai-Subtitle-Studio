@@ -860,6 +860,24 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["data"]["editor_state"], "ST_PROC")
         self.assertIsInstance(result["data"]["guided_snapshot_run"], dict)
 
+    def test_dispatch_status_busy_fallback_uses_cached_runtime_resource_only(self):
+        owner = _DummyOwner()
+        owner._runtime_resource_snapshot = {"active_labels": ["pipeline"], "pressure_stage": "warning"}
+        app_thread = object()
+        current_thread = object()
+        fake_app = SimpleNamespace(thread=lambda: app_thread)
+        signal = SimpleNamespace(emit=lambda *_args, **_kwargs: self.fail("status signal should be skipped for active runtime labels"))
+        owner._sig_external_app_command = signal
+
+        with patch("ui.main.app_command_bridge.QApplication.instance", return_value=fake_app):
+            with patch("ui.main.app_command_bridge.QThread.currentThread", return_value=current_thread):
+                with patch("ui.main.app_command_bridge._runtime_resource_snapshot", side_effect=AssertionError("fresh snapshot forbidden")):
+                    result = dispatch_app_command(owner, {"command": "status"}, timeout_sec=1.0)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["data"]["status_snapshot_fallback"])
+        self.assertEqual(result["data"]["runtime_resource"]["pressure_stage"], "warning")
+
     def test_dispatch_status_command_caches_busy_fallback_snapshot(self):
         owner = _DummyOwner()
         owner._editor_widget.sm.state = "ST_PROC"

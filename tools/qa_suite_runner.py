@@ -425,6 +425,11 @@ def _resolve_editor_compact_diamond_command(
     command: list[str] | None = None
     if pair and boundary_start is not None:
         command = [command_name, "--start-sec", str(boundary_start), "--side", selected_side]
+    elif code != 0 or not runtime:
+        # automation-4 hot path: status may be intentionally compact/fallback
+        # while the app is busy. Drop stale line selection and let the editor
+        # choose the active/nearest diamond instead of failing on old metadata.
+        command = [command_name, "--side", "closest"]
     details = {
         "status_ok": code == 0 and bool(payload.get("ok")),
         "requested_side": requested_side,

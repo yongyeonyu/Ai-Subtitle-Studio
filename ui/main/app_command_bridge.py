@@ -464,6 +464,14 @@ def _runtime_resource_snapshot(owner: Any) -> dict[str, Any]:
     return data
 
 
+def _cached_runtime_resource_snapshot(owner: Any, *, include_stage_metrics: bool = True) -> dict[str, Any]:
+    snapshot = getattr(owner, "_runtime_resource_snapshot", None)
+    data = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
+    if include_stage_metrics:
+        data["stage_metrics"] = snapshot_stage_metrics(max_events=8, include_stages=False)
+    return data
+
+
 def _queue_runtime_snapshot(owner: Any) -> dict[str, Any]:
     completion_fn = getattr(owner, "queue_completion_state", None)
     probe_fn = getattr(owner, "queue_status_probe_parts", None)
@@ -774,7 +782,9 @@ def _status_fallback_snapshot(owner: Any) -> dict[str, Any]:
     if not isinstance(data.get("queue_runtime"), dict):
         data["queue_runtime"] = {}
     if not isinstance(data.get("runtime_resource"), dict):
-        data["runtime_resource"] = _runtime_resource_snapshot(owner)
+        # status fallback은 명령 서버의 생존 신호다. 여기서는 새 리소스 스캔을
+        # 만들지 않고 마지막 cached snapshot만 보강해 app_unreachable을 피한다.
+        data["runtime_resource"] = _cached_runtime_resource_snapshot(owner)
     else:
         runtime_resource = dict(data.get("runtime_resource") or {})
         runtime_resource["stage_metrics"] = snapshot_stage_metrics(max_events=8, include_stages=False)
@@ -813,7 +823,7 @@ def _status_signal_should_defer_to_fallback(owner: Any) -> bool:
             return True
     except Exception:
         pass
-    runtime_resource = _runtime_resource_snapshot(owner)
+    runtime_resource = _cached_runtime_resource_snapshot(owner, include_stage_metrics=False)
     active_labels = [str(label or "").strip().lower() for label in list(runtime_resource.get("active_labels") or [])]
     return any(label in {"pipeline", "editor"} for label in active_labels)
 

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -95,6 +96,43 @@ class RemoteVerifyActionTests(unittest.TestCase):
         self.assertEqual(commands[4]["options"], {"action": "run-now"})
         self.assertTrue(str(commands[1]["path"]).endswith("capture-active-dialog.png"))
         self.assertTrue(str(commands[5]["path"]).endswith("capture-dictionary.png"))
+
+    def test_editor_sequence_maps_save_export_actions_with_artifact_paths_and_long_timeout(self):
+        recorded: list[dict] = []
+
+        def _fake_record_step(report, output_dir, step_name, **kwargs):
+            recorded.append({"name": step_name, **kwargs})
+            report.setdefault("steps", []).append({"name": step_name, "result": {"ok": True}})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.remote_verify._record_step", side_effect=_fake_record_step):
+                with patch("tools.remote_verify._capture_status", return_value={"ok": True, "data": {}}):
+                    with patch("tools.remote_verify._write_report_files", return_value=None):
+                        exit_code = remote_verify._run_editor_sequence(
+                            _args(tmp, ["save-subtitles", "export-subtitles", "export-subtitle-video"])
+                        )
+
+        self.assertEqual(exit_code, 0)
+        commands = [item for item in recorded if item.get("command")]
+        self.assertEqual([item["command"] for item in commands], ["save-subtitles", "export-subtitles", "export-subtitle-video"])
+        self.assertTrue(str(commands[1]["path"]).endswith("manual_export.srt"))
+        self.assertGreaterEqual(commands[0]["timeout"], 60.0)
+        self.assertGreaterEqual(commands[1]["timeout"], 60.0)
+        self.assertGreaterEqual(commands[2]["timeout"], 240.0)
+
+    def test_capture_snapshot_requires_saved_file_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "missing.png"
+
+            with patch(
+                "tools.remote_verify._send",
+                return_value={"ok": True, "message": "snapshot_queued", "data": {"path": str(target)}},
+            ):
+                result = remote_verify._capture_snapshot(Path(tmp), "missing", timeout=0.1)
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["path_exists"])
+        self.assertEqual(result["path_size"], 0)
 
 
 if __name__ == "__main__":

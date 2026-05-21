@@ -14,6 +14,150 @@ from core.automation.app_command_protocol import (
 from core.runtime.stage_metrics import _elapsed_ms, record_stage_done, record_stage_ready, record_stage_start
 
 _CONCURRENT_READ_COMMANDS = {"ping", "status", "guided-subtitle-status"}
+_UDP_SAFE_RESULT_BYTES = min(APP_COMMAND_BUFFER_SIZE - 1024, 60000)
+
+
+def _trim_text_items(values: Any, *, limit: int = 8, max_chars: int = 220) -> list[str]:
+    out: list[str] = []
+    for item in list(values or [])[-limit:]:
+        text = str(item or "")
+        out.append(text[:max_chars])
+    return out
+
+
+def _compact_runtime_resource(value: Any) -> dict[str, Any]:
+    data = dict(value or {}) if isinstance(value, dict) else {}
+    return {
+        "timestamp": data.get("timestamp"),
+        "profile": data.get("profile"),
+        "pressure_stage": data.get("pressure_stage") or data.get("memory_pressure_stage"),
+        "rss_gb": data.get("rss_gb"),
+        "free_memory_gb": data.get("free_memory_gb"),
+        "free_memory_ratio": data.get("free_memory_ratio"),
+        "active_label_count": data.get("active_label_count"),
+        "active_labels": _trim_text_items(data.get("active_labels"), limit=6, max_chars=80),
+    }
+
+
+def _compact_editor_runtime(value: Any) -> dict[str, Any]:
+    data = dict(value or {}) if isinstance(value, dict) else {}
+    segment_keys = ("active_segment", "previous_segment", "next_segment")
+    compact: dict[str, Any] = {}
+    for key in (
+        "playhead_sec",
+        "shadow_playhead_sec",
+        "shadow_playhead_active",
+        "total_duration",
+        "active_seg_line",
+        "active_seg_start",
+        "segment_count",
+        "gap_count",
+        "diamond_left",
+        "diamond_right",
+        "smart_split_ready",
+        "inline_edit_active",
+        "inline_edit_mode",
+        "inline_edit_text_length",
+        "inline_edit_cursor",
+        "split_pending_sec",
+        "timeline_pps",
+        "timeline_scroll_x",
+        "timeline_fit_locked",
+        "playback_center_lock",
+        "video_visible",
+        "active_footer_menu_id",
+    ):
+        if key in data:
+            compact[key] = data.get(key)
+    for key in segment_keys:
+        segment = dict(data.get(key) or {}) if isinstance(data.get(key), dict) else {}
+        if not segment:
+            compact[key] = {}
+            continue
+        compact[key] = {
+            "line": segment.get("line"),
+            "start": segment.get("start"),
+            "end": segment.get("end"),
+            "text": str(segment.get("text", "") or "")[:160],
+            "is_gap": bool(segment.get("is_gap", False)),
+        }
+    return compact
+
+
+def _compact_status_data(value: Any, *, encoded_bytes: int) -> dict[str, Any]:
+    data = dict(value or {}) if isinstance(value, dict) else {}
+    queue = dict(data.get("queue_runtime") or {}) if isinstance(data.get("queue_runtime"), dict) else {}
+    return {
+        "status_response_truncated": True,
+        "status_response_original_bytes": int(encoded_bytes),
+        "editor_open": bool(data.get("editor_open", False)),
+        "editor_media_path": str(data.get("editor_media_path", "") or ""),
+        "editor_state": str(data.get("editor_state", "") or ""),
+        "current_project_path": str(data.get("current_project_path", "") or ""),
+        "current_work_mode": str(data.get("current_work_mode", "") or ""),
+        "backend_active": bool(data.get("backend_active", False)),
+        "auto_processing_active": bool(data.get("auto_processing_active", False)),
+        "editor_runtime": _compact_editor_runtime(data.get("editor_runtime")),
+        "editor_aux_counts": dict(data.get("editor_aux_counts") or {}) if isinstance(data.get("editor_aux_counts"), dict) else {},
+        "editor_stt": dict(data.get("editor_stt") or {}) if isinstance(data.get("editor_stt"), dict) else {},
+        "queue_runtime": {
+            "row_count": queue.get("row_count"),
+            "done_rows": queue.get("done_rows"),
+            "error_rows": queue.get("error_rows"),
+            "all_done": queue.get("all_done"),
+        },
+        "personalization_runtime": dict(data.get("personalization_runtime") or {})
+        if isinstance(data.get("personalization_runtime"), dict)
+        else {},
+        "runtime_resource": _compact_runtime_resource(data.get("runtime_resource")),
+        "recent_logs": _trim_text_items(data.get("recent_logs"), limit=8, max_chars=180),
+        "recent_stage_logs": _trim_text_items(data.get("recent_stage_logs"), limit=8, max_chars=180),
+    }
+
+
+def _compact_result_for_udp(result: dict[str, Any], *, encoded_bytes: int) -> dict[str, Any]:
+    command = str(result.get("command", "") or "")
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    compact_data = (
+        _compact_status_data(data, encoded_bytes=encoded_bytes)
+        if command in _CONCURRENT_READ_COMMANDS
+        else {"response_truncated": True, "response_original_bytes": int(encoded_bytes)}
+    )
+    return build_command_result(
+        command,
+        ok=bool(result.get("ok", False)),
+        accepted=result.get("accepted"),
+        queued=bool(result.get("queued", False)),
+        message=str(result.get("message", "") or ""),
+        error=str(result.get("error", "") or ""),
+        data=compact_data,
+    )
+
+
+def _minimal_result_for_udp(result: dict[str, Any], *, encoded_bytes: int) -> dict[str, Any]:
+    command = str(result.get("command", "") or "")
+    data = (
+        {
+            "status_response_truncated": True,
+            "status_response_send_fallback": True,
+            "status_response_original_bytes": int(encoded_bytes),
+        }
+        if command in _CONCURRENT_READ_COMMANDS
+        else {
+            "response_truncated": True,
+            "response_send_fallback": True,
+            "response_original_bytes": int(encoded_bytes),
+        }
+    )
+    return build_command_result(
+        command,
+        ok=bool(result.get("ok", False)),
+        accepted=result.get("accepted"),
+        queued=bool(result.get("queued", False)),
+        message=str(result.get("message", "") or ""),
+        error=str(result.get("error", "") or ""),
+        data=data,
+    )
 
 
 class LocalAppCommandServer:
@@ -77,8 +221,25 @@ class LocalAppCommandServer:
     def _handle_request(self, raw: bytes, addr: tuple[str, int]) -> None:
         result = self._dispatch(raw)
         try:
+            encoded = encode_command_result(result)
+            if len(encoded) > _UDP_SAFE_RESULT_BYTES:
+                # UDP automation hot path: oversized status payloads fail at
+                # sendto() and look like app_unreachable. Send a compact status
+                # instead so QA can distinguish app health from payload bloat.
+                result = _compact_result_for_udp(result, encoded_bytes=len(encoded))
+                encoded = encode_command_result(result)
+            if len(encoded) > _UDP_SAFE_RESULT_BYTES:
+                result = _minimal_result_for_udp(result, encoded_bytes=len(encoded))
+                encoded = encode_command_result(result)
             with self._send_lock:
-                self._socket.sendto(encode_command_result(result), addr)
+                try:
+                    self._socket.sendto(encoded, addr)
+                except OSError:
+                    # UDP send failure is usually EMSGSIZE under heavy status
+                    # payloads. Reply with a tiny health packet so automation
+                    # records "truncated" instead of a misleading app timeout.
+                    minimal = encode_command_result(_minimal_result_for_udp(result, encoded_bytes=len(encoded)))
+                    self._socket.sendto(minimal, addr)
         except OSError:
             return
 

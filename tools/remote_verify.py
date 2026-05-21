@@ -44,6 +44,13 @@ def _wait_for_snapshot(path: str, *, timeout_sec: float = 6.0) -> bool:
     return os.path.isfile(target)
 
 
+def _file_state(path: str) -> dict[str, Any]:
+    target = str(path or "").strip()
+    exists = bool(target) and os.path.isfile(target)
+    size = int(os.path.getsize(target)) if exists else 0
+    return {"path": target, "path_exists": exists, "path_size": size}
+
+
 def _capture_status(timeout: float) -> dict[str, Any]:
     try:
         return _send("status", timeout=timeout)
@@ -62,11 +69,12 @@ def _capture_snapshot(output_dir: Path, label: str, *, timeout: float) -> dict[s
     snapshot_path = str(data.get("path", target))
     if result.get("ok") and (result.get("queued") or result.get("message") == "snapshot_queued"):
         _wait_for_snapshot(snapshot_path, timeout_sec=max(4.0, timeout))
+    state = _file_state(snapshot_path)
     return {
-        "ok": bool(result.get("ok")),
+        "ok": bool(result.get("ok")) and bool(state.get("path_exists")) and int(state.get("path_size", 0) or 0) > 0,
         "error": str(result.get("error", "") or ""),
         "message": str(result.get("message", "") or ""),
-        "path": snapshot_path,
+        **state,
     }
 
 
@@ -95,6 +103,20 @@ def _record_step(
             entry["result"] = _send(command, timeout=timeout, path=path, options=options)
         except OSError as exc:
             entry["result"] = {"ok": False, "error": "app_unreachable", "message": str(exc), "data": {}}
+        if path:
+            # QA hot path: command success is not enough for capture/export
+            # steps; the artifact must exist so false passes do not hide UI loss.
+            if command in {"capture-active-dialog", "capture-dictionary-snapshot", "export-subtitles"}:
+                _wait_for_snapshot(path, timeout_sec=max(4.0, timeout))
+            artifact = _file_state(path)
+            entry.update(artifact)
+            if command in {"capture-active-dialog", "capture-dictionary-snapshot", "export-subtitles"}:
+                result = dict(entry.get("result") or {})
+                if bool(result.get("ok")) and (not artifact["path_exists"] or int(artifact["path_size"] or 0) <= 0):
+                    result["ok"] = False
+                    result["error"] = "artifact_missing"
+                    result["message"] = artifact["path"]
+                    entry["result"] = result
     else:
         entry["result"] = {"ok": True, "message": "record_only", "data": {}}
     entry["status"] = _capture_status(timeout)
@@ -143,6 +165,18 @@ def _editor_action_spec(
         return {"command": "editor-playback", "options": {"action": "pause"}, "snapshot": False, "path": ""}
     if action in {"save", "save-project"}:
         return {"command": "save-project", "options": {}, "snapshot": False, "path": ""}
+    if action == "save-subtitles":
+        return {"command": "save-subtitles", "options": {}, "snapshot": False, "path": "", "timeout": max(float(args.timeout or 0.0), 60.0)}
+    if action == "export-subtitles":
+        return {
+            "command": "export-subtitles",
+            "options": {},
+            "snapshot": False,
+            "path": str(output_dir / "manual_export.srt"),
+            "timeout": max(float(args.timeout or 0.0), 60.0),
+        }
+    if action == "export-subtitle-video":
+        return {"command": "export-subtitle-video", "options": {}, "snapshot": False, "path": "", "timeout": max(float(args.timeout or 0.0), 240.0)}
     if action in {"video-show", "video-hide", "video-toggle"}:
         return {
             "command": "editor-video",
@@ -214,7 +248,7 @@ def _record_editor_action(
         report,
         output_dir,
         action,
-        timeout=args.timeout,
+        timeout=float(spec.get("timeout", args.timeout) or args.timeout),
         snapshot=args.snapshot_each_step,
         command=str(spec.get("command", "") or ""),
         path=str(spec.get("path", "") or ""),
@@ -361,7 +395,7 @@ def _parser() -> argparse.ArgumentParser:
         "--actions",
         nargs="*",
         default=[],
-        help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split play pause save-project move-segment-left move-segment-right move-diamond merge-diamond video-show video-hide video-toggle stt-enable stt-disable stt-toggle open-dictionary open-settings open-speaker-settings capture-active-dialog capture-dictionary close-active-dialog lora-run-now lora-pause lora-resume snapshot",
+        help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split play pause save-project save-subtitles export-subtitles export-subtitle-video move-segment-left move-segment-right move-diamond merge-diamond video-show video-hide video-toggle stt-enable stt-disable stt-toggle open-dictionary open-settings open-speaker-settings capture-active-dialog capture-dictionary close-active-dialog lora-run-now lora-pause lora-resume snapshot",
     )
     editor.add_argument("--snapshot-each-step", action="store_true")
     return parser

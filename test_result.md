@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## automation-4 검토 항목 회수 및 full 재검증 - 2026-05-21 11:02~11:08
+
+- 실행 모드: Major / Full
+- 결과:
+  - Major: pass, `output/manual_verification/latest/qa_suite_major_20260521_110523`
+  - Full: pass, `output/manual_verification/latest/qa_suite_full_20260521_110628`
+- 최종 `full` scenario:
+  - `editor_compact_macau`: pass
+  - `video_menu_macau`: pass
+  - `save_export_macau`: pass
+  - `menu_stt_lora_macau`: pass
+  - `tinyping_fast_60s`: pass (`total_elapsed_sec=22.229`, `pipeline_elapsed_sec=9.843`, `peak_rss_bytes=431652864`, `final/raw=18/15`)
+  - `tinyping_auto_60s`: pass (`total_elapsed_sec=43.163`, `pipeline_elapsed_sec=10.523`, `peak_rss_bytes=761839616`, `final/raw=18/15`)
+  - `tinyping_high_60s`: pass (`total_elapsed_sec=25.561`, `pipeline_elapsed_sec=25.465`, `peak_rss_bytes=813219840`, `final/raw=16/16`)
+- 실패 원인 분류 및 조치:
+  - code regression: smart split 자동화가 playhead가 tiny fragment 또는 segment 밖에 있을 때 `smart_split_unavailable`로 오판하던 문제를 nearest splittable segment fallback으로 수정.
+  - code regression: status/guided-subtitle-status가 UDP 제한 또는 send failure에서 `app_unreachable`로 보이던 문제를 compact/minimal fallback 응답으로 수정.
+  - fixture/precondition drift: diamond 자동화가 compact 상태에서 stale line/right side를 고정해 `diamond_pair_missing`으로 실패하던 문제를 runner의 `closest` fallback으로 분리.
+  - fixture/verification drift: snapshot/export command가 ok를 반환해도 산출물이 비어 있으면 실패로 기록하도록 `remote_verify.py`를 보강.
+- 코드 수정 여부: 있음.
+  - app command server UDP 응답 압축/최소 응답, status fallback cached resource 사용, editor smart split fallback, QA runner diamond fallback, remote verify artifact 검사.
+- 문서 반영 여부: 있음.
+  - `idea_item.md`, `test_result.md`, `lesson_n_learned.md` 반영.
+- 남은 위험:
+  - automation-4 전용 legacy coverage artifact는 과거 실패 기록이므로, 현재 기준 판정은 공식 `major/full` 통과 artifact를 기준으로 한다.
+  - 멀티클립 long-running 상태 수렴은 이번 공식 suite 범위 밖이며, 이후 전용 반복 검증으로 분리한다.
+
 ## idea_item 최종 실행 QA 가드 보강 및 full 재검증 - 2026-05-21 10:12~10:26
 
 - 실행 모드: Major / Full
@@ -23,7 +50,7 @@
 - 문서 반영 여부: 있음.
   - `test_case.md`, `README.md`, `idea_item.md`, `lesson_n_learned.md`, `waste_action_item.md`에 QA/렌더링/폐기 기준 반영.
 - 남은 위험:
-  - `automation4_full_ux_20260521_101007`의 추가 커버리지 항목은 공식 `major/full`과 별도 성격이라, 전용 automation-4 runner 재실행으로 다시 닫아야 한다.
+  - `automation4_full_ux_20260521_101007`의 추가 커버리지 항목은 이후 `qa_suite_major_20260521_110523` / `qa_suite_full_20260521_110628`에서 공식 suite 기준으로 회수했다.
   - aggressive quarter-overlap STT/LLM은 품질 barrier 전까지 default로 켜지지 않았다.
 
 ## automation-4 전체 UX + 팝업/메뉴/화면저장 보강 실행 - 2026-05-21 10:07~10:11

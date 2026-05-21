@@ -19,58 +19,20 @@
 - 반복하면 안 되는 진단/실험/운영 실수는 `lesson_n_learned.md`에 남긴다.
 - 정상 완료된 idea/action/native item은 이 파일에서 삭제한다. 완료 이력은 필요할 때만 `test_result.md`, release note, `output/manual_verification/latest/`, `waste_action_item.md`, 또는 `lesson_n_learned.md`에 남긴다.
 
-## automation-4 검토 요청 항목 (추가/강화 2026-05-21)
-
-- [검토필요] `automation4_full_ux_20260521_101007`: `editor-begin-smart-split`, `editor-set-inline-cursor`, `editor-commit-inline-edit` 실패.
-  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
-  - 실패 원인: `smart_split_unavailable`, `inline_edit_inactive`.
-  - 액션: `editor_runtime.smart_split_ready`/`editor_runtime.inline_edit_active` precondition 실패를 기능 실패와 분리해 기록.
-
-- [검토필요] `automation4_full_ux_20260521_101007`: `editor-move-diamond`, `editor-merge-diamond` 실패.
-  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
-  - 실패 원인: `segment_not_found`.
-  - 액션: compact action 후 `diamond` boundary source와 segment graph를 재확인하는 guard 추가.
-
-- [검토필요] `automation4_full_ux_20260521_101007`: `export-subtitle-video`, `snapshot-after_save_export`, `snapshot-final_home`, `snapshot-final_editor` 실패.
-  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
-  - 실패 원인: 저장 후 상태 수렴 지연/`app_unreachable`/`command_timeout`.
-  - 액션: 저장 산출물 존재성·mtime 검사와 final snapshot 타임아웃 재시도 정책 분리.
-
-- [검토필요] `automation4_full_ux_20260521_101007`: `stt-enable`, `stt-disable`, `lora-run-now`, `lora-pause`, `lora-resume` 실패.
-  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
-  - 실패 원인: command timeout 집중 구간.
-  - 액션: STT/LoRA 명령은 ack-accepted와 settled-status 2단계로 분리.
-
-- [검토필요] `automation4_full_ux_20260521_101007`: `start-multiclip`, `open-home-before-multiclip` 실패.
-  - 증거: `output/manual_verification/latest/automation4_full_ux_20260521_101007/coverage_summary.json`
-  - 실패 원인: 멀티클립 시작/이동 중 app_unreachable 또는 command timeout.
-  - 액션: 멀티클립은 `start accepted/queued` + `status(row_count, done_rows, all_done)` 분리 판정 표준화.
-
-## automation-4 검토 요청 항목 (2026-05-21)
-
-- [검토필요] `automation4_coverage_run`에서 `editor-move-diamond`, `editor-merge-diamond`가 실패.
-  - 증거: `output/manual_verification/latest/automation4_coverage_run/coverage_summary.json`
-  - 분류: precondition/상태 경계( inline edit + boundary sync ) 영향 가능성.
-  - 액션: `editor_runtime.smart_split_ready`와 `editor_runtime.inline_edit_active` 기준으로 실패 단계별 회귀 패턴 재정의.
-
-- [검토필요] `start-multiclip-fast`, `wait-multiclip-done`가 `app_unreachable`/타임아웃 실패로 종료.
-  - 증거: `output/manual_verification/latest/automation4_coverage_run/coverage_summary.json`
-  - 분류: 통신 타임아웃/상태 수렴 분리 필요.
-  - 액션: `start accepted/queued`와 실제 큐 수렴(`done_rows`, `all_done`)을 분리 판정하는 커맨드 표준 정립.
-
-- [검토필요] `export-subtitle-video`, `snapshot-after_save_export`, `snapshot-final_home`, `snapshot-final_editor` 실패.
-  - 증거: `output/manual_verification/latest/automation4_coverage_run/coverage_summary.json`
-  - 분류: 저장 후 상태 확인 단계에서 응답성 저하.
-  - 액션: 저장 산출물(stat) 기반 검증과 최종 스냅샷 타임아웃 재시도 정책을 고정.
-
 ## Current Baseline Notes
 
 - 유지 후보: `candidate1`
 - 유지 이유: subtitle quality를 유지하면서 X5 평균 시간이 가장 안정적이었다.
 - 최신 실행 브랜치: `opt/one-shot-quality-speed-20260521-0228`
-- 최신 완료 배치: Phase 2/3/5/5.5 rendering-default execution batch + QA verdict hardening
-- 최신 산출물: `output/manual_verification/latest/idea_full_execute_20260521-0821/summary.md`
+- 최신 완료 배치: automation-4 command responsiveness + smart split/diamond QA hardening
+- 최신 산출물: `output/manual_verification/latest/qa_suite_full_20260521_110628`
 - 최신 검증:
+  - automation-4 검토 항목 재분류/수정: smart split precondition fallback, status UDP compact/minimal fallback, snapshot/export artifact existence check, app runner diamond fallback.
+  - `tests.test_app_command_server`, `tests.test_app_command_bridge`, `tests.test_qa_suite_runner`: `73 tests OK`
+  - `tests/test_editor_automation.py tests/test_remote_verify_actions.py`: `8 passed`
+  - `tools/check_maintenance_budget.py --json`: `ok=true`
+  - `tools/qa_suite_runner.py major`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_major_20260521_110523`
+  - `tools/qa_suite_runner.py full`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_full_20260521_110628`
   - `tools/audit_editor_rendering_ownership.py --json`: `ok=true` with TimelineCanvas/GlobalCanvas/TimelineWidget/PaintMixin/PaintPassPlanner/InputHitTargets/WaveformSource/STTPreviewLaneLayout/InlineTextEdit/GpuRenderingGate inventory
   - `tests.test_editor_rendering_ownership_audit`: `2 tests OK`
   - `tools/qa_suite_runner.py major`: `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_major_20260521_102240`
@@ -95,7 +57,7 @@
   - Tinyping fast 60s: total `22.326s`, pipeline `9.804s`, final/raw `18/15`
   - Tinyping auto 60s: total `44.152s`, pipeline `9.833s`, final/raw `18/15`
   - Tinyping high 60s: total `19.526s`, pipeline `19.431s`, final/raw `16/16`
-  - Latest full QA Tinyping fast/auto/high 60s: pipeline `9.860s/10.230s/26.262s`, total `22.553s/46.169s/26.364s`, peak RSS `436256768/783925248/1575256064`, final/raw `18/15`, `18/15`, `16/16`
+  - Latest full QA Tinyping fast/auto/high 60s: pipeline `9.843s/10.523s/25.465s`, total `22.229s/43.163s/25.561s`, peak RSS `431652864/761839616/813219840`, final/raw `18/15`, `18/15`, `16/16`
 - 현재 선택:
   - 기존 `candidate1` 품질 보존 파이프라인을 유지한다.
   - 이번 배치의 stage-owned STT/LLM resource policy, quarter prescan metadata, opaque 2D inline editor 안정화는 채택한다.

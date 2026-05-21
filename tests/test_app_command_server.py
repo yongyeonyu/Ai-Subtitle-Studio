@@ -8,6 +8,7 @@ from core.automation.app_command_protocol import (
     build_command_result,
     decode_command_result,
     encode_command_payload,
+    encode_command_result,
 )
 from core.automation.app_command_server import LocalAppCommandServer
 from core.runtime.stage_metrics import reset_stage_metrics, snapshot_stage_metrics
@@ -146,6 +147,60 @@ class LocalAppCommandServerTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["resources"]["automation"]["stage_ready_count"], 2)
         self.assertGreaterEqual(metrics["resources"]["automation"]["stage_done_count"], 2)
         self.assertGreaterEqual(metrics["resources"]["automation"]["max_queue_depth"], 1)
+
+    def test_oversized_status_payload_is_compacted_before_udp_send(self):
+        huge_logs = ["상태 로그 " + ("x" * 2000) for _ in range(80)]
+
+        def handler(payload: dict) -> dict:
+            command = str(payload.get("command", ""))
+            return build_command_result(
+                command,
+                ok=True,
+                data={
+                    "editor_open": True,
+                    "editor_state": "ST_EDITING",
+                    "editor_runtime": {"segment_count": 3},
+                    "runtime_resource": {"pressure_stage": "normal", "rss_gb": 0.42},
+                    "recent_logs": huge_logs,
+                    "recent_stage_logs": huge_logs,
+                },
+            )
+
+        self._server.set_handler(handler)
+        status_client = self._client(timeout_sec=1.0)
+
+        self._send(status_client, "status")
+        result = self._recv(status_client)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["data"]["status_response_truncated"])
+        self.assertEqual(result["data"]["editor_state"], "ST_EDITING")
+        self.assertLess(len(result["data"]["recent_logs"]), len(huge_logs))
+
+    def test_status_send_failure_falls_back_to_minimal_packet(self):
+        class _FakeSocket:
+            def __init__(self):
+                self.sent: list[bytes] = []
+
+            def sendto(self, payload: bytes, _addr):
+                if not self.sent:
+                    self.sent.append(payload)
+                    raise OSError("message too long")
+                self.sent.append(payload)
+                return len(payload)
+
+        fake_socket = _FakeSocket()
+        server = LocalAppCommandServer(fake_socket)  # type: ignore[arg-type]
+        oversized = {"recent_logs": ["x" * 4000 for _ in range(100)]}
+        server.set_handler(lambda payload: build_command_result(str(payload.get("command", "")), ok=True, data=oversized))
+
+        server._handle_request(encode_command_payload(build_command_payload("status")), ("127.0.0.1", 12345))
+
+        self.assertEqual(len(fake_socket.sent), 2)
+        result = decode_command_result(fake_socket.sent[-1])
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["data"]["status_response_send_fallback"])
+        self.assertLess(len(encode_command_result(result)), 1024)
 
 
 if __name__ == "__main__":

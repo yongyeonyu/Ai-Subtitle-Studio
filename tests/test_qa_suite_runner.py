@@ -156,6 +156,41 @@ class QASuiteRunnerTests(unittest.TestCase):
         with patch("tools.qa_suite_runner._pid_alive_for_restart", return_value=False):
             self.assertTrue(qa_suite_runner._wait_for_pids_exit([123], timeout_sec=0.5))
 
+    def test_resolve_editor_compact_diamond_drops_stale_line_when_status_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.qa_suite_runner._app_status", return_value=(1, {"ok": False, "error": "app_unreachable"})):
+                command, details = qa_suite_runner._resolve_editor_compact_diamond_command(
+                    "editor-move-diamond",
+                    "right",
+                    qa_suite_runner.DEFAULT_PYTHON,
+                    output_dir=Path(tmp),
+                )
+
+        self.assertEqual(command, ["editor-move-diamond", "--side", "closest"])
+        self.assertFalse(details["status_ok"])
+        self.assertEqual(details["pair"], {})
+
+    def test_resolve_editor_compact_diamond_uses_boundary_when_status_has_pair(self):
+        payload = {
+            "ok": True,
+            "data": {
+                "editor_runtime": {
+                    "diamond_right": {"side": "right", "boundary_sec": 12.345},
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.qa_suite_runner._app_status", return_value=(0, payload)):
+                command, details = qa_suite_runner._resolve_editor_compact_diamond_command(
+                    "editor-merge-diamond",
+                    "right",
+                    qa_suite_runner.DEFAULT_PYTHON,
+                    output_dir=Path(tmp),
+                )
+
+        self.assertEqual(command, ["editor-merge-diamond", "--start-sec", "12.345", "--side", "right"])
+        self.assertTrue(details["status_ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

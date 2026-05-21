@@ -74,3 +74,11 @@
 - bundled macOS app은 `.app` 실행 파일만 보고 stale 여부를 판단하지 않는다.
   - 이유: 실제 runner가 붙는 프로세스는 `dist/macos/AI Subtitle Studio.app/Contents/Resources/app/main.py`를 실행하는 Python일 수 있다.
   - 다음 원칙: app restart 전에는 bundled Python main process와 zombie/종료 중 PID를 구분하고, alive process만 blocker로 취급한다.
+
+- 자동화 status/ping은 UI 최신성보다 응답 생존성이 우선이다.
+  - 이유: 2026-05-21 automation-4 재검증에서 status 응답이 커지거나 busy 구간에 새 runtime snapshot을 만들면 실제 기능은 동작해도 `app_unreachable`로 오판될 수 있었다.
+  - 다음 원칙: status fallback은 cached runtime resource만 사용하고, UDP 응답은 compact/minimal fallback을 반드시 거치게 한다. 상세 원인은 artifact와 단계 로그로 따로 본다.
+
+- compact editor QA에서 stale line/side selection을 기능 실패로 단정하지 않는다.
+  - 이유: smart split 후 segment가 아주 짧아지면 이전 `--line 1 --side right` 명령은 현재 graph와 맞지 않아 `diamond_pair_missing`을 만들 수 있다.
+  - 다음 원칙: 자동화 runner는 현재 status에 boundary pair가 없으면 stale line을 버리고 `closest` diamond로 복구한다. 실제 기능 회귀는 editor runtime pair가 있는 상태에서 재현될 때만 본다.

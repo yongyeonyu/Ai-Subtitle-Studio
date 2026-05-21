@@ -108,3 +108,30 @@ def test_inline_commit_restores_last_cursor_after_layout_reset():
 
     assert result["editor_runtime"]["inline_edit_active"] is False
     assert editor.timeline.canvas.committed_cursor == 2
+
+
+def test_smart_split_moves_from_tiny_fragment_to_nearest_splittable_segment():
+    editor = _FakeEditor()
+    editor._segments = [
+        {"line": 0, "start": 0.0, "end": 0.04, "text": "짧음"},
+        {"line": 1, "start": 1.0, "end": 3.0, "text": "충분히 긴 자막"},
+    ]
+    editor.timeline.canvas.playhead_sec = 0.02
+
+    result = editor.automation_begin_smart_split_at_playhead(line=0)
+
+    assert result["line"] == 1
+    assert result["selection_source"] == "nearest_splittable_fallback"
+    assert result["split_sec"] == 2.0
+    assert editor.timeline.canvas.active_seg_line == 1
+
+
+def test_smart_split_recovers_when_playhead_is_outside_all_segments():
+    editor = _FakeEditor()
+    editor.timeline.canvas.playhead_sec = 9.0
+
+    result = editor.automation_begin_smart_split_at_playhead(at_playhead=True)
+
+    assert result["line"] == 1
+    assert result["selection_source"] == "nearest_splittable_fallback"
+    assert result["split_sec"] == 2.0
