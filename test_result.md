@@ -1,5 +1,21 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Phase 7 도움말 QA coverage 매핑 - 2026-05-21 11:35
+
+- 실행 모드: Targeted
+- 결과:
+  - 단위/가드: pass
+- 코드/문서 반영:
+  - 기존 도움말 UI 순서는 유지하고 `HELP_QA_COVERAGE` 데이터만 추가했다.
+  - `tests.test_help_dialog`가 모든 도움말 탭에 QA profile, owner, artifact 매핑과 owner 경로 존재 여부를 검증한다.
+  - `README.md` 최신 quick baseline을 `qa_suite_quick_20260521_113130`으로 갱신했다.
+  - `test_case.md` coverage matrix에 Help/manual QA map 행을 추가했다.
+- 단위/가드:
+  - `tests.test_help_dialog`: pass
+- 분류:
+  - 실패 없음.
+  - code regression/fixture drift/environment-bundle issue 없음.
+
 ## Phase 6 타임라인 silent fallback 로그화 - 2026-05-21 11:26
 
 - 실행 모드: Targeted

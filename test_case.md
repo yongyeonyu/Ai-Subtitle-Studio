@@ -411,6 +411,7 @@ output/manual_verification/latest/ui_compare/
 | Roughcut | `tests.test_roughcut_*`, `tests.test_editor_roughcut_draft` | post-generation roughcut | roughcut view |
 | Project save/load | `tests.test_project_*`, `tests.test_editor_srt_open_refresh` | open project, save, reopen | editor restored |
 | Settings/dictionary | `tests.test_settings_*`, `tests.test_settings_dictionary` | open settings/dictionary | settings, dictionary |
+| Help/manual QA map | `tests.test_help_dialog` | help dialog open, chapter/profile ownership | help dialog, suite artifacts |
 | Native acceleration | `tests.test_native_*`, `tests.test_runtime_optimization_profile` | full media performance sample | report only |
 
 ## Automatic Run Recipes

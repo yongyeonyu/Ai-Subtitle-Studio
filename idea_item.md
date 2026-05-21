@@ -313,6 +313,11 @@ Work:
 - 각 장마다 `quick`, `major`, `full` 책임 profile과 snapshot/artifact 경로 연결.
 - 새 UX/명령이 생겼으면 `test_case.md`, `tools/qa_suite_runner.py`, `tests/test_qa_suite_runner.py`, `README.md`를 함께 갱신.
 
+Already done:
+- 2026-05-21 1차 구현 완료: 기존 도움말 탭의 UI 순서는 유지하고, `HELP_QA_COVERAGE`로 탭별 QA profile/owner/artifact 매핑을 추가했다.
+- 완료 범위: `README.md`의 최신 quick baseline 갱신, `test_case.md` coverage matrix에 도움말/QA map 행 추가, `tests.test_help_dialog`가 모든 도움말 탭의 QA 매핑 존재를 검증한다.
+- 완료 검증: `tests.test_help_dialog`.
+
 QA:
 - `./venv/bin/python tools/qa_suite_runner.py quick`
 - `./venv/bin/python tools/qa_suite_runner.py major`

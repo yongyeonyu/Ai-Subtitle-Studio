@@ -165,3 +165,57 @@ HELP_TABS = [
         ],
     },
 ]
+
+
+HELP_QA_COVERAGE = {
+    "시작 / 프로젝트": {
+        "profiles": ["quick", "major"],
+        "owners": ["ui/home_ui.py", "ui/editor/editor_segments_reload.py", "core/project/project_manager.py"],
+        "artifacts": ["home", "editor restored"],
+    },
+    "자막 생성": {
+        "profiles": ["full"],
+        "owners": ["core/pipeline/single_pipeline.py", "core/audio/media_processor_transcribe.py"],
+        "artifacts": ["tinyping_full_verify.json", "queue processing"],
+    },
+    "자막 편집": {
+        "profiles": ["major"],
+        "owners": ["ui/timeline/timeline_canvas.py", "ui/editor/ux/timeline_inline_text_editor.py"],
+        "artifacts": ["timeline full", "inline edit", "split menu"],
+    },
+    "STT 모드": {
+        "profiles": ["major"],
+        "owners": ["ui/editor/editor_automation.py", "core/audio/media_processor_transcribe.py"],
+        "artifacts": ["menu_stt_lora_macau"],
+    },
+    "멀티클립": {
+        "profiles": ["major"],
+        "owners": ["ui/project/multiclip_panel.py", "core/project/project_frames.py"],
+        "artifacts": ["multiclip state"],
+    },
+    "러프컷": {
+        "profiles": ["major"],
+        "owners": ["core/roughcut", "ui/editor/editor_roughcut_draft.py"],
+        "artifacts": ["roughcut view"],
+    },
+    "출력 / 저장": {
+        "profiles": ["major"],
+        "owners": ["ui/editor/editor_save_manager.py", "tools/remote_verify.py"],
+        "artifacts": ["save_export_macau"],
+    },
+    "설정 / 모델": {
+        "profiles": ["major"],
+        "owners": ["ui/settings", "ui/settings/settings_dictionary.py"],
+        "artifacts": ["settings", "dictionary"],
+    },
+    "자동처리 / 큐": {
+        "profiles": ["quick", "major"],
+        "owners": ["ui/home_sidebar.py", "ui/queue/sidebar_queue_panel.py"],
+        "artifacts": ["queue idle", "queue processing"],
+    },
+    "단축키 / 문제상황": {
+        "profiles": ["quick", "major", "full"],
+        "owners": ["test_case.md", "README.md", "tools/qa_suite_runner.py"],
+        "artifacts": ["suite_result.json", "suite_result.md"],
+    },
+}

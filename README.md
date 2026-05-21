@@ -147,7 +147,7 @@ Artifacts are written under `output/manual_verification/latest/qa_suite_<profile
 
 Current verified baseline:
 
-- `quick`: `qa_suite_quick_20260521_111623`
+- `quick`: `qa_suite_quick_20260521_113130`
 - `major`: `qa_suite_major_20260521_110523`
 - `full`: `qa_suite_full_20260521_110628`
 
@@ -169,6 +169,8 @@ Operational rules:
 ```bash
 ./venv/bin/python tools/audit_editor_rendering_ownership.py --json
 ```
+
+- Help chapter QA ownership is tracked in `ui/help/help_content.py::HELP_QA_COVERAGE` and guarded by `tests.test_help_dialog`.
 
 ## Project Data
 
