@@ -147,9 +147,9 @@ Artifacts are written under `output/manual_verification/latest/qa_suite_<profile
 
 Current verified baseline:
 
-- `quick`: `qa_suite_quick_20260521_113130`
-- `major`: `qa_suite_major_20260521_110523`
-- `full`: `qa_suite_full_20260521_113718`
+- `quick`: `qa_suite_quick_20260521_121518`
+- `major`: `qa_suite_major_20260521_121601`
+- `full`: `qa_suite_full_20260521_121658`
 
 Operational rules:
 

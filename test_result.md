@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## idea_item 전체 실행 재검증 및 큐 종료 - 2026-05-21 12:15~12:19
+
+- 실행 모드: Quick / Major / Full + Macau/X5/Tinyping benchmark
+- 결과:
+  - Quick: pass, `output/manual_verification/latest/qa_suite_quick_20260521_121518`
+  - Major: pass, `output/manual_verification/latest/qa_suite_major_20260521_121601`
+  - Full: pass, `output/manual_verification/latest/qa_suite_full_20260521_121658`
+- 추가 benchmark:
+  - Macau fast repeat10: pass, `output/manual_verification/latest/idea_full_execute_20260521-rerun/macau_fast_repeat10/repeat_summary.json`
+    - pipeline avg/min/max `7.572s/7.427s/7.849s`, final segment `5` 유지, stage trim avg `6.0`
+  - X5 modes repeat10 quality gate: pass, `output/manual_verification/latest/idea_full_execute_20260521-rerun/x5_modes_repeat10_current/repeat_summary.md`
+    - `mode_high_piecewise_drift`: gate `10/10`, avg `43.693s`, p95 `44.338s`, quality `72.989`, final segments `24`
+    - `mode_fast`: gate `0/10`, avg `10.250s`, p95 `11.410s`, quality `71.514`, final segments `17`
+  - Tinyping long high: pass, `output/manual_verification/latest/idea_full_execute_20260521-rerun/tinyping_long_high/tinyping_full_verify.json`
+    - media `24:10`, total `602.634s`, pipeline `574.298s`, peak RSS `4205363200`, final/raw `385/424`, rollback `0`
+- 최종 선택:
+  - 품질 동일 최종 후보는 `mode_high_piecewise_drift`.
+  - `mode_fast`는 Fast 모드 속도 후보로는 유지하지만 X5 reference 품질 gate 실패 때문에 품질 동일 기본 알고리즘으로 승격하지 않는다.
+- 분류:
+  - regression: 없음
+  - fixture drift: 없음
+  - environment-bundle issue: 없음
+- 코드 수정 여부: 없음. 이번 단계는 benchmark/QA refresh와 실행 큐 문서 종료.
+- 문서 반영 여부: 있음. `idea_item.md`, `ACTION_ITEMS.md`, `NATIVE_LIB_PLAN.md`, `README.md`, `test_result.md`, `waste_action_item.md`, `lesson_n_learned.md`.
+- 남은 위험:
+  - Tinyping long high는 성공했지만 runtime pressure snapshot이 `critical`을 기록했다. 장시간 high에서 memory pressure 관찰은 계속 필요하다.
+  - UI snapshot diff 자동 비교기는 별도 전용 도구가 아니라 공식 `quick/major/full` screenshot artifact 기준으로 확인했다.
+
 ## Phase 8 최종 full QA 및 알고리즘 선택 - 2026-05-21 11:37~11:39
 
 - 실행 모드: Full

@@ -19,7 +19,7 @@ restore a separate action queue.
 Use this source of truth:
 
 - `idea_item.md`
-- Section: `2026-05-20 최종 통합 실행 계획: ACTION_ITEMS + NATIVE_LIB_PLAN 전체`
+- Section: `Active Execution Queue`
 
 ## Metadata
 

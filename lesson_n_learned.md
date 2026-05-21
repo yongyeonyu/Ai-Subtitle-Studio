@@ -90,3 +90,11 @@
 - UI hot path fallback은 조용히 삼키지 말고 한 번만 원인을 남긴다.
   - 이유: viewport clip 또는 voice-activity lane refresh 실패는 사용자가 보는 잔상/누락으로 이어질 수 있지만, 매 프레임 로그를 찍으면 편집 성능이 흔들린다.
   - 다음 원칙: 복구 가능한 UI 예외는 기존 복구 동작을 유지하되, key별 one-shot nonfatal WARN으로 남기고 반복 로그는 막는다.
+
+- 완료된 `idea_item.md`를 다시 실행하라는 요청이 오면 폐기 후보를 새 근거 없이 재구현하지 않는다.
+  - 이유: `mode_fast`는 X5 10회 rerun에서도 quality gate `0/10`이었고, 이전 폐기 결론을 뒤집지 못했다.
+  - 다음 원칙: active queue가 비어 있으면 benchmark/QA를 refresh하고 문서를 닫는다. 폐기 후보 재실행은 새 모델, 새 fixture, 새 품질 보정, 새 benchmark 근거가 있을 때만 한다.
+
+- 장시간 High 검증은 성공 여부와 별개로 memory pressure snapshot을 같이 기록한다.
+  - 이유: Tinyping long high 1회는 pass했지만 run 전후 pressure snapshot이 `critical`을 기록했다.
+  - 다음 원칙: long high 최적화는 elapsed만 보지 말고 `runtime_monitor`, `subtitle_generation_monitor`, peak RSS, residual worker를 함께 본다.

@@ -52,3 +52,9 @@
   품질: 실제 자막 산출이 없으므로 품질 보존 조건을 만족하지 않는다.
   결론: spoken/non-trivial slice의 raw 또는 final subtitle 0개는 무조건 실패다. 속도 개선 후보로 취급하지 않는다.
   artifact: `output/manual_verification/latest/qa_suite_full_20260521_100107`
+
+- `mode_fast_as_quality_equivalent_x5_default_rerun`: X5 10회 재검증 후 `mode_fast`를 품질 동일 기본 알고리즘으로 다시 승격하는 방향
+  결과: 2026-05-21 rerun에서 `mode_fast`는 평균 `10.250s`, p95 `11.410s`로 빠르지만 quality gate `0/10`.
+  품질: quality `71.514`, readability `93.057`, timing MAE `0.7347`, final segment `17`로 `mode_high_piecewise_drift`의 quality `72.989`, readability `94.568`, timing MAE `0.6455`, final segment `24`보다 낮았다.
+  결론: 같은 X5 reference 조건에서는 `mode_fast`를 품질 동일 기본 알고리즘으로 반복 제안하지 않는다. Fast 모드 속도 후보로만 유지한다.
+  artifact: `output/manual_verification/latest/idea_full_execute_20260521-rerun/x5_modes_repeat10_current/repeat_summary.md`
