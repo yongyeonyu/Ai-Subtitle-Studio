@@ -223,9 +223,11 @@ Already done:
 - 2026-05-21 3차 구현 완료: `ui.gpu_rendering`의 SceneGraph 기본값을 off로 바꾸고, legacy settings의 `editor_rendering_scenegraph_enabled=true`가 새 opt-in flag 없이 QML UI를 되살리지 못하게 했다.
 - 완료 범위: timeline/project renderer metadata를 `timeline-qwidget-2d`로 정리, runtime optimization editor backend를 `qwidget_2d`로 갱신, custom/default settings에서 OpenGL/SceneGraph 기본값을 off로 정리.
 - 완료 검증: `tests.test_gpu_rendering`, `tests.test_project_context`, `tests.test_timeline_render_cache`, 관련 runtime/native tests.
+- 2026-05-21 4차 구현 완료: `tools/audit_editor_rendering_ownership.py`를 추가해 TimelineCanvas/GlobalCanvas/TimelineWidget/PaintMixin/inline editor/GPU gate가 qwidget-2d owner 원칙을 어기면 실패하도록 했다.
+- 완료 검증: `tools/audit_editor_rendering_ownership.py --json`, `tests.test_editor_rendering_ownership_audit`.
 
 Remaining follow-up:
-- editor rendering inventory를 만든다: `TimelineCanvas`, `TimelineWidget`, `timeline_paint`, `timeline_global`, inline subtitle editor, playhead overlay compatibility object, segment creation/drag handles, cut-boundary diamonds, waveform/minimap, STT preview lanes.
+- editor rendering inventory coverage를 확대한다: segment creation/drag handles, cut-boundary diamonds, waveform/minimap, STT preview lanes가 동일 paint pass/z-order 원칙을 유지하는지 추가 규칙으로 보강한다.
 - 모든 에디터 paint는 single 2D owner 원칙으로 정리한다. 같은 시각 요소를 QML overlay, child widget, scenegraph, canvas paint가 동시에 그리지 않게 한다.
 - inline subtitle editing은 opaque Qt child widget 경로로 고정했다. 남은 작업은 다른 편집 표면에 투명 child widget/segment text 동시 paint가 남아 있는지 inventory로 확인하는 것이다.
 - playhead, shadow playhead, selected segment, hover handle, cut diamond는 한 paint pass에서 z-order를 고정한다. 클릭/드래그/키보드 이동은 색상/모드를 렌더러가 재해석하지 않고 canonical state만 읽는다.

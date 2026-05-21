@@ -10,6 +10,8 @@
 - 단위/가드:
   - `py_compile`: pass
   - `tests.test_gpu_rendering`, `tests.test_project_context`, `tests.test_timeline_render_cache`: pass
+  - `tools/audit_editor_rendering_ownership.py --json`: pass
+  - `tests.test_editor_rendering_ownership_audit`: pass
   - `tests.test_runtime_optimization_profile`, `tests.test_native_macos_acceleration`: pass
   - `tools/check_maintenance_budget.py --json`: `ok=true`
   - `tools/qa_suite_runner.py quick`: pass, `output/manual_verification/latest/qa_suite_quick_20260521_094413`
