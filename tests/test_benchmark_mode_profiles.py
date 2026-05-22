@@ -1,3 +1,4 @@
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -183,6 +184,25 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         packaging_only = _variant_chunk_settings(base, {"subtitle_lora_packaging_enabled": False})
 
         self.assertEqual(signature, _chunk_extraction_signature(packaging_only))
+
+    def test_copy_chunk_dir_hardlinks_wavs_and_copies_metadata(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            wav = source / "vad_000_0.000.wav"
+            meta = source / "vad_strict.json"
+            wav.write_bytes(b"RIFF0000WAVEfmt ")
+            meta.write_text("[]", encoding="utf-8")
+
+            copied = _copy_chunk_dir(source, target)
+
+            self.assertEqual(copied, target)
+            self.assertTrue((target / wav.name).exists())
+            self.assertTrue((target / meta.name).exists())
+            self.assertEqual(os.stat(wav).st_ino, os.stat(target / wav.name).st_ino)
+            self.assertNotEqual(os.stat(meta).st_ino, os.stat(target / meta.name).st_ino)
 
     def test_high_mode_can_enable_llm_when_explicit_model_is_supplied(self):
         variants = benchmark_mode_profiles(

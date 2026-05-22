@@ -25,6 +25,8 @@ def whisperkit_empty_fallback_overrides(
         {
             "stt_whisperkit_empty_fallback_active": True,
             "stt_whisperkit_empty_fallback_model": fallback_model,
+            "stt_npu_prefer_enabled": False,
+            "whisperkit_native_auto_enabled": False,
         }
     )
     return data

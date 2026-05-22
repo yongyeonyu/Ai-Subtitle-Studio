@@ -179,6 +179,26 @@ class NativeSwiftCoreWorkerTests(unittest.TestCase):
         native_subtitle._CLI_PATH_CACHE = None
         native_subtitle._CLI_PATH_CACHE_AT = 0.0
 
+    def test_find_native_cli_path_picks_newest_built_cli_without_explicit_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            release = Path(tmp) / "release" / "AIStudioNativeCLI"
+            debug = Path(tmp) / "debug" / "AIStudioNativeCLI"
+            release.parent.mkdir(parents=True)
+            debug.parent.mkdir(parents=True)
+            release.write_text("#!/bin/sh\n", encoding="utf-8")
+            debug.write_text("#!/bin/sh\n", encoding="utf-8")
+            release.chmod(0o755)
+            debug.chmod(0o755)
+            os.utime(release, (100.0, 100.0))
+            os.utime(debug, (200.0, 200.0))
+            native_subtitle._CLI_PATH_CACHE_ENV = None
+            native_subtitle._CLI_PATH_CACHE = None
+            native_subtitle._CLI_PATH_CACHE_AT = 0.0
+
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                 mock.patch("core.native_swift_subtitle._candidate_cli_paths", return_value=[release, debug]):
+                self.assertEqual(find_native_cli_path(), debug)
+
     def test_core_worker_handles_runtime_eta_roundtrip(self):
         if find_native_cli_path() is None:
             self.skipTest("AIStudioNativeCLI release build is not available")

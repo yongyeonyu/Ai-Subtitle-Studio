@@ -589,6 +589,46 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertIn("vad", sources)
         self.assertIn("lora_duration", sources)
 
+    def test_final_gap_settings_prefer_late_word_span_over_early_selected_candidate_window(self):
+        segments = [
+            {
+                "start": 62.0,
+                "end": 66.0,
+                "text": "아 이게 시림프 갈릭 소스 이게 그건가 보다",
+                "stt_selected_source": "STT1",
+                "_stt_original_candidate_start": 62.0,
+                "_stt_original_candidate_end": 66.0,
+                "words": [
+                    {"word": "아", "start": 67.1, "end": 67.25},
+                    {"word": "이게", "start": 67.28, "end": 67.55},
+                    {"word": "그건가", "start": 68.2, "end": 68.55},
+                    {"word": "보다", "start": 68.58, "end": 68.9},
+                ],
+            }
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "subtitle_timing_fusion_enabled": False,
+                "subtitle_timing_anchor_max_end_lead_sec": 0.0,
+                "subtitle_timing_anchor_max_end_lag_sec": 0.0,
+                "single_subtitle_end": 0.0,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[0]["start"], 67.1, places=3)
+        self.assertAlmostEqual(adjusted[0]["end"], 68.9, places=3)
+        self.assertTrue(
+            any(
+                item.get("edge") == "start" and item.get("anchor_source") == "word_timestamp"
+                for item in adjusted[0].get("_timing_anchor_window_policy", {}).get("adjustments", [])
+            )
+            or adjusted[0].get("_timing_anchor_policy", {}).get("anchor_source") == "word_timestamp"
+        )
+
     def test_final_gap_settings_apply_piecewise_drift_for_consistent_run(self):
         segments = [
             {
@@ -703,6 +743,64 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertIsNone(rejected)
         self.assertFalse(rejected_meta["_llm_candidate_policy"]["accepted"])
         self.assertEqual(rejected_meta["_llm_rollback_policy"]["fallback"], "safe_split")
+
+    def test_verify_llm_chunks_allows_split_merge_but_blocks_meaning_rewrite(self):
+        source = "어? 생각해 주렴 왜? 시선은 몰라"
+        settings = {
+            "accuracy_decision_graph_enabled": True,
+            "llm_candidate_policy_enabled": True,
+            "llm_verifier_enabled": True,
+        }
+        candidates = build_llm_candidate_options(source, threshold=10, settings=settings)
+
+        split_only, split_meta = subtitle_engine._verify_llm_chunks(
+            source,
+            ["어? 생각해 주렴", "왜? 시선은 몰라"],
+            settings,
+            {},
+            fallback="safe_split",
+            candidate_options=candidates,
+            duration_sec=2.0,
+        )
+        rewritten, rewrite_meta = subtitle_engine._verify_llm_chunks(
+            source,
+            ["시", "메놜라시야"],
+            settings,
+            {},
+            fallback="safe_split",
+            candidate_options=candidates,
+            duration_sec=2.0,
+        )
+
+        self.assertEqual(split_only, ["어? 생각해 주렴", "왜? 시선은 몰라"])
+        self.assertTrue(split_meta["_llm_candidate_policy"]["accepted"])
+        self.assertEqual(split_meta["_llm_candidate_policy"]["reason"], "candidate_match")
+        self.assertIsNone(rewritten)
+        self.assertFalse(rewrite_meta["_llm_candidate_policy"]["accepted"])
+        self.assertEqual(rewrite_meta["_llm_rollback_policy"]["fallback"], "safe_split")
+
+    def test_verify_llm_chunks_allows_one_word_near_stt_correction(self):
+        source = "음요를 한 사람씩"
+        settings = {
+            "accuracy_decision_graph_enabled": True,
+            "llm_candidate_policy_enabled": True,
+            "llm_verifier_enabled": True,
+        }
+        candidates = build_llm_candidate_options(source, threshold=10, settings=settings)
+
+        corrected, meta = subtitle_engine._verify_llm_chunks(
+            source,
+            ["음료를 한 사람씩"],
+            settings,
+            {},
+            fallback="safe_split",
+            candidate_options=candidates,
+            duration_sec=1.0,
+        )
+
+        self.assertEqual(corrected, ["음료를 한 사람씩"])
+        self.assertTrue(meta["_llm_candidate_policy"]["accepted"])
+        self.assertEqual(meta["_llm_candidate_policy"]["reason"], "minimal_edit")
 
     def test_verify_llm_chunks_logs_actual_empty_output_distinctly(self):
         logger = unittest.mock.Mock()

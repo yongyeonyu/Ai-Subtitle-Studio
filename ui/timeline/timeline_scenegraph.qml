@@ -164,26 +164,43 @@ Item {
         id: speakerBarComponent
 
         Rectangle {
+            id: speakerBar
+            property var speakerRows: modelData.speakerRows || []
+            property bool speakerTextVisible: !!modelData.showSpeakerText
             x: 0
             y: modelData.speakerY - modelData.y
             width: parent.width
             height: modelData.speakerH
-            color: modelData.speakerFill
-            border.color: "#2D3942"
+            color: modelData.speakerFill || "#1F252A"
+            border.color: "#303840"
             border.width: 1
 
-            Text {
-                anchors.fill: parent
-                anchors.leftMargin: 6
-                anchors.rightMargin: 6
-                text: modelData.speakerText
-                color: "#DCE3EA"
-                font.family: root.fontFamily
-                font.pixelSize: 10
-                elide: Text.ElideRight
-                verticalAlignment: Text.AlignVCenter
-                clip: true
-                visible: !!modelData.showSpeakerText
+            Repeater {
+                model: speakerBar.speakerRows.length > 0 ? speakerBar.speakerRows : [{"name": modelData.speakerText || "", "color": "#8E8E93", "fill": modelData.speakerFill || "#1F252A"}]
+
+                Rectangle {
+                    x: 0
+                    y: index * (speakerBar.height / Math.max(1, speakerBar.speakerRows.length || 1))
+                    width: speakerBar.width
+                    height: speakerBar.height / Math.max(1, speakerBar.speakerRows.length || 1)
+                    color: modelData.fill || "#1F252A"
+                    clip: true
+
+                    Text {
+                        anchors.fill: parent
+                        anchors.leftMargin: 7
+                        anchors.rightMargin: 7
+                        text: modelData.name || ""
+                        color: "#E8EEF4"
+                        font.family: root.fontFamily
+                        font.pixelSize: speakerBar.speakerRows.length > 1 ? 9 : 10
+                        font.bold: true
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                        clip: true
+                        visible: speakerBar.speakerTextVisible
+                    }
+                }
             }
         }
     }

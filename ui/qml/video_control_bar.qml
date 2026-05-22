@@ -220,10 +220,10 @@ Rectangle {
                 )
             )
             height: 36
-            radius: 9
-            color: "#1A2127"
-            border.width: 1
-            border.color: "#2D3942"
+            radius: 0
+            color: "transparent"
+            border.width: 0
+            border.color: "transparent"
             clip: true
             Text {
                 id: infoTextItem
@@ -255,10 +255,10 @@ Rectangle {
                 )
             ) : 0
             height: 36
-            radius: 9
-            color: "#182126"
-            border.width: 1
-            border.color: "#2F4852"
+            radius: 0
+            color: "transparent"
+            border.width: 0
+            border.color: "transparent"
             clip: true
             Text {
                 id: sourceText

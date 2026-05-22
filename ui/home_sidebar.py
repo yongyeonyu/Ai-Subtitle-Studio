@@ -2109,7 +2109,7 @@ class HomeSidebarMixin:
 
     def _on_sidebar_model_link(self, href: str):
         if str(href or "").startswith("prompt:"):
-            self._open_sidebar_prompt_dialog(str(href or "").replace("prompt:", "", 1))
+            self._queue_sidebar_prompt_dialog(str(href or "").replace("prompt:", "", 1))
             return
         key = str(href or "").replace("model:", "", 1)
         if key not in {"stt", "stt1", "stt2", "subtitle_llm", "roughcut_llm"}:
@@ -2289,3 +2289,24 @@ class HomeSidebarMixin:
         chosen = show_context_menu(getattr(self, "home_page", None), QCursor.pos(), items)
         if chosen and chosen in updates_by_id:
             self._apply_sidebar_model_selection(updates_by_id[chosen])
+
+    def _queue_sidebar_prompt_dialog(self, key: str) -> None:
+        key = str(key or "").strip()
+        if not key:
+            return
+        if bool(getattr(self, "_sidebar_prompt_dialog_pending", False)):
+            self._sidebar_prompt_dialog_pending_key = key
+            return
+        self._sidebar_prompt_dialog_pending = True
+        self._sidebar_prompt_dialog_pending_key = key
+
+        def _open_deferred() -> None:
+            pending_key = str(getattr(self, "_sidebar_prompt_dialog_pending_key", "") or "")
+            self._sidebar_prompt_dialog_pending = False
+            self._sidebar_prompt_dialog_pending_key = ""
+            if not pending_key:
+                return
+            # Opening a modal dialog directly from QLabel.linkActivated can crash Qt/Cocoa.
+            self._open_sidebar_prompt_dialog(pending_key)
+
+        QTimer.singleShot(0, _open_deferred)

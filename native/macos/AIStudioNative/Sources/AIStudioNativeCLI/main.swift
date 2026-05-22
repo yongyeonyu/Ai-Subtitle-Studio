@@ -54,6 +54,9 @@ func printUsage() {
       native-policy-lora-score-json
       native-policy-jsonl-worker
       native-memory-snapshot-json
+      native-resource-allocation-json
+      audio-chunk-manifest-json
+      roughcut-boundary-candidates-json
       runtime-disk-cache-prune-json
       native-input-activity-json
       runtime-eta-predict-json
@@ -180,6 +183,12 @@ func run() throws {
                     response = PipelineStatusNative.summary(payload: payload)
                 case "runtime_disk_cache_prune":
                     response = RuntimeDiskCache.prune(payload: payload)
+                case "native_resource_allocation":
+                    response = NativeResourceAllocator.plan(payload: payload)
+                case "audio_chunk_manifest":
+                    response = AudioChunkManifest.manifest(payload: payload)
+                case "roughcut_boundary_candidates":
+                    response = RoughcutChunkPlanner.boundaryCandidates(payload: payload)
                 case "subtitle_core_plan":
                     response = SubtitleCoreNative.plan(payload: payload)
                 default:
@@ -531,6 +540,18 @@ func run() throws {
     case "native-memory-snapshot-json":
         let payload = try readJSONObjectFromStdin()
         try writeJSONObject(MemoryPressure.snapshot(payload: payload))
+
+    case "native-resource-allocation-json":
+        let payload = try readJSONObjectFromStdin()
+        try writeJSONObject(NativeResourceAllocator.plan(payload: payload))
+
+    case "audio-chunk-manifest-json":
+        let payload = try readJSONObjectFromStdin()
+        try writeJSONObject(AudioChunkManifest.manifest(payload: payload))
+
+    case "roughcut-boundary-candidates-json":
+        let payload = try readJSONObjectFromStdin()
+        try writeJSONObject(RoughcutChunkPlanner.boundaryCandidates(payload: payload))
 
     case "runtime-disk-cache-prune-json":
         let payload = try readJSONObjectFromStdin()

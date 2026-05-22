@@ -206,6 +206,33 @@ class LoraVectorRetrieverTests(unittest.TestCase):
             self.assertIn("BMW X5", joined)
             self.assertNotIn("제주도", joined)
 
+    def test_large_runtime_index_skip_avoids_foreground_json_parse(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            paths["lora_retrieval_index"].write_text("x" * 4096, encoding="utf-8")
+            lora_vector_retriever.clear_lora_retrieval_caches()
+
+            with patch(
+                "core.personalization.lora_vector_retriever.read_json",
+                side_effect=AssertionError("foreground retrieval should not parse a large index"),
+            ):
+                result = retrieve_lora_context(
+                    "실시간 자막 전처리",
+                    store_dir=tmpdir,
+                    settings={
+                        "editor_lora_runtime_enabled": True,
+                        "lora_retrieval_skip_large_runtime_index": True,
+                        "lora_retrieval_runtime_max_index_mb": 0.001,
+                    },
+                    limit=4,
+                )
+
+            self.assertEqual(result["items"], [])
+            self.assertEqual(result["skipped_reason"], "large_runtime_index")
+            self.assertGreater(result["index_size_bytes"], result["index_size_limit_bytes"])
+            self.assertEqual(result["index_doc_count"], 0)
+
     def test_runtime_prompt_uses_scored_lora_retrieval_context(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._seed_vehicle_store(tmpdir)
@@ -222,6 +249,31 @@ class LoraVectorRetrieverTests(unittest.TestCase):
             self.assertIn("BMW X5", prompt)
             self.assertIn("scene=car", prompt)
             self.assertIn("괄호(), 대괄호[], 중괄호{}", prompt)
+
+    def test_runtime_retrieval_uses_gpu_vector_scoring_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._seed_vehicle_store(tmpdir)
+            build_lora_retrieval_index(tmpdir)
+            lora_vector_retriever.clear_lora_retrieval_caches()
+
+            with patch(
+                "core.personalization.lora_retrieval_scoring.score_lora_vector_scores_on_gpu",
+                return_value={2: 0.75},
+            ) as gpu_scores:
+                result = retrieve_lora_context(
+                    "BMW X5 고속도로 주행 소음 리뷰",
+                    store_dir=tmpdir,
+                    settings={
+                        "lora_gpu_acceleration_enabled": True,
+                        "lora_gpu_retrieval_scoring_enabled": True,
+                        "lora_gpu_force_small_batches": True,
+                    },
+                    limit=4,
+                )
+
+            self.assertTrue(gpu_scores.called)
+            self.assertTrue(result["items"])
+            self.assertIn(0.75, [item.get("vector_score") for item in result["items"]])
 
     def test_fast_quality_disables_runtime_lora_prompt_context(self):
         with tempfile.TemporaryDirectory() as tmpdir:

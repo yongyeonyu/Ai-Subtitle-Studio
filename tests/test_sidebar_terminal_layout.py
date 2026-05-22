@@ -758,6 +758,20 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_sidebar_prompt_link_defers_dialog_until_link_event_unwinds(self):
+        window = MainWindow()
+        try:
+            with mock.patch.object(window, "_open_sidebar_prompt_dialog") as open_mock:
+                window._on_sidebar_model_link("prompt:subtitle_llm")
+                self.assertFalse(open_mock.called)
+                self.app.processEvents()
+
+            open_mock.assert_called_once_with("subtitle_llm")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_saved_editor_after_generation_marks_pipeline_done(self):
         window = MainWindow()
         try:

@@ -141,7 +141,26 @@ class SignalHandlersMixin:
                 run_nonfatal_ui_step("메인 시그널", "에디터 세그먼트 flush", flusher)
             else:
                 call_nonfatal_ui_step("메인 시그널", editor, "_flush_queue", step="에디터 세그먼트 fallback flush")
-            run_nonfatal_ui_step("메인 시그널", "Qt 이벤트 flush", QApplication.processEvents, default=None)
+            self._schedule_post_append_ui_update(editor)
+
+    def _schedule_post_append_ui_update(self, editor):
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        def _pump_updates():
+            timeline = getattr(editor, "timeline", None)
+            canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+            for label, target in (
+                ("에디터 repaint", editor),
+                ("타임라인 repaint", timeline),
+                ("타임라인 캔버스 repaint", canvas),
+            ):
+                updater = getattr(target, "update", None) if target is not None else None
+                if callable(updater):
+                    run_nonfatal_ui_step("메인 시그널", label, updater, default=None)
+
+        QTimer.singleShot(0, _pump_updates)
 
     def _do_append_segments_ready(self, segments, ready_event):
         try:

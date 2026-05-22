@@ -604,6 +604,84 @@ def _editor_aux_counts(editor: Any) -> dict[str, int]:
     )
 
 
+def _roughcut_runtime_state(editor: Any) -> dict[str, Any]:
+    if editor is None:
+        return {}
+    try:
+        status = str(getattr(editor, "_roughcut_draft_status", "") or "")
+    except Exception:
+        status = ""
+    try:
+        pending = bool(getattr(editor, "_roughcut_draft_pending", False))
+    except Exception:
+        pending = False
+    try:
+        thread = getattr(editor, "_roughcut_draft_thread", None)
+        thread_alive = bool(thread is not None and thread.is_alive())
+    except Exception:
+        thread_alive = False
+    return {
+        "status": status,
+        "pending": pending,
+        "running": status.strip().lower() in {"queued", "running", "saving"} or pending or thread_alive,
+        "thread_alive": thread_alive,
+        "major_count": getattr(editor, "_last_roughcut_draft_major_count", None),
+    }
+
+
+def _status_current_generation_fields(owner: Any, data: dict[str, Any] | None) -> dict[str, Any]:
+    out = dict(data or {})
+    editor = getattr(owner, "_editor_widget", None)
+    guided = out.get("guided_snapshot_run") if isinstance(out.get("guided_snapshot_run"), dict) else {}
+    editor_runtime = out.get("editor_runtime") if isinstance(out.get("editor_runtime"), dict) else {}
+    runtime_resource = out.get("runtime_resource") if isinstance(out.get("runtime_resource"), dict) else {}
+
+    stage = str(
+        out.get("generation_stage")
+        or guided.get("last_stage")
+        or guided.get("last_stage_label")
+        or ""
+    )
+    if not stage and editor is not None:
+        try:
+            stage = str(getattr(editor, "_last_live_processing_stage", "") or "")
+        except Exception:
+            stage = ""
+
+    stage_key = str(out.get("last_stage_key") or guided.get("last_stage_key") or "")
+    if not stage_key and stage:
+        classifier = getattr(owner, "_automation_classify_guided_stage", None)
+        if callable(classifier):
+            try:
+                classified_key, _classified_label = classifier(stage)
+                stage_key = str(classified_key or "")
+            except Exception:
+                stage_key = ""
+
+    subtitle_count = out.get("subtitle_count")
+    if subtitle_count is None:
+        subtitle_count = editor_runtime.get("segment_count")
+    try:
+        subtitle_count = int(subtitle_count or 0)
+    except Exception:
+        subtitle_count = 0
+
+    roughcut = out.get("roughcut_state")
+    if not isinstance(roughcut, dict):
+        roughcut = _roughcut_runtime_state(editor)
+
+    timestamp = out.get("runtime_timestamp") or runtime_resource.get("timestamp")
+    if timestamp is None:
+        timestamp = round(time.time(), 3)
+
+    out["generation_stage"] = stage
+    out["last_stage_key"] = stage_key
+    out["subtitle_count"] = subtitle_count
+    out["roughcut_state"] = roughcut
+    out["runtime_timestamp"] = timestamp
+    return out
+
+
 def _command_option_bool(options: dict[str, Any], key: str, default: bool = False) -> bool:
     value = options.get(key, default)
     if isinstance(value, bool):
@@ -674,7 +752,7 @@ def _status_snapshot(owner: Any) -> dict[str, Any]:
         "recording": bool(getattr(editor, "_stt_recording", False)) if editor is not None else False,
         "vad_running": bool(getattr(editor, "_stt_vad_running", False)) if editor is not None else False,
     }
-    return {
+    snapshot = {
         "editor_open": bool(editor is not None),
         "editor_media_path": str(getattr(editor, "media_path", "") or "") if editor is not None else "",
         "editor_state": state,
@@ -693,6 +771,7 @@ def _status_snapshot(owner: Any) -> dict[str, Any]:
         "recent_logs": recent_logs,
         "recent_stage_logs": recent_stage_logs,
     }
+    return _status_current_generation_fields(owner, snapshot)
 
 
 def _peek_status_snapshot_cache(owner: Any, *, max_age_sec: float | None = None) -> tuple[float, dict[str, Any]] | None:
@@ -710,7 +789,7 @@ def _peek_status_snapshot_cache(owner: Any, *, max_age_sec: float | None = None)
 
 
 def _store_status_snapshot(owner: Any, snapshot: dict[str, Any] | None) -> dict[str, Any]:
-    data = dict(snapshot or {})
+    data = _status_current_generation_fields(owner, dict(snapshot or {}))
     with _STATUS_SNAPSHOT_CACHE_LOCK:
         _STATUS_SNAPSHOT_CACHE[id(owner)] = (time.monotonic(), dict(data))
     return data
@@ -803,7 +882,7 @@ def _status_fallback_snapshot(owner: Any) -> dict[str, Any]:
     data["status_snapshot_fallback"] = True
     if cached_age is not None:
         data["status_snapshot_age_sec"] = round(float(cached_age), 3)
-    return data
+    return _status_current_generation_fields(owner, data)
 
 
 def _status_signal_should_defer_to_fallback(owner: Any) -> bool:
@@ -841,7 +920,7 @@ def _fast_status_command_result(owner: Any, payload: dict[str, Any], *, timeout_
         stale_entry = _peek_status_snapshot_cache(owner, max_age_sec=_STATUS_BUSY_STALE_REUSE_SEC)
         if stale_entry is not None:
             age, snapshot = stale_entry
-            stale_snapshot = dict(snapshot or {})
+            stale_snapshot = _status_current_generation_fields(owner, dict(snapshot or {}))
             stale_snapshot["status_snapshot_fallback"] = True
             stale_snapshot["status_snapshot_age_sec"] = round(float(age), 3)
             return _status_result(command, stale_snapshot)

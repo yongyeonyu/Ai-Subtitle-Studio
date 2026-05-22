@@ -225,15 +225,82 @@ def _progress(path: Path, *, stage: str, status: str = "running", **extra: Any) 
     _write_json(path, payload)
 
 
-def _snapshot_file(src: Path, dst_dir: Path, filename: str) -> dict[str, Any] | None:
+def _snapshot_process_pid(payload: dict[str, Any] | None) -> int | None:
+    data = dict(payload or {})
+    resource = data.get("resource")
+    if not isinstance(resource, dict):
+        resource = data
+    native = resource.get("native_memory") if isinstance(resource, dict) else None
+    if isinstance(native, dict):
+        try:
+            pid = int(native.get("pid") or 0)
+            if pid > 0:
+                return pid
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _resource_pressure_stage(payload: dict[str, Any] | None) -> str | None:
+    data = dict(payload or {})
+    stage = str(data.get("pressure_stage") or data.get("memory_pressure_stage") or "").strip().lower()
+    if stage in {"normal", "warning", "critical"}:
+        return stage
+    native = data.get("native_memory")
+    if isinstance(native, dict):
+        stage = str(native.get("pressure_stage") or native.get("memory_pressure_stage") or "").strip().lower()
+        if stage in {"normal", "warning", "critical"}:
+            return stage
+    return None
+
+
+def _ignored_snapshot_record(src: Path, filename: str, reason: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "filename": filename,
+        "source_path": str(src),
+        "reason": reason,
+        "source_pid": _snapshot_process_pid(payload),
+        "source_stage": payload.get("pressure_stage") or payload.get("memory_pressure_stage"),
+        "source_subtitle_stage": payload.get("subtitle_generation_stage"),
+    }
+
+
+def _snapshot_file(
+    src: Path,
+    dst_dir: Path,
+    filename: str,
+    *,
+    expected_pid: int | None = None,
+    ignored_snapshots: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     if not src.exists():
         return None
     dst = dst_dir / filename
     try:
-        shutil.copy2(src, dst)
-        return json.loads(dst.read_text(encoding="utf-8"))
+        payload = json.loads(src.read_text(encoding="utf-8"))
     except Exception:
         return None
+    if expected_pid is not None:
+        source_pid = _snapshot_process_pid(payload)
+        if source_pid is not None and source_pid != expected_pid:
+            reason = f"pid_mismatch:{source_pid}!={expected_pid}"
+            ignored = _ignored_snapshot_record(src, filename, reason, payload)
+            if ignored_snapshots is not None:
+                ignored_snapshots.append(ignored)
+            ignored_dst = dst.with_name(f"{dst.stem}_ignored.json")
+            try:
+                _write_json(ignored_dst, {"ignored": True, **ignored, "snapshot": payload})
+            except Exception:
+                pass
+            return None
+    try:
+        shutil.copy2(src, dst)
+    except Exception:
+        try:
+            _write_json(dst, payload)
+        except Exception:
+            pass
+    return payload
 
 
 def _collect_processes() -> dict[str, Any]:
@@ -328,6 +395,9 @@ def _summary_markdown(payload: dict[str, Any]) -> str:
                 f"- Native memory pressure: `{runtime_warning}`",
             ]
         )
+    ignored_monitors = list(payload.get("ignored_monitor_snapshots") or [])
+    if ignored_monitors:
+        lines.append(f"- Ignored stale monitor snapshots: `{len(ignored_monitors)}`")
     trim_summary = dict(((payload.get("subtitle_generation_monitor_after") or {}).get("stage_trim_summary")) or {})
     if trim_summary:
         lines.extend(
@@ -470,12 +540,29 @@ def _build_single_verification_context(
         "pressure_stages": [],
         "runtime_stage": None,
         "process_snapshot_before": _collect_processes(),
+        "ignored_monitor_snapshots": [],
     }
-    runtime_monitor_before = _snapshot_file(RUNTIME_MONITOR_FILE, run_dir, "runtime_monitor_before.json")
-    subtitle_generation_monitor_before = _snapshot_file(MEMORY_MONITOR_FILE, run_dir, "subtitle_generation_monitor_before.json")
+    expected_pid = _snapshot_process_pid(payload.get("resource_before"))
+    ignored_snapshots = payload["ignored_monitor_snapshots"]
+    runtime_monitor_before = _snapshot_file(
+        RUNTIME_MONITOR_FILE,
+        run_dir,
+        "runtime_monitor_before.json",
+        expected_pid=expected_pid,
+        ignored_snapshots=ignored_snapshots,
+    )
+    subtitle_generation_monitor_before = _snapshot_file(
+        MEMORY_MONITOR_FILE,
+        run_dir,
+        "subtitle_generation_monitor_before.json",
+        expected_pid=expected_pid,
+        ignored_snapshots=ignored_snapshots,
+    )
     if runtime_monitor_before is not None:
         payload["runtime_monitor_before"] = runtime_monitor_before
         payload["runtime_stage"] = runtime_monitor_before.get("pressure_stage")
+    else:
+        payload["runtime_stage"] = _resource_pressure_stage(payload.get("resource_before"))
     if subtitle_generation_monitor_before is not None:
         payload["subtitle_generation_monitor_before"] = subtitle_generation_monitor_before
     variant = Variant(
@@ -506,16 +593,29 @@ def _finalize_successful_verification_payload(
     payload["variant_score"] = subtitle_output_variant_score(rows, settings)
     payload["resource_after"] = current_resource_snapshot({})
     payload["process_snapshot_after"] = _collect_processes()
-    payload["runtime_monitor_after"] = _snapshot_file(RUNTIME_MONITOR_FILE, run_dir, "runtime_monitor_after.json")
+    expected_pid = _snapshot_process_pid(payload.get("resource_after")) or _snapshot_process_pid(payload.get("resource_before"))
+    ignored_snapshots = payload.setdefault("ignored_monitor_snapshots", [])
+    payload["runtime_monitor_after"] = _snapshot_file(
+        RUNTIME_MONITOR_FILE,
+        run_dir,
+        "runtime_monitor_after.json",
+        expected_pid=expected_pid,
+        ignored_snapshots=ignored_snapshots,
+    )
     payload["subtitle_generation_monitor_after"] = _snapshot_file(
         MEMORY_MONITOR_FILE,
         run_dir,
         "subtitle_generation_monitor_after.json",
+        expected_pid=expected_pid,
+        ignored_snapshots=ignored_snapshots,
     )
     runtime_after = dict(payload.get("runtime_monitor_after") or {})
-    payload["pressure_stages"] = [payload.get("runtime_stage"), runtime_after.get("pressure_stage")]
+    after_stage = runtime_after.get("pressure_stage") or _resource_pressure_stage(payload.get("resource_after"))
+    payload["pressure_stages"] = [payload.get("runtime_stage"), after_stage]
     if runtime_after:
         payload["runtime_stage"] = runtime_after.get("pressure_stage")
+    elif after_stage:
+        payload["runtime_stage"] = after_stage
     payload["peak_rss_bytes"] = int(sampler.peak_rss_bytes or 0)
     payload["total_elapsed_sec"] = round(time.perf_counter() - started, 3)
     payload["finished_at"] = datetime.now().isoformat(timespec="seconds")
@@ -534,11 +634,21 @@ def _finalize_failed_verification_payload(
 ) -> dict[str, Any]:
     payload["error"] = traceback.format_exc()
     payload["process_snapshot_after"] = _collect_processes()
-    payload["runtime_monitor_after"] = _snapshot_file(RUNTIME_MONITOR_FILE, run_dir, "runtime_monitor_after_error.json")
+    expected_pid = _snapshot_process_pid(payload.get("resource_before"))
+    ignored_snapshots = payload.setdefault("ignored_monitor_snapshots", [])
+    payload["runtime_monitor_after"] = _snapshot_file(
+        RUNTIME_MONITOR_FILE,
+        run_dir,
+        "runtime_monitor_after_error.json",
+        expected_pid=expected_pid,
+        ignored_snapshots=ignored_snapshots,
+    )
     payload["subtitle_generation_monitor_after"] = _snapshot_file(
         MEMORY_MONITOR_FILE,
         run_dir,
         "subtitle_generation_monitor_after_error.json",
+        expected_pid=expected_pid,
+        ignored_snapshots=ignored_snapshots,
     )
     payload["peak_rss_bytes"] = int(sampler.peak_rss_bytes or 0)
     payload["total_elapsed_sec"] = round(time.perf_counter() - started, 3)

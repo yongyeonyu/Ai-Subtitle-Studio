@@ -464,21 +464,136 @@ class STTEnsembleTests(unittest.TestCase):
             "stt_ensemble_llm_judge_enabled": True,
             "stt_lattice_selector_enabled": False,
             "stt_ensemble_llm_judge_require_risk": True,
+            "subtitle_timing_fusion_enabled": False,
+            "deep_timing_adjustment_enabled": False,
         }
         with (
-            patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
             patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value=None),
             patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
             patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
             patch("core.engine.subtitle_engine.ollama_split_text", return_value=["B - A보다 문맥상 자연"]),
         ):
-            result = _process_one((seg, {}, 10, {}, "gemma4:e4b", "", "", True))
+            decision = subtitle_engine._select_stt_candidate_text(seg, "gemma4:e4b", "", "", settings, {})
+            selected, applied = subtitle_engine._apply_stt_candidate_decision(seg, decision)
 
-        self.assertEqual(result[0]["text"], "STT2 문장")
-        self.assertAlmostEqual(result[0]["start"], 0.2)
-        self.assertAlmostEqual(result[0]["end"], 1.4)
-        self.assertEqual(result[0]["words"][0]["word"], "STT2")
-        self.assertEqual(result[0]["stt_ensemble_deep_selected_source"], "")
+        self.assertTrue(applied)
+        self.assertEqual(selected["text"], "STT2 문장")
+        self.assertAlmostEqual(selected["start"], 0.2)
+        self.assertAlmostEqual(selected["end"], 1.4)
+        self.assertEqual(selected["words"][0]["word"], "STT2")
+        self.assertEqual(selected["stt_ensemble_deep_selected_source"], "")
+
+    def test_selected_candidate_uses_word_span_when_candidate_slot_is_too_early(self):
+        seg = {
+            "start": 62.0,
+            "end": 66.0,
+            "text": "앞쪽 자막",
+            "speaker": "00",
+        }
+        decision = {
+            "source": "STT1",
+            "label": "score",
+            "selector": "stt_candidate_score_fallback",
+            "text": "아 이게 시림프 갈릭 소스 이게 그건가 보다",
+            "start": 62.0,
+            "end": 66.0,
+            "words": [
+                {"word": "아", "start": 67.1, "end": 67.25},
+                {"word": "이게", "start": 67.28, "end": 67.55},
+                {"word": "그건가", "start": 68.2, "end": 68.55},
+                {"word": "보다", "start": 68.58, "end": 68.9},
+            ],
+        }
+
+        selected, applied = subtitle_engine._apply_stt_candidate_decision(seg, decision)
+
+        self.assertTrue(applied)
+        self.assertEqual(selected["text"], "아 이게 시림프 갈릭 소스 이게 그건가 보다")
+        self.assertAlmostEqual(selected["start"], 67.1)
+        self.assertAlmostEqual(selected["end"], 68.9)
+        self.assertEqual(selected["_stt_original_candidate_start"], 67.1)
+        self.assertEqual(selected["_stt_candidate_word_timing_anchor_policy"]["old_start"], 62.0)
+
+    def test_llm_candidate_judge_parse_failure_uses_highest_score_candidate(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "STT1 첫 후보",
+            "speaker": "00",
+            "stt_candidates": [
+                {"source": "STT1", "text": "STT1 첫 후보", "score": 0.42},
+                {"source": "STT1", "text": "아까 뭐래? 커피준데? 어", "score": 0.91},
+            ],
+        }
+
+        settings = {
+            "stt_ensemble_llm_judge_enabled": True,
+            "stt_lattice_selector_enabled": False,
+            "stt_ensemble_llm_judge_require_risk": True,
+            "stt_selection_score_fallback_enabled": False,
+        }
+        with (
+            patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value=None),
+            patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
+            patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
+            patch("core.engine.subtitle_engine.ollama_split_text", return_value=["애매해서 잘 모르겠습니다"]),
+        ):
+            decision = subtitle_engine._select_stt_candidate_text(seg, "gemma4:e4b", "", "", settings, {})
+
+        self.assertEqual(decision["text"], "아까 뭐래? 커피준데? 어")
+        self.assertEqual(decision["source"], "STT1")
+        self.assertEqual(decision["label"], "score")
+        self.assertEqual(decision["selector"], "stt_candidate_score_fallback")
+
+    def test_score_fallback_prefers_high_confidence_second_stt_candidate_before_llm(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "STT1 첫 후보",
+            "stt_candidates": [
+                {"source": "STT1", "text": "STT1 첫 후보", "score": 0.55},
+                {"source": "STT1", "text": "아까 뭐래? 커피준데? 어", "score": 0.91},
+            ],
+        }
+
+        with (
+            patch("core.engine.subtitle_engine.select_stt_lattice_text", return_value=(None, {"accepted": False})),
+            patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value=None),
+        ):
+            decision = subtitle_engine._select_stt_candidate_fast(
+                seg,
+                {
+                    "stt_selection_score_fallback_enabled": True,
+                    "stt_selection_score_fallback_min_score": 84.0,
+                    "stt_selection_score_fallback_min_margin": 12.0,
+                },
+            )
+
+        self.assertEqual(decision["text"], "아까 뭐래? 커피준데? 어")
+        self.assertEqual(decision["selector"], "stt_candidate_score_fallback")
+
+    def test_stt_fast_selector_rejects_bad_lattice_then_uses_high_score_raw_candidate(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "커피즈가 같이 여기 맞은거예요",
+            "stt_candidates": [
+                {"source": "STT1", "text": "아까 뭐래? 커피준데? 어", "score": 0.91},
+                {"source": "STT2", "text": "아까 뭐래 커피주는데 어", "score": 0.88},
+            ],
+        }
+
+        with (
+            patch(
+                "core.engine.subtitle_engine.select_stt_lattice_text",
+                return_value=({"source": "LATTICE", "text": "커피즈가 같이 여기 맞은거예요"}, {"confidence": 0.96}),
+            ),
+            patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value=None),
+        ):
+            result = subtitle_engine._select_stt_candidate_fast(seg, {"stt_selection_min_raw_candidate_similarity": 0.76})
+
+        self.assertEqual(result["text"], "아까 뭐래? 커피준데? 어")
+        self.assertEqual(result["selector"], "stt_candidate_score_fallback")
 
     def test_llm_candidate_judge_skips_external_model_when_local_only(self):
         seg = {

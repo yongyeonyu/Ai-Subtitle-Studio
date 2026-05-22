@@ -14,7 +14,11 @@ from core.coerce import safe_float as _safe_float
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.runtime import config
 from ui.gpu_rendering import scenegraph_enabled
-from ui.timeline.speaker_labels import current_speaker_settings, normalize_speaker_id, speaker_labels_for_segment
+from ui.timeline.speaker_labels import (
+    current_speaker_settings,
+    normalize_speaker_id,
+    speaker_rows_for_segment,
+)
 from ui.timeline.timeline_analysis import subtitle_score_overlay_marker
 from ui.timeline.timeline_constants import (
     SCORE_H,
@@ -38,7 +42,15 @@ from ui.timeline.timeline_paint import (
     subtitle_confidence_chips,
     subtitle_segment_visual_style,
 )
-from ui.timeline.stt_preview_layout import assign_stt_preview_lanes, stt_preview_lane_geometry
+from ui.timeline.timeline_segment_style import (
+    SPEAKER_SEGMENT_FILL,
+    speaker_segment_fill_hex,
+)
+from ui.timeline.stt_preview_layout import (
+    assign_stt_preview_lanes,
+    dedupe_stt_preview_segments_for_display,
+    stt_preview_lane_geometry,
+)
 
 
 QML_PATH = Path(__file__).with_name("timeline_scenegraph.qml")
@@ -51,11 +63,6 @@ def _speaker_color(seg: dict[str, Any], speaker_settings: dict[str, Any]) -> str
         str(speaker_settings.get("spk3_id", "02")): str(speaker_settings.get("spk3_color", "#FF9F2F")),
     }
     return palette.get(spk, "#8E8E93")
-
-
-def _darker_hex(hex_color: str, factor: int = 135) -> str:
-    color = QColor(str(hex_color or "#8E8E93"))
-    return color.darker(int(factor)).name()
 
 
 def _scenegraph_vector_profile(visible_segment_count: int, pps: float) -> str:
@@ -137,6 +144,9 @@ def build_scenegraph_subtitle_segments(
                 stt1_preview_rows.append(seg)
         else:
             final_rows.append(seg)
+    stt1_preview_rows = dedupe_stt_preview_segments_for_display(stt1_preview_rows)
+    stt2_preview_rows = dedupe_stt_preview_segments_for_display(stt2_preview_rows)
+    visible_preview_ids = {id(seg) for seg in stt1_preview_rows + stt2_preview_rows}
     final_selection_index = build_stt_selection_index(final_rows) if preview_present else {}
     stt1_lane_map, stt1_lane_count = assign_stt_preview_lanes(stt1_preview_rows)
     stt2_lane_map, stt2_lane_count = assign_stt_preview_lanes(stt2_preview_rows)
@@ -156,6 +166,8 @@ def build_scenegraph_subtitle_segments(
             continue
 
         is_preview = bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
+        if is_preview and id(seg) not in visible_preview_ids:
+            continue
         source = stt_preview_source(seg)
         if is_preview:
             if source == "STT2":
@@ -253,10 +265,24 @@ def build_scenegraph_subtitle_segments(
         )
         if not is_preview and show_speaker_bar:
             speaker_color = _speaker_color(seg, speaker_settings)
-            speaker_fill = _darker_hex(speaker_color, 135)
-            speaker_names = " / ".join(speaker_labels_for_segment(speaker_settings, seg)) if show_speaker_text else ""
+            speaker_fill = speaker_segment_fill_hex(speaker_color)
+            speaker_rows = [
+                {
+                    "name": str(row.get("name", "") or ""),
+                    "color": str(row.get("color", "") or "#8E8E93"),
+                    "fill": speaker_segment_fill_hex(str(row.get("color", "") or "#8E8E93")),
+                }
+                for row in speaker_rows_for_segment(speaker_settings, seg)[:2]
+            ]
+            speaker_names = "\n".join(
+                str(row.get("name", "") or "")
+                for row in speaker_rows
+                if str(row.get("name", "") or "").strip()
+            ) if show_speaker_text else ""
             show_speaker_text = bool(show_speaker_text and speaker_names)
-        score_marker = subtitle_score_overlay_marker(seg) if not is_preview else None
+        else:
+            speaker_rows = []
+        score_marker = subtitle_score_overlay_marker(seg) if (not is_preview and not playback_active) else None
         display_text = str(seg.get("text", "") or "") if show_text else ""
         chip_rows = subtitle_confidence_chips(seg) if show_confidence_chips else []
         objects.append(
@@ -281,14 +307,15 @@ def build_scenegraph_subtitle_segments(
                 "confidenceChips": chip_rows,
                 "speakerY": float(SPEAKER_TOP),
                 "speakerH": float(SPEAKER_BOT - SPEAKER_TOP),
-                "speakerFill": speaker_fill if show_speaker_bar else "",
+                "speakerFill": speaker_fill if show_speaker_bar else SPEAKER_SEGMENT_FILL,
                 "speakerText": speaker_names if show_speaker_text else "",
+                "speakerRows": speaker_rows if show_speaker_bar else [],
                 "scoreText": str((score_marker or {}).get("label", "") or ""),
                 "scoreColor": str((score_marker or {}).get("color", "#FFD60A") or "#FFD60A"),
                 "scoreY": float(SCORE_TOP),
                 "scoreSegmentY": float(SCORE_TOP),
                 "scoreSegmentH": float(SCORE_H),
-                "showScoreSegment": bool(not is_preview),
+                "showScoreSegment": bool(not is_preview and not playback_active),
                 "showScoreText": bool(score_marker and width >= 44.0),
                 "showText": show_text,
                 "showConfidenceChips": show_confidence_chips,

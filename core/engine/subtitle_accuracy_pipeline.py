@@ -16,7 +16,7 @@ from core.engine.subtitle_accuracy_utils import (
     safe_float as _safe_float,
     safe_int as _safe_int,
 )
-from core.engine.llm_correction_guard import contains_timecode, normalized_text, validate_llm_chunks
+from core.engine.llm_correction_guard import contains_timecode, normalized_edit_distance, normalized_text, validate_llm_chunks
 from core.native_text_similarity import similarity_ratio
 
 
@@ -90,7 +90,12 @@ def _walk_profile_values(value: Any, keys: set[str]) -> list[str]:
 
 
 def _number_tokens(text: Any) -> list[str]:
-    return [normalized_text(token) for token in _NUMBER_TOKEN_RE.findall(str(text or "")) if normalized_text(token)]
+    out: list[str] = []
+    for token in _NUMBER_TOKEN_RE.findall(str(text or "")):
+        normalized = normalized_text(token)
+        if normalized:
+            out.append(normalized)
+    return out
 
 
 def _profile_brand_tokens(profile: dict[str, Any] | None) -> set[str]:
@@ -99,7 +104,7 @@ def _profile_brand_tokens(profile: dict[str, Any] | None) -> set[str]:
 
 
 def _proper_noun_tokens(text: Any, profile: dict[str, Any] | None = None) -> set[str]:
-    tokens = {normalized_text(token) for token in _LATIN_PROPER_TOKEN_RE.findall(str(text or "")) if normalized_text(token)}
+    tokens = _normalized_findall_set(_LATIN_PROPER_TOKEN_RE, text)
     profile_tokens = _profile_brand_tokens(profile)
     compact = normalized_text(str(text or ""))
     tokens.update(token for token in profile_tokens if token and token in compact)
@@ -107,12 +112,25 @@ def _proper_noun_tokens(text: Any, profile: dict[str, Any] | None = None) -> set
 
 
 def _interjection_tokens(text: Any) -> set[str]:
-    raw_tokens = [normalized_text(token) for token in _CONTENT_TOKEN_RE.findall(str(text or ""))]
+    raw_tokens = _normalized_findall_list(_CONTENT_TOKEN_RE, text)
     return {token for token in raw_tokens if token in _INTERJECTION_TOKENS}
 
 
 def _content_tokens(text: Any) -> set[str]:
-    return {normalized_text(token) for token in _CONTENT_TOKEN_RE.findall(str(text or "")) if len(normalized_text(token)) >= 2}
+    return {token for token in _normalized_findall_list(_CONTENT_TOKEN_RE, text) if len(token) >= 2}
+
+
+def _normalized_findall_list(pattern: re.Pattern[str], text: Any) -> list[str]:
+    out: list[str] = []
+    for token in pattern.findall(str(text or "")):
+        normalized = normalized_text(token)
+        if normalized:
+            out.append(normalized)
+    return out
+
+
+def _normalized_findall_set(pattern: re.Pattern[str], text: Any) -> set[str]:
+    return set(_normalized_findall_list(pattern, text))
 
 
 def _token_is_supported_by_source(token: str, source_norm: str, source_tokens: set[str]) -> bool:
@@ -122,6 +140,8 @@ def _token_is_supported_by_source(token: str, source_norm: str, source_tokens: s
         return True
     for source_token in source_tokens:
         if len(source_token) >= 2 and (source_token in token or token in source_token):
+            return True
+        if len(source_token) >= 2 and normalized_edit_distance(source_token, token, limit=2) <= 2:
             return True
     return False
 
@@ -136,12 +156,13 @@ def _token_diff_preview(
     source_norm = normalized_text(source_text)
     source_tokens = _content_tokens(source_text)
     candidate_tokens = _content_tokens(candidate_text)
+    profile_brand_tokens = _profile_brand_tokens(profile)
     missing = sorted(token for token in source_tokens if token not in candidate_tokens)[:limit]
     added = sorted(
         token
         for token in candidate_tokens
         if token not in _INTERJECTION_TOKENS
-        and token not in _profile_brand_tokens(profile)
+        and token not in profile_brand_tokens
         and not _token_is_supported_by_source(token, source_norm, source_tokens)
     )[:limit]
     return missing, added
@@ -251,11 +272,12 @@ def llm_source_preservation_violations(
     if _safe_bool(settings.get("llm_verifier_block_added_content_tokens"), True):
         source_tokens = _content_tokens(source)
         candidate_tokens = _content_tokens(candidate)
+        profile_brand_tokens = _profile_brand_tokens(profile)
         added_content = sorted(
             token
             for token in candidate_tokens
             if token not in _INTERJECTION_TOKENS
-            and token not in _profile_brand_tokens(profile)
+            and token not in profile_brand_tokens
             and not _token_is_supported_by_source(token, source_norm, source_tokens)
         )
         if added_content:
@@ -840,11 +862,13 @@ def verify_llm_chunks_for_subtitle(
 
     min_similarity = _safe_float(settings.get("llm_verifier_min_similarity"), 0.86)
     max_delta = float(length_policy.get("effective") or _safe_float(settings.get("llm_verifier_max_length_delta_ratio"), 0.16))
+    max_edit_distance = max(1, _safe_int(settings.get("llm_verifier_max_edit_distance"), 2))
     ok, reason = validate_llm_chunks(
         source_text,
         cleaned,
         min_similarity=min_similarity,
         max_length_delta_ratio=max_delta,
+        max_edit_distance=max_edit_distance,
     )
     if not ok:
         return None, _decision(

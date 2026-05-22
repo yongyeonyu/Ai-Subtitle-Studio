@@ -404,11 +404,58 @@ class PipelineCutBoundaryMixin:
                 1.0,
             )
             thread = getattr(self, "_cut_boundary_prescan_thread", None)
-            if (
+            follower = getattr(self, "_cut_boundary_follower_thread", None)
+            prescan_alive = (
                 thread is not None
                 and thread.is_alive()
                 and thread is not threading.current_thread()
+            )
+            follower_alive = (
+                follower is not None
+                and follower.is_alive()
+                and follower is not threading.current_thread()
+            )
+            first_check_event = getattr(self, "_cut_boundary_first_follower_check_event", None)
+            wait_first_check = bool(settings.get("cut_boundary_wait_first_follower_check_before_stt", True))
+            if (
+                wait_first_check
+                and first_check_event is not None
+                and hasattr(first_check_event, "wait")
+                and (prescan_alive or follower_alive)
             ):
+                first_check_timeout_sec = _timeout_setting(
+                    "cut_boundary_wait_first_follower_check_before_stt_timeout_sec",
+                    min(1.2, max(0.2, prescan_timeout_sec or 1.2)),
+                )
+                if not bool(getattr(first_check_event, "is_set", lambda: False)()):
+                    if first_check_timeout_sec > 0.0:
+                        get_logger().log(
+                            f"  🎬 [컷 경계] STT 시작 전 후발대 첫 확인 최대 {first_check_timeout_sec:.1f}초 대기 중..."
+                        )
+                        first_check_event.wait(timeout=first_check_timeout_sec)
+                if bool(getattr(first_check_event, "is_set", lambda: False)()):
+                    meta = getattr(self, "_cut_boundary_first_follower_check_meta", {}) or {}
+                    try:
+                        checked = int(meta.get("checked_count", 0) or 0)
+                        verified = int(meta.get("verified_count", 0) or 0)
+                    except Exception:
+                        checked = 0
+                        verified = 0
+                    get_logger().log(
+                        "  ✅ [컷 경계] 후발대 첫 확인 완료 후 STT 진입 "
+                        f"(확인 {checked}개, 확정 {verified}개)"
+                    )
+                    try:
+                        self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+                    except Exception:
+                        pass
+                else:
+                    get_logger().log(
+                        "  ⏭️ [컷 경계] 후발대 첫 확인이 늦어 STT를 먼저 시작하고 검증은 계속 진행합니다"
+                    )
+                return
+
+            if prescan_alive:
                 if prescan_timeout_sec > 0.0:
                     get_logger().log(
                         f"  🎬 [컷 경계] STT 시작 전 자동 분석 최대 {prescan_timeout_sec:.1f}초 대기 중..."
@@ -425,12 +472,9 @@ class PipelineCutBoundaryMixin:
                     except Exception:
                         pass
             wait_follower = bool(settings.get("cut_boundary_wait_follower_before_stt", True))
-            follower = getattr(self, "_cut_boundary_follower_thread", None)
             if (
                 wait_follower
-                and follower is not None
-                and follower.is_alive()
-                and follower is not threading.current_thread()
+                and follower_alive
             ):
                 if follower_timeout_sec > 0.0:
                     get_logger().log(
@@ -449,6 +493,37 @@ class PipelineCutBoundaryMixin:
                         pass
         except Exception as exc:
             get_logger().log(f"  ⚠️ [컷 경계] STT 시작 전 대기 실패: {exc}")
+
+    def _reset_cut_boundary_first_follower_check_gate(self) -> None:
+        try:
+            self._cut_boundary_first_follower_check_event = threading.Event()
+            self._cut_boundary_first_follower_check_meta = {}
+        except Exception:
+            pass
+
+    def _mark_cut_boundary_first_follower_check_done(
+        self,
+        *,
+        checked_count: int = 0,
+        verified_count: int = 0,
+        source: str = "follower",
+    ) -> None:
+        try:
+            event = getattr(self, "_cut_boundary_first_follower_check_event", None)
+            if event is None:
+                event = threading.Event()
+                self._cut_boundary_first_follower_check_event = event
+            if bool(getattr(event, "is_set", lambda: False)()):
+                return
+            self._cut_boundary_first_follower_check_meta = {
+                "checked_count": max(0, int(checked_count or 0)),
+                "verified_count": max(0, int(verified_count or 0)),
+                "source": str(source or "follower"),
+                "timestamp": time.time(),
+            }
+            event.set()
+        except Exception:
+            pass
 
 
     def _cut_boundary_sec_from_row(self, row) -> float | None:
@@ -494,6 +569,45 @@ class PipelineCutBoundaryMixin:
         except Exception:
             pass
         return 0.0
+
+    def _shift_cut_boundary_rows_for_offset(self, rows, offset: float) -> list[dict]:
+        """Return cut-boundary rows shifted into a clip-local timeline."""
+        from core.frame_time import frame_to_sec, sec_to_frame
+
+        local = []
+        try:
+            offset = float(offset or 0.0)
+        except Exception:
+            offset = 0.0
+        if not offset:
+            return [dict(item) for item in list(rows or []) if isinstance(item, dict)]
+        for item in list(rows or []):
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            try:
+                fps = float(row.get("fps", row.get("timeline_frame_rate", row.get("frame_rate", 30.0))) or 30.0)
+            except Exception:
+                fps = 30.0
+            frame = row.get("timeline_frame", row.get("frame"))
+            if frame is None:
+                try:
+                    frame = sec_to_frame(float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0), fps)
+                except Exception:
+                    frame = 0
+            try:
+                shifted_frame = int(frame) - sec_to_frame(offset, fps)
+            except Exception:
+                shifted_frame = 0
+            if shifted_frame <= 0:
+                continue
+            sec = frame_to_sec(shifted_frame, fps)
+            row["timeline_frame"] = shifted_frame
+            row["frame"] = shifted_frame
+            row["timeline_sec"] = sec
+            row["time"] = sec
+            local.append(row)
+        return local
 
     def _reviewed_cut_boundary_rows_for_middle_segments(
         self,
@@ -825,6 +939,7 @@ class PipelineCutBoundaryMixin:
                 name="cut-boundary-prescan-worker",
                 daemon=True,
             )
+            self._reset_cut_boundary_first_follower_check_gate()
             self._cut_boundary_prescan_thread = thread
             self._cut_boundary_prescan_active_request = dict(request_state)
             self._ui_emit("_sig_set_cut_boundary_scan_active", True)
@@ -954,6 +1069,8 @@ class PipelineCutBoundaryMixin:
             reviewed_middle_rows: list[dict] = []
             list_lock = threading.RLock()
             follower_queue: "queue.Queue[dict | None]" = queue.Queue()
+            if getattr(self, "_cut_boundary_first_follower_check_event", None) is None:
+                self._reset_cut_boundary_first_follower_check_gate()
             self._cut_boundary_provisional_rows = []
             total_files = len(list(files or []))
             progress_preview_interval_sec = 0.18
@@ -1511,6 +1628,13 @@ class PipelineCutBoundaryMixin:
             ):
                 verified_rows = [dict(row) for row in list(verified_rows or []) if isinstance(row, dict)]
                 relocated_rows = [dict(row) for row in list(relocated_rows or []) if isinstance(row, dict)]
+                checked_rows = [dict(row) for row in list(checked_rows or []) if isinstance(row, dict)]
+                if checked_rows or verified_rows or relocated_rows:
+                    self._mark_cut_boundary_first_follower_check_done(
+                        checked_count=max(len(checked_rows), len(verified_rows) + len(relocated_rows)),
+                        verified_count=len(verified_rows),
+                        source="follower",
+                    )
                 verified_keys = {
                     self._cut_boundary_candidate_key(row)
                     for row in list(verified_rows or [])
@@ -1964,29 +2088,11 @@ class PipelineCutBoundaryMixin:
         """Split subtitle/STT rows so no row crosses a saved visual cut."""
         try:
             from core.cut_boundary import cut_boundary_enabled, split_segments_by_cut_boundaries
-            from core.frame_time import frame_to_sec, sec_to_frame
 
             settings = load_settings()
             boundaries = self._project_cut_boundaries_for_pipeline()
             if offset:
-                local = []
-                offset = float(offset or 0.0)
-                for item in boundaries:
-                    row = dict(item)
-                    fps = float(row.get("fps", row.get("timeline_frame_rate", row.get("frame_rate", 30.0))) or 30.0)
-                    frame = row.get("timeline_frame", row.get("frame"))
-                    if frame is None:
-                        frame = sec_to_frame(float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0), fps)
-                    shifted_frame = int(frame) - sec_to_frame(offset, fps)
-                    if shifted_frame <= 0:
-                        continue
-                    sec = frame_to_sec(shifted_frame, fps)
-                    row["timeline_frame"] = shifted_frame
-                    row["frame"] = shifted_frame
-                    row["timeline_sec"] = sec
-                    row["time"] = sec
-                    local.append(row)
-                boundaries = local
+                boundaries = self._shift_cut_boundary_rows_for_offset(boundaries, float(offset or 0.0))
             if not boundaries:
                 return [dict(seg) for seg in (segments or [])]
             result = split_segments_by_cut_boundaries(
@@ -2018,35 +2124,14 @@ class PipelineCutBoundaryMixin:
                 cut_boundary_enabled,
                 magnetize_segments_to_cut_boundaries,
             )
-            from core.frame_time import frame_to_sec, sec_to_frame
 
             settings = load_settings()
             confirmed = self._project_cut_boundaries_for_pipeline() if include_confirmed else []
             provisional = self._project_cut_provisional_boundaries_for_pipeline() if include_provisional else []
             if offset:
                 offset = float(offset or 0.0)
-
-                def _shift(items):
-                    out = []
-                    for item in items:
-                        row = dict(item)
-                        fps = float(row.get("fps", row.get("timeline_frame_rate", row.get("frame_rate", 30.0))) or 30.0)
-                        frame = row.get("timeline_frame", row.get("frame"))
-                        if frame is None:
-                            frame = sec_to_frame(float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0), fps)
-                        shifted_frame = int(frame) - sec_to_frame(offset, fps)
-                        if shifted_frame <= 0:
-                            continue
-                        sec = frame_to_sec(shifted_frame, fps)
-                        row["timeline_frame"] = shifted_frame
-                        row["frame"] = shifted_frame
-                        row["timeline_sec"] = sec
-                        row["time"] = sec
-                        out.append(row)
-                    return out
-
-                confirmed = _shift(confirmed)
-                provisional = _shift(provisional)
+                confirmed = self._shift_cut_boundary_rows_for_offset(confirmed, offset)
+                provisional = self._shift_cut_boundary_rows_for_offset(provisional, offset)
             if not confirmed and not provisional:
                 return [dict(seg) for seg in (segments or [])]
             return magnetize_segments_to_cut_boundaries(

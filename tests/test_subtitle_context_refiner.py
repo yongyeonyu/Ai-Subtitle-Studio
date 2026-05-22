@@ -63,6 +63,50 @@ class SubtitleContextRefinerTests(unittest.TestCase):
         self.assertEqual(refined[0]["_llm_context_boundary_policy"]["action"], "move_boundary")
         self.assertEqual(refined[0]["_llm_context_word_corrections"][0]["to"], "음료를")
 
+    def test_high_context_refiner_rejects_hallucinated_word_correction(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 0.8,
+                "text": "시선은 몰라",
+                "words": [
+                    _word("시선은", 0.0, 0.35),
+                    _word("몰라", 0.4, 0.8),
+                ],
+            },
+            {
+                "start": 0.85,
+                "end": 1.4,
+                "text": "왜",
+                "words": [_word("왜", 0.85, 1.4)],
+            },
+        ]
+
+        def decide(_left, _right, _context):
+            return {
+                "action": "keep",
+                "corrections": [{"word_index": 0, "from": "시선은", "to": "메놜라시야"}],
+                "reason": "bad hallucinated correction",
+            }
+
+        refined = refine_high_contextual_boundaries(
+            segments,
+            settings={
+                "subtitle_mode": "high",
+                "subtitle_llm_context_boundary_refine_enabled": True,
+                "subtitle_llm_context_word_correction_enabled": True,
+                "subtitle_llm_context_max_pairs": 4,
+                "subtitle_llm_context_require_risk_signal": False,
+                "subtitle_llm_context_max_pair_gap_sec": 0.5,
+                "split_length_threshold": 20,
+            },
+            model="exaone3.5:7.8b",
+            decision_func=decide,
+        )
+
+        self.assertEqual([row["text"] for row in refined], ["시선은 몰라", "왜"])
+        self.assertFalse(any(row.get("_llm_context_word_corrections") for row in refined))
+
     def test_context_refiner_is_disabled_outside_high_mode(self):
         segments = [
             {"start": 0.0, "end": 1.0, "text": "문장 하나", "words": [_word("문장", 0.0, 0.4), _word("하나", 0.5, 1.0)]},

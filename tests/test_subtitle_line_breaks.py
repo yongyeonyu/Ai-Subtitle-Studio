@@ -101,6 +101,8 @@ class SubtitleLineBreakTests(unittest.TestCase):
             segs = editor._get_current_segments()
             self.assertEqual(len(segs), 1)
             self.assertEqual(segs[0]["text"], "- 안녕하세요\n- 반갑습니다")
+            self.assertEqual(segs[0]["speaker_list"], ["00", "01"])
+            self.assertEqual(segs[0]["speaker"], "00")
         finally:
             editor.text_edit.close()
 

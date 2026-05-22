@@ -189,7 +189,17 @@ class LocalAppCommandServerTests(unittest.TestCase):
                 data={
                     "editor_open": True,
                     "editor_state": "ST_PROC",
-                    "editor_runtime": {"segment_count": 413, "playhead_sec": 1450.2},
+                    "editor_runtime": {
+                        "segment_count": 413,
+                        "playhead_sec": 1450.2,
+                        "start_button_text": "시작",
+                        "start_button_enabled": True,
+                    },
+                    "generation_stage": "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중",
+                    "last_stage_key": "subtitle-generation",
+                    "subtitle_count": 413,
+                    "roughcut_state": {"status": "queued", "pending": True, "running": True, "debug": "x" * 600},
+                    "runtime_timestamp": 1234.5,
                     "runtime_resource": {"pressure_stage": "warning", "rss_gb": 0.42},
                     "recent_logs": medium_logs,
                 },
@@ -205,6 +215,14 @@ class LocalAppCommandServerTests(unittest.TestCase):
         self.assertTrue(result["data"]["status_response_truncated"])
         self.assertEqual(result["data"]["editor_state"], "ST_PROC")
         self.assertEqual(result["data"]["editor_runtime"]["segment_count"], 413)
+        self.assertEqual(result["data"]["editor_runtime"]["start_button_text"], "시작")
+        self.assertTrue(result["data"]["editor_runtime"]["start_button_enabled"])
+        self.assertEqual(result["data"]["generation_stage"], "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
+        self.assertEqual(result["data"]["last_stage_key"], "subtitle-generation")
+        self.assertEqual(result["data"]["subtitle_count"], 413)
+        self.assertEqual(result["data"]["roughcut_state"]["status"], "queued")
+        self.assertNotIn("debug", result["data"]["roughcut_state"])
+        self.assertEqual(result["data"]["runtime_timestamp"], 1234.5)
         self.assertLess(len(encode_command_result(result)), 8192)
 
     def test_stateful_guided_run_payload_is_compacted_before_send(self):

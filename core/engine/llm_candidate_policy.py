@@ -7,7 +7,7 @@ import re
 from typing import Any, Iterable
 
 from core.coerce import safe_float as _safe_float, safe_round_int as _safe_int
-from core.engine.llm_correction_guard import normalized_text, validate_llm_chunks
+from core.engine.llm_correction_guard import normalized_edit_distance, normalized_text, validate_llm_chunks
 from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
 from core.native_text_similarity import similarity_ratio
 from core.runtime.setting_utils import setting_bool as _setting_bool
@@ -45,6 +45,10 @@ def _clean_chunks(chunks: Iterable[Any] | None) -> list[str]:
 
 def _chunks_signature(chunks: Iterable[Any] | None) -> str:
     return "\x1f".join(normalized_text(chunk) for chunk in _clean_chunks(chunks))
+
+
+def _chunks_compact_signature(chunks: Iterable[Any] | None) -> str:
+    return normalized_text("".join(_clean_chunks(chunks)))
 
 
 def _is_natural_break(word: str, next_word: str, rules: dict[str, Any] | None) -> bool:
@@ -298,11 +302,13 @@ def format_candidate_options_for_prompt(candidates: list[dict[str, Any]] | None)
     payload = json.dumps(rows, ensure_ascii=False, indent=2)
     return (
         "[후보 잠금 모드]\n"
-        "아래 후보 중 하나의 result를 우선 그대로 선택하세요. 새 문장을 쓰거나 후보끼리 섞지 마세요.\n"
-        "LoRA ground truth 후보가 있으면 줄 구성은 그 후보를 최우선 기준으로 삼으세요.\n"
-        "명백한 띄어쓰기/오탈자/문장부호 최소 수정이 필요할 때만 후보를 아주 조금 고칠 수 있습니다.\n"
-        "단, 원문에 없는 명사, 숫자, 브랜드명, 설명, 감정 표현은 절대 추가하지 마세요.\n"
-        "최종 출력 JSON의 result는 선택한 후보의 줄 구성과 거의 같아야 합니다.\n"
+        "아래 후보는 STT 원문을 보존한 줄바꿈 후보입니다. 하나의 result를 그대로 선택하는 것이 기본입니다.\n"
+        "당신의 역할은 후보 선택과 줄바꿈/합침/띄어쓰기 정리뿐이며, 새 문장을 쓰거나 후보끼리 섞지 마세요.\n"
+        "LoRA ground truth 후보가 있으면 줄 구성만 그 후보를 최우선 기준으로 삼으세요.\n"
+        "단어 변경은 발음/글자 형태가 매우 가까운 명백한 오인식 1개 수준만 허용됩니다.\n"
+        "문장 전체를 자연스럽게 다시 쓰는 행위, 다른 명사/동사로 갈아끼우는 행위, 의미 보강은 실패입니다.\n"
+        "원문 후보에 없는 명사, 숫자, 브랜드명, 설명, 감정 표현, 상황 추론은 절대 추가하지 마세요.\n"
+        "최종 출력 JSON의 result는 선택한 후보와 뜻과 단어가 거의 같아야 하며, 애매하면 후보를 그대로 출력하세요.\n"
         f"{payload}"
     )
 
@@ -327,13 +333,15 @@ def validate_candidate_locked_chunks(
         }
 
     output_sig = _chunks_signature(cleaned)
+    output_compact_sig = _chunks_compact_signature(cleaned)
     source_sig = normalized_text(source_text)
     best_id = ""
     best_label = ""
     best_similarity = 0.0
     for candidate in candidate_rows:
         candidate_sig = _chunks_signature(candidate.get("chunks") or [])
-        similarity = similarity_ratio(candidate_sig, output_sig) if candidate_sig and output_sig else 0.0
+        candidate_compact_sig = _chunks_compact_signature(candidate.get("chunks") or [])
+        similarity = similarity_ratio(candidate_compact_sig, output_compact_sig) if candidate_compact_sig and output_compact_sig else 0.0
         if similarity > best_similarity:
             best_similarity = similarity
             best_id = str(candidate.get("id") or "")
@@ -351,18 +359,45 @@ def validate_candidate_locked_chunks(
                 "similarity_to_best_candidate": 1.0,
                 "edit_ratio": 0.0,
             }
+    if source_sig and output_compact_sig == source_sig:
+        return cleaned, {
+            "schema": LLM_CANDIDATE_POLICY_SCHEMA,
+            "task": "llm_candidate_policy",
+            "model": LLM_CANDIDATE_POLICY_MODEL_ID,
+            "accepted": True,
+            "reason": "source_text_preserved",
+            "selected_candidate_id": best_id,
+            "selected_candidate_label": best_label,
+            "candidate_count": len(candidate_rows),
+            "similarity_to_best_candidate": 1.0,
+            "edit_ratio": 0.0,
+        }
 
     allow_minimal = _safe_bool(settings.get("llm_candidate_policy_allow_minimal_edit"), True)
-    max_edit_ratio = max(0.0, min(0.5, _safe_float(settings.get("llm_candidate_policy_max_edit_ratio"), 0.08)))
-    edit_similarity = similarity_ratio(source_sig, output_sig) if source_sig and output_sig else 0.0
+    max_edit_ratio = max(0.0, min(0.5, _safe_float(settings.get("llm_candidate_policy_max_edit_ratio"), 0.04)))
+    source_len = len(source_sig)
+    if source_len <= 12:
+        max_edit_ratio = min(max_edit_ratio, 0.02)
+    elif source_len <= 24:
+        max_edit_ratio = min(max_edit_ratio, 0.04)
+    else:
+        max_edit_ratio = min(max_edit_ratio, 0.06)
+    min_similarity_floor = 0.94 if source_len <= 24 else 0.92
+    edit_similarity = similarity_ratio(source_sig, output_compact_sig) if source_sig and output_compact_sig else 0.0
     edit_ratio = 1.0 - edit_similarity
+    max_edit_chars = max(1, min(4, _safe_int(settings.get("llm_candidate_policy_max_edit_chars"), 2)))
+    if source_len <= 12:
+        max_edit_chars = min(max_edit_chars, 1)
+    edit_distance = normalized_edit_distance(source_sig, output_compact_sig, limit=max_edit_chars) if source_sig and output_compact_sig else max_edit_chars + 1
     ok, guard_reason = validate_llm_chunks(
         source_text,
         cleaned,
-        min_similarity=max(0.9, _safe_float(settings.get("llm_verifier_min_similarity"), 0.86)),
+        min_similarity=max(min_similarity_floor, _safe_float(settings.get("llm_verifier_min_similarity"), 0.86)),
         max_length_delta_ratio=min(0.10, _safe_float(settings.get("llm_verifier_max_length_delta_ratio"), 0.16)),
+        max_edit_distance=max_edit_chars,
     )
-    if allow_minimal and ok and edit_ratio <= max_edit_ratio:
+    ratio_ok = edit_ratio <= max_edit_ratio or (source_len <= 24 and edit_distance <= max_edit_chars)
+    if allow_minimal and ok and ratio_ok and edit_distance <= max_edit_chars:
         return cleaned, {
             "schema": LLM_CANDIDATE_POLICY_SCHEMA,
             "task": "llm_candidate_policy",
@@ -374,7 +409,10 @@ def validate_candidate_locked_chunks(
             "candidate_count": len(candidate_rows),
             "similarity_to_best_candidate": round(best_similarity, 4),
             "edit_ratio": round(edit_ratio, 4),
+            "edit_distance": int(edit_distance),
+            "max_edit_chars": int(max_edit_chars),
             "max_edit_ratio": round(max_edit_ratio, 4),
+            "min_similarity": round(max(min_similarity_floor, _safe_float(settings.get("llm_verifier_min_similarity"), 0.86)), 4),
         }
 
     return None, {
@@ -388,7 +426,10 @@ def validate_candidate_locked_chunks(
         "candidate_count": len(candidate_rows),
         "similarity_to_best_candidate": round(best_similarity, 4),
         "edit_ratio": round(edit_ratio, 4),
+        "edit_distance": int(edit_distance),
+        "max_edit_chars": int(max_edit_chars),
         "max_edit_ratio": round(max_edit_ratio, 4),
+        "min_similarity": round(max(min_similarity_floor, _safe_float(settings.get("llm_verifier_min_similarity"), 0.86)), 4),
     }
 
 

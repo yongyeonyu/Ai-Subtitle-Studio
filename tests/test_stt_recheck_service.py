@@ -1,7 +1,9 @@
 import os
 import unittest
+from unittest.mock import patch
 
 from core.audio import stt_recheck_service, stt_rescue
+from core.audio.stt_backend_router import select_stt_backend
 from core.native_stt_recheck import stt_recheck_backend
 
 
@@ -166,11 +168,29 @@ class STTRecheckServiceTests(unittest.TestCase):
         selective = stt_recheck_service.selective_secondary_recheck_overrides()
 
         self.assertTrue(precision["stt_word_timestamp_precision_pass"])
-        self.assertEqual(precision["stt_backend_policy"], "quality")
+        self.assertEqual(precision["stt_backend_policy"], "native")
+        self.assertTrue(precision["whisperkit_native_auto_enabled"])
+        self.assertTrue(precision["stt_npu_prefer_enabled"])
+        self.assertTrue(precision["stt_whisperkit_precision_aggressive_gpu_enabled"])
+        self.assertEqual(precision["stt_whisperkit_gpu_saturation_max_workers"], 10)
+        self.assertEqual(precision["stt_word_timestamp_worker_straggler_max_missing_chunks"], 3)
         self.assertFalse(low_score["stt_ensemble_enabled"])
         self.assertEqual(low_score["whisper_chunk_overlap_sec"], 0.0)
         self.assertEqual(selective["stt_word_timestamps_mode"], "off")
         self.assertFalse(selective["stt_word_timestamps_precision_enabled"])
+        self.assertFalse(selective["stt_persistent_runtime_reuse_enabled"])
+
+    def test_precision_overrides_route_supported_mlx_alias_to_whisperkit_native(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
+             patch("core.audio.stt_backend_router._whisperkit_ready", return_value=True), \
+             patch("core.audio.stt_backend_router._whisperkit_supported_model", return_value=True):
+            choice = select_stt_backend(
+                "mlx-community/whisper-large-v3-mlx",
+                stt_recheck_service.precision_pass_overrides(),
+            )
+
+        self.assertEqual(choice.backend, "whisperkit_persistent")
+        self.assertTrue(choice.model.startswith("whisperkit-persistent:"))
 
     def test_collect_prepared_recheck_clips_skips_empty_results(self):
         item = stt_rescue.SttRecheckRange(

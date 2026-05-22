@@ -5,14 +5,13 @@ ui/timeline_global.py
 Global timeline minimap
 """
 import numpy as np
-from PyQt6.QtCore import QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from core.runtime import config
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_analysis import (
-    analysis_markers_for_widget,
     preliminary_major_markers_for_widget,
     roughcut_major_markers_for_widget,
     topicless_major_markers_for_widget,
@@ -37,10 +36,8 @@ MINIMAP_SUBTITLE_FILL = QColor(*APPLE_BLACK_MINIMAP["subtitle_fill_rgba"])
 MINIMAP_SUBTITLE_BORDER = QColor(APPLE_BLACK_MINIMAP["subtitle_border"])
 MINIMAP_PENDING_FILL = QColor(*APPLE_BLACK_MINIMAP["pending_fill_rgba"])
 MINIMAP_PENDING_BORDER = QColor(APPLE_BLACK_MINIMAP["pending_border"])
-MINIMAP_SILENCE_FILL = QColor(*APPLE_BLACK_MINIMAP["silence_fill_rgba"])
-MINIMAP_SILENCE_BORDER = QColor(APPLE_BLACK_MINIMAP["silence_border"])
 MINIMAP_SUBTITLE_MERGE_GAP_PX = 4
-MINIMAP_HEIGHT = 72
+MINIMAP_HEIGHT = 128
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -50,8 +47,9 @@ class GlobalCanvas(GlobalCanvasBase):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setFixedHeight(MINIMAP_HEIGHT)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(MINIMAP_HEIGHT)
+        self.resize(max(1, self.width()), MINIMAP_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
         # 미니맵도 2D 단일 렌더러로 맞춰 메인 타임라인과 다른 합성 경로를 만들지 않는다.
@@ -75,6 +73,12 @@ class GlobalCanvas(GlobalCanvasBase):
         self._last_viewport_px: tuple[int, int] | None = None
         self._last_whisper_px: int | None = None
         self._segments_signature = None
+
+    def sizeHint(self) -> QSize:
+        return QSize(1, MINIMAP_HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(1, MINIMAP_HEIGHT)
 
     def _invalidate_static_cache(self):
         self._static_cache = None
@@ -412,14 +416,6 @@ class GlobalCanvas(GlobalCanvasBase):
                 p.drawRoundedRect(rounded, radius, radius)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
-        markers = analysis_markers_for_widget(
-            self,
-            list(getattr(self, "segments", []) or []),
-            list(getattr(self, "vad_segments", []) or []),
-            [],
-            total,
-        )
-
         if total > 0:
             subtitle_lane = QRect(
                 bottom_lane.x(),
@@ -440,7 +436,6 @@ class GlobalCanvas(GlobalCanvasBase):
             p.setPen(Qt.PenStyle.NoPen)
             pending_rects: list[QRect] = []
             confirmed_rects: list[QRect] = []
-            silence_rects: list[QRect] = []
             for s in self._merged_minimap_subtitle_segments(w, total):
                 rect = _rect_for_lane(
                     float(s.get("start", 0.0) or 0.0),
@@ -452,15 +447,6 @@ class GlobalCanvas(GlobalCanvasBase):
                     pending_rects.append(rect)
                 else:
                     confirmed_rects.append(rect)
-            for marker in sorted(markers, key=lambda item: int(item.get("priority", 0) or 0)):
-                if str(marker.get("kind", "") or "").strip().lower() not in {"silence"}:
-                    continue
-                try:
-                    start = max(0.0, float(marker.get("start", 0.0) or 0.0))
-                    end = max(start, float(marker.get("end", start) or start))
-                except Exception:
-                    continue
-                silence_rects.append(_rect_for_lane(start, end, silence_lane, min_h_pad=1))
             if confirmed_rects:
                 p.setBrush(MINIMAP_SUBTITLE_FILL)
                 p.drawRects(confirmed_rects)
@@ -473,13 +459,6 @@ class GlobalCanvas(GlobalCanvasBase):
                 p.setPen(QPen(MINIMAP_PENDING_BORDER, 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRects(pending_rects)
-            if silence_rects:
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(MINIMAP_SILENCE_FILL)
-                p.drawRects(silence_rects)
-                p.setPen(QPen(MINIMAP_SILENCE_BORDER, 1))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRects(silence_rects)
 
         p.end()
         self._static_cache = pixmap

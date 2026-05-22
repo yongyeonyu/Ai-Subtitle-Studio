@@ -9,6 +9,7 @@ from typing import Any
 from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
 from core.media_fingerprint import media_fingerprint_digest
 from core.personalization.lora_models import stable_hash
+from core.personalization.lora_gpu_acceleration import score_lora_vector_scores_on_gpu
 from core.personalization.lora_retrieval_config import (
     FACET_POINT_WEIGHTS,
     LIST_FACET_POINT_WEIGHTS,
@@ -220,13 +221,22 @@ def score_lora_docs(
         except Exception:
             pass
     inverted = dict(index.get("inverted_index") or {})
+    gpu_vector_scores = score_lora_vector_scores_on_gpu(
+        inverted,
+        dict(query_vector),
+        doc_count=len(docs),
+        settings=settings,
+    )
     vector_scores: dict[int, float] = defaultdict(float)
-    for bucket, query_weight in query_vector.items():
-        for doc_index, doc_weight in list(inverted.get(str(bucket), []) or []):
-            try:
-                vector_scores[int(doc_index)] += float(query_weight) * float(doc_weight)
-            except Exception:
-                continue
+    if gpu_vector_scores is not None:
+        vector_scores.update({int(key): float(value) for key, value in dict(gpu_vector_scores).items()})
+    else:
+        for bucket, query_weight in query_vector.items():
+            for doc_index, doc_weight in list(inverted.get(str(bucket), []) or []):
+                try:
+                    vector_scores[int(doc_index)] += float(query_weight) * float(doc_weight)
+                except Exception:
+                    continue
     bm25_scores = _bm25_scores(index, query_terms)
     ranked: list[dict[str, Any]] = []
     for doc_index in set(vector_scores) | set(bm25_scores):

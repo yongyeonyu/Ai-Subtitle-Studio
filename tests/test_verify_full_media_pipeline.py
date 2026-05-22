@@ -1,6 +1,14 @@
 import cProfile
+import json
 
-from tools.verify_full_media_pipeline import _profile_stats_rows, summary_metrics, verification_failure_reason
+from tools.verify_full_media_pipeline import (
+    _profile_stats_rows,
+    _resource_pressure_stage,
+    _snapshot_file,
+    _snapshot_process_pid,
+    summary_metrics,
+    verification_failure_reason,
+)
 
 
 def test_summary_metrics_exposes_top_level_quality_and_performance_fields():
@@ -56,6 +64,46 @@ def test_summary_metrics_exposes_stage_trim_rollup_when_monitor_snapshot_exists(
     assert metrics["stage_trim_total_elapsed_ms"] == 18.5
     assert metrics["stage_trim_executed_count"] == 2
     assert metrics["stage_trim_slowest_stage"] == "subtitle_optimize_done"
+
+
+def test_snapshot_file_ignores_stale_monitor_from_other_process(tmp_path):
+    src = tmp_path / "latest.json"
+    src.write_text(
+        json.dumps({
+            "pressure_stage": "critical",
+            "subtitle_generation_stage": "stt_transcribe_start",
+            "resource": {"native_memory": {"pid": 111}},
+        }),
+        encoding="utf-8",
+    )
+    ignored = []
+
+    snapshot = _snapshot_file(
+        src,
+        tmp_path,
+        "runtime_monitor_before.json",
+        expected_pid=222,
+        ignored_snapshots=ignored,
+    )
+
+    assert snapshot is None
+    assert ignored[0]["reason"] == "pid_mismatch:111!=222"
+    assert ignored[0]["source_stage"] == "critical"
+    ignored_path = tmp_path / "runtime_monitor_before_ignored.json"
+    assert ignored_path.exists()
+    ignored_payload = json.loads(ignored_path.read_text(encoding="utf-8"))
+    assert ignored_payload["ignored"] is True
+    assert ignored_payload["snapshot"]["subtitle_generation_stage"] == "stt_transcribe_start"
+
+
+def test_snapshot_process_pid_and_resource_pressure_helpers():
+    payload = {
+        "memory_pressure_stage": "warning",
+        "native_memory": {"pid": 333, "pressure_stage": "critical"},
+    }
+
+    assert _snapshot_process_pid(payload) == 333
+    assert _resource_pressure_stage(payload) == "warning"
 
 
 def test_verification_failure_reason_rejects_empty_spoken_slice():

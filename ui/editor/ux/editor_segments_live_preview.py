@@ -122,6 +122,50 @@ class EditorSegmentsLivePreviewMixin:
         label = "/".join(source for source in sources if source) or "STT"
         self.set_live_processing_stage(f"{label} 실시간 자막 드래프트 표시 중 · {len(drafts)}개 추가")
 
+    def _live_editor_preview_follow_focus_enabled(self) -> bool:
+        settings = getattr(self, "settings", {}) or {}
+        if isinstance(settings, dict) and "editor_live_stt_preview_follow_video_enabled" in settings:
+            return bool(settings.get("editor_live_stt_preview_follow_video_enabled"))
+        return True
+
+    def _live_editor_preview_view_anchor(self) -> dict:
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None:
+            return {}
+        state: dict = {}
+        try:
+            state["cursor_position"] = int(text_edit.textCursor().position())
+        except Exception:
+            pass
+        for name in ("verticalScrollBar", "horizontalScrollBar"):
+            try:
+                bar = getattr(text_edit, name)()
+                state[name] = int(bar.value())
+            except Exception:
+                pass
+        return state
+
+    def _restore_live_editor_preview_view_anchor(self, state: dict | None) -> None:
+        if not state or not hasattr(self, "text_edit"):
+            return
+        text_edit = self.text_edit
+        if "cursor_position" in state:
+            try:
+                doc = text_edit.document()
+                cursor = QTextCursor(doc)
+                max_pos = max(0, int(doc.characterCount() or 1) - 1)
+                cursor.setPosition(max(0, min(int(state.get("cursor_position", 0) or 0), max_pos)))
+                text_edit.setTextCursor(cursor)
+            except Exception:
+                pass
+        for name in ("verticalScrollBar", "horizontalScrollBar"):
+            if name not in state:
+                continue
+            try:
+                getattr(text_edit, name)().setValue(int(state.get(name, 0) or 0))
+            except Exception:
+                pass
+
     def preview_stt_segments(self, segments: list[dict]):
         try:
             if hasattr(self, "status_lbl"):
@@ -273,6 +317,16 @@ class EditorSegmentsLivePreviewMixin:
                         return True
         return bool(getattr(self, "_live_editor_preview_pending", False) or getattr(self, "_segment_queue", None))
 
+    def _processing_segment_thumbnail_allowed(self, requested: bool) -> bool:
+        if not requested:
+            return False
+        try:
+            if self._processing_live_editor_preview_enabled():
+                return False
+        except Exception:
+            return False
+        return True
+
     def _sync_live_preview_playhead_to_video(self, preview: list[dict]) -> None:
         """Keep the video pane visibly following the newest live STT draft."""
         if not preview:
@@ -314,6 +368,7 @@ class EditorSegmentsLivePreviewMixin:
             global_sec = self._frame_time(max(0.0, float(global_sec or 0.0)))
         except Exception:
             return
+        show_thumbnail = self._processing_segment_thumbnail_allowed(show_thumbnail)
 
         last_sec = getattr(self, "_last_processing_video_seek_sec", None)
         try:
@@ -387,7 +442,10 @@ class EditorSegmentsLivePreviewMixin:
             return
         try:
             if hasattr(player, "seek_direct"):
-                player.seek_direct(local_sec)
+                try:
+                    player.seek_direct(local_sec, show_thumbnail=False)
+                except TypeError:
+                    player.seek_direct(local_sec)
             elif hasattr(player, "frame_step_seek"):
                 player.frame_step_seek(local_sec)
             elif hasattr(player, "preview_seek"):
@@ -402,6 +460,11 @@ class EditorSegmentsLivePreviewMixin:
             pass
 
     def _show_processing_segment_thumbnail(self, player, local_sec: float) -> None:
+        try:
+            if self._processing_live_editor_preview_enabled():
+                return
+        except Exception:
+            return
         extractor = getattr(player, "_extract_and_show_thumbnail_at", None)
         if not callable(extractor):
             return
@@ -893,7 +956,11 @@ class EditorSegmentsLivePreviewMixin:
         except Exception:
             pass
         if target_start is not None:
-            self._sync_processing_segment_view(float(target_start), show_thumbnail=True)
+            try:
+                show_thumbnail = not self._processing_live_editor_preview_enabled()
+            except Exception:
+                show_thumbnail = False
+            self._sync_processing_segment_view(float(target_start), show_thumbnail=show_thumbnail)
         return True
 
     def _has_live_editor_preview_overlap(self, seg: dict, *, prefer_primary: bool = False) -> bool:
@@ -937,17 +1004,22 @@ class EditorSegmentsLivePreviewMixin:
                 return
         if self._live_editor_preview_drafts_match_current(drafts):
             self._set_live_preview_status(drafts, stage_label=stage_label or None)
-            self._focus_editor_block_for_processing_segment(drafts[-1], prefer_last=True)
+            if self._live_editor_preview_follow_focus_enabled():
+                self._focus_editor_block_for_processing_segment(drafts[-1], prefer_last=True)
             return
+        follow_focus = self._live_editor_preview_follow_focus_enabled()
+        view_anchor = None if follow_focus else self._live_editor_preview_view_anchor()
         self._clear_live_editor_preview_blocks()
         for idx, seg in enumerate(drafts):
             source = self._stt_candidate_source(seg)
             self._insert_live_editor_preview_segment(
                 seg,
                 source=source,
-                focus=idx == len(drafts) - 1,
+                focus=follow_focus and idx == len(drafts) - 1,
             )
         self._set_live_preview_status(drafts, stage_label=stage_label or None)
+        if not follow_focus:
+            self._restore_live_editor_preview_view_anchor(view_anchor)
 
     def _clear_live_editor_preview_blocks(self) -> bool:
         self._live_editor_preview_queue = []

@@ -50,10 +50,9 @@ class EditorTimelineVideoMixin(
 
     def _playhead_active_interval_ms(self) -> int:
         try:
-            settings = getattr(self, "settings", {}) or {}
-            return max(16, min(80, int(settings.get("playhead_active_interval_ms", 24) or 24)))
+            return max(16, min(80, int(round(1000.0 / self._current_frame_fps()))))
         except Exception:
-            return 24
+            return 33
 
     def _snap_to_frame(self, sec: float) -> float:
         return snap_sec_to_frame(sec, self._current_frame_fps())

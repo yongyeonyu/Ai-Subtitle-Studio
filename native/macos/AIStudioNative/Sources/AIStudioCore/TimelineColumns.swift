@@ -28,6 +28,7 @@ public struct TimelineSegmentLayoutInput: Codable, Equatable, Sendable {
     public var lane: Int?
     public var isGap: Bool
     public var isPending: Bool
+    public var sttPreviewSource: String?
 
     public init(
         id: String? = nil,
@@ -36,7 +37,8 @@ public struct TimelineSegmentLayoutInput: Codable, Equatable, Sendable {
         end: Double,
         lane: Int? = nil,
         isGap: Bool = false,
-        isPending: Bool = false
+        isPending: Bool = false,
+        sttPreviewSource: String? = nil
     ) {
         self.id = id
         self.line = line
@@ -45,6 +47,7 @@ public struct TimelineSegmentLayoutInput: Codable, Equatable, Sendable {
         self.lane = lane
         self.isGap = isGap
         self.isPending = isPending
+        self.sttPreviewSource = sttPreviewSource
     }
 }
 
@@ -99,6 +102,7 @@ public struct TimelineSegmentLayout: Codable, Equatable, Sendable {
     public var isActive: Bool
     public var isGap: Bool
     public var isPending: Bool
+    public var sttPreviewSource: String?
 
     public init(
         index: Int,
@@ -113,7 +117,8 @@ public struct TimelineSegmentLayout: Codable, Equatable, Sendable {
         lane: Int,
         isActive: Bool,
         isGap: Bool,
-        isPending: Bool
+        isPending: Bool,
+        sttPreviewSource: String? = nil
     ) {
         self.index = index
         self.id = id
@@ -128,6 +133,7 @@ public struct TimelineSegmentLayout: Codable, Equatable, Sendable {
         self.isActive = isActive
         self.isGap = isGap
         self.isPending = isPending
+        self.sttPreviewSource = sttPreviewSource
     }
 }
 
@@ -254,6 +260,17 @@ public enum TimelineColumns {
 }
 
 public enum TimelineLayout {
+    public static func normalizedSTTPreviewSource(_ source: String?) -> String? {
+        let normalized = (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if normalized.contains("STT2") || normalized == "SECONDARY" || normalized == "S2" {
+            return "STT2"
+        }
+        if normalized.contains("STT1") || normalized == "PRIMARY" || normalized == "S1" {
+            return "STT1"
+        }
+        return nil
+    }
+
     public static func segmentLayouts(_ request: TimelineSegmentLayoutRequest) -> TimelineSegmentLayoutResponse {
         let canvasWidth = max(0, request.width)
         guard canvasWidth > 0 else {
@@ -306,7 +323,8 @@ public enum TimelineLayout {
                 lane: lane,
                 isActive: active,
                 isGap: segment.isGap,
-                isPending: segment.isPending
+                isPending: segment.isPending,
+                sttPreviewSource: normalizedSTTPreviewSource(segment.sttPreviewSource)
             ))
         }
 

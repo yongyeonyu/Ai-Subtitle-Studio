@@ -203,7 +203,7 @@ class EditorVideoControlsMixin:
             return False
         self._deferred_open_waveform_loaded = True
         try:
-            # 영상 오픈 직후가 아니라 Start 이후에 UI용 waveform 준비를 시작해 첫 입력 지연을 줄인다.
+            # 자막 생성 중 STT/LLM 리소스와 겹치지 않도록 완료/idle 이후 UI용 waveform을 준비한다.
             loader(path)
             return True
         except Exception:

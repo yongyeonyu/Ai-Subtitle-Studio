@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -1444,8 +1445,18 @@ def _copy_chunk_dir(source: Path, target: Path) -> Path:
         raise FileNotFoundError(source)
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)
-    shutil.copytree(source, target)
+    shutil.copytree(source, target, copy_function=_copy_benchmark_chunk_file)
     return target
+
+
+def _copy_benchmark_chunk_file(src: str, dst: str) -> str:
+    if Path(src).suffix.lower() == ".wav":
+        try:
+            os.link(src, dst)
+            return dst
+        except OSError:
+            pass
+    return shutil.copy2(src, dst)
 
 
 _CHUNK_EXACT_KEYS = {
@@ -1542,7 +1553,7 @@ def _slim_segments_for_artifact(rows: list[dict[str, Any]]) -> list[dict[str, An
 
 def _chunk_wav_count(chunk_dir: Path) -> int:
     try:
-        return len([path for path in chunk_dir.iterdir() if path.is_file() and path.suffix.lower() == ".wav"])
+        return sum(1 for path in chunk_dir.iterdir() if path.is_file() and path.suffix.lower() == ".wav")
     except Exception:
         return 0
 

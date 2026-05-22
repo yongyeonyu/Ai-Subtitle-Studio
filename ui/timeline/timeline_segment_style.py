@@ -43,6 +43,9 @@ STAGE_CONFIDENCE_COLORS = {
     "gray": COLORS["neutral"],
 }
 
+SPEAKER_SEGMENT_FILL = "#1F252A"
+SPEAKER_SEGMENT_BORDER = "#303840"
+
 _HIDDEN_BOUNDARY_MARKER_STYLE = {"visible": False}
 _FOLLOWER_FINAL_BOUNDARY_STATUSES = {"checked", "verified", "confirmed", "accepted", "done", "reviewed"}
 _AUDIO_BOUNDARY_LINE_HINTS = {"#39ff14", "audio_gain", "green", "neon_green"}
@@ -207,6 +210,11 @@ def _mix_hex(base_hex: str, accent_hex: str, ratio: float) -> str:
         _blend_channel(base_g, accent_g),
         _blend_channel(base_b, accent_b),
     )
+
+
+def speaker_segment_fill_hex(accent_hex: str | None = None) -> str:
+    """Keep speaker bars dark enough for white text while retaining a subtle speaker tint."""
+    return _mix_hex(SPEAKER_SEGMENT_FILL, str(accent_hex or "#8E8E93"), 0.12)
 
 
 def cut_boundary_scan_marker_verified(marker) -> bool:
@@ -471,6 +479,56 @@ def stt_preview_source(seg: dict) -> str:
     return str(source or "").strip().upper()
 
 
+def stt_checked_sources(seg: dict) -> frozenset[str]:
+    """Return all STT engines represented by final/candidate metadata."""
+    if not isinstance(seg, dict):
+        return frozenset()
+    sources: set[str] = set()
+
+    def _record_source(value) -> None:
+        text = str(value or "").strip().upper()
+        if "STT1" in text:
+            sources.add("STT1")
+        if "STT2" in text:
+            sources.add("STT2")
+
+    for key in (
+        "stt_ensemble_source",
+        "stt_selected_source",
+        "stt_ensemble_llm_selected_source",
+        "stt_preview_source",
+        "stt_source",
+        "source",
+    ):
+        _record_source(seg.get(key))
+
+    for list_key in ("stt_candidates", "candidate_lattice", "candidates"):
+        candidates = seg.get(list_key)
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for key in ("source", "stt_preview_source", "stt_source", "engine"):
+                _record_source(candidate.get(key))
+
+    scores = seg.get("stt_recheck_original_scores")
+    if isinstance(scores, dict):
+        for key in scores.keys():
+            _record_source(key)
+
+    return frozenset(sources)
+
+
+def stt_checked_source(seg: dict) -> str:
+    sources = stt_checked_sources(seg)
+    if "STT2" in sources:
+        return "STT2"
+    if "STT1" in sources:
+        return "STT1"
+    return ""
+
+
 def stt_preview_visual_style(
     seg: dict,
     *,
@@ -642,6 +700,8 @@ __all__ = [
     "scan_boundary_marker_label",
     "scan_boundary_marker_visual",
     "segment_text_kind",
+    "stt_checked_source",
+    "stt_checked_sources",
     "stt_candidate_selected",
     "stt_candidate_selected_by_llm",
     "stt_candidate_selection_state",

@@ -91,12 +91,31 @@ class VideoPlayerSubtitleMixin:
         self._set_subtitle_overlay_text(cur_sub)
 
     @staticmethod
+    def _display_text_for_video_subtitle_segment(seg) -> str:
+        if not isinstance(seg, dict):
+            return ""
+        text = str(seg.get("text", "") or "")
+        speakers = [
+            str(item or "").strip()
+            for item in list(seg.get("speaker_list") or [])
+            if str(item or "").strip()
+        ]
+        if len(set(speakers)) < 2:
+            return text
+        lines = [line.strip() for line in text.replace("\u2028", "\n").splitlines() if line.strip()]
+        if len(lines) < 2:
+            return text
+        if all(line.startswith("-") for line in lines[:2]):
+            return "\n".join(lines)
+        return "\n".join(f"- {line.lstrip('- ').strip()}" for line in lines[:2])
+
+    @staticmethod
     def _normalize_video_subtitle_segment(seg):
         try:
             return {
                 "start": float(seg.get("start", 0.0) or 0.0),
                 "end": float(seg.get("end", 0.0) or 0.0),
-                "text": str(seg.get("text", "") or ""),
+                "text": VideoPlayerSubtitleMixin._display_text_for_video_subtitle_segment(seg),
             }
         except Exception:
             return None
@@ -108,6 +127,49 @@ class VideoPlayerSubtitleMixin:
         digest.update(b"\x1f")
         digest.update(str(speaker or "").encode("utf-8", errors="replace"))
         digest.update(b"\x1e")
+
+    @staticmethod
+    def _overlay_preview_row(seg) -> bool:
+        if not isinstance(seg, dict):
+            return False
+        return bool(seg.get("_live_subtitle_preview") or seg.get("_live_stt_preview") or seg.get("stt_pending"))
+
+    @staticmethod
+    def _row_time_range(seg: dict) -> tuple[float, float] | None:
+        try:
+            start = float(seg.get("start", 0.0) or 0.0)
+            end = float(seg.get("end", start) or start)
+        except Exception:
+            return None
+        if end <= start:
+            return None
+        return start, end
+
+    def _filter_overlay_rows(self, segments) -> list[dict]:
+        rows = [seg for seg in list(segments or []) if isinstance(seg, dict)]
+        if not rows:
+            return []
+        final_ranges = [
+            rng for seg in rows
+            if not self._overlay_preview_row(seg)
+            for rng in [self._row_time_range(seg)]
+            if rng is not None
+        ]
+        if not final_ranges:
+            return rows
+        filtered: list[dict] = []
+        for seg in rows:
+            if not self._overlay_preview_row(seg):
+                filtered.append(seg)
+                continue
+            rng = self._row_time_range(seg)
+            if rng is None:
+                continue
+            start, end = rng
+            overlaps_final = any(start < f_end - 0.001 and end > f_start + 0.001 for f_start, f_end in final_ranges)
+            if not overlaps_final:
+                filtered.append(seg)
+        return filtered
 
     def _segments_signature_fast(self, segments) -> str:
         digest = hashlib.sha256()
@@ -134,7 +196,7 @@ class VideoPlayerSubtitleMixin:
         sorted_ok = True
         prev_start = None
         count = 0
-        source = () if segments is None else segments
+        source = self._filter_overlay_rows(segments)
         for seg in source:
             item = self._normalize_video_subtitle_segment(seg)
             if item is None:

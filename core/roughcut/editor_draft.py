@@ -2,6 +2,7 @@
 # Phase: PHASE2
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 import json
 import math
 import os
@@ -15,6 +16,7 @@ from typing import Any, Iterable
 from core.cut_boundary_audio import is_audio_gain_boundary
 from core.llm.openai_provider import is_codex_model, is_openai_model, resolve_openai_model
 from core.llm.secure_keys import get_api_key
+from core.native_swift_roughcut import roughcut_boundary_candidates_via_swift
 from core.project.project_context import segment_signature
 
 from .edl_generator import build_edl_segments, edl_to_dict, map_edl_segments_to_clip_sources
@@ -28,7 +30,7 @@ from .models import (
     RoughCutSegment,
     SubtitleSegment,
     roughcut_result_from_dict,
-    subtitles_from_dicts,
+    subtitle_from_dict,
 )
 from .roughcut_settings import merge_roughcut_settings
 from .roughcut_context_policy import resolve_roughcut_context_policy
@@ -471,6 +473,7 @@ def run_editor_roughcut_llm_draft(
 ) -> dict[str, Any] | None:
     settings = settings or {}
     rows = _subtitle_prompt_rows(segments)
+    prompt_source_segments = _subtitle_prompt_source_segments(segments)
     llm_config = resolve_roughcut_llm_config(settings, subtitle_rows=rows)
     model = str(llm_config.model or "").strip()
     provider = str(llm_config.provider or "").strip().lower()
@@ -535,7 +538,7 @@ def run_editor_roughcut_llm_draft(
         local_fallback_count = 0
         chunk_total = max(1, int(scope.get("chunk_count", 1) or 1))
         for chunk in list(scope.get("chunks") or []):
-            prompt_segments = segments[
+            prompt_segments = prompt_source_segments[
                 int(chunk["prompt_start_index"]): int(chunk["prompt_end_index"]) + 1
             ]
             core_subtitles = subtitles[
@@ -947,7 +950,11 @@ def _normalize_subtitles(items: Iterable[dict[str, Any]] | Iterable[SubtitleSegm
     first = source[0]
     if isinstance(first, SubtitleSegment):
         return [item for item in source if isinstance(item, SubtitleSegment) and item.end > item.start and item.text]
-    return list(subtitles_from_dicts(tuple(item for item in source if isinstance(item, dict))))
+    return [
+        subtitle_from_dict(item, fallback_id=index)
+        for index, item in enumerate(source)
+        if isinstance(item, dict) and item and not item.get("is_gap")
+    ]
 
 
 def _subtitle_prompt_rows(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -968,6 +975,19 @@ def _subtitle_prompt_rows(segments: list[dict[str, Any]]) -> list[dict[str, Any]
             }
         )
     return rows
+
+
+def _subtitle_prompt_source_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    source: list[dict[str, Any]] = []
+    for idx, segment in enumerate(list(segments or [])):
+        if not isinstance(segment, dict) or segment.get("is_gap"):
+            continue
+        if not str(segment.get("text", "") or "").strip():
+            continue
+        row = dict(segment)
+        row.setdefault("subtitle_id", idx)
+        source.append(row)
+    return source
 
 
 def _reference_major_segments_payload(reference_major_segments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -1150,19 +1170,18 @@ def _major_groups_from_reference_segments(
         if end <= start:
             continue
         is_last = idx == len(refs) - 1
-        selected = []
+        selected_pairs: list[tuple[int, SubtitleSegment]] = []
         for global_idx, item in enumerate(subtitles):
             sid = _subtitle_id(item, global_idx)
             if sid in used_ids:
                 continue
             midpoint = (float(item.start) + float(item.end)) / 2.0
             if start <= midpoint < end or (is_last and start <= midpoint <= end):
-                selected.append(item)
-        if not selected:
+                selected_pairs.append((global_idx, item))
+        if not selected_pairs:
             continue
-        for global_idx, item in enumerate(subtitles):
-            if item in selected:
-                used_ids.add(_subtitle_id(item, global_idx))
+        used_ids.update(_subtitle_id(item, global_idx) for global_idx, item in selected_pairs)
+        selected = [item for _global_idx, item in selected_pairs]
         raw_title = str(ref.get("title") or "").strip()
         title = _title_from_subtitles(selected) if (not raw_title or "주제없음" in raw_title) else raw_title
         raw_summary = str(ref.get("summary") or "").strip()
@@ -1607,6 +1626,8 @@ def _plan_editor_roughcut_core_ranges(
     min_core, target_core, max_core = _roughcut_chunk_bounds(settings, max_rows=max_rows, target_rows=target_rows)
     confirmed_candidates = _boundary_break_candidates(rows, cut_boundaries or [], source="confirmed")
     provisional_candidates = _boundary_break_candidates(rows, provisional_cut_boundaries or [], source="provisional")
+    confirmed_index = _indexed_chunk_break_candidates(confirmed_candidates)
+    provisional_index = _indexed_chunk_break_candidates(provisional_candidates)
     start = 0
     chunks: list[dict[str, Any]] = []
     while start < row_count:
@@ -1623,8 +1644,8 @@ def _plan_editor_roughcut_core_ranges(
                 target_end = min(target_end, latest_safe_end)
                 max_end = min(max_end, max(min_end, latest_safe_end))
             choice = _pick_chunk_break_candidate(
-                confirmed_candidates=confirmed_candidates,
-                provisional_candidates=provisional_candidates,
+                confirmed_candidates=confirmed_index,
+                provisional_candidates=provisional_index,
                 min_end=min_end,
                 target_end=target_end,
                 max_end=max_end,
@@ -1667,21 +1688,23 @@ def _roughcut_chunk_bounds(settings: dict[str, Any], *, max_rows: int, target_ro
 def _boundary_break_candidates(rows: list[dict[str, Any]], boundary_rows: list[Any], *, source: str) -> list[dict[str, Any]]:
     if len(rows) < 2 or not boundary_rows:
         return []
-    midpoints = [
-        (
-            idx,
-            (float(rows[idx]["end"]) + float(rows[idx + 1]["start"])) / 2.0,
-        )
-        for idx in range(len(rows) - 1)
-    ]
+    if _roughcut_native_candidate_plan_worthwhile(rows, boundary_rows):
+        native = roughcut_boundary_candidates_via_swift(rows, list(boundary_rows or []), source=source)
+        if native is not None:
+            return native
+    midpoints = _roughcut_row_midpoints(rows)
+    midpoint_values = [midpoint for _idx, midpoint in midpoints]
+    monotonic = _is_nondecreasing(midpoint_values)
     best_by_index: dict[int, dict[str, Any]] = {}
     for item in list(boundary_rows or []):
         boundary_time = _boundary_time(item)
         if boundary_time is None:
             continue
-        end_index, distance = min(
-            ((idx, abs(midpoint - boundary_time)) for idx, midpoint in midpoints),
-            key=lambda pair: pair[1],
+        end_index, distance = _nearest_roughcut_midpoint(
+            midpoints,
+            midpoint_values,
+            boundary_time,
+            use_bisect=monotonic,
         )
         current = best_by_index.get(end_index)
         if current is None or distance < float(current.get("distance", 999999.0)):
@@ -1694,29 +1717,115 @@ def _boundary_break_candidates(rows: list[dict[str, Any]], boundary_rows: list[A
     return [best_by_index[index] for index in sorted(best_by_index)]
 
 
+def _roughcut_row_midpoints(rows: list[dict[str, Any]]) -> list[tuple[int, float]]:
+    return [
+        (
+            idx,
+            (float(rows[idx]["end"]) + float(rows[idx + 1]["start"])) / 2.0,
+        )
+        for idx in range(len(rows) - 1)
+    ]
+
+
+def _is_nondecreasing(values: list[float]) -> bool:
+    return all(values[index] <= values[index + 1] for index in range(len(values) - 1))
+
+
+def _roughcut_native_candidate_plan_worthwhile(rows: list[dict[str, Any]], boundary_rows: list[Any]) -> bool:
+    if len(rows) < 32 or len(boundary_rows) < 24:
+        return False
+    values = [midpoint for _idx, midpoint in _roughcut_row_midpoints(rows)]
+    return _is_nondecreasing(values) and (len(values) * len(boundary_rows)) >= 4096
+
+
+def _nearest_roughcut_midpoint(
+    midpoints: list[tuple[int, float]],
+    midpoint_values: list[float],
+    boundary_time: float,
+    *,
+    use_bisect: bool,
+) -> tuple[int, float]:
+    if not midpoints:
+        return 0, 0.0
+    if not use_bisect:
+        return min(
+            ((idx, abs(midpoint - boundary_time)) for idx, midpoint in midpoints),
+            key=lambda pair: pair[1],
+        )
+    pos = bisect_left(midpoint_values, boundary_time)
+    candidate_positions: list[int] = []
+    if pos < len(midpoint_values):
+        candidate_positions.append(pos)
+    if pos > 0:
+        left_value = midpoint_values[pos - 1]
+        candidate_positions.append(bisect_left(midpoint_values, left_value, 0, pos))
+    best_position = min(
+        candidate_positions,
+        key=lambda item: (abs(midpoint_values[item] - boundary_time), item),
+    )
+    idx, midpoint = midpoints[best_position]
+    return idx, abs(midpoint - boundary_time)
+
+
 def _pick_chunk_break_candidate(
     *,
-    confirmed_candidates: list[dict[str, Any]],
-    provisional_candidates: list[dict[str, Any]],
+    confirmed_candidates,
+    provisional_candidates,
     min_end: int,
     target_end: int,
     max_end: int,
 ) -> dict[str, Any] | None:
     for pool in (confirmed_candidates, provisional_candidates):
-        filtered = [
-            item
-            for item in pool
-            if min_end <= int(item.get("end_index", -1)) <= max_end
-        ]
+        filtered = _chunk_break_candidate_window(pool, min_end=min_end, max_end=max_end)
         if filtered:
-            return min(
+            _end_index, _order, item = min(
                 filtered,
-                key=lambda item: (
-                    abs(int(item.get("end_index", target_end)) - target_end),
-                    float(item.get("distance", 999999.0)),
+                key=lambda entry: (
+                    abs(int(entry[0]) - target_end),
+                    float(entry[2].get("distance", 999999.0)),
+                    int(entry[1]),
                 ),
             )
+            return item
     return None
+
+
+def _indexed_chunk_break_candidates(candidates: list[dict[str, Any]] | None) -> dict[str, Any]:
+    entries: list[tuple[int, int, dict[str, Any]]] = []
+    for order, item in enumerate(candidates or []):
+        if not isinstance(item, dict):
+            continue
+        try:
+            end_index = int(item.get("end_index", -1))
+        except (TypeError, ValueError):
+            continue
+        entries.append((end_index, order, item))
+    entries.sort(key=lambda entry: (entry[0], entry[1]))
+    return {
+        "ends": [entry[0] for entry in entries],
+        "entries": entries,
+    }
+
+
+def _chunk_break_candidate_window(pool, *, min_end: int, max_end: int) -> list[tuple[int, int, dict[str, Any]]]:
+    if isinstance(pool, dict):
+        ends = pool.get("ends")
+        entries = pool.get("entries")
+        if isinstance(ends, list) and isinstance(entries, list):
+            left = bisect_left(ends, min_end)
+            right = bisect_right(ends, max_end)
+            return list(entries[left:right])
+    out: list[tuple[int, int, dict[str, Any]]] = []
+    for order, item in enumerate(pool or []):
+        if not isinstance(item, dict):
+            continue
+        try:
+            end_index = int(item.get("end_index", -1))
+        except (TypeError, ValueError):
+            continue
+        if min_end <= end_index <= max_end:
+            out.append((end_index, order, item))
+    return out
 
 
 def _groups_from_chunk_payload(

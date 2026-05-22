@@ -247,6 +247,7 @@ class EditorSaveManagerMixin:
                     "end": round(float(seg.get("end", seg.get("start", 0.0)) or 0.0), 3),
                     "text": str(seg.get("text", "") or ""),
                     "speaker": str(seg.get("speaker", seg.get("spk", "")) or ""),
+                    "speaker_list": [str(item or "") for item in list(seg.get("speaker_list") or [])],
                     "is_gap": bool(seg.get("is_gap", False)),
                     "stt_pending": bool(seg.get("stt_pending", False)),
                     "stt_mode": bool(seg.get("stt_mode", False)),

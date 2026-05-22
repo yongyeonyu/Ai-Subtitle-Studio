@@ -14,7 +14,9 @@ from PyQt6.QtWidgets import QApplication, QScrollArea
 
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
 from ui.timeline.timeline_canvas import TimelineCanvas
-from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, RULER_H, SCORE_H, SCORE_TOP, SEG_TOP, STT2_TOP, STT_PREVIEW_VERTICAL_INSET, SUBTITLE_BOT, SUBTITLE_TOP, WAVE_H
+from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, RULER_H, SCORE_H, SCORE_TOP, SEG_TOP, STT1_BOT, STT1_TOP, STT2_TOP, STT_PREVIEW_VERTICAL_INSET, SUBTITLE_BOT, SUBTITLE_TOP, WAVE_H
+from ui.timeline.timeline_segment_style import speaker_segment_fill_hex
+from ui.timeline.stt_preview_layout import stt_preview_lane_geometry
 from ui.timeline.paint_passes import build_cut_boundary_work_lane_paint_plan
 from ui.timeline.timeline_widget import TimelineWidget
 
@@ -164,7 +166,7 @@ class TimelineRenderCacheTests(unittest.TestCase):
                     "text": "stt1",
                     "line": 3,
                     "stt_selected_source": "STT1",
-                    "stt_candidates": [{"source": "STT1", "text": "stt1"}],
+                    "stt_candidates": [{"source": "STT1", "text": "stt1"}, {"source": "STT2", "text": "stt2"}],
                 },
             ]
             visible = canvas.visible_segments_for_time_window(0.0, 6.0, pad_sec=0.0)
@@ -177,11 +179,65 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertEqual([seg["text"] for seg in first["selected_final_segments"]], ["stt1"])
             self.assertEqual([seg["text"] for seg in first["stt1_preview_segments"]], ["stt1"])
             self.assertEqual([seg["text"] for seg in first["stt2_preview_segments"]], ["stt2"])
+            self.assertEqual([seg["text"] for seg in first["stt1_checked_segments"]], ["stt1"])
+            self.assertEqual([seg["text"] for seg in first["stt2_checked_segments"]], ["stt1"])
             self.assertEqual(len(first["selected_final_index"].get("rows") or []), 1)
             self.assertEqual(first["stt1_lane_count"], 1)
             self.assertEqual(first["stt2_lane_count"], 1)
             self.assertEqual(first["stt_selection_states"].get(id(first["stt1_preview_segments"][0])), "manual")
             self.assertEqual(first["stt_selection_states"].get(id(first["stt2_preview_segments"][0])), "unselected")
+        finally:
+            canvas.close()
+
+    def test_visible_segment_lane_cache_refreshes_when_stt_checked_metadata_changes(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.segments = [
+                {"start": 1.0, "end": 2.0, "text": "final", "line": 0},
+            ]
+            visible = canvas.visible_segments_for_time_window(0.0, 3.0, pad_sec=0.0)
+
+            first = canvas.visible_segment_lanes_cached(visible)
+            canvas.segments[0]["stt_candidates"] = [{"source": "STT2", "text": "보강 후보"}]
+            second = canvas.visible_segment_lanes_cached(visible)
+
+            self.assertIsNot(first, second)
+            self.assertEqual(second["stt2_checked_segments"], [canvas.segments[0]])
+        finally:
+            canvas.close()
+
+    def test_stt_candidate_hit_test_respects_overlapping_preview_sublanes(self):
+        canvas = TimelineCanvas()
+        try:
+            first = {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "아까 뭐래?",
+                "line": 1,
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+            }
+            second = {
+                "start": 1.1,
+                "end": 2.1,
+                "text": "아까 뭐래? 커피준데? 어",
+                "line": 2,
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+            }
+            canvas.resize(900, CANVAS_H)
+            canvas.pps = 300.0
+            canvas.segments = [first, second]
+            canvas._invalidate_render_cache()
+
+            x = canvas._x(1.5)
+            first_top, first_h = stt_preview_lane_geometry(STT1_TOP, STT1_BOT, 0, 2, inset=STT_PREVIEW_VERTICAL_INSET)
+            second_top, second_h = stt_preview_lane_geometry(STT1_TOP, STT1_BOT, 1, 2, inset=STT_PREVIEW_VERTICAL_INSET)
+
+            self.assertIs(canvas._stt_candidate_at(x, first_top + first_h // 2), first)
+            self.assertIs(canvas._stt_candidate_at(x, second_top + second_h // 2), second)
         finally:
             canvas.close()
 
@@ -361,7 +417,11 @@ class TimelineRenderCacheTests(unittest.TestCase):
                 image = QImage(canvas.size(), QImage.Format.Format_ARGB32_Premultiplied)
                 image.fill(0)
                 canvas.render(image)
-                return bytes(image.bits().asstring(image.sizeInBytes()))
+                data = bytes(image.bits().asstring(image.sizeInBytes()))
+                stride = image.bytesPerLine()
+                score_top = int(SCORE_TOP)
+                score_bottom = int(SCORE_TOP + SCORE_H + 1)
+                return data[: score_top * stride] + data[score_bottom * stride :]
 
             self.assertEqual(_render_body(False), _render_body(True))
         finally:
@@ -400,7 +460,11 @@ class TimelineRenderCacheTests(unittest.TestCase):
                 image = QImage(canvas.size(), QImage.Format.Format_ARGB32_Premultiplied)
                 image.fill(0)
                 canvas.render(image)
-                return bytes(image.bits().asstring(image.sizeInBytes()))
+                data = bytes(image.bits().asstring(image.sizeInBytes()))
+                stride = image.bytesPerLine()
+                score_top = int(SCORE_TOP)
+                score_bottom = int(SCORE_TOP + SCORE_H + 1)
+                return data[: score_top * stride] + data[score_bottom * stride :]
 
             self.assertEqual(_render_body(False), _render_body(True))
         finally:
@@ -839,6 +903,41 @@ class TimelineRenderCacheTests(unittest.TestCase):
         self.assertEqual(rows[0]["renderProfile"], "full")
         self.assertTrue(rows[0]["showText"])
 
+    def test_scenegraph_speaker_rows_use_configured_two_speaker_names(self):
+        with patch("ui.timeline.speaker_labels.load_settings", return_value={}):
+            rows = build_scenegraph_subtitle_segments(
+                [
+                    {
+                        "start": 1.0,
+                        "end": 2.0,
+                        "text": "대화",
+                        "line": 0,
+                        "speaker": "00",
+                        "speaker_list": ["00", "01"],
+                    },
+                ],
+                pps=240.0,
+                fps=30.0,
+                visible_start_sec=0.0,
+                visible_end_sec=3.0,
+                speaker_settings={
+                    "spk1_id": "00",
+                    "spk1_name": "인터뷰어",
+                    "spk1_color": "#579DFF",
+                    "spk2_id": "01",
+                    "spk2_name": "게스트",
+                    "spk2_color": "#75C76B",
+                },
+            )
+
+        self.assertEqual([row["name"] for row in rows[0]["speakerRows"]], ["인터뷰어", "게스트"])
+        self.assertEqual([row["color"] for row in rows[0]["speakerRows"]], ["#579DFF", "#75C76B"])
+        self.assertEqual([row["fill"] for row in rows[0]["speakerRows"]], [
+            speaker_segment_fill_hex("#579DFF"),
+            speaker_segment_fill_hex("#75C76B"),
+        ])
+        self.assertEqual(rows[0]["speakerText"], "인터뷰어\n게스트")
+
     def test_scenegraph_sync_is_disabled_by_single_owner_2d_timeline(self):
         timeline = TimelineWidget()
         try:
@@ -943,6 +1042,31 @@ class TimelineRenderCacheTests(unittest.TestCase):
         self.assertEqual(rows[0]["scoreSegmentY"], SCORE_TOP)
         self.assertEqual(rows[0]["scoreSegmentH"], SCORE_H)
         self.assertLess(rows[0]["scoreSegmentY"] + rows[0]["scoreSegmentH"], SUBTITLE_TOP)
+
+    def test_scenegraph_hides_subtitle_score_label_during_playback(self):
+        segments = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "needs review",
+                "line": 0,
+                "speaker": "00",
+                "quality": {"confidence_label": "red", "confidence_score": 31},
+            },
+        ]
+
+        rows = build_scenegraph_subtitle_segments(
+            segments,
+            pps=240.0,
+            fps=30.0,
+            visible_start_sec=0.0,
+            visible_end_sec=3.0,
+            playback_active=True,
+        )
+
+        self.assertEqual(rows[0]["scoreText"], "")
+        self.assertFalse(rows[0]["showScoreText"])
+        self.assertFalse(rows[0]["showScoreSegment"])
 
     def test_visible_item_index_keeps_dragged_segment_when_cached_position_is_offscreen(self):
         canvas = TimelineCanvas()

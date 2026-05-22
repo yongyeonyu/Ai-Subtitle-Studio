@@ -94,7 +94,10 @@ APPLE_BLACK_MINIMAP = {
     "subtitle_border": "#74BEFF",
     "pending_fill_rgba": (104, 89, 214, 172),
     "pending_border": "#C6BBFF",
+    "stt1_fill_rgba": (52, 199, 89, 212),
+    "stt1_border": "#D7FFE4",
+    "stt2_fill_rgba": (255, 214, 10, 212),
+    "stt2_border": "#FFF1A6",
     "silence_fill_rgba": (255, 159, 10, 138),
     "silence_border": "#F5C671",
 }
-

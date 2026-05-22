@@ -51,6 +51,25 @@ final class TimelineColumnsTests: XCTestCase {
         XCTAssertEqual(response.layouts.first?.isActive, true)
     }
 
+    func testSegmentLayoutCarriesNormalizedSTTPreviewSource() {
+        let response = TimelineLayout.segmentLayouts(TimelineSegmentLayoutRequest(
+            segments: [
+                TimelineSegmentLayoutInput(id: "stt1", start: 0.0, end: 1.0, isPending: true, sttPreviewSource: "STT1_SELECTIVE"),
+                TimelineSegmentLayoutInput(id: "stt2", start: 1.0, end: 2.0, isPending: true, sttPreviewSource: "stt2_selective_recheck"),
+                TimelineSegmentLayoutInput(id: "plain", start: 2.0, end: 3.0, isPending: true, sttPreviewSource: "manual")
+            ],
+            viewStart: 0.0,
+            viewEnd: 3.0,
+            width: 300,
+            top: 10,
+            rowHeight: 20
+        ))
+
+        XCTAssertEqual(response.layouts.map(\.sttPreviewSource), ["STT1", "STT2", nil])
+        XCTAssertEqual(TimelineLayout.normalizedSTTPreviewSource("secondary"), "STT2")
+        XCTAssertEqual(TimelineLayout.normalizedSTTPreviewSource("primary"), "STT1")
+    }
+
     func testPlayheadDirtyRectUsesOldAndNewPixelsOnly() {
         let rect = TimelineLayout.playheadDirtyRect(TimelinePlayheadDirtyRequest(
             oldSec: 1.0,

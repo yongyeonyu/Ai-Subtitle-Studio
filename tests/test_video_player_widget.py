@@ -603,7 +603,21 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
-    def test_video_surface_uses_contain_aspect_ratio_to_avoid_preview_crop(self):
+    def test_preview_display_rect_preserves_aspect_ratio_for_wide_video_pane(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._display_aspect = 16 / 9
+            rect = widget._displayed_video_rect(SimpleNamespace(width=lambda: 1000, height=lambda: 500))
+            self.assertEqual(rect.width(), 889)
+            self.assertEqual(rect.height(), 500)
+            self.assertEqual(rect.left(), 55)
+            self.assertEqual(rect.top(), 0)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_video_surface_preserves_source_aspect_ratio(self):
         view = VideoSurfaceView()
         try:
             self.assertEqual(view.video_item.aspectRatioMode(), Qt.AspectRatioMode.KeepAspectRatio)
@@ -653,7 +667,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertIn("\n", label.text())
             self.assertEqual(label.text().replace("\n", ""), os.path.basename(path))
             self.assertTrue(label.wordWrap())
-            self.assertIn("border-radius: 9px", label.styleSheet())
+            self.assertIn("background: transparent", label.styleSheet())
+            self.assertIn("border: none", label.styleSheet())
             self.assertIs(label.parentWidget(), widget.status_info_container)
             self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
             control_layout = label.parentWidget().layout()
@@ -663,6 +678,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(control_layout.spacing(), 6)
             self.assertEqual(widget.info_label.maximumWidth(), 220)
             self.assertEqual(widget.source_name_label.maximumWidth(), 200)
+            self.assertIn("background: transparent", widget.info_label.styleSheet())
+            self.assertIn("border: none", widget.info_label.styleSheet())
         finally:
             widget.close()
             widget.deleteLater()
@@ -795,11 +812,11 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             left, right = widget._apply_control_bar_video_content_insets()
             state = widget._quick_control_bar_state()
 
-            self.assertEqual((left, right), (55, 56))
+            self.assertEqual((left, right), (0, 0))
             margins = widget._control_bar_widget.layout().contentsMargins()
-            self.assertEqual((margins.left(), margins.right()), (55, 56))
-            self.assertEqual(state["contentLeftInset"], 55)
-            self.assertEqual(state["contentRightInset"], 56)
+            self.assertEqual((margins.left(), margins.right()), (0, 0))
+            self.assertEqual(state["contentLeftInset"], 0)
+            self.assertEqual(state["contentRightInset"], 0)
         finally:
             widget.close()
             widget.deleteLater()
@@ -863,6 +880,54 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(widget.sub_label.text(), "다음 자막")
             self.assertFalse(widget.sub_label.isHidden())
             self.assertEqual(widget.video_widget.subtitle_item.text(), "")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_subtitle_overlay_prefers_final_segment_over_overlapping_live_preview(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget.set_context_segments([
+                {"start": 60.694, "end": 62.195, "text": "맛나"},
+                {
+                    "start": 60.694,
+                    "end": 66.300,
+                    "text": "맛나 칸막은 이게 뭔지 모르겠어요 뭐지?",
+                    "_live_subtitle_preview": True,
+                },
+                {"start": 62.262, "end": 64.298, "text": "칸막은 이게 뭘지 모르겠어요"},
+                {"start": 64.298, "end": 66.300, "text": "뭐지?"},
+            ])
+
+            widget.set_subtitle_display_time(61.0)
+            self.assertEqual(widget._last_sub, "맛나")
+            self.assertEqual(widget.sub_label.text(), "맛나")
+
+            widget.set_subtitle_display_time(63.0)
+            self.assertEqual(widget._last_sub, "칸막은 이게 뭘지 모르겠어요")
+            self.assertEqual(widget.sub_label.text(), "칸막은 이게 뭘지 모르겠어요")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_subtitle_overlay_preserves_two_speaker_dash_lines(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget.set_context_segments([
+                {
+                    "start": 1.0,
+                    "end": 3.0,
+                    "text": "아이스로 드릴까요?\n네네",
+                    "speaker_list": ["00", "01"],
+                }
+            ])
+
+            widget.set_subtitle_display_time(1.5)
+
+            self.assertEqual(widget._last_sub, "- 아이스로 드릴까요?\n- 네네")
+            self.assertEqual(widget.sub_label.text(), "- 아이스로 드릴까요?\n- 네네")
         finally:
             widget.close()
             widget.deleteLater()
@@ -1395,6 +1460,23 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(widget.frame_time_map.total_frames, 48)
             self.assertEqual(widget.frame_rate, 24.0)
             self.assertAlmostEqual(widget.snap_sec_to_frame(1.01), 1.0, places=6)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_video_ui_timer_intervals_track_current_frame_rate(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget.set_frame_rate(24.0)
+            self.assertEqual(widget._play_ui_interval_ms, 42)
+            self.assertEqual(widget._idle_ui_interval_ms, 126)
+            self.assertEqual(widget._ui_timer.interval(), 126)
+
+            widget.set_frame_rate(60.0)
+            self.assertEqual(widget._play_ui_interval_ms, 17)
+            self.assertEqual(widget._idle_ui_interval_ms, 90)
+            self.assertEqual(widget._ui_timer.interval(), 90)
         finally:
             widget.close()
             widget.deleteLater()

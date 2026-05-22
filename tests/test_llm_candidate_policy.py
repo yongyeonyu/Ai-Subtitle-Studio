@@ -89,6 +89,40 @@ class LlmCandidatePolicyTests(unittest.TestCase):
         self.assertFalse(decision["accepted"])
         self.assertTrue(decision["reason"].startswith("not_candidate_or_minimal_edit:"))
 
+    def test_rejects_semantic_rewrite_when_stt_candidate_contains_ground_truth(self):
+        source = "아까 뭐래? 커피준데? 어"
+        candidates = [
+            {"id": "A", "label": "원문 유지", "chunks": [source]},
+            {"id": "B", "label": "구어 호흡 분리", "chunks": ["아까 뭐래?", "커피준데?", "어"]},
+        ]
+
+        chunks, decision = validate_candidate_locked_chunks(
+            source,
+            ["커피즈가 같이 여기 맞은거예요"],
+            candidates,
+        )
+
+        self.assertIsNone(chunks)
+        self.assertFalse(decision["accepted"])
+        self.assertEqual(decision["reason"].split(":", 1)[0], "not_candidate_or_minimal_edit")
+
+    def test_accepts_locked_stt_candidate_line_break_without_rewrite(self):
+        source = "아까 뭐래? 커피준데? 어"
+        candidates = [
+            {"id": "A", "label": "원문 유지", "chunks": [source]},
+            {"id": "B", "label": "구어 호흡 분리", "chunks": ["아까 뭐래?", "커피준데?", "어"]},
+        ]
+
+        chunks, decision = validate_candidate_locked_chunks(
+            source,
+            ["아까 뭐래?", "커피준데?", "어"],
+            candidates,
+        )
+
+        self.assertEqual(chunks, ["아까 뭐래?", "커피준데?", "어"])
+        self.assertTrue(decision["accepted"])
+        self.assertEqual(decision["selected_candidate_id"], "B")
+
 
 if __name__ == "__main__":
     unittest.main()

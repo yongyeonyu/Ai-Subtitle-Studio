@@ -5,16 +5,19 @@ from types import SimpleNamespace
 
 from core.audio.stt_candidate_scorer import stt_score_to_color
 from core.project.subtitle_status import subtitle_detection_score
-from ui.timeline.timeline_paint import (
+from ui.timeline.timeline_paint import TimelinePaintMixin
+from ui.timeline.timeline_segment_style import (
     SEGMENT_TEXT_KIND_STYLES,
     official_boundary_marker_visual,
     scan_boundary_marker_label,
-    segment_text_kind,
     scan_boundary_marker_visual,
+    segment_text_kind,
+    stt_checked_source,
+    stt_checked_sources,
+    stt_preview_visual_style,
     subtitle_confidence_chips,
     subtitle_render_detail_mode,
     subtitle_segment_visual_style,
-    stt_preview_visual_style,
 )
 from ui.timeline.timeline_analysis import (
     MAJOR_SEGMENT_COLORS,
@@ -30,10 +33,20 @@ from ui.timeline.timeline_analysis import (
     voice_activity_segments_for_editor,
 )
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
-from ui.timeline.timeline_constants import STT1_BOT, STT1_TOP, STT_PREVIEW_VERTICAL_INSET
-from ui.timeline.timeline_roughcut_paint import coalesce_roughcut_paint_markers
-from ui.timeline.stt_preview_layout import MAX_STT_PREVIEW_SUBLANES, assign_stt_preview_lanes, stt_preview_lane_geometry
+from ui.timeline.timeline_constants import RULER_H, STT1_BOT, STT1_TOP, STT_PREVIEW_VERTICAL_INSET
+from ui.timeline.timeline_roughcut_paint import coalesce_roughcut_paint_markers, visible_roughcut_label_span
+from ui.timeline.stt_preview_layout import (
+    MAX_STT_PREVIEW_SUBLANES,
+    assign_stt_preview_lanes,
+    dedupe_stt_preview_segments_for_display,
+    stt_preview_lane_geometry,
+)
 from ui.style import COLORS
+
+
+class _DummyTimelineRuler(TimelinePaintMixin):
+    def __init__(self, pps: float):
+        self.pps = float(pps)
 
 
 class TimelineSegmentColorTests(unittest.TestCase):
@@ -160,6 +173,48 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(by_line[0]["borderWidth"], 2)
         self.assertEqual(by_line[1]["borderWidth"], 1)
 
+    def test_fps_ruler_uses_per_frame_ticks_when_zoom_allows_it(self):
+        ruler = _DummyTimelineRuler(pps=1600.0)
+
+        self.assertEqual(ruler._fps_ruler_minor_step_frames(25.0), 1)
+        self.assertEqual(ruler._fps_ruler_major_step_seconds(), 1)
+        self.assertEqual(ruler._fps_ruler_reference_label_step_seconds(), 1)
+        self.assertTrue(ruler._fps_ruler_should_draw_minor_ticks(1, 1, 25.0))
+
+    def test_fps_ruler_coarsens_minor_ticks_when_zoom_is_tight(self):
+        ruler = _DummyTimelineRuler(pps=40.0)
+
+        self.assertEqual(ruler._fps_ruler_major_step_seconds(), 2)
+        self.assertEqual(ruler._fps_ruler_minor_step_frames(25.0), 25)
+        self.assertEqual(ruler._fps_ruler_reference_label_step_seconds(), 2)
+        self.assertFalse(ruler._fps_ruler_should_draw_minor_ticks(2, 25, 25.0))
+
+    def test_fps_ruler_scales_major_ticks_for_zoomed_out_long_media(self):
+        ruler = _DummyTimelineRuler(pps=0.8)
+
+        self.assertEqual(ruler._fps_ruler_major_step_seconds(), 60)
+        self.assertEqual(ruler._fps_ruler_reference_label_step_seconds(), 120)
+        self.assertFalse(ruler._fps_ruler_should_draw_minor_ticks(60, 60, 60.0))
+
+    def test_ruler_time_label_background_covers_tick_line(self):
+        ruler = _DummyTimelineRuler(pps=200.0)
+
+        rect = ruler._ruler_time_label_background_rect(
+            120,
+            34,
+            baseline_y=RULER_H - 9,
+            font_ascent=10,
+            font_descent=3,
+            clip_left=0,
+            clip_right=240,
+        )
+
+        self.assertLessEqual(rect.left(), 120)
+        self.assertGreaterEqual(rect.right(), 120)
+        self.assertGreaterEqual(rect.width(), 44)
+        self.assertLess(rect.top(), RULER_H - 9)
+        self.assertLess(rect.bottom(), RULER_H)
+
     def test_scenegraph_splits_overlapping_stt_preview_candidates_to_two_rows_per_source(self):
         objects = build_scenegraph_subtitle_segments(
             [
@@ -239,6 +294,25 @@ class TimelineSegmentColorTests(unittest.TestCase):
         )[1]
         self.assertEqual(len(slot_heights), 1)
         self.assertEqual(next(iter(slot_heights)), expected_slot_h)
+
+    def test_stt_preview_display_dedupes_same_source_duplicate_text_only(self):
+        segments = [
+            {"start": 1.0, "end": 3.0, "text": "시트도 편하고", "stt_preview_source": "STT1", "stt_score": 70},
+            {"start": 1.05, "end": 3.05, "text": "시트도 편하고", "stt_preview_source": "STT1", "stt_score": 88},
+            {"start": 1.05, "end": 3.05, "text": "헤드레스트도 편하고", "stt_preview_source": "STT1", "stt_score": 60},
+            {"start": 1.05, "end": 3.05, "text": "시트도 편하고", "stt_preview_source": "STT2", "stt_score": 55},
+        ]
+
+        visible = dedupe_stt_preview_segments_for_display(segments)
+
+        self.assertEqual(
+            [(seg["stt_preview_source"], seg["text"], seg["stt_score"]) for seg in visible],
+            [
+                ("STT1", "시트도 편하고", 88),
+                ("STT1", "헤드레스트도 편하고", 60),
+                ("STT2", "시트도 편하고", 55),
+            ],
+        )
 
     def test_manual_confirmed_subtitle_keeps_green_border_under_filters(self):
         seg = {
@@ -765,6 +839,24 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(low["fill"], stt_score_to_color(0))
         self.assertEqual(low["border"], stt_score_to_color(0))
 
+    def test_stt_checked_sources_include_candidate_and_recheck_metadata(self):
+        sources = stt_checked_sources(
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "최종",
+                "stt_selected_source": "STT1",
+                "stt_candidates": [{"source": "STT1"}, {"source": "STT2"}],
+                "stt_recheck_original_scores": {"STT2": 82},
+            }
+        )
+
+        self.assertEqual(sources, frozenset({"STT1", "STT2"}))
+        self.assertEqual(
+            stt_checked_source({"stt_candidates": [{"source": "STT2", "score": 0.82}]}),
+            "STT2",
+        )
+
     def test_stt_preview_can_fallback_to_quality_score_for_color(self):
         style = stt_preview_visual_style(
             {
@@ -1034,6 +1126,15 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(merged[0]["start"], 0.0)
         self.assertEqual(merged[0]["end"], 2.0)
         self.assertEqual(merged[1]["label"], "B")
+
+    def test_roughcut_label_span_pins_to_visible_marker_area(self):
+        self.assertEqual(
+            visible_roughcut_label_span(0, 5000, clip_left=3400, clip_right=4300),
+            (3408, 4292),
+        )
+        self.assertIsNone(
+            visible_roughcut_label_span(0, 5000, clip_left=3400, clip_right=3435),
+        )
 
     def test_roughcut_paint_markers_do_not_merge_different_statuses(self):
         markers = [

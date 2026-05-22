@@ -481,6 +481,21 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
         self.assertEqual(len(seen_boundaries), 1)
         self.assertAlmostEqual(float(seen_boundaries[0]["timeline_sec"]), 2.0, places=3)
 
+    def test_shift_cut_boundary_rows_for_offset_uses_frame_precise_local_time(self):
+        backend = _DummyBackend("")
+
+        rows = backend._shift_cut_boundary_rows_for_offset(
+            [
+                {"timeline_sec": 5.0, "time": 5.0, "timeline_frame": 150, "fps": 30.0},
+                {"timeline_sec": 12.0, "time": 12.0, "timeline_frame": 360, "fps": 30.0},
+            ],
+            10.0,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["timeline_frame"], 60)
+        self.assertAlmostEqual(float(rows[0]["timeline_sec"]), 2.0, places=3)
+
     def test_completed_follower_clears_saved_provisional_rows(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = os.path.join(tmpdir, "sample.project.json")

@@ -643,6 +643,7 @@ class SinglePipelineMixin:
                 t_diarize.start()
 
             auto_collected_segs = []
+            transcribe_errors = []
             preview_opt_queue = queue.Queue()
             preview_opt_sentinel = object()
 
@@ -720,6 +721,16 @@ class SinglePipelineMixin:
                             memory_guard,
                             f"stt_transcribe_chunk:{c_idx}/{t_total}",
                         )
+                except Exception as exc:
+                    transcribe_errors.append(exc)
+                    get_logger().log(
+                        "  ❌ STT 스레드 오류: "
+                        f"{exc}\n{traceback.format_exc()}"
+                    )
+                    try:
+                        self._emit_processing_stage(queue_index, f"❌ [STT] 자막 인식 실패: {exc}")
+                    except Exception:
+                        pass
                 finally:
                     # STT 완료 직후 강제 cleanup은 비필수 구간에서 성능 오버헤드가 된다.
                     # critical 상태에서는 MemoryGuard의 압박 기반 정리를 따르게 둔다.
@@ -996,6 +1007,28 @@ class SinglePipelineMixin:
                 # warning/critical 스테이지에서만 MemoryGuard가 trim을 트리거한다.
                 force=True,
             )
+
+            if transcribe_errors and not auto_collected_segs:
+                err = transcribe_errors[-1]
+                get_logger().log(f"  ❌ STT 결과 생성 실패: {err}")
+                self._emit_processing_stage(queue_index, f"❌ [STT] 자막 인식 실패: {err}")
+                self._pipeline_progress_coordinator().emit_item_error(queue_index)
+                self._active = False
+                return
+
+            try:
+                empty_stt_is_error = bool(load_settings().get("stt_empty_result_error_enabled", True))
+            except Exception:
+                empty_stt_is_error = True
+            if empty_stt_is_error and not auto_collected_segs and vad_segs:
+                get_logger().log(
+                    "  ❌ STT 결과가 0개입니다. rolling-window/worker 결과를 확인하고 "
+                    "빈 자막으로 완료하지 않습니다."
+                )
+                self._emit_processing_stage(queue_index, "❌ [STT] 자막 결과가 0개입니다")
+                self._pipeline_progress_coordinator().emit_item_error(queue_index)
+                self._active = False
+                return
 
             # ✅ STT 완료 → 큐 즉시 업데이트
             if not self._active:

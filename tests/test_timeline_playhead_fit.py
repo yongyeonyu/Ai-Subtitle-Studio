@@ -3401,6 +3401,15 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_playhead_active_interval_tracks_current_frame_rate(self):
+        editor = _DummyTimelineVideoEditor()
+        editor.video_fps = 24.0
+        editor.settings = {"playhead_active_interval_ms": 24}
+        self.assertEqual(editor._playhead_active_interval_ms(), 42)
+
+        editor.video_fps = 60.0
+        self.assertEqual(editor._playhead_active_interval_ms(), 17)
+
     def test_playhead_smoothing_ignores_small_backward_jitter(self):
         editor = _DummyTimelineVideoEditor()
         editor.video_fps = 30.0
@@ -3477,6 +3486,22 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_global_canvas_expands_into_available_bottom_space(self):
+        timeline = TimelineWidget()
+        try:
+            base_height = timeline.sizeHint().height()
+            timeline.resize(900, base_height + 64)
+            timeline.show()
+            self.app.processEvents()
+
+            self.assertGreater(timeline.global_canvas.height(), MINIMAP_HEIGHT)
+
+            pixmap = timeline.global_canvas._build_static_cache()
+            self.assertFalse(pixmap.isNull())
+            self.assertEqual(pixmap.height(), timeline.global_canvas.height())
+        finally:
+            timeline.close()
+
     def test_global_canvas_major_segments_render_outline_without_fill(self):
         timeline = TimelineWidget()
         try:
@@ -3549,7 +3574,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
-    def test_global_canvas_splits_subtitles_and_silence_into_complementary_bottom_lanes(self):
+    def test_global_canvas_keeps_silence_lane_without_drawing_silence_blocks(self):
         timeline = TimelineWidget()
         try:
             canvas = timeline.global_canvas
@@ -3573,9 +3598,8 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             silence_px = image.pixelColor(silence_x, silence_y)
 
             self.assertNotEqual(subtitle_px.name(), QColor(MINIMAP_SUBTITLE_LANE_BG).name())
-            self.assertNotEqual(silence_px.name(), QColor(MINIMAP_SILENCE_LANE_BG).name())
+            self.assertEqual(silence_px.name(), QColor(MINIMAP_SILENCE_LANE_BG).name())
             self.assertGreater(subtitle_px.blue(), subtitle_px.red())
-            self.assertGreater(silence_px.red(), silence_px.blue())
         finally:
             timeline.close()
 

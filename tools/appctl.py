@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.automation.app_command_protocol import build_command_payload
+from core.media_queue_order import ordered_media_files
 from tools.automation_command_client import (
     command_is_read_only,
     result_is_waiting_for_app,
@@ -141,6 +142,16 @@ def _editor_selection_options(args: argparse.Namespace) -> dict:
     }
 
 
+def _resolved_start_multiclip_paths(args: argparse.Namespace) -> list[str]:
+    paths = [str(path or "").strip() for path in list(getattr(args, "paths", []) or []) if str(path or "").strip()]
+    if paths:
+        return paths
+    folder = str(getattr(args, "folder", "") or "").strip()
+    if not folder:
+        return []
+    return ordered_media_files(folder)
+
+
 def _payload_from_args(args: argparse.Namespace) -> dict:
     command = str(args.command or "")
     if command in {
@@ -209,7 +220,7 @@ def _payload_from_args(args: argparse.Namespace) -> dict:
         return build_command_payload(
             command,
             folder=str(args.folder or ""),
-            paths=list(args.paths or []),
+            paths=_resolved_start_multiclip_paths(args),
             options={
                 "mode": str(args.mode or ""),
                 "reuse_existing": str(args.reuse_existing or "ask"),

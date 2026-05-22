@@ -23,6 +23,7 @@ import wave
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
+from core.audio.audio_chunk_manifest import audio_chunk_manifest
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.audio.audio_runtime_services import plan_audio_route_workers
 from core.llm.secure_keys import get_api_key
@@ -2464,21 +2465,9 @@ class VideoProcessorAudioHelpersMixin:
 
     def _grouped_chunks_from_existing_wavs(self, chunk_dir: str) -> list[dict]:
         grouped = []
-        try:
-            names = sorted(name for name in os.listdir(chunk_dir) if name.lower().endswith(".wav"))
-        except Exception:
-            return grouped
-        for name in names:
-            path = os.path.join(chunk_dir, name)
-            match = re.search(r"vad_\d+_([\d.]+)\.wav$", name)
-            if not match:
-                continue
-            try:
-                start = float(match.group(1))
-                with wave.open(path, "r") as wf:
-                    duration = wf.getnframes() / float(wf.getframerate())
-            except Exception:
-                continue
+        for row in audio_chunk_manifest(chunk_dir, require_vad_start=True):
+            start = float(row.get("start", 0.0) or 0.0)
+            duration = float(row.get("duration", 0.0) or 0.0)
             if duration <= 0:
                 continue
             grouped.append({"start": round(start, 3), "end": round(start + duration, 3)})

@@ -34,6 +34,16 @@ class EditorSegmentsSttSelectionFlowMixin:
         if not bool(getattr(self, "_stt_preview_subtitle_drafts_enabled", True)):
             explicit_subtitle_preview = []
         elif explicit_subtitle_preview:
+            drop_overlapping = getattr(self, "_drop_overlapping_preview", None)
+            if callable(drop_overlapping):
+                try:
+                    explicit_subtitle_preview = drop_overlapping(
+                        explicit_subtitle_preview,
+                        confirmed,
+                        same_source_only=False,
+                    )
+                except Exception:
+                    pass
             subtitle_preview = sorted(
                 explicit_subtitle_preview,
                 key=lambda seg: (

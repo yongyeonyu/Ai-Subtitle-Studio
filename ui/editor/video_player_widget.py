@@ -177,6 +177,8 @@ class VideoPlayerWidget(
 
     def set_frame_rate(self, fps: float):
         self._rebuild_frame_time_map(fps=normalize_fps(fps))
+        if hasattr(self, "_refresh_ui_timer_intervals"):
+            self._refresh_ui_timer_intervals()
 
     def snap_sec_to_frame(self, sec: float) -> float:
         frame_map = getattr(self, "frame_time_map", None)
@@ -313,9 +315,10 @@ class VideoPlayerWidget(
     def _last_playable_sec(self) -> float:
         return self.sec_for_frame(self._last_playable_frame())
 
-    def seek_direct(self, sec):
+    def seek_direct(self, sec, *, show_thumbnail: bool = True):
         snapped = self._apply_seek_state(sec, remember_pending=False, refresh_provider=True)
-        self._show_unprimed_seek_thumbnail(snapped, force=True)
+        if show_thumbnail:
+            self._show_unprimed_seek_thumbnail(snapped, force=True)
 
     def preview_seek(self, sec: float):
         """Lightweight seek for timeline scrubbing.

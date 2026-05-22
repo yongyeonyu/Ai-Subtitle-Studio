@@ -29,6 +29,7 @@ def classify_resource_label(stage: str, fallback: str = "general") -> str:
         ("stt1", ("stt1", "stt_transcribe", "whisperkit", "word", "단어")),
         ("stt2", ("stt2", "fast-stt2", "mlx", "komix", "재검사")),
         ("vad", ("vad", "silero", "음성 위치")),
+        ("subtitle_optimize", ("subtitle_optimize", "subtitle optimize", "optimizer", "자막 최적화", "교정/분리")),
         ("llm", ("llm", "lora", "러프컷", "roughcut", "자막 최적화")),
         ("cut", ("cut", "boundary", "컷 경계")),
         ("score", ("score", "quality", "검수", "자가진단", "scoring")),

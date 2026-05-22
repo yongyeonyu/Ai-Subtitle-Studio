@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from core.audio.whisper_coreml import DEFAULT_COREML_MODEL_ID, find_whisperkit_cli, is_coreml_whisper_model
+from core.audio.whisper_coreml import find_whisperkit_cli, is_coreml_whisper_model
 from core.performance import hardware_profile
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -11,14 +11,28 @@ from core.runtime.setting_utils import setting_bool as _setting_bool
 
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}
 _NPU_UNAVAILABLE_NOTICE_KEYS: set[tuple[str, str]] = set()
+DEFAULT_NPU_QUALITY_MODEL = getattr(
+    config,
+    "WHISPERKIT_QUALITY_MODEL",
+    "whisperkit-persistent:large-v3-v20240930_626MB",
+)
+DEFAULT_NPU_TURBO_MODEL = getattr(
+    config,
+    "WHISPERKIT_FAST_MODEL",
+    "whisperkit-persistent:large-v3-v20240930_turbo_632MB",
+)
 _NPU_MODEL_MAP = {
-    "large-v3": DEFAULT_COREML_MODEL_ID,
-    "whisper-large-v3": DEFAULT_COREML_MODEL_ID,
-    "whisper-large-v3-mlx": DEFAULT_COREML_MODEL_ID,
-    "whisper-large-v3-faster": DEFAULT_COREML_MODEL_ID,
-    "openai/whisper-large-v3": DEFAULT_COREML_MODEL_ID,
-    "mlx-community/whisper-large-v3-mlx": DEFAULT_COREML_MODEL_ID,
-    "systran/faster-whisper-large-v3": DEFAULT_COREML_MODEL_ID,
+    "large-v3": DEFAULT_NPU_QUALITY_MODEL,
+    "whisper-large-v3": DEFAULT_NPU_QUALITY_MODEL,
+    "whisper-large-v3-mlx": DEFAULT_NPU_QUALITY_MODEL,
+    "whisper-large-v3-faster": DEFAULT_NPU_QUALITY_MODEL,
+    "openai/whisper-large-v3": DEFAULT_NPU_QUALITY_MODEL,
+    "mlx-community/whisper-large-v3-mlx": DEFAULT_NPU_QUALITY_MODEL,
+    "systran/faster-whisper-large-v3": DEFAULT_NPU_QUALITY_MODEL,
+    "large-v3-turbo": DEFAULT_NPU_TURBO_MODEL,
+    "whisper-large-v3-turbo": DEFAULT_NPU_TURBO_MODEL,
+    "openai/whisper-large-v3-turbo": DEFAULT_NPU_TURBO_MODEL,
+    "mlx-community/whisper-large-v3-turbo": DEFAULT_NPU_TURBO_MODEL,
 }
 @lru_cache(maxsize=1)
 def apple_neural_engine_available() -> bool:

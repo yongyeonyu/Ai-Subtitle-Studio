@@ -67,6 +67,8 @@ def _compact_editor_runtime(value: Any) -> dict[str, Any]:
         "timeline_scroll_x",
         "timeline_fit_locked",
         "playback_center_lock",
+        "start_button_text",
+        "start_button_enabled",
         "video_visible",
         "video_playback_state",
         "video_backend",
@@ -95,6 +97,15 @@ def _compact_editor_runtime(value: Any) -> dict[str, Any]:
     return compact
 
 
+def _compact_roughcut_state(value: Any) -> dict[str, Any]:
+    data = dict(value or {}) if isinstance(value, dict) else {}
+    compact: dict[str, Any] = {}
+    for key in ("status", "pending", "running", "thread_alive", "major_count"):
+        if key in data:
+            compact[key] = data.get(key)
+    return compact
+
+
 def _compact_status_data(value: Any, *, encoded_bytes: int, send_fallback: bool = False) -> dict[str, Any]:
     data = dict(value or {}) if isinstance(value, dict) else {}
     queue = dict(data.get("queue_runtime") or {}) if isinstance(data.get("queue_runtime"), dict) else {}
@@ -108,6 +119,11 @@ def _compact_status_data(value: Any, *, encoded_bytes: int, send_fallback: bool 
         "current_work_mode": str(data.get("current_work_mode", "") or ""),
         "backend_active": bool(data.get("backend_active", False)),
         "auto_processing_active": bool(data.get("auto_processing_active", False)),
+        "generation_stage": str(data.get("generation_stage", "") or ""),
+        "last_stage_key": str(data.get("last_stage_key", "") or ""),
+        "subtitle_count": data.get("subtitle_count"),
+        "roughcut_state": _compact_roughcut_state(data.get("roughcut_state")),
+        "runtime_timestamp": data.get("runtime_timestamp"),
         "editor_runtime": _compact_editor_runtime(data.get("editor_runtime")),
         "editor_aux_counts": dict(data.get("editor_aux_counts") or {}) if isinstance(data.get("editor_aux_counts"), dict) else {},
         "editor_stt": dict(data.get("editor_stt") or {}) if isinstance(data.get("editor_stt"), dict) else {},

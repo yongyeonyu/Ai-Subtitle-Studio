@@ -368,6 +368,11 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
     if normalized is None:
         normalized = _normalize_stt_preview_segments(raw_segments, primary_fps=primary_fps)
     if not normalized:
+        normalized = _normalize_stt_preview_segments(
+            _project_stt_preview_segments_from_lattice_artifact(project),
+            primary_fps=primary_fps,
+        )
+    if not normalized:
         return []
     normalized = _trim_segments_to_project_duration(normalized, project, primary_fps=primary_fps)
     if not normalized:
@@ -480,6 +485,101 @@ def _project_stt_preview_track_source(
     if not isinstance(tracks, dict):
         tracks = (project.get("analysis", {}) or {}).get("stt_candidate_tracks")
     return tracks if isinstance(tracks, dict) else None
+
+
+def _project_stt_lattice_artifact_path(project: dict[str, Any]) -> str:
+    analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+    artifact_path = str(
+        analysis.get("stt_lattice_artifact_path")
+        or ((project.get("editor_state", {}) or {}).get("analysis", {}) or {}).get("stt_lattice_artifact_path")
+        or ""
+    )
+    if not artifact_path:
+        return ""
+    if not os.path.isabs(artifact_path):
+        base = str(project.get("_project_file_path") or project.get("project_path") or "")
+        if base:
+            artifact_path = os.path.join(os.path.dirname(os.path.abspath(base)), artifact_path)
+    return artifact_path
+
+
+def _load_project_stt_lattice_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
+    artifact_path = _project_stt_lattice_artifact_path(project)
+    if not artifact_path or not os.path.exists(artifact_path):
+        return []
+    try:
+        with open(artifact_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return []
+    rows = payload.get("segments") if isinstance(payload, dict) else []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _project_stt_preview_segments_from_lattice_artifact(project: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = _load_project_stt_lattice_segments(project)
+    if not rows:
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, int, str]] = set()
+    for row in rows:
+        candidates = row.get("candidate_lattice")
+        if not isinstance(candidates, list):
+            candidates = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            source = _normalize_stt_source(
+                candidate.get("source")
+                or candidate.get("stt_preview_source")
+                or row.get("source")
+                or row.get("stt_preview_source")
+            )
+            if source not in {"STT1", "STT2"}:
+                continue
+            text = str(candidate.get("text", row.get("text", "")) or "").strip()
+            if not text:
+                continue
+            start = _safe_float(candidate.get("start", row.get("start", 0.0)), 0.0)
+            end = _safe_float(candidate.get("end", row.get("end", start)), start)
+            key = (source, round(start * 1000), round(end * 1000), text)
+            if key in seen:
+                continue
+            seen.add(key)
+            raw_source = str(candidate.get("source") or row.get("source") or source)
+            item = {
+                "index": len(out) + 1,
+                "start": start,
+                "end": max(start, end),
+                "text": text,
+                "speaker": str(candidate.get("speaker", row.get("speaker", row.get("spk", "00"))) or "00"),
+                "stt_preview_source": source,
+                "stt_source": source,
+                "stt_ensemble_source": raw_source,
+                "stt_pending": True,
+                "_live_stt_preview": True,
+            }
+            if candidate.get("score") not in (None, ""):
+                item["score"] = candidate.get("score")
+                item["stt_score"] = candidate.get("score")
+            for key_name in (
+                "confidence",
+                "words",
+                "quality",
+                "quality_history",
+                "quality_candidates",
+                "_clip_idx",
+                "_clip_file",
+            ):
+                if key_name in candidate:
+                    item[key_name] = candidate.get(key_name)
+                elif key_name in row:
+                    item[key_name] = row.get(key_name)
+            out.append(item)
+    out.sort(key=lambda item: (_safe_float(item.get("start")), 0 if item.get("stt_preview_source") == "STT1" else 1))
+    for idx, item in enumerate(out, start=1):
+        item["index"] = idx
+    return out
 
 
 def _project_raw_subtitle_segments(
@@ -743,27 +843,8 @@ def _attach_external_stt_candidates(segments: list[dict[str, Any]], tracks: dict
 
 
 def _attach_lattice_candidates_from_artifact(segments: list[dict[str, Any]], project: dict[str, Any]) -> None:
-    analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
-    artifact_path = str(
-        analysis.get("stt_lattice_artifact_path")
-        or ((project.get("editor_state", {}) or {}).get("analysis", {}) or {}).get("stt_lattice_artifact_path")
-        or ""
-    )
-    if not artifact_path:
-        return
-    if not os.path.isabs(artifact_path):
-        base = str(project.get("_project_file_path") or project.get("project_path") or "")
-        if base:
-            artifact_path = os.path.join(os.path.dirname(os.path.abspath(base)), artifact_path)
-    if not artifact_path or not os.path.exists(artifact_path):
-        return
-    try:
-        with open(artifact_path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except Exception:
-        return
-    rows = payload.get("segments") if isinstance(payload, dict) else []
-    if not isinstance(rows, list):
+    rows = _load_project_stt_lattice_segments(project)
+    if not rows:
         return
     by_id: dict[str, dict[str, Any]] = {}
     by_time: dict[tuple[float, float], dict[str, Any]] = {}

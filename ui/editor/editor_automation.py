@@ -137,6 +137,71 @@ class EditorAutomationMixin:
             return seg
         return None
 
+    def _automation_segment_at_sec(
+        self,
+        sec: float,
+        *,
+        rows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        segments = list(rows or self._automation_segments(force_rebuild=True))
+        editable = [seg for seg in segments if isinstance(seg, dict) and not bool(seg.get("is_gap"))]
+        if not editable:
+            return None
+        seg = find_segment_at(editable, self._automation_snap_sec(float(sec or 0.0)), skip_gap=True)
+        return dict(seg) if isinstance(seg, dict) else None
+
+    def _automation_sync_active_segment_for_playhead(self, sec: float) -> dict[str, Any] | None:
+        seg = self._automation_segment_at_sec(sec)
+        if seg is None:
+            return None
+
+        sync = getattr(self, "_sync_cursor_to_seg", None)
+        if callable(sync):
+            try:
+                sync(seg, ensure_visible=True, move_cursor=True, sync_playhead=False)
+                return seg
+            except TypeError:
+                try:
+                    sync(seg, ensure_visible=True, move_cursor=True)
+                    return seg
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        start = self._automation_segment_start(seg)
+        line = self._automation_segment_line(seg)
+        if start is not None:
+            try:
+                self._active_seg_start = float(start)
+            except Exception:
+                pass
+        canvas = self._automation_canvas()
+        if canvas is not None:
+            if line is not None:
+                try:
+                    canvas.active_seg_line = int(line)
+                except Exception:
+                    pass
+            if start is not None:
+                try:
+                    canvas.active_seg_start = float(start)
+                except Exception:
+                    pass
+        timeline = getattr(self, "timeline", None)
+        if start is not None and timeline is not None and hasattr(timeline, "set_active"):
+            try:
+                timeline.set_active(float(start))
+            except Exception:
+                pass
+        highlighter = getattr(self, "_highlighter", None)
+        if line is not None and highlighter is not None and hasattr(highlighter, "set_current_line"):
+            try:
+                highlighter.set_current_line(int(line))
+            except Exception:
+                pass
+        return seg
+
     def _automation_segment_index(self, rows: list[dict[str, Any]], target: dict[str, Any] | None) -> int | None:
         if not isinstance(target, dict):
             return None
@@ -330,7 +395,18 @@ class EditorAutomationMixin:
             video_duration_ms = int(media_player.duration() or 0) if media_player is not None and hasattr(media_player, "duration") else 0
         except Exception:
             video_duration_ms = 0
+        btn_start = getattr(self, "btn_start", None)
+        try:
+            start_button_text = str(btn_start.text() or "") if btn_start is not None else ""
+        except Exception:
+            start_button_text = ""
+        try:
+            start_button_enabled = bool(btn_start.isEnabled()) if btn_start is not None else False
+        except Exception:
+            start_button_enabled = False
         return {
+            "start_button_text": start_button_text,
+            "start_button_enabled": start_button_enabled,
             "playhead_sec": playhead,
             "shadow_playhead_sec": None if getattr(canvas, "shadow_playhead_sec", None) is None else float(getattr(canvas, "shadow_playhead_sec", 0.0) or 0.0),
             "shadow_playhead_active": getattr(canvas, "shadow_playhead_sec", None) is not None if canvas is not None else False,
@@ -397,6 +473,7 @@ class EditorAutomationMixin:
                 localizer = getattr(self, "_global_to_local_sec", None)
                 local_sec = localizer(target) if callable(localizer) else target
                 seeker(local_sec)
+        self._automation_sync_active_segment_for_playhead(target)
         return {"playhead_sec": target, "editor_runtime": self.automation_editor_state_snapshot()}
 
     def automation_pin_shadow_playhead(self, sec: float | None = None) -> dict[str, Any]:

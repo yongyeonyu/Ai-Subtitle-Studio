@@ -23,6 +23,7 @@ from core.native_macos_acceleration import (
     mac_native_backend_plan,
     mac_native_runtime_overrides,
 )
+from core.native_resource_allocator import native_resource_allocation, native_task_allocation
 from core.runtime import config
 from core.runtime.memory_manager import process_rss_bytes, runtime_disk_cache_usage
 from core.runtime.setting_utils import setting_bool as _setting_bool
@@ -169,6 +170,7 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("runtime_scheduler_auto_enabled", True)
     set_opt("runtime_scheduler_reserve_cores", int(interactive_reserve))
     set_opt("runtime_scheduler_ramp_up_enabled", False)
+    set_opt("native_resource_allocator_worker_plan_enabled", True)
 
     set_opt("stt_backend_policy", "native")
     set_opt("whisperkit_native_auto_enabled", True)
@@ -236,6 +238,8 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("scan_cut_follower_stream_min_interval_sec", 0.75)
     # Follower rollback can keep refining while STT starts from pioneer cuts.
     # Avoid burning a second of idle wall time on Apple Silicon startup.
+    set_opt("cut_boundary_wait_first_follower_check_before_stt", True)
+    set_opt("cut_boundary_wait_first_follower_check_before_stt_timeout_sec", 1.2)
     set_opt("cut_boundary_wait_prescan_before_stt_timeout_sec", 1.0)
     set_opt("cut_boundary_wait_follower_before_stt", False)
     set_opt("cut_boundary_wait_follower_before_stt_timeout_sec", 0.0)
@@ -348,11 +352,14 @@ def _mixed_accelerator_parallelism_floor(task: str, accelerators: list[str], wor
     task_key = str(task or "").strip().lower()
     if workload <= 1 or task_key not in {
         "stt",
+        "stt_window",
+        "stt_precision",
         "vad",
         "diarize",
         "audio_ml",
         "ml",
         "subtitle_llm",
+        "subtitle_optimize",
         "roughcut_llm",
     }:
         return 0
@@ -363,6 +370,8 @@ def _mixed_accelerator_parallelism_floor(task: str, accelerators: list[str], wor
             normalized.append(name)
     non_cpu = [item for item in normalized if item != "cpu"]
     if len(non_cpu) >= 2:
+        if task_key in {"stt", "stt_window", "stt_precision"}:
+            return max(2, min(int(workload), len(non_cpu) + 1))
         return max(2, min(int(workload), len(non_cpu) + (1 if "cpu" in normalized else 0)))
     if len(non_cpu) == 1 and "cpu" in normalized:
         return min(int(workload), 2)
@@ -565,6 +574,37 @@ def runtime_parallel_worker_plan(
         meta["worker_topology_limit"] = int(topology_limit)
         meta["worker_topology"] = topology_meta
         meta["worker_topology_applied"] = int(worker_upper_bound) < int(base_worker_upper_bound)
+    if _setting_bool(settings.get("native_resource_allocator_worker_plan_enabled"), False):
+        try:
+            native_allocation = native_task_allocation(
+                task,
+                settings=settings,
+                workload=workload_count,
+                requested_workers=int(workers or 0),
+                minimum=minimum_count,
+                maximum=worker_upper_bound,
+                active_labels=[task],
+            )
+        except Exception:
+            native_allocation = None
+        if isinstance(native_allocation, dict) and native_allocation:
+            native_workers = _positive_int(native_allocation.get("workers"), workers)
+            native_pressure_stage = str(native_allocation.get("pressure_stage") or "").strip().lower()
+            adjusted_workers = max(
+                minimum_count,
+                min(int(native_workers or workers), worker_upper_bound, max(1, workload_count or 1)),
+            )
+            if mix_floor > 0 and native_pressure_stage != "critical":
+                floor_workers = min(worker_upper_bound, max(minimum_count, mix_floor))
+                if adjusted_workers < floor_workers:
+                    adjusted_workers = floor_workers
+                    meta["native_resource_allocator_preserved_accelerator_floor"] = True
+            if adjusted_workers != int(workers or 0):
+                meta["native_resource_allocator_previous_workers"] = int(workers or 0)
+                workers = adjusted_workers
+            meta["native_resource_allocator_applied"] = True
+            meta["native_resource_allocator_action"] = str(native_allocation.get("action") or "")
+            meta["native_resource_allocator_lease_ms"] = int(native_allocation.get("lease_ms", 0) or 0)
     meta["reserve_cores"] = int(reserve_cores_count)
     meta["accelerators"] = accelerator_names
     meta["coordinator"] = "runtime_parallel_worker_plan"
@@ -652,6 +692,26 @@ class RuntimeResourceCoordinator:
         process_cpu = self._sample_process_cpu_percent()
         active = self._active_runtime_labels(window)
         stage = self._pressure_stage(resource, rss_bytes)
+        previous_native_allocation = {}
+        try:
+            previous_native_allocation = dict(self._latest.get("native_resource_allocation") or {})
+        except Exception:
+            previous_native_allocation = {}
+        native_allocation = native_resource_allocation(
+            self.settings,
+            active_labels=active,
+            memory=dict(resource.get("native_memory") or {}),
+            topology={
+                "logical_cores": int(resource.get("logical_cores", 1) or 1),
+                "physical_cores": int(resource.get("physical_cores", 1) or 1),
+                "performance_cores": int(resource.get("performance_cores", 1) or 1),
+                "efficiency_cores": int(resource.get("efficiency_cores", 0) or 0),
+                "gpu_cores": int(resource.get("gpu_cores", 0) or 0),
+                "neural_engine_cores": int(resource.get("neural_engine_cores", 0) or 0),
+                "memory_bytes": int(resource.get("memory_bytes", 0) or 0),
+            },
+            previous_allocation=previous_native_allocation,
+        )
         snapshot = {
             "timestamp": round(now, 3),
             "profile": performance_profile(self.settings),
@@ -673,6 +733,8 @@ class RuntimeResourceCoordinator:
             "active_label_count": len(active),
             "resource": resource,
         }
+        if isinstance(native_allocation, dict) and native_allocation:
+            snapshot["native_resource_allocation"] = native_allocation
         self._latest = snapshot
         self._last_snapshot_at = now
         self._write_snapshot(snapshot)
@@ -746,6 +808,8 @@ class RuntimeResourceCoordinator:
                 backend = getattr(window, backend_name, None)
                 if backend is not None and bool(getattr(backend, "_active", False)):
                     labels.append(label)
+                if backend is not None and self._cut_boundary_runtime_active(backend):
+                    labels.append("cut_boundary")
             except Exception:
                 continue
         try:
@@ -754,11 +818,67 @@ class RuntimeResourceCoordinator:
                 labels.append("editor")
             if editor is not None and bool(getattr(editor, "_stt_mode_enabled", False)):
                 labels.append("stt")
+            if editor is not None and self._subtitle_llm_runtime_active(editor):
+                labels.append("subtitle_llm")
+            if editor is not None and self._subtitle_optimize_runtime_active(editor):
+                labels.append("subtitle_optimize")
+            if editor is not None and self._roughcut_llm_runtime_active(editor):
+                labels.append("roughcut_llm")
         except Exception:
             editor = None
         if self._exit_mode:
             labels.append("exit")
-        return labels
+        deduped: list[str] = []
+        for label in labels:
+            if label not in deduped:
+                deduped.append(label)
+        return deduped
+
+    def _cut_boundary_runtime_active(self, backend) -> bool:
+        for attr in ("_cut_boundary_prescan_thread", "_cut_boundary_follower_thread"):
+            try:
+                thread = getattr(backend, attr, None)
+                if thread is not None and thread.is_alive():
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _subtitle_llm_runtime_active(self, editor) -> bool:
+        try:
+            stage = str(getattr(editor, "_last_live_processing_stage", "") or "")
+        except Exception:
+            stage = ""
+        return "자막 LLM" in stage or "subtitle_llm" in stage.lower()
+
+    def _subtitle_optimize_runtime_active(self, editor) -> bool:
+        try:
+            stage = str(getattr(editor, "_last_live_processing_stage", "") or "")
+        except Exception:
+            stage = ""
+        lowered = stage.lower()
+        return any(
+            token in lowered
+            for token in (
+                "subtitle_optimize",
+                "subtitle optimize",
+                "optimizer",
+                "stt+자막 llm",
+                "교정/분리",
+            )
+        ) or "자막 최적화" in stage
+
+    def _roughcut_llm_runtime_active(self, editor) -> bool:
+        try:
+            status = str(getattr(editor, "_roughcut_draft_status", "") or "").strip().lower()
+            if status in {"queued", "running", "saving"}:
+                return True
+            if bool(getattr(editor, "_roughcut_draft_pending", False)):
+                return True
+            thread = getattr(editor, "_roughcut_draft_thread", None)
+            return bool(thread is not None and thread.is_alive())
+        except Exception:
+            return False
 
     def _sample_system_cpu_percent(self) -> float:
         psutil = self._psutil_module

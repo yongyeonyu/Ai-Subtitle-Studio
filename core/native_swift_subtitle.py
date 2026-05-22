@@ -63,13 +63,14 @@ def find_native_cli_path() -> Path | None:
             _CLI_PATH_CACHE = None
 
     candidates = _candidate_cli_paths()
-    for path in candidates[:2]:
+    explicit_count = int(bool(env_key[0])) + int(bool(env_key[1]))
+    for path in candidates[:explicit_count]:
         if path.exists() and os.access(path, os.X_OK):
             _CLI_PATH_CACHE_ENV = env_key
             _CLI_PATH_CACHE = path
             _CLI_PATH_CACHE_AT = now
             return path
-    built = [path for path in candidates[2:] if path.exists() and os.access(path, os.X_OK)]
+    built = [path for path in candidates[explicit_count:] if path.exists() and os.access(path, os.X_OK)]
     if built:
         _CLI_PATH_CACHE_ENV = env_key
         _CLI_PATH_CACHE = max(built, key=lambda item: item.stat().st_mtime_ns)

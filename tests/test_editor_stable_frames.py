@@ -46,6 +46,8 @@ class EditorStableFrameTests(unittest.TestCase):
             self.assertEqual(editor.editor_frame.property("renderFeature"), "editor")
             self.assertEqual(editor.video_frame.property("renderFeature"), "video")
             self.assertEqual(editor.timeline_frame.property("renderFeature"), "timeline")
+            self.assertEqual(editor.video_frame.height(), 420)
+            self.assertEqual(editor.video_player.height(), 420)
             self.assertGreaterEqual(
                 editor.timeline_frame.minimumSizeHint().height(),
                 editor.timeline.minimumSizeHint().height(),
@@ -55,7 +57,7 @@ class EditorStableFrameTests(unittest.TestCase):
             editor.deleteLater()
             self.app.processEvents()
 
-    def test_editor_rebalances_video_gap_into_timeline_height(self):
+    def test_editor_keeps_fixed_video_height_without_rebalancing_timeline(self):
         from ui.editor.editor_widget import EditorWidget
 
         with patch("ui.editor.editor_widget._dm_load_settings", return_value={}), \
@@ -71,16 +73,10 @@ class EditorStableFrameTests(unittest.TestCase):
             for _ in range(4):
                 self.app.processEvents()
 
-            video_rect = editor.video_player.video_container.rect()
-            displayed_rect = editor.video_player._displayed_video_rect(video_rect)
-            bottom_gap = max(0, video_rect.height() - displayed_rect.height())
-
-            self.assertGreater(editor.timeline.canvas_height_bonus(), 0)
-            self.assertLessEqual(bottom_gap, 8)
-            self.assertEqual(
-                editor.timeline_frame.height(),
-                editor.timeline.minimumHeight(),
-            )
+            self.assertEqual(editor.video_frame.height(), 420)
+            self.assertEqual(editor.video_player.height(), 420)
+            self.assertEqual(editor.timeline.canvas_height_bonus(), 0)
+            self.assertEqual(editor.timeline_frame.height(), editor._timeline_base_height)
         finally:
             editor.close()
             editor.deleteLater()

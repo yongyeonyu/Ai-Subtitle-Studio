@@ -5,22 +5,26 @@ from core.audio.npu_acceleration import prefer_npu_whisper_model, whisper_model_
 
 
 class NpuAccelerationTests(unittest.TestCase):
-    def test_large_v3_family_maps_to_coreml_target(self):
+    def test_large_v3_family_maps_to_whisperkit_npu_target(self):
         self.assertEqual(
             whisper_model_npu_target("mlx-community/whisper-large-v3-mlx"),
-            "coreml:large-v3-v20240930_626MB",
+            "whisperkit-persistent:large-v3-v20240930_626MB",
         )
         self.assertEqual(
             whisper_model_npu_target("whisper-large-v3-mlx"),
-            "coreml:large-v3-v20240930_626MB",
+            "whisperkit-persistent:large-v3-v20240930_626MB",
         )
         self.assertEqual(
             whisper_model_npu_target("Systran/faster-whisper-large-v3"),
-            "coreml:large-v3-v20240930_626MB",
+            "whisperkit-persistent:large-v3-v20240930_626MB",
         )
         self.assertEqual(
             whisper_model_npu_target("large-v3"),
-            "coreml:large-v3-v20240930_626MB",
+            "whisperkit-persistent:large-v3-v20240930_626MB",
+        )
+        self.assertEqual(
+            whisper_model_npu_target("mlx-community/whisper-large-v3-turbo"),
+            "whisperkit-persistent:large-v3-v20240930_turbo_632MB",
         )
 
     def test_prefer_npu_keeps_unsupported_models(self):
@@ -32,7 +36,7 @@ class NpuAccelerationTests(unittest.TestCase):
             )
         self.assertEqual(routed, "youngouk/ghost613-turbo-korean-4bit-mlx")
 
-    def test_prefer_npu_routes_supported_model_when_coreml_runtime_exists(self):
+    def test_prefer_npu_routes_supported_model_when_whisperkit_runtime_exists(self):
         with patch("core.audio.npu_acceleration.config.IS_MAC", True), \
              patch("core.audio.npu_acceleration.apple_neural_engine_available", return_value=True):
             routed = prefer_npu_whisper_model(
@@ -40,7 +44,7 @@ class NpuAccelerationTests(unittest.TestCase):
                 {"runtime_npu_acceleration_enabled": True, "stt_npu_prefer_enabled": True},
                 emit_log=False,
             )
-        self.assertEqual(routed, "coreml:large-v3-v20240930_626MB")
+        self.assertEqual(routed, "whisperkit-persistent:large-v3-v20240930_626MB")
 
     def test_prefer_npu_can_be_disabled_in_settings(self):
         with patch("core.audio.npu_acceleration.config.IS_MAC", True), \

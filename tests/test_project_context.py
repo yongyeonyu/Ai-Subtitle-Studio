@@ -2834,6 +2834,62 @@ class ProjectContextTests(unittest.TestCase):
             project["editor_state"]["stt"]["candidate_tracks"]["STT2"][0],
         )
 
+    def test_project_stt_preview_segments_restores_from_lattice_artifact_when_tracks_are_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lattice_path = Path(tmp) / "project.stt_lattice.json"
+            lattice_path.write_text(
+                json.dumps(
+                    {
+                        "segments": [
+                            {
+                                "start": 0.0,
+                                "end": 1.0,
+                                "candidate_lattice": [
+                                    {
+                                        "candidate_key": "current",
+                                        "source": "STT1_SELECTIVE",
+                                        "start": 0.0,
+                                        "end": 1.0,
+                                        "text": "STT1 후보",
+                                        "score": 86.0,
+                                    }
+                                ],
+                            },
+                            {
+                                "start": 1.2,
+                                "end": 2.0,
+                                "candidate_lattice": [
+                                    {
+                                        "candidate_key": "current",
+                                        "source": "STT2_SELECTIVE_RECHECK",
+                                        "start": 1.2,
+                                        "end": 2.0,
+                                        "text": "STT2 후보",
+                                        "score": 91.5,
+                                    }
+                                ],
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            project = {
+                "project_path": str(Path(tmp) / "project.aissproj"),
+                "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+                "subtitles": {"storage": PROJECT_EXTERNAL_STORAGE},
+                "analysis": {"stt_lattice_artifact_path": str(lattice_path)},
+                "editor_state": {"stt": {"candidate_tracks": {}}},
+            }
+
+            previews = project_stt_preview_segments(project)
+
+        self.assertEqual([row["text"] for row in previews], ["STT1 후보", "STT2 후보"])
+        self.assertEqual([row["stt_preview_source"] for row in previews], ["STT1", "STT2"])
+        self.assertEqual(previews[1]["stt_ensemble_source"], "STT2_SELECTIVE_RECHECK")
+        self.assertEqual(previews[1]["stt_score"], 91.5)
+
     def test_project_segments_to_editor_loads_external_subtitles_once_when_external_storage_is_authoritative(self):
         project = {
             "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},

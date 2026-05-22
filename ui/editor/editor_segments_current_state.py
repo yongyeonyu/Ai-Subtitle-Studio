@@ -135,6 +135,21 @@ class EditorSegmentsCurrentStateMixin:
             same_group
         ):
             segments[-1]["text"] += "\n" + str(item.get("text", "") or "")
+            speakers = [
+                str(value or "").strip()
+                for value in list(segments[-1].get("speaker_list") or [segments[-1].get("speaker", segments[-1].get("spk", ""))])
+                if str(value or "").strip()
+            ]
+            next_speaker = str(item.get("speaker", item.get("spk", "")) or "").strip()
+            if next_speaker:
+                speakers.append(next_speaker)
+            deduped: list[str] = []
+            for speaker in speakers:
+                if speaker and speaker not in deduped:
+                    deduped.append(speaker)
+            if deduped:
+                segments[-1]["speaker_list"] = deduped
+                segments[-1]["speaker"] = deduped[0]
             return
         segments.append(item)
 

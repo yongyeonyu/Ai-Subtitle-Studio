@@ -11,6 +11,7 @@ public struct NativeTimelineSegment: Identifiable, Equatable, Sendable {
     public var lane: Int
     public var isGap: Bool
     public var isPending: Bool
+    public var sttPreviewSource: String?
 
     public init(
         id: String,
@@ -19,7 +20,8 @@ public struct NativeTimelineSegment: Identifiable, Equatable, Sendable {
         end: Double,
         lane: Int = 0,
         isGap: Bool = false,
-        isPending: Bool = false
+        isPending: Bool = false,
+        sttPreviewSource: String? = nil
     ) {
         self.id = id
         self.line = line
@@ -28,6 +30,7 @@ public struct NativeTimelineSegment: Identifiable, Equatable, Sendable {
         self.lane = lane
         self.isGap = isGap
         self.isPending = isPending
+        self.sttPreviewSource = sttPreviewSource
     }
 }
 
@@ -130,7 +133,8 @@ public struct NativeTimelineView: View {
                     end: $0.end,
                     lane: $0.lane,
                     isGap: $0.isGap,
-                    isPending: $0.isPending
+                    isPending: $0.isPending,
+                    sttPreviewSource: $0.sttPreviewSource
                 )
             },
             viewStart: state.viewStart,
@@ -151,17 +155,83 @@ public struct NativeTimelineView: View {
                 width: CGFloat(layout.clippedWidth),
                 height: CGFloat(layout.height)
             )
-            let fill: Color
-            if layout.isPending {
-                fill = Color(red: 1.0, green: 0.27, blue: 0.23).opacity(0.82)
-            } else if layout.isActive {
-                fill = Color.white.opacity(0.92)
-            } else {
-                fill = Color.white.opacity(0.74)
-            }
+            let style = segmentStyle(for: layout)
+            let fill = (layout.isActive && !layout.isPending) ? Color.white.opacity(0.92) : style.fill
             context.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(fill))
-            context.stroke(Path(roundedRect: rect, cornerRadius: 2), with: .color(Color.white.opacity(0.30)), lineWidth: 1)
+            context.stroke(Path(roundedRect: rect, cornerRadius: 2), with: .color(style.border), lineWidth: 1)
+            if let badge = style.badge, rect.width >= 48, rect.height >= 18 {
+                drawSourceBadge(badge, context: context, segmentRect: rect, fill: style.badgeFill, border: style.badgeBorder)
+            }
         }
+    }
+
+    private func segmentStyle(for layout: TimelineSegmentLayout) -> (
+        fill: Color,
+        border: Color,
+        badge: String?,
+        badgeFill: Color,
+        badgeBorder: Color
+    ) {
+        let source = layout.sttPreviewSource ?? ""
+        if layout.isPending && source == "STT1" {
+            return (
+                Color(red: 0.10, green: 0.32, blue: 0.18).opacity(0.90),
+                Color(red: 0.20, green: 0.78, blue: 0.35).opacity(0.95),
+                "STT1",
+                Color(red: 0.05, green: 0.23, blue: 0.15).opacity(0.95),
+                Color(red: 0.20, green: 0.78, blue: 0.35).opacity(0.95)
+            )
+        }
+        if layout.isPending && source == "STT2" {
+            return (
+                Color(red: 0.10, green: 0.24, blue: 0.32).opacity(0.90),
+                Color(red: 0.39, green: 0.82, blue: 1.0).opacity(0.95),
+                "STT2",
+                Color(red: 0.06, green: 0.18, blue: 0.26).opacity(0.95),
+                Color(red: 0.39, green: 0.82, blue: 1.0).opacity(0.95)
+            )
+        }
+        if layout.isPending {
+            return (
+                Color(red: 1.0, green: 0.27, blue: 0.23).opacity(0.82),
+                Color.white.opacity(0.30),
+                nil,
+                Color.clear,
+                Color.clear
+            )
+        }
+        return (
+            Color.white.opacity(0.74),
+            Color.white.opacity(0.30),
+            nil,
+            Color.clear,
+            Color.clear
+        )
+    }
+
+    private func drawSourceBadge(
+        _ label: String,
+        context: GraphicsContext,
+        segmentRect: CGRect,
+        fill: Color,
+        border: Color
+    ) {
+        let width = min(CGFloat(34), max(CGFloat(28), segmentRect.width - 8))
+        let height = min(CGFloat(16), max(CGFloat(12), segmentRect.height - 8))
+        let rect = CGRect(
+            x: segmentRect.minX + 5,
+            y: segmentRect.minY + 4,
+            width: width,
+            height: height
+        )
+        context.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(fill))
+        context.stroke(Path(roundedRect: rect, cornerRadius: 2), with: .color(border), lineWidth: 1)
+        context.draw(
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .default))
+                .foregroundStyle(Color.white),
+            in: rect
+        )
     }
 
 }

@@ -523,19 +523,58 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         )
 
     def visible_segment_lanes_cached(self, visible_segments) -> dict[str, object]:
-        from ui.timeline.stt_preview_layout import assign_stt_preview_lanes
+        from ui.timeline.stt_preview_layout import (
+            assign_stt_preview_lanes,
+            dedupe_stt_preview_segments_for_display,
+        )
         from ui.timeline.timeline_segment_style import (
             build_stt_selection_index,
             final_stt_selection_source,
+            stt_checked_sources,
             stt_candidate_selection_state,
             stt_preview_source,
         )
 
         rows = visible_segments if isinstance(visible_segments, list) else list(visible_segments or [])
+
+        def _source_metadata_signature(seg: dict) -> tuple:
+            if not isinstance(seg, dict):
+                return ()
+            candidate_sig = []
+            for list_key in ("stt_candidates", "candidate_lattice", "candidates"):
+                candidates = seg.get(list_key)
+                if not isinstance(candidates, list):
+                    continue
+                candidate_sig.append(
+                    (
+                        list_key,
+                        tuple(
+                            str(item.get(key, "") or "").strip().upper()
+                            for item in candidates
+                            if isinstance(item, dict)
+                            for key in ("source", "stt_preview_source", "stt_source", "engine")
+                        ),
+                    )
+                )
+            scores = seg.get("stt_recheck_original_scores")
+            score_sig = tuple(str(key).strip().upper() for key in scores.keys()) if isinstance(scores, dict) else ()
+            return (
+                bool(seg.get("stt_pending")),
+                bool(seg.get("_live_stt_preview")),
+                str(seg.get("stt_ensemble_source", "") or "").strip().upper(),
+                str(seg.get("stt_selected_source", "") or "").strip().upper(),
+                str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip().upper(),
+                str(seg.get("stt_preview_source", "") or "").strip().upper(),
+                str(seg.get("stt_source", "") or "").strip().upper(),
+                str(seg.get("source", "") or "").strip().upper(),
+                tuple(candidate_sig),
+                score_sig,
+            )
+
         key = (
             int(getattr(self, "_render_epoch", 0) or 0),
             len(rows),
-            tuple(id(seg) for seg in rows if isinstance(seg, dict)),
+            tuple((id(seg), _source_metadata_signature(seg)) for seg in rows if isinstance(seg, dict)),
         )
         if key == getattr(self, "_visible_segment_lanes_cache_key", None):
             cached = getattr(self, "_visible_segment_lanes_cache", None)
@@ -547,6 +586,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         selected_final_segments: list[dict] = []
         stt1_preview_segments: list[dict] = []
         stt2_preview_segments: list[dict] = []
+        stt1_checked_segments: list[dict] = []
+        stt2_checked_segments: list[dict] = []
         for seg in rows:
             if not isinstance(seg, dict):
                 continue
@@ -560,7 +601,15 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             final_segments.append(seg)
             if final_stt_selection_source(seg):
                 selected_final_segments.append(seg)
+            checked_sources = stt_checked_sources(seg)
+            if "STT1" in checked_sources:
+                stt1_checked_segments.append(seg)
+            if "STT2" in checked_sources:
+                stt2_checked_segments.append(seg)
         selected_final_index = build_stt_selection_index(selected_final_segments)
+        stt1_preview_segments = dedupe_stt_preview_segments_for_display(stt1_preview_segments)
+        stt2_preview_segments = dedupe_stt_preview_segments_for_display(stt2_preview_segments)
+        stt_preview_segments = stt1_preview_segments + stt2_preview_segments
         stt1_lane_map, stt1_lane_count = assign_stt_preview_lanes(stt1_preview_segments)
         stt2_lane_map, stt2_lane_count = assign_stt_preview_lanes(stt2_preview_segments)
         stt_selection_states = {
@@ -575,6 +624,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             "selected_final_index": selected_final_index,
             "stt1_preview_segments": stt1_preview_segments,
             "stt2_preview_segments": stt2_preview_segments,
+            "stt1_checked_segments": stt1_checked_segments,
+            "stt2_checked_segments": stt2_checked_segments,
             "stt1_lane_map": stt1_lane_map,
             "stt1_lane_count": stt1_lane_count,
             "stt2_lane_map": stt2_lane_map,

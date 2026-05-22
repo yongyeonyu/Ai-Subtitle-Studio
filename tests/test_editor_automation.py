@@ -135,3 +135,18 @@ def test_smart_split_recovers_when_playhead_is_outside_all_segments():
     assert result["line"] == 1
     assert result["selection_source"] == "nearest_splittable_fallback"
     assert result["split_sec"] == 2.0
+
+
+def test_set_playhead_syncs_active_segment_to_target_time():
+    editor = _FakeEditor()
+    editor.timeline.canvas.active_seg_line = 0
+    editor.timeline.canvas.active_seg_start = 0.0
+
+    result = editor.automation_set_playhead(1.5)
+
+    assert result["playhead_sec"] == 1.5
+    assert editor.timeline.canvas.playhead_sec == 1.5
+    assert editor.timeline.canvas.active_seg_line == 1
+    assert editor.timeline.canvas.active_seg_start == 1.0
+    assert result["editor_runtime"]["active_segment"]["line"] == 1
+    assert result["editor_runtime"]["active_segment"]["text"] == "둘째 줄"

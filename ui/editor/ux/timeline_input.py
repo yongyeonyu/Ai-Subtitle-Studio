@@ -39,10 +39,16 @@ from ui.timeline.timeline_constants import (
     STT1_TOP,
     STT2_BOT,
     STT2_TOP,
+    STT_PREVIEW_VERTICAL_INSET,
     VOICE_ACTIVITY_BOT,
     VOICE_ACTIVITY_TOP,
     WAVE_H,
     _build_gaps,
+)
+from ui.timeline.stt_preview_layout import (
+    assign_stt_preview_lanes,
+    dedupe_stt_preview_segments_for_display,
+    stt_preview_lane_geometry,
 )
 
 class TimelineInputMixin:
@@ -734,6 +740,9 @@ class TimelineInputMixin:
             start_ms,
             end_ms,
             str(seg.get("speaker", seg.get("spk_id", "")) or ""),
+            tuple(str(item or "") for item in list(seg.get("speaker_list") or [])),
+            str(seg.get("speaker2", "") or ""),
+            str(seg.get("speaker_name", "") or ""),
         )
         cached = cache.get(cache_key)
         if isinstance(cached, QRect):
@@ -786,11 +795,14 @@ class TimelineInputMixin:
     def _stt_candidate_at(self, x: int, y: int):
         if STT1_TOP <= y < STT1_BOT:
             lane_source = "STT1"
+            lane_top, lane_bot = STT1_TOP, STT1_BOT
         elif STT2_TOP <= y < STT2_BOT:
             lane_source = "STT2"
+            lane_top, lane_bot = STT2_TOP, STT2_BOT
         else:
             return None
         candidates = self._segments_near_x_for_hit(x, pad_px=12) if hasattr(self, "_segments_near_x_for_hit") else self.segments
+        preview_candidates = []
         for seg in candidates:
             if not self._is_stt_preview_segment(seg):
                 continue
@@ -799,13 +811,33 @@ class TimelineInputMixin:
                 continue
             if lane_source == "STT2" and source != "STT2":
                 continue
+            preview_candidates.append(seg)
+        visible_candidates = dedupe_stt_preview_segments_for_display(preview_candidates)
+        lane_map, lane_count = assign_stt_preview_lanes(visible_candidates)
+        hits = []
+        for seg in visible_candidates:
             try:
                 x1 = self._x(float(seg.get("start", 0.0) or 0.0))
                 x2 = self._x(float(seg.get("end", 0.0) or 0.0))
             except Exception:
                 continue
-            if x1 <= x <= x2:
-                return seg
+            left = min(x1, x2)
+            right = max(x1, x2)
+            lane_idx = int(lane_map.get(id(seg), 0) or 0)
+            row_top, row_h = stt_preview_lane_geometry(
+                lane_top,
+                lane_bot,
+                lane_idx,
+                lane_count,
+                inset=STT_PREVIEW_VERTICAL_INSET,
+            )
+            rect = QRect(int(left), int(row_top), max(2, int(right - left)), max(1, int(row_h)))
+            if rect.contains(int(x), int(y)):
+                center_y = row_top + (row_h / 2.0)
+                hits.append((abs(float(y) - center_y), lane_idx, seg))
+        if hits:
+            hits.sort(key=lambda item: (item[0], item[1]))
+            return hits[0][2]
         return None
 
     def _gap_at(self, x: int, y: int):

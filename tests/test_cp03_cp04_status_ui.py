@@ -654,7 +654,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         state_manager.update_progress(1, 3, 33)
         self.assertIn("LLM", state_manager._status_msg)
 
-    def test_start_pipeline_marks_processing_before_cut_prescan(self):
+    def test_start_pipeline_marks_processing_before_cut_prescan_without_waveform_worker(self):
         class DummyEditor(EditorPipelineMixin):
             def __init__(self):
                 self.sm = SubtitleStateManager()
@@ -691,9 +691,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             editor._start_pipeline(is_restart=False)
 
         prescan = [item for item in editor.calls if item[0] == "prescan"][0]
-        waveform_index = [idx for idx, item in enumerate(editor.calls) if item[0] == "waveform"][0]
-        prescan_index = [idx for idx, item in enumerate(editor.calls) if item[0] == "prescan"][0]
-        self.assertLess(waveform_index, prescan_index)
+        self.assertNotIn("waveform", [item[0] for item in editor.calls])
         self.assertEqual(prescan[1], SubtitleStateManager.ST_PROC)
         self.assertIn("정지", prescan[2])
         self.assertIn("시작 준비", prescan[3])

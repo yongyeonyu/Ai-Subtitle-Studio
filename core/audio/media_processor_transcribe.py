@@ -7,12 +7,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import select
 import shutil
 import threading
+import time
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.audio import stt_rescue
+from core.audio.audio_chunk_manifest import audio_chunk_manifest, chunk_dir_signature
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.audio.audio_runtime_services import current_memory_pressure_stage, stage_owned_resource_policy
 from core.audio.stt_recheck_service import (
@@ -75,6 +78,10 @@ from core.subtitle_quality.vad_alignment_checker import annotate_segment_vad_ali
 _parse_worker_json_line = parse_worker_json_line
 
 
+class SttWorkerTimeout(RuntimeError):
+    """Raised when a persistent STT worker stops producing chunk responses."""
+
+
 def _stt_memory_pressure_stage(settings: dict | None) -> str:
     """Return the current memory pressure stage for STT reuse decisions."""
 
@@ -120,6 +127,39 @@ class VideoProcessorTranscribeMixin:
     _ensemble_scheduler_suffix = staticmethod(ensemble_scheduler_suffix)
     _clone_ensemble_chunk_dir = staticmethod(clone_ensemble_chunk_dir)
     _whisper_worker_options = staticmethod(whisper_worker_options)
+
+    def _audio_chunk_manifest(
+        self,
+        chunk_dir: str,
+        *,
+        fallback_step_sec: float = 0.0,
+        require_vad_start: bool = False,
+    ) -> list[dict]:
+        root = os.path.abspath(str(chunk_dir or ""))
+        if not root:
+            return []
+        signature = chunk_dir_signature(root)
+        key = (
+            signature if signature is not None else root,
+            round(float(fallback_step_sec or 0.0), 6),
+            bool(require_vad_start),
+        )
+        cache = getattr(self, "_audio_chunk_manifest_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+        if key in cache:
+            return [dict(row) for row in cache[key]]
+        rows = audio_chunk_manifest(
+            root,
+            fallback_step_sec=fallback_step_sec,
+            require_vad_start=require_vad_start,
+            signature=signature,
+        )
+        if len(cache) >= 4:
+            cache.clear()
+        cache[key] = [dict(row) for row in rows]
+        self._audio_chunk_manifest_cache = cache
+        return [dict(row) for row in rows]
 
     @staticmethod
     def _annotate_stt_candidates(segments, **kwargs):
@@ -412,6 +452,462 @@ class VideoProcessorTranscribeMixin:
                 pass
 
         return _callback
+
+    def _early_stt_preview_burst_sec(self, settings: dict | None, target_end_sec: float | None) -> float:
+        burst_sec = self._setting_float(settings, "stt_early_preview_burst_sec", 30.0)
+        burst_sec = max(5.0, min(60.0, float(burst_sec or 30.0)))
+        if target_end_sec is not None:
+            try:
+                burst_sec = min(burst_sec, max(0.0, float(target_end_sec)))
+            except Exception:
+                pass
+        return burst_sec
+
+    def _run_early_stt_preview_burst(
+        self,
+        chunk_dir: str,
+        items: list[dict],
+        settings: dict,
+        *,
+        target_end_sec: float | None,
+        is_single: bool,
+        model: str | None,
+        log_label: str,
+        preview_callback,
+        vad_strict: list[dict] | None = None,
+    ) -> None:
+        if not callable(preview_callback):
+            return
+        if not self._setting_bool(settings, "stt_early_preview_burst_enabled", True):
+            return
+        if _stt_memory_pressure_stage(settings) == "critical":
+            get_logger().log("  ⚡ [STT Preview] 메모리 critical 상태라 early preview burst를 건너뜁니다.")
+            return
+
+        burst_sec = self._early_stt_preview_burst_sec(settings, target_end_sec)
+        if burst_sec <= 0.01:
+            return
+        root = os.path.abspath(str(chunk_dir or ""))
+        key = (root, str(model or "").strip(), str(log_label or "STT").strip(), round(burst_sec, 3))
+        seen = getattr(self, "_stt_early_preview_burst_keys", None)
+        if not isinstance(seen, set):
+            seen = set()
+        if key in seen:
+            return
+        seen.add(key)
+        self._stt_early_preview_burst_keys = seen
+
+        window_range = {"start": 0.0, "end": burst_sec}
+        window_items: list[dict] = []
+        for item in list(items or []):
+            item_start = float((item or {}).get("ov_start_offset", 0.0) or 0.0)
+            item_duration = float((item or {}).get("duration", 0.0) or 0.0)
+            if item_duration <= 0.001:
+                source = str((item or {}).get("input_path") or "")
+                item_duration = self._wav_duration(source) if source else 0.0
+            item_end = item_start + max(0.001, float(item_duration or 0.001))
+            if item_start < burst_sec and item_end > 0.0:
+                window_items.append(dict(item))
+        if not window_items:
+            get_logger().log(f"  ⚡ [STT Preview] 0~{burst_sec:.0f}초에 STT preview용 음성 청크가 없어 건너뜁니다.")
+            return
+
+        burst_dir = ""
+        emitted_count = 0
+
+        def _preview(chunk_segs, _worker_label=None):
+            nonlocal emitted_count
+            preview = []
+            for seg in list(chunk_segs or []):
+                if not isinstance(seg, dict):
+                    continue
+                try:
+                    if float(seg.get("start", 0.0) or 0.0) >= burst_sec + 0.05:
+                        continue
+                except Exception:
+                    pass
+                row = dict(seg)
+                meta = dict(row.get("asr_metadata") or {})
+                meta["early_preview_burst"] = {
+                    "enabled": True,
+                    "burst_sec": round(burst_sec, 3),
+                    "final_quality_path": "unchanged_rolling_window",
+                }
+                row["asr_metadata"] = meta
+                row.setdefault("stt_preview_source", "STT1_EARLY_PREVIEW")
+                row.setdefault("stt_ensemble_source", "STT1_EARLY_PREVIEW")
+                preview.append(row)
+            if not preview:
+                return
+            emitted_count += len(preview)
+            try:
+                preview_callback(preview, "STT1-EARLY")
+            except Exception:
+                pass
+
+        overrides = dict(settings or {})
+        overrides.update({
+            "stt_ensemble_enabled": False,
+            "stt_ensemble_selective_enabled": False,
+            "stt_selective_secondary_recheck_enabled": False,
+            "stt_word_timestamps_default_enabled": False,
+            "stt_word_timestamps_mode": "off",
+            "stt_word_timestamps_precision_enabled": False,
+            "stt_word_timestamp_precision_pass": False,
+        })
+        try:
+            get_logger().log(f"  ⚡ [STT Preview] 0~{burst_sec:.0f}초 early STT preview burst 시작")
+            burst_dir = self._build_window_chunk_dir(
+                chunk_dir,
+                window_items,
+                window_index=0,
+                total_windows=1,
+                window_range=window_range,
+                vad_segments=self._clip_vad_segments_to_window(vad_strict or [], 0.0, burst_sec),
+            )
+            self._collect_transcribe_result(
+                burst_dir,
+                str(model or "").strip() or str((settings or {}).get("selected_whisper_model") or self.whisper_model),
+                target_end_sec=burst_sec,
+                is_single=True,
+                label="STT1-EARLY",
+                preview_callback=_preview,
+                settings_overrides=overrides,
+            )
+            get_logger().log(f"  ⚡ [STT Preview] early STT preview 표시 완료: {emitted_count}개")
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [STT Preview] early preview burst 실패, 본 STT는 계속 진행합니다: {exc}")
+        finally:
+            if burst_dir:
+                shutil.rmtree(burst_dir, ignore_errors=True)
+
+    def _stt_window_zero_result_fallback_enabled(self, settings: dict | None) -> bool:
+        return self._setting_bool(settings, "stt_window_zero_result_fallback_enabled", True)
+
+    def _stt_window_head_gap_fallback_enabled(self, settings: dict | None) -> bool:
+        return self._setting_bool(settings, "stt_window_head_gap_fallback_enabled", True)
+
+    @staticmethod
+    def _min_segment_start(segments: list[dict] | None) -> float | None:
+        starts: list[float] = []
+        for seg in list(segments or []):
+            try:
+                starts.append(float(seg.get("start", 0.0) or 0.0))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        return min(starts) if starts else None
+
+    @staticmethod
+    def _min_item_start(items: list[dict] | None) -> float | None:
+        starts: list[float] = []
+        for item in list(items or []):
+            try:
+                starts.append(float(item.get("ov_start_offset", 0.0) or 0.0))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        return min(starts) if starts else None
+
+    def _stt_window_head_gap_fallback_needed(
+        self,
+        items: list[dict],
+        settings: dict,
+        first_window_segments: list[dict] | None,
+        *,
+        vad_strict: list[dict] | None = None,
+    ) -> tuple[bool, float | None, float]:
+        if not self._stt_window_head_gap_fallback_enabled(settings):
+            return False, self._min_segment_start(first_window_segments), 0.0
+        source_start = self._min_item_start(items)
+        if source_start is None or source_start > 5.0:
+            return False, self._min_segment_start(first_window_segments), 0.0
+        head_gap_sec = self._windowed_float(
+            settings,
+            "stt_window_head_gap_fallback_sec",
+            45.0,
+            5.0,
+            180.0,
+        )
+        if not vad_strict and self._setting_bool(settings, "stt_window_head_gap_requires_vad", True):
+            return False, self._min_segment_start(first_window_segments), head_gap_sec
+        # If VAD exists and proves the head is silent, keep the faster window result.
+        if vad_strict:
+            has_head_voice = False
+            cutoff = source_start + head_gap_sec
+            for row in list(vad_strict or []):
+                try:
+                    vad_start = float(row.get("start", 0.0) or 0.0)
+                    vad_end = float(row.get("end", vad_start) or vad_start)
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                if vad_end > source_start + 0.25 and vad_start <= cutoff:
+                    has_head_voice = True
+                    break
+            if not has_head_voice:
+                return False, self._min_segment_start(first_window_segments), head_gap_sec
+        first_start = self._min_segment_start(first_window_segments)
+        if first_start is None:
+            return True, None, head_gap_sec
+        return first_start > source_start + head_gap_sec, first_start, head_gap_sec
+
+    def _whisperkit_concurrent_worker_count(
+        self,
+        settings: dict | None,
+        *,
+        total_chunks: int,
+        word_timestamps: bool,
+    ) -> int:
+        chunks = max(1, int(total_chunks or 1))
+        if chunks <= 1:
+            return 1
+        pressure_stage = _stt_memory_pressure_stage(settings)
+        if pressure_stage == "critical":
+            return 1
+        data = dict(settings or {})
+        normal_pressure = pressure_stage not in {"warning", "critical"}
+        recheck_pass = (
+            bool(data.get("stt_rescue_whisper_mode", False))
+            and not bool(data.get("stt_word_timestamp_precision_pass", False))
+            and not word_timestamps
+        )
+        key = (
+            "stt_whisperkit_word_timestamp_concurrent_workers"
+            if word_timestamps
+            else "stt_whisperkit_concurrent_workers"
+        )
+        try:
+            if recheck_pass and "stt_whisperkit_recheck_concurrent_workers" in data:
+                configured = int(float(data.get("stt_whisperkit_recheck_concurrent_workers", 0) or 0))
+            else:
+                configured = int(float(data.get(key, 0) or 0))
+        except (TypeError, ValueError):
+            configured = 0
+        if recheck_pass and "stt_whisperkit_recheck_concurrent_workers" not in data:
+            configured = 0
+        if configured <= 0:
+            if recheck_pass:
+                configured = 4 if pressure_stage == "warning" else 8
+            elif pressure_stage == "warning":
+                configured = 2 if word_timestamps else 3
+            else:
+                configured = 4 if word_timestamps else 6
+        try:
+            default_max = 10 if recheck_pass and normal_pressure else (6 if recheck_pass else (8 if normal_pressure else 4))
+            max_key = "stt_whisperkit_recheck_concurrent_max_workers" if recheck_pass else "stt_whisperkit_concurrent_max_workers"
+            max_workers = int(float(data.get(max_key, data.get("stt_whisperkit_concurrent_max_workers", default_max)) or default_max))
+        except (TypeError, ValueError):
+            max_workers = 10 if recheck_pass and normal_pressure else (6 if recheck_pass else (8 if normal_pressure else 4))
+        if word_timestamps and normal_pressure and self._setting_bool(data, "stt_whisperkit_precision_aggressive_gpu_enabled", True):
+            try:
+                saturation_workers = int(float(data.get("stt_whisperkit_gpu_saturation_max_workers", 10) or 10))
+            except (TypeError, ValueError):
+                saturation_workers = 10
+            saturation_workers = max(1, min(chunks, saturation_workers))
+            configured = max(configured, saturation_workers)
+            max_workers = max(max_workers, saturation_workers)
+        allocation_workers = 0
+        if self._setting_bool(data, "stt_whisperkit_native_allocator_can_raise_workers", True):
+            try:
+                from core.native_resource_allocator import native_task_allocation
+
+                task = "stt_precision" if word_timestamps else ("stt2" if recheck_pass else "stt1")
+                plan = native_task_allocation(
+                    task,
+                    settings=data,
+                    workload=chunks,
+                    requested_workers=configured,
+                    minimum=1,
+                    maximum=max(1, min(chunks, int(data.get("stt_whisperkit_gpu_saturation_max_workers", 8) or 8))),
+                    active_labels=[task, "stt"],
+                )
+                allocation_workers = int((plan or {}).get("workers", 0) or 0)
+            except Exception:
+                allocation_workers = 0
+        if allocation_workers > 0:
+            configured = max(configured, allocation_workers)
+            max_workers = max(max_workers, allocation_workers)
+        return max(1, min(chunks, configured, max(1, max_workers)))
+
+    def _stt_worker_silence_timeout_sec(
+        self,
+        settings: dict | None,
+        *,
+        log_label: str,
+        word_timestamps: bool,
+    ) -> float:
+        data = dict(settings or {})
+        precision_pass = bool(data.get("stt_word_timestamp_precision_pass", False))
+        label = str(log_label or "").strip()
+        if precision_pass or "단어정밀" in label:
+            key = "stt_word_timestamp_worker_response_timeout_sec"
+            default = 45.0
+        elif word_timestamps:
+            key = "stt_worker_word_timestamp_response_timeout_sec"
+            default = 90.0
+        else:
+            key = "stt_worker_response_timeout_sec"
+            default = 150.0
+        try:
+            value = float(data.get(key, default) or 0.0)
+        except (TypeError, ValueError):
+            value = default
+        if value <= 0.0:
+            return 0.0
+        return max(0.05, min(600.0, value))
+
+    def _stt_precision_straggler_timeout_sec(self, settings: dict | None) -> float:
+        data = dict(settings or {})
+        try:
+            value = float(data.get("stt_word_timestamp_worker_straggler_timeout_sec", 12.0) or 0.0)
+        except (TypeError, ValueError):
+            value = 12.0
+        if value <= 0.0:
+            return 0.0
+        return max(2.0, min(120.0, value))
+
+    def _stt_precision_straggler_max_missing_chunks(self, settings: dict | None) -> int:
+        data = dict(settings or {})
+        try:
+            value = int(float(data.get("stt_word_timestamp_worker_straggler_max_missing_chunks", 1) or 1))
+        except (TypeError, ValueError):
+            value = 1
+        return max(1, min(8, value))
+
+    def _stt_precision_straggler_min_received_ratio(self, settings: dict | None) -> float:
+        data = dict(settings or {})
+        try:
+            value = float(data.get("stt_word_timestamp_worker_straggler_min_received_ratio", 0.90) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.90
+        if value <= 0.0:
+            return 0.0
+        return max(0.50, min(1.0, value))
+
+    def _stt_recheck_straggler_timeout_sec(self, settings: dict | None) -> float:
+        data = dict(settings or {})
+        try:
+            value = float(data.get("stt_recheck_worker_straggler_timeout_sec", 18.0) or 0.0)
+        except (TypeError, ValueError):
+            value = 18.0
+        if value <= 0.0:
+            return 0.0
+        return max(2.0, min(120.0, value))
+
+    def _stt_recheck_straggler_max_missing_chunks(self, settings: dict | None) -> int:
+        data = dict(settings or {})
+        try:
+            value = int(float(data.get("stt_recheck_worker_straggler_max_missing_chunks", 4) or 4))
+        except (TypeError, ValueError):
+            value = 4
+        return max(1, min(4, value))
+
+    def _stt_recheck_straggler_min_received_ratio(self, settings: dict | None) -> float:
+        data = dict(settings or {})
+        try:
+            value = float(data.get("stt_recheck_worker_straggler_min_received_ratio", 0.60) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.60
+        if value <= 0.0:
+            return 0.0
+        return max(0.25, min(1.0, value))
+
+    def _read_worker_stdout_line(
+        self,
+        proc,
+        *,
+        log_label: str,
+        received: int,
+        total: int,
+        wait_started_at: float,
+        last_wait_log_at: float,
+        heartbeat_sec: float = 18.0,
+        max_silence_sec: float | None = None,
+    ):
+        stream = getattr(proc, "stdout", None)
+        if stream is None:
+            return "", last_wait_log_at
+        try:
+            fileno = stream.fileno()
+        except Exception:
+            return stream.readline(), last_wait_log_at
+
+        heartbeat = max(5.0, float(heartbeat_sec or 18.0))
+        try:
+            timeout_sec = max(0.0, float(max_silence_sec or 0.0))
+        except (TypeError, ValueError):
+            timeout_sec = 0.0
+        while True:
+            now = time.monotonic()
+            if timeout_sec > 0.0 and now - wait_started_at >= timeout_sec:
+                elapsed = max(0.0, now - wait_started_at)
+                get_logger().log(
+                    f"  ⚠️ [{log_label}] STT worker 응답 타임아웃: "
+                    f"{received}/{total} chunks · {elapsed:.0f}s"
+                )
+                raise SttWorkerTimeout(
+                    f"stt_worker_timeout[{log_label}]: {received}/{total} chunks after {elapsed:.1f}s"
+                )
+            select_timeout = 1.0
+            if timeout_sec > 0.0:
+                select_timeout = max(0.05, min(1.0, timeout_sec - max(0.0, now - wait_started_at)))
+            try:
+                ready, _, _ = select.select([fileno], [], [], select_timeout)
+            except Exception:
+                return stream.readline(), last_wait_log_at
+            if ready:
+                return stream.readline(), last_wait_log_at
+            now = time.monotonic()
+            if now - last_wait_log_at >= heartbeat:
+                elapsed = max(0.0, now - wait_started_at)
+                get_logger().log(
+                    f"  ⏳ [{log_label}] STT worker 응답 대기 중... "
+                    f"{received}/{total} chunks · {elapsed:.0f}s"
+                )
+                last_wait_log_at = now
+            try:
+                if proc.poll() is not None:
+                    return stream.readline() or "", last_wait_log_at
+            except Exception:
+                pass
+
+    def _transcribe_zero_window_fallback(
+        self,
+        chunk_dir: str,
+        *,
+        target_end_sec: float | None,
+        is_single: bool,
+        model_override: str | None,
+        log_label: str,
+        preview_callback,
+    ):
+        yield from self.transcribe(
+            chunk_dir,
+            is_fast_mode=False,
+            target_end_sec=target_end_sec,
+            is_single=is_single,
+            model_override=model_override,
+            cleanup_chunk_dir=False,
+            log_label=log_label,
+            preview_callback=preview_callback,
+            _allow_window_rolling=False,
+        )
+
+    def _transcribe_ensemble_zero_window_fallback(
+        self,
+        chunk_dir: str,
+        *,
+        target_end_sec: float | None,
+        is_single: bool,
+        preview_callback,
+    ):
+        yield from self.transcribe_ensemble(
+            chunk_dir,
+            target_end_sec=target_end_sec,
+            is_single=is_single,
+            preview_callback=preview_callback,
+            cleanup_chunk_dir=False,
+            _allow_window_rolling=False,
+        )
+
     def _ffmpeg_trim_recheck_clip(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float, settings: dict | None = None) -> bool:
         filter_chain = stt_rescue.rescue_audio_filter(settings)
         cmd = [
@@ -458,17 +954,14 @@ class VideoProcessorTranscribeMixin:
         }
 
     def _chunk_path_covering_time(self, chunk_dir: str, target_sec: float) -> str:
-        try:
-            names = sorted(name for name in os.listdir(chunk_dir) if name.endswith(".wav"))
-        except Exception:
-            return ""
-        for name in names:
-            path = os.path.join(chunk_dir, name)
-            start = self._chunk_start_from_path(path)
-            duration = self._wav_duration(path)
+        target = float(target_sec or 0.0)
+        for row in self._audio_chunk_manifest(chunk_dir):
+            path = str(row.get("path") or "")
+            start = float(row.get("start", 0.0) or 0.0)
+            duration = float(row.get("duration", 0.0) or 0.0)
             if duration <= 0.0:
                 continue
-            if (start - 0.25) <= float(target_sec or 0.0) <= (start + duration + 0.25):
+            if (start - 0.25) <= target <= (start + duration + 0.25):
                 return path
         return ""
 
@@ -512,6 +1005,7 @@ class VideoProcessorTranscribeMixin:
         settings: dict,
         vad_strict: list[dict],
         primary_model: str,
+        preview_callback=None,
     ) -> list[dict]:
         refined = self._recheck_primary_low_score_with_secondary(
             chunk_dir,
@@ -519,6 +1013,7 @@ class VideoProcessorTranscribeMixin:
             settings,
             vad_strict,
             primary_model,
+            preview_callback=preview_callback,
         )
         return self._recheck_word_timestamps_for_precision(
             chunk_dir,
@@ -698,6 +1193,7 @@ class VideoProcessorTranscribeMixin:
         settings: dict,
         vad_strict: list[dict],
         primary_model: str,
+        preview_callback=None,
     ) -> list[dict]:
         if not chunk_segs or not self._selective_secondary_recheck_enabled(settings, primary_model):
             return chunk_segs
@@ -737,12 +1233,20 @@ class VideoProcessorTranscribeMixin:
         rescue_dir = os.path.join(chunk_dir, "_fast_stt2_recheck")
         shutil.rmtree(rescue_dir, ignore_errors=True)
         os.makedirs(rescue_dir, exist_ok=True)
+        collect_fn = self._collect_transcribe_result
+        if callable(preview_callback):
+            stt2_preview_callback = self._ensemble_preview_callback("STT2", preview_callback)
+
+            def collect_fn(*args, **kwargs):
+                kwargs["preview_callback"] = stt2_preview_callback
+                return self._collect_transcribe_result(*args, **kwargs)
+
         batch = prepare_and_collect_recheck_segments_via_service(
             ranges=ranges,
             out_dir=rescue_dir,
             settings=settings,
             prepare_clip_fn=self._prepare_recheck_clip,
-            collect_fn=self._collect_transcribe_result,
+            collect_fn=collect_fn,
             model=secondary_model,
             label="Fast-STT2",
             settings_overrides=selective_secondary_recheck_overrides_via_service(),
@@ -861,6 +1365,7 @@ class VideoProcessorTranscribeMixin:
                     settings,
                     vad_strict,
                     primary_model,
+                    preview_callback=preview_callback,
                 )
 
             primary_segments = self._recheck_word_timestamps_for_precision(
@@ -972,10 +1477,27 @@ class VideoProcessorTranscribeMixin:
                 vad_strict = []
 
         s = self._load_all_settings()
-        if _allow_window_rolling and self._windowed_span_ranges(q, s):
+        runtime_overrides = getattr(self, "_fast_mode_overrides", None)
+        if isinstance(runtime_overrides, dict) and runtime_overrides:
+            s = {**dict(s or {}), **runtime_overrides}
+        window_ranges = self._windowed_span_ranges(q, s)
+        if _allow_window_rolling and window_ranges:
+            self._run_early_stt_preview_burst(
+                chunk_dir,
+                q,
+                s,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                model=s.get("selected_whisper_model", self.whisper_model),
+                log_label="STT1",
+                preview_callback=preview_callback,
+                vad_strict=vad_strict,
+            )
             had_window_error = False
             try:
-                yield from self._transcribe_with_windowed_spans(
+                emitted_window_segments = 0
+                checked_first_window = False
+                for chunk_segs, c_idx, t_total in self._transcribe_with_windowed_spans(
                     chunk_dir,
                     q,
                     s,
@@ -986,7 +1508,42 @@ class VideoProcessorTranscribeMixin:
                     log_label="STT-ENSEMBLE",
                     use_ensemble_windows=self._setting_bool(s, "stt_window_ensemble_enabled", False),
                     preview_callback=preview_callback,
-                )
+                ):
+                    if not checked_first_window:
+                        checked_first_window = True
+                        head_gap, first_start, head_gap_sec = self._stt_window_head_gap_fallback_needed(
+                            q,
+                            s,
+                            chunk_segs,
+                            vad_strict=vad_strict,
+                        )
+                        if head_gap:
+                            first_text = "none" if first_start is None else f"{first_start:.1f}s"
+                            get_logger().log(
+                                "  ⚠️ [STT-ENSEMBLE] rolling-window 첫 확정 구간이 "
+                                f"head {head_gap_sec:.0f}s 밖에서 시작({first_text})해 "
+                                "같은 품질 설정의 serial STT fallback으로 전환합니다."
+                            )
+                            yield from self._transcribe_ensemble_zero_window_fallback(
+                                chunk_dir,
+                                target_end_sec=target_end_sec,
+                                is_single=is_single,
+                                preview_callback=preview_callback,
+                            )
+                            return
+                    emitted_window_segments += len(chunk_segs or [])
+                    yield chunk_segs, c_idx, t_total
+                if emitted_window_segments == 0 and self._stt_window_zero_result_fallback_enabled(s):
+                    get_logger().log(
+                        "  ⚠️ [STT-ENSEMBLE] rolling-window 결과가 0개라 "
+                        "같은 품질 설정으로 serial STT fallback을 1회 실행합니다."
+                    )
+                    yield from self._transcribe_ensemble_zero_window_fallback(
+                        chunk_dir,
+                        target_end_sec=target_end_sec,
+                        is_single=is_single,
+                        preview_callback=preview_callback,
+                    )
             except Exception:
                 had_window_error = True
                 raise
@@ -1185,23 +1742,17 @@ class VideoProcessorTranscribeMixin:
             self._release_after_transcribe_job("STT 앙상블")
 
     def _scan_transcribe_chunks(self, chunk_dir: str) -> tuple[list[str], list[dict], float]:
-        chunks = sorted(
-            [f for f in os.listdir(chunk_dir) if f.endswith(".wav")],
-            key=self._chunk_sort_key,
-        )
+        manifest = self._audio_chunk_manifest(chunk_dir, fallback_step_sec=30.0)
+        chunks = [str(row.get("name") or "") for row in manifest if str(row.get("name") or "")]
         t_sec = 1.0
         items: list[dict] = []
-        for i, cf in enumerate(chunks):
-            cp = os.path.join(chunk_dir, cf)
-            m = re.search(r'vad_\d+_([\d\.]+)\.wav', cf)
-            ov_start = float(m.group(1)) if m else i * 30.0
-            try:
-                with wave.open(cp, "r") as w:
-                    chunk_duration = w.getnframes() / float(w.getframerate())
-                    chunk_end = ov_start + chunk_duration
-            except Exception:
+        for i, row in enumerate(manifest):
+            cp = str(row.get("path") or os.path.join(chunk_dir, str(row.get("name") or "")))
+            ov_start = float(row.get("start", i * 30.0) or 0.0)
+            chunk_duration = float(row.get("duration", 0.0) or 0.0)
+            if chunk_duration <= 0.0:
                 chunk_duration = 30.0
-                chunk_end = ov_start + 30.0
+            chunk_end = ov_start + chunk_duration
             items.append({
                 "idx": i,
                 "input_path": cp,
@@ -1241,11 +1792,28 @@ class VideoProcessorTranscribeMixin:
 
         total = len(chunks)
         _s = self._load_all_settings()
+        runtime_overrides = getattr(self, "_fast_mode_overrides", None)
+        if isinstance(runtime_overrides, dict) and runtime_overrides:
+            _s = {**dict(_s or {}), **runtime_overrides}
 
-        if _allow_window_rolling and self._windowed_span_ranges(q, _s):
+        window_ranges = self._windowed_span_ranges(q, _s)
+        if _allow_window_rolling and window_ranges:
+            self._run_early_stt_preview_burst(
+                chunk_dir,
+                q,
+                _s,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                model=model_override or _s.get("selected_whisper_model", self.whisper_model),
+                log_label=log_label,
+                preview_callback=preview_callback,
+                vad_strict=vad_strict,
+            )
             had_window_error = False
             try:
-                yield from self._transcribe_with_windowed_spans(
+                emitted_window_segments = 0
+                checked_first_window = False
+                for chunk_segs, c_idx, t_total in self._transcribe_with_windowed_spans(
                     chunk_dir,
                     q,
                     _s,
@@ -1255,7 +1823,46 @@ class VideoProcessorTranscribeMixin:
                     model_override=model_override,
                     log_label=log_label,
                     preview_callback=preview_callback,
-                )
+                ):
+                    if not checked_first_window:
+                        checked_first_window = True
+                        head_gap, first_start, head_gap_sec = self._stt_window_head_gap_fallback_needed(
+                            q,
+                            _s,
+                            chunk_segs,
+                            vad_strict=vad_strict,
+                        )
+                        if head_gap:
+                            first_text = "none" if first_start is None else f"{first_start:.1f}s"
+                            get_logger().log(
+                                f"  ⚠️ [{log_label}] rolling-window 첫 확정 구간이 "
+                                f"head {head_gap_sec:.0f}s 밖에서 시작({first_text})해 "
+                                "같은 품질 설정의 serial STT fallback으로 전환합니다."
+                            )
+                            yield from self._transcribe_zero_window_fallback(
+                                chunk_dir,
+                                target_end_sec=target_end_sec,
+                                is_single=is_single,
+                                model_override=model_override,
+                                log_label=log_label,
+                                preview_callback=preview_callback,
+                            )
+                            return
+                    emitted_window_segments += len(chunk_segs or [])
+                    yield chunk_segs, c_idx, t_total
+                if emitted_window_segments == 0 and self._stt_window_zero_result_fallback_enabled(_s):
+                    get_logger().log(
+                        f"  ⚠️ [{log_label}] rolling-window 결과가 0개라 "
+                        "같은 품질 설정으로 serial STT fallback을 1회 실행합니다."
+                    )
+                    yield from self._transcribe_zero_window_fallback(
+                        chunk_dir,
+                        target_end_sec=target_end_sec,
+                        is_single=is_single,
+                        model_override=model_override,
+                        log_label=log_label,
+                        preview_callback=preview_callback,
+                    )
             except Exception:
                 had_window_error = True
                 raise
@@ -1347,6 +1954,15 @@ class VideoProcessorTranscribeMixin:
             f"  ⚙️ [{log_label}] word_timestamps={'on' if word_timestamps else 'off'} "
             f"(mode={str(s.get('stt_word_timestamps_mode') or 'always')})"
         )
+        worker_silence_timeout_sec = self._stt_worker_silence_timeout_sec(
+            s,
+            log_label=log_label,
+            word_timestamps=word_timestamps,
+        )
+        if worker_silence_timeout_sec > 0:
+            get_logger().log(
+                f"  ⏱️ [{log_label}] STT worker silence timeout: {worker_silence_timeout_sec:.0f}s"
+            )
 
         from core.runtime import config as _cfg
 
@@ -1386,6 +2002,16 @@ class VideoProcessorTranscribeMixin:
                         self._whisperkit_runner_proc = ensure_worker(current_proc, log_label=log_label)
                         proc = self._whisperkit_runner_proc
                         if proc is not None:
+                            whisperkit_workers = self._whisperkit_concurrent_worker_count(
+                                s,
+                                total_chunks=len(safe_paths),
+                                word_timestamps=word_timestamps,
+                            )
+                            if whisperkit_workers > 1:
+                                get_logger().log(
+                                    f"  ⚡ [{log_label}] WhisperKit ANE/GPU batch concurrency: "
+                                    f"{whisperkit_workers} chunks"
+                                )
                             mac_task_id = submit_task(
                                 proc=proc,
                                 chunk_paths=safe_paths,
@@ -1393,6 +2019,7 @@ class VideoProcessorTranscribeMixin:
                                 language=self.language,
                                 temperature_values=temperature_values,
                                 word_timestamps=word_timestamps,
+                                concurrent_worker_count=whisperkit_workers,
                             )
             except Exception as exc:
                 get_logger().log(f"  ⚠️ [{log_label}] WhisperKit worker 요청 실패 → MLX fallback: {exc}")
@@ -1501,43 +2128,87 @@ class VideoProcessorTranscribeMixin:
                 received = 0
                 next_emit_idx = 0
                 pending_payloads: dict[int, tuple[dict, dict]] = {}
+                received_indices: set[int] = set()
                 done_seen = False
-                while received < total or (done_seen and next_emit_idx in pending_payloads):
-                    line = proc.stdout.readline()
-                    if not line:
-                        break
+                wait_started_at = time.monotonic()
+                last_wait_log_at = wait_started_at
+                precision_pass_active = bool(s.get("stt_word_timestamp_precision_pass", False))
+                precision_straggler_skip_enabled = self._setting_bool(
+                    s,
+                    "stt_word_timestamp_straggler_skip_enabled",
+                    True,
+                )
+                precision_straggler_timeout_sec = self._stt_precision_straggler_timeout_sec(s)
+                precision_straggler_max_missing = self._stt_precision_straggler_max_missing_chunks(s)
+                precision_straggler_min_received_ratio = self._stt_precision_straggler_min_received_ratio(s)
+                recheck_pass_active = bool(s.get("stt_rescue_whisper_mode", False)) and not precision_pass_active
+                recheck_straggler_skip_enabled = self._setting_bool(
+                    s,
+                    "stt_recheck_straggler_skip_enabled",
+                    True,
+                )
+                recheck_straggler_timeout_sec = self._stt_recheck_straggler_timeout_sec(s)
+                recheck_straggler_max_missing = self._stt_recheck_straggler_max_missing_chunks(s)
+                recheck_straggler_min_received_ratio = self._stt_recheck_straggler_min_received_ratio(s)
 
-                    data = _parse_worker_json_line(line)
-                    if data is None:
-                        continue
+                def _missing_worker_indices() -> list[int]:
+                    return [
+                        idx
+                        for idx in range(total)
+                        if idx not in received_indices and idx not in pending_payloads
+                    ]
 
-                    task_id = data.get("task_id", data.get("taskId"))
-                    if task_id != mac_task_id:
-                        continue
-                    if data.get("done"):
-                        done_seen = True
-                        if received >= total:
-                            break
-                        continue
+                def _precision_straggler_can_skip(missing_count: int) -> bool:
+                    if not precision_pass_active or not precision_straggler_skip_enabled:
+                        return False
+                    if received <= 0 or missing_count <= 0:
+                        return False
+                    if missing_count <= precision_straggler_max_missing:
+                        return True
+                    if total <= 0 or precision_straggler_min_received_ratio <= 0.0:
+                        return False
+                    return (float(received) / float(total)) >= precision_straggler_min_received_ratio
 
-                    if data.get("fatal_error") or data.get("error"):
-                        had_error = True
-                        msg = data.get("fatal_error") or data.get("error") or "unknown whisper worker error"
-                        stage = data.get("stage", "worker")
-                        get_logger().log(f"  [FAIL] Whisper worker error ({stage}): {msg}")
-                        raise RuntimeError(f"whisper_worker_error[{stage}]: {msg}")
+                def _recheck_straggler_can_skip(missing_count: int) -> bool:
+                    if not recheck_pass_active or not recheck_straggler_skip_enabled:
+                        return False
+                    if received <= 0 or missing_count <= 0:
+                        return False
+                    if missing_count <= recheck_straggler_max_missing:
+                        return True
+                    if total <= 0 or recheck_straggler_min_received_ratio <= 0.0:
+                        return False
+                    return (float(received) / float(total)) >= recheck_straggler_min_received_ratio
 
-                    idx = int(data.get("index", received))
-                    item = q[idx]
-                    payload = data.get("result") if "result" in data else {"error": data.get("error", "")}
-                    if isinstance(payload, dict):
-                        payload.setdefault("backend", data.get("backend", "mlx-whisper"))
-                        payload.setdefault("language_probability", data.get("language_probability"))
-                        payload.setdefault("chunk_path", item.get("input_path"))
-                        payload.setdefault("word_timestamps", data.get("word_timestamps", word_timestamps))
-                    pending_payloads[idx] = (item, payload)
-                    received += 1
+                def _queue_empty_straggler_payloads(reason: str, kind: str) -> int:
+                    missing = _missing_worker_indices()
+                    if not missing:
+                        return 0
+                    backend = "whisperkit-persistent" if use_whisperkit_persistent else "mlx-whisper"
+                    for missing_idx in missing:
+                        missing_item = q[missing_idx]
+                        pending_payloads[missing_idx] = (
+                            missing_item,
+                            {
+                                "backend": backend,
+                                "language_probability": None,
+                                "chunk_path": missing_item.get("input_path"),
+                                "word_timestamps": word_timestamps,
+                                "segments": [],
+                                "text": "",
+                                "stt_precision_straggler_fallback": reason if kind == "precision" else "",
+                                "stt_recheck_straggler_fallback": reason if kind == "recheck" else "",
+                            },
+                        )
+                        received_indices.add(missing_idx)
+                    return len(missing)
 
+                def _emit_ready_payloads():
+                    nonlocal next_emit_idx
+                    nonlocal prev_end
+                    nonlocal processed_audio_sec
+                    nonlocal processed_count
+                    nonlocal emitted_segment_count
                     while next_emit_idx in pending_payloads:
                         pending_item, pending_payload = pending_payloads.pop(next_emit_idx)
                         chunk_segs = self._parse_whisper_payload(
@@ -1567,6 +2238,7 @@ class VideoProcessorTranscribeMixin:
                             s,
                             vad_strict,
                             target_model,
+                            preview_callback=preview_callback,
                         )
 
                         if chunk_segs:
@@ -1584,11 +2256,139 @@ class VideoProcessorTranscribeMixin:
                             progress_sec = prev_end
                         pct = min(100, int((progress_sec / t_sec) * 100))
                         get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
-
                         yield chunk_segs, pending_item["idx"] + 1, total
                         processed_count += 1
                         emitted_segment_count += len(chunk_segs or [])
                         next_emit_idx += 1
+
+                while received < total or (done_seen and next_emit_idx in pending_payloads):
+                    effective_timeout_sec = worker_silence_timeout_sec
+                    heartbeat_sec = 18.0
+                    remaining_count = total - len(received_indices)
+                    if (
+                        precision_straggler_timeout_sec > 0.0
+                        and _precision_straggler_can_skip(remaining_count)
+                    ):
+                        effective_timeout_sec = (
+                            precision_straggler_timeout_sec
+                            if effective_timeout_sec <= 0.0
+                            else min(effective_timeout_sec, precision_straggler_timeout_sec)
+                        )
+                        heartbeat_sec = max(2.0, min(5.0, effective_timeout_sec * 0.5))
+                    elif (
+                        recheck_straggler_timeout_sec > 0.0
+                        and _recheck_straggler_can_skip(remaining_count)
+                    ):
+                        effective_timeout_sec = (
+                            recheck_straggler_timeout_sec
+                            if effective_timeout_sec <= 0.0
+                            else min(effective_timeout_sec, recheck_straggler_timeout_sec)
+                        )
+                        heartbeat_sec = max(2.0, min(5.0, effective_timeout_sec * 0.5))
+                    try:
+                        line, last_wait_log_at = self._read_worker_stdout_line(
+                            proc,
+                            log_label=log_label,
+                            received=received,
+                            total=total,
+                            wait_started_at=wait_started_at,
+                            last_wait_log_at=last_wait_log_at,
+                            heartbeat_sec=heartbeat_sec,
+                            max_silence_sec=effective_timeout_sec,
+                        )
+                    except SttWorkerTimeout:
+                        missing = _missing_worker_indices()
+                        if (
+                            _precision_straggler_can_skip(len(missing))
+                        ):
+                            skipped = _queue_empty_straggler_payloads("timeout", "precision")
+                            received += skipped
+                            get_logger().log(
+                                f"  ⚡ [{log_label}] 마지막 {skipped}개 chunk가 "
+                                f"{effective_timeout_sec:.0f}s 이상 지연되어 단어정밀 보정만 건너뜁니다. "
+                                "기존 STT 자막은 유지합니다."
+                            )
+                            yield from _emit_ready_payloads()
+                            if received >= total:
+                                break
+                            wait_started_at = time.monotonic()
+                            last_wait_log_at = wait_started_at
+                            continue
+                        if _recheck_straggler_can_skip(len(missing)):
+                            skipped = _queue_empty_straggler_payloads("timeout", "recheck")
+                            received += skipped
+                            get_logger().log(
+                                f"  ⚡ [{log_label}] 마지막 {skipped}개 STT2 보강 chunk가 "
+                                f"{effective_timeout_sec:.0f}s 이상 지연되어 해당 구간은 STT1 후보를 유지합니다."
+                            )
+                            yield from _emit_ready_payloads()
+                            if received >= total:
+                                break
+                            wait_started_at = time.monotonic()
+                            last_wait_log_at = wait_started_at
+                            continue
+                        raise
+                    if not line:
+                        break
+
+                    data = _parse_worker_json_line(line)
+                    if data is None:
+                        continue
+
+                    task_id = data.get("task_id", data.get("taskId"))
+                    if task_id != mac_task_id:
+                        continue
+                    if data.get("done"):
+                        done_seen = True
+                        missing = _missing_worker_indices()
+                        if (
+                            _precision_straggler_can_skip(len(missing))
+                        ):
+                            skipped = _queue_empty_straggler_payloads("done_missing", "precision")
+                            received += skipped
+                            get_logger().log(
+                                f"  ⚡ [{log_label}] worker 완료 신호 후 누락된 {skipped}개 chunk는 "
+                                "단어정밀 보정만 건너뛰고 기존 STT 자막을 유지합니다."
+                            )
+                            yield from _emit_ready_payloads()
+                            break
+                        if _recheck_straggler_can_skip(len(missing)):
+                            skipped = _queue_empty_straggler_payloads("done_missing", "recheck")
+                            received += skipped
+                            get_logger().log(
+                                f"  ⚡ [{log_label}] worker 완료 신호 후 누락된 {skipped}개 STT2 보강 chunk는 "
+                                "해당 구간만 STT1 후보를 유지합니다."
+                            )
+                            yield from _emit_ready_payloads()
+                            break
+                        wait_started_at = time.monotonic()
+                        last_wait_log_at = wait_started_at
+                        if received >= total:
+                            break
+                        continue
+
+                    if data.get("fatal_error") or data.get("error"):
+                        had_error = True
+                        msg = data.get("fatal_error") or data.get("error") or "unknown whisper worker error"
+                        stage = data.get("stage", "worker")
+                        get_logger().log(f"  [FAIL] Whisper worker error ({stage}): {msg}")
+                        raise RuntimeError(f"whisper_worker_error[{stage}]: {msg}")
+
+                    idx = int(data.get("index", received))
+                    item = q[idx]
+                    payload = data.get("result") if "result" in data else {"error": data.get("error", "")}
+                    if isinstance(payload, dict):
+                        payload.setdefault("backend", data.get("backend", "mlx-whisper"))
+                        payload.setdefault("language_probability", data.get("language_probability"))
+                        payload.setdefault("chunk_path", item.get("input_path"))
+                        payload.setdefault("word_timestamps", data.get("word_timestamps", word_timestamps))
+                    pending_payloads[idx] = (item, payload)
+                    received_indices.add(idx)
+                    received += 1
+                    wait_started_at = time.monotonic()
+                    last_wait_log_at = wait_started_at
+
+                    yield from _emit_ready_payloads()
 
                 if total > 0 and processed_count == 0:
                     if use_whisperkit_persistent:
@@ -1697,6 +2497,7 @@ class VideoProcessorTranscribeMixin:
                         s,
                         vad_strict,
                         target_model,
+                        preview_callback=preview_callback,
                     )
 
                     if chunk_segs:
@@ -1726,6 +2527,39 @@ class VideoProcessorTranscribeMixin:
                     had_error = True
                     raise RuntimeError("whisper produced 0 chunks")
 
+        except SttWorkerTimeout as exc:
+            had_error = True
+            precision_pass = bool(s.get("stt_word_timestamp_precision_pass", False))
+            if use_whisperkit_persistent and not precision_pass:
+                fallback_model = whisperkit_empty_result_fallback_model(target_model, s)
+                get_logger().log(
+                    f"  ⚠️ [{log_label}] WhisperKit worker timeout → MLX GPU fallback으로 재시도: "
+                    f"{fallback_model.split(chr(47))[-1]}"
+                )
+                handled_by_fallback = True
+                stop_empty_whisperkit_worker(self, proc)
+                previous_overrides = getattr(self, "_fast_mode_overrides", None)
+                fallback_overrides = whisperkit_empty_fallback_overrides(
+                    previous_overrides,
+                    fallback_model,
+                )
+                self._fast_mode_overrides = fallback_overrides
+                try:
+                    yield from self.transcribe(
+                        chunk_dir,
+                        is_fast_mode=is_fast_mode,
+                        target_end_sec=target_end_sec,
+                        is_single=is_single,
+                        model_override=fallback_model,
+                        cleanup_chunk_dir=cleanup_chunk_dir,
+                        log_label=log_label,
+                        preview_callback=preview_callback,
+                        _allow_window_rolling=_allow_window_rolling,
+                    )
+                finally:
+                    self._fast_mode_overrides = previous_overrides
+                return
+            raise RuntimeError(str(exc)) from exc
         finally:
             if not handled_by_fallback:
                 self._release_after_transcribe_job(log_label, force_stop=had_error)
@@ -2247,7 +3081,13 @@ class VideoProcessorTranscribeMixin:
                 get_logger().log(f"  ⚠️ [STT window] isolated worker cleanup failed: {exc}")
         return collected
 
-    def _stt_quarter_parallel_window_workers(self, settings: dict, total_windows: int) -> tuple[int, dict]:
+    def _stt_quarter_parallel_window_workers(
+        self,
+        settings: dict,
+        total_windows: int,
+        *,
+        accelerators: list[str] | None = None,
+    ) -> tuple[int, dict]:
         window_parallel_enabled = bool(
             settings.get(
                 "stt_window_parallel_enabled",
@@ -2258,7 +3098,7 @@ class VideoProcessorTranscribeMixin:
             return 1, {}
         pressure_stage = _stt_memory_pressure_stage(settings)
         if pressure_stage == "critical":
-            get_logger().log("  🧵 [STT 1/4 병렬] 메모리 critical 상태라 병렬 창 처리를 건너뜁니다.")
+            get_logger().log("  🧵 [STT 창 병렬] 메모리 critical: 병렬 worker만 1개로 회수하고 STT 처리는 계속합니다.")
             return 1, {"memory_pressure_stage": pressure_stage}
         quarter_count = int(settings.get("stt_quarter_parallel_count", 4) or 4)
         window_sec = float(settings.get("stt_window_sec", 180.0) or 180.0)
@@ -2280,6 +3120,7 @@ class VideoProcessorTranscribeMixin:
             minimum=1,
             maximum=min(4, total_windows),
             reserve_task="stt",
+            accelerators=list(accelerators or []),
         )
         return max(1, int(workers or 1)), dict(scheduler_meta or {})
 
@@ -2523,9 +3364,31 @@ class VideoProcessorTranscribeMixin:
             + (" · 창별 STT1/STT2 앙상블" if use_ensemble_windows else "")
         )
 
-        parallel_workers, scheduler_meta = self._stt_quarter_parallel_window_workers(settings, total_windows)
+        window_accelerators: list[str] = []
+        if use_ensemble_windows:
+            primary_model = str(model_override or settings.get("selected_whisper_model") or self.whisper_model or "")
+            secondary_model = str(settings.get("selected_whisper_model_secondary") or "").strip()
+            if secondary_model:
+                primary_accel, secondary_accel, window_backend_mix = self._ensemble_scheduler_context(
+                    primary_model,
+                    secondary_model,
+                    settings,
+                )
+                window_accelerators = [primary_accel, secondary_accel]
+            else:
+                window_backend_mix = self._whisper_runtime_accelerator(primary_model, settings).upper()
+                window_accelerators = [window_backend_mix]
+        else:
+            primary_model = str(model_override or settings.get("selected_whisper_model") or self.whisper_model or "")
+            window_backend_mix = self._whisper_runtime_accelerator(primary_model, settings).upper()
+            window_accelerators = [window_backend_mix]
+        parallel_workers, scheduler_meta = self._stt_quarter_parallel_window_workers(
+            settings,
+            total_windows,
+            accelerators=window_accelerators,
+        )
         if parallel_workers > 1:
-            suffix = self._ensemble_scheduler_suffix(scheduler_meta, "windowed")
+            suffix = self._ensemble_scheduler_suffix(scheduler_meta, f"windowed {window_backend_mix}")
             get_logger().log(
                 f"  🧵 [{log_label}] STT rolling window 병렬 활성화: "
                 f"{parallel_workers}개 워커{suffix}"

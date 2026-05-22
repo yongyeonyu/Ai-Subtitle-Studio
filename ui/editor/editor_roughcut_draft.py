@@ -59,7 +59,8 @@ class EditorRoughcutDraftMixin:
                 pass
         self._roughcut_draft_pending = False
         self._roughcut_draft_cancelled = True
-        self._roughcut_draft_auto_schedule_blocked_epoch = current_auto_epoch
+        if reason_text == "수동 저장":
+            self._roughcut_draft_auto_schedule_blocked_epoch = current_auto_epoch
         self._roughcut_draft_generation = int(getattr(self, "_roughcut_draft_generation", 0) or 0) + 1
         self._set_roughcut_draft_status("idle")
         mark_done = getattr(self, "_mark_roughcut_queue_done", None)
@@ -687,6 +688,8 @@ class EditorRoughcutDraftMixin:
             get_logger().log("⏭️ 러프컷 자동 실행 생략: 수동 저장으로 취소된 예약입니다.")
             return
         self._roughcut_draft_cancelled = False
+        if force or not bool(getattr(self, "_roughcut_draft_pending", False)):
+            self._roughcut_llm_pressure_gate_attempts = 0
         if isinstance(settings_override, dict):
             self._roughcut_draft_settings_override = dict(settings_override)
         if force and require_autorun and not self._roughcut_draft_post_generation_autorun_enabled():
@@ -958,6 +961,34 @@ class EditorRoughcutDraftMixin:
         )
         return False
 
+    def _roughcut_llm_pressure_gate_delay_ms(self, context: dict) -> int:
+        if bool(context.get("manual_run", False)):
+            return 0
+        settings = dict(context.get("settings") or {})
+        if settings.get("roughcut_llm_pressure_gate_enabled", True) is False:
+            return 0
+        max_attempts = int(settings.get("roughcut_llm_pressure_gate_max_attempts", 3) or 3)
+        attempts = int(getattr(self, "_roughcut_llm_pressure_gate_attempts", 0) or 0)
+        if attempts >= max(0, max_attempts):
+            return 0
+        pressure = ""
+        try:
+            main_w = self.window()
+            snapshot = getattr(main_w, "_runtime_resource_snapshot", None)
+            if isinstance(snapshot, dict):
+                pressure = str(snapshot.get("pressure_stage") or snapshot.get("memory_pressure_stage") or "").strip().lower()
+        except Exception:
+            pressure = ""
+        if pressure != "critical":
+            self._roughcut_llm_pressure_gate_attempts = 0
+            return 0
+        self._roughcut_llm_pressure_gate_attempts = attempts + 1
+        try:
+            delay_ms = int(settings.get("roughcut_llm_pressure_gate_delay_ms", 1800) or 1800)
+        except Exception:
+            delay_ms = 1800
+        return max(250, min(delay_ms, 5000))
+
     def _start_roughcut_draft_llm_worker(self, segments: list[dict], context: dict) -> None:
         def worker():
             try:
@@ -996,6 +1027,7 @@ class EditorRoughcutDraftMixin:
                     pass
 
         self._roughcut_draft_pending = False
+        self._roughcut_llm_pressure_gate_attempts = 0
         self._roughcut_draft_thread = threading.Thread(target=worker, daemon=True, name="editor-post-generation-roughcut-draft")
         self._roughcut_draft_thread.start()
 
@@ -1025,11 +1057,18 @@ class EditorRoughcutDraftMixin:
             self._roughcut_draft_settings_override = None
             self._roughcut_draft_manual_run_requested = False
             return
+        settings = self._draft_settings_snapshot()
+        context = self._roughcut_draft_run_context(segments, settings)
+        gate_delay_ms = self._roughcut_llm_pressure_gate_delay_ms(context)
+        if gate_delay_ms > 0:
+            get_logger().log(
+                f"⏳ 러프컷 LLM 후처리 대기: STT 직후 메모리 pressure가 critical이라 {gate_delay_ms}ms 뒤 재확인합니다."
+            )
+            self._roughcut_draft_requeue(gate_delay_ms)
+            return
         self._roughcut_draft_pending = True
         self._set_roughcut_draft_status("running")
 
-        settings = self._draft_settings_snapshot()
-        context = self._roughcut_draft_run_context(segments, settings)
         self._log_roughcut_draft_prepared(segments, context)
         if self._roughcut_draft_can_run_llm(segments, context):
             # LLM 실행은 thread로 넘기고, 준비/로컬 fallback 판정은 UI thread에서 끝낸다.

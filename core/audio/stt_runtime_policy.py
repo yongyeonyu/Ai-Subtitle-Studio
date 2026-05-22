@@ -39,10 +39,11 @@ def whisper_runtime_accelerator(model: str, settings: dict | None = None) -> str
     from core.audio.torch_acceleration import torch_acceleration_snapshot
     from core.audio.whisper_coreml import is_coreml_whisper_model
     from core.audio.whisper_cpp import is_whisper_cpp_model
+    from core.audio.whisperkit_persistent import is_whisperkit_persistent_model
     from core.audio.whisper_transformers import is_transformers_whisper_model
 
     lowered = raw.lower()
-    if is_coreml_whisper_model(raw):
+    if is_coreml_whisper_model(raw) or is_whisperkit_persistent_model(raw):
         return "npu"
     if is_whisper_cpp_model(raw):
         return "cpu"

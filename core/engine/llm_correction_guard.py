@@ -19,6 +19,32 @@ def normalized_text(value: str) -> str:
     return _NOISE_PATTERN.sub("", str(value or "")).lower()
 
 
+def normalized_edit_distance(left: str, right: str, *, limit: int | None = None) -> int:
+    a = normalized_text(left)
+    b = normalized_text(right)
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    if limit is not None and abs(len(a) - len(b)) > int(limit):
+        return int(limit) + 1
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        current = [i]
+        row_min = i
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            value = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+            current.append(value)
+            row_min = min(row_min, value)
+        if limit is not None and row_min > int(limit):
+            return int(limit) + 1
+        previous = current
+    return previous[-1]
+
+
 def contains_timecode(value: str) -> bool:
     return bool(_TIME_CODE_PATTERN.search(str(value or "")))
 
@@ -33,6 +59,7 @@ def validate_llm_chunks(
     *,
     min_similarity: float = 0.82,
     max_length_delta_ratio: float = 0.18,
+    max_edit_distance: int | None = None,
 ) -> tuple[bool, str]:
     """Check that LLM correction/splitting did not invent, delete, or time-shift content."""
     source_norm = normalized_text(source_text)
@@ -54,7 +81,12 @@ def validate_llm_chunks(
 
     similarity = similarity_ratio(source_norm, candidate_norm)
     if similarity < min_similarity:
-        return False, f"similarity:{similarity:.2f}"
+        allowed_edit_distance = max_edit_distance
+        if allowed_edit_distance is None:
+            allowed_edit_distance = max(1, min(2, int(round(len(source_norm) * 0.12))))
+        edit_distance = normalized_edit_distance(source_norm, candidate_norm, limit=allowed_edit_distance)
+        if edit_distance > allowed_edit_distance:
+            return False, f"similarity:{similarity:.2f}"
 
     return True, "ok"
 

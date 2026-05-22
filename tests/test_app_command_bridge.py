@@ -750,7 +750,11 @@ class AppCommandBridgeTests(unittest.TestCase):
     def test_status_command_reports_current_runtime_snapshot(self):
         owner = _DummyOwner()
         owner._current_project_path = "/tmp/project.json"
-        owner._runtime_resource_snapshot = {"rss_gb": 1.25, "pressure_stage": "normal"}
+        owner._runtime_resource_snapshot = {"rss_gb": 1.25, "pressure_stage": "normal", "timestamp": 1234.5}
+        owner._editor_widget._last_live_processing_stage = "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중"
+        owner._editor_widget._roughcut_draft_status = "queued"
+        owner._editor_widget._roughcut_draft_pending = True
+        owner._automation_classify_guided_stage = lambda _text: ("subtitle-generation", "자막 생성")
         owner.backend._active = True
         get_logger().log("status log line")
         get_logger().log("🎯 자막 생성 중")
@@ -762,6 +766,11 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["data"]["backend_active"])
         self.assertTrue(result["data"]["editor_open"])
         self.assertEqual(result["data"]["editor_runtime"]["segment_count"], 2)
+        self.assertEqual(result["data"]["generation_stage"], "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
+        self.assertEqual(result["data"]["last_stage_key"], "subtitle-generation")
+        self.assertEqual(result["data"]["subtitle_count"], 2)
+        self.assertTrue(result["data"]["roughcut_state"]["running"])
+        self.assertEqual(result["data"]["runtime_timestamp"], 1234.5)
         self.assertEqual(result["data"]["runtime_resource"]["rss_gb"], 1.25)
         self.assertIn("stage_metrics", result["data"])
         self.assertIn("stage_metrics", result["data"]["runtime_resource"])

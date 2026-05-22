@@ -71,6 +71,8 @@ class VideoPlayerSurfaceMixin:
             self.current_time = self.frame_time_map.sec_for_frame(self.current_frame)
         except Exception:
             self.current_frame = 0
+        if hasattr(self, "_refresh_ui_timer_intervals"):
+            self._refresh_ui_timer_intervals()
         self._refresh_time_label(force=True)
         self._update_frame_count_label(force=True)
 

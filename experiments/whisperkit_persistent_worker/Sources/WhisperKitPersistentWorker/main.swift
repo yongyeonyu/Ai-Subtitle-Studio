@@ -1,4 +1,5 @@
 import Foundation
+import CoreML
 import WhisperKit
 
 struct WorkerRequest: Decodable {
@@ -8,6 +9,7 @@ struct WorkerRequest: Decodable {
     let model: String
     let language: String
     let wordTimestamps: Bool
+    let concurrentWorkerCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case op
@@ -16,6 +18,7 @@ struct WorkerRequest: Decodable {
         case model
         case language
         case wordTimestamps = "word_timestamps"
+        case concurrentWorkerCount = "concurrent_worker_count"
     }
 }
 
@@ -82,7 +85,18 @@ final class ModelCache {
         if let existing = whisperKit, cachedModel == model {
             return existing
         }
-        let kit = try await WhisperKit(model: model)
+        let computeOptions = ModelComputeOptions(
+            melCompute: .all,
+            audioEncoderCompute: .all,
+            textDecoderCompute: .all
+        )
+        let config = WhisperKitConfig(
+            model: model,
+            computeOptions: computeOptions,
+            verbose: false,
+            prewarm: false
+        )
+        let kit = try await WhisperKit(config)
         whisperKit = kit
         cachedModel = model
         return kit
@@ -169,34 +183,44 @@ func handle(_ request: WorkerRequest) async {
             verbose: false,
             task: .transcribe,
             language: request.language,
-            wordTimestamps: request.wordTimestamps
+            wordTimestamps: request.wordTimestamps,
+            concurrentWorkerCount: max(1, request.concurrentWorkerCount ?? 1)
         )
-        for (index, path) in request.chunkPaths.enumerated() {
-            do {
-                let results = try await kit.transcribe(audioPath: path, decodeOptions: options)
-                let payload = TranscriptionPayload(
-                    backend: "whisperkit-persistent",
-                    loadedModel: request.model,
-                    segments: segmentPayloads(from: results, includeWords: request.wordTimestamps),
-                    text: results.map { $0.text }.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines),
-                    wordTimestamps: request.wordTimestamps
-                )
-                emit(
-                    WorkerResponse(
+        let batchSize = max(1, min(request.concurrentWorkerCount ?? 1, max(1, request.chunkPaths.count)))
+        var batchStart = 0
+        while batchStart < request.chunkPaths.count {
+            let batchEnd = min(request.chunkPaths.count, batchStart + batchSize)
+            let batchPaths = Array(request.chunkPaths[batchStart..<batchEnd])
+            let batchResults = await kit.transcribeWithResults(audioPaths: batchPaths, decodeOptions: options)
+            for (offset, result) in batchResults.enumerated() {
+                let index = batchStart + offset
+                switch result {
+                case .success(let results):
+                    let payload = TranscriptionPayload(
                         backend: "whisperkit-persistent",
-                        taskId: request.taskId,
-                        index: index,
-                        result: payload,
                         loadedModel: request.model,
-                        wordTimestamps: request.wordTimestamps,
-                        done: nil,
-                        error: nil,
-                        stage: nil
+                        segments: segmentPayloads(from: results, includeWords: request.wordTimestamps),
+                        text: results.map { $0.text }.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines),
+                        wordTimestamps: request.wordTimestamps
                     )
-                )
-            } catch {
-                emitError(taskId: request.taskId, index: index, error: error, stage: "transcribe")
+                    emit(
+                        WorkerResponse(
+                            backend: "whisperkit-persistent",
+                            taskId: request.taskId,
+                            index: index,
+                            result: payload,
+                            loadedModel: request.model,
+                            wordTimestamps: request.wordTimestamps,
+                            done: nil,
+                            error: nil,
+                            stage: nil
+                        )
+                    )
+                case .failure(let error):
+                    emitError(taskId: request.taskId, index: index, error: error, stage: "transcribe")
+                }
             }
+            batchStart = batchEnd
         }
         emit(
             WorkerResponse(

@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from core.personalization.lora_gpu_acceleration import lora_training_acceleration_plan
 from core.personalization.lora_models import iso_now, stable_hash
 from core.personalization.lora_retrieval_utils import classification_summary
 from core.personalization.lora_store_common import (
@@ -433,6 +434,7 @@ def build_stt1_whisper_adapter_training_plan(
     backend = "dataset_plan_only"
     if all(_module_exists(name) for name in ("torch", "transformers", "peft", "datasets")):
         backend = "transformers_peft_whisper_lora"
+    acceleration = lora_training_acceleration_plan({"lora_gpu_acceleration_enabled": True}, backend=backend)
 
     usable_rows = len(items)
     source_existing_items = sum(1 for item in items if bool(item.get("source_exists")))
@@ -445,6 +447,7 @@ def build_stt1_whisper_adapter_training_plan(
         "schema": "ai_subtitle_studio.stt1_whisper_adapter_training_plan.v1",
         "created_at": _now(),
         "backend": backend,
+        "training_acceleration": acceleration,
         "adapter_name": adapter_name,
         "base_model": base_model,
         "truth_table_path": str(truth_table_path),
@@ -508,7 +511,7 @@ def build_stt1_whisper_adapter_training_plan(
                 "Generate missing mono WAV clips at 16kHz from source media by using each item's extraction_command.",
             ],
             "fine_tune_step": [
-                "Load base Whisper in Transformers, apply PEFT LoRA/adapter tuning, and train on transcript_text.",
+                "Load base Whisper in Transformers, move tensors/model to training_acceleration.torch_device when available, apply PEFT LoRA/adapter tuning, and train on transcript_text.",
                 "Merge the adapter into a runtime model after validation.",
             ],
             "runtime_step": [
@@ -518,6 +521,7 @@ def build_stt1_whisper_adapter_training_plan(
         },
         "notes": [
             "This pipeline prepares STT1-only Whisper adapter data from ground-truth pairs and multimodal context.",
+            "MPS/CUDA is selected for adapter training compute when available; JSON/WAV read-write stays CPU/OS.",
             "The current app keeps retrieval-based LoRA for prompt/settings correction and adds STT1 adapter only when a runtime-ready model exists.",
         ],
     }

@@ -73,4 +73,21 @@ def coalesce_roughcut_paint_markers(
     return merged
 
 
-__all__ = ["coalesce_roughcut_paint_markers"]
+def visible_roughcut_label_span(
+    marker_x1: int | float,
+    marker_x2: int | float,
+    *,
+    clip_left: int | float,
+    clip_right: int | float,
+    pad_px: int = 8,
+    min_width_px: int = 44,
+) -> tuple[int, int] | None:
+    """Return a label span pinned to the visible part of a roughcut marker."""
+    left = int(max(float(marker_x1), float(clip_left)) + int(pad_px))
+    right = int(min(float(marker_x2), float(clip_right)) - int(pad_px))
+    if right - left + 1 < int(min_width_px):
+        return None
+    return left, right
+
+
+__all__ = ["coalesce_roughcut_paint_markers", "visible_roughcut_label_span"]

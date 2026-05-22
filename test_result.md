@@ -1349,3 +1349,31 @@
   - 원본 JSON: `.codex_work/benchmarks/stt_resource_aggressive/20260521_140857/benchmark_results.json`
   - 공식 runner JSON: `output/manual_verification/latest/stt_resource_aggressive_20260521_140857/official_benchmark_results.json`
   - X5 전체 runner JSON: `output/manual_verification/latest/stt_resource_aggressive_20260521_140857/x5_full_benchmark_results.json`
+
+## X5 High post-STT hot path/resource 검증 - 2026-05-22 23:31
+
+- 실행 범위:
+  - 자막 품질 정책, STT2 선택 기준, LLM 모델/게이트 변경 없이 post-STT UI/status/resource hot path만 축소
+  - STT live preview 중 동기 4K thumbnail extraction 차단
+  - `guided-subtitle-status` compact 필드 유지
+  - `subtitle_optimize` resource label/native allocator budget 추가
+  - roughcut LLM 시작 전 `critical` pressure 짧은 gate 추가
+- 검증:
+  - Python compile: OK
+  - `tests/test_app_command_bridge.py tests/test_app_command_server.py`: 65 passed
+  - `tests/test_runtime_multi_process.py tests/test_runtime_stage_metrics.py`: 37 passed
+  - `tests/test_editor_roughcut_draft.py`: 56 passed
+  - `tests/test_project_segment_reload.py`: 69 passed
+  - `swift test --package-path native/macos/AIStudioNative --filter NativeResourceAllocatorTests`: 7 passed
+  - `swift build -c release --package-path experiments/whisperkit_persistent_worker`: OK
+- X5 High 실앱 결과:
+  - `guided-subtitle-status`: `backend_active=false`, `last_stage_key=completed`, `roughcut_state.status=done`, `roughcut_state.major_count=4`
+  - 최종 runtime pressure: `normal`, RSS `0.9865GB`, free memory `6.1085GB`
+  - 저장 subtitle count: project `63`, final SRT `63`
+- 판정:
+  - hot path/resource 변경은 실앱 완료와 pressure 회복을 확인
+  - 기존 active item reference의 X5 저장 subtitle count `107`과 이번 저장 count `63`이 달라 ACTION_ITEMS 완료 삭제는 보류
+- 산출물:
+  - `output/manual_verification/latest/20260522_x5_hotpath_resource_after_patch/verification_summary.md`
+  - `output/manual_verification/latest/20260522_x5_hotpath_resource_after_patch/final.png`
+  - `output/manual_verification/latest/20260522_x5_hotpath_resource_after_patch/final_guided_status.json`

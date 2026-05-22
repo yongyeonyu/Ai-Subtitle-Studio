@@ -27,6 +27,11 @@ class _Logger:
         self.messages.append(str(message))
 
 
+class _AliveThread:
+    def is_alive(self):
+        return True
+
+
 class RuntimeMultiProcessTests(unittest.TestCase):
     def setUp(self):
         import core.runtime.multi_process as multi_process
@@ -109,6 +114,8 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertTrue(settings["stt_window_parallel_aggressive_enabled"])
         self.assertEqual(settings["stt_quarter_parallel_count"], 4)
         self.assertEqual(settings["stt_quarter_parallel_max_workers"], 4)
+        self.assertTrue(settings["cut_boundary_wait_first_follower_check_before_stt"])
+        self.assertEqual(settings["cut_boundary_wait_first_follower_check_before_stt_timeout_sec"], 1.2)
         self.assertEqual(settings["cut_boundary_wait_prescan_before_stt_timeout_sec"], 1.0)
         self.assertFalse(settings["cut_boundary_wait_follower_before_stt"])
         self.assertEqual(settings["cut_boundary_wait_follower_before_stt_timeout_sec"], 0.0)
@@ -159,6 +166,8 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(settings["scan_cut_follower_stream_batch_size"], 16)
         self.assertTrue(settings["stt_window_parallel_enabled"])
         self.assertEqual(settings["stt_quarter_parallel_max_workers"], 4)
+        self.assertTrue(settings["cut_boundary_wait_first_follower_check_before_stt"])
+        self.assertEqual(settings["cut_boundary_wait_first_follower_check_before_stt_timeout_sec"], 1.2)
         self.assertFalse(settings["cut_boundary_wait_follower_before_stt"])
         self.assertEqual(settings["stt_primary_gpu_slots"], 1)
         self.assertEqual(settings["stt_npu_coreml_slots"], 1)
@@ -516,6 +525,82 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(meta["accelerator_mix_floor"], 2)
         self.assertEqual(meta["accelerators"], ["npu", "gpu"])
 
+    def test_runtime_parallel_worker_plan_floors_mixed_stt_window_to_three_workers(self):
+        with patch("core.runtime.multi_process.runtime_scheduler_reserve_cores", return_value=0), \
+             patch("core.runtime.multi_process.distributed_worker_ceiling", return_value=4), \
+             patch("core.runtime.multi_process.adaptive_worker_count", return_value=(1, {"reductions": ["high_cpu_load"]})):
+            workers, meta = runtime_parallel_worker_plan(
+                settings={"runtime_performance_profile": "max"},
+                task="stt_window",
+                workload=4,
+                requested=4,
+                minimum=1,
+                maximum=4,
+                reserve_task="stt",
+                accelerators=["npu", "gpu"],
+            )
+
+        self.assertEqual(workers, 3)
+        self.assertTrue(meta["accelerator_mix_applied"])
+        self.assertEqual(meta["accelerator_mix_floor"], 3)
+
+    def test_native_allocator_cannot_shrink_noncritical_mixed_accelerator_floor(self):
+        native_result = {
+            "task": "stt_window",
+            "workers": 1,
+            "action": "shrink",
+            "lease_ms": 220,
+            "pressure_stage": "normal",
+        }
+        with patch("core.runtime.multi_process.runtime_scheduler_reserve_cores", return_value=0), \
+             patch("core.runtime.multi_process.distributed_worker_ceiling", return_value=4), \
+             patch("core.runtime.multi_process.adaptive_worker_count", return_value=(1, {"reason": "resource_adaptive"})), \
+             patch("core.runtime.multi_process.native_task_allocation", return_value=native_result):
+            workers, meta = runtime_parallel_worker_plan(
+                settings={"native_resource_allocator_worker_plan_enabled": True},
+                task="stt_window",
+                workload=4,
+                requested=4,
+                minimum=1,
+                maximum=4,
+                reserve_task="stt",
+                accelerators=["npu", "gpu"],
+            )
+
+        self.assertEqual(workers, 3)
+        self.assertTrue(meta["native_resource_allocator_applied"])
+        self.assertTrue(meta["native_resource_allocator_preserved_accelerator_floor"])
+
+    def test_runtime_parallel_worker_plan_applies_native_allocator_worker_count(self):
+        native_result = {
+            "task": "audio_extract",
+            "workers": 3,
+            "action": "shrink",
+            "lease_ms": 220,
+        }
+        with patch("core.runtime.multi_process.runtime_scheduler_reserve_cores", return_value=1), \
+             patch("core.runtime.multi_process.distributed_worker_ceiling", return_value=8), \
+             patch("core.runtime.multi_process.adaptive_worker_count", return_value=(6, {"reason": "resource_adaptive"})), \
+             patch("core.runtime.multi_process.native_task_allocation", return_value=native_result) as native_alloc:
+            workers, meta = runtime_parallel_worker_plan(
+                settings={"native_resource_allocator_worker_plan_enabled": True},
+                task="audio_extract",
+                workload=8,
+                requested=8,
+                minimum=1,
+                maximum=8,
+                reserve_task="audio_extract",
+            )
+
+        self.assertEqual(workers, 3)
+        self.assertEqual(meta["native_resource_allocator_previous_workers"], 6)
+        self.assertTrue(meta["native_resource_allocator_applied"])
+        self.assertEqual(meta["native_resource_allocator_action"], "shrink")
+        self.assertEqual(meta["native_resource_allocator_lease_ms"], 220)
+        native_alloc.assert_called_once()
+        self.assertEqual(native_alloc.call_args.kwargs["requested_workers"], 6)
+        self.assertEqual(native_alloc.call_args.kwargs["maximum"], 8)
+
     def test_runtime_llm_worker_plan_adds_coordinator_metadata(self):
         with patch("core.runtime.multi_process.adaptive_llm_worker_count", return_value=(2, {"reason": "resource_adaptive"})):
             workers, meta = runtime_llm_worker_plan(
@@ -556,7 +641,8 @@ class RuntimeMultiProcessTests(unittest.TestCase):
                  patch("core.runtime.multi_process.runtime_disk_cache_usage", return_value={"total_bytes": 2 * 1024 ** 3, "file_count": 7}), \
                  patch("core.runtime.multi_process.native_thread_budget", return_value=10), \
                  patch("core.runtime.multi_process.hardware_profile", return_value=snapshot), \
-                 patch("core.runtime.multi_process.runtime_acceleration_snapshot", return_value={"summary": "CPU + GPU + NPU", "available": {"cpu": True, "gpu": True, "npu": True}}):
+                 patch("core.runtime.multi_process.runtime_acceleration_snapshot", return_value={"summary": "CPU + GPU + NPU", "available": {"cpu": True, "gpu": True, "npu": True}}), \
+                 patch("core.runtime.multi_process.native_resource_allocation", return_value={"ok": True, "allocations": {"stt": {"workers": 1}}}):
                 coordinator = RuntimeResourceCoordinator(
                     settings={
                         "runtime_performance_profile": "max",
@@ -576,6 +662,7 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(data["native_thread_budget"], 10)
         self.assertEqual(data["disk_cache_files"], 7)
         self.assertEqual(data["accelerators"]["summary"], "CPU + GPU + NPU")
+        self.assertEqual(data["native_resource_allocation"]["allocations"]["stt"]["workers"], 1)
         self.assertIn("pipeline", data["active_labels"])
         self.assertIn("editor", data["active_labels"])
         self.assertIn("stt", data["active_labels"])
@@ -589,6 +676,72 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertNotIn("accel=CPU + GPU + NPU", coordinator.status_plain(data))
         self.assertTrue(any("📊 [Runtime] CPU 72%" in item for item in logger.messages))
         self.assertFalse(any("MAX" in item or "ACCEL" in item for item in logger.messages))
+
+    def test_runtime_resource_coordinator_sends_previous_native_plan_for_delta(self):
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 6 * 1024 ** 3,
+            "available_memory_ratio": 0.37,
+            "logical_cores": 10,
+            "physical_cores": 8,
+            "performance_cores": 4,
+        }
+        allocations = [
+            {"ok": True, "allocations": {"stt": {"task": "stt", "workers": 2}}},
+            {"ok": True, "allocations": {"stt": {"task": "stt", "workers": 1}}},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            with patch("core.runtime.multi_process.runtime_monitor_dir", return_value=tmpdir), \
+                 patch("core.runtime.multi_process.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.multi_process.process_rss_bytes", return_value=3 * 1024 ** 3), \
+                 patch("core.runtime.multi_process.runtime_disk_cache_usage", return_value={"total_bytes": 0, "file_count": 0}), \
+                 patch("core.runtime.multi_process.native_thread_budget", return_value=10), \
+                 patch("core.runtime.multi_process.hardware_profile", return_value=snapshot), \
+                 patch("core.runtime.multi_process.runtime_acceleration_snapshot", return_value={}), \
+                 patch("core.runtime.multi_process.native_resource_allocation", side_effect=allocations) as native_alloc:
+                coordinator = RuntimeResourceCoordinator(settings={}, logger=None)
+                coordinator._sample_system_cpu_percent = lambda: 10.0
+                coordinator._sample_process_cpu_percent = lambda: 10.0
+                first = coordinator.poll(window=None)
+                second = coordinator.poll(window=None)
+
+        self.assertEqual(first["native_resource_allocation"]["allocations"]["stt"]["workers"], 2)
+        self.assertEqual(second["native_resource_allocation"]["allocations"]["stt"]["workers"], 1)
+        self.assertEqual(native_alloc.call_args_list[0].kwargs["previous_allocation"], {})
+        self.assertEqual(
+            native_alloc.call_args_list[1].kwargs["previous_allocation"]["allocations"]["stt"]["workers"],
+            2,
+        )
+
+    def test_runtime_resource_coordinator_active_labels_include_live_pipeline_stages(self):
+        coordinator = RuntimeResourceCoordinator(settings={}, logger=None)
+        window = SimpleNamespace(
+            _auto_processing_active=True,
+            backend=SimpleNamespace(
+                _active=True,
+                _cut_boundary_prescan_thread=_AliveThread(),
+                _cut_boundary_follower_thread=None,
+            ),
+            backend_fast=SimpleNamespace(_active=False),
+            _editor_widget=SimpleNamespace(
+                _is_ai_processing=True,
+                _stt_mode_enabled=True,
+                _last_live_processing_stage="⏳ [STT+자막 LLM] 인식 결과 교정/분리 중",
+                _roughcut_draft_status="queued",
+                _roughcut_draft_pending=True,
+                _roughcut_draft_thread=None,
+            ),
+        )
+
+        labels = coordinator._active_runtime_labels(window)
+
+        self.assertIn("cut_boundary", labels)
+        self.assertIn("stt", labels)
+        self.assertIn("subtitle_llm", labels)
+        self.assertIn("subtitle_optimize", labels)
+        self.assertIn("roughcut_llm", labels)
 
     def test_runtime_resource_coordinator_does_not_log_normal_idle_snapshot(self):
         logger = _Logger()

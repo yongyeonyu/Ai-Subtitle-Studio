@@ -238,6 +238,40 @@ class IndividualQueueContextTests(unittest.TestCase):
             ],
         )
 
+    def test_wait_cut_boundary_prescan_before_stt_uses_first_follower_check_gate(self):
+        ui = _DummyUi()
+        backend = CoreBackend(ui)
+        backend._cut_boundary_prescan_thread = _JoinableThread(alive=True, auto_finish=False)
+        backend._cut_boundary_follower_thread = _JoinableThread(alive=True, auto_finish=False)
+        backend._cut_boundary_first_follower_check_event = threading.Event()
+        backend._cut_boundary_first_follower_check_event.set()
+        backend._cut_boundary_first_follower_check_meta = {"checked_count": 3, "verified_count": 1}
+        emitted = []
+        backend._ui_emit = lambda *args, **kwargs: emitted.append(args) or True
+
+        with patch("core.pipeline.cut_boundary_helpers.load_settings", return_value={}):
+            backend._wait_cut_boundary_prescan_before_stt()
+
+        self.assertEqual(backend._cut_boundary_prescan_thread.join_calls, [])
+        self.assertEqual(backend._cut_boundary_follower_thread.join_calls, [])
+        self.assertEqual(emitted, [("_sig_refresh_cut_boundary_placeholder",)])
+
+    def test_wait_cut_boundary_prescan_before_stt_starts_when_first_follower_check_is_slow(self):
+        ui = _DummyUi()
+        backend = CoreBackend(ui)
+        backend._cut_boundary_prescan_thread = _JoinableThread(alive=True, auto_finish=False)
+        backend._cut_boundary_follower_thread = _JoinableThread(alive=True, auto_finish=False)
+        backend._cut_boundary_first_follower_check_event = threading.Event()
+
+        with patch(
+            "core.pipeline.cut_boundary_helpers.load_settings",
+            return_value={"cut_boundary_wait_first_follower_check_before_stt_timeout_sec": 0.0},
+        ):
+            backend._wait_cut_boundary_prescan_before_stt()
+
+        self.assertEqual(backend._cut_boundary_prescan_thread.join_calls, [])
+        self.assertEqual(backend._cut_boundary_follower_thread.join_calls, [])
+
     def test_single_file_auto_start_does_not_wait_for_second_manual_start(self):
         ui = _DummyUi()
         backend = CoreBackend(ui)

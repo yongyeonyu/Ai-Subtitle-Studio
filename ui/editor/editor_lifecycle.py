@@ -436,6 +436,17 @@ class EditorLifecycleMixin:
             self.global_menu_bar.bind_editor(editor)
         if hasattr(self, "_attach_global_menu_to_editor"):
             self._attach_global_menu_to_editor(editor)
+        if not is_batch:
+            def _mark_start_ready(e=editor):
+                if getattr(self, "_editor_widget", None) is not e:
+                    return
+                marker = getattr(e, "_mark_open_media_start_ready", None)
+                if callable(marker):
+                    marker(reason="editor_open")
+
+            _mark_start_ready()
+            QTimer.singleShot(0, _mark_start_ready)
+            QTimer.singleShot(90, _mark_start_ready)
         restore_workspace_callback = None
         apply_project_ui_callback = None
         if self._current_project_path:

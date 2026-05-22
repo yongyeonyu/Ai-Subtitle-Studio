@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 from unittest.mock import Mock
 
 from ui.main.main_signals import SignalHandlersMixin
@@ -43,6 +44,35 @@ class MainNonfatalSignalsTests(unittest.TestCase):
 
         editor.append_segments.assert_called_once()
         self.assertEqual(event.called, 1)
+
+    def test_do_append_segments_flush_defers_repaint_without_reentering_event_loop(self):
+        canvas = SimpleNamespace(update=Mock())
+        timeline = SimpleNamespace(update=Mock(), canvas=canvas)
+        editor = SimpleNamespace(
+            append_segments=Mock(),
+            _flush_pending_segment_queue_now=Mock(),
+            update=Mock(),
+            timeline=timeline,
+        )
+        window = _SignalWindow(editor=editor)
+
+        with mock.patch("ui.main.main_signals.QApplication.processEvents", side_effect=AssertionError("should not run")) as process_events:
+            with mock.patch("ui.main.main_signals.QApplication.instance", return_value=object()):
+                with mock.patch("ui.main.main_signals.QTimer.singleShot") as single_shot:
+                    window._do_append_segments([{"text": "A"}], flush=True)
+
+        editor.append_segments.assert_called_once()
+        editor._flush_pending_segment_queue_now.assert_called_once()
+        process_events.assert_not_called()
+        single_shot.assert_called_once()
+        delay, callback = single_shot.call_args.args
+        self.assertEqual(delay, 0)
+
+        callback()
+
+        editor.update.assert_called_once()
+        timeline.update.assert_called_once()
+        canvas.update.assert_called_once()
 
     def test_do_clear_editor_continues_when_timer_stop_fails(self):
         text_edit = SimpleNamespace(clear=Mock())

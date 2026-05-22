@@ -257,6 +257,57 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertFalse(editor._roughcut_draft_pending)
         self.assertEqual(editor._roughcut_draft_timer.started, [])
 
+    def test_foreground_activity_cancel_does_not_block_completion_verify_reschedule(self):
+        class _Timer:
+            def __init__(self):
+                self.started = []
+                self.active = True
+
+            def isActive(self):
+                return self.active
+
+            def stop(self):
+                self.active = False
+
+            def start(self, ms):
+                self.active = True
+                self.started.append(int(ms))
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 7
+                self._roughcut_draft_status = "queued"
+                self._roughcut_draft_thread = None
+                self._roughcut_draft_auto_schedule_epoch = 4
+                self._roughcut_draft_auto_schedule_blocked_epoch = 0
+                self._roughcut_draft_settings_override = None
+
+            def _roughcut_draft_post_generation_autorun_enabled(self):
+                return True
+
+            def _roughcut_draft_runtime_enabled(self):
+                return True
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _mark_roughcut_queue_active(self, note):
+                pass
+
+            def _mark_roughcut_queue_done(self, **_kwargs):
+                pass
+
+        editor = _Editor()
+
+        self.assertTrue(editor._cancel_post_generation_roughcut_draft(reason="편집 시작"))
+        editor._schedule_post_generation_roughcut_draft(force=True)
+
+        self.assertEqual(editor._roughcut_draft_auto_schedule_blocked_epoch, 0)
+        self.assertEqual(editor._roughcut_draft_status, "queued")
+        self.assertEqual(editor._roughcut_draft_timer.started, [120])
+
     def test_foreground_activity_cancels_pending_post_generation_roughcut(self):
         class _Editor(EditorSegmentsRuntimeCacheMixin):
             def __init__(self):
@@ -496,6 +547,73 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertEqual(editor._roughcut_draft_status, "queued")
         self.assertEqual(editor._roughcut_draft_timer.started, [900])
 
+    def test_run_requeues_automatic_roughcut_llm_when_memory_pressure_is_critical(self):
+        class _Timer:
+            def __init__(self):
+                self.started = []
+
+            def start(self, ms):
+                self.started.append(int(ms))
+
+        class _Main:
+            def __init__(self):
+                self._current_project_path = ""
+                self._runtime_resource_snapshot = {"pressure_stage": "critical"}
+                self._multiclip_files = []
+                self._multiclip_boundaries = []
+                self.backend = None
+                self.backend_fast = None
+
+        class _Signal:
+            def emit(self, *_args):
+                raise AssertionError("critical pressure gate must not emit roughcut result immediately")
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self.settings = {
+                    "editor_roughcut_draft_enabled": True,
+                    "roughcut_run_after_subtitle_generation": True,
+                    "roughcut_llm_enabled": True,
+                    "roughcut_llm_pressure_gate_delay_ms": 1250,
+                }
+                self._main = _Main()
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_status = "queued"
+                self._roughcut_draft_thread = None
+                self._roughcut_draft_generation = 0
+                self._roughcut_draft_settings_override = None
+                self._roughcut_draft_manual_run_requested = False
+                self._auto_cut_boundary_scan_active = False
+                self._auto_cut_boundary_scan_lines = []
+                self.video_player = None
+                self.media_path = "/tmp/source.mp4"
+                self.sig_roughcut_draft_ready = _Signal()
+
+            def window(self):
+                return self._main
+
+            def _draft_settings_snapshot(self):
+                return dict(self.settings)
+
+            def _set_roughcut_draft_status(self, status: str, count=None):
+                self._roughcut_draft_status = status
+
+            def _mark_roughcut_queue_done(self, **_kwargs):
+                raise AssertionError("critical pressure gate must not finish the roughcut queue")
+
+            def _get_current_segments(self):
+                return _segments(8)
+
+        editor = _Editor()
+
+        editor._run_post_generation_roughcut_draft()
+
+        self.assertEqual(editor._roughcut_draft_status, "queued")
+        self.assertEqual(editor._roughcut_draft_timer.started, [1250])
+        self.assertEqual(getattr(editor, "_roughcut_llm_pressure_gate_attempts", 0), 1)
+        self.assertIsNone(editor._roughcut_draft_thread)
+
     def test_draft_reference_major_segments_prefers_project_topicless_segments(self):
         class _Main:
             def __init__(self, path):
@@ -692,9 +810,14 @@ class EditorRoughcutDraftTests(unittest.TestCase):
             self.assertEqual(editor._last_live_processing_stage, "")
             self.assertEqual(editor._next_live_processing_stage_at, 0.0)
             self.assertIn(0, [delay for delay, _callback in scheduled])
-            self.assertEqual([delay for delay, _callback in scheduled[1:3]], [900, 200])
+            self.assertIn(900, [delay for delay, _callback in scheduled])
+            self.assertIn(2600, [delay for delay, _callback in scheduled])
+            self.assertIn(200, [delay for delay, _callback in scheduled])
 
             next(callback for delay, callback in scheduled if delay == 900)()
+            self.assertEqual(editor.roughcut_schedule_count, 1)
+
+            next(callback for delay, callback in scheduled if delay == 2600)()
             self.assertEqual(editor.roughcut_schedule_count, 1)
 
             next(callback for delay, callback in scheduled if delay == 200)()
@@ -704,6 +827,31 @@ class EditorRoughcutDraftTests(unittest.TestCase):
             editor._roughcut_draft_status = "done"
 
         self.assertEqual(main.release_calls, [])
+
+    def test_completion_roughcut_verify_reschedules_lost_auto_followup(self):
+        class _Timer:
+            def isActive(self):
+                return False
+
+        class _Editor(EditorPipelineMixin):
+            def __init__(self):
+                self._roughcut_draft_auto_schedule_epoch = 4
+                self._roughcut_draft_status = "idle"
+                self._roughcut_draft_pending = False
+                self._roughcut_draft_timer = _Timer()
+                self._roughcut_draft_thread = None
+                self.roughcut_schedule_count = 0
+
+            def _schedule_post_generation_roughcut_draft(self, force=False):
+                self.roughcut_schedule_count += 1
+                self._roughcut_draft_status = "queued"
+
+        editor = _Editor()
+
+        editor._verify_generation_complete_roughcut_followup(4)
+
+        self.assertEqual(editor.roughcut_schedule_count, 1)
+        self.assertEqual(editor._roughcut_draft_status, "queued")
 
     def test_late_processing_stage_after_completion_is_ignored(self):
         class _Timer:
@@ -1573,6 +1721,103 @@ class EditorRoughcutDraftTests(unittest.TestCase):
             [(row["start_subtitle_id"], row["end_subtitle_id"]) for row in result["major_segments"]],
             [(0, 3), (4, 7), (8, 11)],
         )
+
+    def test_chunked_editor_draft_prompt_indices_skip_gap_rows(self):
+        from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
+
+        segments = _segments(12)
+        segments.insert(2, {"start": 2.0, "end": 2.4, "text": "", "is_gap": True})
+        settings = {
+            "selected_model": "roughcut-local",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "ollama",
+            "roughcut_llm_model": "roughcut-local",
+            "roughcut_llm_rows_auto_enabled": False,
+            "roughcut_llm_max_context_rows": 5,
+            "roughcut_llm_chunk_min_rows": 4,
+            "roughcut_llm_chunk_max_rows": 5,
+            "roughcut_llm_chunk_rows": 4,
+            "roughcut_llm_lookahead_rows": 0,
+        }
+        seen_prompts = []
+
+        def fake_llm(_model, prompt, *, timeout):
+            payload = json.loads(prompt)
+            seen_prompts.append(payload)
+            rows = payload["subtitle_rows"]
+            return {
+                "major_segments": [
+                    {
+                        "major_id": "A",
+                        "title": "chunk",
+                        "start_subtitle_id": rows[0]["subtitle_id"],
+                        "end_subtitle_id": rows[-1]["subtitle_id"],
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+
+        with mock.patch("core.roughcut.editor_draft.prepare_roughcut_llm_model_for_run"), \
+             mock.patch("core.roughcut.editor_draft._call_ollama_json", side_effect=fake_llm):
+            result = run_editor_roughcut_llm_draft(segments, settings=settings)
+
+        self.assertIsNotNone(result)
+        self.assertGreater(len(seen_prompts), 1)
+        first_ids = [row["subtitle_id"] for row in seen_prompts[0]["subtitle_rows"]]
+        self.assertEqual(first_ids[:4], [0, 1, 3, 4])
+        self.assertNotIn(2, first_ids)
+
+    def test_roughcut_boundary_break_candidates_match_linear_nearest_choice(self):
+        from core.roughcut.editor_draft import _boundary_break_candidates
+
+        rows = [
+            {"start": 0.0, "end": 1.0},
+            {"start": 1.5, "end": 2.0},
+            {"start": 2.4, "end": 3.0},
+            {"start": 3.4, "end": 4.0},
+        ]
+
+        with mock.patch("core.roughcut.editor_draft.roughcut_boundary_candidates_via_swift", return_value=None):
+            candidates = _boundary_break_candidates(
+                rows,
+                [{"time": 1.2}, {"timeline_sec": 2.3}, 3.2],
+                source="confirmed",
+            )
+
+        self.assertEqual([item["end_index"] for item in candidates], [0, 1, 2])
+        self.assertEqual([item["source"] for item in candidates], ["confirmed", "confirmed", "confirmed"])
+
+    def test_roughcut_chunk_break_candidate_index_matches_linear_choice(self):
+        from core.roughcut.editor_draft import _indexed_chunk_break_candidates, _pick_chunk_break_candidate
+
+        confirmed = [
+            {"end_index": 4, "distance": 0.25, "source": "confirmed"},
+            {"end_index": 8, "distance": 0.10, "source": "confirmed"},
+            {"end_index": 12, "distance": 0.01, "source": "confirmed"},
+        ]
+        provisional = [
+            {"end_index": 7, "distance": 0.0, "source": "provisional"},
+        ]
+
+        linear = _pick_chunk_break_candidate(
+            confirmed_candidates=confirmed,
+            provisional_candidates=provisional,
+            min_end=6,
+            target_end=9,
+            max_end=10,
+        )
+        indexed = _pick_chunk_break_candidate(
+            confirmed_candidates=_indexed_chunk_break_candidates(confirmed),
+            provisional_candidates=_indexed_chunk_break_candidates(provisional),
+            min_end=6,
+            target_end=9,
+            max_end=10,
+        )
+
+        self.assertEqual(linear, indexed)
+        self.assertEqual(indexed["end_index"], 8)
+        self.assertEqual(indexed["source"], "confirmed")
 
     def test_builds_major_segments_with_subtitle_rows_as_minor_groups(self):
         result = build_editor_roughcut_draft_result(

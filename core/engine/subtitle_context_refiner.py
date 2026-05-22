@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any, Callable
 
+from core.engine.llm_correction_guard import normalized_edit_distance
 
 CONTEXT_BOUNDARY_SCHEMA = "ai_subtitle_studio.subtitle_llm_context_boundary.v1"
 
@@ -72,6 +73,21 @@ def _word_text(word: dict[str, Any]) -> str:
 
 def _normal_word(text: Any) -> str:
     return re.sub(r"[^\w가-힣]", "", str(text or "")).strip().lower()
+
+
+def _minimal_word_correction_allowed(old: str, new: str, settings: dict[str, Any]) -> bool:
+    old_norm = _normal_word(old)
+    new_norm = _normal_word(new)
+    if not old_norm or not new_norm or old_norm == new_norm:
+        return bool(old_norm and new_norm)
+    if old_norm[0] != new_norm[0]:
+        return False
+    default_distance = 1 if len(old_norm) <= 3 else 2
+    max_distance = max(1, _setting_int(settings, "subtitle_llm_context_max_correction_edit_distance", default_distance))
+    max_distance = min(max_distance, 2)
+    if abs(len(new_norm) - len(old_norm)) > max_distance:
+        return False
+    return normalized_edit_distance(old_norm, new_norm, limit=max_distance) <= max_distance
 
 
 def _segment_words(seg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -352,6 +368,8 @@ def _valid_correction(item: Any, words: list[dict[str, Any]], settings: dict[str
     if len(new) > _setting_int(settings, "subtitle_llm_context_max_correction_chars", 8):
         return None
     if abs(len(new) - len(old)) > _setting_int(settings, "subtitle_llm_context_max_correction_delta", 3):
+        return None
+    if not _minimal_word_correction_allowed(old, new, settings):
         return None
     idx: int | None = None
     try:

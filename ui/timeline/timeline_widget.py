@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 from ui.editor.ux.timeline_playhead_mode import playhead_line_color_hex
 from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, RULER_H, SEG_TOP, WAVE_H
 from ui.timeline.timeline_canvas import TimelineCanvas
-from ui.timeline.timeline_global import GlobalCanvas
+from ui.timeline.timeline_global import GlobalCanvas, MINIMAP_HEIGHT
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker, patch_waveform_buffer
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import COLORS, button_style, settings_dialog_stylesheet
@@ -319,7 +319,7 @@ class TimelineWidget(QWidget):
 
         self._base_canvas_height = CANVAS_H
         self._canvas_height_bonus = 0
-        self._base_widget_height = CANVAS_H + 55
+        self._base_widget_height = CANVAS_H + MINIMAP_HEIGHT + 29
         self.setMinimumHeight(self._base_widget_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -894,6 +894,7 @@ class TimelineWidget(QWidget):
         if owner is None:
             owner = self
         dialog = QInputDialog(owner)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         dialog.setWindowTitle("편집 창 시간")
         dialog.setInputMode(QInputDialog.InputMode.IntInput)
         dialog.setLabelText(

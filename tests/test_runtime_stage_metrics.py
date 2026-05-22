@@ -57,6 +57,8 @@ class RuntimeStageMetricsTests(unittest.TestCase):
         self.assertEqual(classify_resource_label("Fast-STT2 재검사"), "stt2")
         self.assertEqual(classify_resource_label("VAD 후처리"), "vad")
         self.assertEqual(classify_resource_label("자막 LLM cleanup"), "llm")
+        self.assertEqual(classify_resource_label("자막 최적화/검수 중"), "subtitle_optimize")
+        self.assertEqual(classify_resource_label("⏳ [STT+자막 LLM] 인식 결과 교정/분리 중"), "subtitle_optimize")
         self.assertEqual(classify_resource_label("timeline render playhead"), "render")
 
 

@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from core.platform_compat import ffmpeg_binary
 from core.runtime.subprocess_utils import run_subprocess_capture_cancelable
+from core.personalization.lora_gpu_acceleration import lora_training_acceleration_plan
 from core.personalization.text_lora_dataset import (
     TEXT_LORA_CORPUS_MANIFEST_PATH,
     TEXT_LORA_CORPUS_PATH,
@@ -219,6 +220,7 @@ def build_text_lora_training_plan(
             speakers[speaker] += 1
 
     backend = "mlx_lm_lora" if _module_exists("mlx_lm") else "unavailable"
+    acceleration = lora_training_acceleration_plan({"lora_gpu_acceleration_enabled": True}, backend=backend)
     command = []
     if backend == "mlx_lm_lora":
         command = [
@@ -247,6 +249,7 @@ def build_text_lora_training_plan(
         "created_at": _now(),
         "platform": "mac",
         "backend": backend,
+        "training_acceleration": acceleration,
         "base_model": base_model,
         "adapter_name": adapter_name,
         "output_dir": str(out_dir),
@@ -280,6 +283,7 @@ def build_text_lora_training_plan(
         },
         "notes": [
             "mac first subtitle QA text LoRA training scaffold",
+            "mlx_lm_lora runs on Apple Metal GPU when MLX is available; JSON corpus file I/O remains CPU/OS.",
             "uses accumulated STT candidate -> final subtitle corpus",
             "preserves spoken style while learning conservative subtitle review corrections",
             "runtime personalization now prefers compact subtitle pattern indexes before text LoRA",
@@ -470,13 +474,18 @@ def build_voice_lora_training_plan(
     backend_candidates = []
     if _module_exists("TTS"):
         backend_candidates.append("coqui_xtts_dataset_ready")
+    voice_acceleration = lora_training_acceleration_plan({"lora_gpu_acceleration_enabled": True}, backend="torch_voice")
     if _module_exists("torch"):
-        backend_candidates.append("torch_voice_finetune_possible")
+        if str(voice_acceleration.get("torch_device") or "cpu") != "cpu":
+            backend_candidates.append(f"torch_{voice_acceleration['torch_device']}_voice_finetune_possible")
+        else:
+            backend_candidates.append("torch_voice_finetune_possible")
     backend = backend_candidates[0] if backend_candidates else "dataset_plan_only"
     plan = {
         "schema": "ai_subtitle_studio.voice_lora_training_plan.v1",
         "created_at": _now(),
         "backend": backend,
+        "training_acceleration": voice_acceleration,
         "base_model": base_model,
         "adapter_name": adapter_name,
         "bridge_path": str(bridge_target),
@@ -509,6 +518,7 @@ def build_voice_lora_training_plan(
         },
         "notes": [
             "This plan prepares voice LoRA / voice-clone fine-tuning data from video segments.",
+            "Torch voice fine-tuning should use MPS/CUDA from training_acceleration when available; WAV file writes remain CPU/OS.",
             "ffmpeg extraction commands are stored per item and saved WAV clips become the training dataset.",
             "Actual voice LoRA backend depends on the installed voice model toolkit.",
         ],

@@ -4,7 +4,7 @@
 
 ## 사용 규칙
 
-- `idea_item.md` 실행 또는 새 아이디어 발굴 전에 반드시 이 파일과 `waste_action_item.md`를 먼저 확인한다.
+- `ACTION_ITEMS.md` 실행 또는 새 아이디어 발굴 전에 반드시 이 파일과 `waste_action_item.md`를 먼저 확인한다.
 - 이미 폐기된 아이디어는 같은 조건에서 다시 제안하거나 실행하지 않는다.
 - 같은 아이디어를 재검토하려면 새 하드웨어, 새 모델, 새 benchmark, 새 계측처럼 이전 결론을 뒤집을 근거를 먼저 적는다.
 - lesson은 짧게 남기되, 가능하면 원인, 금지할 반복 행동, 다시 해야 할 검증을 함께 적는다.
@@ -91,7 +91,7 @@
   - 이유: viewport clip 또는 voice-activity lane refresh 실패는 사용자가 보는 잔상/누락으로 이어질 수 있지만, 매 프레임 로그를 찍으면 편집 성능이 흔들린다.
   - 다음 원칙: 복구 가능한 UI 예외는 기존 복구 동작을 유지하되, key별 one-shot nonfatal WARN으로 남기고 반복 로그는 막는다.
 
-- 완료된 `idea_item.md`를 다시 실행하라는 요청이 오면 폐기 후보를 새 근거 없이 재구현하지 않는다.
+- 완료된 `ACTION_ITEMS.md` 항목을 다시 실행하라는 요청이 오면 폐기 후보를 새 근거 없이 재구현하지 않는다.
   - 이유: `mode_fast`는 X5 10회 rerun에서도 quality gate `0/10`이었고, 이전 폐기 결론을 뒤집지 못했다.
   - 다음 원칙: active queue가 비어 있으면 benchmark/QA를 refresh하고 문서를 닫는다. 폐기 후보 재실행은 새 모델, 새 fixture, 새 품질 보정, 새 benchmark 근거가 있을 때만 한다.
 

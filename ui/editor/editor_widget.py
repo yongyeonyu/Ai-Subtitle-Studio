@@ -62,6 +62,11 @@ from ui.editor.editor_stt_mode import EditorSTTModeMixin
 DATASET_DIR   = "dataset"
 SETTINGS_FILE = os.path.join(DATASET_DIR, "user_settings.json")
 DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC = 300
+EDITOR_VIDEO_PLAYER_FIXED_HEIGHT = 420
+EDITOR_VIDEO_PLAYER_MIN_WIDTH = 320
+EDITOR_VIDEO_PLAYER_16_9_ASPECT = 16 / 9
+EDITOR_VIDEO_PLAYER_16_9_TOLERANCE = 0.035
+QT_WIDGETSIZE_MAX = 16777215
 
 
 class EditorWidget(
@@ -590,14 +595,21 @@ class EditorWidget(
         self._editor_focus_border.hide()
         self._sync_editor_focus_border()
         self.splitter.addWidget(editor_wrap)
+        # UI LOCK: keep the video player at a fixed editor height. Do not grow
+        # this slot to fill spare vertical space or crop/zoom the preview.
+        # For 16:9 sources, width is derived from the current preview height
+        # below. Do not change this back to splitter-fill behavior.
+        video_fixed_height = EDITOR_VIDEO_PLAYER_FIXED_HEIGHT
         self.video_frame = StableRenderFrame(
             "EditorVideoFrame",
             render_feature="video",
-            min_width=320,
-            min_height=260,
+            min_width=EDITOR_VIDEO_PLAYER_MIN_WIDTH,
+            min_height=video_fixed_height,
+            fixed_height=True,
         )
         self.video_frame.setStyleSheet("QFrame#EditorVideoFrame { background: #000000; border: none; border-radius: 0px; }")
         self.video_player = VideoPlayerWidget(self.video_frame)
+        self.video_player.setFixedHeight(video_fixed_height)
         if hasattr(self.video_player, "set_subtitle_provider"):
             self.video_player.set_subtitle_provider(self._video_subtitle_context_for_player)
         if hasattr(self.video_player, "frame_step_requested"):
@@ -640,6 +652,8 @@ class EditorWidget(
         self._video_width_locking = False
         QTimer.singleShot(0, self._position_video_expand_button)
         QTimer.singleShot(150, self._position_video_expand_button)
+        QTimer.singleShot(0, self._apply_fixed_video_preview_width)
+        QTimer.singleShot(150, self._apply_fixed_video_preview_width)
 
         self.timeline = TimelineWidget()
         self.timeline.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
@@ -1693,6 +1707,7 @@ class EditorWidget(
     def resizeEvent(self, event):
         super().resizeEvent(event)
         QTimer.singleShot(0, self._position_video_expand_button)
+        QTimer.singleShot(0, self._apply_fixed_video_preview_width)
         QTimer.singleShot(0, self._sync_editor_focus_border)
         QTimer.singleShot(0, self._schedule_vertical_rebalance)
         self._apply_footer_menu_button_styles()
@@ -1701,7 +1716,95 @@ class EditorWidget(
         return
 
     def _apply_fixed_video_preview_width(self):
-        return
+        frame = getattr(self, "video_frame", None)
+        player = getattr(self, "video_player", None)
+        if frame is None or player is None:
+            return
+
+        if not self._video_source_is_16_9():
+            self._set_video_preview_width_lock(None)
+            return
+
+        preview_height = self._video_fixed_height()
+        layout_margin_width = 0
+        try:
+            margins = player.layout().contentsMargins()
+            layout_margin_width = int(margins.left()) + int(margins.right())
+        except Exception:
+            layout_margin_width = 0
+        target_width = max(
+            EDITOR_VIDEO_PLAYER_MIN_WIDTH,
+            int(round(preview_height * EDITOR_VIDEO_PLAYER_16_9_ASPECT)) + layout_margin_width,
+        )
+        self._set_video_preview_width_lock(target_width)
+
+    def _video_source_aspect(self):
+        player = getattr(self, "video_player", None)
+        if player is None:
+            return EDITOR_VIDEO_PLAYER_16_9_ASPECT
+        try:
+            source_width = int(getattr(player, "_source_width", 0) or 0)
+            source_height = int(getattr(player, "_source_height", 0) or 0)
+            if source_width > 0 and source_height > 0:
+                return source_width / source_height
+        except Exception:
+            pass
+        try:
+            return float(getattr(player, "_source_aspect", EDITOR_VIDEO_PLAYER_16_9_ASPECT) or EDITOR_VIDEO_PLAYER_16_9_ASPECT)
+        except Exception:
+            return EDITOR_VIDEO_PLAYER_16_9_ASPECT
+
+    def _video_source_is_16_9(self):
+        aspect = self._video_source_aspect()
+        return abs(aspect - EDITOR_VIDEO_PLAYER_16_9_ASPECT) <= EDITOR_VIDEO_PLAYER_16_9_TOLERANCE
+
+    def _set_video_preview_width_lock(self, target_width):
+        frame = getattr(self, "video_frame", None)
+        player = getattr(self, "video_player", None)
+        if frame is None or player is None:
+            return
+
+        if target_width is None:
+            if not bool(getattr(self, "_video_width_locking", False)):
+                return
+            self._video_width_locking = False
+            self._video_width_lock_value = 0
+            for widget in (frame, player):
+                try:
+                    widget.setMinimumWidth(EDITOR_VIDEO_PLAYER_MIN_WIDTH)
+                    widget.setMaximumWidth(QT_WIDGETSIZE_MAX)
+                    policy = widget.sizePolicy()
+                    widget.setSizePolicy(QSizePolicy.Policy.Expanding, policy.verticalPolicy())
+                    widget.updateGeometry()
+                except Exception:
+                    pass
+            return
+
+        target_width = max(EDITOR_VIDEO_PLAYER_MIN_WIDTH, int(target_width))
+        if (
+            bool(getattr(self, "_video_width_locking", False))
+            and int(getattr(self, "_video_width_lock_value", 0) or 0) == target_width
+        ):
+            return
+        self._video_width_locking = True
+        self._video_width_lock_value = target_width
+
+        # UI LOCK: 16:9 video preview is height-owned. The editor keeps the
+        # current fixed preview height and derives width as height * 16:9.
+        # Do not change this to auto-fill/auto-zoom; it reintroduces the
+        # oversized player regression marked in live UI QA.
+        for widget in (frame, player):
+            try:
+                widget.setFixedWidth(target_width)
+                policy = widget.sizePolicy()
+                widget.setSizePolicy(QSizePolicy.Policy.Fixed, policy.verticalPolicy())
+                widget.updateGeometry()
+            except Exception:
+                pass
+        try:
+            self.updateGeometry()
+        except Exception:
+            pass
 
     def _video_fixed_height(self):
         try:
@@ -1717,53 +1820,22 @@ class EditorWidget(
 
     def _rebalance_video_timeline_heights(self):
         self._vertical_rebalance_scheduled = False
-        followups = max(0, int(getattr(self, "_vertical_rebalance_followups", 0) or 0))
+        # UI LOCK: video/timeline heights are fixed; do not auto-redistribute
+        # letterbox space by enlarging or shrinking the video preview.
+        self._timeline_height_bonus = 0
+        self._vertical_rebalance_followups = 0
         timeline = getattr(self, "timeline", None)
         timeline_frame = getattr(self, "timeline_frame", None)
-        video_player = getattr(self, "video_player", None)
-        if timeline is None or timeline_frame is None or video_player is None:
-            self._vertical_rebalance_followups = 0
+        if timeline is None or timeline_frame is None:
             return
         try:
-            container_rect = video_player.video_container.rect()
-        except Exception:
-            self._vertical_rebalance_followups = 0
-            return
-        if container_rect.width() <= 0 or container_rect.height() <= 0:
-            self._vertical_rebalance_followups = 0
-            return
-        try:
-            display_rect = video_player._displayed_video_rect(container_rect)
-        except Exception:
-            self._vertical_rebalance_followups = 0
-            return
-        current_gap = max(0, int(container_rect.height() - display_rect.height()))
-        current_bonus = max(0, int(getattr(self, "_timeline_height_bonus", 0) or 0))
-        base_gap_estimate = current_gap + current_bonus
-        target_gap = 6
-        max_bonus = max(0, min(160, int(self.height() * 0.22)))
-        desired_bonus = min(max_bonus, max(0, base_gap_estimate - target_gap))
-        if desired_bonus == current_bonus:
-            self._vertical_rebalance_followups = 0
-            return
-        self._timeline_height_bonus = desired_bonus
-        timeline.set_canvas_height_bonus(desired_bonus)
-        target_height = max(
-            int(getattr(self, "_timeline_base_height", timeline.minimumHeight()) or 0),
-            int(timeline.minimumHeight() or 0),
-        )
-        try:
-            timeline_frame.setFixedHeight(target_height)
+            if hasattr(timeline, "set_canvas_height_bonus"):
+                timeline.set_canvas_height_bonus(0)
         except Exception:
             pass
         timeline.updateGeometry()
         timeline_frame.updateGeometry()
         self.updateGeometry()
-        if followups < 3:
-            self._vertical_rebalance_followups = followups + 1
-            QTimer.singleShot(0, self._rebalance_video_timeline_heights)
-        else:
-            self._vertical_rebalance_followups = 0
 
     # ---------------------------------------------------------
     # Helpers

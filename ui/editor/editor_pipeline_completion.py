@@ -117,6 +117,18 @@ class EditorPipelineCompletionMixin:
                 label="컷 경계 placeholder 정리",
             )
 
+    def _load_generation_complete_waveform(self) -> bool:
+        loader = getattr(self, "_load_deferred_open_waveform", None)
+        if not callable(loader):
+            return False
+        return bool(
+            self._safe_generation_completion_step(
+                lambda: loader(reason="generation_complete"),
+                label="생성 완료 waveform 로드",
+                default=False,
+            )
+        )
+
     def _schedule_generation_complete_followups(self, main_w, *, suppress_post_generation_tasks: bool) -> None:
         if suppress_post_generation_tasks:
             self._pipeline_single_shot(0, self._post_completion_sync)
@@ -126,16 +138,59 @@ class EditorPipelineCompletionMixin:
             start_idle()
         roughcut = getattr(self, "_schedule_post_generation_roughcut_draft", None)
         if callable(roughcut):
-            self._roughcut_draft_auto_schedule_epoch = int(
+            epoch = int(
                 getattr(self, "_roughcut_draft_auto_schedule_epoch", 0) or 0
             ) + 1
+            self._roughcut_draft_auto_schedule_epoch = epoch
             # 내부 완료 동기화가 editor activity로 기록될 수 있어, 실제 timer가 발화할 때 pending을 세운다.
             self._pipeline_single_shot(900, lambda: roughcut(force=True))
+            self._pipeline_single_shot(
+                2600,
+                lambda scheduled_epoch=epoch: self._verify_generation_complete_roughcut_followup(scheduled_epoch),
+            )
         self._pipeline_single_shot(200, self._post_completion_sync)
         self._schedule_generation_completion_autosave(delay_ms=650)
         unlock_sidebar = getattr(main_w, "_unlock_workspace_sidebar_width", None)
         if callable(unlock_sidebar):
             self._pipeline_single_shot(1300, unlock_sidebar)
+
+    def _roughcut_followup_is_active_or_finished(self) -> bool:
+        status = str(getattr(self, "_roughcut_draft_status", "") or "").strip().lower()
+        if status in {"queued", "running", "saving", "done", "disabled"}:
+            return True
+        if bool(getattr(self, "_roughcut_draft_pending", False)):
+            return True
+        timer = getattr(self, "_roughcut_draft_timer", None)
+        try:
+            if timer is not None and bool(timer.isActive()):
+                return True
+        except Exception:
+            pass
+        thread = getattr(self, "_roughcut_draft_thread", None)
+        try:
+            if thread is not None and thread.is_alive():
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _verify_generation_complete_roughcut_followup(self, scheduled_epoch: int) -> None:
+        try:
+            current_epoch = int(getattr(self, "_roughcut_draft_auto_schedule_epoch", 0) or 0)
+        except Exception:
+            current_epoch = 0
+        if int(scheduled_epoch or 0) != current_epoch:
+            return
+        if self._roughcut_followup_is_active_or_finished():
+            return
+        roughcut = getattr(self, "_schedule_post_generation_roughcut_draft", None)
+        if not callable(roughcut):
+            return
+        get_logger().log("⚠️ 러프컷 LLM 후처리 확인: 예약/실행 상태가 없어 한 번 재예약합니다.")
+        try:
+            roughcut(force=True)
+        except Exception as exc:
+            get_logger().log(f"⚠️ 러프컷 LLM 후처리 재예약 실패: {exc}")
 
     def _set_process_completed(self, *, suppress_post_generation_tasks: bool = False):
         if bool(getattr(self, "_process_completed_finalized", False)):
@@ -181,4 +236,5 @@ class EditorPipelineCompletionMixin:
         if main_w is not None:
             self._queue_generation_complete_learning(main_w)
             self._run_generation_complete_cleanup(main_w)
+        self._load_generation_complete_waveform()
         self._schedule_generation_complete_followups(main_w, suppress_post_generation_tasks=False)

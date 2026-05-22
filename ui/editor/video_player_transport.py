@@ -7,6 +7,7 @@ from PyQt6.QtCore import QEvent, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetrics, QImage
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
+from core.frame_time import normalize_fps
 from core.runtime import config
 from core.runtime.logger import get_logger
 from ui.gpu_rendering import scenegraph_enabled
@@ -168,9 +169,9 @@ class VideoPlayerTransportMixin:
         self.info_label.setStyleSheet(
             "QLabel#VideoSourceMetaLabel {"
             " color: #A9B0B7;"
-            " background: #1A2127;"
-            " border: 1px solid #2D3942;"
-            " border-radius: 9px;"
+            " background: transparent;"
+            " border: none;"
+            " border-radius: 0px;"
             " padding: 2px 10px 1px 10px;"
             " font-size: 9px;"
             "}"
@@ -189,9 +190,9 @@ class VideoPlayerTransportMixin:
         self.source_name_label.setStyleSheet(
             "QLabel#VideoSourceNameLabel {"
             " color: #EAF2F8;"
-            " background: #182126;"
-            " border: 1px solid #2F4852;"
-            " border-radius: 9px;"
+            " background: transparent;"
+            " border: none;"
+            " border-radius: 0px;"
             " padding: 2px 10px 1px 10px;"
             " font-size: 10px;"
             " font-weight: 700;"
@@ -500,6 +501,24 @@ class VideoPlayerTransportMixin:
         if self._source_info_status_text in {"", "영상 정보를 불러오는 중...", "영상을 불러오는 중..."}:
             self._source_info_status_text = ""
         self._refresh_source_info_label()
+        self._schedule_editor_video_size_policy_refresh()
+
+    def _schedule_editor_video_size_policy_refresh(self):
+        parent = None
+        try:
+            parent = self.parent()
+        except Exception:
+            parent = None
+        while parent is not None:
+            hook = getattr(parent, "_apply_fixed_video_preview_width", None)
+            if callable(hook):
+                QTimer.singleShot(0, hook)
+                QTimer.singleShot(150, hook)
+                return
+            try:
+                parent = parent.parent()
+            except Exception:
+                return
 
     def _set_source_name_badge(self, path: str):
         name = os.path.basename(str(path or "").strip())
@@ -657,13 +676,31 @@ class VideoPlayerTransportMixin:
 
     def _get_video_ui_interval_ms(self) -> int:
         try:
-            settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
-            if os.path.exists(settings_path):
-                with open(settings_path, "r", encoding="utf-8") as f:
-                    return max(24, min(80, int(json.load(f).get("video_ui_interval_ms", 50))))
+            fps = normalize_fps(getattr(self, "frame_rate", 30.0) or 30.0)
+            return max(16, min(80, int(round(1000.0 / fps))))
+        except Exception:
+            return 33
+
+    def _refresh_ui_timer_intervals(self) -> None:
+        play_interval = int(self._get_video_ui_interval_ms())
+        idle_interval = max(90, int(play_interval * 3))
+        self._play_ui_interval_ms = play_interval
+        self._idle_ui_interval_ms = idle_interval
+        timer = getattr(self, "_ui_timer", None)
+        if timer is None:
+            return
+        try:
+            state = self.media_player.playbackState()
+            playing_state = getattr(self.media_player.PlaybackState, "PlayingState", None)
+            is_playing = bool(playing_state is not None and state == playing_state)
+        except Exception:
+            is_playing = False
+        target_interval = play_interval if is_playing else idle_interval
+        try:
+            if int(timer.interval()) != int(target_interval):
+                timer.setInterval(int(target_interval))
         except Exception as exc:
-            self._log_video_transport_nonfatal("load_ui_interval", exc)
-        return 50
+            self._log_video_transport_nonfatal("refresh_ui_timer_interval", exc)
 
     def request_scan_cut(self, direction: int):
         try:

@@ -52,12 +52,6 @@ class EditorPipelineStartupMixin(EditorPipelineSafetyMixin):
             label="생성 완료 idle timer 중지",
             log=False,
         )
-        self._pipeline_call_if_callable(
-            self,
-            "_load_deferred_open_waveform",
-            label="시작 후 지연 waveform 로드",
-            log=False,
-        )
         try:
             from core.settings import load_settings
 

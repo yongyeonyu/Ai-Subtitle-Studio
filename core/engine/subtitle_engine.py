@@ -1622,6 +1622,14 @@ def _attach_final_integrity_policy(rows: list[dict], policy: dict) -> list[dict]
     return out
 
 
+def _nonempty_subtitle_segment_count(rows: list[dict] | None) -> int:
+    return sum(
+        1
+        for seg in rows or []
+        if isinstance(seg, dict) and str(seg.get("text", "") or "").strip()
+    )
+
+
 def _final_transcript_integrity_guard(
     optimized: list[dict],
     source_segments: list[dict],
@@ -1667,8 +1675,8 @@ def _final_transcript_integrity_guard(
         "task": "final_transcript_integrity_guard",
         "accepted": bool(verified),
         "reason": str(decision.get("reason") or "ok"),
-        "source_segments": len([seg for seg in list(source_segments or []) if isinstance(seg, dict) and str(seg.get("text", "") or "").strip()]),
-        "final_segments": len([seg for seg in list(optimized or []) if isinstance(seg, dict) and str(seg.get("text", "") or "").strip()]),
+        "source_segments": _nonempty_subtitle_segment_count(source_segments),
+        "final_segments": _nonempty_subtitle_segment_count(optimized),
         "source_compact_len": decision.get("source_compact_len"),
         "candidate_compact_len": decision.get("candidate_compact_len"),
         "similarity": decision.get("similarity"),
@@ -1835,20 +1843,36 @@ def _select_stt_candidate_fast(seg: dict, settings: dict | None = None) -> dict 
     lattice_decision, lattice_meta = select_stt_lattice_text(seg, settings, _profile_from_settings(settings))
     if lattice_decision:
         lattice_meta = dict(lattice_meta or {})
-        selected = dict(lattice_decision)
-        selected["_stt_lattice_policy"] = lattice_meta
-        selected.setdefault("selector", "stt_lattice")
-        get_logger().log(
-            f"[STT격자-딥러닝판정] 단어 {lattice_meta.get('replacements', 0)}개 교체 "
-            f"confidence={lattice_meta.get('confidence', '-')}: "
-            f"'{str(selected.get('text', '') or '')[:18]}...'"
-        )
-        return selected
+        raw_ok, raw_meta = _stt_decision_matches_raw_candidate(lattice_decision, unique, settings)
+        lattice_meta["raw_candidate_guard"] = raw_meta
+        if not raw_ok:
+            get_logger().log(
+                "[STT격자-딥러닝판정] STT1/STT2 원문과 의미 거리가 커서 자동 선택 보류: "
+                f"similarity={raw_meta.get('similarity_to_raw_candidate', '-')}"
+            )
+        else:
+            selected = dict(lattice_decision)
+            selected["_stt_lattice_policy"] = lattice_meta
+            selected.setdefault("selector", "stt_lattice")
+            get_logger().log(
+                f"[STT격자-딥러닝판정] 단어 {lattice_meta.get('replacements', 0)}개 교체 "
+                f"confidence={lattice_meta.get('confidence', '-')}: "
+                f"'{str(selected.get('text', '') or '')[:18]}...'"
+            )
+            return selected
 
     if seg.get("stt_ensemble_primary_locked"):
         return None
     deep_decision = deep_select_stt_candidate({**seg, "stt_candidates": unique}, settings, _profile_from_settings(settings))
     if deep_decision:
+        raw_ok, raw_meta = _stt_decision_matches_raw_candidate(deep_decision, unique, settings)
+        if not raw_ok:
+            get_logger().log(
+                "[STT앙상블-딥러닝판정] STT1/STT2 원문과 의미 거리가 커서 자동 선택 보류: "
+                f"similarity={raw_meta.get('similarity_to_raw_candidate', '-')}"
+            )
+            return None
+        deep_decision = {**deep_decision, "_stt_raw_candidate_guard": raw_meta}
         source = str(deep_decision.get("source", "") or "").strip().upper()
         label = str(deep_decision.get("label", "") or "").strip()
         get_logger().log(
@@ -1857,6 +1881,35 @@ def _select_stt_candidate_fast(seg: dict, settings: dict | None = None) -> dict 
             f"'{str(deep_decision.get('text', '') or '')[:18]}...'"
         )
         return deep_decision
+    if _setting_bool(settings, "stt_selection_score_fallback_enabled", True):
+        best_candidate = _best_scored_stt_candidate(unique)
+        best_score = _stt_candidate_score100(best_candidate)
+        current_score = _stt_current_candidate_score(seg, unique)
+        min_score = _setting_float(settings, "stt_selection_score_fallback_min_score", 84.0)
+        min_margin = _setting_float(settings, "stt_selection_score_fallback_min_margin", 12.0)
+        if (
+            best_candidate
+            and best_score >= min_score
+            and (best_score - current_score) >= min_margin
+            and _stt_candidate_similarity(str(best_candidate.get("text", "") or ""), str(seg.get("text", "") or "")) < 0.995
+        ):
+            selected_text = str(best_candidate.get("text", "") or "").strip()
+            selected_source = str(best_candidate.get("source", "") or "").strip().upper()
+            get_logger().log(
+                "[STT앙상블-점수판정] 최고 STT 점수 후보 우선 선택: "
+                f"{selected_source or '-'} score={best_score:.1f} margin={best_score - current_score:.1f} "
+                f"'{selected_text[:18]}...'"
+            )
+            return {
+                "text": selected_text,
+                "source": selected_source,
+                "label": str(best_candidate.get("label") or best_candidate.get("stt_label") or "score").strip(),
+                "start": best_candidate.get("start"),
+                "end": best_candidate.get("end"),
+                "words": list(best_candidate.get("words") or []),
+                "score": best_candidate.get("score", best_candidate.get("stt_score")),
+                "selector": "stt_candidate_score_fallback",
+            }
     return None
 
 
@@ -1887,6 +1940,128 @@ def _stt_candidate_score100(candidate: dict | None) -> float:
             value *= 100.0
         return max(0.0, min(100.0, value))
     return 0.0
+
+
+def _selected_decision_word_span(decision: dict | None) -> tuple[float, float] | None:
+    words = [word for word in list((decision or {}).get("words") or []) if isinstance(word, dict)]
+    if not words:
+        return None
+    starts = []
+    ends = []
+    for word in words:
+        try:
+            starts.append(float(word.get("start")))
+            ends.append(float(word.get("end")))
+        except (TypeError, ValueError):
+            continue
+    if not starts or not ends:
+        return None
+    start = min(starts)
+    end = max(ends)
+    if end <= start:
+        return None
+    return start, end
+
+
+def _looks_like_relative_word_span(word_span: tuple[float, float], selected_span: tuple[float, float] | None) -> bool:
+    if selected_span is None:
+        return False
+    selected_start, selected_end = selected_span
+    duration = max(0.05, selected_end - selected_start)
+    word_start, word_end = word_span
+    return bool(
+        selected_start > 5.0
+        and word_start < 2.0
+        and word_end <= max(2.0, duration + 1.0)
+        and abs(word_start - selected_start) > 2.0
+    )
+
+
+def _candidate_span_from_decision(decision: dict | None) -> tuple[float, float] | None:
+    try:
+        start = float((decision or {}).get("start"))
+        end = float((decision or {}).get("end"))
+    except (TypeError, ValueError):
+        return None
+    return (start, end) if end > start else None
+
+
+def _stt_decision_timing_span(decision: dict | None) -> tuple[float, float] | None:
+    selected_span = _candidate_span_from_decision(decision)
+    word_span = _selected_decision_word_span(decision)
+    if word_span is None or _looks_like_relative_word_span(word_span, selected_span):
+        return selected_span
+    if selected_span is None:
+        return word_span
+    selected_start, selected_end = selected_span
+    word_start, word_end = word_span
+    overlap = max(0.0, min(selected_end, word_end) - max(selected_start, word_start))
+    word_dur = max(0.001, word_end - word_start)
+    selected_dur = max(0.001, selected_end - selected_start)
+    overlap_ratio = overlap / min(word_dur, selected_dur)
+    if overlap_ratio < 0.25 and max(abs(word_start - selected_start), abs(word_end - selected_end)) > 0.35:
+        return word_span
+    return selected_span
+
+
+def _best_scored_stt_candidate(candidates: list[dict] | tuple[dict, ...]) -> dict | None:
+    rows = [c for c in list(candidates or []) if isinstance(c, dict) and str(c.get("text", "") or "").strip()]
+    if not rows:
+        return None
+    return max(
+        rows,
+        key=lambda candidate: (
+            _stt_candidate_score100(candidate),
+            len(_stt_candidate_compact_text(str(candidate.get("text", "") or ""))),
+        ),
+    )
+
+
+def _stt_current_candidate_score(seg: dict, candidates: list[dict] | tuple[dict, ...]) -> float:
+    current_text = str((seg or {}).get("text", "") or "")
+    current_score = _stt_candidate_score100(seg)
+    best_match_score = 0.0
+    best_match_similarity = 0.0
+    for candidate in list(candidates or []):
+        if not isinstance(candidate, dict):
+            continue
+        similarity = _stt_candidate_similarity(current_text, str(candidate.get("text", "") or ""))
+        if similarity > best_match_similarity:
+            best_match_similarity = similarity
+            best_match_score = _stt_candidate_score100(candidate)
+    if best_match_similarity >= 0.96:
+        return best_match_score
+    return current_score
+
+
+def _stt_decision_matches_raw_candidate(decision: dict | None, candidates: list[dict], settings: dict | None) -> tuple[bool, dict]:
+    decision_text = str((decision or {}).get("text", "") or "").strip()
+    if not decision_text:
+        return False, {"accepted": False, "reason": "empty_decision"}
+    raw = [
+        c for c in list(candidates or [])
+        if isinstance(c, dict)
+        and str(c.get("text", "") or "").strip()
+        and str(c.get("source", "") or "").strip().upper() in {"STT1", "STT2"}
+    ]
+    if not raw:
+        raw = [c for c in list(candidates or []) if isinstance(c, dict) and str(c.get("text", "") or "").strip()]
+    if not raw:
+        return False, {"accepted": False, "reason": "no_raw_candidates"}
+    best_similarity = max(_stt_candidate_similarity(decision_text, str(c.get("text", "") or "")) for c in raw)
+    compact_len = len(_stt_candidate_compact_text(decision_text))
+    min_similarity = _setting_float(settings or {}, "stt_selection_min_raw_candidate_similarity", 0.72)
+    if compact_len <= 12:
+        min_similarity = max(min_similarity, 0.82)
+    elif compact_len <= 24:
+        min_similarity = max(min_similarity, 0.76)
+    ok = best_similarity >= min_similarity
+    return ok, {
+        "accepted": ok,
+        "reason": "raw_candidate_similarity" if ok else "too_far_from_stt1_stt2",
+        "similarity_to_raw_candidate": round(best_similarity, 4),
+        "min_similarity": round(min_similarity, 4),
+    }
 
 
 def _stt_candidate_risk_flags(seg: dict, candidates: list[dict]) -> set[str]:
@@ -2010,7 +2185,11 @@ def _apply_stt_candidate_decision(seg: dict, selected_decision: dict | None) -> 
         return dict(seg or {}), False
     selected_source = str(selected_decision.get("source", "") or "").strip().upper()
     selector_name = str(selected_decision.get("selector") or "")
-    is_deep_selector = bool(selector_name) and selector_name not in {"stt_lattice", "stt_candidate_llm_judge"}
+    is_deep_selector = bool(selector_name) and selector_name not in {
+        "stt_lattice",
+        "stt_candidate_llm_judge",
+        "stt_candidate_score_fallback",
+    }
     out = {
         **dict(seg or {}),
         "text": selected_text,
@@ -2028,18 +2207,25 @@ def _apply_stt_candidate_decision(seg: dict, selected_decision: dict | None) -> 
     }
     if selected_decision.get("words"):
         out["words"] = list(selected_decision.get("words") or [])
-    try:
-        selected_start = float(selected_decision.get("start"))
-        selected_end = float(selected_decision.get("end"))
-    except (TypeError, ValueError):
-        selected_start = selected_end = None
-    if selected_start is not None and selected_end is not None and selected_end > selected_start:
+    selected_span = _stt_decision_timing_span(selected_decision)
+    if selected_span is not None:
+        selected_start, selected_end = selected_span
         out["start"] = selected_start
         out["end"] = selected_end
         out["_stt_original_candidate_start"] = selected_start
         out["_stt_original_candidate_end"] = selected_end
         out["original_start"] = selected_start
         out["original_end"] = selected_end
+        word_span = _selected_decision_word_span(selected_decision)
+        raw_span = _candidate_span_from_decision(selected_decision)
+        if word_span is not None and raw_span is not None and selected_span == word_span:
+            out["_stt_candidate_word_timing_anchor_policy"] = {
+                "task": "stt_candidate_word_timing_anchor",
+                "old_start": round(raw_span[0], 3),
+                "old_end": round(raw_span[1], 3),
+                "word_start": round(word_span[0], 3),
+                "word_end": round(word_span[1], 3),
+            }
     return out, True
 
 
@@ -2090,8 +2276,9 @@ def _select_stt_candidate_text(
         )
     prompt = (
         "당신은 한국어 영상 자막 검수자입니다.\n"
-        "아래 앞뒤 문맥을 참고해서 STT 후보 중 실제 발화로 가장 자연스럽고, 한국어 구어체로 가장 그럴듯한 후보 하나만 고르세요.\n"
-        "없는 말을 새로 만들거나 두 후보를 섞지 마세요.\n"
+        "아래 앞뒤 문맥을 참고해서 STT 후보 중 실제 발화와 가장 가까운 후보 하나만 고르세요.\n"
+        "없는 말을 새로 만들거나 두 후보를 섞지 말고, 후보의 뜻을 바꾸는 추론은 하지 마세요.\n"
+        "애매하면 score가 더 높은 STT 원문 후보를 고르세요.\n"
         "반드시 JSON 배열로만 답하세요. 예: [\"A\"] 또는 [\"B\"]\n\n"
         f"시간: {float(seg.get('start', 0) or 0):.2f}s ~ {float(seg.get('end', 0) or 0):.2f}s\n"
         f"이전 문맥: {str(seg.get('stt_ensemble_context_prev', '') or '').strip()[:220] or '(없음)'}\n"
@@ -2151,7 +2338,32 @@ def _select_stt_candidate_text(
 
     decision = " ".join(str(x) for x in (chunks or []))
     selected_label = _parse_stt_candidate_llm_label(decision, labels)
-    selected_index = labels.index(selected_label) if selected_label in labels else 0
+    if selected_label not in labels:
+        fallback_candidate = _best_scored_stt_candidate(unique)
+        if not fallback_candidate:
+            get_logger().log(f"[STT앙상블-LLM판정] 응답 파싱 실패, 자동 선택 보류: {decision[:120]}")
+            return None
+        selected = str(fallback_candidate.get("text", "") or "").strip()
+        if not selected:
+            return None
+        selected_source = str(fallback_candidate.get("source", "") or "").strip().upper()
+        fallback_label = str(fallback_candidate.get("label") or fallback_candidate.get("stt_label") or "score").strip()
+        get_logger().log(
+            "[STT앙상블-LLM판정] 응답 파싱 실패, 최고 STT 점수 후보로 보수 선택: "
+            f"{selected_source or '-'} score={_stt_candidate_score100(fallback_candidate):.1f} '{selected[:18]}...'"
+        )
+        return {
+            "text": selected,
+            "source": selected_source,
+            "label": fallback_label,
+            "start": fallback_candidate.get("start"),
+            "end": fallback_candidate.get("end"),
+            "words": list(fallback_candidate.get("words") or []),
+            "score": fallback_candidate.get("score", fallback_candidate.get("stt_score")),
+            "selector": "stt_candidate_score_fallback",
+            "_llm_gate_policy": stt_llm_gate,
+        }
+    selected_index = labels.index(selected_label)
     selected_candidate = unique[selected_index]
     selected = str(selected_candidate.get("text", "") or "").strip()
     selected_source = str(selected_candidate.get("source", "") or "").strip().upper()

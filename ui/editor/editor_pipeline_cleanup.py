@@ -39,8 +39,37 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
         try:
             if hasattr(self, "btn_start") and self.btn_start:
                 self.btn_start.setEnabled(True)
+                main_w = self.window()
+                sync_menu = getattr(main_w, "sync_menu_from_editor", None)
+                if callable(sync_menu):
+                    sync_menu(self)
         except RuntimeError:
             pass
+
+    def _mark_open_media_start_ready(self, *, reason: str = "") -> bool:
+        try:
+            if bool(getattr(self, "_is_ai_processing", False)):
+                return False
+            sm = getattr(self, "sm", None)
+            if str(getattr(sm, "state", "") or "") == "ST_PROC":
+                return False
+            btn = getattr(self, "btn_start", None)
+            if btn is None:
+                return False
+            clean = getattr(self, "_clean_action_label", None)
+            text = clean("시작") if callable(clean) else "시작"
+            btn.setText(text)
+            btn.setEnabled(True)
+            self._last_start_button_signature = (text, True)
+            main_w = self.window()
+            sync_menu = getattr(main_w, "sync_menu_from_editor", None)
+            if callable(sync_menu):
+                sync_menu(self)
+            if reason:
+                get_logger().log_perf("editor.open", event="start_ready", reason=str(reason))
+            return True
+        except RuntimeError:
+            return False
 
     def _abort_pending_editor_processing_ui_work(self):
         for timer_name in (

@@ -1,6 +1,7 @@
 # Version: 03.14.05
 # Phase: PHASE2
 import unittest
+import json
 import re
 import tempfile
 from pathlib import Path
@@ -61,6 +62,21 @@ class _VideoPlayer:
 
     def set_subtitle_display_time(self, sec):
         self.display_time = float(sec)
+
+
+class _DirectSeekVideoPlayer(_VideoPlayer):
+    def __init__(self, total_time=0.0):
+        super().__init__(total_time=total_time)
+        self.direct_seek_calls = []
+        self.thumbnail_calls = []
+        self._current_source_path = "/tmp/source.mp4"
+
+    def seek_direct(self, sec, *, show_thumbnail=True):
+        self.direct_seek_calls.append((float(sec), bool(show_thumbnail)))
+        self.seek_calls.append(float(sec))
+
+    def _extract_and_show_thumbnail_at(self, path, sec=0.0):
+        self.thumbnail_calls.append((str(path), float(sec)))
 
 
 class _ScrollBar:
@@ -423,6 +439,24 @@ class _LifecycleTimeline:
         self.boundary_times = list(times or [])
 
 
+class _LifecycleButton:
+    def __init__(self):
+        self.text_value = ""
+        self.enabled_value = False
+
+    def setText(self, text):
+        self.text_value = str(text or "")
+
+    def text(self):
+        return self.text_value
+
+    def setEnabled(self, enabled):
+        self.enabled_value = bool(enabled)
+
+    def isEnabled(self):
+        return self.enabled_value
+
+
 class _LifecycleEditor:
     def __init__(self, video_name, segments, media_path=None, parent=None, defer_media_load=False, hydrate_existing_srt_on_empty=True):
         self.video_name = video_name
@@ -442,6 +476,8 @@ class _LifecycleEditor:
         self.sig_save = _Signal()
         self.sig_auto_save = _Signal()
         self._terminal_layout_visible = None
+        self.btn_start = _LifecycleButton()
+        self.start_ready_reasons = []
 
         class _SM:
             def init_state(inner_self):
@@ -454,6 +490,12 @@ class _LifecycleEditor:
 
     def set_terminal_visible_layout(self, visible):
         self._terminal_layout_visible = bool(visible)
+
+    def _mark_open_media_start_ready(self, *, reason=""):
+        self.start_ready_reasons.append(str(reason or ""))
+        self.btn_start.setText("시작")
+        self.btn_start.setEnabled(True)
+        return True
 
 
 class _LifecycleStack:
@@ -895,6 +937,9 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(owner.scheduled_media, [(owner._editor_widget, target_file)])
         self.assertEqual(owner.fit_calls, 1)
         self.assertEqual(owner.idle_mode_reason, "editor_open")
+        self.assertIn("editor_open", owner._editor_widget.start_ready_reasons)
+        self.assertEqual(owner._editor_widget.btn_start.text(), "시작")
+        self.assertTrue(owner._editor_widget.btn_start.isEnabled())
 
     def test_init_editor_restores_workspace_when_project_is_opened(self):
         owner = _LifecycleOwner()
@@ -1185,6 +1230,63 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(subtitle_drafts, [])
         self.assertEqual([seg["text"] for seg in stt_previews], ["STT1 후보", "STT2 후보"])
 
+    def test_project_restore_rehydrates_stt_lanes_from_lattice_artifact_when_tracks_are_absent(self):
+        editor = _LivePreviewEditor()
+        editor._cached_segs = [{"start": 0.0, "end": 2.0, "text": "최종", "speaker": "00"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            lattice_path = Path(tmp) / "sample_project.stt_lattice.json"
+            lattice_path.write_text(
+                json.dumps(
+                    {
+                        "segments": [
+                            {
+                                "start": 0.0,
+                                "end": 1.0,
+                                "candidate_lattice": [
+                                    {
+                                        "candidate_key": "current",
+                                        "source": "STT1_SELECTIVE",
+                                        "start": 0.0,
+                                        "end": 1.0,
+                                        "text": "STT1 후보",
+                                    }
+                                ],
+                            },
+                            {
+                                "start": 1.0,
+                                "end": 2.0,
+                                "candidate_lattice": [
+                                    {
+                                        "candidate_key": "current",
+                                        "source": "STT2_SELECTIVE_RECHECK",
+                                        "start": 1.0,
+                                        "end": 2.0,
+                                        "text": "STT2 후보",
+                                    }
+                                ],
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            project = {
+                "project_path": str(Path(tmp) / "sample_project.aissproj"),
+                "subtitles": {"storage": "external_srt"},
+                "editor_state": {"stt": {"candidate_tracks": {}}},
+                "analysis": {"stt_lattice_artifact_path": str(lattice_path)},
+            }
+
+            restored = restore_project_stt_preview_segments(editor, project)
+
+        self.assertEqual(restored, 2)
+        self.assertEqual(
+            [seg["stt_preview_source"] for seg in editor._live_stt_preview_segments],
+            ["STT1", "STT2"],
+        )
+        self.assertEqual([seg["text"] for seg in editor._live_stt_preview_segments], ["STT1 후보", "STT2 후보"])
+
     def test_restore_project_stt_preview_segments_copies_project_rows(self):
         editor = _LivePreviewEditor()
         project = {
@@ -1347,6 +1449,28 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             self.assertEqual(editor._live_editor_preview_timer.start_calls, [18])
             self.assertIn("첫 자막", editor.text_edit.toPlainText())
             self.assertNotIn("갱신된 자막", editor.text_edit.toPlainText())
+        finally:
+            editor.text_edit.close()
+
+    def test_live_editor_preview_does_not_jump_to_latest_when_follow_disabled(self):
+        editor = _ActualSelectionEditor()
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        editor.settings["editor_live_stt_preview_follow_video_enabled"] = False
+        try:
+            editor.preview_stt_segments([
+                {"start": 0.0, "end": 1.0, "text": "처음 자막", "stt_preview_source": "STT1"},
+                {"start": 52.0, "end": 54.0, "text": "뒤쪽 자막", "stt_preview_source": "STT1"},
+            ])
+
+            self.assertEqual(
+                [line for line in editor.text_edit.toPlainText().splitlines() if line.strip()],
+                ["처음 자막", "뒤쪽 자막"],
+            )
+            self.assertEqual(len(editor._live_editor_preview_segments), 2)
+            self.assertIsNone(editor._active_seg_start)
+            self.assertEqual(editor.timeline.playhead_calls, [])
+            self.assertEqual(editor.video_player.seek_calls, [])
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
         finally:
             editor.text_edit.close()
 
@@ -1604,6 +1728,53 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.timeline.active_calls[-1], 4.25)
         self.assertEqual(editor.timeline.playhead_calls[-1], (4.25, True))
         self.assertEqual(editor.video_player.seek_calls[-1], 4.25)
+
+    def test_processing_segment_focus_skips_thumbnail_while_generation_locked(self):
+        editor = _ActualSelectionEditor()
+        editor.video_player = _DirectSeekVideoPlayer(total_time=100.0)
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        try:
+            focused = editor._focus_editor_block_for_processing_segment({
+                "active": True,
+                "start": 4.25,
+                "end": 5.0,
+                "text": "처리 중 세그먼트",
+            })
+
+            self.assertFalse(focused)
+            self.assertEqual(editor.video_player.direct_seek_calls[-1], (4.25, False))
+            self.assertEqual(editor.video_player.thumbnail_calls, [])
+        finally:
+            editor.text_edit.close()
+
+    def test_processing_thumbnail_helper_is_disabled_while_generation_locked(self):
+        editor = _ActualSelectionEditor()
+        editor.video_player = _DirectSeekVideoPlayer(total_time=100.0)
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        try:
+            editor._show_processing_segment_thumbnail(editor.video_player, 4.25)
+
+            self.assertEqual(editor.video_player.thumbnail_calls, [])
+        finally:
+            editor.text_edit.close()
+
+    def test_processing_segment_focus_keeps_thumbnail_when_editor_idle(self):
+        editor = _ActualSelectionEditor()
+        editor.video_player = _DirectSeekVideoPlayer(total_time=100.0)
+        editor.sm = type("State", (), {"is_locked": False, "state": "ST_IDLE"})()
+        try:
+            focused = editor._focus_editor_block_for_processing_segment({
+                "active": True,
+                "start": 4.25,
+                "end": 5.0,
+                "text": "수동 확인 세그먼트",
+            })
+
+            self.assertFalse(focused)
+            self.assertEqual(editor.video_player.direct_seek_calls[-1], (4.25, False))
+            self.assertEqual(editor.video_player.thumbnail_calls[-1], ("/tmp/source.mp4", 4.25))
+        finally:
+            editor.text_edit.close()
 
     def test_processing_segment_focus_does_not_insert_editor_draft_when_missing(self):
         editor = _ActualSelectionEditor()

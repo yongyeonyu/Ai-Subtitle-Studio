@@ -162,6 +162,7 @@ def submit_task(
     language: str,
     temperature_values: list[float] | None = None,
     word_timestamps: bool = False,
+    concurrent_worker_count: int | None = None,
 ) -> str:
     if proc is None or proc.poll() is not None:
         raise RuntimeError("Swift WhisperKit worker가 실행 중이 아닙니다.")
@@ -178,6 +179,11 @@ def submit_task(
         "temperature_values": list(temperature_values or [0.0]),
         "word_timestamps": bool(word_timestamps),
     }
+    if concurrent_worker_count is not None:
+        try:
+            payload["concurrent_worker_count"] = max(1, int(concurrent_worker_count or 1))
+        except Exception:
+            payload["concurrent_worker_count"] = 1
     proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
     proc.stdin.flush()
     return task_id
@@ -260,6 +266,7 @@ def run_whisper(
             language=language,
             temperature_values=temp_values,
             word_timestamps=word_timestamps,
+            concurrent_worker_count=None,
         )
         return proc
     except Exception as exc:
