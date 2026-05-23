@@ -319,14 +319,14 @@ class TimelineWidget(QWidget):
 
         self._base_canvas_height = CANVAS_H
         self._canvas_height_bonus = 0
-        self._base_widget_height = CANVAS_H + MINIMAP_HEIGHT + 29
+        self._base_widget_height = CANVAS_H + MINIMAP_HEIGHT + 28
         self.setMinimumHeight(self._base_widget_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 4, 10, 1)
+        lay.setContentsMargins(10, 4, 10, 0)
         lay.setSpacing(0)
 
         toolbar_checkbox_style = _compact_toolbar_checkbox_style()

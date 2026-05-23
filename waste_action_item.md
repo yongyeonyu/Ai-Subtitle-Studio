@@ -79,6 +79,12 @@
 
 ## 2026-05-23
 
+- `high_stt2_overactive_threshold_82_budget36_default`: High/Precise 기본 STT2 선택 재검사 예산을 threshold `82`, max segments `36`, max audio `160s`, min improvement `1.0`으로 넓히는 방향
+  결과: X5 High 180초에서 `quality_score=80.561`, `CER=0.168865`, `timing_mae_sec=0.7765`, `raw/final=64/62`, `elapsed_sec=139.900`으로 최신 정상 기준 `quality_score=87.402`, `CER=0.088391`, `timing_mae_sec=0.5742`, `raw/final=59/57`보다 나빠졌다.
+  품질: STT2 후보가 `47 -> 35`로 과하게 넓어져 reference timing/text quality가 회귀했다.
+  결론: Fast/Auto의 적극 STT2는 유지하되 High/Precise 기본값은 X5 검증된 bounded 예산 `threshold=78`, `max_segments=24`, `max_audio=110s`, `min_improvement=2.0`을 유지한다.
+  artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260523_203930/benchmark_results.md`
+
 - `final_micro_merge_preserve_direct_stt_rows_default`: 후단 보정에서 STT1/STT2가 직접 선택한 인접 자막 row를 기본적으로 병합하지 않는 방향
   결과: X5 High 180초에서 `quality_score=81.354`, `CER=0.174142`, `timing_mae_sec=0.6846`, `raw/final=47/61`로 최신 정상 기준 `quality_score=87.502`, `CER=0.084433`, `timing_mae_sec=0.5689`, `raw/final=59/56`보다 나빠졌다.
   품질: STT/final lane 모양은 일부 더 비슷해질 수 있지만, reference 기준 자막 텍스트/타이밍 품질과 segment 안정성이 떨어졌다.

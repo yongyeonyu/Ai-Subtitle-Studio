@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+import errno
 import os
 from types import SimpleNamespace
 from typing import Any
+
+
+def _is_permission_denied(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    return isinstance(exc, OSError) and getattr(exc, "errno", None) in {errno.EACCES, errno.EPERM}
+
+
+def _file_rows(helpers: SimpleNamespace, outputs: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    return [
+        {**helpers.file_result(srt_path), "target_file": target_file}
+        for srt_path, target_file in list(outputs or [])
+    ]
 
 
 def _handle_editor_transport_command(
@@ -325,7 +339,13 @@ def _handle_open_command(
             if not callable(opener):
                 return fail("project_open_unavailable")
             logger.log(f"🤖 자동화 명령 수신: open-project {os.path.basename(path)}")
-            if not bool(opener(path)):
+            try:
+                opened = bool(opener(path))
+            except Exception as exc:
+                if _is_permission_denied(exc):
+                    return fail("project_open_permission_denied", message=str(exc), data={"path": path})
+                return fail("project_open_failed", message=str(exc), data={"path": path})
+            if not opened:
                 return fail("project_open_failed", message=path)
             helpers.bring_to_front(owner)
             return ok(message="project_opened", data={"path": path})
@@ -531,6 +551,13 @@ def _handle_save_export_command(
             return fail("editor_missing")
         if command == "save-subtitles":
             logger.log("🤖 자동화 명령 수신: save-subtitles")
+            segs = helpers.current_editor_srt_segments(editor)
+            if not segs:
+                outputs = helpers.saved_srt_outputs(editor)
+                return fail(
+                    "subtitle_segments_missing",
+                    data={"segment_count": 0, "outputs": _file_rows(helpers, outputs)},
+                )
             save_handler = getattr(editor, "_on_save", None)
             if not callable(save_handler):
                 return fail("subtitle_save_unavailable")
@@ -542,19 +569,35 @@ def _handle_save_export_command(
                 except TypeError:
                     saved = bool(save_handler())
             if not saved:
-                return fail("subtitle_save_declined")
+                outputs = helpers.saved_srt_outputs(editor)
+                return fail(
+                    "subtitle_save_declined",
+                    data={
+                        "segment_count": len(segs),
+                        "has_existing_outputs": bool(outputs),
+                        "outputs": _file_rows(helpers, outputs),
+                    },
+                )
             outputs = helpers.saved_srt_outputs(editor)
-            output_rows = [{**helpers.file_result(srt_path), "target_file": target_file} for srt_path, target_file in outputs]
+            output_rows = _file_rows(helpers, outputs)
             missing = [row for row in output_rows if not row.get("exists")]
             if not output_rows or missing:
-                return fail("subtitle_outputs_missing", data={"count": len(output_rows), "missing_count": len(missing), "outputs": output_rows})
+                return fail(
+                    "subtitle_outputs_missing",
+                    data={
+                        "segment_count": len(segs),
+                        "count": len(output_rows),
+                        "missing_count": len(missing),
+                        "outputs": output_rows,
+                    },
+                )
             return ok(message="subtitles_saved", data={"count": len(output_rows), "outputs": output_rows})
 
         if command == "export-subtitles":
             logger.log("🤖 자동화 명령 수신: export-subtitles")
             segs = helpers.current_editor_srt_segments(editor)
             if not segs:
-                return fail("subtitle_segments_missing")
+                return fail("subtitle_segments_missing", data={"segment_count": 0})
             output_path = helpers.normalize_path(command_payload.get("path"))
             if not output_path:
                 media_path = helpers.normalize_path(getattr(editor, "media_path", "") or "")
@@ -577,6 +620,9 @@ def _handle_save_export_command(
         logger.log("🤖 자동화 명령 수신: export-subtitle-video")
         outputs = helpers.saved_srt_outputs(editor)
         if not outputs:
+            segs = helpers.current_editor_srt_segments(editor)
+            if not segs:
+                return fail("subtitle_segments_missing", data={"segment_count": 0})
             save_handler = getattr(editor, "_on_save", None)
             if not callable(save_handler):
                 return fail("subtitle_video_export_unavailable")
@@ -588,10 +634,43 @@ def _handle_save_export_command(
                 except TypeError:
                     saved = bool(save_handler())
             if not saved:
-                return fail("subtitle_save_declined")
+                outputs = helpers.saved_srt_outputs(editor)
+                return fail(
+                    "subtitle_save_declined",
+                    data={
+                        "segment_count": len(segs),
+                        "has_existing_outputs": bool(outputs),
+                        "outputs": _file_rows(helpers, outputs),
+                    },
+                )
             outputs = helpers.saved_srt_outputs(editor)
         if not outputs:
-            return fail("subtitle_outputs_missing")
+            return fail("subtitle_outputs_missing", data={"outputs": []})
+        output_rows = [
+            {
+                "srt_path": helpers.normalize_path(srt_path),
+                "target_file": helpers.normalize_path(target_file or srt_path),
+                "mov_output": helpers.file_result(helpers.subtitle_video_output_path(target_file or srt_path)),
+            }
+            for srt_path, target_file in outputs
+        ]
+        scheduler = getattr(editor, "_schedule_auto_export_saved_subtitle_videos", None)
+        if callable(scheduler):
+            try:
+                setattr(editor, "_last_saved_srt_outputs", list(outputs))
+            except Exception:
+                pass
+            try:
+                scheduler(delay_ms=0)
+            except TypeError:
+                scheduler()
+            except Exception as exc:
+                return fail("subtitle_video_export_failed", message=str(exc), data={"outputs": output_rows})
+            return ok(
+                message="subtitle_video_export_queued",
+                queued=True,
+                data={"count": len(output_rows), "outputs": output_rows},
+            )
         exporter = getattr(editor, "_auto_export_saved_subtitle_videos", None)
         if not callable(exporter):
             return fail("subtitle_video_export_unavailable")
@@ -601,7 +680,14 @@ def _handle_save_export_command(
             exporter()
         except Exception as exc:
             return fail("subtitle_video_export_failed", message=str(exc))
-        output_rows = [{"srt_path": helpers.normalize_path(srt_path), "target_file": helpers.normalize_path(target_file or srt_path), "mov_output": helpers.file_result(helpers.subtitle_video_output_path(target_file or srt_path))} for srt_path, target_file in outputs]
+        output_rows = [
+            {
+                "srt_path": helpers.normalize_path(srt_path),
+                "target_file": helpers.normalize_path(target_file or srt_path),
+                "mov_output": helpers.file_result(helpers.subtitle_video_output_path(target_file or srt_path)),
+            }
+            for srt_path, target_file in outputs
+        ]
         missing = [row for row in output_rows if not bool((row.get("mov_output") or {}).get("exists"))]
         if missing:
             return fail("subtitle_video_outputs_missing", data={"count": len(output_rows), "missing_count": len(missing), "outputs": output_rows})

@@ -12,10 +12,17 @@ from core.personalization.deferred_editor_learning import (
     enqueue_deferred_editor_learning,
 )
 from core.personalization.idle_trainer import run_training_queue_once
+from core.personalization.idle_trainer import clear_personalization_training_interrupt
 from core.personalization.lora_storage import initialize_lora_personalization_store, load_training_queue, store_paths
 
 
 class EditorTruthCaptureTests(unittest.TestCase):
+    def setUp(self):
+        clear_personalization_training_interrupt()
+
+    def tearDown(self):
+        clear_personalization_training_interrupt()
+
     def test_deferred_editor_learning_runs_from_idle_queue(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)

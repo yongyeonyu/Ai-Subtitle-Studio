@@ -540,7 +540,7 @@ class EditorWidget(
     # UI 빌드
     # ---------------------------------------------------------
     def _build_ui(self):
-        root = QVBoxLayout(self); root.setContentsMargins(2, 2, 2, 2); root.setSpacing(2)
+        root = QVBoxLayout(self); root.setContentsMargins(2, 2, 2, 0); root.setSpacing(2)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)

@@ -24,10 +24,10 @@ Item {
             Rectangle {
                 id: body
                 anchors.fill: parent
-                color: modelData.fill
+                color: modelData.fill || "#242A31"
                 opacity: Math.max(0.0, Math.min(1.0, modelData.alpha / 255.0))
-                border.color: modelData.border
-                border.width: modelData.borderWidth
+                border.color: modelData.border || "#3A4650"
+                border.width: modelData.borderWidth || 1
                 radius: 0
             }
 

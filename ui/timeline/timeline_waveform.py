@@ -125,6 +125,19 @@ def _downsample_waveform_samples(samples: np.ndarray, *, duration: float | None 
 
 def _downsample_waveform_raw(raw: bytes | bytearray | memoryview | None, *, duration: float | None = None) -> tuple[np.ndarray, float]:
     try:
+        from core.native_subtitle_waveform import downsample_f32le
+
+        native = downsample_f32le(
+            raw,
+            sample_rate=WAVEFORM_SAMPLE_RATE,
+            points_per_second=WAVEFORM_POINTS_PER_SECOND,
+            duration=duration,
+        )
+        if native is not None:
+            return native
+    except Exception:
+        pass
+    try:
         from core.native_cut_boundary import waveform_peaks_f32le
 
         native = waveform_peaks_f32le(

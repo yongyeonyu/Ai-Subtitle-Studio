@@ -32,6 +32,7 @@ class EditorPipelineStartupMixin(EditorPipelineSafetyMixin):
         main_w = self._pipeline_window()
         layout_snapshot = self._snapshot_start_layout()
         self._show_pipeline_start_feedback(is_restart=is_restart)
+        self._schedule_deferred_open_waveform_after_start()
         self._pipeline_call_if_callable(
             main_w,
             "_lock_workspace_sidebar_width",
@@ -140,6 +141,28 @@ class EditorPipelineStartupMixin(EditorPipelineSafetyMixin):
                 app.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         except Exception as exc:
             self._pipeline_log_nonfatal("시작 직전 UI flush", exc)
+
+    def _schedule_deferred_open_waveform_after_start(self, *, delay_ms: int = 260) -> bool:
+        path = str(getattr(self, "_deferred_open_waveform_path", "") or "").strip()
+        if not path or bool(getattr(self, "_deferred_open_waveform_loaded", False)):
+            return False
+
+        token = object()
+        self._deferred_open_waveform_start_token = token
+
+        def _load_waveform_after_start():
+            if getattr(self, "_deferred_open_waveform_start_token", None) is not token:
+                return
+            loader = getattr(self, "_load_deferred_open_waveform", None)
+            if not callable(loader):
+                return
+            try:
+                loader(reason="pipeline_start")
+            except Exception as exc:
+                self._pipeline_log_nonfatal("시작 후 waveform 로드", exc)
+
+        QTimer.singleShot(max(0, int(delay_ms)), _load_waveform_after_start)
+        return True
 
     def _snapshot_start_layout(self) -> dict:
         """Capture layout sizes that should not shift just because processing starts."""

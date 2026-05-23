@@ -59,6 +59,28 @@ class AppCtlTests(unittest.TestCase):
 
         self.assertEqual(payload["paths"], [str(first), str(second)])
         self.assertEqual(payload["path"], str(first))
+        self.assertEqual(payload["options"]["reuse_existing"], "no")
+
+    def test_start_multiclip_can_still_request_confirmation_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            first = folder / "a.mp4"
+            second = folder / "b.mp4"
+            first.write_bytes(b"video")
+            second.write_bytes(b"video")
+
+            args = _parser().parse_args(
+                [
+                    "start-multiclip",
+                    str(first),
+                    str(second),
+                    "--reuse-existing",
+                    "ask",
+                ]
+            )
+            payload = _payload_from_args(args)
+
+        self.assertEqual(payload["options"]["reuse_existing"], "ask")
 
 
 if __name__ == "__main__":

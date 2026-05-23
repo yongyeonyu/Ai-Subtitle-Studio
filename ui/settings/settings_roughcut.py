@@ -118,8 +118,9 @@ class SettingsRoughcutMixin:
             and "사용 안함" not in (self.input_roughcut_llm_model.text().strip() or "")
         )
 
-    def _collect_roughcut_llm_settings(self) -> dict:
-        enabled = self._roughcut_llm_enabled_from_widgets()
+    def _collect_roughcut_llm_settings(self, *, force_disabled: bool = False) -> dict:
+        configured_threads = self.result_settings.get("roughcut_llm_threads", 4)
+        enabled = False if force_disabled else self._roughcut_llm_enabled_from_widgets()
         return {
             "roughcut_llm_enabled": enabled,
             "roughcut_llm_use_override": enabled,
@@ -131,5 +132,6 @@ class SettingsRoughcutMixin:
             "roughcut_llm_rows_auto_enabled": True,
             "roughcut_llm_rows_lora_enabled": True,
             "roughcut_llm_prompt": "",
+            "roughcut_llm_threads": configured_threads,
             "roughcut_llm_threads_auto_enabled": True,
         }

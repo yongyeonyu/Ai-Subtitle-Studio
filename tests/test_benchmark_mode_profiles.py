@@ -4,10 +4,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from core.native_swift_subtitle_assembly import ASSEMBLED_VARIANT_NAME
 from tools.apply_subtitle_benchmark_quality_gate import apply_gate
 from tools.benchmark_subtitle_pipeline_variants import (
     _copy_chunk_dir,
     _compact_text,
+    _enforce_swift_assembly_quality_floor,
+    _native_global_canvas_summary_for_variant,
+    _native_resource_summary_for_variant,
+    _native_segments_summary_for_variant,
+    _native_stt_segments_summary_for_variant,
     _rank_rows,
     _run_postprocess,
     _base_benchmark_settings,
@@ -17,6 +23,7 @@ from tools.benchmark_subtitle_pipeline_variants import (
     benchmark_mode_lora_packaging_profiles,
     benchmark_mode_lora_selective_profiles,
     benchmark_mode_profiles,
+    score_against_reference,
     score_readability,
 )
 
@@ -37,6 +44,7 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
                 "mode_high",
                 "mode_high_full_core_overlap",
                 "mode_high_piecewise_drift",
+                ASSEMBLED_VARIANT_NAME,
             },
         )
 
@@ -125,6 +133,162 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(high_drift.method, "selective_ensemble")
         self.assertTrue(bool(high_drift.overrides.get("subtitle_timing_piecewise_drift_enabled")))
 
+        assembled = by_name[ASSEMBLED_VARIANT_NAME]
+        self.assertEqual(assembled.method, by_name["mode_high_full_core_overlap"].method)
+        self.assertEqual(assembled.overrides.get("native_subtitle_assembly_source_variant"), "mode_high_full_core_overlap")
+        self.assertTrue(bool(assembled.overrides.get("native_subtitle_assembly_enabled")))
+        self.assertEqual(assembled.overrides.get("native_subtitle_assembly_quality_floor"), "best_fast_auto_high")
+        self.assertTrue(bool(assembled.overrides.get("runtime_hardware_acceleration_enabled")))
+        self.assertTrue(bool(assembled.overrides.get("whisperkit_native_auto_enabled")))
+        self.assertEqual(assembled.overrides.get("stt_accelerator_distribution"), "gpu+npu+cpu")
+        self.assertTrue(bool(assembled.overrides.get("audio_torch_gpu_enabled")))
+        self.assertTrue(bool(assembled.overrides.get("ffmpeg_videotoolbox_decode_enabled")))
+        self.assertTrue(bool(assembled.overrides.get("scan_cut_pioneer_pipe_hwaccel_enabled")))
+        self.assertTrue(bool(assembled.overrides.get("lora_gpu_acceleration_enabled")))
+        self.assertTrue(bool(assembled.overrides.get("subtitle_llm_prev_next_context_enabled")))
+        self.assertEqual(assembled.overrides.get("subtitle_llm_context_min_current_similarity"), 0.86)
+        self.assertEqual(assembled.overrides.get("subtitle_llm_context_neighbor_reject_margin"), 0.06)
+        self.assertEqual(assembled.overrides.get("stt_word_timestamps_precision_max_segments"), 48)
+        self.assertEqual(assembled.overrides.get("stt_word_timestamps_precision_min_similarity"), 0.36)
+        self.assertEqual(assembled.overrides.get("stt_word_timestamps_precision_max_timing_shift_sec"), 0.28)
+        plan = dict(assembled.overrides.get("native_subtitle_assembly_plan") or {})
+        self.assertEqual(plan.get("candidate_variant"), ASSEMBLED_VARIANT_NAME)
+        self.assertEqual(plan.get("source_variant"), "mode_high_full_core_overlap")
+        self.assertEqual(
+            dict(plan.get("quality_floor") or {}).get("baseline_variants"),
+            ["mode_fast", "mode_auto", "mode_high"],
+        )
+
+    def test_native_resource_summary_keeps_compact_accelerator_counts(self):
+        with mock.patch(
+            "tools.benchmark_subtitle_pipeline_variants.plan_subtitle_resource_via_swift",
+            return_value={
+                "schema": "ai_subtitle_studio.subtitle_resource.plan.v1",
+                "backend": "swift",
+                "pressure_stage": "normal",
+                "accelerator_summary": {
+                    "gpu_task_count": 3,
+                    "ane_task_count": 2,
+                    "metal_task_count": 1,
+                    "gpu_lanes_total": 12,
+                    "ane_lanes_total": 10,
+                    "max_gpu_lanes": 8,
+                    "max_ane_lanes": 8,
+                    "gpu_tasks": ["stt", "stt_precision", "vad"],
+                    "ane_tasks": ["stt", "stt_precision"],
+                    "metal_tasks": ["vad"],
+                    "metal_claims_ane": False,
+                },
+            },
+        ):
+            summary = _native_resource_summary_for_variant({"subtitle_mode": "high"}, run_llm=True)
+
+        self.assertEqual(summary["backend"], "swift")
+        self.assertEqual(summary["gpu_task_count"], 3)
+        self.assertEqual(summary["ane_task_count"], 2)
+        self.assertEqual(summary["metal_task_count"], 1)
+        self.assertFalse(summary["metal_claims_ane"])
+        self.assertIn("stt_precision", summary["ane_tasks"])
+
+    def test_native_segments_summary_keeps_compact_invariant_counts(self):
+        with mock.patch(
+            "tools.benchmark_subtitle_pipeline_variants.summarize_segments_via_swift",
+            return_value={
+                "schema": "ai_subtitle_studio.subtitle_segments.summary.v1",
+                "backend": "swift",
+                "segment_count": 2,
+                "invalid_duration_count": 0,
+                "non_monotonic_count": 0,
+                "overlap_count": 1,
+                "empty_text_count": 0,
+                "total_duration": 2.0,
+                "first_start": 0.0,
+                "last_end": 1.8,
+                "max_gap": 0.0,
+                "max_chars": 5,
+                "avg_chars": 4.5,
+                "stable_for_save_reopen": True,
+            },
+        ):
+            summary = _native_segments_summary_for_variant([{"start": 0.0, "end": 1.0, "text": "테스트"}])
+
+        self.assertEqual(summary["backend"], "swift")
+        self.assertEqual(summary["segment_count"], 2)
+        self.assertEqual(summary["overlap_count"], 1)
+        self.assertTrue(summary["stable_for_save_reopen"])
+
+    def test_native_stt_segments_summary_keeps_compact_stt2_counts(self):
+        with mock.patch(
+            "tools.benchmark_subtitle_pipeline_variants.summarize_stt_segments_via_swift",
+            return_value={
+                "schema": "ai_subtitle_studio.subtitle_stt_segments.summary.v1",
+                "backend": "swift",
+                "segment_count": 3,
+                "stt1_selected_count": 1,
+                "stt2_selected_count": 2,
+                "recheck_applied_count": 2,
+                "word_precision_count": 1,
+                "secondary_hint_count": 0,
+                "unknown_source_count": 0,
+                "invalid_duration_count": 0,
+                "non_monotonic_count": 0,
+                "overlap_count": 0,
+                "source_switch_count": 1,
+                "total_duration": 3.0,
+                "stt1_duration": 1.0,
+                "stt2_duration": 2.0,
+                "stt2_coverage_ratio": 0.666667,
+                "stt2_active": True,
+                "selective_recheck_active": True,
+                "stable_for_timeline_feed": True,
+            },
+        ):
+            summary = _native_stt_segments_summary_for_variant(
+                [{"start": 0.0, "end": 1.0, "text": "테스트", "stt_selected_source": "STT2"}]
+            )
+
+        self.assertEqual(summary["backend"], "swift")
+        self.assertEqual(summary["stt2_selected_count"], 2)
+        self.assertEqual(summary["recheck_applied_count"], 2)
+        self.assertTrue(summary["stt2_active"])
+        self.assertTrue(summary["stable_for_timeline_feed"])
+
+    def test_native_global_canvas_summary_keeps_compact_occupancy_counts(self):
+        with mock.patch(
+            "tools.benchmark_subtitle_pipeline_variants.summarize_global_canvas_via_swift",
+            return_value={
+                "schema": "ai_subtitle_studio.subtitle_global_canvas.summary.v1",
+                "backend": "swift",
+                "segment_count": 3,
+                "valid_segment_count": 3,
+                "invalid_duration_count": 0,
+                "non_monotonic_count": 0,
+                "duration": 10.0,
+                "bin_count": 5,
+                "occupied_bin_count": 3,
+                "empty_bin_count": 2,
+                "dense_bin_count": 1,
+                "max_bin_active": 2,
+                "avg_bin_active": 0.8,
+                "coverage_duration": 4.0,
+                "coverage_ratio": 0.4,
+                "longest_empty_span_sec": 2.0,
+                "max_active_segments": 2,
+                "stable_for_global_canvas": True,
+            },
+        ):
+            summary = _native_global_canvas_summary_for_variant(
+                [{"start": 0.0, "end": 1.0, "text": "테스트"}],
+                duration=10.0,
+                bin_count=5,
+            )
+
+        self.assertEqual(summary["backend"], "swift")
+        self.assertEqual(summary["occupied_bin_count"], 3)
+        self.assertEqual(summary["dense_bin_count"], 1)
+        self.assertEqual(summary["max_active_segments"], 2)
+        self.assertTrue(summary["stable_for_global_canvas"])
+
     def test_quality_gate_tool_keeps_selective_variant_above_fast_loss(self):
         rows = [
             {
@@ -149,6 +313,114 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(gated["baseline_variant"], "phase1_serial_selective_stt2")
         self.assertEqual(ranked[0]["name"], "phase1_serial_selective_stt2")
         self.assertFalse(ranked[1]["quality_gate_passed"])
+
+    def test_score_against_reference_can_use_native_timing_metrics_without_changing_text_score(self):
+        hypothesis = [{"start": 0.0, "end": 1.0, "text": "테스트"}]
+        reference = [{"start": 0.0, "end": 1.0, "text": "테스트"}]
+
+        with mock.patch(
+            "tools.benchmark_subtitle_pipeline_variants.score_timing_metrics_via_swift",
+            return_value=None,
+        ), mock.patch(
+            "tools.benchmark_subtitle_pipeline_variants.cpp_timing_metrics",
+            return_value={"timing_mae_sec": 0.25, "overlap_score": 75.0, "native_backend": "cpp"},
+        ):
+            score = score_against_reference(hypothesis, reference)
+
+        self.assertEqual(score["timing_metrics_backend"], "cpp")
+        self.assertEqual(score["timing_mae_sec"], 0.25)
+        self.assertEqual(score["overlap_score"], 75.0)
+        self.assertEqual(score["local_text_score"], 100.0)
+
+    def test_best_mode_quality_gate_rejects_swift_assembled_below_fast_auto_high_floor(self):
+        rows = [
+            {"name": "mode_fast", "elapsed_sec": 9.0, "quality": {"quality_score": 75.0}, "readability": {"readability_score": 93.0}, "final_segments": 20},
+            {"name": "mode_auto", "elapsed_sec": 12.0, "quality": {"quality_score": 80.0}, "readability": {"readability_score": 94.0}, "final_segments": 20},
+            {"name": "mode_high", "elapsed_sec": 18.0, "quality": {"quality_score": 87.0}, "readability": {"readability_score": 95.0}, "final_segments": 20},
+            {
+                "name": ASSEMBLED_VARIANT_NAME,
+                "elapsed_sec": 16.0,
+                "quality": {"quality_score": 86.999},
+                "readability": {"readability_score": 95.0},
+                "final_segments": 20,
+            },
+        ]
+
+        gated = apply_gate({"ranked_results": rows}, baseline_variant="best-mode")
+        assembled = next(row for row in gated["ranked_results"] if row["name"] == ASSEMBLED_VARIANT_NAME)
+
+        self.assertEqual(gated["baseline_variant"], "mode_high")
+        self.assertTrue(bool(gated["strict_best_mode_floor"]))
+        self.assertFalse(assembled["quality_gate_passed"])
+        self.assertEqual(
+            assembled["swift_assembly_quality_gate"]["reason"],
+            "quality_score_below_best_fast_auto_high",
+        )
+
+    def test_best_mode_quality_gate_accepts_swift_assembled_at_fast_auto_high_floor(self):
+        rows = [
+            {"name": "mode_fast", "elapsed_sec": 9.0, "quality": {"quality_score": 75.0}, "readability": {"readability_score": 93.0}, "final_segments": 20},
+            {"name": "mode_auto", "elapsed_sec": 12.0, "quality": {"quality_score": 80.0}, "readability": {"readability_score": 94.0}, "final_segments": 20},
+            {"name": "mode_high", "elapsed_sec": 18.0, "quality": {"quality_score": 87.0}, "readability": {"readability_score": 95.0}, "final_segments": 20},
+            {
+                "name": ASSEMBLED_VARIANT_NAME,
+                "elapsed_sec": 16.0,
+                "quality": {"quality_score": 87.0},
+                "readability": {"readability_score": 95.0},
+                "final_segments": 20,
+            },
+        ]
+
+        gated = apply_gate({"ranked_results": rows}, baseline_variant="best-mode")
+        assembled = next(row for row in gated["ranked_results"] if row["name"] == ASSEMBLED_VARIANT_NAME)
+
+        self.assertTrue(assembled["quality_gate_passed"])
+        self.assertEqual(
+            assembled["swift_assembly_quality_gate"]["reason"],
+            "candidate_not_below_best_fast_auto_high",
+        )
+
+    def test_swift_assembled_benchmark_result_rolls_back_to_best_mode_when_floor_fails(self):
+        rows = [
+            {
+                "name": "mode_high",
+                "phase": "mode_profile",
+                "elapsed_sec": 90.0,
+                "final_segments": 56,
+                "quality": {"quality_score": 87.5},
+                "readability": {"readability_score": 94.7},
+                "settings": {"subtitle_mode": "high"},
+            },
+            {
+                "name": ASSEMBLED_VARIANT_NAME,
+                "phase": "mode_profile",
+                "elapsed_sec": 70.0,
+                "final_segments": 57,
+                "quality": {"quality_score": 87.4},
+                "readability": {"readability_score": 94.6},
+                "settings": {"native_subtitle_assembly_enabled": True},
+            },
+        ]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, text in (("mode_high", "best"), (ASSEMBLED_VARIANT_NAME, "attempt")):
+                folder = root / name
+                folder.mkdir()
+                (folder / "output_segments.json").write_text(text, encoding="utf-8")
+                (folder / "raw_segments.json").write_text(text, encoding="utf-8")
+
+            repaired = _enforce_swift_assembly_quality_floor(rows, root)
+
+            assembled = next(row for row in repaired if row["name"] == ASSEMBLED_VARIANT_NAME)
+            self.assertTrue(bool(assembled["native_subtitle_assembly_quality_floor_applied"]))
+            self.assertEqual(assembled["native_subtitle_assembly_selected_result_variant"], "mode_high")
+            self.assertEqual(assembled["quality"]["quality_score"], 87.5)
+            self.assertEqual(assembled["candidate_attempt_quality"]["quality_score"], 87.4)
+            self.assertEqual((root / ASSEMBLED_VARIANT_NAME / "output_segments.json").read_text(encoding="utf-8"), "best")
+            self.assertEqual(
+                (root / ASSEMBLED_VARIANT_NAME / "candidate_attempt_output_segments.json").read_text(encoding="utf-8"),
+                "attempt",
+            )
 
     def test_variant_chunk_settings_use_mode_specific_audio_path(self):
         base = _base_benchmark_settings("current")

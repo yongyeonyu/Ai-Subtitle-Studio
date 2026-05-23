@@ -1158,7 +1158,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "settings_simplified_ui_enabled": True,
             "simple_operation_mode": simple_mode,
             "subtitle_mode": simple_mode,
-            **self._collect_roughcut_llm_settings(),
+            **self._collect_roughcut_llm_settings(force_disabled=True),
             "auto_start_mode": auto_start_mode,
             "auto_start_enabled": auto_start_enabled,
             "nas_path": nas_path,

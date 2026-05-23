@@ -7,6 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
 
+from ui.timeline.stt_preview_layout import MAX_STT_PREVIEW_SUBLANES, stt_preview_lane_geometry
 from ui.timeline.timeline_constants import (
     CANVAS_H,
     FOCUS_BORDER_COLOR,
@@ -41,7 +42,7 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_canvas_height_allows_stt1_stt2_preview_lanes(self):
-        self.assertEqual(CANVAS_H, 324)
+        self.assertEqual(CANVAS_H, 348)
         self.assertGreaterEqual(SEG_TOP - (RULER_H + WAVE_H), 34)
         self.assertEqual(SEG_BOT, CANVAS_H)
         self.assertGreater(SUBTITLE_TOP, RULER_H + WAVE_H)
@@ -61,6 +62,37 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
         self.assertEqual(VOICE_ACTIVITY_BOT - VOICE_ACTIVITY_TOP, 0)
         self.assertEqual(STT_PREVIEW_VERTICAL_INSET, 2)
         self.assertEqual(SPEAKER_BOT, SEG_BOT)
+
+    def test_stt_preview_lane_supports_three_readable_sublanes(self):
+        self.assertEqual(MAX_STT_PREVIEW_SUBLANES, 3)
+
+        _, slot_h = stt_preview_lane_geometry(
+            STT1_TOP,
+            STT1_BOT,
+            MAX_STT_PREVIEW_SUBLANES - 1,
+            MAX_STT_PREVIEW_SUBLANES,
+            inset=STT_PREVIEW_VERTICAL_INSET,
+        )
+
+        self.assertGreaterEqual(slot_h, 24)
+
+    def test_timeline_global_canvas_reaches_bottom_edge(self):
+        from ui.timeline.timeline_global import MINIMAP_HEIGHT
+        from ui.timeline.timeline_widget import TimelineWidget
+
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.sizeHint().height() + 48)
+            timeline.show()
+            self.app.processEvents()
+
+            margins = timeline.layout().contentsMargins()
+            self.assertEqual(margins.bottom(), 0)
+            self.assertGreater(timeline.global_canvas.height(), MINIMAP_HEIGHT)
+            self.assertEqual(timeline.global_canvas.geometry().bottom(), timeline.rect().bottom())
+        finally:
+            timeline.close()
+            timeline.deleteLater()
 
     def test_focus_border_style_is_shared_with_editor_panel(self):
         from ui.editor.editor_widget import EditorWidget

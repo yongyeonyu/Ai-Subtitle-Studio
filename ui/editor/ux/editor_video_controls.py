@@ -203,7 +203,7 @@ class EditorVideoControlsMixin:
             return False
         self._deferred_open_waveform_loaded = True
         try:
-            # 자막 생성 중 STT/LLM 리소스와 겹치지 않도록 완료/idle 이후 UI용 waveform을 준비한다.
+            # UI convenience data only: start the worker without blocking subtitle generation.
             loader(path)
             return True
         except Exception:

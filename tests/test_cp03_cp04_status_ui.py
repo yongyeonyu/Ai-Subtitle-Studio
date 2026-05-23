@@ -654,13 +654,15 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         state_manager.update_progress(1, 3, 33)
         self.assertIn("LLM", state_manager._status_msg)
 
-    def test_start_pipeline_marks_processing_before_cut_prescan_without_waveform_worker(self):
+    def test_start_pipeline_marks_processing_before_cut_prescan_and_schedules_waveform(self):
         class DummyEditor(EditorPipelineMixin):
             def __init__(self):
                 self.sm = SubtitleStateManager()
                 self.settings = {}
                 self.is_auto_start = False
                 self.calls = []
+                self._deferred_open_waveform_path = "/tmp/clip.mp4"
+                self._deferred_open_waveform_loaded = False
                 self.main = SimpleNamespace(
                     _stop_post_completion_idle_timer=lambda: None,
                     sync_menu_from_editor=lambda editor=None: self.calls.append(("sync", self.sm.state)),
@@ -675,8 +677,8 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             def _prepare_cut_boundaries_before_start(self):
                 self.calls.append(("prescan", self.sm.state, self.sm._button_text, self.sm._status_msg))
 
-            def _load_deferred_open_waveform(self):
-                self.calls.append(("waveform", self.sm.state, self.sm._status_msg))
+            def _load_deferred_open_waveform(self, *, reason=""):
+                self.calls.append(("waveform", reason, self.sm.state, self.sm._status_msg))
                 return True
 
             def _execute_pipeline_logic(self, is_restart):
@@ -686,15 +688,23 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.calls.append(("restore", self.sm.state))
 
         editor = DummyEditor()
+        scheduled = []
 
-        with patch("core.settings.load_settings", return_value={}):
+        with patch("core.settings.load_settings", return_value={}), patch(
+            "ui.editor.editor_pipeline_startup.QTimer.singleShot",
+            side_effect=lambda delay, callback: scheduled.append((int(delay), callback)),
+        ):
             editor._start_pipeline(is_restart=False)
 
         prescan = [item for item in editor.calls if item[0] == "prescan"][0]
         self.assertNotIn("waveform", [item[0] for item in editor.calls])
+        self.assertEqual([delay for delay, _callback in scheduled], [260])
         self.assertEqual(prescan[1], SubtitleStateManager.ST_PROC)
         self.assertIn("정지", prescan[2])
         self.assertIn("시작 준비", prescan[3])
+
+        scheduled[0][1]()
+        self.assertIn(("waveform", "pipeline_start", SubtitleStateManager.ST_PROC, prescan[3]), editor.calls)
 
     def test_prepare_cut_boundaries_before_start_forces_rescan_for_existing_project(self):
         class _Backend:

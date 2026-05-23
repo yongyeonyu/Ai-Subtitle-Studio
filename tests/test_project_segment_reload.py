@@ -721,6 +721,50 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertTrue(getattr(editor, "_direct_srt_edit_mode"))
         self.assertEqual(getattr(editor, "_linked_project_path_for_srt"), "/tmp/sample_project.aissproj")
 
+    def test_open_project_file_passes_resolved_external_srt_path_to_editor(self):
+        window = _ProjectOpenWindow(_ProjectOpenEditor())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_path = root / "sample.aissproj"
+            media_path = root / "sample.mp4"
+            srt_path = root / "sample.assets" / "subtitles" / "final.srt"
+            media_path.write_bytes(b"video")
+            srt_path.parent.mkdir(parents=True)
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nSRT\n", encoding="utf-8")
+            project = {
+                "_project_file_path": str(project_path),
+                "project_name": "external-srt",
+                "timeline": {"tracks": [{"clips": [{"source_path": str(media_path)}]}]},
+                "subtitles": {"srt_path": "sample.assets/subtitles/final.srt"},
+                "editor_state": {},
+                "analysis": {},
+            }
+            calls = []
+
+            def _open(filepath, project_payload, media, segments, **kwargs):
+                calls.append(
+                    {
+                        "filepath": filepath,
+                        "media": list(media),
+                        "segments": list(segments),
+                        "kwargs": dict(kwargs),
+                    }
+                )
+                return True
+
+            window._load_local_settings = lambda: {}
+            window._sorted_project_media = lambda _project: [str(media_path)]
+            window._open_project_segments_in_editor = _open
+
+            with patch("ui.project.project_panel.load_project", return_value=project):
+                with patch("ui.project.project_panel.restore_project_model_settings", return_value=({}, {})):
+                    with patch("ui.project.project_panel.attach_project_session"):
+                        with patch("ui.project.project_panel.project_segments_to_editor", return_value=[{"text": "SRT"}]):
+                            opened = window._open_project_file(str(project_path))
+
+        self.assertTrue(opened)
+        self.assertEqual(calls[0]["kwargs"]["source_srt_path"], str(srt_path))
+
     def test_subtitle_only_open_helper_uses_same_editor_bootstrap_without_project_state(self):
         editor = _ProjectOpenEditor()
         window = _ProjectOpenWindow(editor)
@@ -1471,6 +1515,38 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             self.assertEqual(editor.timeline.playhead_calls, [])
             self.assertEqual(editor.video_player.seek_calls, [])
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
+        finally:
+            editor.text_edit.close()
+
+    def test_live_editor_preview_follows_latest_draft_and_defers_thumbnail(self):
+        editor = _ActualSelectionEditor()
+        editor.video_player = _DirectSeekVideoPlayer(total_time=100.0)
+        editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
+        scheduled = []
+        try:
+            with patch(
+                "ui.editor.editor_segments_live_preview.QTimer.singleShot",
+                side_effect=lambda delay, cb: scheduled.append((int(delay), cb)),
+            ):
+                editor.preview_stt_segments([
+                    {"start": 0.0, "end": 1.0, "text": "처음 자막", "stt_preview_source": "STT1"},
+                    {"start": 52.0, "end": 54.0, "text": "뒤쪽 자막", "stt_preview_source": "STT1"},
+                ])
+
+            self.assertEqual(
+                [line for line in editor.text_edit.toPlainText().splitlines() if line.strip()],
+                ["처음 자막", "뒤쪽 자막"],
+            )
+            self.assertEqual(editor.text_edit.textCursor().block().text(), "뒤쪽 자막")
+            self.assertAlmostEqual(editor._active_seg_start, 52.0)
+            self.assertEqual(editor.timeline.playhead_calls[-1], (52.0, True))
+            self.assertEqual(editor.video_player.direct_seek_calls[-1], (52.0, False))
+            self.assertEqual(editor.video_player.thumbnail_calls, [])
+            self.assertEqual([delay for delay, _cb in scheduled], [80])
+
+            scheduled[0][1]()
+
+            self.assertEqual(editor.video_player.thumbnail_calls[-1], ("/tmp/source.mp4", 52.0))
         finally:
             editor.text_edit.close()
 

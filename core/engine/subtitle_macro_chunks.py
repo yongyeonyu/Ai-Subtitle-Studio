@@ -347,6 +347,7 @@ def process_llm_macro_group(
     is_openai_model = callbacks["is_openai_model"]
     verify_llm_chunks = callbacks["verify_llm_chunks"]
     deep_rerank_chunks = callbacks["deep_rerank_chunks"]
+    llm_context_pack_for_rows = callbacks.get("llm_context_pack_for_rows")
 
     macro_seg = macro_segment_from_group(rows)
     if not macro_seg:
@@ -377,6 +378,7 @@ def process_llm_macro_group(
         if row_locked_options:
             candidate_options = row_locked_options
             policy["source_lock"] = "stt_rows"
+    context_pack = llm_context_pack_for_rows(rows) if callable(llm_context_pack_for_rows) else None
     if "Gemini" in model:
         chunks = ask_gemini_to_split(
             text,
@@ -388,6 +390,7 @@ def process_llm_macro_group(
             conservative=conservative,
             settings=macro_settings,
             candidate_options=candidate_options,
+            context_pack=context_pack,
         )
     elif is_openai_model(model):
         chunks = ask_openai_to_split(
@@ -400,6 +403,7 @@ def process_llm_macro_group(
             conservative=conservative,
             settings=macro_settings,
             candidate_options=candidate_options,
+            context_pack=context_pack,
         )
     else:
         chunks = ask_exaone_to_split(
@@ -411,6 +415,7 @@ def process_llm_macro_group(
             conservative=conservative,
             settings=macro_settings,
             candidate_options=candidate_options,
+            context_pack=context_pack,
         )
     chunks, macro_lora = verify_llm_chunks(
         text,
@@ -419,6 +424,7 @@ def process_llm_macro_group(
         macro_lora,
         fallback="lora_deep_prepass",
         candidate_options=candidate_options,
+        context_pack=context_pack,
     )
     if not chunks:
         policy["llm_called"] = True

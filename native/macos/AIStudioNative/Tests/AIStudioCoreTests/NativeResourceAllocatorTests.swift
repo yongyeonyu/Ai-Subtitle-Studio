@@ -71,6 +71,92 @@ final class NativeResourceAllocatorTests: XCTestCase {
         XCTAssertEqual(llm["workers"] as? Int, 2)
     }
 
+    func testFullCoreProfileUsesAllLogicalCoresForNativePipelineBudget() throws {
+        let response = NativeResourceAllocator.plan(
+            payload: [
+                "active_labels": ["pipeline"],
+                "settings": [
+                    "benchmark_runtime_profile": "apple_m_full_core_throughput",
+                ],
+                "topology": [
+                    "logical_cores": 10,
+                    "physical_cores": 10,
+                    "performance_cores": 4,
+                    "efficiency_cores": 6,
+                    "gpu_cores": 10,
+                    "neural_engine_cores": 16,
+                    "memory_bytes": 16 * 1_073_741_824,
+                ],
+                "memory": [
+                    "memory_bytes": 16 * 1_073_741_824,
+                    "available_memory_bytes": 6 * 1_073_741_824,
+                    "available_memory_ratio": 0.375,
+                    "pressure_stage": "normal",
+                ],
+                "requests": [
+                    ["task": "audio_extract", "workload": 10, "requested_workers": 10, "minimum": 1],
+                    ["task": "stt_precision", "workload": 10, "requested_workers": 10, "minimum": 1],
+                ],
+            ]
+        )
+
+        let global = try XCTUnwrap(response["global"] as? [String: Any])
+        XCTAssertEqual(global["interactive_reserve_cores"] as? Int, 0)
+        XCTAssertEqual(global["cpu_worker_budget"] as? Int, 10)
+        let allocations = try XCTUnwrap(response["allocations"] as? [String: Any])
+        let audio = try XCTUnwrap(allocations["audio_extract"] as? [String: Any])
+        XCTAssertEqual(audio["workers"] as? Int, 10)
+        let precision = try XCTUnwrap(allocations["stt_precision"] as? [String: Any])
+        XCTAssertEqual(precision["workers"] as? Int, 10)
+        XCTAssertEqual(precision["compute_units"] as? String, "all")
+        let accelerator = try XCTUnwrap(precision["accelerator"] as? [String: Any])
+        XCTAssertEqual(accelerator["policy"] as? String, "whisperkit_ane_gpu_saturation")
+        XCTAssertEqual(accelerator["gpu_lanes"] as? Int, 10)
+        XCTAssertEqual(accelerator["ane_lanes"] as? Int, 10)
+    }
+
+    func testVadAndAudioMLUseMetalGPUHintsWithoutClaimingANE() throws {
+        let response = NativeResourceAllocator.plan(
+            payload: [
+                "active_labels": ["pipeline"],
+                "topology": [
+                    "logical_cores": 10,
+                    "physical_cores": 10,
+                    "performance_cores": 4,
+                    "efficiency_cores": 6,
+                    "gpu_cores": 10,
+                    "neural_engine_cores": 16,
+                    "memory_bytes": 16 * 1_073_741_824,
+                ],
+                "memory": [
+                    "memory_bytes": 16 * 1_073_741_824,
+                    "available_memory_bytes": 6 * 1_073_741_824,
+                    "available_memory_ratio": 0.375,
+                    "pressure_stage": "normal",
+                ],
+                "requests": [
+                    ["task": "vad", "workload": 4, "requested_workers": 4, "minimum": 1],
+                    ["task": "audio_ml", "workload": 4, "requested_workers": 4, "minimum": 1],
+                ],
+            ]
+        )
+
+        let allocations = try XCTUnwrap(response["allocations"] as? [String: Any])
+        let vad = try XCTUnwrap(allocations["vad"] as? [String: Any])
+        let vadAccelerator = try XCTUnwrap(vad["accelerator"] as? [String: Any])
+        XCTAssertEqual(vadAccelerator["policy"] as? String, "metal_ml_balanced")
+        XCTAssertEqual(vadAccelerator["prefer"] as? [String], ["gpu", "cpu"])
+        XCTAssertGreaterThan(try XCTUnwrap(vadAccelerator["gpu_lanes"] as? Int), 0)
+        XCTAssertEqual(vadAccelerator["ane_lanes"] as? Int, 0)
+        XCTAssertEqual(vad["compute_units"] as? String, "cpuOnly")
+
+        let audioML = try XCTUnwrap(allocations["audio_ml"] as? [String: Any])
+        let audioMLAccelerator = try XCTUnwrap(audioML["accelerator"] as? [String: Any])
+        XCTAssertEqual(audioMLAccelerator["policy"] as? String, "metal_ml_balanced")
+        XCTAssertGreaterThan(try XCTUnwrap(audioMLAccelerator["gpu_lanes"] as? Int), 0)
+        XCTAssertEqual(audioMLAccelerator["ane_lanes"] as? Int, 0)
+    }
+
     func testNormalPressureAllowsAggressiveSTTPrecisionSlots() throws {
         let response = NativeResourceAllocator.plan(
             payload: [

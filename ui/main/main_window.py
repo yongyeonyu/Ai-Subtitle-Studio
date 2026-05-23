@@ -932,13 +932,15 @@ class MainWindow(
         panel.setMaximumHeight(190)
 
     def _show_bottom_queue_table(self):
+        self._collapse_bottom_queue_panel()
+
+    def _collapse_bottom_queue_panel(self):
         panel = getattr(self, "bottom_work_panel", None)
         if panel is not None:
             panel.show_queue_table()
-            if self._should_preserve_editor_processing_layout():
-                return
             panel.setVisible(False)
             panel.setMaximumHeight(0)
+            panel.updateGeometry()
 
     def _should_preserve_editor_processing_layout(self) -> bool:
         """Keep the editor/video geometry stable while the start pipeline is running."""
@@ -1464,6 +1466,7 @@ class MainWindow(
             detach = getattr(editor, "detach_external_menu_bar", None)
             if callable(detach):
                 detach()
+        self._collapse_bottom_queue_panel()
         self._dock_global_menu_to_workspace()
 
     def _empty_quick_button(self, text, icon_name, slot):

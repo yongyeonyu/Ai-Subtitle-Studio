@@ -462,7 +462,7 @@ class TimelineInputMixin:
 
     def _is_readonly_analysis_lane_y(self, y: int) -> bool:
         if VOICE_ACTIVITY_BOT <= VOICE_ACTIVITY_TOP:
-            return False
+            return int(y) >= VOICE_ACTIVITY_TOP
         return VOICE_ACTIVITY_TOP <= int(y) < VOICE_ACTIVITY_BOT
 
     def focusNextPrevChild(self, next):

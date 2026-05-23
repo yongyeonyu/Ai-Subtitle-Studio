@@ -1,3 +1,4 @@
+import errno
 import os
 import tempfile
 import unittest
@@ -583,6 +584,23 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(owner.opened_project, str(path))
 
+    def test_open_project_command_classifies_permission_error(self):
+        owner = _DummyOwner()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "demo.json"
+            path.write_text("{}", encoding="utf-8")
+
+            def _deny(_path):
+                raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
+
+            owner._open_project_file = _deny
+
+            result = execute_app_command(owner, {"command": "open-project", "path": str(path)})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "project_open_permission_denied")
+        self.assertEqual(result["data"]["path"], str(path))
+
     def test_queue_folder_command_orders_media_and_starts_queue(self):
         owner = _DummyOwner()
         with patch("ui.main.app_command_bridge.ordered_media_files", return_value=["/tmp/a.mp4", "/tmp/b.wav"]):
@@ -610,6 +628,17 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["message"], "subtitles_saved")
         self.assertEqual(result["data"]["count"], 1)
         self.assertTrue(result["data"]["outputs"][0]["exists"])
+
+    def test_save_subtitles_command_reports_missing_segments_before_save(self):
+        owner = _DummyOwner()
+        owner._editor_widget._segments = []
+
+        result = execute_app_command(owner, {"command": "save-subtitles"})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "subtitle_segments_missing")
+        self.assertEqual(result["data"]["segment_count"], 0)
+        self.assertEqual(owner._editor_widget.save_calls, 0)
 
     def test_export_subtitles_command_writes_requested_path(self):
         owner = _DummyOwner()
@@ -639,6 +668,26 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["message"], "subtitle_videos_exported")
         self.assertEqual(result["data"]["count"], 1)
         self.assertTrue(result["data"]["outputs"][0]["mov_output"]["exists"])
+
+    def test_export_subtitle_video_command_queues_when_scheduler_is_available(self):
+        owner = _DummyOwner()
+        scheduled = []
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "demo.mp4"
+            media_path.write_bytes(b"video")
+            srt_path = Path(tmp) / "demo.srt"
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\n테스트\n", encoding="utf-8")
+            owner._editor_widget.media_path = str(media_path)
+            owner._editor_widget._last_saved_srt_outputs = [(str(srt_path), str(media_path))]
+            owner._editor_widget._schedule_auto_export_saved_subtitle_videos = lambda delay_ms=1500: scheduled.append(delay_ms)
+
+            result = execute_app_command(owner, {"command": "export-subtitle-video"})
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])
+        self.assertEqual(result["message"], "subtitle_video_export_queued")
+        self.assertEqual(scheduled, [0])
+        self.assertEqual(result["data"]["count"], 1)
 
     def test_start_current_pipeline_rejects_duplicate_processing_toggle(self):
         owner = _DummyOwner()

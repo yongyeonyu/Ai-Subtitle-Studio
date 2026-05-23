@@ -1173,6 +1173,7 @@ class TimelinePaintMixin:
                 for item in plan.active_items:
                     p.fillRect(item.rect, QColor(20, 16, 0, 118))
                     p.setPen(QPen(QColor("#FFFFFF"), 2))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
                     p.drawRect(item.rect)
                     p.fillRect(item.icon_rect, QColor("#3B1D20"))
                     p.setPen(QColor("#FF8A80"))
@@ -1191,6 +1192,7 @@ class TimelinePaintMixin:
                 for item in plan.active_items:
                     p.fillRect(item.rect, QColor(20, 16, 0, 118))
                     p.setPen(QPen(QColor("#FFFFFF"), 2))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
                     p.drawRect(item.rect)
                     p.fillRect(item.icon_rect, QColor("#3B1D20"))
                     p.setPen(QColor("#FF8A80"))
@@ -1289,6 +1291,7 @@ class TimelinePaintMixin:
                         badge_text = "LLM" if selection_state == "llm" else "선택"
                         p.fillRect(badge_rect, badge_fill)
                         p.setPen(QPen(badge_border, 1))
+                        p.setBrush(Qt.BrushStyle.NoBrush)
                         p.drawRect(badge_rect)
                         p.setPen(QColor(COLORS["warning_text_soft"]))
                         p.setFont(QFont(config.FONT, 7, QFont.Weight.Bold))
@@ -1504,6 +1507,7 @@ class TimelinePaintMixin:
                     border = QColor(visual_style["border"])
                     p.fillRect(rect, fill)
                     p.setPen(QPen(border, 1))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
                     p.drawRect(rect)
                     speaker_rect = QRect(rect.x(), speaker_top, rect.width(), speaker_bot - speaker_top)
                     self._fill_speaker_rows(p, speaker_rect, _speaker_rows(seg))
@@ -1514,12 +1518,14 @@ class TimelinePaintMixin:
 
                 p.fillRect(rect, fill)
                 p.setPen(QPen(border, bw))
+                p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(rect)
                 if is_merge_preview:
                     preview_rect = rect.adjusted(1, 1, -1, -1)
                     if preview_rect.isValid():
                         p.fillRect(preview_rect, QColor(10, 132, 255, 36))
                     p.setPen(QPen(QColor("#0A84FF"), 2))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
                     p.drawRect(rect.adjusted(0, 0, -1, -1))
                 chips = subtitle_confidence_chips(seg)
                 chips_drawn = False
@@ -1633,6 +1639,7 @@ class TimelinePaintMixin:
                             badge_text_color = QColor("#FFF2A8" if is_llm_choice else "#D7FFE4")
                             p.fillRect(badge_rect, badge_fill)
                             p.setPen(QPen(badge_border, 1))
+                            p.setBrush(Qt.BrushStyle.NoBrush)
                             p.drawRect(badge_rect)
                             p.setPen(badge_text_color)
                             p.setFont(QFont(config.FONT, 7, QFont.Weight.Bold))
@@ -1645,6 +1652,7 @@ class TimelinePaintMixin:
                     p.setPen(QPen(QColor(SPEAKER_SEGMENT_BORDER), 1))
                     p.setBrush(QColor(SPEAKER_SEGMENT_FILL))
                     p.drawRect(speaker_rect)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
                     self._fill_speaker_rows(p, speaker_rect, _speaker_rows(seg))
                 if (
                     not playback_light_mode

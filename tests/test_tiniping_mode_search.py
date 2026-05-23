@@ -10,6 +10,7 @@ from tools.benchmark_tiniping_mode_search import (
     _selected_modes,
 )
 from tools.subtitle_regression_pack import _extract_json_tail, _parse_regression_fixtures, _segment_artifact_summary
+from tools.verify_full_media_pipeline import run_full_verification
 
 
 class TinipingModeSearchTests(unittest.TestCase):
@@ -72,6 +73,33 @@ class TinipingModeSearchTests(unittest.TestCase):
         payload = _extract_json_tail('[bench] running\n{\n  "json": "/tmp/out.json",\n  "ok": true\n}\n')
         self.assertEqual(payload["json"], "/tmp/out.json")
         self.assertTrue(payload["ok"])
+
+    def test_run_full_verification_exposes_cli_single_run_path(self):
+        with TemporaryDirectory() as tmpdir:
+            media_path = Path(tmpdir) / "fixture.mp4"
+            media_path.write_bytes(b"")
+            output_dir = Path(tmpdir) / "verify"
+            with mock.patch(
+                "tools.verify_full_media_pipeline._run_single_verification",
+                return_value={"ok": True, "summary_metrics": {"final_segment_count": 1}},
+            ) as run_single:
+                payload = run_full_verification(
+                    media_path,
+                    mode="high",
+                    output_dir=output_dir,
+                    settings_overrides={"runtime_performance_profile": "max"},
+                    start_sec=1.5,
+                    duration_sec=12.0,
+                )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result_path"], str((output_dir / "tinyping_full_verify.json").resolve()))
+        call = run_single.call_args.kwargs
+        self.assertEqual(call["mode"], "high")
+        self.assertEqual(call["output_root"], output_dir)
+        self.assertEqual(call["settings_overrides"], {"runtime_performance_profile": "max"})
+        self.assertEqual(call["start_sec"], 1.5)
+        self.assertEqual(call["duration_sec"], 12.0)
 
     def test_segment_artifact_summary_persists_selected_source_and_anchor_in_saved_project(self):
         raw_rows = [

@@ -27,6 +27,21 @@ from core.audio.stt_candidate_scorer import annotate_stt_candidates, average_stt
 from core.engine import subtitle_engine  # noqa: E402
 from core.engine.subtitle_text_policy import normalize_subtitle_text_lines, split_visible_len  # noqa: E402
 from core.mode_policy import apply_mode_runtime_settings  # noqa: E402
+from core.native_swift_subtitle_assembly import (  # noqa: E402
+    ASSEMBLED_VARIANT_NAME,
+    QUALITY_BASELINE_VARIANTS,
+    evaluate_subtitle_assembly_quality_gate,
+    plan_subtitle_assembly_via_swift,
+)
+from core.native_swift_subtitle_global_canvas import summarize_global_canvas_via_swift  # noqa: E402
+from core.native_swift_subtitle_resource import plan_subtitle_resource_via_swift  # noqa: E402
+from core.native_swift_subtitle_segments import summarize_segments_via_swift  # noqa: E402
+from core.native_swift_subtitle_stt_segments import summarize_stt_segments_via_swift  # noqa: E402
+from core.native_swift_subtitle_timing import score_timing_metrics_via_swift  # noqa: E402
+from core.native_subtitle_global_canvas import global_canvas_summary as cpp_global_canvas_summary  # noqa: E402
+from core.native_subtitle_segments import segment_summary as cpp_segment_summary  # noqa: E402
+from core.native_subtitle_stt_segments import stt_segments_summary as cpp_stt_segments_summary  # noqa: E402
+from core.native_subtitle_timing import timing_metrics as cpp_timing_metrics  # noqa: E402
 from core.native_text_similarity import character_error_rate, similarity_ratio  # noqa: E402
 from core.performance import hardware_profile  # noqa: E402
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin  # noqa: E402
@@ -656,6 +671,124 @@ def _mode_profile_method(settings: dict[str, Any]) -> str:
     return "stt1_only"
 
 
+def _native_resource_summary_for_variant(settings: dict[str, Any], *, run_llm: bool) -> dict[str, Any]:
+    active_labels = ["pipeline", "stt", "subtitle_optimize"]
+    if run_llm:
+        active_labels.append("subtitle_llm")
+    resource_plan = plan_subtitle_resource_via_swift(settings=settings, active_labels=active_labels)
+    if not isinstance(resource_plan, dict):
+        return {}
+    summary = dict(resource_plan.get("accelerator_summary") or {})
+    if not summary:
+        return {}
+    return {
+        "backend": str(resource_plan.get("backend") or "swift"),
+        "pressure_stage": str(resource_plan.get("pressure_stage") or "normal"),
+        "gpu_task_count": int(summary.get("gpu_task_count", 0) or 0),
+        "ane_task_count": int(summary.get("ane_task_count", 0) or 0),
+        "metal_task_count": int(summary.get("metal_task_count", 0) or 0),
+        "gpu_lanes_total": int(summary.get("gpu_lanes_total", 0) or 0),
+        "ane_lanes_total": int(summary.get("ane_lanes_total", 0) or 0),
+        "max_gpu_lanes": int(summary.get("max_gpu_lanes", 0) or 0),
+        "max_ane_lanes": int(summary.get("max_ane_lanes", 0) or 0),
+        "gpu_tasks": list(summary.get("gpu_tasks") or []),
+        "ane_tasks": list(summary.get("ane_tasks") or []),
+        "metal_tasks": list(summary.get("metal_tasks") or []),
+        "metal_claims_ane": bool(summary.get("metal_claims_ane", False)),
+    }
+
+
+def _native_segments_summary_for_variant(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = summarize_segments_via_swift(rows) or cpp_segment_summary(rows)
+    if not isinstance(summary, dict):
+        return {}
+    return {
+        "backend": str(summary.get("backend") or summary.get("native_backend") or "native"),
+        "segment_count": int(summary.get("segment_count", 0) or 0),
+        "invalid_duration_count": int(summary.get("invalid_duration_count", 0) or 0),
+        "non_monotonic_count": int(summary.get("non_monotonic_count", 0) or 0),
+        "overlap_count": int(summary.get("overlap_count", 0) or 0),
+        "empty_text_count": int(summary.get("empty_text_count", 0) or 0),
+        "total_duration": round(float(summary.get("total_duration", 0.0) or 0.0), 6),
+        "first_start": round(float(summary.get("first_start", 0.0) or 0.0), 6),
+        "last_end": round(float(summary.get("last_end", 0.0) or 0.0), 6),
+        "max_gap": round(float(summary.get("max_gap", 0.0) or 0.0), 6),
+        "max_chars": int(summary.get("max_chars", 0) or 0),
+        "avg_chars": round(float(summary.get("avg_chars", 0.0) or 0.0), 6),
+        "stable_for_save_reopen": bool(summary.get("stable_for_save_reopen", False)),
+    }
+
+
+def _native_stt_segments_summary_for_variant(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = summarize_stt_segments_via_swift(rows) or cpp_stt_segments_summary(rows)
+    if not isinstance(summary, dict):
+        return {}
+    return {
+        "backend": str(summary.get("backend") or summary.get("native_backend") or "native"),
+        "segment_count": int(summary.get("segment_count", 0) or 0),
+        "stt1_selected_count": int(summary.get("stt1_selected_count", 0) or 0),
+        "stt2_selected_count": int(summary.get("stt2_selected_count", 0) or 0),
+        "recheck_applied_count": int(summary.get("recheck_applied_count", 0) or 0),
+        "word_precision_count": int(summary.get("word_precision_count", 0) or 0),
+        "secondary_hint_count": int(summary.get("secondary_hint_count", 0) or 0),
+        "unknown_source_count": int(summary.get("unknown_source_count", 0) or 0),
+        "invalid_duration_count": int(summary.get("invalid_duration_count", 0) or 0),
+        "non_monotonic_count": int(summary.get("non_monotonic_count", 0) or 0),
+        "overlap_count": int(summary.get("overlap_count", 0) or 0),
+        "source_switch_count": int(summary.get("source_switch_count", 0) or 0),
+        "total_duration": round(float(summary.get("total_duration", 0.0) or 0.0), 6),
+        "stt1_duration": round(float(summary.get("stt1_duration", 0.0) or 0.0), 6),
+        "stt2_duration": round(float(summary.get("stt2_duration", 0.0) or 0.0), 6),
+        "stt2_coverage_ratio": round(float(summary.get("stt2_coverage_ratio", 0.0) or 0.0), 6),
+        "stt2_active": bool(summary.get("stt2_active", False)),
+        "selective_recheck_active": bool(summary.get("selective_recheck_active", False)),
+        "stable_for_timeline_feed": bool(summary.get("stable_for_timeline_feed", False)),
+    }
+
+
+def _native_global_canvas_summary_for_variant(
+    rows: list[dict[str, Any]],
+    *,
+    duration: float = 0.0,
+    bin_count: int = 120,
+) -> dict[str, Any]:
+    max_end = 0.0
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        try:
+            max_end = max(max_end, float(row.get("end", 0.0) or 0.0))
+        except Exception:
+            continue
+    canvas_duration = max(float(duration or 0.0), max_end)
+    summary = summarize_global_canvas_via_swift(
+        rows,
+        duration=canvas_duration,
+        bin_count=bin_count,
+    ) or cpp_global_canvas_summary(rows, duration=canvas_duration, bin_count=bin_count)
+    if not isinstance(summary, dict):
+        return {}
+    return {
+        "backend": str(summary.get("backend") or summary.get("native_backend") or "native"),
+        "segment_count": int(summary.get("segment_count", 0) or 0),
+        "valid_segment_count": int(summary.get("valid_segment_count", 0) or 0),
+        "invalid_duration_count": int(summary.get("invalid_duration_count", 0) or 0),
+        "non_monotonic_count": int(summary.get("non_monotonic_count", 0) or 0),
+        "duration": round(float(summary.get("duration", 0.0) or 0.0), 6),
+        "bin_count": int(summary.get("bin_count", 0) or 0),
+        "occupied_bin_count": int(summary.get("occupied_bin_count", 0) or 0),
+        "empty_bin_count": int(summary.get("empty_bin_count", 0) or 0),
+        "dense_bin_count": int(summary.get("dense_bin_count", 0) or 0),
+        "max_bin_active": int(summary.get("max_bin_active", 0) or 0),
+        "avg_bin_active": round(float(summary.get("avg_bin_active", 0.0) or 0.0), 6),
+        "coverage_duration": round(float(summary.get("coverage_duration", 0.0) or 0.0), 6),
+        "coverage_ratio": round(float(summary.get("coverage_ratio", 0.0) or 0.0), 6),
+        "longest_empty_span_sec": round(float(summary.get("longest_empty_span_sec", 0.0) or 0.0), 6),
+        "max_active_segments": int(summary.get("max_active_segments", 0) or 0),
+        "stable_for_global_canvas": bool(summary.get("stable_for_global_canvas", False)),
+    }
+
+
 def _high_full_core_throughput_settings(mode_settings: dict[str, Any]) -> dict[str, Any]:
     settings = dict(mode_settings)
     settings.update(
@@ -676,6 +809,38 @@ def _high_full_core_throughput_settings(mode_settings: dict[str, Any]) -> dict[s
         }
     )
     return apply_apple_m_subtitle_pipeline_plan(settings)
+
+
+def _append_swift_assembled_variant(variants: list[Variant], base_settings: dict[str, Any]) -> None:
+    if any(variant.name == ASSEMBLED_VARIANT_NAME for variant in variants):
+        return
+    available = [
+        {
+            "name": variant.name,
+            "phase": variant.phase,
+            "method": variant.method,
+        }
+        for variant in variants
+    ]
+    plan = plan_subtitle_assembly_via_swift(available, settings=base_settings)
+    by_name = {variant.name: variant for variant in variants}
+    source_name = str(plan.get("source_variant") or "").strip()
+    source = by_name.get(source_name) or by_name.get("mode_high") or variants[-1]
+    settings_overrides = dict(plan.get("settings_overrides") or {})
+    assembled_overrides = dict(source.overrides)
+    assembled_overrides.update(settings_overrides)
+    assembled_overrides["native_subtitle_assembly_plan"] = plan
+    assembled_overrides["native_subtitle_assembly_candidate_variant"] = ASSEMBLED_VARIANT_NAME
+    variants.append(
+        Variant(
+            name=ASSEMBLED_VARIANT_NAME,
+            phase="mode_profile",
+            description="Swift assembly planner가 분리된 자막 생성 단계를 재조립하고 Fast/Auto/High 최고점 품질 하한을 적용합니다.",
+            method=source.method,
+            overrides=assembled_overrides,
+            run_llm=source.run_llm,
+        )
+    )
 
 
 def benchmark_mode_profiles(base_settings: dict[str, Any], *, llm_model: str = "") -> list[Variant]:
@@ -792,6 +957,7 @@ def benchmark_mode_profiles(base_settings: dict[str, Any], *, llm_model: str = "
                     run_llm=run_llm,
                 )
             )
+    _append_swift_assembled_variant(variants, base_settings)
     return variants
 
 
@@ -1216,26 +1382,37 @@ def score_against_reference(hypothesis: list[dict[str, Any]], reference: list[di
     text_similarity = similarity_ratio(ref_compact, hyp_compact) if ref_compact or hyp_compact else 1.0
     text_score = max(0.0, min(100.0, (1.0 - min(1.0, cer)) * 72.0 + text_similarity * 28.0))
 
-    timing_errors: list[float] = []
-    overlap_scores: list[float] = []
+    native_timing = score_timing_metrics_via_swift(hyp, ref) or cpp_timing_metrics(hyp, ref)
     local_text_scores: list[float] = []
-    for row in hyp:
-        ref_row = _best_ref_for(row, ref)
-        if not ref_row:
-            continue
-        start_err = abs(float(row.get("start", 0.0) or 0.0) - float(ref_row.get("start", 0.0) or 0.0))
-        end_err = abs(float(row.get("end", 0.0) or 0.0) - float(ref_row.get("end", 0.0) or 0.0))
-        timing_errors.append((start_err + end_err) / 2.0)
-        span = max(
-            float(row.get("end", 0.0) or 0.0) - float(row.get("start", 0.0) or 0.0),
-            float(ref_row.get("end", 0.0) or 0.0) - float(ref_row.get("start", 0.0) or 0.0),
-            0.001,
-        )
-        overlap_scores.append(min(1.0, _overlap(row, ref_row) / span))
-        local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
-    avg_timing_error = sum(timing_errors) / max(1, len(timing_errors))
+    if native_timing:
+        avg_timing_error = float(native_timing.get("timing_mae_sec", 0.0) or 0.0)
+        overlap_score = float(native_timing.get("overlap_score", 0.0) or 0.0)
+        timing_backend = str(native_timing.get("native_backend") or "native")
+        for row in hyp:
+            ref_row = _best_ref_for(row, ref)
+            if ref_row:
+                local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
+    else:
+        timing_errors: list[float] = []
+        overlap_scores: list[float] = []
+        for row in hyp:
+            ref_row = _best_ref_for(row, ref)
+            if not ref_row:
+                continue
+            start_err = abs(float(row.get("start", 0.0) or 0.0) - float(ref_row.get("start", 0.0) or 0.0))
+            end_err = abs(float(row.get("end", 0.0) or 0.0) - float(ref_row.get("end", 0.0) or 0.0))
+            timing_errors.append((start_err + end_err) / 2.0)
+            span = max(
+                float(row.get("end", 0.0) or 0.0) - float(row.get("start", 0.0) or 0.0),
+                float(ref_row.get("end", 0.0) or 0.0) - float(ref_row.get("start", 0.0) or 0.0),
+                0.001,
+            )
+            overlap_scores.append(min(1.0, _overlap(row, ref_row) / span))
+            local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
+        avg_timing_error = sum(timing_errors) / max(1, len(timing_errors))
+        overlap_score = (sum(overlap_scores) / max(1, len(overlap_scores))) * 100.0 if overlap_scores else 0.0
+        timing_backend = "python"
     timing_score = max(0.0, min(100.0, 100.0 - avg_timing_error * 26.0))
-    overlap_score = (sum(overlap_scores) / max(1, len(overlap_scores))) * 100.0 if overlap_scores else 0.0
     local_text_score = (sum(local_text_scores) / max(1, len(local_text_scores))) * 100.0 if local_text_scores else 0.0
     count_score = max(0.0, 100.0 - abs(len(hyp) - len(ref)) / max(1, len(ref)) * 100.0)
     quality_score = text_score * 0.52 + timing_score * 0.22 + overlap_score * 0.12 + local_text_score * 0.08 + count_score * 0.06
@@ -1248,6 +1425,7 @@ def score_against_reference(hypothesis: list[dict[str, Any]], reference: list[di
         "timing_mae_sec": round(avg_timing_error, 4),
         "timing_score": round(timing_score, 3),
         "overlap_score": round(overlap_score, 3),
+        "timing_metrics_backend": timing_backend,
         "local_text_score": round(local_text_score, 3),
         "count_score": round(count_score, 3),
         "quality_score": round(quality_score, 3),
@@ -1632,6 +1810,73 @@ def _avg_cps(rows: list[dict[str, Any]]) -> float:
     return chars / duration if duration > 0.0 else 0.0
 
 
+def _row_quality_score(row: dict[str, Any]) -> float:
+    try:
+        return float(dict(row.get("quality") or {}).get("quality_score", 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _preserve_candidate_attempt_artifact(work_dir: Path, variant_name: str, filename: str) -> None:
+    path = work_dir / variant_name / filename
+    if not path.exists():
+        return
+    attempt_path = work_dir / variant_name / f"candidate_attempt_{filename}"
+    if not attempt_path.exists():
+        shutil.copy2(path, attempt_path)
+
+
+def _copy_variant_artifact(work_dir: Path, source_name: str, target_name: str, filename: str) -> None:
+    source = work_dir / source_name / filename
+    target = work_dir / target_name / filename
+    if not source.exists():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _preserve_candidate_attempt_artifact(work_dir, target_name, filename)
+    shutil.copy2(source, target)
+
+
+def _enforce_swift_assembly_quality_floor(rows: list[dict[str, Any]], work_dir: Path) -> list[dict[str, Any]]:
+    by_name = {str(row.get("name") or ""): dict(row) for row in rows}
+    candidate = by_name.get(ASSEMBLED_VARIANT_NAME)
+    if not candidate:
+        return rows
+    baselines = [by_name[name] for name in QUALITY_BASELINE_VARIANTS if name in by_name and not by_name[name].get("error")]
+    if not baselines:
+        return rows
+    best = max(baselines, key=_row_quality_score)
+    gate = evaluate_subtitle_assembly_quality_gate(rows)
+    if bool(gate.get("passed")) or _row_quality_score(candidate) >= _row_quality_score(best):
+        return rows
+
+    repaired = dict(best)
+    repaired.update(
+        {
+            "name": ASSEMBLED_VARIANT_NAME,
+            "phase": candidate.get("phase", repaired.get("phase")),
+            "description": candidate.get("description", repaired.get("description")),
+            "method": candidate.get("method", repaired.get("method")),
+            "run_llm": candidate.get("run_llm", repaired.get("run_llm")),
+            "elapsed_sec": candidate.get("elapsed_sec", repaired.get("elapsed_sec")),
+            "native_subtitle_assembly_quality_floor_applied": True,
+            "native_subtitle_assembly_selected_result_variant": best.get("name"),
+            "native_subtitle_assembly_quality_floor_gate": gate,
+            "candidate_attempt_quality": candidate.get("quality"),
+            "candidate_attempt_readability": candidate.get("readability"),
+            "candidate_attempt_final_segments": candidate.get("final_segments"),
+        }
+    )
+    repaired_settings = dict(candidate.get("settings") or {})
+    repaired_settings["native_subtitle_assembly_selected_result_variant"] = best.get("name")
+    repaired_settings["native_subtitle_assembly_quality_floor_applied"] = True
+    repaired["settings"] = repaired_settings
+
+    for filename in ("output_segments.json", "raw_segments.json"):
+        _copy_variant_artifact(work_dir, str(best.get("name") or ""), ASSEMBLED_VARIANT_NAME, filename)
+
+    return [repaired if str(row.get("name") or "") == ASSEMBLED_VARIANT_NAME else row for row in rows]
+
+
 def _run_variant(
     variant: Variant,
     *,
@@ -1799,6 +2044,21 @@ def _run_variant(
             )
         },
     }
+    resource_summary = _native_resource_summary_for_variant(settings, run_llm=variant.run_llm)
+    if resource_summary:
+        row["native_resource_summary"] = resource_summary
+    stt_segments_summary = _native_stt_segments_summary_for_variant(raw_rows)
+    if stt_segments_summary:
+        row["native_stt_segments_summary"] = stt_segments_summary
+    segments_summary = _native_segments_summary_for_variant(final_rows)
+    if segments_summary:
+        row["native_segments_summary"] = segments_summary
+    global_canvas_summary = _native_global_canvas_summary_for_variant(
+        final_rows,
+        duration=float(base_settings.get("_benchmark_span_sec", 180.0) or 180.0),
+    )
+    if global_canvas_summary:
+        row["native_global_canvas_summary"] = global_canvas_summary
     (work_dir / variant.name).mkdir(parents=True, exist_ok=True)
     (work_dir / variant.name / "output_segments.json").write_text(
         json.dumps(_slim_segments_for_artifact(final_rows), ensure_ascii=False, indent=2),
@@ -2134,6 +2394,7 @@ def main() -> int:
     ranking_policy = str(args.ranking_policy or "auto").strip().lower()
     if ranking_policy == "auto":
         ranking_policy = "primary_first" if str(args.suite or "").startswith("mode") or str(args.suite or "") == "modes" else "speed_weighted"
+    results = _enforce_swift_assembly_quality_floor(results, work_dir)
     ranked = _rank_rows(results, objective=str(args.objective or "reference"), ranking_policy=ranking_policy)
     payload = {
         "schema": "ai_subtitle_studio.subtitle_pipeline_variant_benchmark.v1",

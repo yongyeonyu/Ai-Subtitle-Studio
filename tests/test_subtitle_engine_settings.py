@@ -629,6 +629,247 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
             or adjusted[0].get("_timing_anchor_policy", {}).get("anchor_source") == "word_timestamp"
         )
 
+    def test_final_stt_anchor_guard_restores_low_similarity_timing_drift(self):
+        final_rows = [
+            {
+                "start": 63.063,
+                "end": 64.598,
+                "text": "시계군가 없다",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 62.429,
+                "end": 63.997,
+                "text": "칸막은 이게 뭘지 모르겠어요",
+                "stt_selected_source": "STT2",
+            },
+            {
+                "start": 64.431,
+                "end": 65.999,
+                "text": "뭐지?",
+                "stt_selected_source": "STT2",
+            },
+        ]
+
+        restored = subtitle_engine._restore_final_stt_anchor_drift(
+            final_rows,
+            source_rows,
+            {
+                "single_subtitle_end": 0.0,
+                "sub_min_duration": 0.2,
+                "subtitle_final_stt_anchor_guard_enabled": True,
+            },
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "칸막은 이게 뭘지 모르겠어요")
+        self.assertAlmostEqual(restored[0]["start"], 62.429, places=3)
+        self.assertAlmostEqual(restored[0]["end"], 63.997, places=3)
+        self.assertEqual(restored[0]["stt_selected_source"], "STT2")
+        self.assertEqual(
+            restored[0]["_final_stt_anchor_guard_policy"]["action"],
+            "restore_stt_anchor",
+        )
+
+    def test_final_stt_anchor_guard_keeps_similar_conservative_cleanup(self):
+        final_rows = [
+            {
+                "start": 66.433,
+                "end": 70.003,
+                "text": "아 이게 쉬림프 갈릭 소스 이게 그런가 보다",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 66.433,
+                "end": 70.003,
+                "text": "아 이게 시림프 갈릭소스 이게 그런가 보다",
+                "stt_selected_source": "STT1",
+            }
+        ]
+
+        restored = subtitle_engine._restore_final_stt_anchor_drift(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "아 이게 쉬림프 갈릭 소스 이게 그런가 보다")
+        self.assertNotIn("_final_stt_anchor_guard_policy", restored[0])
+
+    def test_final_stt_anchor_guard_does_not_duplicate_one_stt_anchor(self):
+        final_rows = [
+            {
+                "start": 62.9,
+                "end": 63.4,
+                "text": "시계군가 없다",
+            },
+            {
+                "start": 63.45,
+                "end": 63.95,
+                "text": "센처 마켓",
+            },
+        ]
+        source_rows = [
+            {
+                "start": 62.8,
+                "end": 64.0,
+                "text": "칸막은 이게 뭘지 모르겠어요",
+                "stt_selected_source": "STT1",
+            }
+        ]
+
+        restored = subtitle_engine._restore_final_stt_anchor_drift(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "칸막은 이게 뭘지 모르겠어요")
+        self.assertEqual(restored[1]["text"], "센처 마켓")
+        self.assertNotIn("_final_stt_anchor_guard_policy", restored[1])
+
+    def test_final_stt_anchor_guard_preserves_numbered_final_text(self):
+        final_rows = [
+            {
+                "start": 70.0,
+                "end": 72.0,
+                "text": "10원짜리인데 이거",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 70.0,
+                "end": 72.0,
+                "text": "이 소금을 받은 거다 고마워요",
+                "stt_selected_source": "STT2",
+            }
+        ]
+
+        restored = subtitle_engine._restore_final_stt_anchor_drift(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "10원짜리인데 이거")
+        self.assertNotIn("_final_stt_anchor_guard_policy", restored[0])
+
+    def test_final_stt_anchor_guard_prefers_selected_primary_anchor(self):
+        final_rows = [
+            {
+                "start": 66.0,
+                "end": 68.0,
+                "text": "감사합니다",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 66.0,
+                "end": 68.0,
+                "text": "아 이게 시림프 갈릭소스 이게 그",
+                "stt_selected_source": "STT1",
+                "stt_score": 88,
+                "stt_candidates": [
+                    {
+                        "start": 66.0,
+                        "end": 68.0,
+                        "text": "이 소금을 받은 거다 고마워요",
+                        "source": "STT2",
+                        "stt_score": 99,
+                    }
+                ],
+            }
+        ]
+
+        restored = subtitle_engine._restore_final_stt_anchor_drift(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "아 이게 시림프 갈릭소스 이게 그")
+        self.assertEqual(restored[0]["stt_selected_source"], "STT1")
+
+    def test_final_stt_anchor_guard_reinserts_missing_primary_anchor_and_trims_overlap(self):
+        final_rows = [
+            {
+                "start": 77.5,
+                "end": 82.235,
+                "text": "아 이거는 10원짤데",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 77.5,
+                "end": 79.5,
+                "text": "아 이거는 10원짤데",
+                "stt_selected_source": "STT1",
+            },
+            {
+                "start": 79.5,
+                "end": 81.5,
+                "text": "그냥 가져가?",
+                "stt_selected_source": "STT1",
+            },
+        ]
+
+        restored = subtitle_engine._restore_missing_final_stt_anchor_rows(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(len(restored), 2)
+        self.assertEqual(restored[0]["text"], "아 이거는 10원짤데")
+        self.assertAlmostEqual(restored[0]["end"], 79.5, places=3)
+        self.assertEqual(restored[1]["text"], "그냥 가져가?")
+        self.assertAlmostEqual(restored[1]["start"], 79.5, places=3)
+        self.assertEqual(
+            restored[1]["_final_stt_anchor_guard_policy"]["action"],
+            "insert_missing_stt_anchor",
+        )
+
+    def test_final_stt_anchor_guard_does_not_reinsert_represented_merged_anchor(self):
+        final_rows = [
+            {
+                "start": 77.5,
+                "end": 82.235,
+                "text": "아 이거는 10원짤데 그냥 가져가?",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 77.5,
+                "end": 79.5,
+                "text": "아 이거는 10원짤데",
+                "stt_selected_source": "STT1",
+            },
+            {
+                "start": 79.5,
+                "end": 81.5,
+                "text": "그냥 가져가?",
+                "stt_selected_source": "STT1",
+            },
+        ]
+
+        restored = subtitle_engine._restore_missing_final_stt_anchor_rows(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(len(restored), 1)
+        self.assertEqual(restored[0]["text"], "아 이거는 10원짤데 그냥 가져가?")
+        self.assertNotIn("_final_stt_anchor_guard_policy", restored[0])
+
     def test_final_gap_settings_apply_piecewise_drift_for_consistent_run(self):
         segments = [
             {

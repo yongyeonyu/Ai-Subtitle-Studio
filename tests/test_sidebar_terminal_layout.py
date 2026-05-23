@@ -1664,6 +1664,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(window.right_layout.indexOf(window.global_menu_bar), window.right_layout.count() - 1)
             self.assertEqual(editor.external_menu_host.height(), 0)
             self.assertTrue(editor.external_menu_host.isHidden())
+            self.assertTrue(window.bottom_work_panel.isHidden())
+            self.assertEqual(window.bottom_work_panel.maximumHeight(), 0)
         finally:
             if editor is not None:
                 editor.close()
@@ -1692,7 +1694,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_queue_updates_do_not_collapse_bottom_panel_during_editor_processing(self):
+    def test_queue_updates_collapse_bottom_panel_during_editor_processing(self):
         window = MainWindow()
         editor = QWidget()
         try:
@@ -1706,8 +1708,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             window._show_bottom_queue_table()
 
-            self.assertFalse(window.bottom_work_panel.isHidden())
-            self.assertEqual(window.bottom_work_panel.maximumHeight(), 190)
+            self.assertTrue(window.bottom_work_panel.isHidden())
+            self.assertEqual(window.bottom_work_panel.maximumHeight(), 0)
             self.assertTrue(window._should_preserve_editor_processing_layout())
         finally:
             window._editor_widget = None

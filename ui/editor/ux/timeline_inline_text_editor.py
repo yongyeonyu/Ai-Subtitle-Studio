@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QTextOption
+from PyQt6.QtGui import QAction, QColor, QPalette, QTextOption
 from PyQt6.QtWidgets import QFrame, QPlainTextEdit
 
 from core.runtime.logger import get_logger
@@ -29,6 +29,7 @@ class TimelineInlineTextEdit(QPlainTextEdit):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         if hasattr(Qt.WidgetAttribute, "WA_MacShowFocusRect"):
             self.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
+        self.viewport().setObjectName("timelineInlineTextEditViewport")
         self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         self.viewport().setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.viewport().setAutoFillBackground(True)
@@ -46,9 +47,22 @@ class TimelineInlineTextEdit(QPlainTextEdit):
 
     def _apply_inline_style(self) -> None:
         bg = str(getattr(self, "_background_color", "#163223") or "#163223")
+        bg_color = QColor(bg)
+        if not bg_color.isValid():
+            bg = "#163223"
+            bg_color = QColor(bg)
+        for target in (self, self.viewport()):
+            palette = target.palette()
+            palette.setColor(QPalette.ColorRole.Base, bg_color)
+            palette.setColor(QPalette.ColorRole.Window, bg_color)
+            palette.setColor(QPalette.ColorRole.Text, QColor("#DCE3EA"))
+            palette.setColor(QPalette.ColorRole.Highlight, QColor(68, 255, 136, 110))
+            palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#FFFFFF"))
+            target.setPalette(palette)
+            target.setAutoFillBackground(True)
         self.setStyleSheet(
             "QPlainTextEdit#timelineInlineTextEdit {"
-            f" background: {bg};"
+            f" background: {bg}; background-color: {bg};"
             " color: #DCE3EA;"
             " border: none;"
             " border-radius: 0px;"
@@ -56,8 +70,9 @@ class TimelineInlineTextEdit(QPlainTextEdit):
             " selection-background-color: rgba(68, 255, 136, 110);"
             " selection-color: #FFFFFF;"
             " }"
-            " QPlainTextEdit#timelineInlineTextEdit > QWidget {"
-            f" background: {bg};"
+            " QPlainTextEdit#timelineInlineTextEdit > QWidget,"
+            " QWidget#timelineInlineTextEditViewport {"
+            f" background: {bg}; background-color: {bg};"
             " border: none;"
             " }"
         )

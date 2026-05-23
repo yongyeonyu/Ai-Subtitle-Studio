@@ -16,6 +16,7 @@ from core.runtime.multi_process import (
     runtime_llm_worker_plan,
     runtime_parallel_worker_plan,
 )
+from core.runtime.subtitle_resource_manager import active_runtime_labels_from_window
 from core.performance import runtime_scheduler_reserve_cores
 
 
@@ -211,6 +212,19 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(settings["ffmpeg_filter_threads"], 10)
         self.assertEqual(settings["llm_threads"], 6)
         self.assertEqual(settings["llm_threads_resource_max"], 8)
+        self.assertTrue(settings["macos_native_resource_allocator_enabled"])
+        self.assertEqual(settings["native_resource_allocator_reserve_cores"], 0)
+        self.assertTrue(settings["runtime_npu_acceleration_enabled"])
+        self.assertTrue(settings["stt_npu_prefer_enabled"])
+        self.assertTrue(settings["audio_torch_gpu_enabled"])
+        self.assertTrue(settings["ffmpeg_videotoolbox_decode_enabled"])
+        self.assertTrue(settings["scan_cut_pioneer_pipe_hwaccel_enabled"])
+        self.assertTrue(settings["lora_gpu_acceleration_enabled"])
+        self.assertTrue(settings["stt_whisperkit_native_allocator_can_raise_workers"])
+        self.assertTrue(settings["stt_whisperkit_native_compute_profile_enabled"])
+        self.assertEqual(settings["stt_whisperkit_compute_profile"], "auto")
+        self.assertTrue(settings["stt_whisperkit_precision_aggressive_gpu_enabled"])
+        self.assertEqual(settings["stt_whisperkit_gpu_saturation_max_workers"], 10)
         self.assertTrue(settings["stt_window_ensemble_enabled"])
         self.assertTrue(settings["stt_window_parallel_enabled"])
         self.assertEqual(settings["stt_window_sec"], 180.0)
@@ -220,6 +234,18 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertFalse(settings["stt_ensemble_parallel_enabled"])
         self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["full_core_aggressive"])
         self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["stt_window_ensemble"])
+        self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["native_threads"], 10)
+        self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["audio_workers"], 10)
+        self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["llm_workers"], 6)
+        self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["llm_resource_max"], 8)
+        self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["native_resource_allocator_reserve_cores"], 0)
+        self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["whisperkit_compute_profile"], "auto")
+        self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["whisperkit_native_allocator_can_raise_workers"])
+        self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["whisperkit_gpu_saturation_max_workers"], 10)
+        self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["audio_torch_gpu_enabled"])
+        self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["ffmpeg_videotoolbox_decode_enabled"])
+        self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["scan_cut_pioneer_pipe_hwaccel_enabled"])
+        self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["lora_gpu_acceleration_enabled"])
 
     def test_apply_apple_m_full_core_profile_keeps_full_parallel_stt_explicit(self):
         snapshot = {
@@ -239,6 +265,35 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertTrue(settings["stt_ensemble_parallel_enabled"])
         self.assertFalse(settings["stt_ensemble_selective_enabled"])
         self.assertTrue(settings["_apple_m_pipeline_parallel_plan"]["full_parallel_stt_experiment"])
+
+    def test_apply_apple_m_plan_reports_false_string_accelerator_flags(self):
+        snapshot = {
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+        }
+        with patch("core.runtime.multi_process.config.IS_APPLE_SILICON", True), \
+             patch("core.runtime.multi_process.hardware_profile", return_value=snapshot):
+            settings = apply_apple_m_subtitle_pipeline_plan({
+                "stt_whisperkit_native_allocator_can_raise_workers": "false",
+                "audio_torch_gpu_enabled": "off",
+                "ffmpeg_videotoolbox_decode_enabled": "0",
+                "scan_cut_pioneer_pipe_hwaccel_enabled": "disabled",
+                "lora_gpu_acceleration_enabled": "false",
+                "stt_window_ensemble_enabled": "false",
+                "apple_m_aggressive_full_parallel_stt_enabled": "false",
+            })
+
+        plan = settings["_apple_m_pipeline_parallel_plan"]
+        self.assertFalse(plan["whisperkit_native_allocator_can_raise_workers"])
+        self.assertFalse(plan["audio_torch_gpu_enabled"])
+        self.assertFalse(plan["ffmpeg_videotoolbox_decode_enabled"])
+        self.assertFalse(plan["scan_cut_pioneer_pipe_hwaccel_enabled"])
+        self.assertFalse(plan["lora_gpu_acceleration_enabled"])
+        self.assertFalse(plan["stt_window_ensemble"])
+        self.assertFalse(plan["full_parallel_stt_experiment"])
 
     def test_apply_apple_m_subtitle_pipeline_plan_can_be_disabled(self):
         original = {"apple_m_pipeline_parallel_enabled": False, "io_workers": 2}
@@ -821,6 +876,35 @@ class RuntimeMultiProcessTests(unittest.TestCase):
 
         self.assertIn("cut_boundary", labels)
         self.assertIn("stt", labels)
+        self.assertIn("subtitle_llm", labels)
+        self.assertIn("subtitle_optimize", labels)
+        self.assertIn("roughcut_llm", labels)
+
+    def test_subtitle_resource_manager_active_labels_dedupes_and_keeps_exit(self):
+        window = SimpleNamespace(
+            _auto_processing_active=True,
+            backend=SimpleNamespace(
+                _active=True,
+                _cut_boundary_prescan_thread=_AliveThread(),
+                _cut_boundary_follower_thread=_AliveThread(),
+            ),
+            backend_fast=SimpleNamespace(_active=True),
+            _editor_widget=SimpleNamespace(
+                _is_ai_processing=True,
+                _stt_mode_enabled=True,
+                _last_live_processing_stage="subtitle_optimize subtitle_llm 자막 최적화",
+                _roughcut_draft_status="running",
+                _roughcut_draft_pending=False,
+                _roughcut_draft_thread=None,
+            ),
+        )
+
+        labels = active_runtime_labels_from_window(window, exit_mode=True)
+
+        self.assertEqual(labels.count("cut_boundary"), 1)
+        self.assertEqual(labels.count("exit"), 1)
+        self.assertIn("pipeline", labels)
+        self.assertIn("fast", labels)
         self.assertIn("subtitle_llm", labels)
         self.assertIn("subtitle_optimize", labels)
         self.assertIn("roughcut_llm", labels)

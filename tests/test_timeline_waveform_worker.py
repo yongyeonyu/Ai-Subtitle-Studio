@@ -51,6 +51,17 @@ class TimelineWaveformWorkerTests(unittest.TestCase):
         self.assertEqual(len(waveform), 100)
         self.assertAlmostEqual(float(waveform.max()), 1.0, places=6)
 
+    def test_downsample_waveform_raw_prefers_subtitle_waveform_native_helper(self):
+        samples = np.zeros(WAVEFORM_SAMPLE_RATE, dtype=np.float32)
+        expected = np.array([0.25, 1.0], dtype=np.float32)
+
+        with patch("core.native_subtitle_waveform.downsample_f32le", return_value=(expected, 1.0)) as native_downsample:
+            waveform, duration = _downsample_waveform_raw(samples.tobytes())
+
+        native_downsample.assert_called_once()
+        self.assertEqual(duration, 1.0)
+        np.testing.assert_allclose(waveform, expected)
+
     def test_ffmpeg_waveform_cmd_streams_to_stdout(self):
         cmd = _ffmpeg_waveform_cmd("/tmp/input.mp4")
 

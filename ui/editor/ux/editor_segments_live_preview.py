@@ -335,6 +335,14 @@ class EditorSegmentsLivePreviewMixin:
             return False
         return True
 
+    def _live_preview_follow_interval_sec(self) -> float:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            value = float(settings.get("editor_live_stt_preview_follow_interval_sec", 0.45) or 0.45)
+        except Exception:
+            value = 0.45
+        return max(0.20, min(2.0, value))
+
     def _sync_live_preview_playhead_to_video(self, preview: list[dict]) -> None:
         """Keep the video pane visibly following the newest live STT draft."""
         if not preview:
@@ -346,13 +354,7 @@ class EditorSegmentsLivePreviewMixin:
         if not bool(follow_enabled):
             return
         now = time.monotonic()
-        try:
-            interval = max(
-                0.5,
-                float(settings.get("editor_live_stt_preview_follow_interval_sec", 2.0) or 2.0),
-            )
-        except Exception:
-            interval = 2.0
+        interval = self._live_preview_follow_interval_sec()
         last_at = float(getattr(self, "_last_live_stt_video_follow_at", 0.0) or 0.0)
         if now - last_at < interval:
             return
@@ -369,18 +371,49 @@ class EditorSegmentsLivePreviewMixin:
         except Exception:
             return
 
-        self._sync_processing_segment_view(global_sec, show_thumbnail=False)
+        self._sync_processing_segment_view(
+            global_sec,
+            show_thumbnail=True,
+            allow_processing_thumbnail=True,
+            defer_thumbnail=True,
+        )
 
-    def _sync_processing_segment_view(self, global_sec: float, *, show_thumbnail: bool = True) -> None:
+    def _sync_processing_segment_view(
+        self,
+        global_sec: float,
+        *,
+        show_thumbnail: bool = True,
+        allow_processing_thumbnail: bool = False,
+        defer_thumbnail: bool = False,
+    ) -> None:
         try:
             global_sec = self._frame_time(max(0.0, float(global_sec or 0.0)))
         except Exception:
             return
-        show_thumbnail = self._processing_segment_thumbnail_allowed(show_thumbnail)
+        if allow_processing_thumbnail and show_thumbnail:
+            show_thumbnail = True
+        else:
+            show_thumbnail = self._processing_segment_thumbnail_allowed(show_thumbnail)
 
         last_sec = getattr(self, "_last_processing_video_seek_sec", None)
         try:
             if last_sec is not None and abs(float(last_sec) - global_sec) < 0.04:
+                if show_thumbnail:
+                    player = getattr(self, "_last_processing_video_player", None) or getattr(self, "video_player", None)
+                    local_sec = getattr(self, "_last_processing_video_local_sec", global_sec)
+                    if player is not None:
+                        if defer_thumbnail:
+                            self._queue_processing_segment_thumbnail(
+                                player,
+                                local_sec,
+                                allow_during_processing=allow_processing_thumbnail,
+                            )
+                        else:
+                            self._show_processing_segment_thumbnail(
+                                player,
+                                local_sec,
+                                allow_during_processing=allow_processing_thumbnail,
+                            )
                 return
         except Exception:
             pass
@@ -449,6 +482,8 @@ class EditorSegmentsLivePreviewMixin:
         if player is None:
             return
         try:
+            self._last_processing_video_local_sec = float(local_sec)
+            self._last_processing_video_player = player
             if hasattr(player, "seek_direct"):
                 try:
                     player.seek_direct(local_sec, show_thumbnail=False)
@@ -463,13 +498,66 @@ class EditorSegmentsLivePreviewMixin:
             if hasattr(player, "set_subtitle_display_time"):
                 player.set_subtitle_display_time(local_sec)
             if show_thumbnail:
-                self._show_processing_segment_thumbnail(player, local_sec)
+                if defer_thumbnail:
+                    self._queue_processing_segment_thumbnail(
+                        player,
+                        local_sec,
+                        allow_during_processing=allow_processing_thumbnail,
+                    )
+                else:
+                    self._show_processing_segment_thumbnail(
+                        player,
+                        local_sec,
+                        allow_during_processing=allow_processing_thumbnail,
+                    )
         except Exception:
             pass
 
-    def _show_processing_segment_thumbnail(self, player, local_sec: float) -> None:
+    def _queue_processing_segment_thumbnail(
+        self,
+        player,
+        local_sec: float,
+        *,
+        allow_during_processing: bool = False,
+    ) -> None:
         try:
-            if self._processing_live_editor_preview_enabled():
+            local_sec = float(local_sec)
+        except Exception:
+            return
+        self._pending_processing_thumbnail = (player, local_sec, bool(allow_during_processing))
+        if bool(getattr(self, "_processing_thumbnail_flush_pending", False)):
+            return
+        self._processing_thumbnail_flush_pending = True
+        try:
+            QTimer.singleShot(80, self._flush_processing_segment_thumbnail)
+        except Exception:
+            self._flush_processing_segment_thumbnail()
+
+    def _flush_processing_segment_thumbnail(self) -> None:
+        self._processing_thumbnail_flush_pending = False
+        pending = getattr(self, "_pending_processing_thumbnail", None)
+        self._pending_processing_thumbnail = None
+        if not pending:
+            return
+        try:
+            player, local_sec, allow_during_processing = pending
+        except Exception:
+            return
+        self._show_processing_segment_thumbnail(
+            player,
+            local_sec,
+            allow_during_processing=bool(allow_during_processing),
+        )
+
+    def _show_processing_segment_thumbnail(
+        self,
+        player,
+        local_sec: float,
+        *,
+        allow_during_processing: bool = False,
+    ) -> None:
+        try:
+            if not allow_during_processing and self._processing_live_editor_preview_enabled():
                 return
         except Exception:
             return
@@ -486,7 +574,8 @@ class EditorSegmentsLivePreviewMixin:
             same_near_sec = last_sec is not None and abs(float(last_sec) - float(local_sec)) < 0.20
         except Exception:
             same_near_sec = False
-        if same_near_sec and now - last_at < 0.80:
+        min_interval = 0.45 if allow_during_processing else 0.80
+        if same_near_sec and now - last_at < min_interval:
             return
         self._last_processing_thumbnail_at = now
         self._last_processing_thumbnail_sec = float(local_sec)

@@ -4,6 +4,7 @@
 
 from core.engine.subtitle_settings import _get_user_settings
 from core.engine.llm_candidate_policy import format_candidate_options_for_prompt
+from core.native_swift_subtitle_llm_context import format_subtitle_llm_context_for_prompt
 from core.personalization.runtime_lora_context import build_runtime_lora_prompt
 from core.runtime import config
 from core.subtitle_quality.llm_guarded_corrector import build_conservative_prompt
@@ -58,6 +59,7 @@ def _build_llm_prompt(
     conservative: bool = False,
     settings: dict | None = None,
     candidate_options: list[dict] | None = None,
+    context_pack: dict | None = None,
 ) -> str:
     end_words = ", ".join(rules.get("end_words", []))
     start_words = ", ".join(rules.get("start_words", []))
@@ -86,4 +88,7 @@ def _build_llm_prompt(
     candidate_prompt = format_candidate_options_for_prompt(candidate_options)
     if candidate_prompt:
         prompt = f"{prompt}\n\n{candidate_prompt}"
+    context_prompt = format_subtitle_llm_context_for_prompt(context_pack)
+    if context_prompt:
+        prompt = f"{prompt}\n\n{context_prompt}"
     return prompt

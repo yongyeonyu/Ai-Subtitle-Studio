@@ -91,6 +91,10 @@ from core.engine.subtitle_timing import (
     apply_final_gap_settings,
 )
 from core.engine.subtitle_context_refiner import refine_high_contextual_boundaries
+from core.native_swift_subtitle_llm_context import (
+    build_subtitle_llm_context_packs_via_swift,
+    evaluate_subtitle_llm_context_gate_via_swift,
+)
 from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -248,6 +252,7 @@ def ask_exaone_to_split(
     conservative: bool = False,
     settings: dict | None = None,
     candidate_options: list[dict] | None = None,
+    context_pack: dict | None = None,
 ) -> list[str] | None:
     if "사용 안함" in model:
         return None
@@ -263,6 +268,7 @@ def ask_exaone_to_split(
         conservative=conservative,
         settings=settings,
         candidate_options=candidate_options,
+        context_pack=context_pack,
     )
 
     try:
@@ -287,6 +293,7 @@ def ask_openai_to_split(
     conservative: bool = False,
     settings: dict | None = None,
     candidate_options: list[dict] | None = None,
+    context_pack: dict | None = None,
 ) -> list[str] | None:
     if not api_key and not is_codex_model(model_name):
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 OpenAI API Key를 입력해주세요.")
@@ -305,6 +312,7 @@ def ask_openai_to_split(
                 conservative=conservative,
                 settings=settings,
                 candidate_options=candidate_options,
+                context_pack=context_pack,
             ),
         )
     except Exception as e:
@@ -441,6 +449,7 @@ def _verify_llm_chunks(
     fallback: str,
     candidate_options: list[dict] | None = None,
     duration_sec: float | None = None,
+    context_pack: dict | None = None,
 ) -> tuple[list[str] | None, dict]:
     out_meta = dict(lora_meta or {})
     if not chunks:
@@ -479,6 +488,25 @@ def _verify_llm_chunks(
         )
         return None, out_meta
 
+    if context_pack and _setting_bool(settings, "subtitle_llm_prev_next_context_enabled", True):
+        context_decision = evaluate_subtitle_llm_context_gate_via_swift(
+            text,
+            candidate_checked,
+            context_pack,
+            settings=settings or {},
+        )
+        out_meta = _append_accuracy_decision_for_settings(out_meta, context_decision, settings)
+        out_meta["_llm_context_gate_policy"] = context_decision
+        if not bool(context_decision.get("accepted", False)):
+            rollback = rollback_decision(str(context_decision.get("reason") or "llm_context_gate_rejected"), fallback=fallback)
+            out_meta = _append_accuracy_decision_for_settings(out_meta, rollback, settings)
+            out_meta["_llm_rollback_policy"] = rollback
+            get_logger().log(
+                "[LLM-문맥잠금] 이전/현재/다음 STT/VAD 문맥과 어긋난 출력 차단 "
+                f"({context_decision.get('reason')}): '{str(text or '')[:15]}...'"
+            )
+            return None, out_meta
+
     verified, decision = verify_llm_chunks_for_subtitle(
         text,
         candidate_checked,
@@ -515,6 +543,68 @@ def _log_accuracy_metrics(segments: list[dict], settings: dict | None) -> dict:
             f"{style_text}"
         )
     return summary
+
+
+def _attach_llm_context_windows(
+    segments: list[dict],
+    vad_segments: list[dict] | None,
+    settings: dict | None,
+) -> list[dict]:
+    rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    if not rows or not _setting_bool(settings, "subtitle_llm_prev_next_context_enabled", True):
+        return rows
+    try:
+        packs = build_subtitle_llm_context_packs_via_swift(rows, vad_segments or [], settings=settings or {})
+    except Exception:
+        packs = []
+    if len(packs) != len(rows):
+        return rows
+    out: list[dict] = []
+    for row, pack in zip(rows, packs, strict=False):
+        item = dict(row)
+        item["_llm_context_pack"] = dict(pack)
+        out.append(item)
+    return out
+
+
+def _segment_llm_context_pack(seg: dict | None) -> dict | None:
+    pack = dict((seg or {}).get("_llm_context_pack") or {})
+    return pack or None
+
+
+def _current_context_text_from_pack(pack: dict) -> str:
+    current = dict(dict(pack.get("window") or {}).get("current") or {})
+    return str(current.get("text") or "").strip()
+
+
+def _llm_context_pack_for_rows(rows: list[dict] | None) -> dict | None:
+    packs = [dict(row.get("_llm_context_pack") or {}) for row in list(rows or []) if isinstance(row, dict) and row.get("_llm_context_pack")]
+    if not packs:
+        return None
+    if len(packs) == 1:
+        return packs[0]
+    current_texts = [_current_context_text_from_pack(pack) for pack in packs]
+    current_texts = [text for text in current_texts if text]
+    return {
+        "schema": "ai_subtitle_studio.subtitle_llm_context_pack.v1",
+        "mode": "macro_group",
+        "source_pack_count": len(packs),
+        "window": {
+            "previous": dict(packs[0].get("window") or {}).get("previous") or {},
+            "current": {
+                "role": "current",
+                "exists": True,
+                "text": " ".join(current_texts).strip(),
+                "candidates": [{"source": "STT_ROWS", "text": text} for text in current_texts],
+            },
+            "next": dict(packs[-1].get("window") or {}).get("next") or {},
+        },
+        "constraints": {
+            "llm_role": "advisory_only",
+            "previous_next_are_context_only": True,
+            "current_subtitle_required": True,
+        },
+    }
 
 
 def _annotate_context_consistency(segments: list[dict], settings: dict | None) -> list[dict]:
@@ -1699,6 +1789,368 @@ def _safe_source_integrity_variant(source_segments: list[dict], settings: dict |
     rows = _enforce_final_subtitle_text_policy(rows, corrections)
     rows = _apply_final_sequence_cleanup(rows, settings or {}, stage="source_integrity")
     return _expand_non_speaker_multiline_segments(rows, settings or {})
+
+
+def _source_stt_anchor_rows(source_segments: list[dict]) -> list[dict]:
+    anchors: list[dict] = []
+    for source_index, raw_seg in enumerate(list(source_segments or [])):
+        if not isinstance(raw_seg, dict):
+            continue
+        seg = dict(raw_seg)
+        selected_source_name = str(seg.get("stt_selected_source") or seg.get("stt_ensemble_source") or "").strip().upper()
+        selected_source_base = selected_source_name.split("_", 1)[0]
+        candidates = [seg]
+        candidates.extend(c for c in list(seg.get("stt_candidates") or []) if isinstance(c, dict))
+        for cand_index, candidate in enumerate(candidates):
+            text = str(candidate.get("text", "") or "").strip()
+            if not text or _stt_candidate_compact_text(text) in {"", "-"}:
+                continue
+            span = _stt_decision_timing_span(candidate) or _stt_decision_timing_span(seg)
+            if span is None:
+                continue
+            start, end = span
+            if end <= start:
+                continue
+            source_name = str(
+                candidate.get("source")
+                or candidate.get("stt_selected_source")
+                or seg.get("stt_selected_source")
+                or seg.get("stt_ensemble_source")
+                or "STT"
+            ).strip().upper()
+            source_base = source_name.split("_", 1)[0]
+            anchor_priority = 0.0
+            if cand_index == 0:
+                anchor_priority += 4.0
+            if selected_source_base and source_base == selected_source_base:
+                anchor_priority += 2.0
+            anchor_priority += min(1.0, _stt_candidate_score100(candidate) / 100.0)
+            anchors.append(
+                {
+                    **{key: seg[key] for key in _stt_selection_metadata(seg).keys() if key in seg},
+                    **dict(candidate),
+                    "text": text,
+                    "start": float(start),
+                    "end": float(end),
+                    "source": source_name,
+                    "_anchor_priority": round(anchor_priority, 4),
+                    "_source_segment_index": source_index,
+                    "_source_candidate_index": cand_index,
+                }
+            )
+    anchors.sort(key=lambda item: (float(item.get("start", 0.0) or 0.0), float(item.get("end", 0.0) or 0.0)))
+    return anchors
+
+
+_FINAL_STT_ANCHOR_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*(?:[%％]|[A-Za-z가-힣]+)?")
+
+
+def _subtitle_number_tokens(text: str) -> set[str]:
+    return {
+        _stt_candidate_compact_text(token)
+        for token in _FINAL_STT_ANCHOR_NUMBER_RE.findall(str(text or ""))
+        if _stt_candidate_compact_text(token)
+    }
+
+
+def _stt_anchor_guard_key(anchor: dict) -> tuple:
+    return (
+        anchor.get("_source_segment_index"),
+        anchor.get("_source_candidate_index"),
+        round(float(anchor.get("start", 0.0) or 0.0), 3),
+        round(float(anchor.get("end", 0.0) or 0.0), 3),
+        _stt_candidate_compact_text(str(anchor.get("text", "") or "")),
+    )
+
+
+def _subtitle_row_span(row: dict) -> tuple[float, float] | None:
+    try:
+        start = float(row.get("start"))
+        end = float(row.get("end"))
+    except (TypeError, ValueError):
+        return None
+    if end <= start:
+        return None
+    return start, end
+
+
+def _best_stt_anchor_for_final_row(row: dict, anchors: list[dict], settings: dict | None) -> tuple[dict | None, dict]:
+    row_span = _subtitle_row_span(row)
+    if row_span is None:
+        return None, {}
+    row_start, row_end = row_span
+    row_mid = (row_start + row_end) / 2.0
+    row_duration = max(0.05, row_end - row_start)
+    max_mid_delta = max(0.8, _setting_float(settings or {}, "subtitle_final_stt_anchor_guard_max_mid_delta_sec", 1.9))
+    best: tuple[float, dict, dict] | None = None
+    for anchor in anchors:
+        anchor_span = _subtitle_row_span(anchor)
+        if anchor_span is None:
+            continue
+        anchor_start, anchor_end = anchor_span
+        anchor_duration = max(0.05, anchor_end - anchor_start)
+        overlap = max(0.0, min(row_end, anchor_end) - max(row_start, anchor_start))
+        overlap_ratio = overlap / max(0.05, min(row_duration, anchor_duration))
+        anchor_mid = (anchor_start + anchor_end) / 2.0
+        mid_delta = abs(anchor_mid - row_mid)
+        if overlap_ratio <= 0.0 and mid_delta > max(max_mid_delta, row_duration + 0.65, anchor_duration + 0.65):
+            continue
+        temporal_score = (overlap_ratio * 4.0) + max(0.0, 1.0 - (mid_delta / max(0.05, max_mid_delta)))
+        text_similarity = _stt_candidate_similarity(str(row.get("text", "") or ""), str(anchor.get("text", "") or ""))
+        anchor_priority = float(anchor.get("_anchor_priority", 0.0) or 0.0)
+        score = temporal_score + (text_similarity * 0.35) + (anchor_priority * 0.12)
+        meta = {
+            "overlap_ratio": round(overlap_ratio, 4),
+            "mid_delta_sec": round(mid_delta, 4),
+            "text_similarity": round(text_similarity, 4),
+            "temporal_score": round(temporal_score, 4),
+            "anchor_priority": round(anchor_priority, 4),
+        }
+        if best is None or score > best[0]:
+            best = (score, anchor, meta)
+    if best is None:
+        return None, {}
+    return best[1], best[2]
+
+
+def _stt_anchor_is_represented(anchor: dict, rows: list[dict], settings: dict | None) -> bool:
+    anchor_span = _subtitle_row_span(anchor)
+    if anchor_span is None:
+        return False
+    anchor_start, anchor_end = anchor_span
+    anchor_mid = (anchor_start + anchor_end) / 2.0
+    anchor_duration = max(0.05, anchor_end - anchor_start)
+    anchor_text = str(anchor.get("text", "") or "").strip()
+    anchor_compact = _stt_candidate_compact_text(anchor_text)
+    if not anchor_compact:
+        return False
+    min_similarity = max(
+        0.05,
+        min(0.95, _setting_float(settings or {}, "subtitle_final_stt_anchor_guard_present_similarity", 0.64)),
+    )
+    max_mid_delta = max(
+        0.25,
+        _setting_float(settings or {}, "subtitle_final_stt_anchor_guard_present_mid_delta_sec", 1.1),
+    )
+    for row in list(rows or []):
+        row_span = _subtitle_row_span(row)
+        if row_span is None:
+            continue
+        row_start, row_end = row_span
+        row_mid = (row_start + row_end) / 2.0
+        row_duration = max(0.05, row_end - row_start)
+        overlap = max(0.0, min(row_end, anchor_end) - max(row_start, anchor_start))
+        overlap_ratio = overlap / max(0.05, min(row_duration, anchor_duration))
+        mid_delta = abs(row_mid - anchor_mid)
+        if overlap_ratio <= 0.0 and mid_delta > max_mid_delta:
+            continue
+        row_text = str(row.get("text", "") or "").strip()
+        row_compact = _stt_candidate_compact_text(row_text)
+        if len(anchor_compact) >= 4 and anchor_compact in row_compact:
+            return True
+        if _stt_candidate_similarity(anchor_text, row_text) >= min_similarity:
+            return True
+    return False
+
+
+def _trim_rows_for_inserted_stt_anchor(rows: list[dict], anchor: dict, settings: dict | None) -> list[dict]:
+    anchor_span = _subtitle_row_span(anchor)
+    if anchor_span is None:
+        return rows
+    anchor_start, anchor_end = anchor_span
+    min_duration = max(0.15, min(0.5, _setting_float(settings or {}, "sub_min_duration", 0.3)))
+    trimmed: list[dict] = []
+    for raw_row in list(rows or []):
+        row = dict(raw_row)
+        row_span = _subtitle_row_span(row)
+        if row_span is None:
+            trimmed.append(row)
+            continue
+        row_start, row_end = row_span
+        overlap = max(0.0, min(row_end, anchor_end) - max(row_start, anchor_start))
+        if overlap <= 0.0:
+            trimmed.append(row)
+            continue
+        old_start, old_end = row_start, row_end
+        if row_start < anchor_start < row_end:
+            row_end = min(row_end, anchor_start)
+            if row_end - row_start >= min_duration:
+                row["end"] = row_end
+                row["_final_stt_anchor_trim_policy"] = {
+                    "task": "final_stt_anchor_guard",
+                    "action": "trim_end_for_inserted_stt_anchor",
+                    "old_start": round(old_start, 3),
+                    "old_end": round(old_end, 3),
+                    "new_start": round(row_start, 3),
+                    "new_end": round(row_end, 3),
+                    "inserted_text": str(anchor.get("text", "") or "")[:80],
+                }
+        elif row_start < anchor_end < row_end:
+            row_start = max(row_start, anchor_end)
+            if row_end - row_start >= min_duration:
+                row["start"] = row_start
+                row["_final_stt_anchor_trim_policy"] = {
+                    "task": "final_stt_anchor_guard",
+                    "action": "trim_start_for_inserted_stt_anchor",
+                    "old_start": round(old_start, 3),
+                    "old_end": round(old_end, 3),
+                    "new_start": round(row_start, 3),
+                    "new_end": round(row_end, 3),
+                    "inserted_text": str(anchor.get("text", "") or "")[:80],
+                }
+        trimmed.append(row)
+    return trimmed
+
+
+def _restore_final_stt_anchor_drift(
+    optimized: list[dict],
+    source_segments: list[dict],
+    settings: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    settings = dict(settings or {})
+    if not optimized or not source_segments:
+        return optimized
+    if not _bool_setting(settings, "subtitle_final_stt_anchor_guard_enabled", True):
+        return optimized
+    anchors = _source_stt_anchor_rows(source_segments)
+    if not anchors:
+        return optimized
+    min_similarity = max(
+        0.05,
+        min(0.95, _setting_float(settings, "subtitle_final_stt_anchor_guard_min_similarity", 0.38)),
+    )
+    min_source_chars = max(2, _setting_int(settings, "subtitle_final_stt_anchor_guard_min_source_chars", 3))
+    min_overlap_ratio = max(
+        0.0,
+        min(0.95, _setting_float(settings, "subtitle_final_stt_anchor_guard_min_overlap_ratio", 0.35)),
+    )
+    strict_mid_delta = max(
+        0.1,
+        _setting_float(settings, "subtitle_final_stt_anchor_guard_strict_mid_delta_sec", 0.45),
+    )
+    restored_count = 0
+    rows: list[dict] = []
+    used_anchor_keys: set[tuple] = set()
+    for raw_row in list(optimized or []):
+        row = dict(raw_row) if isinstance(raw_row, dict) else {}
+        text = str(row.get("text", "") or "").strip()
+        if not text or row.get("is_gap"):
+            rows.append(row)
+            continue
+        anchor, meta = _best_stt_anchor_for_final_row(row, anchors, settings)
+        if not anchor:
+            rows.append(row)
+            continue
+        anchor_key = _stt_anchor_guard_key(anchor)
+        if anchor_key in used_anchor_keys:
+            rows.append(row)
+            continue
+        anchor_text = str(anchor.get("text", "") or "").strip()
+        if len(_stt_candidate_compact_text(anchor_text)) < min_source_chars:
+            rows.append(row)
+            continue
+        text_numbers = _subtitle_number_tokens(text)
+        anchor_numbers = _subtitle_number_tokens(anchor_text)
+        if text_numbers and not text_numbers.issubset(anchor_numbers):
+            rows.append(row)
+            continue
+        similarity = float(meta.get("text_similarity", 0.0) or 0.0)
+        if similarity >= min_similarity:
+            rows.append(row)
+            continue
+        overlap_ratio = float(meta.get("overlap_ratio", 0.0) or 0.0)
+        mid_delta = float(meta.get("mid_delta_sec", 999.0) or 999.0)
+        if overlap_ratio < min_overlap_ratio and mid_delta > strict_mid_delta:
+            rows.append(row)
+            continue
+        restored = {
+            **row,
+            "text": anchor_text,
+            "start": float(anchor.get("start", row.get("start", 0.0)) or 0.0),
+            "end": float(anchor.get("end", row.get("end", row.get("start", 0.0))) or 0.0),
+            "stt_selected_source": str(anchor.get("source") or row.get("stt_selected_source") or "STT"),
+            "_stt_original_candidate_start": float(anchor.get("start", row.get("start", 0.0)) or 0.0),
+            "_stt_original_candidate_end": float(anchor.get("end", row.get("end", row.get("start", 0.0))) or 0.0),
+            "_final_stt_anchor_guard_policy": {
+                "task": "final_stt_anchor_guard",
+                "stage": stage,
+                "action": "restore_stt_anchor",
+                "old_text": text,
+                "new_text": anchor_text,
+                "source": str(anchor.get("source") or "STT"),
+                "source_segment_index": anchor.get("_source_segment_index"),
+                "source_candidate_index": anchor.get("_source_candidate_index"),
+                **meta,
+            },
+        }
+        restored_count += 1
+        used_anchor_keys.add(anchor_key)
+        rows.append(restored)
+    if restored_count:
+        get_logger().log(f"[자막무결성-STT앵커] {stage}: STT 후보와 어긋난 최종 자막 {restored_count}개 복구")
+    return rows
+
+
+def _restore_missing_final_stt_anchor_rows(
+    optimized: list[dict],
+    source_segments: list[dict],
+    settings: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    settings = dict(settings or {})
+    if not optimized or not source_segments:
+        return optimized
+    if not _bool_setting(settings, "subtitle_final_stt_anchor_guard_enabled", True):
+        return optimized
+    if not _bool_setting(settings, "subtitle_final_stt_anchor_guard_insert_missing_enabled", True):
+        return optimized
+    anchors = _source_stt_anchor_rows(source_segments)
+    if not anchors:
+        return optimized
+    min_source_chars = max(2, _setting_int(settings, "subtitle_final_stt_anchor_guard_min_source_chars", 3))
+    rows = [dict(row) for row in list(optimized or []) if isinstance(row, dict)]
+    inserted_count = 0
+    for anchor in anchors:
+        if int(anchor.get("_source_candidate_index", 0) or 0) != 0:
+            continue
+        anchor_text = str(anchor.get("text", "") or "").strip()
+        if len(_stt_candidate_compact_text(anchor_text)) < min_source_chars:
+            continue
+        if _stt_anchor_is_represented(anchor, rows, settings):
+            continue
+        anchor_span = _subtitle_row_span(anchor)
+        if anchor_span is None:
+            continue
+        anchor_start, anchor_end = anchor_span
+        rows = _trim_rows_for_inserted_stt_anchor(rows, anchor, settings)
+        rows.append(
+            {
+                **_stt_selection_metadata(anchor),
+                "start": float(anchor_start),
+                "end": float(anchor_end),
+                "text": anchor_text,
+                "stt_selected_source": str(anchor.get("source") or anchor.get("stt_selected_source") or "STT"),
+                "_stt_original_candidate_start": float(anchor_start),
+                "_stt_original_candidate_end": float(anchor_end),
+                "_final_stt_anchor_guard_policy": {
+                    "task": "final_stt_anchor_guard",
+                    "stage": stage,
+                    "action": "insert_missing_stt_anchor",
+                    "new_text": anchor_text,
+                    "source": str(anchor.get("source") or "STT"),
+                    "source_segment_index": anchor.get("_source_segment_index"),
+                    "source_candidate_index": anchor.get("_source_candidate_index"),
+                },
+            }
+        )
+        inserted_count += 1
+    if inserted_count:
+        rows.sort(key=lambda item: (float(item.get("start", 0.0) or 0.0), float(item.get("end", 0.0) or 0.0)))
+        get_logger().log(f"[자막무결성-STT앵커] {stage}: 최종 자막에서 누락된 STT 앵커 {inserted_count}개 복구")
+    return rows
 
 
 def _attach_final_integrity_policy(rows: list[dict], policy: dict) -> list[dict]:
@@ -3044,6 +3496,7 @@ def _process_one(args: tuple) -> list[dict]:
     # [수정] LLM 호출 분기 부분
     should_call_llm = False
     candidate_options: list[dict] | None = None
+    context_pack = _segment_llm_context_pack(seg)
     if llm_disabled:
         chunks = None
     else:
@@ -3063,6 +3516,7 @@ def _process_one(args: tuple) -> list[dict]:
                     conservative=conservative,
                     settings=segment_settings,
                     candidate_options=candidate_options,
+                    context_pack=context_pack,
                 )
             elif is_openai_model(model):
                 chunks = ask_openai_to_split(
@@ -3075,6 +3529,7 @@ def _process_one(args: tuple) -> list[dict]:
                     conservative=conservative,
                     settings=segment_settings,
                     candidate_options=candidate_options,
+                    context_pack=context_pack,
                 )
             else:
                 chunks = ask_exaone_to_split(
@@ -3086,6 +3541,7 @@ def _process_one(args: tuple) -> list[dict]:
                     conservative=conservative,
                     settings=segment_settings,
                     candidate_options=candidate_options,
+                    context_pack=context_pack,
                 )
         if should_call_llm:
             chunks, segment_lora = _verify_llm_chunks(
@@ -3096,6 +3552,7 @@ def _process_one(args: tuple) -> list[dict]:
                 fallback="word_timing_split",
                 candidate_options=candidate_options,
                 duration_sec=max(0.0, float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)),
+                context_pack=context_pack,
             )
 
 
@@ -3299,6 +3756,7 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
             word.setdefault("speaker", spk)
 
     should_call_llm, segment_lora = _apply_llm_confidence_gate(seg, cleaned_text, threshold, duration, segment_settings, segment_lora)
+    context_pack = _segment_llm_context_pack(seg)
     if not should_call_llm:
         chunks = None
     else:
@@ -3314,6 +3772,7 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
                 conservative=conservative,
                 settings=segment_settings,
                 candidate_options=candidate_options,
+                context_pack=context_pack,
             )
         elif is_openai_model(model):
             chunks = ask_openai_to_split(
@@ -3326,6 +3785,7 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
                 conservative=conservative,
                 settings=segment_settings,
                 candidate_options=candidate_options,
+                context_pack=context_pack,
             )
         else:
             chunks = ask_exaone_to_split(
@@ -3337,6 +3797,7 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
                 conservative=conservative,
                 settings=segment_settings,
                 candidate_options=candidate_options,
+                context_pack=context_pack,
             )
     if should_call_llm:
         chunks, segment_lora = _verify_llm_chunks(
@@ -3347,6 +3808,7 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
             fallback="original_subtitle",
             candidate_options=candidate_options,
             duration_sec=max(0.0, float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)),
+            context_pack=context_pack,
         )
 
     if not chunks:
@@ -3845,6 +4307,7 @@ def _llm_macro_callbacks() -> dict:
         "is_openai_model": is_openai_model,
         "verify_llm_chunks": _verify_llm_chunks,
         "deep_rerank_chunks": _deep_rerank_chunks,
+        "llm_context_pack_for_rows": _llm_context_pack_for_rows,
         "emit_llm_progress": _emit_llm_progress,
         "logger": get_logger(),
     }
@@ -3868,6 +4331,7 @@ def optimize_segments(
     )
     segments = _annotate_stt_candidate_context([dict(seg) for seg in original_segments])
     segments, uncertainty_plan = annotate_uncertainty_first_segments(segments, loaded_settings)
+    segments = _attach_llm_context_windows(segments, vad_segments or [], loaded_settings)
     process_order = list(uncertainty_plan.get("process_order") or range(len(segments)))
     if uncertainty_plan.get("enabled"):
         counts = dict(uncertainty_plan.get("bucket_counts") or {})
@@ -4100,6 +4564,8 @@ def optimize_segments(
     optimized = _apply_output_variant_selector(optimized, original_segments, vad_segments or [], loaded_settings, stage="llm")
     optimized = _enforce_final_subtitle_text_policy(optimized, corrections)
     optimized = _apply_final_sequence_cleanup(optimized, loaded_settings, stage="llm_final")
+    optimized = _restore_final_stt_anchor_drift(optimized, original_segments, loaded_settings, stage="llm_final")
+    optimized = _restore_missing_final_stt_anchor_rows(optimized, original_segments, loaded_settings, stage="llm_final")
     _emit_processing_preview(
         stage_segments_callback,
         stage="context_review",
@@ -4121,6 +4587,12 @@ def optimize_segments(
     optimized = _final_transcript_integrity_guard(optimized, original_segments, vad_segments or [], loaded_settings)
     if _llm_model_disabled(model):
         optimized = _restore_no_llm_raw_stt_text(optimized)
+        optimized = _restore_missing_final_stt_anchor_rows(
+            optimized,
+            original_segments,
+            loaded_settings,
+            stage="no_llm_raw_text_lock",
+        )
     _emit_processing_preview(
         stage_segments_callback,
         stage="final_integrity_guard",
@@ -4160,6 +4632,7 @@ def ask_gemini_to_split(
     conservative: bool = False,
     settings: dict | None = None,
     candidate_options: list[dict] | None = None,
+    context_pack: dict | None = None,
 ) -> list[str] | None:
     if not api_key:
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 Google API Key를 입력해주세요.")
@@ -4177,6 +4650,7 @@ def ask_gemini_to_split(
                 conservative=conservative,
                 settings=settings,
                 candidate_options=candidate_options,
+                context_pack=context_pack,
             ),
         )
     except Exception:

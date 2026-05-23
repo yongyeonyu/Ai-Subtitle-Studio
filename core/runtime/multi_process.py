@@ -27,6 +27,10 @@ from core.native_resource_allocator import native_resource_allocation, native_ta
 from core.runtime import config
 from core.runtime.memory_manager import process_rss_bytes, runtime_disk_cache_usage
 from core.runtime.setting_utils import setting_bool as _setting_bool
+from core.runtime.subtitle_resource_manager import (
+    active_runtime_labels_from_window,
+    apple_m_accelerator_flag_report,
+)
 
 # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
 # cut-boundary pioneer 4 workers and follower 4-way CPU verification beat
@@ -150,6 +154,8 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     npu_slots = _positive_int(chip_npu.get("coreml_slots"), 0)
 
     full_core_aggressive = _apple_m_full_core_aggressive_requested(merged)
+    llm_workers_user_provided = merged.get("llm_workers") not in (None, "")
+    llm_threads_user_provided = merged.get("llm_threads") not in (None, "")
     respect_manual = (
         _setting_bool(merged.get("apple_m_pipeline_respect_manual_worker_settings"), False)
         and not full_core_aggressive
@@ -161,6 +167,10 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
             if current not in (None, "") and (manual_zero_is_auto or _positive_int(current, 0) > 0):
                 return
         merged[key] = value
+
+    def set_default_opt(key: str, value: Any) -> None:
+        if merged.get(key) in (None, ""):
+            set_opt(key, value)
 
     set_opt("runtime_performance_profile", "max")
     set_opt("runtime_hardware_acceleration_enabled", True)
@@ -263,8 +273,8 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
             merged[key] = value
         else:
             set_opt(key, value)
-    set_opt("llm_workers", min(llm_workers, 4))
-    set_opt("llm_threads", min(llm_workers, 4))
+    set_default_opt("llm_workers", min(llm_workers, 4))
+    set_default_opt("llm_threads", min(llm_workers, 4))
     set_opt("llm_threads_resource_max", llm_workers)
     set_opt("local_ollama_llm_max_workers", local_llm_workers)
     set_opt("roughcut_llm_threads_auto_enabled", True)
@@ -273,12 +283,20 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     if full_core_aggressive:
         full_core_workers = max(1, logical)
         full_core_llm_workers = max(1, min(logical, max(4, performance + min(efficiency, 4))))
+        full_core_accelerator_workers = max(
+            full_core_workers,
+            _int_value(profile.get("gpu_cores"), 0),
+            _int_value(merged.get("stt_whisperkit_gpu_saturation_max_workers"), 0),
+        )
+        full_core_accelerator_workers = max(1, min(logical, full_core_accelerator_workers))
         full_parallel_stt = _setting_bool(merged.get("apple_m_aggressive_full_parallel_stt_enabled"), False)
 
         # Opt-in benchmark hot path: use every logical core while keeping the
         # quality-safe 3 minute STT window and selective STT2 rescue by default.
         set_opt("benchmark_runtime_profile", APPLE_M_FULL_CORE_THROUGHPUT_PROFILE)
         set_opt("runtime_scheduler_reserve_cores", 0)
+        set_opt("native_resource_allocator_reserve_cores", 0)
+        set_opt("macos_native_resource_allocator_enabled", True)
         set_opt("runtime_native_threads", full_core_workers)
         set_opt("io_workers", full_core_workers)
         set_opt("audio_chunk_route_max_workers", full_core_workers)
@@ -286,8 +304,10 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         set_opt("ff_threads", full_core_workers)
         set_opt("subtitle_native_prepass_workers", full_core_workers)
         set_opt("subtitle_native_prepass_workers_resource_max", full_core_workers)
-        set_opt("llm_workers", min(full_core_llm_workers, 6))
-        set_opt("llm_threads", min(full_core_llm_workers, 6))
+        if not llm_workers_user_provided:
+            set_opt("llm_workers", min(full_core_llm_workers, 6))
+        if not llm_threads_user_provided:
+            set_opt("llm_threads", min(full_core_llm_workers, 6))
         set_opt("llm_threads_resource_max", full_core_llm_workers)
         set_opt("roughcut_llm_threads_resource_max", full_core_llm_workers)
         set_opt("stt_window_ensemble_enabled", True)
@@ -295,6 +315,25 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         set_opt("stt_window_parallel_aggressive_enabled", True)
         set_opt("stt_quarter_parallel_count", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
         set_opt("stt_quarter_parallel_max_workers", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
+        set_opt("runtime_npu_acceleration_enabled", True)
+        set_opt("stt_npu_prefer_enabled", True)
+        set_opt("audio_torch_gpu_enabled", True)
+        set_opt("ffmpeg_videotoolbox_decode_enabled", True)
+        set_opt("scan_cut_pioneer_pipe_hwaccel_enabled", True)
+        set_opt("lora_gpu_acceleration_enabled", True)
+        set_opt("stt_whisperkit_native_allocator_can_raise_workers", True)
+        set_opt("stt_whisperkit_native_compute_profile_enabled", True)
+        set_opt("stt_whisperkit_compute_profile", "auto")
+        set_opt("stt_whisperkit_precision_aggressive_gpu_enabled", True)
+        set_opt("stt_whisperkit_gpu_saturation_max_workers", full_core_accelerator_workers)
+        set_opt("stt_whisperkit_concurrent_max_workers", max(
+            full_core_accelerator_workers,
+            _int_value(merged.get("stt_whisperkit_concurrent_max_workers"), 0),
+        ))
+        set_opt("stt_whisperkit_recheck_concurrent_max_workers", max(
+            full_core_accelerator_workers,
+            _int_value(merged.get("stt_whisperkit_recheck_concurrent_max_workers"), 0),
+        ))
         if full_parallel_stt:
             set_opt("stt_ensemble_parallel_enabled", True)
             set_opt("stt_ensemble_selective_enabled", False)
@@ -304,8 +343,16 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
             set_opt("stt_ensemble_selective_enabled", True)
             set_opt("stt_selective_secondary_recheck_enabled", True)
 
-    set_opt("editor_live_stt_preview_follow_video_enabled", False)
-    set_opt("editor_live_stt_preview_follow_interval_sec", 2.0)
+    set_opt("editor_live_stt_preview_follow_video_enabled", True)
+    set_opt("editor_live_stt_preview_follow_interval_sec", 0.45)
+
+    plan_native_threads = _int_value(merged.get("runtime_native_threads"), native_threads)
+    plan_audio_workers = _int_value(merged.get("io_workers"), wide_workers)
+    plan_llm_workers = _int_value(merged.get("llm_threads"), min(llm_workers, 4))
+    plan_llm_resource_max = _int_value(merged.get("llm_threads_resource_max"), llm_workers)
+    plan_local_llm_workers = _int_value(merged.get("local_ollama_llm_max_workers"), local_llm_workers)
+
+    accelerator_flags = apple_m_accelerator_flag_report(merged)
 
     merged["_apple_m_pipeline_parallel_plan"] = {
         "schema": "ai_subtitle_studio.apple_m_pipeline.v2",
@@ -317,24 +364,32 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         "efficiency_cores": efficiency,
         "gpu_cores": int(profile.get("gpu_cores", 0) or 0),
         "neural_engine_cores": int(profile.get("neural_engine_cores", 0) or 0),
-        "native_threads": native_threads,
-        "audio_workers": wide_workers,
+        "native_threads": plan_native_threads,
+        "audio_workers": plan_audio_workers,
         "cut_pioneer_workers": BENCH_LOCKED_CUT_PIONEER_WORKERS,
         "cut_follower_workers": BENCH_LOCKED_CUT_FOLLOWER_WORKERS,
         "cut_follower_outer_splits": BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS,
         "quarter_parallel_count": BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS,
-        "llm_workers": min(llm_workers, 4),
-        "llm_resource_max": llm_workers,
-        "local_llm_workers": local_llm_workers,
+        "llm_workers": plan_llm_workers,
+        "llm_resource_max": plan_llm_resource_max,
+        "local_llm_workers": plan_local_llm_workers,
         "stt_primary_gpu_slots": stt_primary_slots,
         "stt_npu_coreml_slots": npu_slots,
+        "native_resource_allocator_reserve_cores": int(merged.get("native_resource_allocator_reserve_cores", interactive_reserve) or 0),
+        "whisperkit_compute_profile": str(merged.get("stt_whisperkit_compute_profile") or "auto"),
+        "whisperkit_native_allocator_can_raise_workers": accelerator_flags["whisperkit_native_allocator_can_raise_workers"],
+        "whisperkit_gpu_saturation_max_workers": int(merged.get("stt_whisperkit_gpu_saturation_max_workers", 0) or 0),
+        "audio_torch_gpu_enabled": accelerator_flags["audio_torch_gpu_enabled"],
+        "ffmpeg_videotoolbox_decode_enabled": accelerator_flags["ffmpeg_videotoolbox_decode_enabled"],
+        "scan_cut_pioneer_pipe_hwaccel_enabled": accelerator_flags["scan_cut_pioneer_pipe_hwaccel_enabled"],
+        "lora_gpu_acceleration_enabled": accelerator_flags["lora_gpu_acceleration_enabled"],
         "native_cpp_llm_macro_groups": bool(native_overrides["native_cpp_llm_macro_groups_enabled"]),
         "native_swift_quality_min_segments": int(native_overrides["native_swift_quality_scoring_min_segments"]),
         "native_swift_common_split_min_items": int(native_overrides["native_swift_common_split_min_items"]),
         "native_backend_plan": mac_native_backend_plan(merged),
         "full_core_aggressive": bool(full_core_aggressive),
-        "stt_window_ensemble": bool(merged.get("stt_window_ensemble_enabled", False)),
-        "full_parallel_stt_experiment": bool(merged.get("apple_m_aggressive_full_parallel_stt_enabled", False)),
+        "stt_window_ensemble": accelerator_flags["stt_window_ensemble"],
+        "full_parallel_stt_experiment": accelerator_flags["full_parallel_stt_experiment"],
     }
     return merged
 
@@ -850,90 +905,7 @@ class RuntimeResourceCoordinator:
         return "normal"
 
     def _active_runtime_labels(self, window) -> list[str]:
-        labels: list[str] = []
-        if window is None:
-            return labels
-        try:
-            if bool(getattr(window, "_auto_processing_active", False)):
-                labels.append("auto")
-        except Exception:
-            labels = labels
-        for backend_name, label in (("backend", "pipeline"), ("backend_fast", "fast")):
-            try:
-                backend = getattr(window, backend_name, None)
-                if backend is not None and bool(getattr(backend, "_active", False)):
-                    labels.append(label)
-                if backend is not None and self._cut_boundary_runtime_active(backend):
-                    labels.append("cut_boundary")
-            except Exception:
-                continue
-        try:
-            editor = getattr(window, "_editor_widget", None)
-            if editor is not None and bool(getattr(editor, "_is_ai_processing", False)):
-                labels.append("editor")
-            if editor is not None and bool(getattr(editor, "_stt_mode_enabled", False)):
-                labels.append("stt")
-            if editor is not None and self._subtitle_llm_runtime_active(editor):
-                labels.append("subtitle_llm")
-            if editor is not None and self._subtitle_optimize_runtime_active(editor):
-                labels.append("subtitle_optimize")
-            if editor is not None and self._roughcut_llm_runtime_active(editor):
-                labels.append("roughcut_llm")
-        except Exception:
-            editor = None
-        if self._exit_mode:
-            labels.append("exit")
-        deduped: list[str] = []
-        for label in labels:
-            if label not in deduped:
-                deduped.append(label)
-        return deduped
-
-    def _cut_boundary_runtime_active(self, backend) -> bool:
-        for attr in ("_cut_boundary_prescan_thread", "_cut_boundary_follower_thread"):
-            try:
-                thread = getattr(backend, attr, None)
-                if thread is not None and thread.is_alive():
-                    return True
-            except Exception:
-                continue
-        return False
-
-    def _subtitle_llm_runtime_active(self, editor) -> bool:
-        try:
-            stage = str(getattr(editor, "_last_live_processing_stage", "") or "")
-        except Exception:
-            stage = ""
-        return "자막 LLM" in stage or "subtitle_llm" in stage.lower()
-
-    def _subtitle_optimize_runtime_active(self, editor) -> bool:
-        try:
-            stage = str(getattr(editor, "_last_live_processing_stage", "") or "")
-        except Exception:
-            stage = ""
-        lowered = stage.lower()
-        return any(
-            token in lowered
-            for token in (
-                "subtitle_optimize",
-                "subtitle optimize",
-                "optimizer",
-                "stt+자막 llm",
-                "교정/분리",
-            )
-        ) or "자막 최적화" in stage
-
-    def _roughcut_llm_runtime_active(self, editor) -> bool:
-        try:
-            status = str(getattr(editor, "_roughcut_draft_status", "") or "").strip().lower()
-            if status in {"queued", "running", "saving"}:
-                return True
-            if bool(getattr(editor, "_roughcut_draft_pending", False)):
-                return True
-            thread = getattr(editor, "_roughcut_draft_thread", None)
-            return bool(thread is not None and thread.is_alive())
-        except Exception:
-            return False
+        return active_runtime_labels_from_window(window, exit_mode=self._exit_mode)
 
     def _sample_system_cpu_percent(self) -> float:
         psutil = self._psutil_module

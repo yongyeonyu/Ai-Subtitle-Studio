@@ -12,7 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.optimization.quality_gate import subtitle_quality_gate  # noqa: E402
+from core.native_swift_subtitle_assembly import (  # noqa: E402
+    ASSEMBLED_VARIANT_NAME,
+    QUALITY_BASELINE_VARIANTS,
+    evaluate_subtitle_assembly_quality_gate,
+)
+from core.optimization.quality_gate import BackendQualityGate, subtitle_quality_gate  # noqa: E402
 
 
 PREFERRED_BASELINES = (
@@ -23,6 +28,14 @@ PREFERRED_BASELINES = (
     "mode_auto",
     "mode_fast",
 )
+BEST_MODE_BASELINE_ALIASES = {
+    "best-mode",
+    "best_mode",
+    "best-fast-auto-high",
+    "best_fast_auto_high",
+    "fast-auto-high",
+    "fast_auto_high",
+}
 
 
 def _auto_baseline_name(rows: list[dict[str, Any]]) -> str:
@@ -34,6 +47,17 @@ def _auto_baseline_name(rows: list[dict[str, Any]]) -> str:
         if not row.get("error"):
             return str(row.get("name") or "")
     return ""
+
+
+def _best_mode_baseline_name(rows: list[dict[str, Any]]) -> str:
+    candidates = [
+        row
+        for row in rows
+        if not row.get("error") and str(row.get("name") or "") in QUALITY_BASELINE_VARIANTS
+    ]
+    if not candidates:
+        return _auto_baseline_name(rows)
+    return str(max(candidates, key=_quality_score).get("name") or "")
 
 
 def _quality_score(row: dict[str, Any]) -> float:
@@ -54,7 +78,15 @@ def _primary_speed_score(row: dict[str, Any]) -> float:
 
 def apply_gate(payload: dict[str, Any], *, baseline_variant: str = "auto") -> dict[str, Any]:
     rows = [dict(row) for row in list(payload.get("ranked_results") or payload.get("results") or []) if isinstance(row, dict)]
-    baseline_name = _auto_baseline_name(rows) if str(baseline_variant or "auto").strip() == "auto" else str(baseline_variant).strip()
+    requested_baseline = str(baseline_variant or "auto").strip()
+    requested_key = requested_baseline.lower()
+    strict_best_mode_floor = requested_key in BEST_MODE_BASELINE_ALIASES
+    if requested_key == "auto":
+        baseline_name = _auto_baseline_name(rows)
+    elif strict_best_mode_floor:
+        baseline_name = _best_mode_baseline_name(rows)
+    else:
+        baseline_name = requested_baseline
     if not baseline_name:
         raise RuntimeError("no usable benchmark row for quality gate baseline")
     by_name = {str(row.get("name") or ""): row for row in rows}
@@ -62,13 +94,26 @@ def apply_gate(payload: dict[str, Any], *, baseline_variant: str = "auto") -> di
     if baseline is None:
         raise RuntimeError(f"unknown quality gate baseline variant: {baseline_name}")
 
+    strict_gate = BackendQualityGate(max_quality_score_drop=0.0) if strict_best_mode_floor else None
+    swift_assembly_gate = (
+        evaluate_subtitle_assembly_quality_gate(rows)
+        if ASSEMBLED_VARIANT_NAME in by_name
+        else None
+    )
     gated: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
         # Keep final selection quality-first: fast candidates must preserve the selective baseline.
-        gate = subtitle_quality_gate(baseline, item)
+        gate = subtitle_quality_gate(baseline, item, gate=strict_gate)
         if str(item.get("name") or "") == baseline_name:
             gate["baseline"] = True
+        if str(item.get("name") or "") == ASSEMBLED_VARIANT_NAME and swift_assembly_gate:
+            item["swift_assembly_quality_gate"] = swift_assembly_gate
+            if not bool(swift_assembly_gate.get("passed")):
+                gate["passed"] = False
+                reasons = list(gate.get("reasons") or [])
+                reasons.append(f"swift_assembly_quality_gate:{swift_assembly_gate.get('reason')}")
+                gate["reasons"] = reasons
         item["quality_gate"] = gate
         item["quality_gate_passed"] = bool(gate.get("passed"))
         gated.append(item)
@@ -94,6 +139,9 @@ def apply_gate(payload: dict[str, Any], *, baseline_variant: str = "auto") -> di
         "reference_srt": payload.get("reference_srt"),
         "suite": payload.get("suite"),
         "baseline_variant": baseline_name,
+        "baseline_variant_request": requested_baseline,
+        "strict_best_mode_floor": strict_best_mode_floor,
+        "swift_assembly_quality_gate": swift_assembly_gate,
         "ranked_results": ranked,
     }
 
@@ -105,6 +153,7 @@ def _write_markdown(payload: dict[str, Any], path: Path) -> None:
         f"- Media: `{payload.get('media')}`",
         f"- Reference: `{payload.get('reference_srt')}`",
         f"- Baseline variant: `{payload.get('baseline_variant')}`",
+        f"- Strict Fast/Auto/High floor: `{payload.get('strict_best_mode_floor')}`",
         f"- Created: {payload.get('created_at')}",
         "",
         "| Gate Rank | Variant | Gate | Time(s) | Quality | Readability | Segs | Reasons |",

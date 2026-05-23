@@ -800,6 +800,34 @@ def _run_single_verification(
         sampler.stop()
 
 
+def run_full_verification(
+    media_path: str | Path,
+    *,
+    mode: str = "high",
+    output_dir: str | Path = LATEST_DIR,
+    settings_overrides: dict[str, Any] | None = None,
+    start_sec: float = 0.0,
+    duration_sec: float | None = None,
+    profile_functions: bool = False,
+    profile_top: int = 80,
+) -> dict[str, Any]:
+    output_root = Path(output_dir).expanduser()
+    output_root.mkdir(parents=True, exist_ok=True)
+    payload = _run_single_verification(
+        Path(media_path).expanduser(),
+        mode=str(mode or "high").strip().lower(),
+        output_root=output_root,
+        settings_overrides=settings_overrides,
+        run_index=None,
+        start_sec=max(0.0, float(start_sec or 0.0)),
+        duration_sec=float(duration_sec) if duration_sec and duration_sec > 0.0 else None,
+        profile_functions=bool(profile_functions),
+        profile_top=max(1, int(profile_top or 80)),
+    )
+    payload["result_path"] = str((output_root / "tinyping_full_verify.json").resolve())
+    return payload
+
+
 def _build_repeat_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
     elapsed = [item.get("summary_metrics", {}).get("pipeline_elapsed_sec") for item in runs]
     elapsed = [float(v) for v in elapsed if isinstance(v, (int, float))]

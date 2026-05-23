@@ -106,7 +106,12 @@ def _parser() -> argparse.ArgumentParser:
     start_multiclip.add_argument("paths", nargs="*")
     start_multiclip.add_argument("--folder", default="")
     start_multiclip.add_argument("--mode", choices=["fast", "auto", "high", "stt"], default="")
-    start_multiclip.add_argument("--reuse-existing", choices=["ask", "yes", "no"], default="ask")
+    start_multiclip.add_argument(
+        "--reuse-existing",
+        choices=["ask", "yes", "no"],
+        default="no",
+        help="Automation default is 'no': move sibling SRTs to 자막백업 and regenerate. Use 'yes' to reuse or 'ask' to require confirmation.",
+    )
 
     open_project = sub.add_parser("open-project")
     open_project.add_argument("path")

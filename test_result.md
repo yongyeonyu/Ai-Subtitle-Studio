@@ -1,5 +1,149 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Runtime resource labels, CLI compatibility, X5 benchmark, full regression - 2026-05-23
+
+- 실행 모드: behavior-preserving `subtitle_resource_manager`/runtime active-label facade extraction + CLI/test compatibility fix + X5 High 180s reference benchmark.
+- 결과: pass
+- 수정/확인 항목:
+  - `RuntimeResourceCoordinator`의 자막 파이프라인 활성 라벨 판단을 `core/runtime/subtitle_resource_manager.py` 순수 함수로 이동해 `pipeline/fast/cut_boundary/editor/stt/subtitle_llm/subtitle_optimize/roughcut_llm/exit` 판단을 공유.
+  - 사용자/깨진 `llm_threads`와 `llm_workers` 설정값은 보존하고, Apple Silicon cap은 `llm_threads_resource_max` 등 resource max 경로로 적용하도록 보정.
+  - `tools.verify_full_media_pipeline.run_full_verification()` 공개 wrapper를 복구해 `subtitle_regression_pack`/Tiniping mode-search 테스트 수집 실패를 수정.
+  - 전역 training-interrupt 테스트 격리, collapsed voice/analysis lane 클릭의 subtitle select 방지, simplified settings에서 hidden roughcut LLM 자동 활성화 방지를 수정.
+  - UI/UX 시나리오, STT1/STT2 선택 정책, LLM/LoRA 품질 게이트, 자막 텍스트/타이밍 정책은 변경하지 않음.
+- X5 실측:
+  - artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260523_205429/benchmark_results.md`
+  - `quality_score=87.402`, `CER=0.088391`, `global_text_similarity=0.954667`, `timing_mae_sec=0.5742`, `raw/final=59/57`, `elapsed_sec=70.293`
+  - accelerator log: STT1 WhisperKit ANE/GPU concurrency `2`, selective STT2 `14 blocks`, word precision ANE/GPU concurrency `10`.
+- 단위/가드:
+  - runtime/appctl/timeline/STT/mode targeted guards: pass (`102 passed`, `25 passed`, `7 passed`, focused roughcut/editor/timeline guards passed)
+  - full Python regression: pass (`2634 passed, 1 warning, 5 subtests passed in 218.77s`)
+  - app bundle rebuild/validation: pass (`dist/macos/AI Subtitle Studio.app`; unsigned warning only)
+  - packaged app status after relaunch: pass (`ok=true`, `editor_open=false`, `backend_active=false`, `pressure_stage=normal`, `active_labels=[]`)
+- 산출물: `output/manual_verification/latest/20260523_runtime_resource_labels_x5_fullsuite/verification_summary.md`
+- 참고:
+  - 이번 slice는 전체 `Subtitle Generation Domain Split And Native Acceleration Plan` 완료가 아니라 `subtitle_resource_manager`/runtime active-label facade + compatibility hardening sub-slice 완료임. 메인 active item은 계속 남김.
+
+## Mac native action items and X5 reference rerun - 2026-05-23
+
+- 실행 모드: behavior-preserving Mac native/STT/UI hot-path action-item execution + X5 High 180s reference benchmark.
+- 결과: pass after rejecting one over-aggressive STT2 High-budget candidate.
+- 수정/확인 항목:
+  - Apple Silicon full-core native path, Swift resource allocator, WhisperKit/Core ML compute-profile handoff, VideoToolbox/Metal/GPU hints, and native resource plan reporting remain active.
+  - Fast/Auto STT2는 더 적극적으로 유지하되, High/Precise STT2는 X5 timing-safe budget으로 되돌림: threshold `78`, max segments `24`, max audio `110s`, min improvement `2.0`.
+  - `appctl start-multiclip` 자동화 기본 정책을 `--reuse-existing no`로 명시. 기존 sibling SRT는 `자막백업`으로 이동 후 새로 생성하며, `yes`/`ask`는 명시 선택 가능.
+  - completed automation-4 multiclip reuse-policy item removed from `ACTION_ITEMS.md`.
+  - UI/UX scenario, subtitle quality policy, STT1/STT2 full-parallel opt-in policy, LLM conservative gates unchanged.
+- Rejected candidate:
+  - artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260523_203930/benchmark_results.md`
+  - `quality_score=80.561`, `CER=0.168865`, `timing_mae_sec=0.7765`, `raw/final=64/62`, `elapsed_sec=139.900`
+  - rejection reason: High STT2 threshold `82` / max `36` selected too many candidates (`47 -> 35`) and regressed timing/text quality.
+- Accepted X5 실측:
+  - artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260523_204316/benchmark_results.md`
+  - `quality_score=87.402`, `CER=0.088391`, `global_text_similarity=0.954667`, `timing_mae_sec=0.5742`, `raw/final=59/57`, `elapsed_sec=79.317`
+  - accelerator log: STT1 WhisperKit ANE/GPU concurrency `2`, selective STT2 `14 blocks`, word precision ANE/GPU concurrency `10`.
+- 단위/가드:
+  - broad modified-surface Python guard: pass (`386 passed`)
+  - Swift NativeResourceAllocatorTests: pass (`9 tests, 0 failures`)
+  - STT2/recheck/straggler guard: pass (`50 passed, 84 deselected`)
+  - post-tuning STT/mode guard: pass (`71 passed, 84 deselected`)
+  - appctl/multiclip reuse policy guard: pass (`6 passed`)
+- 산출물: `output/manual_verification/latest/20260523_action_items_mac_native_x5/verification_summary.md`
+
+## Subtitle resource-manager accelerator flag report - 2026-05-23
+
+- 실행 모드: Apple Silicon subtitle resource-manager flag parsing hardening + X5 High 180s reference benchmark
+- 결과: pass
+- 수정/확인 항목:
+  - `core/runtime/subtitle_resource_manager.py`를 추가해 `_apple_m_pipeline_parallel_plan` accelerator/report boolean 해석을 분리.
+  - 문자열 false/off/0/disabled 설정이 benchmark plan artifact에서 GPU/Metal/VideoToolbox/WhisperKit native allocator enabled로 잘못 기록될 수 있는 버그를 수정.
+  - UI/UX 시나리오, STT1/STT2 선택 정책, LLM/LoRA 품질 게이트, 자막 텍스트/타이밍 정책은 변경하지 않음.
+- 단위/가드:
+  - py_compile: pass
+  - targeted Apple M resource plan tests: pass (`3 passed`)
+  - broader runtime/setting/benchmark/native guard: pass (`68 passed`)
+- X5 실측:
+  - artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260523_195117/benchmark_results.md`
+  - `quality_score=87.402`, `CER=0.088391`, `global_text_similarity=0.954667`, `timing_mae_sec=0.5742`, `raw/final=59/57`, `elapsed_sec=73.604`
+  - latest accepted full-core quality/timing baseline 대비 quality/CER/timing/raw/final unchanged.
+  - accelerator log: STT1 `2 chunks`, selective STT2 `14 blocks`, word precision `10 chunks`; full parallel STT remains disabled unless explicitly requested.
+- 산출물: `output/manual_verification/latest/20260523_resource_manager_flag_report/verification_summary.md`
+- 참고:
+  - 이번 slice는 전체 `Subtitle Generation Domain Split And Native Acceleration Plan` 완료가 아니라 `subtitle_resource_manager` facade/flag-report sub-slice 완료임. 메인 active item은 계속 남김.
+
+## Metal/GPU resource hints and full-core plan accuracy - 2026-05-23
+
+- 실행 모드: full-core Mac native resource hint hardening + X5 High 180s reference benchmark
+- 결과: pass
+- 수정/확인 항목:
+  - full-core profile에서 `audio_torch_gpu_enabled`, `ffmpeg_videotoolbox_decode_enabled`, `scan_cut_pioneer_pipe_hwaccel_enabled`, `lora_gpu_acceleration_enabled`를 명시적으로 켜 stale manual setting이 benchmark full-core 경로를 낮추지 않게 함.
+  - `_apple_m_pipeline_parallel_plan`의 `native_threads`, `audio_workers`, `llm_workers`, `llm_resource_max`, `local_llm_workers`가 full-core override 이후 실제 적용값을 기록하도록 보정.
+  - Swift `NativeResourceAllocator` 기본 pipeline 요청에 `audio_ml`, `diarize`를 추가하고, VAD/audio-ML/diarize에는 `metal_ml_balanced` GPU 힌트를 부여. ANE는 WhisperKit/Core ML STT 전용으로 유지.
+  - UI/UX 시나리오, STT1/STT2 선택 정책, LLM/LoRA 품질 게이트, 자막 텍스트/타이밍 정책은 변경하지 않음.
+- 단위/가드:
+  - py_compile: pass
+  - targeted runtime/ffmpeg/torch tests: pass (`10 passed`)
+  - broader runtime/benchmark/native guard: pass (`62 passed`)
+  - Swift NativeResourceAllocatorTests: pass (`9 tests, 0 failures`)
+  - app bundle rebuild: pass (`dist/macos/AI Subtitle Studio.app`)
+  - app bundle validation: pass (`validate_app_bundle.sh`; unsigned warning only)
+- X5 실측:
+  - artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260523_194503/benchmark_results.md`
+  - `quality_score=87.402`, `CER=0.088391`, `global_text_similarity=0.954667`, `timing_mae_sec=0.5742`, `raw/final=59/57`, `elapsed_sec=73.858`
+  - latest accepted full-core quality/timing baseline 대비 quality/CER/timing/raw/final unchanged.
+  - accelerator log: STT1 `2 chunks`, STT2 `8 chunks`, word precision `10 chunks`; full parallel STT remains disabled unless explicitly requested.
+- 산출물: `output/manual_verification/latest/20260523_metal_gpu_resource_hints/verification_summary.md`
+- 참고:
+  - 이번 slice는 전체 `Subtitle Generation Domain Split And Native Acceleration Plan` 완료가 아니라 Metal/GPU resource hint 및 full-core plan accuracy sub-slice 완료임. 메인 active item은 계속 남김.
+
+## Full-core native accelerator budget - 2026-05-23
+
+- 실행 모드: Apple Silicon full-core/native allocator budget hardening + X5 High 180s reference benchmark
+- 결과: pass
+- 수정/확인 항목:
+  - full-core profile에서 Swift native resource allocator reserve를 `0`으로 명시해 Python runtime reserve와 Swift allocator reserve 불일치를 제거.
+  - full-core profile에서 WhisperKit native allocator worker raise, native compute profile `auto`, NPU prefer, precision GPU saturation을 명시.
+  - Swift native allocator가 `apple_m_full_core_throughput`/`apple_m_full_core_aggressive_enabled`를 인식해 normal pressure pipeline의 CPU budget과 audio/STT precision cap을 전체 logical core budget까지 열도록 보정.
+  - UI/UX 시나리오, STT1/STT2 선택 정책, full parallel STT opt-in 정책, 자막 텍스트/타이밍 정책은 변경하지 않음.
+- 단위/가드:
+  - py_compile: pass
+  - targeted runtime/media/native allocator tests: pass (`6 passed`)
+  - runtime/STT recheck guard: pass (`39 passed`)
+  - Swift NativeResourceAllocatorTests: pass (`8 tests, 0 failures`)
+  - app bundle rebuild: pass (`dist/macos/AI Subtitle Studio.app`)
+  - app bundle validation: pass (`validate_app_bundle.sh`; unsigned warning only)
+- X5 실측:
+  - artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260523_193659/benchmark_results.md`
+  - `quality_score=87.402`, `CER=0.088391`, `global_text_similarity=0.954667`, `timing_mae_sec=0.5742`, `raw/final=59/57`, `elapsed_sec=74.169`
+  - latest accepted full-core quality/timing baseline 대비 quality/CER/timing/raw/final unchanged.
+  - accelerator log: STT1 `2 chunks`, STT2 `8 chunks`, word precision `10 chunks`; full parallel STT remains disabled unless explicitly requested.
+- 산출물: `output/manual_verification/latest/20260523_full_core_native_accelerator_budget/verification_summary.md`
+- 참고:
+  - 이번 slice는 전체 `Subtitle Generation Domain Split And Native Acceleration Plan` 완료가 아니라 full-core native accelerator/resource-manager sub-slice 완료임. 메인 active item은 계속 남김.
+
+## Automation-4 open/save/export command split - 2026-05-23
+
+- 실행 모드: app-command bridge project open/save/export fix + rebuilt bundled app major QA
+- 결과: pass
+- 수정/확인 항목:
+  - `open-project` 내부 `PermissionError`/`EPERM`/`EACCES`를 generic `execution_exception` 대신 `project_open_permission_denied`로 분리해 artifact에서 권한 실패를 바로 판별할 수 있게 함.
+  - 프로젝트 open 시 외부 `subtitles.srt_path`를 project-relative path로 해석해 editor `_last_saved_srt_outputs`에 보존.
+  - `save-subtitles`/`export-subtitles`/`export-subtitle-video` 실패 데이터를 `segment_count`, 기존 output, missing output 기준으로 분리.
+  - 실제 editor의 `export-subtitle-video`는 긴 render를 UDP command에서 동기 실행하지 않고 기존 background scheduler로 넘겨 `queued=true`를 반환.
+  - UI/UX, 자막 텍스트/타이밍, STT/VAD/LLM 품질 정책은 변경하지 않음.
+- 단위/가드:
+  - py_compile: pass
+  - `tests/test_app_command_bridge.py`: pass (`60 passed`)
+  - `tests/test_project_segment_reload.py`: pass (`70 passed`)
+  - `tests/test_appctl.py tests/test_remote_verify_actions.py tests/test_qa_suite_runner.py`: pass (`17 passed`)
+  - `git diff --check`: pass
+- 실앱 검증:
+  - app bundle rebuild: pass (`dist/macos/AI Subtitle Studio.app`)
+  - major QA artifact: `output/manual_verification/latest/20260523_action_items_app_command_save_export_rerun`
+  - major QA result: pass (`failed_count=0`)
+  - `save_export_macau`: `open_project`, `save_project`, `save_subtitles`, `export_subtitles`, `export_subtitle_video` all pass; video export returns `subtitle_video_export_queued`.
+- 남은 위험:
+  - 멀티클립 `--reuse-existing yes/no` 자동화 분리 케이스는 별도 action item으로 남김.
+
 ## Native LLM allocator full-core slice - 2026-05-23
 
 - 실행 모드: native Swift resource allocator handoff for local subtitle/roughcut LLM worker planning + X5 High 180s reference benchmark

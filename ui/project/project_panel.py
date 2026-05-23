@@ -20,6 +20,7 @@ from core.project.project_manager import (
     restore_project_model_settings,
     save_project,
 )
+from core.project.project_assets import resolve_project_asset_path
 from core.project.project_context import (
     project_cut_boundary_provisional_segments,
     project_active_work_mode,
@@ -101,13 +102,22 @@ class ProjectUIMixin:
             project.get("subtitle", {}).get("path", "")
             or project.get("subtitles", {}).get("srt_path", "")
         )
+        source_srt_path = ""
+        if srt_path:
+            try:
+                source_srt_path = resolve_project_asset_path(project, srt_path)
+            except Exception:
+                source_srt_path = os.path.abspath(str(srt_path or ""))
 
         get_logger().log(
             f"📂 프로젝트 로드: {project.get('project_name', '')} (미디어 {len(media)}개)"
         )
 
         if media:
-            if self._open_project_segments_in_editor(filepath, project, media, project_segments):
+            open_kwargs = {}
+            if source_srt_path and os.path.exists(source_srt_path):
+                open_kwargs["source_srt_path"] = source_srt_path
+            if self._open_project_segments_in_editor(filepath, project, media, project_segments, **open_kwargs):
                 if project_active_work_mode(project) == "roughcut" and project_roughcut_state(project):
                     def _open_roughcut_deferred():
                         try:
@@ -118,8 +128,8 @@ class ProjectUIMixin:
                     QTimer.singleShot(180, _open_roughcut_deferred)
                 return True
 
-        if srt_path and os.path.exists(srt_path):
-            self._open_srt_in_editor(srt_path)
+        if source_srt_path and os.path.exists(source_srt_path):
+            self._open_srt_in_editor(source_srt_path)
             return True
 
         if media and self.backend:

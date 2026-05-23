@@ -397,7 +397,7 @@ def resolve_mode_policy(
                 "stt2_enabled": True,
                 "speaker_diarization": False,
                 "decoder": "adaptive-fast",
-                "reason": "Fast mode keeps Komix STT1 as the main route and only uses selective STT2 rescue on risky spans.",
+                "reason": "Fast mode keeps Komix STT1 as the main route while checking short low-confidence spans with STT2.",
             },
             "llm": _fast_auto_llm_policy("fast", subtitle_llm_enabled, roughcut_llm_enabled),
             "lora": {
@@ -448,7 +448,7 @@ def resolve_mode_policy(
                 "stt2_enabled": True,
                 "speaker_diarization": False,
                 "decoder": "precise",
-                "reason": "High mode runs STT2 as an automatic missing-span/quality backstop.",
+                "reason": "High mode checks low-confidence, missing, and borderline spans with a wider STT2 budget.",
             },
             "llm": {
                 "subtitle_enabled": bool(subtitle_llm_enabled),
@@ -506,7 +506,7 @@ def resolve_mode_policy(
                 "stt2_enabled": True,
                 "speaker_diarization": False,
                 "decoder": "adaptive",
-                "reason": "Auto mode uses STT1 first, then applies selective STT2 rescue and Deep output selection on uncertain spans.",
+                "reason": "Auto mode uses STT1 first, then applies broader selective STT2 rescue and Deep output selection on uncertain spans.",
             },
             "llm": _fast_auto_llm_policy("auto", subtitle_llm_enabled, roughcut_llm_enabled),
             "lora": {
@@ -747,7 +747,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "stt_recheck_native_fast_audio_filter_enabled": True,
                 "stt_persistent_runtime_reuse_enabled": True,
                 "stt_missing_voice_min_duration_sec": 0.55,
-                "stt_selective_secondary_recheck_reason": "Fast mode keeps selective STT2 rescue only for risky spans.",
+                "stt_selective_secondary_recheck_reason": "Fast mode checks short low-confidence spans with STT2 while keeping STT1 as the main route.",
             }
         )
         _disable_subtitle_llm_settings(

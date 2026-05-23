@@ -28,7 +28,8 @@ public enum NativeResourceAllocator {
         let cpuBudget = cpuWorkerBudget(
             pressureStage: pressureStage,
             reserveCores: reserveCores,
-            topology: topology
+            topology: topology,
+            settings: settings
         )
         let memoryBudgetBytes = memoryBudget(memory: memory, pressureStage: pressureStage)
         var allocations: [String: Any] = [:]
@@ -120,6 +121,8 @@ public enum NativeResourceAllocator {
             ["task": "cut_follower", "workload": pipelineActive ? 4 : 1, "minimum": 1, "priority": 105],
             ["task": "stt", "workload": pipelineActive ? 4 : 1, "minimum": 1, "priority": 100, "model": "whisperkit"],
             ["task": "stt_precision", "workload": pipelineActive ? 10 : 1, "minimum": 1, "priority": 96, "model": "whisperkit"],
+            ["task": "audio_ml", "workload": pipelineActive ? 4 : 1, "minimum": 1, "priority": 65],
+            ["task": "diarize", "workload": pipelineActive ? 2 : 1, "minimum": 0, "priority": 65],
             ["task": "subtitle_llm", "workload": pipelineActive ? 4 : 1, "minimum": 1, "priority": 80],
             ["task": "subtitle_optimize", "workload": subtitleOptimizeActive ? 3 : 0, "minimum": subtitleOptimizeActive ? 1 : 0, "priority": 78],
             ["task": "audio_extract", "workload": pipelineActive ? 6 : 2, "minimum": 1, "priority": 70],
@@ -192,8 +195,9 @@ public enum NativeResourceAllocator {
         let logical = max(1, intValue(topology["logical_cores"]) ?? 1)
         let perf = max(1, intValue(topology["performance_cores"]) ?? 1)
         let efficiency = max(0, intValue(topology["efficiency_cores"]) ?? 0)
-        let healthyWide = min(logical, perf + min(efficiency, 4))
-        let healthyBalanced = min(logical, perf + min(efficiency, 2))
+        let fullCore = pressureStage == "normal" && fullCoreThroughput(settings: settings)
+        let healthyWide = fullCore ? logical : min(logical, perf + min(efficiency, 4))
+        let healthyBalanced = fullCore ? logical : min(logical, perf + min(efficiency, 2))
         switch task {
         case "ui", "timeline":
             return 1
@@ -245,7 +249,12 @@ public enum NativeResourceAllocator {
         return max(minimum, raw)
     }
 
-    private static func cpuWorkerBudget(pressureStage: String, reserveCores: Int, topology: [String: Any]) -> Int {
+    private static func cpuWorkerBudget(
+        pressureStage: String,
+        reserveCores: Int,
+        topology: [String: Any],
+        settings: [String: Any]
+    ) -> Int {
         let logical = max(1, intValue(topology["logical_cores"]) ?? 1)
         let perf = max(1, intValue(topology["performance_cores"]) ?? 1)
         let efficiency = max(0, intValue(topology["efficiency_cores"]) ?? 0)
@@ -255,6 +264,9 @@ public enum NativeResourceAllocator {
         case "warning":
             return max(1, min(logical - reserveCores, perf + min(efficiency, 1)))
         default:
+            if fullCoreThroughput(settings: settings) {
+                return max(1, logical - reserveCores)
+            }
             return max(1, min(logical - reserveCores, perf + min(efficiency, 4)))
         }
     }
@@ -275,6 +287,9 @@ public enum NativeResourceAllocator {
         }
         if pressureStage == "critical" {
             return min(logical - 1, 2)
+        }
+        if pressureStage == "normal" && fullCoreThroughput(settings: settings) {
+            return 0
         }
         return min(logical - 1, 1)
     }
@@ -354,6 +369,13 @@ public enum NativeResourceAllocator {
                 "prefer": ["ane", "gpu", "cpu"],
                 "gpu_lanes": min(max(0, workers), max(1, gpu)),
                 "ane_lanes": min(max(1, workers), max(1, neural)),
+            ]
+        case "vad", "audio_ml", "diarize":
+            return [
+                "policy": "metal_ml_balanced",
+                "prefer": ["gpu", "cpu"],
+                "gpu_lanes": pressureStage == "normal" ? min(max(0, workers), max(1, gpu)) : 0,
+                "ane_lanes": 0,
             ]
         default:
             return [
@@ -811,6 +833,16 @@ public enum NativeResourceAllocator {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return ["1", "true", "yes", "on"].contains(text)
+    }
+
+    private static func fullCoreThroughput(settings: [String: Any]) -> Bool {
+        let profile = String(describing: settings["benchmark_runtime_profile"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if profile == "apple_m_full_core_throughput" {
+            return true
+        }
+        return boolValue(settings["apple_m_full_core_aggressive_enabled"])
     }
 
     private static func isAPIModel(settings: [String: Any]) -> Bool {

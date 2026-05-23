@@ -1338,7 +1338,7 @@ class VideoProcessorTranscribeMixin:
 
         threshold = stt_rescue.threshold(settings)
         get_logger().log(
-            f"  🔁 [{context_label}] STT1 {threshold:.0f}점 이하/누락 후보 {len(ranges)}개만 STT2로 확인"
+            f"  🔁 [{context_label}] STT1 {threshold:.0f}점 이하/누락/경계 후보 {len(ranges)}개를 STT2로 확인"
         )
         self._notify_stage(f"⏳ [STT] 저점 구간 {len(ranges)}개 STT2 확인 중")
 
@@ -1520,7 +1520,7 @@ class VideoProcessorTranscribeMixin:
                     pass
             get_logger().log(
                 "  ✅ [STT 선택 앙상블] 최종 후보 완료 "
-                f"({len(primary_segments)}개, STT2는 저신뢰/누락 후보에만 사용)"
+                f"({len(primary_segments)}개, STT2는 저신뢰/누락/경계 후보에 사용)"
             )
             yield primary_segments, 1, 1
         finally:

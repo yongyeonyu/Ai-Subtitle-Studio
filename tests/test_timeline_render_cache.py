@@ -9,7 +9,7 @@ import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QRect
-from PyQt6.QtGui import QImage, QPainter, QRegion
+from PyQt6.QtGui import QColor, QImage, QPainter, QPalette, QRegion
 from PyQt6.QtWidgets import QApplication, QScrollArea
 
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
@@ -495,6 +495,58 @@ class TimelineRenderCacheTests(unittest.TestCase):
                 return data[: score_top * stride] + data[score_bottom * stride :]
 
             self.assertEqual(_render_body(False), _render_body(True))
+        finally:
+            canvas.close()
+
+    def test_active_subtitle_segment_never_renders_as_white_fill(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(1200, CANVAS_H)
+            canvas.setFixedWidth(1200)
+            canvas.total_duration = 8.0
+            canvas.pps = 140.0
+            canvas.playhead_sec = 0.0
+            canvas._timeline_playback_active = lambda: True
+            canvas.segments = [
+                {"start": 0.8, "end": 2.6, "text": "재생 선택 구간", "line": 0},
+                {"start": 2.8, "end": 4.4, "text": "다음 자막", "line": 1},
+            ]
+            canvas.set_active(0.8)
+            canvas._invalidate_render_cache()
+
+            image = QImage(canvas.size(), QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(0)
+            canvas.render(image)
+
+            sample = image.pixelColor(int(canvas._x(1.8)), (SUBTITLE_TOP + SUBTITLE_BOT) // 2)
+            self.assertFalse(sample.red() > 245 and sample.green() > 245 and sample.blue() > 245)
+        finally:
+            canvas.close()
+
+    def test_inline_editor_viewport_uses_segment_dark_palette_when_selected(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(1200, CANVAS_H)
+            canvas.setFixedWidth(1200)
+            canvas.total_duration = 8.0
+            canvas.pps = 140.0
+            canvas.segments = [
+                {"start": 0.8, "end": 2.6, "text": "선택 자막", "line": 0},
+            ]
+            canvas.show()
+            self.app.processEvents()
+
+            canvas.start_inline_edit(0, 0.8)
+            self.app.processEvents()
+
+            editor = getattr(canvas, "_inline_editor", None)
+            self.assertIsNotNone(editor)
+            self.assertTrue(editor.isVisible())
+            for target in (editor, editor.viewport()):
+                base = target.palette().color(QPalette.ColorRole.Base)
+                window = target.palette().color(QPalette.ColorRole.Window)
+                self.assertNotEqual(base.name(), QColor("#FFFFFF").name())
+                self.assertNotEqual(window.name(), QColor("#FFFFFF").name())
         finally:
             canvas.close()
 
