@@ -34,6 +34,29 @@ Those standalone files were intentionally removed after consolidation.
 - 반복하면 안 되는 진단/실험/운영 실수는 `lesson_n_learned.md`에 남긴다.
 - 정상 완료된 idea/action/native item은 이 파일에서 삭제한다. 완료 이력은 필요할 때만 `test_result.md`, release note, `output/manual_verification/latest/`, `waste_action_item.md`, 또는 `lesson_n_learned.md`에 남긴다.
 
+## automation-4 2026-05-23 UX/작동 이슈 검토요청
+
+- [검토요청] `open-project` 권한 실패 정리
+  - 증상: `open-project`/프로젝트 로드 시 `[Errno 1] Operation not permitted` 빈도 높음
+  - 영향 범위: `automation-4`의 멀티클립/러프컷/저장 플로우 일부가 동일 세션에서 중단
+  - 증거: `output/manual_verification/latest/qa_suite_full_20260523_100416/save_export_macau/summary.json`와
+    `output/manual_verification/latest/automation4_full_manual_20260523/manual_run_report.json`
+  - 요청: 권한 정책/프로세스 접근 범위 조치 후 `open-project` + 재실행 재검증
+
+- [검토요청] 저장/내보내기 decline 경로 분리
+  - 증상: `save-subtitles` `save_declined`, `export-subtitles` `subtitle_segments_missing`, `export-subtitle-video` `save_declined`
+  - 영향 범위: 7항목(프로젝트 저장/자막 저장/자막 출력/자막영상 출력)
+  - 증거: `output/manual_verification/latest/qa_suite_full_20260523_100416/save_export_macau/summary.json`,
+    `output/manual_verification/latest/automation4_full_manual_20260523/manual_run_report.json`
+  - 요청: `save_subtitles` 선행 조건(자막 구간 존재/권한/변경사항 존재) 기준 분기 추가 후 재측정
+
+- [검토요청] 멀티클립 기존자막 확인 분기 정렬
+  - 증상: `start-multiclip`에서 `existing_subtitles_confirmation_required` 발생
+  - 영향 범위: 멀티클립 항목(13항목 기준 3번)
+  - 증거: `output/manual_verification/latest/automation4_full_manual_20260523/manual_run_report.json`,
+    `output/manual_verification/latest/qa_suite_full_20260523_100416/save_export_macau/summary.json`
+  - 요청: `--reuse-existing` 정책과 기존 파일 정리 정책을 명시해 자동화 케이스에 반영
+
 ## Active Execution Queue
 
 ### 1. Subtitle Generation Domain Split And Native Acceleration Plan
@@ -41,11 +64,6 @@ Those standalone files were intentionally removed after consolidation.
 Goal: 자막 생성 전체를 기능 경계별 파일/함수로 분리하고, 안정된 compute hot path만 Swift/C++ native helper로 승격해 Apple Silicon ANE/GPU 사용 가능성을 넓힌다.
 
 Status: in_progress
-
-Latest completed slice:
-
-- 2026-05-23: STT native hot-path slice completed. Added Swift/Python audio chunk manifest signature caching and selective STT2 straggler handling so the final stalled Fast-STT2 chunk keeps the STT1 candidate instead of forcing a full fallback replay. X5 High 180s benchmark completed with `quality_score=87.556` and `elapsed_sec=101.223`. Artifact: `output/manual_verification/latest/20260523_action_native_stt_manifest_straggler/verification_summary.md`.
-- 2026-05-23: Fast-STT2 aggressive straggler slice completed. Added Fast-STT2-specific WhisperKit concurrency defaults (`8`, max `10`), STT2 ratio straggler cutoff (`>=60%` received), and word-precision ratio cutoff (`>=90%` received). X5 High 180s benchmark completed with `quality_score=87.318` and `elapsed_sec=117.401`. Artifact: `output/manual_verification/latest/20260523_fast_stt2_aggressive_straggler/verification_summary.md`.
 
 Owner intent:
 

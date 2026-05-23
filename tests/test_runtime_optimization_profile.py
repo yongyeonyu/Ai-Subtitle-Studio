@@ -197,6 +197,41 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
         self.assertEqual(native_choice.backend, "mlx")
         self.assertEqual(native_choice.model, "mlx-community/whisper-large-v3-turbo")
 
+    def test_native_stt_policy_uses_safe_mlx_fallback_for_custom_mlx_by_default(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
+             patch("core.audio.stt_backend_router._whisper_cpp_ready", return_value=False), \
+             patch("core.audio.stt_backend_router._whisperkit_ready", return_value=True):
+            native_choice = select_stt_backend(
+                "youngouk/whisper-medium-komixv2-mlx",
+                {
+                    "stt_backend_policy": "native",
+                    "runtime_backend_autotune_enabled": False,
+                    "whisperkit_native_auto_enabled": True,
+                },
+            )
+
+        self.assertEqual(native_choice.backend, "mlx")
+        self.assertEqual(native_choice.model, "mlx-community/whisper-large-v3-turbo")
+        self.assertEqual(native_choice.reason, "native_policy_mlx_safe_fallback")
+
+    def test_native_stt_policy_preserves_user_selected_mlx_model_when_exact_gate_is_enabled(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
+             patch("core.audio.stt_backend_router._whisper_cpp_ready", return_value=False), \
+             patch("core.audio.stt_backend_router._whisperkit_ready", return_value=True):
+            native_choice = select_stt_backend(
+                "youngouk/whisper-medium-komixv2-mlx",
+                {
+                    "stt_backend_policy": "native",
+                    "stt_native_exact_mlx_model_enabled": True,
+                    "runtime_backend_autotune_enabled": False,
+                    "whisperkit_native_auto_enabled": True,
+                },
+            )
+
+        self.assertEqual(native_choice.backend, "mlx")
+        self.assertEqual(native_choice.model, "youngouk/whisper-medium-komixv2-mlx")
+        self.assertEqual(native_choice.reason, "native_policy_selected_mlx_model")
+
     def test_profiled_whisperkit_backend_gets_persistent_model_prefix(self):
         with patch("core.audio.stt_backend_router.profile_backend", return_value="whisperkit_persistent"), \
              patch("core.audio.stt_backend_router.profile_model", return_value="large-v3-turbo"):
@@ -254,7 +289,8 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
             with open(proxy, "wb") as handle:
                 handle.write(b"proxy")
 
-            choice = select_cut_boundary_backend(media_path, {"cut_boundary_backend_policy": "fast"})
+            with patch("core.video_preview_proxy.preview_proxy_is_valid", return_value=True):
+                choice = select_cut_boundary_backend(media_path, {"cut_boundary_backend_policy": "fast"})
 
         self.assertEqual(choice.backend, "opencv_proxy_fast")
         self.assertEqual(choice.scan_path, proxy)

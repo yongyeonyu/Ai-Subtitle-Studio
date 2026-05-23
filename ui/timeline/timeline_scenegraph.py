@@ -13,6 +13,7 @@ from PyQt6.QtGui import QColor
 from core.coerce import safe_float as _safe_float
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.runtime import config
+from core.timeline_time import segment_display_time_bounds
 from ui.gpu_rendering import scenegraph_enabled
 from ui.timeline.speaker_labels import (
     current_speaker_settings,
@@ -49,6 +50,7 @@ from ui.timeline.timeline_segment_style import (
 from ui.timeline.stt_preview_layout import (
     assign_stt_preview_lanes,
     dedupe_stt_preview_segments_for_display,
+    ensure_stt_preview_lane_numbers,
     stt_preview_lane_geometry,
 )
 
@@ -144,6 +146,7 @@ def build_scenegraph_subtitle_segments(
                 stt1_preview_rows.append(seg)
         else:
             final_rows.append(seg)
+    ensure_stt_preview_lane_numbers(stt1_preview_rows + stt2_preview_rows, mutate=True)
     stt1_preview_rows = dedupe_stt_preview_segments_for_display(stt1_preview_rows)
     stt2_preview_rows = dedupe_stt_preview_segments_for_display(stt2_preview_rows)
     visible_preview_ids = {id(seg) for seg in stt1_preview_rows + stt2_preview_rows}
@@ -158,8 +161,7 @@ def build_scenegraph_subtitle_segments(
     visible_end_frame = sec_to_frame(max(visible_start_sec, visible_end_sec) + 0.35, fps)
     objects: list[dict[str, Any]] = []
     for idx, seg in enumerate(rows):
-        start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
-        end = max(start, _safe_float(seg.get("end", seg.get("timeline_end", start)), start))
+        start, end = segment_display_time_bounds(seg)
         start_frame = sec_to_frame(start, fps)
         end_frame = max(start_frame + 1, sec_to_frame(end, fps))
         if end_frame < visible_start_frame or start_frame > visible_end_frame:
@@ -239,6 +241,13 @@ def build_scenegraph_subtitle_segments(
             h = SUBTITLE_BOT - SUBTITLE_TOP
 
         width = max(2.0, float(end_frame - start_frame) * px_per_frame)
+        draw_x = float(start_frame) * px_per_frame
+        draw_width = width
+        if is_preview and draw_width > 4.0:
+            # Match the QWidget fallback: STT preview boxes get an inner pixel
+            # gap so adjacent frame-snapped candidates do not visually overlap.
+            draw_x += 1.0
+            draw_width = max(2.0, draw_width - 2.0)
         allow_text = render_profile == "full"
         if render_profile == "compact" and width >= 184.0 and (is_active or is_hover):
             allow_text = True
@@ -290,9 +299,9 @@ def build_scenegraph_subtitle_segments(
                 "id": str(seg.get("id") or f"sg_seg_{idx}_{start_frame}_{end_frame}"),
                 "line": int(seg.get("line", idx) or idx),
                 "text": display_text,
-                "x": float(start_frame) * px_per_frame,
+                "x": draw_x,
                 "y": float(y),
-                "w": width,
+                "w": draw_width,
                 "h": float(h),
                 "startFrame": int(start_frame),
                 "endFrame": int(end_frame),

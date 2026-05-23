@@ -99,11 +99,19 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         return self._effective_min_speakers, self._effective_max_speakers
 
     @staticmethod
-    def _inline_dialogue_turns(text: str) -> list[str]:
+    def _inline_dialogue_turns(text: str, *, allow_missing_leading_marker: bool = False) -> list[str]:
         compact = re.sub(r"\s+", " ", str(text or "").replace("\n", " ")).strip()
         if not compact.startswith("-"):
-            return []
-        turns = [part.lstrip("-").strip() for part in re.split(r"\s+-\s+", compact) if part.strip()]
+            if not allow_missing_leading_marker or not re.search(r"\s-\s*\S", compact):
+                return []
+            compact = f"- {compact}"
+        turns = [
+            match.group(1).strip()
+            for match in re.finditer(r"(?:^|\s)-\s*([^-]+?)(?=\s+-\s*\S|$)", compact)
+            if match.group(1).strip()
+        ]
+        if len(turns) != 2:
+            turns = [part.lstrip("-").strip() for part in re.split(r"\s+-\s*", compact) if part.strip()]
         turns = [turn for turn in turns if turn]
         if len(turns) != 2:
             return []
@@ -136,10 +144,25 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         row: dict,
         speaker_map: list[dict] | None = None,
     ) -> dict:
-        turns = self._inline_dialogue_turns(row.get("text", ""))
+        explicit_speakers: list[str] = []
+        seen_speakers: set[str] = set()
+        for item in list(row.get("speaker_list") or []):
+            speaker = self._normalize_runtime_speaker_id(item)
+            if speaker and speaker not in seen_speakers:
+                explicit_speakers.append(speaker)
+                seen_speakers.add(speaker)
+        mapped_speakers = self._speaker_sequence_for_range(row.get("start", 0.0), row.get("end", 0.0), speaker_map)
+        turns = self._inline_dialogue_turns(
+            row.get("text", ""),
+            allow_missing_leading_marker=(
+                len(explicit_speakers) >= 2
+                or len(set(mapped_speakers)) >= 2
+                or bool(row.get("_stt_speaker_marker_preserved"))
+            ),
+        )
         if len(turns) != 2:
             return row
-        speakers = self._speaker_sequence_for_range(row.get("start", 0.0), row.get("end", 0.0), speaker_map)
+        speakers = explicit_speakers[:2] or mapped_speakers
         if len(set(speakers)) < 2:
             try:
                 from core.audio.diarize import get_speaker_for_segment
@@ -389,6 +412,23 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                 elif os.path.exists(srt_p):
                     os.remove(srt_p)
                     get_logger().log("    └ 🗑️ 기존 자막 파일을 삭제했습니다. (새로 생성)")
+
+            project_path = str(getattr(getattr(self, "ui", None), "_current_project_path", "") or "")
+            if project_path and os.path.exists(project_path):
+                try:
+                    from core.project.project_manager import save_project
+
+                    save_project(
+                        project_path,
+                        segments=[],
+                        stt_preview_segments=[],
+                        provisional_cut_boundaries=[],
+                        persist_analysis_artifacts=False,
+                        recover_external_assets_on_empty=False,
+                    )
+                    get_logger().log("    └ 🧹 재시작용 프로젝트 자막 자산을 초기화했습니다.")
+                except Exception as project_exc:
+                    get_logger().log(f"    └ ⚠️ 프로젝트 자막 자산 초기화 실패: {project_exc}")
 
             def _clear_editor_main():
                 ed = getattr(self.ui, "_editor_widget", None)

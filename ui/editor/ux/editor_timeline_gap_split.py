@@ -67,7 +67,10 @@ class EditorTimelineGapSplitMixin:
 
         live = list(getattr(self, "_live_stt_preview_segments", []) or [])
         if live:
+            from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
+
             self._live_stt_preview_segments = self._trim_segments_outside_range(live, start, end)
+            ensure_stt_preview_lane_numbers(self._live_stt_preview_segments, mutate=True)
 
         timeline = getattr(self, "timeline", None)
         canvas = getattr(timeline, "canvas", None)

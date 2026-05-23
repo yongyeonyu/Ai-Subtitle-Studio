@@ -544,6 +544,8 @@ class TimelinePaintMixin:
                 p.setPen(QPen(bot, 1)); p.drawLine(x, mid_y + 1, x, mid_y + h)
 
         def _draw_subtitle_detection_lane(mid_y):
+            if voice_bot <= voice_top:
+                return
             clip = paint_clip
             lane_top = voice_top
             lane_h = max(8, voice_bot - voice_top)

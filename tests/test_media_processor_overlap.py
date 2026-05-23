@@ -2910,20 +2910,42 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
     def test_whisperkit_concurrent_workers_native_allocator_can_raise_precision_slots(self):
         with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
-             patch("core.native_resource_allocator.native_task_allocation", return_value={"workers": 6}) as allocator:
+             patch("core.native_resource_allocator.native_task_allocation", return_value={"workers": 6, "compute_units": "all"}) as allocator:
+            settings = {
+                "stt_whisperkit_word_timestamp_concurrent_workers": 2,
+                "stt_whisperkit_concurrent_max_workers": 4,
+                "stt_whisperkit_native_allocator_can_raise_workers": True,
+                "stt_whisperkit_precision_aggressive_gpu_enabled": False,
+                "stt_whisperkit_compute_profile": "auto",
+            }
             precise = self.processor._whisperkit_concurrent_worker_count(
-                {
-                    "stt_whisperkit_word_timestamp_concurrent_workers": 2,
-                    "stt_whisperkit_concurrent_max_workers": 4,
-                    "stt_whisperkit_native_allocator_can_raise_workers": True,
-                    "stt_whisperkit_precision_aggressive_gpu_enabled": False,
-                },
+                settings,
                 total_chunks=8,
+                word_timestamps=True,
+            )
+            compute_profile = self.processor._whisperkit_compute_profile(
+                settings,
                 word_timestamps=True,
             )
 
         self.assertEqual(precise, 6)
+        self.assertEqual(compute_profile, "all")
         self.assertEqual(allocator.call_args.kwargs["task"] if "task" in allocator.call_args.kwargs else allocator.call_args.args[0], "stt_precision")
+
+    def test_whisperkit_compute_profile_keeps_explicit_override(self):
+        self.processor._whisperkit_native_allocation_plan = {
+            "chunks": 8,
+            "word_timestamps": True,
+            "task": "stt_precision",
+            "plan": {"compute_units": "all"},
+        }
+
+        compute_profile = self.processor._whisperkit_compute_profile(
+            {"stt_whisperkit_compute_profile": "gpu"},
+            word_timestamps=True,
+        )
+
+        self.assertEqual(compute_profile, "gpu")
 
     def test_whisperkit_precision_aggressive_gpu_raises_slots_under_normal_pressure(self):
         with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
@@ -3010,10 +3032,14 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             [0.0],
             word_timestamps=False,
             concurrent_worker_count=3,
+            stream_results=True,
+            compute_profile="ane_gpu",
         )
 
         payload = json.loads(proc.stdin.lines[0])
         self.assertEqual(payload["concurrent_worker_count"], 3)
+        self.assertTrue(payload["stream_results"])
+        self.assertEqual(payload["compute_profile"], "ane_gpu")
         self.assertEqual(payload["chunk_paths"], ["/tmp/a.wav", "/tmp/b.wav", "/tmp/c.wav"])
 
     def test_transcribe_can_route_to_experimental_whisperkit_persistent_backend(self):
@@ -3085,6 +3111,97 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertIs(ensure_worker.return_value, proc)
         self.assertEqual(submit_task.call_args.kwargs["model"], "whisperkit-persistent:large-v3-v20240930_626MB")
         self.assertFalse(submit_task.call_args.kwargs["word_timestamps"])
+        self.assertTrue(submit_task.call_args.kwargs["stream_results"])
+        self.assertEqual(submit_task.call_args.kwargs["compute_profile"], "ane_gpu")
+
+    def test_whisperkit_recheck_submits_long_chunks_first_but_emits_chronologically(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+                self.returncode = 0
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav0 = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            wav1 = os.path.join(chunk_dir, "vad_001_1.000.wav")
+            wav2 = os.path.join(chunk_dir, "vad_002_5.000.wav")
+            self._write_silent_wav(wav0, frames=16000)
+            self._write_silent_wav(wav1, frames=64000)
+            self._write_silent_wav(wav2, frames=32000)
+            proc = _Proc([
+                json.dumps(
+                    {
+                        "task_id": "task-duration",
+                        "index": 0,
+                        "backend": "whisperkit-persistent",
+                        "word_timestamps": False,
+                        "result": {"segments": [{"start": 0.0, "end": 0.5, "text": "긴 원본1", "words": []}]},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                json.dumps(
+                    {
+                        "task_id": "task-duration",
+                        "index": 1,
+                        "backend": "whisperkit-persistent",
+                        "word_timestamps": False,
+                        "result": {"segments": [{"start": 0.0, "end": 0.5, "text": "중간 원본2", "words": []}]},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                json.dumps(
+                    {
+                        "task_id": "task-duration",
+                        "index": 2,
+                        "backend": "whisperkit-persistent",
+                        "word_timestamps": False,
+                        "result": {"segments": [{"start": 0.0, "end": 0.5, "text": "짧은 원본0", "words": []}]},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                json.dumps({"task_id": "task-duration", "done": True}, ensure_ascii=False) + "\n",
+            ])
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "whisperkit-persistent:large-v3",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_rescue_whisper_mode": True,
+                "stt_duration_first_submission_enabled": True,
+                "stt_word_timestamps_mode": "off",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisperkit_persistent.ensure_worker", return_value=proc), \
+                 patch("core.audio.whisperkit_persistent.submit_task", return_value="task-duration") as submit_task, \
+                 patch("core.audio.whisperkit_persistent.stop_worker"):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False, log_label="Fast-STT2"))
+
+        submitted = submit_task.call_args.kwargs["chunk_paths"]
+        self.assertEqual([os.path.realpath(path) for path in submitted], [os.path.realpath(path) for path in [wav1, wav2, wav0]])
+        self.assertEqual([row[0][0]["text"] for row in rows], ["짧은 원본0", "긴 원본1", "중간 원본2"])
+        self.assertEqual([round(row[0][0]["start"], 3) for row in rows], [0.0, 1.0, 5.0])
 
     def test_word_precision_straggler_skips_last_chunk_and_keeps_pipeline_moving(self):
         read_fd, write_fd = os.pipe()

@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import tempfile
 from typing import Any
 
+from core.native_json import loads_json
 from core.runtime.logger import get_logger
 
 
-def parse_worker_json_line(line: str) -> dict[str, Any] | None:
-    line = (line or "").strip()
-    if not line or not line.startswith("{"):
+def parse_worker_json_line(line: str | bytes | bytearray) -> dict[str, Any] | None:
+    line = (line or b"" if isinstance(line, (bytes, bytearray)) else line or "").strip()
+    if not line:
+        return None
+    prefix = b"{" if isinstance(line, (bytes, bytearray)) else "{"
+    if not line.startswith(prefix):
         return None
     try:
-        return json.loads(line)
+        return loads_json(line)
     except Exception as exc:
         get_logger().log(f"  ⚠️ JSON 파싱 오류: {exc}")
         get_logger().log(f"  ⚠️ raw line: {line[:200] if line else 'empty'}")

@@ -206,7 +206,10 @@ class UndoManager:
             editor.text_edit.update_margins()
         if hasattr(editor.text_edit, 'timestampArea'):
             editor.text_edit.timestampArea.update()
+        from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
+
         editor._live_stt_preview_segments = [dict(seg) for seg in list(state.live_stt_preview_segments or [])]
+        ensure_stt_preview_lane_numbers(editor._live_stt_preview_segments, mutate=True)
         cached_segments = [dict(seg) for seg in list(state.cached_segments or [])]
         if hasattr(editor, "_rebuild_subtitle_memory_cache"):
             editor._rebuild_subtitle_memory_cache(cached_segments)
@@ -214,7 +217,7 @@ class UndoManager:
             editor._cached_segs = cached_segments
         if hasattr(editor, "timeline") and hasattr(editor.timeline, "update_segments"):
             confirmed = [dict(seg) for seg in list(state.cached_segments or []) if not seg.get("is_gap")]
-            preview = [dict(seg) for seg in list(state.live_stt_preview_segments or [])]
+            preview = [dict(seg) for seg in list(editor._live_stt_preview_segments or [])]
             combined = sorted(
                 confirmed + preview,
                 key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),

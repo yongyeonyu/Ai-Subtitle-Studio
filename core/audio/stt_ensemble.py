@@ -29,6 +29,37 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+def _normalize_candidate_text(segment: dict) -> str:
+    raw = str((segment or {}).get("text", "") or "")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in raw.replace("\u2028", "\n").splitlines()]
+    lines = [line for line in lines if line]
+    if len(lines) >= 2 and sum(1 for line in lines[:2] if line.startswith("-")) >= 2:
+        return "\n".join(lines)
+    return normalize_text(raw)
+
+
+def _speaker_list_from_segment(segment: dict) -> list[str]:
+    values: list[str] = []
+    for item in list((segment or {}).get("speaker_list") or []):
+        text = str(item or "").strip()
+        if text:
+            values.append(text)
+    for key in ("speaker", "speaker2", "spk", "spk_id"):
+        text = str((segment or {}).get(key) or "").strip()
+        if text:
+            values.append(text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+        if len(out) >= 2:
+            break
+    return out
+
+
 def compact_text(text: str) -> str:
     return re.sub(r"[\s\W_]+", "", str(text or ""), flags=re.UNICODE).lower()
 
@@ -392,9 +423,10 @@ def _candidate_payload(source: str, segment: dict) -> dict:
     score_flags = list(segment.get("stt_score_flags") or [])
     if not score_flags:
         score_flags = sorted(_segment_quality_flags(segment))
-    return {
+    speakers = _speaker_list_from_segment(segment)
+    payload = {
         "source": source,
-        "text": normalize_text(segment.get("text", "")),
+        "text": _normalize_candidate_text(segment),
         "start": round(_as_float(segment.get("start")), 3),
         "end": round(_as_float(segment.get("end")), 3),
         "score": score,
@@ -410,6 +442,12 @@ def _candidate_payload(source: str, segment: dict) -> dict:
         "compression_ratio": segment.get("compression_ratio"),
         "words": _words_from_segment(segment),
     }
+    if speakers:
+        payload["speaker"] = speakers[0]
+        payload["speaker_list"] = speakers
+        if len(speakers) >= 2:
+            payload["speaker2"] = speakers[1]
+    return payload
 
 
 def _pick_best(candidates: list[tuple[str, dict]]) -> tuple[str, dict]:
@@ -518,7 +556,7 @@ def _merge_group(candidates: list[tuple[str, dict]]) -> dict:
     merged = dict(selected)
     merged["start"] = min(_as_float(seg.get("start")) for seg in group_segments)
     merged["end"] = max(_as_float(seg.get("end")) for seg in group_segments)
-    merged["text"] = normalize_text(selected.get("text", ""))
+    merged["text"] = _normalize_candidate_text(selected)
     merged["stt_ensemble_source"] = source
     selected_score = _candidate_score_100(selected)
     merged["score"] = round(selected_score, 2)
@@ -572,7 +610,7 @@ def _merge_primary_group(primary_item: tuple[str, dict], candidates: list[tuple[
         selected_source = "RECHECK"
     merged["start"] = round(_as_float(selected_segment.get("start")), 3)
     merged["end"] = round(_as_float(selected_segment.get("end")), 3)
-    merged["text"] = normalize_text(selected_segment.get("text", ""))
+    merged["text"] = _normalize_candidate_text(selected_segment)
     merged["stt_ensemble_source"] = selected_source
     selected_score = _candidate_score_100(selected_segment)
     merged["score"] = round(selected_score, 2)

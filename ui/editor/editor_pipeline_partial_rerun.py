@@ -188,6 +188,9 @@ class EditorPipelinePartialRerunMixin:
                 continue
             if seg_end <= float(start_sec or 0.0):
                 live_preview.append(dict(seg))
+        from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
+
+        ensure_stt_preview_lane_numbers(live_preview, mutate=True)
         self._live_stt_preview_segments = live_preview
         remover = getattr(self, "_remove_live_editor_preview_overlapping", None)
         if callable(remover):

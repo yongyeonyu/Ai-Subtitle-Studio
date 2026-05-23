@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from core.audio import stt_recheck_service, stt_rescue
 from core.audio.stt_backend_router import select_stt_backend
-from core.native_stt_recheck import stt_recheck_backend
+from core.native_stt_recheck import duration_desc_order_indices, stt_recheck_backend
 
 
 class STTRecheckServiceTests(unittest.TestCase):
@@ -53,6 +53,82 @@ class STTRecheckServiceTests(unittest.TestCase):
 
         self.assertEqual(len(ranges), 2)
         self.assertEqual([item.primary_text for item in ranges], ["첫 구간", "둘째 구간"])
+
+    def test_budget_recheck_ranges_match_python_fallback_when_native_available(self):
+        previous = os.environ.get("AI_SUBTITLE_NATIVE_STT_RECHECK")
+        ranges = [
+            stt_rescue.SttRecheckRange(
+                start=5.0,
+                end=6.0,
+                primary_score=80.0,
+                secondary_score=0.0,
+                primary_text="후순위",
+                secondary_text="",
+                primary={},
+                secondary={},
+            ),
+            stt_rescue.SttRecheckRange(
+                start=10.0,
+                end=13.0,
+                primary_score=0.0,
+                secondary_score=0.0,
+                primary_text="",
+                secondary_text="",
+                primary={},
+                secondary={},
+            ),
+            stt_rescue.SttRecheckRange(
+                start=1.0,
+                end=3.0,
+                primary_score=40.0,
+                secondary_score=0.0,
+                primary_text="저점 짧음",
+                secondary_text="",
+                primary={},
+                secondary={},
+            ),
+            stt_rescue.SttRecheckRange(
+                start=3.0,
+                end=6.0,
+                primary_score=40.0,
+                secondary_score=0.0,
+                primary_text="저점 김",
+                secondary_text="",
+                primary={},
+                secondary={},
+            ),
+        ]
+        settings = {
+            "stt_low_score_recheck_max_segments": 3,
+            "stt_low_score_recheck_max_audio_sec": 10.0,
+        }
+        try:
+            os.environ["AI_SUBTITLE_NATIVE_STT_RECHECK"] = "0"
+            python_out = stt_rescue.budget_recheck_ranges(ranges, settings)
+            os.environ["AI_SUBTITLE_NATIVE_STT_RECHECK"] = "1"
+            native_out = stt_rescue.budget_recheck_ranges(ranges, settings)
+        finally:
+            if previous is None:
+                os.environ.pop("AI_SUBTITLE_NATIVE_STT_RECHECK", None)
+            else:
+                os.environ["AI_SUBTITLE_NATIVE_STT_RECHECK"] = previous
+
+        self.assertEqual(
+            [(item.start, item.end, item.primary_text) for item in native_out],
+            [(item.start, item.end, item.primary_text) for item in python_out],
+        )
+        self.assertEqual([item.primary_text for item in native_out], ["저점 짧음", "저점 김", ""])
+
+    def test_native_duration_desc_order_prioritizes_long_chunks_stably(self):
+        order = duration_desc_order_indices(
+            starts=[4.0, 0.0, 2.0, 6.0],
+            durations=[1.0, 3.0, 3.0, 0.5],
+        )
+
+        if stt_recheck_backend() == "cpp":
+            self.assertEqual(order, [1, 2, 0, 3])
+        else:
+            self.assertIsNone(order)
 
     def test_missing_voice_recheck_ranges_skips_covered_vad_segments(self):
         ranges = stt_recheck_service.missing_voice_recheck_ranges(
@@ -136,6 +212,75 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertEqual(len(ranges), 1)
         self.assertEqual(ranges[0].primary_text, "우선")
 
+    def test_word_precision_ranges_match_python_fallback_when_native_available(self):
+        previous = os.environ.get("AI_SUBTITLE_NATIVE_STT_RECHECK")
+        segments = [
+            {
+                "start": 5.0,
+                "end": 6.0,
+                "text": "노란 후보",
+                "stt_score": 78,
+                "quality": {"confidence_label": "yellow", "flags": ["word_timestamps_missing"]},
+            },
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "선택 후보",
+                "stt_score": 62,
+                "selected": True,
+                "quality": {"confidence_label": "green", "flags": []},
+            },
+            {
+                "start": 3.0,
+                "end": 4.0,
+                "text": "빨간 후보",
+                "stt_score": 44,
+                "quality": {"confidence_label": "red", "flags": ["outside_vad_speech"]},
+            },
+            {
+                "start": 7.0,
+                "end": 8.0,
+                "text": "제외",
+                "stt_score": 15,
+                "quality": {"confidence_label": "red", "flags": []},
+                "skip_precision": True,
+            },
+        ]
+        settings = {
+            "stt_word_timestamps_precision_enabled": True,
+            "stt_word_timestamps_precision_max_segments": 2,
+            "stt_word_timestamps_precision_max_audio_sec": 30.0,
+        }
+
+        try:
+            os.environ["AI_SUBTITLE_NATIVE_STT_RECHECK"] = "0"
+            python_out = stt_recheck_service.word_precision_ranges(
+                segments,
+                settings,
+                needs_precision_fn=lambda seg, _settings: not seg.get("skip_precision"),
+                score_fn=lambda seg: seg.get("stt_score", 0.0),
+                has_score_fn=lambda _seg: True,
+            )
+            os.environ["AI_SUBTITLE_NATIVE_STT_RECHECK"] = "1"
+            native_out = stt_recheck_service.word_precision_ranges(
+                segments,
+                settings,
+                needs_precision_fn=lambda seg, _settings: not seg.get("skip_precision"),
+                score_fn=lambda seg: seg.get("stt_score", 0.0),
+                has_score_fn=lambda _seg: True,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("AI_SUBTITLE_NATIVE_STT_RECHECK", None)
+            else:
+                os.environ["AI_SUBTITLE_NATIVE_STT_RECHECK"] = previous
+
+        self.assertEqual(
+            [(item.start, item.end, item.primary_text, item.primary_score) for item in native_out],
+            [(item.start, item.end, item.primary_text, item.primary_score) for item in python_out],
+        )
+        self.assertEqual([item.primary_text for item in native_out], ["선택 후보", "빨간 후보"])
+
     def test_resolve_precision_model_prefers_explicit_then_selected_then_primary(self):
         self.assertEqual(
             stt_recheck_service.resolve_precision_model(
@@ -174,11 +319,13 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertTrue(precision["stt_whisperkit_precision_aggressive_gpu_enabled"])
         self.assertEqual(precision["stt_whisperkit_gpu_saturation_max_workers"], 10)
         self.assertEqual(precision["stt_word_timestamp_worker_straggler_max_missing_chunks"], 3)
+        self.assertTrue(precision["stt_duration_first_submission_enabled"])
         self.assertFalse(low_score["stt_ensemble_enabled"])
         self.assertEqual(low_score["whisper_chunk_overlap_sec"], 0.0)
         self.assertEqual(selective["stt_word_timestamps_mode"], "off")
         self.assertFalse(selective["stt_word_timestamps_precision_enabled"])
         self.assertFalse(selective["stt_persistent_runtime_reuse_enabled"])
+        self.assertTrue(selective["stt_duration_first_submission_enabled"])
 
     def test_precision_overrides_route_supported_mlx_alias_to_whisperkit_native(self):
         with patch("core.audio.stt_backend_router.config.IS_MAC", True), \

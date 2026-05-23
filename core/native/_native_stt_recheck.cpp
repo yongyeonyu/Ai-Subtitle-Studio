@@ -399,12 +399,325 @@ PyObject* py_match_low_score_pair_indices(PyObject*, PyObject* args) {
     return out;
 }
 
+struct WordPrecisionCandidate {
+    size_t index;
+    double start;
+    double end;
+    double score;
+    double priority;
+};
+
+PyObject* py_word_precision_candidate_indices(PyObject*, PyObject* args) {
+    PyObject* starts_obj = nullptr;
+    PyObject* ends_obj = nullptr;
+    PyObject* scores_obj = nullptr;
+    PyObject* has_scores_obj = nullptr;
+    PyObject* needs_precision_obj = nullptr;
+    PyObject* selected_flags_obj = nullptr;
+    PyObject* red_flags_obj = nullptr;
+    PyObject* yellow_flags_obj = nullptr;
+    PyObject* risk_flags_obj = nullptr;
+    PyObject* missing_word_flags_obj = nullptr;
+    long limit = 24;
+    double max_audio_sec = 90.0;
+    if (!PyArg_ParseTuple(
+            args,
+            "OOOOOOOOOOld",
+            &starts_obj,
+            &ends_obj,
+            &scores_obj,
+            &has_scores_obj,
+            &needs_precision_obj,
+            &selected_flags_obj,
+            &red_flags_obj,
+            &yellow_flags_obj,
+            &risk_flags_obj,
+            &missing_word_flags_obj,
+            &limit,
+            &max_audio_sec)) {
+        return nullptr;
+    }
+
+    std::vector<double> starts;
+    std::vector<double> ends;
+    std::vector<double> scores;
+    std::vector<int> has_scores;
+    std::vector<int> needs_precision;
+    std::vector<int> selected_flags;
+    std::vector<int> red_flags;
+    std::vector<int> yellow_flags;
+    std::vector<int> risk_flags;
+    std::vector<int> missing_word_flags;
+    if (!extract_double_vector(starts_obj, starts) ||
+        !extract_double_vector(ends_obj, ends) ||
+        !extract_double_vector(scores_obj, scores) ||
+        !extract_bool_vector(has_scores_obj, has_scores) ||
+        !extract_bool_vector(needs_precision_obj, needs_precision) ||
+        !extract_bool_vector(selected_flags_obj, selected_flags) ||
+        !extract_bool_vector(red_flags_obj, red_flags) ||
+        !extract_bool_vector(yellow_flags_obj, yellow_flags) ||
+        !extract_bool_vector(risk_flags_obj, risk_flags) ||
+        !extract_bool_vector(missing_word_flags_obj, missing_word_flags)) {
+        return nullptr;
+    }
+
+    const size_t count = std::min({
+        starts.size(),
+        ends.size(),
+        scores.size(),
+        has_scores.size(),
+        needs_precision.size(),
+        selected_flags.size(),
+        red_flags.size(),
+        yellow_flags.size(),
+        risk_flags.size(),
+        missing_word_flags.size(),
+    });
+    const long bounded_limit = std::max(1L, std::min(200L, limit));
+    const double bounded_max_audio = std::max(10.0, std::min(1800.0, max_audio_sec));
+
+    std::vector<WordPrecisionCandidate> candidates;
+    candidates.reserve(count);
+    for (size_t idx = 0; idx < count; ++idx) {
+        if (needs_precision[idx] == 0) {
+            continue;
+        }
+        const double start = std::max(0.0, starts[idx]);
+        const double end = std::max(start + 0.1, ends[idx]);
+        const double score = std::max(0.0, std::min(100.0, scores[idx]));
+        double priority = 0.0;
+        if (selected_flags[idx] != 0) {
+            priority += 100.0;
+        }
+        if (red_flags[idx] != 0) {
+            priority += 40.0;
+        } else if (yellow_flags[idx] != 0) {
+            priority += 20.0;
+        }
+        if (risk_flags[idx] != 0) {
+            priority += 15.0;
+        }
+        if (missing_word_flags[idx] != 0) {
+            priority += 5.0;
+        }
+        if (has_scores[idx] != 0) {
+            priority += std::max(0.0, 100.0 - score) / 4.0;
+        }
+        candidates.push_back(WordPrecisionCandidate{idx, start, end, score, priority});
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        if (left.priority != right.priority) {
+            return left.priority > right.priority;
+        }
+        if (left.score != right.score) {
+            return left.score < right.score;
+        }
+        return left.start < right.start;
+    });
+
+    std::vector<WordPrecisionCandidate> selected;
+    selected.reserve(static_cast<size_t>(bounded_limit));
+    double selected_sec = 0.0;
+    for (const auto& item : candidates) {
+        if (selected.size() >= static_cast<size_t>(bounded_limit)) {
+            break;
+        }
+        const double duration = std::max(0.05, item.end - item.start);
+        if (!selected.empty() && selected_sec + duration > bounded_max_audio) {
+            continue;
+        }
+        selected.push_back(item);
+        selected_sec += duration;
+    }
+
+    std::sort(selected.begin(), selected.end(), [](const auto& left, const auto& right) {
+        if (left.start != right.start) {
+            return left.start < right.start;
+        }
+        return left.end < right.end;
+    });
+
+    PyObject* out = PyList_New(0);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    for (const auto& item : selected) {
+        PyObject* value = PyLong_FromLong(static_cast<long>(item.index));
+        if (value == nullptr || PyList_Append(out, value) != 0) {
+            Py_XDECREF(value);
+            Py_DECREF(out);
+            return nullptr;
+        }
+        Py_DECREF(value);
+    }
+    return out;
+}
+
+struct BudgetCandidate {
+    size_t index;
+    double start;
+    double end;
+    double best_score;
+    int has_text;
+};
+
+PyObject* py_budget_recheck_indices(PyObject*, PyObject* args) {
+    PyObject* starts_obj = nullptr;
+    PyObject* ends_obj = nullptr;
+    PyObject* best_scores_obj = nullptr;
+    PyObject* has_text_obj = nullptr;
+    long limit = 80;
+    double max_audio_sec = 180.0;
+    if (!PyArg_ParseTuple(
+            args,
+            "OOOOld",
+            &starts_obj,
+            &ends_obj,
+            &best_scores_obj,
+            &has_text_obj,
+            &limit,
+            &max_audio_sec)) {
+        return nullptr;
+    }
+
+    std::vector<double> starts;
+    std::vector<double> ends;
+    std::vector<double> best_scores;
+    std::vector<int> has_text;
+    if (!extract_double_vector(starts_obj, starts) ||
+        !extract_double_vector(ends_obj, ends) ||
+        !extract_double_vector(best_scores_obj, best_scores) ||
+        !extract_bool_vector(has_text_obj, has_text)) {
+        return nullptr;
+    }
+
+    const size_t count = std::min({starts.size(), ends.size(), best_scores.size(), has_text.size()});
+    const long bounded_limit = std::max(1L, std::min(200L, limit));
+    const double bounded_max_audio = std::max(10.0, std::min(1800.0, max_audio_sec));
+    std::vector<BudgetCandidate> candidates;
+    candidates.reserve(count);
+    for (size_t idx = 0; idx < count; ++idx) {
+        const double start = starts[idx];
+        const double end = std::max(start, ends[idx]);
+        const double score = std::max(0.0, std::min(100.0, best_scores[idx]));
+        candidates.push_back(BudgetCandidate{idx, start, end, score, has_text[idx] != 0 ? 1 : 0});
+    }
+
+    std::stable_sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        const int left_text_priority = left.has_text != 0 ? 1 : 0;
+        const int right_text_priority = right.has_text != 0 ? 1 : 0;
+        if (left_text_priority != right_text_priority) {
+            return left_text_priority < right_text_priority;
+        }
+        if (left.best_score != right.best_score) {
+            return left.best_score < right.best_score;
+        }
+        const double left_duration = std::max(0.05, left.end - left.start);
+        const double right_duration = std::max(0.05, right.end - right.start);
+        return left_duration > right_duration;
+    });
+
+    std::vector<BudgetCandidate> selected;
+    selected.reserve(static_cast<size_t>(bounded_limit));
+    double selected_sec = 0.0;
+    for (const auto& item : candidates) {
+        if (selected.size() >= static_cast<size_t>(bounded_limit)) {
+            break;
+        }
+        const double duration = std::max(0.05, item.end - item.start);
+        if (!selected.empty() && selected_sec + duration > bounded_max_audio) {
+            continue;
+        }
+        selected.push_back(item);
+        selected_sec += duration;
+    }
+
+    std::stable_sort(selected.begin(), selected.end(), [](const auto& left, const auto& right) {
+        if (left.start != right.start) {
+            return left.start < right.start;
+        }
+        return left.end < right.end;
+    });
+
+    PyObject* out = PyList_New(0);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    for (const auto& item : selected) {
+        PyObject* value = PyLong_FromLong(static_cast<long>(item.index));
+        if (value == nullptr || PyList_Append(out, value) != 0) {
+            Py_XDECREF(value);
+            Py_DECREF(out);
+            return nullptr;
+        }
+        Py_DECREF(value);
+    }
+    return out;
+}
+
+struct DurationOrderCandidate {
+    size_t index;
+    double start;
+    double duration;
+};
+
+PyObject* py_duration_desc_order_indices(PyObject*, PyObject* args) {
+    PyObject* starts_obj = nullptr;
+    PyObject* durations_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &starts_obj, &durations_obj)) {
+        return nullptr;
+    }
+
+    std::vector<double> starts;
+    std::vector<double> durations;
+    if (!extract_double_vector(starts_obj, starts) || !extract_double_vector(durations_obj, durations)) {
+        return nullptr;
+    }
+
+    const size_t count = std::min(starts.size(), durations.size());
+    std::vector<DurationOrderCandidate> candidates;
+    candidates.reserve(count);
+    for (size_t idx = 0; idx < count; ++idx) {
+        candidates.push_back(DurationOrderCandidate{
+            idx,
+            starts[idx],
+            std::max(0.0, durations[idx]),
+        });
+    }
+
+    std::stable_sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        if (left.duration != right.duration) {
+            return left.duration > right.duration;
+        }
+        return left.start < right.start;
+    });
+
+    PyObject* out = PyList_New(0);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    for (const auto& item : candidates) {
+        PyObject* value = PyLong_FromLong(static_cast<long>(item.index));
+        if (value == nullptr || PyList_Append(out, value) != 0) {
+            Py_XDECREF(value);
+            Py_DECREF(out);
+            return nullptr;
+        }
+        Py_DECREF(value);
+    }
+    return out;
+}
+
 PyMethodDef kMethods[] = {
+    {"budget_recheck_indices", py_budget_recheck_indices, METH_VARARGS, "Select budgeted recheck range indices."},
+    {"duration_desc_order_indices", py_duration_desc_order_indices, METH_VARARGS, "Order chunk indices by descending duration."},
     {"low_score_primary_indices", py_low_score_primary_indices, METH_VARARGS, "Find low-score primary indices."},
     {"match_low_score_pair_indices", py_match_low_score_pair_indices, METH_VARARGS, "Match low-score primary/secondary pairs."},
     {"uncovered_vad_indices", py_uncovered_vad_indices, METH_VARARGS, "Find uncovered VAD rows."},
     {"overlap_segment_groups", py_overlap_segment_groups, METH_VARARGS, "Group segment indices by overlapping ranges."},
     {"overlap_range_components", py_overlap_range_components, METH_VARARGS, "Group overlapping recheck ranges."},
+    {"word_precision_candidate_indices", py_word_precision_candidate_indices, METH_VARARGS, "Select word-precision candidate indices."},
     {nullptr, nullptr, 0, nullptr},
 };
 

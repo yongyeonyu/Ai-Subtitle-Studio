@@ -1573,6 +1573,8 @@ class ProjectContextTests(unittest.TestCase):
                             "end": 11.0,
                             "text": "후보",
                             "stt_preview_source": "STT2",
+                            "stt_preview_sublane": 1,
+                            "stt_preview_sublane_count": 2,
                             "_clip_idx": 1,
                             "_clip_file": str(media_b),
                         }
@@ -1585,6 +1587,8 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segment["stt_candidates"][0]["source"], "STT2")
         preview = project_stt_preview_segments(loaded)[0]
         self.assertEqual(preview["stt_preview_source"], "STT2")
+        self.assertEqual(preview["stt_preview_sublane"], 1)
+        self.assertEqual(preview["stt_preview_sublane_count"], 2)
         self.assertEqual(preview["_clip_idx"], 1)
         self.assertEqual(preview["start_frame"], 240)
         self.assertEqual(preview["end_frame"], 264)
@@ -2725,6 +2729,61 @@ class ProjectContextTests(unittest.TestCase):
         self.assertIn("stt_stt1", raw_payload["asset_storage"]["tracks"])
         self.assertIn("stt_stt2", raw_payload["asset_storage"]["tracks"])
         self.assertEqual([row["text"] for row in project_segments_to_editor(repaired, include_analysis_candidates=False)], ["최종 자막"])
+
+    def test_save_project_can_intentionally_clear_external_assets_for_full_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            project = {
+                "app": "AI Subtitle Studio",
+                "version": "03.00.25",
+                "project_path": str(path),
+                "workspace": {},
+                "timeline": {
+                    "total_duration": 2.0,
+                    "timebase": {"primary_fps": 30.0},
+                    "tracks": [{"clips": [{"timeline_start": 0.0, "timeline_end": 2.0, "fps": 30.0, "source_path": str(media)}]}],
+                },
+                "media": [{"path": str(media), "duration": 2.0, "offset": 0.0}],
+                "editor_state": build_editor_state(mode="single", media_files=[str(media)], segments=[], primary_fps=30.0),
+            }
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=[{"start": 0.0, "end": 1.0, "text": "이전 자막"}],
+                stt_tracks={
+                    "STT1": [{"start": 0.0, "end": 1.0, "text": "이전 후보 1", "stt_preview_source": "STT1"}],
+                    "STT2": [{"start": 0.0, "end": 1.0, "text": "이전 후보 2", "stt_preview_source": "STT2"}],
+                },
+            )
+            write_project_file(str(path), project)
+            final_srt = path.parent / "project.assets" / "subtitles" / "final.srt"
+            stt1_srt = path.parent / "project.assets" / "subtitles" / "stt1.srt"
+            stt2_srt = path.parent / "project.assets" / "subtitles" / "stt2.srt"
+            self.assertTrue(final_srt.exists())
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 2.0, "fps": 30.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[],
+                    stt_preview_segments=[],
+                    recover_external_assets_on_empty=False,
+                )
+
+            clear_project_file_cache(str(path))
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            loaded = load_project(str(path), hydrate_text_assets=False)
+
+        self.assertEqual(raw_payload["subtitles"]["storage"], "editor_state.rendering.subtitle_canvas")
+        self.assertEqual(raw_payload["subtitles"]["segment_count"], 0)
+        self.assertNotIn("asset_storage", raw_payload)
+        self.assertFalse(final_srt.exists())
+        self.assertFalse(stt1_srt.exists())
+        self.assertFalse(stt2_srt.exists())
+        self.assertEqual(project_segments_to_editor(loaded, include_analysis_candidates=False), [])
+        self.assertEqual(project_stt_preview_segments(loaded), [])
 
     def test_project_open_discards_hot_open_segments_beyond_media_duration(self):
         project = {

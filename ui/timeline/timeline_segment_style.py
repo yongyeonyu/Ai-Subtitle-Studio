@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 
-from core.audio.stt_candidate_scorer import stt_score_to_color
 from ui.style import COLORS
 from ui.timeline.timeline_analysis import SUBTITLE_STATUS_COLORS, subtitle_review_state
 
@@ -537,27 +536,19 @@ def stt_preview_visual_style(
     border_hex: str = "#34C759",
     text_hex: str = "#D7FFE4",
 ) -> dict:
-    """Return STT candidate lane colors; unselected candidates still keep score color."""
-    quality = dict(seg.get("quality") or {})
-    score = seg.get("stt_score", seg.get("score", quality.get("confidence_score")))
-    score_hex = str(seg.get("score_color") or seg.get("stt_score_color") or "")
-    if not score_hex:
-        try:
-            score_hex = stt_score_to_color(float(score))
-        except Exception:
-            score_hex = ""
+    """Return STT candidate lane colors with stable source-owned fills."""
     state = str(selection_state or "")
     is_selected = state in {"manual", "llm"}
     is_unselected = state == "unselected"
-    fill = score_hex or fill_hex
-    border = COLORS["warning"] if state == "llm" else ("#FFFFFF" if is_selected else (score_hex or border_hex))
+    fill = fill_hex
+    border = COLORS["warning"] if state == "llm" else border_hex
     return {
         "fill": fill,
         "border": border,
         "text": "#C9D0D6" if is_unselected else text_hex,
         "alpha": 96 if is_unselected else 142,
         "border_width": 2 if is_selected else 1,
-        "score_color": score_hex,
+        "score_color": str(seg.get("score_color") or seg.get("stt_score_color") or ""),
     }
 
 

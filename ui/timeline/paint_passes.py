@@ -14,6 +14,7 @@ from typing import Callable, Iterable, Sequence
 from PyQt6.QtCore import QRect
 
 from core.frame_time import normalize_fps
+from core.timeline_time import segment_display_time_bounds
 from ui.timeline.timeline_constants import (
     ICON_SZ,
     RULER_H,
@@ -147,8 +148,7 @@ def _visual_hidden(visual: dict | None) -> bool:
 
 def _segment_x_bounds(seg: dict, sec_to_x: Callable[[float], int]) -> tuple[int, int] | None:
     try:
-        start = float(seg.get("start", 0.0) or 0.0)
-        end = float(seg.get("end", seg.get("start", 0.0)) or seg.get("start", 0.0) or 0.0)
+        start, end = segment_display_time_bounds(seg)
     except (AttributeError, TypeError, ValueError):
         return None
     return int(sec_to_x(start)), int(sec_to_x(end))

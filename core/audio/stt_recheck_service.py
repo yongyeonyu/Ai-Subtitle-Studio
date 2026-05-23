@@ -12,6 +12,7 @@ from core.native_stt_recheck import (
     overlap_range_components as native_overlap_range_components,
     overlap_segment_groups as native_overlap_segment_groups,
     uncovered_vad_indices as native_uncovered_vad_indices,
+    word_precision_candidate_indices as native_word_precision_candidate_indices,
 )
 
 _RECHECK_OVERLAP_THRESHOLD = 0.18
@@ -284,6 +285,7 @@ def precision_pass_overrides() -> dict[str, Any]:
         "stt_word_timestamp_worker_straggler_max_missing_chunks": 3,
         "stt_word_timestamp_worker_straggler_min_received_ratio": 0.86,
         "stt_word_timestamp_straggler_skip_enabled": True,
+        "stt_duration_first_submission_enabled": True,
         "w_none_temp_max": 0.0,
         "whisper_chunk_overlap_sec": 0.0,
     }
@@ -312,6 +314,7 @@ def selective_secondary_recheck_overrides() -> dict[str, Any]:
         "stt_word_timestamps_default_enabled": False,
         "stt_word_timestamps_precision_enabled": False,
         "stt_persistent_runtime_reuse_enabled": False,
+        "stt_duration_first_submission_enabled": True,
         "w_none_temp_max": 0.0,
         "whisper_chunk_overlap_sec": 0.0,
     }
@@ -527,28 +530,57 @@ def word_precision_ranges(
         1,
         min(200, int(_as_float(settings.get("stt_word_timestamps_precision_max_segments"), 24))),
     )
+    max_audio_sec = max(
+        10.0,
+        min(1800.0, _as_float(settings.get("stt_word_timestamps_precision_max_audio_sec"), 90.0)),
+    )
+    starts: list[float] = []
+    ends: list[float] = []
+    scores: list[float] = []
+    has_scores: list[int] = []
+    needs_flags: list[int] = []
+    selected_flags: list[int] = []
+    red_flags: list[int] = []
+    yellow_flags: list[int] = []
+    risk_flags: list[int] = []
+    missing_word_flags: list[int] = []
+    ranges_by_index: dict[int, stt_rescue.SttRecheckRange] = {}
     prioritized: list[tuple[tuple[float, float, float], stt_rescue.SttRecheckRange]] = []
-    for seg in segments or []:
-        if not needs_precision_fn(seg, settings):
-            continue
+    for idx, seg in enumerate(segments or []):
         start = max(0.0, _as_float(seg.get("start"), 0.0))
         end = max(start + 0.1, _as_float(seg.get("end"), start))
-        score = round(float(score_fn(seg) or 0.0), 2)
-        quality = dict(seg.get("quality") or {})
+        needs_precision = bool(needs_precision_fn(seg, settings))
+        score = round(float(score_fn(seg) or 0.0), 2) if needs_precision else 0.0
+        quality = dict(seg.get("quality") or {}) if needs_precision else {}
         flags = {str(flag) for flag in (quality.get("flags") or ())}
-        priority = 0.0
-        if any(bool(seg.get(key)) for key in ("editor_selected", "selected", "precision_review", "needs_review")):
-            priority += 100.0
+        has_score = bool(has_score_fn(seg)) if needs_precision else False
+        starts.append(start)
+        ends.append(end)
+        scores.append(score)
+        has_scores.append(1 if has_score else 0)
+        needs_flags.append(1 if needs_precision else 0)
+        selected_flags.append(
+            1 if any(bool(seg.get(key)) for key in ("editor_selected", "selected", "precision_review", "needs_review")) else 0
+        )
         label = str(quality.get("confidence_label") or "").strip().lower()
-        if label == "red":
+        red_flags.append(1 if label == "red" else 0)
+        yellow_flags.append(1 if label == "yellow" else 0)
+        risk_flags.append(1 if flags.intersection({"outside_vad_speech", "high_cps", "short_duration_long_text"}) else 0)
+        missing_word_flags.append(1 if flags.intersection({"word_timestamps_missing"}) else 0)
+        if not needs_precision:
+            continue
+        priority = 0.0
+        if selected_flags[-1]:
+            priority += 100.0
+        if red_flags[-1]:
             priority += 40.0
-        elif label == "yellow":
+        elif yellow_flags[-1]:
             priority += 20.0
-        if flags.intersection({"outside_vad_speech", "high_cps", "short_duration_long_text"}):
+        if risk_flags[-1]:
             priority += 15.0
-        if flags.intersection({"word_timestamps_missing"}):
+        if missing_word_flags[-1]:
             priority += 5.0
-        if has_score_fn(seg):
+        if has_score:
             priority += max(0.0, 100.0 - score) / 4.0
         item = stt_rescue.SttRecheckRange(
             start=round(start, 3),
@@ -560,12 +592,34 @@ def word_precision_ranges(
             primary=dict(seg),
             secondary={},
         )
+        ranges_by_index[idx] = item
         prioritized.append(((-priority, score, start), item))
-    prioritized.sort(key=lambda pair: pair[0])
-    max_audio_sec = max(
-        10.0,
-        min(1800.0, _as_float(settings.get("stt_word_timestamps_precision_max_audio_sec"), 90.0)),
+    native_indices = native_word_precision_candidate_indices(
+        starts=starts,
+        ends=ends,
+        scores=scores,
+        has_scores=has_scores,
+        needs_precision=needs_flags,
+        selected_flags=selected_flags,
+        red_flags=red_flags,
+        yellow_flags=yellow_flags,
+        risk_flags=risk_flags,
+        missing_word_flags=missing_word_flags,
+        limit=limit,
+        max_audio_sec=max_audio_sec,
     )
+    if native_indices is not None:
+        selected: list[stt_rescue.SttRecheckRange] = []
+        seen: set[int] = set()
+        for idx in native_indices:
+            if idx in seen:
+                continue
+            seen.add(idx)
+            item = ranges_by_index.get(idx)
+            if item is not None:
+                selected.append(item)
+        return selected
+    prioritized.sort(key=lambda pair: pair[0])
     selected: list[stt_rescue.SttRecheckRange] = []
     selected_sec = 0.0
     for _priority, item in prioritized:

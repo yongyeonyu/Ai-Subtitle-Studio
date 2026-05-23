@@ -657,6 +657,7 @@ class VideoProcessorTranscribeMixin:
         word_timestamps: bool,
     ) -> int:
         chunks = max(1, int(total_chunks or 1))
+        self._whisperkit_native_allocation_plan = None
         if chunks <= 1:
             return 1
         pressure_stage = _stt_memory_pressure_stage(settings)
@@ -719,6 +720,13 @@ class VideoProcessorTranscribeMixin:
                     maximum=max(1, min(chunks, int(data.get("stt_whisperkit_gpu_saturation_max_workers", 8) or 8))),
                     active_labels=[task, "stt"],
                 )
+                if isinstance(plan, dict):
+                    self._whisperkit_native_allocation_plan = {
+                        "chunks": chunks,
+                        "word_timestamps": bool(word_timestamps),
+                        "task": task,
+                        "plan": dict(plan),
+                    }
                 allocation_workers = int((plan or {}).get("workers", 0) or 0)
             except Exception:
                 allocation_workers = 0
@@ -726,6 +734,110 @@ class VideoProcessorTranscribeMixin:
             configured = max(configured, allocation_workers)
             max_workers = max(max_workers, allocation_workers)
         return max(1, min(chunks, configured, max(1, max_workers)))
+
+    @staticmethod
+    def _whisperkit_compute_profile_from_native_units(
+        compute_units: object,
+        *,
+        fallback: str = "ane_gpu",
+    ) -> str:
+        value = str(compute_units or "").strip()
+        if not value:
+            return fallback
+        key = value.replace("-", "_").replace(" ", "").lower()
+        if key in {"all", "full", "allcomputeunits"}:
+            return "all"
+        if key in {"cpuandgpu", "cpu_gpu", "gpucpu", "gpu", "cpuandgputhenane"}:
+            return "gpu"
+        if key in {
+            "cpuandneuralengine",
+            "cpu_neural_engine",
+            "cpu_ane",
+            "ane",
+            "neuralengine",
+            "anegpu",
+            "ane_gpu",
+        }:
+            return "ane_gpu"
+        if key in {"cpuonly", "cpu"}:
+            return "cpu"
+        return fallback
+
+    def _whisperkit_compute_profile(
+        self,
+        settings: dict | None,
+        *,
+        word_timestamps: bool,
+        fallback: str = "ane_gpu",
+    ) -> str:
+        data = dict(settings or {})
+        configured = str(data.get("stt_whisperkit_compute_profile") or "auto").strip()
+        if not self._setting_bool(data, "stt_whisperkit_native_compute_profile_enabled", True):
+            return configured or fallback
+        if configured and configured.lower() not in {"auto", "native", "allocator", "resource_adaptive"}:
+            return configured
+        record = getattr(self, "_whisperkit_native_allocation_plan", None)
+        if not isinstance(record, dict):
+            return fallback
+        if bool(record.get("word_timestamps", False)) != bool(word_timestamps):
+            return fallback
+        plan = record.get("plan")
+        if not isinstance(plan, dict):
+            return fallback
+        return self._whisperkit_compute_profile_from_native_units(
+            plan.get("compute_units"),
+            fallback=fallback,
+        )
+
+    def _duration_first_stt_submission_enabled(
+        self,
+        settings: dict | None,
+        *,
+        word_timestamps: bool,
+    ) -> bool:
+        data = dict(settings or {})
+        rescue_pass = bool(data.get("stt_rescue_whisper_mode", False))
+        precision_pass = bool(data.get("stt_word_timestamp_precision_pass", False))
+        if not (rescue_pass or precision_pass or word_timestamps):
+            return False
+        return self._setting_bool(data, "stt_duration_first_submission_enabled", True)
+
+    def _duration_first_submission_order(self, items: list[dict], settings: dict | None) -> list[int]:
+        if len(items or []) <= 1:
+            return list(range(len(items or [])))
+        starts = [float(item.get("ov_start_offset", idx) or idx) for idx, item in enumerate(items)]
+        durations = [max(0.001, float(item.get("duration", 0.001) or 0.001)) for item in items]
+        native_order = None
+        try:
+            from core.native_stt_recheck import duration_desc_order_indices
+
+            native_order = duration_desc_order_indices(starts=starts, durations=durations)
+        except Exception:
+            native_order = None
+        if native_order is None:
+            native_order = sorted(range(len(items)), key=lambda idx: (-durations[idx], starts[idx]))
+        seen: set[int] = set()
+        order: list[int] = []
+        for idx in native_order:
+            if idx in seen or idx < 0 or idx >= len(items):
+                continue
+            seen.add(idx)
+            order.append(idx)
+        for idx in range(len(items)):
+            if idx not in seen:
+                order.append(idx)
+        # Avoid remapping overhead on uniform chunks; chronological order is best for live preview.
+        if order == list(range(len(items))) or (max(durations) - min(durations)) < 0.05:
+            return list(range(len(items)))
+        if self._setting_bool(dict(settings or {}), "stt_duration_first_submission_log_enabled", True):
+            try:
+                get_logger().log(
+                    "  ⚡ [STT Native Scheduler] duration-first chunk submission: "
+                    f"{order[:8]}{'...' if len(order) > 8 else ''}"
+                )
+            except Exception:
+                pass
+        return order
 
     def _stt_worker_silence_timeout_sec(
         self,
@@ -1938,7 +2050,6 @@ class VideoProcessorTranscribeMixin:
         self._notify_stage(f"⏳ [{log_label}] Whisper 인식 중")
         get_logger().log(f"\n🎯 [{log_label}] Whisper 인식 시작 (총 {total}블록, 모델: {target_model.split(chr(47))[-1]})")
 
-        safe_paths = [x["input_path"] for x in q]
         s = _s
         progress_by_audio_duration = bool(s.get("stt_rescue_whisper_mode", False)) or bool(
             s.get("stt_word_timestamp_precision_pass", False)
@@ -1977,6 +2088,8 @@ class VideoProcessorTranscribeMixin:
         use_whisper_cpp = stt_backend_name == "whisper_cpp" or is_whisper_cpp_model(target_model)
         use_transformers_whisper = is_transformers_whisper_model(target_model)
         use_whisperkit_persistent = is_whisperkit_persistent_model(target_model)
+        submitted_q = q
+        safe_paths = [x["input_path"] for x in submitted_q]
         if use_whisperkit_persistent:
             from core.audio.whisperkit_persistent import (
                 ensure_worker,
@@ -2002,6 +2115,11 @@ class VideoProcessorTranscribeMixin:
                         self._whisperkit_runner_proc = ensure_worker(current_proc, log_label=log_label)
                         proc = self._whisperkit_runner_proc
                         if proc is not None:
+                            if self._duration_first_stt_submission_enabled(s, word_timestamps=word_timestamps):
+                                submission_order = self._duration_first_submission_order(q, s)
+                                if submission_order != list(range(total)):
+                                    submitted_q = [q[idx] for idx in submission_order]
+                                    safe_paths = [x["input_path"] for x in submitted_q]
                             whisperkit_workers = self._whisperkit_concurrent_worker_count(
                                 s,
                                 total_chunks=len(safe_paths),
@@ -2012,6 +2130,15 @@ class VideoProcessorTranscribeMixin:
                                     f"  ⚡ [{log_label}] WhisperKit ANE/GPU batch concurrency: "
                                     f"{whisperkit_workers} chunks"
                                 )
+                            whisperkit_stream_results = self._setting_bool(
+                                s,
+                                "stt_whisperkit_stream_results_enabled",
+                                True,
+                            )
+                            whisperkit_compute_profile = self._whisperkit_compute_profile(
+                                s,
+                                word_timestamps=word_timestamps,
+                            )
                             mac_task_id = submit_task(
                                 proc=proc,
                                 chunk_paths=safe_paths,
@@ -2020,6 +2147,8 @@ class VideoProcessorTranscribeMixin:
                                 temperature_values=temperature_values,
                                 word_timestamps=word_timestamps,
                                 concurrent_worker_count=whisperkit_workers,
+                                stream_results=whisperkit_stream_results,
+                                compute_profile=whisperkit_compute_profile,
                             )
             except Exception as exc:
                 get_logger().log(f"  ⚠️ [{log_label}] WhisperKit worker 요청 실패 → MLX fallback: {exc}")
@@ -2374,8 +2503,11 @@ class VideoProcessorTranscribeMixin:
                         get_logger().log(f"  [FAIL] Whisper worker error ({stage}): {msg}")
                         raise RuntimeError(f"whisper_worker_error[{stage}]: {msg}")
 
-                    idx = int(data.get("index", received))
-                    item = q[idx]
+                    submitted_idx = int(data.get("index", received))
+                    if submitted_idx < 0 or submitted_idx >= len(submitted_q):
+                        continue
+                    item = submitted_q[submitted_idx]
+                    idx = int(item.get("idx", submitted_idx))
                     payload = data.get("result") if "result" in data else {"error": data.get("error", "")}
                     if isinstance(payload, dict):
                         payload.setdefault("backend", data.get("backend", "mlx-whisper"))

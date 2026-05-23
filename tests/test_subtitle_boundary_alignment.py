@@ -2,6 +2,7 @@ import unittest
 
 from core.cut_boundary import magnetize_segments_to_cut_boundaries
 from core.engine.subtitle_timing import (
+    _selected_stt_candidate_span,
     align_stt_candidates_to_subtitle_segments,
     align_stt_preview_to_subtitle_segments,
     apply_final_gap_settings,
@@ -63,6 +64,7 @@ class SubtitleBoundaryAlignmentTests(unittest.TestCase):
 
         self.assertEqual(aligned[0]["text"], "STT2 전체")
         self.assertEqual((aligned[0]["start"], aligned[0]["end"]), (0.9, 4.1))
+        self.assertEqual((aligned[0]["timeline_start"], aligned[0]["timeline_end"]), (1.0, 4.0))
         self.assertTrue(aligned[0]["stt_preview_preserved_candidate_timing"])
 
     def test_non_stt_preview_rows_align_to_final_subtitle_union(self):
@@ -123,6 +125,22 @@ class SubtitleBoundaryAlignmentTests(unittest.TestCase):
         adjusted = apply_final_gap_settings(aligned, {"sub_min_duration": 0.1}, force=True)
 
         self.assertEqual((adjusted[0]["start"], adjusted[0]["end"]), (1.1, 1.9))
+
+    def test_word_matched_final_subtitle_prefers_chunk_word_span_over_whole_candidate(self):
+        segment = {
+            "start": 140.9,
+            "end": 141.8,
+            "text": "말린 과일이네",
+            "_stt_original_candidate_start": 136.0,
+            "_stt_original_candidate_end": 143.0,
+            "_stt_word_match_timing_policy": {"task": "stt_chunk_word_timing_match"},
+            "words": [
+                {"word": "말린", "start": 140.9, "end": 141.2},
+                {"word": "과일이네", "start": 141.24, "end": 141.8},
+            ],
+        }
+
+        self.assertEqual(_selected_stt_candidate_span(segment), (140.9, 141.8))
 
     def test_analysis_lanes_ignore_stt_candidate_timing(self):
         segments = [

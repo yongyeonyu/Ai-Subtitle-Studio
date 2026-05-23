@@ -18,7 +18,7 @@ class EditorOpenLayoutTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_16_9_video_player_width_is_locked_to_current_preview_height(self):
+    def test_video_player_width_is_locked_to_height_based_16_9_slot(self):
         editor = EditorWidget(
             video_name="sample.mp4",
             segments=[],
@@ -54,10 +54,45 @@ class EditorOpenLayoutTests(unittest.TestCase):
             editor._apply_fixed_video_preview_width()
             self.app.processEvents()
 
-            self.assertEqual(editor.video_frame.minimumWidth(), EDITOR_VIDEO_PLAYER_MIN_WIDTH)
-            self.assertGreater(editor.video_frame.maximumWidth(), expected_width)
-            self.assertEqual(editor.video_player.minimumWidth(), EDITOR_VIDEO_PLAYER_MIN_WIDTH)
-            self.assertGreater(editor.video_player.maximumWidth(), expected_width)
+            self.assertEqual(editor.video_frame.minimumWidth(), expected_width)
+            self.assertEqual(editor.video_frame.maximumWidth(), expected_width)
+            self.assertEqual(editor.video_player.minimumWidth(), expected_width)
+            self.assertEqual(editor.video_player.maximumWidth(), expected_width)
+        finally:
+            editor.close()
+
+    def test_fixed_video_width_rebalances_initial_splitter_even_when_width_is_unchanged(self):
+        editor = EditorWidget(
+            video_name="sample.mp4",
+            segments=[],
+            media_path="",
+            defer_media_load=True,
+        )
+        try:
+            editor.resize(1600, 720)
+            editor.show()
+            self.app.processEvents()
+
+            editor.video_player._source_width = 1920
+            editor.video_player._source_height = 1080
+            editor.video_player._source_aspect = EDITOR_VIDEO_PLAYER_16_9_ASPECT
+            editor._apply_fixed_video_preview_width()
+            self.app.processEvents()
+
+            target_width = int(editor.video_frame.maximumWidth())
+            total = max(1, int(editor.splitter.width()) - int(editor.splitter.handleWidth()))
+            expected_editor_width = max(1, total - target_width)
+
+            editor.splitter.setSizes([280, max(1, total - 280)])
+            self.app.processEvents()
+            self.assertLess(editor.splitter.sizes()[0], expected_editor_width - 100)
+
+            editor._apply_fixed_video_preview_width()
+            self.app.processEvents()
+
+            sizes = editor.splitter.sizes()
+            self.assertAlmostEqual(sizes[0], expected_editor_width, delta=2)
+            self.assertAlmostEqual(sizes[1], target_width, delta=2)
         finally:
             editor.close()
 

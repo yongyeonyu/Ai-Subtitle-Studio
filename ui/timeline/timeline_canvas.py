@@ -12,6 +12,7 @@ from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QSizePolicy, QScrollArea, QWidget
 
 from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
+from core.timeline_time import segment_display_time_bounds
 
 from ui.timeline.timeline_constants import (
     CANVAS_H,
@@ -526,6 +527,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         from ui.timeline.stt_preview_layout import (
             assign_stt_preview_lanes,
             dedupe_stt_preview_segments_for_display,
+            ensure_stt_preview_lane_numbers,
         )
         from ui.timeline.timeline_segment_style import (
             build_stt_selection_index,
@@ -567,36 +569,44 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 str(seg.get("stt_preview_source", "") or "").strip().upper(),
                 str(seg.get("stt_source", "") or "").strip().upper(),
                 str(seg.get("source", "") or "").strip().upper(),
+                seg.get("stt_preview_sublane"),
+                seg.get("stt_preview_sublane_count"),
                 tuple(candidate_sig),
                 score_sig,
             )
 
+        source_rows = list(getattr(self, "segments", []) or [])
+        source_ids = {id(seg) for seg in source_rows if isinstance(seg, dict)}
+        source_rows.extend(
+            seg
+            for seg in rows
+            if isinstance(seg, dict) and id(seg) not in source_ids
+        )
+        global_preview_rows = [
+            seg
+            for seg in source_rows
+            if isinstance(seg, dict) and bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
+        ]
+        ensure_stt_preview_lane_numbers(global_preview_rows, mutate=True)
         key = (
             int(getattr(self, "_render_epoch", 0) or 0),
             len(rows),
             tuple((id(seg), _source_metadata_signature(seg)) for seg in rows if isinstance(seg, dict)),
+            tuple((id(seg), _source_metadata_signature(seg)) for seg in global_preview_rows),
         )
         if key == getattr(self, "_visible_segment_lanes_cache_key", None):
             cached = getattr(self, "_visible_segment_lanes_cache", None)
             if isinstance(cached, dict) and cached:
                 return cached
 
-        stt_preview_segments: list[dict] = []
         final_segments: list[dict] = []
         selected_final_segments: list[dict] = []
-        stt1_preview_segments: list[dict] = []
-        stt2_preview_segments: list[dict] = []
         stt1_checked_segments: list[dict] = []
         stt2_checked_segments: list[dict] = []
         for seg in rows:
             if not isinstance(seg, dict):
                 continue
             if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
-                stt_preview_segments.append(seg)
-                if stt_preview_source(seg) == "STT2":
-                    stt2_preview_segments.append(seg)
-                else:
-                    stt1_preview_segments.append(seg)
                 continue
             final_segments.append(seg)
             if final_stt_selection_source(seg):
@@ -607,11 +617,29 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             if "STT2" in checked_sources:
                 stt2_checked_segments.append(seg)
         selected_final_index = build_stt_selection_index(selected_final_segments)
-        stt1_preview_segments = dedupe_stt_preview_segments_for_display(stt1_preview_segments)
-        stt2_preview_segments = dedupe_stt_preview_segments_for_display(stt2_preview_segments)
+        global_stt1_preview_segments: list[dict] = []
+        global_stt2_preview_segments: list[dict] = []
+        for seg in global_preview_rows:
+            if stt_preview_source(seg) == "STT2":
+                global_stt2_preview_segments.append(seg)
+            else:
+                global_stt1_preview_segments.append(seg)
+        global_stt1_preview_segments = dedupe_stt_preview_segments_for_display(global_stt1_preview_segments)
+        global_stt2_preview_segments = dedupe_stt_preview_segments_for_display(global_stt2_preview_segments)
+        stt1_global_lane_map, stt1_lane_count = assign_stt_preview_lanes(global_stt1_preview_segments)
+        stt2_global_lane_map, stt2_lane_count = assign_stt_preview_lanes(global_stt2_preview_segments)
+        visible_ids = {id(seg) for seg in rows if isinstance(seg, dict)}
+        stt1_preview_segments = [seg for seg in global_stt1_preview_segments if id(seg) in visible_ids]
+        stt2_preview_segments = [seg for seg in global_stt2_preview_segments if id(seg) in visible_ids]
         stt_preview_segments = stt1_preview_segments + stt2_preview_segments
-        stt1_lane_map, stt1_lane_count = assign_stt_preview_lanes(stt1_preview_segments)
-        stt2_lane_map, stt2_lane_count = assign_stt_preview_lanes(stt2_preview_segments)
+        stt1_lane_map = {
+            id(seg): stt1_global_lane_map.get(id(seg), 0)
+            for seg in stt1_preview_segments
+        }
+        stt2_lane_map = {
+            id(seg): stt2_global_lane_map.get(id(seg), 0)
+            for seg in stt2_preview_segments
+        }
         stt_selection_states = {
             id(seg): stt_candidate_selection_state(seg, selected_final_segments, selected_final_index)
             for seg in stt_preview_segments
@@ -709,14 +737,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     @staticmethod
     def _paint_item_bounds(item: dict) -> tuple[float, float]:
         if isinstance(item, dict):
-            try:
-                start = float(item.get("start", item.get("timeline_sec", item.get("time", 0.0))) or 0.0)
-            except Exception:
-                start = 0.0
-            try:
-                end = float(item.get("end", item.get("timeline_end", start)) or start)
-            except Exception:
-                end = start
+            start, end = segment_display_time_bounds(item)
         else:
             try:
                 start = float(item or 0.0)
@@ -1124,6 +1145,16 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             content_end_ms = max(content_end_ms, end_ms)
             geometry_checksum = ((geometry_checksum * 1000003) ^ (start_ms * 31) ^ end_ms) & 0xFFFFFFFF
         previous_geometry_signature = getattr(self, "_segments_geometry_signature", None)
+        from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
+
+        ensure_stt_preview_lane_numbers(
+            [
+                seg
+                for seg in segments
+                if isinstance(seg, dict) and bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
+            ],
+            mutate=True,
+        )
         self.segments = segments
         self.total_duration = total_dur or (rows[-1]["end"] if rows else 0.0)
         self._segments_content_duration = max(
@@ -1485,8 +1516,9 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         if not seg:
             return QRect()
         try:
-            x1 = self._x(float(seg.get("start", 0.0) or 0.0))
-            x2 = self._x(float(seg.get("end", 0.0) or 0.0))
+            start, end = segment_display_time_bounds(seg)
+            x1 = self._x(start)
+            x2 = self._x(end)
         except Exception:
             return QRect()
         frame_px = int(max(2.0, (1.0 / max(1.0, float(self._get_fps()))) * max(1.0, float(self.pps or 1.0))))

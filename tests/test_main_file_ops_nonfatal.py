@@ -2,9 +2,10 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QFileDialog
 
 from ui.main.main_file_ops import FileOpsMixin
+from ui.main.main_window import MainWindow
 
 
 class _FileOpsWindow(FileOpsMixin):
@@ -62,6 +63,44 @@ class MainFileOpsNonfatalTests(unittest.TestCase):
             window._prepare_dialog_state()
 
         process_events.assert_called_once()
+
+    def test_file_dialog_replays_deferred_home_rebuild_after_cancel(self):
+        window = _FileOpsWindow()
+        window._pending_home_auto_source_rebuild = True
+        window._build_home_content = mock.Mock()
+
+        def _open(_parent, _title, folder, _filter):
+            self.assertTrue(window._file_dialog_active)
+            self.assertTrue(folder)
+            return ([], "")
+
+        with mock.patch.object(QFileDialog, "getOpenFileNames", side_effect=_open):
+            paths, _ = window._safe_open_file_names("파일 선택", "/missing/folder", "Media")
+
+        self.assertEqual(paths, [])
+        self.assertFalse(window._file_dialog_active)
+        self.assertFalse(window._pending_home_auto_source_rebuild)
+        self.app.processEvents()
+        window._build_home_content.assert_called_once()
+
+    def test_file_dialog_selection_skips_stale_home_rebuild(self):
+        window = _FileOpsWindow()
+        window._pending_home_auto_source_rebuild = True
+        window._build_home_content = mock.Mock()
+
+        with mock.patch.object(QFileDialog, "getOpenFileNames", return_value=(["/tmp/clip.mp4"], "")):
+            paths, _ = window._safe_open_file_names("파일 선택", "/tmp", "Media")
+
+        self.assertEqual(paths, ["/tmp/clip.mp4"])
+        self.assertFalse(window._file_dialog_active)
+        self.assertFalse(window._pending_home_auto_source_rebuild)
+        self.app.processEvents()
+        window._build_home_content.assert_not_called()
+
+    def test_optional_startup_waits_while_file_dialog_is_active(self):
+        owner = SimpleNamespace(_offscreen_test=False, _file_dialog_active=True)
+
+        self.assertFalse(MainWindow._optional_startup_home_ready(owner))
 
     def test_quick_exit_continues_when_schedule_and_backup_raise(self):
         window = _FileOpsWindow()

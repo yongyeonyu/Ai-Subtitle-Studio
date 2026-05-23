@@ -11,6 +11,7 @@ import numpy as np
 from core.native_json import dumps_json_bytes, dumps_json_text, json_default, loads_json, loads_json_output, write_jsonl_line
 from core.native_swift_subtitle import find_native_cli_path, native_swift_runtime_enabled
 from core.runtime.stage_metrics import _elapsed_ms, record_native_bridge_metric
+from core.timeline_time import segment_display_time_bounds
 
 _WORKER: subprocess.Popen | None = None
 _WORKER_LOCK = threading.Lock()
@@ -488,8 +489,7 @@ def _editor_segment_row(item: dict[str, Any], index: int = 0) -> dict[str, Any] 
     if not isinstance(item, dict):
         return None
     try:
-        start = float(item.get("start", 0.0) or 0.0)
-        end = float(item.get("end", item.get("start", 0.0)) or item.get("start", 0.0) or 0.0)
+        start, end = segment_display_time_bounds(item)
     except Exception:
         return None
     row: dict[str, Any] = {

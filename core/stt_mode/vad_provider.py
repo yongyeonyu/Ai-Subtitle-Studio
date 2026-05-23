@@ -10,6 +10,7 @@ import wave
 from typing import Any
 
 from core.frame_time import normalize_fps
+from core.native_swift_vad import vad_flags_to_segments_via_swift
 from core.audio.silero_vad_runtime import load_silero_vad_runtime
 from core.audio.torch_acceleration import move_torch_model_to_preferred_device, move_torch_tensor_to_device
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
@@ -62,7 +63,13 @@ def _detect_silero_wav(wav_path: str, settings: dict[str, Any] | None = None) ->
     device_name = "cpu"
     try:
         model, utils, _loader = load_silero_vad_runtime()
-        device_name = move_torch_model_to_preferred_device(model, settings=settings, log_label="STT VAD")
+        device_name = move_torch_model_to_preferred_device(
+            model,
+            settings=settings,
+            log_label="STT VAD",
+            task="vad",
+            estimated_bytes=_estimated_wav_bytes(wav_path),
+        )
         get_speech_timestamps, _, read_audio, _, _ = utils
         audio_data = read_audio(wav_path, sampling_rate=16000)
         audio_data = move_torch_tensor_to_device(audio_data, device_name)
@@ -106,7 +113,38 @@ def _vad_flags_to_segments(
     min_silence_sec: float,
     speech_pad_sec: float,
     provider: str,
+    settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    native_rows = vad_flags_to_segments_via_swift(
+        flags,
+        hop_sec=hop_sec,
+        min_speech_sec=min_speech_sec,
+        min_silence_sec=min_silence_sec,
+        speech_pad_sec=speech_pad_sec,
+        source=provider,
+        settings=settings,
+    )
+    if native_rows is not None:
+        out: list[dict[str, Any]] = []
+        for row in native_rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                start = float(row.get("start", 0.0) or 0.0)
+                end = float(row.get("end", start) or start)
+            except (TypeError, ValueError):
+                continue
+            if end > start:
+                out.append(
+                    {
+                        "provider": str(row.get("source") or provider),
+                        "start": round(start, 4),
+                        "end": round(end, 4),
+                        "score": 0.4,
+                    }
+                )
+        return out
+
     raw: list[tuple[float, float]] = []
     start_idx = None
     for idx, flag in enumerate(flags):
@@ -176,7 +214,15 @@ def _detect_ten_vad_wav(wav_path: str, settings: dict[str, Any] | None = None) -
         min_silence_sec=min_silence,
         speech_pad_sec=speech_pad,
         provider="ten_vad",
+        settings=settings,
     )
+
+
+def _estimated_wav_bytes(wav_path: str) -> int:
+    try:
+        return max(0, int(os.path.getsize(wav_path))) * 2
+    except Exception:
+        return 0
 
 
 def detect_vad_candidates_from_wav(

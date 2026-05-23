@@ -639,6 +639,27 @@ git diff --check --
   - 최종 스냅샷 단계에서 `app_unreachable` 발생 시 즉시 앱 재기동 후 1회 재시도.
   - 재시도 결과 실패 시에도 최초 실행 evidence와 함께 원인 분류해서 검토요청.
 
+### 테스트 케이스 고도화 메모 - 2026-05-23
+
+- 실행 전 자동 진단 규칙:
+  - 매 실행 시작 시 `status`로 현재 `foreground_busy_reason`, `editor_media_path`, `current_project_path`, `backend_active`를 기록해
+    이전 실행 잔재를 먼저 분리한다.
+  - `open-project`가 `[Errno 1] Operation not permitted`로 실패하면 해당 run은 `검토필요:권한/접근제약`으로 분리하고
+    `open-media` 기반 fallback 시나리오로 진행한다.
+  - 멀티클립은 `--reuse-existing yes`와 `--reuse-existing no`를 모두 별도 케이스로 나눠 수집하고,
+    `existing_subtitles_confirmation_required`는 `수동 확인 경로 분리` 실패로 기록한다.
+- 저장/내보내기 케이스 강화:
+  - `save-subtitles`가 `subtitle_save_declined`면 `저장불가 경로(변경사항 없음/경로 권한/세그먼트 부재)`를 분해해 기록한다.
+  - `export-subtitles`는 `subtitle_segments_missing`이면 강제로 오탐 처리하지 않고 `검토필요:자막구간 미생성`으로 표시한다.
+  - `export-subtitle-video`는 세그먼트 저장 성공 여부가 선행되어야 하므로 `save_subtitles`와 묶어 결과를 판정한다.
+- 편집 시퀀스 실패 분리:
+  - `segment_not_found`는 기본 실패가 아니라 `fixture 상태(step 전환 불일치)`로 먼저 분류하고,
+    `smart_split_ready`, `inline_edit_active`, `set-playhead` precheck 값을 저장한 뒤 재실행한다.
+  - `editor-set-playhead` 직후는 최소 1초 settle 또는 `sync-playhead`를 강제해 segment 존재 여부를 재확인한다.
+- 화면 전환/종료 테스트 강화:
+  - home/editor/roughcut/종료 전 마지막 화면은 모두 final 스냅샷으로 남긴다.
+  - 종료 테스트는 반드시 `quit(프로세스 종료)` + 2초 후 `app_unreachable` 확인 + 앱 재기동 성공을 한 블록으로 기록한다.
+
 ### 테스트 케이스 자동 추가 규칙
 
 - 실행 중 항목이 빠진 경우 해당 항목을 먼저 `test_case.md`에 추가하고, 테스트를 즉시 1회 이상 실행한다.

@@ -18,6 +18,7 @@ from core.native_swift_timeline import (
     plan_stt_candidate_selection_via_swift,
 )
 from core.project.project_srt import strip_whisper_control_tokens
+from core.timeline_time import segment_display_time_bounds
 from ui.editor.ux.subtitle_text_edit import SubtitleBlockData
 from ui.style import COLORS
 
@@ -210,8 +211,15 @@ class EditorSegmentsLivePreviewMixin:
         if not preview:
             return
         existing_preview = self._drop_overlapping_preview(existing_preview, preview, same_source_only=True)
-        self._live_stt_preview_segments = self._clamp_segments_to_clip_duration(
+        from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
+
+        combined_preview = self._clamp_segments_to_clip_duration(
             existing_preview + preview,
+            log_changes=False,
+        )
+        ensure_stt_preview_lane_numbers(combined_preview, mutate=True)
+        self._live_stt_preview_segments = self._clamp_segments_to_clip_duration(
+            combined_preview,
             log_changes=False,
         )
         self._redraw_timeline_with_live_preview()
@@ -353,11 +361,11 @@ class EditorSegmentsLivePreviewMixin:
             latest = max(
                 preview,
                 key=lambda seg: (
-                    float(seg.get("start", 0.0) or 0.0),
-                    float(seg.get("end", seg.get("start", 0.0)) or 0.0),
+                    segment_display_time_bounds(seg)[0],
+                    segment_display_time_bounds(seg)[1],
                 ),
             )
-            global_sec = self._frame_time(max(0.0, float(latest.get("start", 0.0) or 0.0)))
+            global_sec = self._frame_time(max(0.0, segment_display_time_bounds(latest)[0]))
         except Exception:
             return
 
@@ -489,8 +497,9 @@ class EditorSegmentsLivePreviewMixin:
 
     def _live_editor_preview_key(self, seg: dict) -> tuple:
         try:
-            start = round(float(seg.get("start", 0.0) or 0.0), 2)
-            end = round(float(seg.get("end", start) or start), 2)
+            display_start, display_end = segment_display_time_bounds(seg)
+            start = round(display_start, 2)
+            end = round(display_end, 2)
         except Exception:
             start = end = 0.0
         return (
@@ -528,8 +537,7 @@ class EditorSegmentsLivePreviewMixin:
 
     def _live_editor_preview_match(self, seg: dict, *, same_source_only: bool = True):
         try:
-            start = float(seg.get("start", 0.0) or 0.0)
-            end = float(seg.get("end", start) or start)
+            start, end = segment_display_time_bounds(seg)
         except Exception:
             return None
         source = str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1").strip().upper()
@@ -553,8 +561,7 @@ class EditorSegmentsLivePreviewMixin:
                     if same_source_only and stored_source != preview_source:
                         continue
                     try:
-                        stored_start = float(stored.get("start", 0.0) or 0.0)
-                        stored_end = float(stored.get("end", stored_start) or stored_start)
+                        stored_start, stored_end = segment_display_time_bounds(stored)
                     except Exception:
                         continue
                     if abs(stored_start - block_start) <= 0.08:
@@ -615,8 +622,7 @@ class EditorSegmentsLivePreviewMixin:
         for draft in list(drafts or []):
             row = dict(draft)
             try:
-                start = float(row.get("start", 0.0) or 0.0)
-                end = float(row.get("end", start) or start)
+                start, end = segment_display_time_bounds(row)
             except Exception:
                 start = end = 0.0
             source = str(row.get("stt_preview_source") or row.get("stt_source") or "STT1").strip().upper()
@@ -627,8 +633,7 @@ class EditorSegmentsLivePreviewMixin:
                 if old_source != source:
                     continue
                 try:
-                    old_start = float(old.get("start", 0.0) or 0.0)
-                    old_end = float(old.get("end", old_start) or old_start)
+                    old_start, old_end = segment_display_time_bounds(old)
                 except Exception:
                     continue
                 if not (start < old_end + 0.12 and end > old_start - 0.12):
@@ -692,7 +697,7 @@ class EditorSegmentsLivePreviewMixin:
         if not block.isValid():
             return False
         try:
-            start_sec = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
+            start_sec = self._frame_time(max(0.0, segment_display_time_bounds(seg)[0]))
         except Exception:
             start_sec = 0.0
         source = str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1").strip().upper()
@@ -773,7 +778,7 @@ class EditorSegmentsLivePreviewMixin:
         if self._update_live_editor_preview_segment(seg, focus=focus):
             return True
         try:
-            start_sec = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
+            start_sec = self._frame_time(max(0.0, segment_display_time_bounds(seg)[0]))
         except Exception:
             start_sec = 0.0
         source_label = str(source or seg.get("stt_preview_source") or seg.get("stt_source") or "WORK").strip().upper()
@@ -839,8 +844,8 @@ class EditorSegmentsLivePreviewMixin:
         ]
         drafts.sort(
             key=lambda seg: (
-                float(seg.get("start", 0.0) or 0.0),
-                float(seg.get("end", seg.get("start", 0.0)) or 0.0),
+                segment_display_time_bounds(seg)[0],
+                segment_display_time_bounds(seg)[1],
             )
         )
         # 첫 실시간 드래프트는 debounce를 기다리지 않고 바로 보여 줘야
@@ -965,15 +970,13 @@ class EditorSegmentsLivePreviewMixin:
 
     def _has_live_editor_preview_overlap(self, seg: dict, *, prefer_primary: bool = False) -> bool:
         try:
-            start = float(seg.get("start", 0.0) or 0.0)
-            end = float(seg.get("end", start) or start)
+            start, end = segment_display_time_bounds(seg)
         except Exception:
             return False
         source = str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1").strip().upper()
         for existing in list(getattr(self, "_live_editor_preview_segments", []) or []):
             try:
-                e_start = float(existing.get("start", 0.0) or 0.0)
-                e_end = float(existing.get("end", e_start) or e_start)
+                e_start, e_end = segment_display_time_bounds(existing)
             except Exception:
                 continue
             if not (start < e_end + 0.05 and end > e_start - 0.05):
@@ -1099,8 +1102,9 @@ class EditorSegmentsLivePreviewMixin:
             if not text:
                 continue
             try:
-                start = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
-                end = self._frame_time(max(start + 0.05, float(seg.get("end", start + 0.5) or start + 0.5)))
+                display_start, display_end = segment_display_time_bounds(seg)
+                start = self._frame_time(max(0.0, display_start))
+                end = self._frame_time(max(start + 0.05, display_end))
             except Exception:
                 continue
             if end <= start:
@@ -1121,15 +1125,9 @@ class EditorSegmentsLivePreviewMixin:
             confirmed_segments,
             same_source_only=False,
         )
-        for line, draft in enumerate(sorted(drafts, key=lambda item: (
-            float(item.get("start", 0.0) or 0.0),
-            float(item.get("end", 0.0) or 0.0),
-        ))):
+        for line, draft in enumerate(sorted(drafts, key=lambda item: segment_display_time_bounds(item))):
             draft["line"] = -2000 - line
-        return sorted(drafts, key=lambda item: (
-            float(item.get("start", 0.0) or 0.0),
-            float(item.get("end", 0.0) or 0.0),
-        ))
+        return sorted(drafts, key=lambda item: segment_display_time_bounds(item))
 
     def _remove_live_editor_preview_overlapping(self, final_segments: list[dict]) -> None:
         if not hasattr(self, "text_edit") or not final_segments:
@@ -1137,8 +1135,7 @@ class EditorSegmentsLivePreviewMixin:
         ranges = []
         for seg in final_segments:
             try:
-                start = float(seg.get("start", 0.0) or 0.0)
-                end = float(seg.get("end", start) or start)
+                start, end = segment_display_time_bounds(seg)
             except Exception:
                 continue
             if end > start:
@@ -1164,14 +1161,11 @@ class EditorSegmentsLivePreviewMixin:
                 end = start + 0.5
                 for preview in list(getattr(self, "_live_editor_preview_segments", []) or []):
                     try:
-                        p_start = float(preview.get("start", 0.0) or 0.0)
+                        p_start, p_end = segment_display_time_bounds(preview)
                     except Exception:
                         continue
                     if abs(p_start - start) <= 0.03:
-                        try:
-                            end = float(preview.get("end", end) or end)
-                        except Exception:
-                            pass
+                        end = p_end
                         break
                 if _covered(start, end):
                     to_remove.append(block.blockNumber())
@@ -1207,7 +1201,7 @@ class EditorSegmentsLivePreviewMixin:
         self._live_editor_preview_segments = [
             dict(seg)
             for seg in list(getattr(self, "_live_editor_preview_segments", []) or [])
-            if not _covered(float(seg.get("start", 0.0) or 0.0), float(seg.get("end", seg.get("start", 0.0)) or 0.0))
+            if not _covered(*segment_display_time_bounds(seg))
         ]
         self._live_editor_preview_keys = {
             self._live_editor_preview_key(seg)
@@ -1232,9 +1226,10 @@ class EditorSegmentsLivePreviewMixin:
         ranges = []
         for seg in final_segments or []:
             try:
+                range_start, range_end = segment_display_time_bounds(seg)
                 ranges.append((
-                    float(seg.get("start", 0.0) or 0.0),
-                    float(seg.get("end", 0.0) or 0.0),
+                    range_start,
+                    range_end,
                     str(
                         seg.get("stt_preview_source")
                         or seg.get("stt_source")
@@ -1252,8 +1247,7 @@ class EditorSegmentsLivePreviewMixin:
         kept = []
         for seg in preview:
             try:
-                start = float(seg.get("start", 0.0) or 0.0)
-                end = float(seg.get("end", start) or start)
+                start, end = segment_display_time_bounds(seg)
                 source = str(
                     seg.get("stt_preview_source")
                     or seg.get("stt_source")
@@ -1375,10 +1369,7 @@ class EditorSegmentsLivePreviewMixin:
                 confirmed_segments,
                 same_source_only=False,
             )
-            for line, draft in enumerate(sorted(filtered_drafts, key=lambda seg: (
-                float(seg.get("start", 0.0) or 0.0),
-                float(seg.get("end", 0.0) or 0.0),
-            ))):
+            for line, draft in enumerate(sorted(filtered_drafts, key=lambda seg: segment_display_time_bounds(seg))):
                 draft["line"] = -1000 - line
             return filtered_drafts
         preview_segments = [dict(seg) for seg in list(preview_segments or []) if isinstance(seg, dict)]
@@ -1389,12 +1380,6 @@ class EditorSegmentsLivePreviewMixin:
         )
         if not preview_segments:
             return []
-
-        def _as_float(value, default=0.0):
-            try:
-                return float(value)
-            except Exception:
-                return default
 
         def _source_priority(seg: dict) -> int:
             source = self._stt_candidate_source(seg)
@@ -1408,10 +1393,8 @@ class EditorSegmentsLivePreviewMixin:
 
         def _overlaps(left: dict, right: dict) -> bool:
             try:
-                l_start = float(left.get("start", 0.0) or 0.0)
-                l_end = float(left.get("end", l_start) or l_start)
-                r_start = float(right.get("start", 0.0) or 0.0)
-                r_end = float(right.get("end", r_start) or r_start)
+                l_start, l_end = segment_display_time_bounds(left)
+                r_start, r_end = segment_display_time_bounds(right)
             except Exception:
                 return False
             return l_start < r_end + 0.05 and l_end > r_start - 0.05
@@ -1420,17 +1403,18 @@ class EditorSegmentsLivePreviewMixin:
         ordered = sorted(
             preview_segments,
             key=lambda seg: (
-                _as_float(seg.get("start")),
+                segment_display_time_bounds(seg)[0],
                 _source_priority(seg),
-                _as_float(seg.get("end")),
+                segment_display_time_bounds(seg)[1],
             ),
         )
         for seg in ordered:
             text = str(seg.get("text", "") or "").strip()
             if not text:
                 continue
-            start = self._frame_time(max(0.0, _as_float(seg.get("start"))))
-            end = self._frame_time(max(start + 0.05, _as_float(seg.get("end"), start + 0.5)))
+            display_start, display_end = segment_display_time_bounds(seg)
+            start = self._frame_time(max(0.0, display_start))
+            end = self._frame_time(max(start + 0.05, display_end))
             source = self._stt_candidate_source(seg)
             try:
                 score = float(seg.get("stt_score", seg.get("score", 98.0)) or 98.0)

@@ -278,6 +278,8 @@ class MainWindow(
     def _optional_startup_home_ready(self) -> bool:
         if bool(getattr(self, "_offscreen_test", False)):
             return False
+        if bool(getattr(self, "_file_dialog_active", False)):
+            return False
         if getattr(self, "_editor_widget", None) is not None:
             return False
         stack = getattr(self, "stack", None)
@@ -625,6 +627,9 @@ class MainWindow(
             icloud_rows=icloud_rows,
             nas_rows=nas_rows,
         )
+        if bool(getattr(self, "_file_dialog_active", False)):
+            self._pending_home_auto_source_rebuild = True
+            return
         if int(getattr(self, "stack", None).currentIndex() if getattr(self, "stack", None) is not None else -1) == 0:
             run_nonfatal_ui_step(
                 "홈 자동 소스 갱신",
@@ -1193,6 +1198,7 @@ class MainWindow(
                     active_work_mode=EDITOR_MODE,
                     stt_preview_segments=[],
                     provisional_cut_boundaries=[],
+                    recover_external_assets_on_empty=False,
                 )
                 project = read_project_file(project_path)
                 analysis = project.setdefault("analysis", {})

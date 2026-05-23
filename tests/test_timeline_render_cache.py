@@ -241,6 +241,40 @@ class TimelineRenderCacheTests(unittest.TestCase):
         finally:
             canvas.close()
 
+    def test_stt_candidate_hit_test_uses_word_span_for_lead_in_window(self):
+        canvas = TimelineCanvas()
+        try:
+            seg = {
+                "start": 62.0,
+                "end": 66.0,
+                "text": "아 이게 시림프 갈릭 소스",
+                "line": 1,
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+                "words": [
+                    {"word": "아", "start": 67.1, "end": 67.25},
+                    {"word": "소스", "start": 68.2, "end": 68.9},
+                ],
+            }
+            canvas.resize(900, CANVAS_H)
+            canvas.pps = 100.0
+            canvas.segments = [seg]
+            canvas._invalidate_render_cache()
+
+            top, height = stt_preview_lane_geometry(
+                STT1_TOP,
+                STT1_BOT,
+                0,
+                1,
+                inset=STT_PREVIEW_VERTICAL_INSET,
+            )
+
+            self.assertIs(canvas._stt_candidate_at(canvas._x(67.5), top + height // 2), seg)
+            self.assertIsNone(canvas._stt_candidate_at(canvas._x(63.0), top + height // 2))
+        finally:
+            canvas.close()
+
     def test_cut_boundary_work_lane_plan_filters_visible_rows(self):
         plan = build_cut_boundary_work_lane_paint_plan(
             official_rows=[
@@ -356,6 +390,43 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertEqual(stt1_lanes, {0, 1})
             self.assertEqual(stt2_lanes, {0, 1})
             self.assertIn(lane_data["stt1_lane_map"][id(lane_data["stt1_preview_segments"][2])], {0, 1})
+        finally:
+            canvas.close()
+
+    def test_visible_stt_preview_sublane_does_not_flip_when_overlap_neighbor_scrolls_out(self):
+        canvas = TimelineCanvas()
+        try:
+            first = {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "STT1 A",
+                "line": 10,
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+            }
+            second = {
+                "start": 1.1,
+                "end": 3.0,
+                "text": "STT1 B",
+                "line": 11,
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+            }
+            canvas.segments = [first, second]
+            canvas._invalidate_render_cache()
+
+            full = canvas.visible_segment_lanes_cached([first, second])
+            bottom_lane = full["stt1_lane_map"][id(second)]
+            bottom_count = full["stt1_lane_count"]
+            canvas._invalidate_render_cache()
+            only_second = canvas.visible_segment_lanes_cached([second])
+
+            self.assertEqual(bottom_count, 2)
+            self.assertEqual(bottom_lane, 1)
+            self.assertEqual(only_second["stt1_lane_count"], 2)
+            self.assertEqual(only_second["stt1_lane_map"][id(second)], 1)
         finally:
             canvas.close()
 

@@ -85,14 +85,27 @@ class HomeSidebarNavWidget(QWidget):
                 heights.append(26)
         content_height = sum(heights) + max(0, len(heights) - 1) * item_spacing
         min_height = max(26, content_height)
-        self.setMinimumHeight(min_height)
-        self.setMaximumHeight(min_height)
+        self._lock_content_height(min_height)
         if self._quick is not None:
             root = self._quick.rootObject()
             if root is not None:
                 root.setProperty("menuItems", self._items)
+            self._quick.updateGeometry()
+            self._quick.update()
             return
         self._render_fallback_items()
+
+    def _lock_content_height(self, height: int) -> None:
+        height = max(26, int(height or 26))
+        # The native sidebar row stack must not let the QML child relayout itself
+        # during live progress updates; otherwise the top-left nav can briefly clip.
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
+        self.setFixedHeight(height)
+        if self._quick is not None:
+            self._quick.setMinimumHeight(height)
+            self._quick.setMaximumHeight(height)
+            self._quick.setFixedHeight(height)
 
     def _render_fallback_items(self):
         layout = self._fallback_layout

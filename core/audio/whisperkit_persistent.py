@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
 import threading
 import uuid
 
+from core.native_json import dumps_json_bytes
 from core.platform_compat import hidden_subprocess_kwargs
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -113,13 +113,30 @@ def _attach_stderr_logger(proc, log_label: str = "STT") -> None:
     def _reader():
         try:
             for line in proc.stderr:
-                text = str(line or "").strip()
+                if isinstance(line, (bytes, bytearray)):
+                    text = line.decode("utf-8", errors="replace").strip()
+                else:
+                    text = str(line or "").strip()
                 if text:
                     get_logger().log(f"[{log_label}] [whisperkit-persistent] {text}")
         except Exception:
             pass
 
     threading.Thread(target=_reader, daemon=True, name="whisperkit-persistent-stderr").start()
+
+
+def _write_worker_json_line(stdin, payload: dict) -> None:
+    if stdin is None:
+        raise RuntimeError("Swift WhisperKit worker stdin이 닫혀 있습니다.")
+    line = dumps_json_bytes(payload, append_newline=True)
+    try:
+        if getattr(stdin, "encoding", None):
+            stdin.write(line.decode("utf-8"))
+        else:
+            stdin.write(line)
+    except TypeError:
+        stdin.write(line.decode("utf-8"))
+    stdin.flush()
 
 
 def ensure_worker(proc=None, log_label: str = "STT"):
@@ -142,9 +159,7 @@ def ensure_worker(proc=None, log_label: str = "STT"):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
+            bufsize=0,
             **hidden_subprocess_kwargs(strip_qt=True),
         )
         _attach_stderr_logger(new_proc, log_label=log_label)
@@ -163,6 +178,8 @@ def submit_task(
     temperature_values: list[float] | None = None,
     word_timestamps: bool = False,
     concurrent_worker_count: int | None = None,
+    stream_results: bool | None = None,
+    compute_profile: str | None = None,
 ) -> str:
     if proc is None or proc.poll() is not None:
         raise RuntimeError("Swift WhisperKit worker가 실행 중이 아닙니다.")
@@ -184,8 +201,11 @@ def submit_task(
             payload["concurrent_worker_count"] = max(1, int(concurrent_worker_count or 1))
         except Exception:
             payload["concurrent_worker_count"] = 1
-    proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    proc.stdin.flush()
+    if stream_results is not None:
+        payload["stream_results"] = bool(stream_results)
+    if compute_profile is not None:
+        payload["compute_profile"] = str(compute_profile or "").strip() or "ane_gpu"
+    _write_worker_json_line(proc.stdin, payload)
     return task_id
 
 
@@ -195,21 +215,17 @@ def stop_worker(proc) -> None:
 
     try:
         if proc.poll() is None and proc.stdin:
-            proc.stdin.write(
-                json.dumps(
-                    {
-                        "op": "quit",
-                        "task_id": "quit",
-                        "chunk_paths": [],
-                        "model": "",
-                        "language": "ko",
-                        "word_timestamps": False,
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
+            _write_worker_json_line(
+                proc.stdin,
+                {
+                    "op": "quit",
+                    "task_id": "quit",
+                    "chunk_paths": [],
+                    "model": "",
+                    "language": "ko",
+                    "word_timestamps": False,
+                },
             )
-            proc.stdin.flush()
     except Exception:
         pass
 

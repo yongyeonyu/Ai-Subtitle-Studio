@@ -56,6 +56,7 @@ func printUsage() {
       native-memory-snapshot-json
       native-resource-allocation-json
       audio-chunk-manifest-json
+      vad-flags-to-segments-json
       roughcut-boundary-candidates-json
       runtime-disk-cache-prune-json
       native-input-activity-json
@@ -163,6 +164,8 @@ func run() throws {
                     }
                 case "input_activity_snapshot":
                     response = InputActivity.snapshot(payload: payload)
+                case "vad_flags_to_segments":
+                    response = VADSegmentsNative.flagsToSegments(payload: payload)
                 case "runtime_eta_predict":
                     response = RuntimeETAEstimator.predict(payload: payload)
                 case "runtime_eta_record":
@@ -548,6 +551,10 @@ func run() throws {
     case "audio-chunk-manifest-json":
         let payload = try readJSONObjectFromStdin()
         try writeJSONObject(AudioChunkManifest.manifest(payload: payload))
+
+    case "vad-flags-to-segments-json":
+        let payload = try readJSONObjectFromStdin()
+        try writeJSONObject(VADSegmentsNative.flagsToSegments(payload: payload))
 
     case "roughcut-boundary-candidates-json":
         let payload = try readJSONObjectFromStdin()

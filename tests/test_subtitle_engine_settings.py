@@ -1248,6 +1248,61 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertEqual(len(result), 12)
         self.assertTrue(any(row.get("_llm_macro_chunk_policy", {}).get("llm_called") for row in result))
 
+    def test_macro_chunk_stt_rows_reject_freeform_llm_rewrite(self):
+        segments = [
+            {
+                "start": float(index * 2),
+                "end": float(index * 2 + 1.4),
+                "text": f"에스티티 원문 후보 {index} 입니다",
+                "stt_candidates": [
+                    {"source": "STT1", "text": f"에스티티 원문 후보 {index} 입니다", "score": 0.91},
+                    {"source": "STT2", "text": f"에스티티 원문 후보 {index} 입니다", "score": 0.88},
+                ],
+                "words": [
+                    {"word": "에스티티", "start": float(index * 2), "end": float(index * 2 + 0.3)},
+                    {"word": "원문", "start": float(index * 2 + 0.35), "end": float(index * 2 + 0.7)},
+                    {"word": "후보", "start": float(index * 2 + 0.75), "end": float(index * 2 + 0.95)},
+                    {"word": str(index), "start": float(index * 2 + 1.0), "end": float(index * 2 + 1.1)},
+                    {"word": "입니다", "start": float(index * 2 + 1.12), "end": float(index * 2 + 1.3)},
+                ],
+            }
+            for index in range(10)
+        ]
+        settings = {
+            "subtitle_llm_macro_chunk_enabled": True,
+            "subtitle_llm_macro_chunk_min_rows": 10,
+            "subtitle_llm_macro_chunk_max_rows": 15,
+            "subtitle_llm_macro_chunk_use_cut_boundaries": True,
+            "split_length_threshold": 8,
+            "sub_max_duration": 6.0,
+            "llm_confidence_gate_enabled": False,
+            "llm_candidate_policy_enabled": True,
+            "editor_lora_runtime_enabled": False,
+            "subtitle_quality_auto_correct_enabled": False,
+            "deep_subtitle_policy_enabled": False,
+            "deep_policy_event_logging_enabled": False,
+            "runtime_quality_self_review_enabled": False,
+            "subtitle_output_selector_enabled": False,
+            "subtitle_context_consistency_enabled": False,
+            "subtitle_auto_review_enabled": False,
+            "accuracy_decision_graph_enabled": False,
+        }
+
+        with (
+            unittest.mock.patch("core.engine.subtitle_engine.get_selected_llm", return_value="exaone3.5:7.8b"),
+            unittest.mock.patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+            unittest.mock.patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
+            unittest.mock.patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
+            unittest.mock.patch("core.engine.subtitle_engine.warmup_ollama_model"),
+            unittest.mock.patch("core.engine.subtitle_engine.ollama_split_text", return_value=["감사합니다"]) as split_text,
+        ):
+            result = subtitle_engine.optimize_segments(segments)
+
+        self.assertEqual(split_text.call_count, 1)
+        self.assertEqual([row["text"] for row in result], [row["text"] for row in segments])
+        self.assertTrue(all(row.get("_llm_macro_chunk_policy", {}).get("source_lock") == "stt_rows" for row in result))
+        self.assertTrue(all(row.get("_llm_macro_chunk_policy", {}).get("reason") == "llm_rejected_keep_lora_deep_prepass" for row in result))
+
     def test_lora_deep_prepass_uses_runtime_worker_plan_and_preserves_order(self):
         segments = [
             {"start": float(index), "end": float(index) + 0.8, "text": f"문장 {index}"}

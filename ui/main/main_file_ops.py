@@ -120,6 +120,8 @@ class FileOpsMixin:
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
             run_nonfatal_ui_step("파일 작업", "file dialog foreground pause", lambda: pause_lora("file_dialog"), default=None)
+        call_nonfatal_ui_step("파일 작업", self, "raise_", step="dialog owner raise", default=None)
+        call_nonfatal_ui_step("파일 작업", self, "activateWindow", step="dialog owner activate", default=None)
         fw = run_nonfatal_ui_step("파일 작업", "focus widget lookup", QApplication.focusWidget, default=None)
         if fw is not None:
             call_nonfatal_ui_step("파일 작업", fw, "clearFocus", step="focus clear", default=None)
@@ -127,17 +129,70 @@ class FileOpsMixin:
         call_nonfatal_ui_step("파일 작업", self, "update", step="dialog state update", default=None)
         run_nonfatal_ui_step("파일 작업", "dialog state processEvents", QApplication.processEvents, default=None)
 
-    def _safe_open_file_names(self, title, folder, flt):
+    def _dialog_start_folder(self, folder):
+        path = str(folder or "").strip() or os.path.expanduser("~")
+        if os.path.isfile(path):
+            path = os.path.dirname(path)
+        if not os.path.isdir(path):
+            path = os.path.expanduser("~")
+        return path
+
+    def _dialog_result_has_selection(self, result) -> bool:
+        selected = result[0] if isinstance(result, tuple) and result else result
+        if isinstance(selected, (list, tuple, set)):
+            return bool(selected)
+        return bool(str(selected or "").strip())
+
+    def _finish_file_dialog_foreground(self, result=None):
+        self._file_dialog_active = False
+        if self._dialog_result_has_selection(result):
+            self._pending_home_auto_source_rebuild = False
+            return
+        if not bool(getattr(self, "_pending_home_auto_source_rebuild", False)):
+            return
+        self._pending_home_auto_source_rebuild = False
+
+        def _rebuild_if_home():
+            stack = getattr(self, "stack", None)
+            if stack is not None:
+                try:
+                    if int(stack.currentIndex()) != 0:
+                        return
+                except Exception:
+                    return
+            rebuild = getattr(self, "_build_home_content", None)
+            if callable(rebuild):
+                rebuild()
+
+        QTimer.singleShot(0, _rebuild_if_home)
+
+    def _run_foreground_file_dialog(self, opener):
         self._prepare_dialog_state()
-        return QFileDialog.getOpenFileNames(self, title, folder, flt)
+        self._file_dialog_active = True
+        result = None
+        try:
+            result = opener()
+            return result
+        finally:
+            self._finish_file_dialog_foreground(result)
+
+    def _safe_open_file_names(self, title, folder, flt):
+        folder = self._dialog_start_folder(folder)
+        return self._run_foreground_file_dialog(
+            lambda: QFileDialog.getOpenFileNames(self, title, folder, flt)
+        )
 
     def _safe_open_file_name(self, title, folder, flt):
-        self._prepare_dialog_state()
-        return QFileDialog.getOpenFileName(self, title, folder, flt)
+        folder = self._dialog_start_folder(folder)
+        return self._run_foreground_file_dialog(
+            lambda: QFileDialog.getOpenFileName(self, title, folder, flt)
+        )
 
     def _safe_open_directory(self, title, folder):
-        self._prepare_dialog_state()
-        return QFileDialog.getExistingDirectory(self, title, folder)
+        folder = self._dialog_start_folder(folder)
+        return self._run_foreground_file_dialog(
+            lambda: QFileDialog.getExistingDirectory(self, title, folder)
+        )
 
     def _add_recent_folder(self, folder_path):
         if not folder_path or not str(folder_path).strip():

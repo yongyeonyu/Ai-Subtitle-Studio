@@ -37,7 +37,8 @@ MINIMAP_SUBTITLE_BORDER = QColor(APPLE_BLACK_MINIMAP["subtitle_border"])
 MINIMAP_PENDING_FILL = QColor(*APPLE_BLACK_MINIMAP["pending_fill_rgba"])
 MINIMAP_PENDING_BORDER = QColor(APPLE_BLACK_MINIMAP["pending_border"])
 MINIMAP_SUBTITLE_MERGE_GAP_PX = 4
-MINIMAP_HEIGHT = 128
+MINIMAP_MARKER_LANE_H = 28
+MINIMAP_HEIGHT = 104
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -325,8 +326,9 @@ class GlobalCanvas(GlobalCanvasBase):
         w = pixmap.width()
         h = pixmap.height()
         total = float(self.total_duration or 0.0)
-        top_lane = QRect(0, 0, w, max(1, (h // 2) - 1))
-        bottom_lane = QRect(0, top_lane.bottom() + 1, w, max(1, h - top_lane.height()))
+        marker_lane_h = max(22, min(int(MINIMAP_MARKER_LANE_H), max(1, h - 24)))
+        top_lane = QRect(0, 0, w, marker_lane_h)
+        bottom_lane = QRect(0, top_lane.bottom() + 1, w, max(1, h - top_lane.height() - 1))
         divider_y = top_lane.bottom() + 1
 
         p.fillRect(top_lane, QColor(MINIMAP_TOP_LANE_BG))
@@ -417,22 +419,8 @@ class GlobalCanvas(GlobalCanvasBase):
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         if total > 0:
-            subtitle_lane = QRect(
-                bottom_lane.x(),
-                bottom_lane.y(),
-                bottom_lane.width(),
-                max(1, bottom_lane.height() // 2),
-            )
-            silence_lane = QRect(
-                bottom_lane.x(),
-                subtitle_lane.bottom() + 1,
-                bottom_lane.width(),
-                max(1, bottom_lane.height() - subtitle_lane.height() - 1),
-            )
+            subtitle_lane = bottom_lane
             p.fillRect(subtitle_lane, QColor(MINIMAP_SUBTITLE_LANE_BG))
-            p.fillRect(silence_lane, QColor(MINIMAP_SILENCE_LANE_BG))
-            p.setPen(QPen(MINIMAP_DIVIDER, 1))
-            p.drawLine(0, silence_lane.y() - 1, w, silence_lane.y() - 1)
             p.setPen(Qt.PenStyle.NoPen)
             pending_rects: list[QRect] = []
             confirmed_rects: list[QRect] = []

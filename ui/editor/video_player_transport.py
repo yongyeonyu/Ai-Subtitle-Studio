@@ -8,6 +8,7 @@ from PyQt6.QtGui import QColor, QFontMetrics, QImage
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
 from core.frame_time import normalize_fps
+from core.performance import qt_tooltip_stylesheet
 from core.runtime import config
 from core.runtime.logger import get_logger
 from ui.gpu_rendering import scenegraph_enabled
@@ -348,6 +349,7 @@ class VideoPlayerTransportMixin:
             }}
             QPushButton:hover {{ background: #303841; }}
             QPushButton:pressed {{ background: #1D2329; }}
+            {qt_tooltip_stylesheet()}
         """
 
     def _format_clock_time(self, sec: float | int | str | None) -> str:

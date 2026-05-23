@@ -76,3 +76,29 @@
   품질: 완료 전 중단. short fixture 기준 안정성/메모리 보호 실패로 판단.
   결론: full-core aggressive는 기본 High preset에 넣지 않는다. 필요하면 benchmark override 또는 긴 영상 전용 실험으로만 사용한다.
   artifact: `output/manual_verification/latest/20260521_macau_high_full_core_after_item1`
+
+## 2026-05-23
+
+- `final_micro_merge_preserve_direct_stt_rows_default`: 후단 보정에서 STT1/STT2가 직접 선택한 인접 자막 row를 기본적으로 병합하지 않는 방향
+  결과: X5 High 180초에서 `quality_score=81.354`, `CER=0.174142`, `timing_mae_sec=0.6846`, `raw/final=47/61`로 최신 정상 기준 `quality_score=87.502`, `CER=0.084433`, `timing_mae_sec=0.5689`, `raw/final=59/56`보다 나빠졌다.
+  품질: STT/final lane 모양은 일부 더 비슷해질 수 있지만, reference 기준 자막 텍스트/타이밍 품질과 segment 안정성이 떨어졌다.
+  결론: STT row 보존을 후단 미세병합의 기본 정책으로 승격하지 않는다. 특정 화면/후보 표시 문제는 generation 품질 정책이 아니라 timeline/STT candidate display 또는 더 좁은 clamp 조건에서 다룬다.
+  artifact: `output/manual_verification/latest/20260523_x5_native_stt_safe_fallback_timing/verification_summary.md`
+
+- `whisperkit_streaming_task_level_audio_load`: Swift WhisperKit streaming worker에서 오디오 로드까지 worker task 안으로 넣어 load+transcribe를 동시에 더 강하게 밀어 넣는 방향
+  결과: X5 High 180초에서 `elapsed_sec=89.965`로 직전 안전 기준 `83.744~84.101s`보다 느려졌다. Fast-STT2 종료 직후 memory `critical`로 STT persistent worker 재사용이 끊겼고, 단어정밀 단계가 새 Swift worker를 다시 시작했다.
+  품질: `quality_score=87.502`, `CER=0.084433`, `raw/final=59/56`으로 품질은 유지됐다.
+  결론: 오디오 로드까지 병렬 task에 넣는 공격적 방식은 메모리 pressure를 높여 long High run hot path를 악화시킨다. streaming worker는 task-level audio load를 기본값으로 쓰지 않는다.
+  artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260523_043624/benchmark_results.json`
+
+- `whisperkit_decode_options_reuse_helper`: Swift WhisperKit streaming worker에서 chunk마다 만들던 `DecodingOptions`를 request 단위로 한 번만 만들고 transcribe task body를 helper로 합치는 방향
+  결과: X5 High 180초에서 `elapsed_sec=89.026`으로 최신 채택 기준 `82.942s`보다 느렸다. STT1 직후 memory `critical`로 persistent worker 재사용이 끊겼다.
+  품질: `quality_score=87.502`, `CER=0.084433`, `raw/final=59/56`으로 품질은 유지됐다.
+  결론: 작은 할당 감소보다 해당 run의 memory pressure/worker 재시작 비용이 더 컸고, 성능/메모리 gate를 통과하지 못해 되돌린다.
+  artifact: `output/manual_verification/latest/20260523_whisperkit_decode_options_reuse_rejected/verification_summary.md`
+
+- `whisperkit_payload_assembly_combined_text_fast_path`: Swift WhisperKit worker에서 `segments` payload와 top-level `text` payload 조립을 한 함수로 합치고, 흔한 single-result 경로를 빠르게 처리하는 방향
+  결과: 1차 후보는 X5 High 180초에서 `elapsed_sec=83.848`로 직전 안전 기준 `83.238`보다 느렸고, 2차 single-result fast path 후보는 `elapsed_sec=91.076`으로 더 느려졌다.
+  품질: 두 후보 모두 `quality_score=87.502`, `CER=0.084433`, `raw/final=59/56`으로 품질은 유지됐다.
+  결론: top-level text 조립 미세 최적화는 long High run에서 유의미한 이득이 없었고, 2차 후보는 STT1/단어정밀에서 memory `critical` worker reuse break를 유발했다. 기존 검증된 `segmentPayloads` + top-level text 조립 경로를 유지한다.
+  artifact: `output/manual_verification/latest/20260523_whisperkit_payload_assembly_rejected/verification_summary.md`

@@ -104,9 +104,54 @@ def configure_qt_application_font() -> str:
         return ""
 
 
+def qt_tooltip_stylesheet() -> str:
+    return (
+        "QToolTip, QTipLabel { "
+        "background-color: #202A31; color: #F5F7FA; "
+        "border: 1px solid #3A4650; border-radius: 6px; "
+        "padding: 6px; font-size: 12px; opacity: 245; "
+        "}"
+    )
+
+
+def configure_qt_tooltip_theme(*, append_stylesheet: bool = False) -> str:
+    """Keep native Qt tooltips readable on macOS when widget stylesheets refresh."""
+    try:
+        from PyQt6.QtGui import QColor, QPalette
+        from PyQt6.QtWidgets import QApplication, QToolTip
+    except Exception:
+        return ""
+    app = QApplication.instance()
+    if app is None:
+        return ""
+    rule = qt_tooltip_stylesheet()
+    try:
+        palette = QToolTip.palette()
+        for group in (
+            QPalette.ColorGroup.Active,
+            QPalette.ColorGroup.Inactive,
+            QPalette.ColorGroup.Disabled,
+        ):
+            palette.setColor(group, QPalette.ColorRole.ToolTipBase, QColor("#202A31"))
+            palette.setColor(group, QPalette.ColorRole.ToolTipText, QColor("#F5F7FA"))
+        QToolTip.setPalette(palette)
+    except Exception:
+        pass
+    if append_stylesheet:
+        try:
+            current = str(app.styleSheet() or "")
+            marker = "/* AI_SUBTITLE_DARK_TOOLTIP */"
+            if marker not in current:
+                app.setStyleSheet((current.rstrip() + "\n" + marker + "\n" + rule).strip())
+        except Exception:
+            pass
+    return rule
+
+
 def configure_qt_runtime() -> None:
     """Tune Qt global caches after QApplication is created."""
     configure_qt_application_font()
+    configure_qt_tooltip_theme()
     try:
         from PyQt6.QtGui import QPixmapCache
     except Exception:

@@ -476,6 +476,9 @@ class VideoPlayerSurfaceMixin:
             return
         if self.media_player.playbackState() == self.media_player.PlaybackState.PlayingState:
             return
+        if self._thumbnail_generation_blocked_by_processing():
+            self._show_precomputed_thumbnail_at(path, sec, width=640)
+            return
         self.video_stack.setCurrentIndex(1)
         temp_dir = tempfile.gettempdir()
         thumb_path = os.path.join(temp_dir, "thumb_temp_cpd.jpg")
@@ -513,6 +516,62 @@ class VideoPlayerSurfaceMixin:
             return True
         except Exception:
             return False
+
+    def _thumbnail_generation_blocked_by_processing(self) -> bool:
+        def _active(value) -> bool:
+            if callable(value):
+                try:
+                    value = value()
+                except Exception:
+                    value = False
+            return bool(value)
+
+        candidates = [self]
+        try:
+            parent = self.parent()
+        except Exception:
+            parent = None
+        hops = 0
+        while parent is not None and hops < 8:
+            candidates.append(parent)
+            try:
+                parent = parent.parent()
+            except Exception:
+                parent = None
+            hops += 1
+        try:
+            owner = self.window()
+            if owner is not None:
+                candidates.append(owner)
+        except Exception:
+            pass
+
+        seen: set[int] = set()
+        for obj in candidates:
+            if obj is None:
+                continue
+            ident = id(obj)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            for attr in ("_auto_processing_active", "_is_ai_processing", "_live_editor_preview_pending"):
+                if _active(getattr(obj, attr, False)):
+                    return True
+            sm = getattr(obj, "sm", None)
+            if sm is not None:
+                try:
+                    if bool(getattr(sm, "is_locked", False)) or str(getattr(sm, "state", "") or "") == "ST_PROC":
+                        return True
+                except Exception:
+                    pass
+            for backend_name in ("backend_fast", "backend"):
+                backend = getattr(obj, backend_name, None)
+                if backend is None:
+                    continue
+                for attr in ("_active", "is_running", "running"):
+                    if _active(getattr(backend, attr, False)):
+                        return True
+        return False
 
     def _thumbnail_cache_dir(self) -> str:
         try:
@@ -602,6 +661,8 @@ class VideoPlayerSurfaceMixin:
             return False
         if self.media_player.playbackState() == self.media_player.PlaybackState.PlayingState:
             return False
+        if self._thumbnail_generation_blocked_by_processing():
+            return self._show_precomputed_thumbnail_at(path, sec, width=width)
         result = ensure_thumbnail(
             path,
             max(0.0, float(sec or 0.0)),
@@ -615,6 +676,9 @@ class VideoPlayerSurfaceMixin:
     def prefetch_thumbnail_at(self, path: str, sec: float = 0.0, *, width: int = 640) -> str:
         if not self._is_video_file(path):
             return ""
+        if self._thumbnail_generation_blocked_by_processing():
+            thumb_path = self._cached_thumbnail_path(path, sec, width=width)
+            return str(thumb_path or "") if thumb_path and os.path.exists(thumb_path) else ""
         result = ensure_thumbnail(
             path,
             max(0.0, float(sec or 0.0)),

@@ -207,6 +207,52 @@ def macro_segment_from_group(rows: list[dict]) -> dict:
     }
 
 
+def _row_text_chunks(rows: list[dict]) -> list[str]:
+    chunks: list[str] = []
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        text = re.sub(r"\s+", " ", str(row.get("text", "") or "").strip())
+        if text:
+            chunks.append(text)
+    return chunks
+
+
+def _stt_backed_rows(rows: list[dict]) -> bool:
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        if row.get("stt_candidates"):
+            return True
+        for key in (
+            "stt_ensemble_source",
+            "stt_ensemble_llm_selected_source",
+            "stt_ensemble_fast_selected_source",
+            "stt_selected_source",
+        ):
+            if str(row.get(key, "") or "").strip():
+                return True
+    return False
+
+
+def _stt_row_locked_candidate_options(rows: list[dict]) -> list[dict]:
+    chunks = _row_text_chunks(rows)
+    if not chunks:
+        return []
+    compact_len = len(re.sub(r"\s+", "", "".join(chunks)))
+    return [
+        {
+            "id": "STT_ROWS",
+            "label": "STT1/STT2 원문 행 유지",
+            "strategy": "stt_source_rows",
+            "chunks": chunks,
+            "chunk_count": len(chunks),
+            "compact_len": compact_len,
+            "lora_primary": False,
+        }
+    ]
+
+
 def attach_macro_policy(rows: list[dict], policy: dict) -> list[dict]:
     out = []
     for row in list(rows or []):
@@ -326,6 +372,11 @@ def process_llm_macro_group(
         return attach_macro_policy(rows, policy)
 
     candidate_options = build_candidate_options(text, macro_threshold, rules, macro_settings)
+    if _stt_backed_rows(rows):
+        row_locked_options = _stt_row_locked_candidate_options(rows)
+        if row_locked_options:
+            candidate_options = row_locked_options
+            policy["source_lock"] = "stt_rows"
     if "Gemini" in model:
         chunks = ask_gemini_to_split(
             text,

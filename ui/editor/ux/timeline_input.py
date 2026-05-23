@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QApplication
 from core.coerce import safe_float as _as_float
 from core.runtime import config
 from core.speaker_profile_settings import visible_speaker_slots
+from core.timeline_time import segment_display_time_bounds
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.editor_helpers import find_segment_at
 from ui.editor.ux.timeline_playhead_mode import (
@@ -460,7 +461,9 @@ class TimelineInputMixin:
         return str(source or "STT1").strip().upper()
 
     def _is_readonly_analysis_lane_y(self, y: int) -> bool:
-        return VOICE_ACTIVITY_TOP <= int(y) <= VOICE_ACTIVITY_BOT
+        if VOICE_ACTIVITY_BOT <= VOICE_ACTIVITY_TOP:
+            return False
+        return VOICE_ACTIVITY_TOP <= int(y) < VOICE_ACTIVITY_BOT
 
     def focusNextPrevChild(self, next):
         if bool(next):
@@ -817,8 +820,9 @@ class TimelineInputMixin:
         hits = []
         for seg in visible_candidates:
             try:
-                x1 = self._x(float(seg.get("start", 0.0) or 0.0))
-                x2 = self._x(float(seg.get("end", 0.0) or 0.0))
+                start, end = segment_display_time_bounds(seg)
+                x1 = self._x(start)
+                x2 = self._x(end)
             except Exception:
                 continue
             left = min(x1, x2)

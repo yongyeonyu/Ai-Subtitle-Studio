@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from core.coerce import safe_float as _safe_float
+from core.timeline_time import segment_display_time_bounds
 
 
 class TimelineSegmentStore:
@@ -36,8 +37,11 @@ class TimelineSegmentStore:
         ends = np.zeros(count, dtype=np.float64)
         max_span = 0.0
         for idx, row in enumerate(self.rows):
-            start = _safe_float(row.get("start", row.get("timeline_sec", row.get("time", 0.0))) if isinstance(row, dict) else 0.0)
-            end = _safe_float(row.get("end", row.get("timeline_end", start)) if isinstance(row, dict) else start, start)
+            if isinstance(row, dict):
+                start, end = segment_display_time_bounds(row)
+            else:
+                start = _safe_float(row)
+                end = start
             if end < start:
                 start, end = end, start
             starts[idx] = start

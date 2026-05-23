@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from core.ffmpeg_acceleration import ffmpeg_video_decode_accel_args
 from core.frame_time import normalize_fps, sec_to_frame
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 
@@ -82,14 +83,18 @@ def detect_ffmpeg_scene_boundaries(
     source_path = str(visual_scan_source_path or path)
 
     filter_expr = f"select='gt(scene,{scene_threshold:.4f})',showinfo"
+    input_args = [
+        *ffmpeg_video_decode_accel_args(),
+        "-i",
+        str(path),
+    ]
     cmd = [
         ffmpeg_binary(),
         "-hide_banner",
         "-nostdin",
         "-threads",
         "1",
-        "-i",
-        str(path),
+        *input_args,
         "-vf",
         filter_expr,
         "-an",
@@ -98,18 +103,26 @@ def detect_ffmpeg_scene_boundaries(
         "-",
     ]
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            **hidden_subprocess_kwargs(strip_qt=True),
-        )
-    except Exception:
+    proc = None
+    for attempt, candidate in enumerate((cmd, [item for item in cmd if item not in {"-hwaccel", "videotoolbox"}])):
+        if attempt > 0 and candidate == cmd:
+            continue
+        try:
+            proc = subprocess.run(
+                candidate,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                **hidden_subprocess_kwargs(strip_qt=True),
+            )
+        except Exception:
+            proc = None
+        if proc is not None and proc.returncode in (0, None):
+            break
+    if proc is None:
         return []
 
     stderr = str(proc.stderr or "")

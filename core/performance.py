@@ -29,7 +29,9 @@ from core.runtime.setting_utils import setting_bool as _setting_bool
 
 configure_qt_application_font = _qt_runtime.configure_qt_application_font
 configure_qt_runtime = _qt_runtime.configure_qt_runtime
+configure_qt_tooltip_theme = _qt_runtime.configure_qt_tooltip_theme
 qt_application_font_family = _qt_runtime.qt_application_font_family
+qt_tooltip_stylesheet = _qt_runtime.qt_tooltip_stylesheet
 _QT_GPU_RENDERING_SETTINGS_REQUEST = _qt_runtime._qt_gpu_rendering_settings_request
 
 

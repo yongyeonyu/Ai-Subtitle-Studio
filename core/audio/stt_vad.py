@@ -177,7 +177,12 @@ def _detect_silero_high_sensitivity(wav_path: str) -> list[dict]:
     device_name = "cpu"
     try:
         model, utils, _loader = load_silero_vad_runtime()
-        device_name = move_torch_model_to_preferred_device(model, log_label="STT 모드 VAD")
+        device_name = move_torch_model_to_preferred_device(
+            model,
+            log_label="STT 모드 VAD",
+            task="vad",
+            estimated_bytes=_stt_vad_estimated_audio_bytes(wav_path),
+        )
         get_speech_timestamps, _, read_audio, _, _ = utils
         audio_data = read_audio(wav_path, sampling_rate=16000)
         audio_data = move_torch_tensor_to_device(audio_data, device_name)
@@ -215,3 +220,10 @@ def _detect_silero_high_sensitivity(wav_path: str) -> list[dict]:
         del audio_data
         del model
         clear_audio_model_memory_caches(include_gpu=True)
+
+
+def _stt_vad_estimated_audio_bytes(wav_path: str) -> int:
+    try:
+        return max(0, int(os.path.getsize(wav_path))) * 2
+    except Exception:
+        return 0

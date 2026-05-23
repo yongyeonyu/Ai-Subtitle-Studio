@@ -8,6 +8,7 @@ from core.audio.stt_ensemble import merge_stt_outputs, text_similarity
 from core.engine import subtitle_engine
 from core.engine.subtitle_engine import _process_one, optimize_segments
 from core.pipeline.multiclip_pipeline import MulticlipPipelineMixin
+from core.pipeline.pipeline_helpers import PipelineHelpersMixin
 from core.pipeline.single_pipeline import (
     SinglePipelineMixin,
     _should_flush_final_subtitle_buffer,
@@ -514,6 +515,75 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertEqual(selected["_stt_original_candidate_start"], 67.1)
         self.assertEqual(selected["_stt_candidate_word_timing_anchor_policy"]["old_start"], 62.0)
 
+    def test_selected_candidate_preserves_stt_speaker_markers(self):
+        seg = {
+            "start": 94.0,
+            "end": 96.0,
+            "text": "아까 뭐래?",
+            "speaker": "00",
+            "stt_candidates": [
+                {"source": "STT1", "text": "아까 뭐래?", "score": 0.55, "speaker_list": ["00"]},
+                {
+                    "source": "STT2",
+                    "text": "-아까 뭐래? -어",
+                    "score": 0.91,
+                    "speaker": "00",
+                    "speaker_list": ["00", "01"],
+                },
+            ],
+        }
+        decision = {
+            "source": "STT2",
+            "label": "B",
+            "selector": "stt_candidate_llm_judge",
+            "text": "-아까 뭐래? -어",
+            "start": 94.0,
+            "end": 96.0,
+            "speaker_list": ["00", "01"],
+        }
+
+        selected, applied = subtitle_engine._apply_stt_candidate_decision(seg, decision)
+
+        self.assertTrue(applied)
+        self.assertEqual(selected["text"], "-아까 뭐래? -어")
+        self.assertEqual(selected["speaker"], "00")
+        self.assertEqual(selected["speaker_list"], ["00", "01"])
+        self.assertEqual(selected["speaker2"], "01")
+        self.assertTrue(selected["_stt_speaker_marker_preserved"])
+
+    def test_runtime_dialogue_split_handles_compact_stt_dash_markers(self):
+        helper = PipelineHelpersMixin()
+        row = {
+            "start": 94.0,
+            "end": 96.0,
+            "text": "아까 뭐래? -어",
+            "speaker_list": ["00", "01"],
+        }
+
+        updated = helper._apply_inline_dialogue_speaker_split(row, [])
+
+        self.assertEqual(updated["text"], "- 아까 뭐래?\n- 어")
+        self.assertEqual(updated["speaker"], "00")
+        self.assertEqual(updated["speaker_list"], ["00", "01"])
+
+    def test_runtime_dialogue_split_uses_speaker_map_when_first_dash_is_missing(self):
+        helper = PipelineHelpersMixin()
+        row = {
+            "start": 94.0,
+            "end": 96.0,
+            "text": "아까 뭐래? -어",
+        }
+        speaker_map = [
+            {"start": 94.0, "end": 95.0, "speaker": "SPEAKER_00"},
+            {"start": 95.0, "end": 96.0, "speaker": "SPEAKER_01"},
+        ]
+
+        updated = helper._apply_inline_dialogue_speaker_split(row, speaker_map)
+
+        self.assertEqual(updated["text"], "- 아까 뭐래?\n- 어")
+        self.assertEqual(updated["speaker"], "00")
+        self.assertEqual(updated["speaker_list"], ["00", "01"])
+
     def test_llm_candidate_judge_parse_failure_uses_highest_score_candidate(self):
         seg = {
             "start": 0.0,
@@ -572,7 +642,7 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertEqual(decision["text"], "아까 뭐래? 커피준데? 어")
         self.assertEqual(decision["selector"], "stt_candidate_score_fallback")
 
-    def test_stt_fast_selector_rejects_bad_lattice_then_uses_high_score_raw_candidate(self):
+    def test_stt_fast_selector_uses_raw_guard_when_current_text_is_not_stt_candidate(self):
         seg = {
             "start": 0.0,
             "end": 1.0,
@@ -587,13 +657,15 @@ class STTEnsembleTests(unittest.TestCase):
             patch(
                 "core.engine.subtitle_engine.select_stt_lattice_text",
                 return_value=({"source": "LATTICE", "text": "커피즈가 같이 여기 맞은거예요"}, {"confidence": 0.96}),
-            ),
-            patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value=None),
+            ) as lattice_mock,
+            patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value=None) as deep_mock,
         ):
             result = subtitle_engine._select_stt_candidate_fast(seg, {"stt_selection_min_raw_candidate_similarity": 0.76})
 
         self.assertEqual(result["text"], "아까 뭐래? 커피준데? 어")
-        self.assertEqual(result["selector"], "stt_candidate_score_fallback")
+        self.assertEqual(result["selector"], "stt_raw_candidate_guard")
+        lattice_mock.assert_not_called()
+        deep_mock.assert_not_called()
 
     def test_llm_candidate_judge_skips_external_model_when_local_only(self):
         seg = {
@@ -684,6 +756,74 @@ class STTEnsembleTests(unittest.TestCase):
         restart_mock.assert_called_once()
         split_mock.assert_not_called()
         self.assertEqual(sum("Ollama 연결 실패" in line for line in logger.lines), 1)
+
+    def test_no_llm_candidate_selection_skips_lattice_and_deep_generated_text(self):
+        seg = {
+            "start": 136.0,
+            "end": 139.0,
+            "text": "와 이런 것도 가네",
+            "stt_candidates": [
+                {"source": "STT1", "text": "와 이런 것도 가네", "score": 82.0},
+                {"source": "STT2", "text": "망고 구와바 말리거", "score": 86.0},
+            ],
+        }
+        settings = {"stt_selection_score_fallback_enabled": False}
+
+        with (
+            patch("core.engine.subtitle_engine.select_stt_lattice_text", return_value=({"text": "배불러요", "source": "LATTICE"}, {})) as lattice_mock,
+            patch("core.engine.subtitle_engine.deep_select_stt_candidate", return_value={"text": "배불러요", "source": "DEEP"}) as deep_mock,
+        ):
+            decision = subtitle_engine._select_stt_candidate_text(seg, "사용 안함 (Whisper 단독 진행)", "", "", settings, {})
+
+        self.assertIsNone(decision)
+        lattice_mock.assert_not_called()
+        deep_mock.assert_not_called()
+
+    def test_no_llm_raw_guard_can_only_pick_raw_stt_candidate(self):
+        seg = {
+            "start": 136.0,
+            "end": 139.0,
+            "text": "배불러요",
+            "score": 60.0,
+            "stt_candidates": [
+                {"source": "STT1", "text": "와 이런 것도 가네", "score": 60.0},
+                {"source": "STT2", "text": "망고 구와바 말리거", "score": 90.0},
+            ],
+        }
+
+        decision = subtitle_engine._select_stt_candidate_text(seg, "사용 안함 (Whisper 단독 진행)", "", "", {}, {})
+
+        self.assertEqual(decision["text"], "망고 구와바 말리거")
+        self.assertEqual(decision["source"], "STT2")
+        self.assertEqual(decision["selector"], "stt_raw_candidate_guard_no_llm")
+        self.assertEqual(decision["_stt_no_llm_raw_candidate_policy"]["raw_text"], "망고 구와바 말리거")
+
+    def test_no_llm_process_keeps_raw_stt_text_against_editor_truth(self):
+        seg = {
+            "start": 1.0,
+            "end": 3.0,
+            "text": "아 원문",
+            "speaker": "00",
+        }
+
+        with patch("core.engine.subtitle_engine.apply_recent_editor_truth_patterns", return_value=("배불러요", {"task": "truth"})) as truth_mock:
+            result = subtitle_engine._process_one_llm_only(
+                (
+                    seg,
+                    {},
+                    16,
+                    {"원문": "교정문"},
+                    "사용 안함 (Whisper 단독 진행)",
+                    "",
+                    "",
+                    True,
+                    {},
+                )
+            )
+
+        self.assertEqual(result[0]["text"], "아 원문")
+        self.assertEqual(result[0]["_stt_no_llm_raw_text"], "아 원문")
+        truth_mock.assert_not_called()
 
 
 if __name__ == "__main__":

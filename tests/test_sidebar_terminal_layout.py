@@ -438,7 +438,12 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(items[0].get("id"), "generation_status")
             self.assertEqual(items[0].get("meta"), "CPU -- · PROC -- · RAM --")
             self.assertEqual(items[0].get("height"), 42)
-            self.assertEqual(nav.minimumHeight(), 42 + (4 * (len(items) - 1)) + (26 * (len(items) - 1)))
+            expected_height = 42 + (4 * (len(items) - 1)) + (26 * (len(items) - 1))
+            self.assertEqual(nav.minimumHeight(), expected_height)
+            self.assertEqual(nav.maximumHeight(), expected_height)
+            if getattr(nav, "_quick", None) is not None:
+                self.assertEqual(nav._quick.minimumHeight(), expected_height)
+                self.assertEqual(nav._quick.maximumHeight(), expected_height)
         finally:
             window.close()
             window.deleteLater()

@@ -595,10 +595,10 @@ class EditorWidget(
         self._editor_focus_border.hide()
         self._sync_editor_focus_border()
         self.splitter.addWidget(editor_wrap)
-        # UI LOCK: keep the video player at a fixed editor height. Do not grow
-        # this slot to fill spare vertical space or crop/zoom the preview.
-        # For 16:9 sources, width is derived from the current preview height
-        # below. Do not change this back to splitter-fill behavior.
+        # UI LOCK: keep the video player at a fixed editor height. The slot
+        # width is always derived as height * 16:9 so loading square/vertical
+        # media cannot steal horizontal space from the subtitle editor.
+        # Do not change this back to splitter-fill behavior.
         video_fixed_height = EDITOR_VIDEO_PLAYER_FIXED_HEIGHT
         self.video_frame = StableRenderFrame(
             "EditorVideoFrame",
@@ -1721,10 +1721,9 @@ class EditorWidget(
         if frame is None or player is None:
             return
 
-        if not self._video_source_is_16_9():
-            self._set_video_preview_width_lock(None)
-            return
-
+        # UI LOCK: the editor owns a 16:9 preview slot by height, regardless of
+        # source aspect. The video surface may letterbox/pillarbox inside it,
+        # but the right panel width must not expand and squeeze the editor.
         preview_height = self._video_fixed_height()
         layout_margin_width = 0
         try:
@@ -1785,6 +1784,7 @@ class EditorWidget(
             bool(getattr(self, "_video_width_locking", False))
             and int(getattr(self, "_video_width_lock_value", 0) or 0) == target_width
         ):
+            self._apply_editor_video_splitter_widths(target_width)
             return
         self._video_width_locking = True
         self._video_width_lock_value = target_width
@@ -1805,6 +1805,61 @@ class EditorWidget(
             self.updateGeometry()
         except Exception:
             pass
+        self._apply_editor_video_splitter_widths(target_width)
+
+    def _apply_editor_video_splitter_widths(self, target_width) -> bool:
+        splitter = getattr(self, "splitter", None)
+        editor_wrap = getattr(self, "_editor_wrap", None)
+        frame = getattr(self, "video_frame", None)
+        player = getattr(self, "video_player", None)
+        if splitter is None or editor_wrap is None or frame is None or player is None:
+            return False
+        try:
+            if not frame.isVisible() or not player.isVisible():
+                return False
+        except Exception:
+            return False
+
+        try:
+            total_width = int(splitter.width() or 0)
+            if total_width <= 0:
+                total_width = int(sum(splitter.sizes()) or 0)
+            handle_width = int(splitter.handleWidth() or 0) if splitter.count() > 1 else 0
+        except Exception:
+            return False
+        available = max(1, total_width - max(0, handle_width))
+        if available <= 1:
+            return False
+
+        try:
+            editor_min = int(editor_wrap.minimumWidth() or 0)
+            hint = editor_wrap.minimumSizeHint()
+            editor_min = max(editor_min, int(hint.width() or 0))
+        except Exception:
+            editor_min = int(getattr(editor_wrap, "minimumWidth", lambda: 0)() or 0)
+        editor_min = max(260, editor_min)
+
+        video_width = max(EDITOR_VIDEO_PLAYER_MIN_WIDTH, int(target_width or 0))
+        if available > editor_min:
+            video_width = min(video_width, max(1, available - editor_min))
+        editor_width = max(1, available - video_width)
+
+        try:
+            sizes = list(splitter.sizes())
+        except Exception:
+            sizes = []
+        if len(sizes) >= 2 and abs(int(sizes[0]) - editor_width) <= 2 and abs(int(sizes[1]) - video_width) <= 2:
+            return True
+
+        try:
+            # UI LOCK: on first media open, Qt may keep the old 63/37 splitter
+            # ratio until the user nudges the handle. Force the same settled
+            # layout immediately: video gets the fixed 16:9 slot, editor gets
+            # every remaining pixel. Do not remove; this protects editor width.
+            splitter.setSizes([editor_width, video_width])
+            return True
+        except Exception:
+            return False
 
     def _video_fixed_height(self):
         try:

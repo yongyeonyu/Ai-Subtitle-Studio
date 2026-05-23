@@ -96,6 +96,37 @@ class TimelinePaintPassesTests(unittest.TestCase):
         self.assertEqual(plan.items[0].selection_state, "manual")
         self.assertTrue(plan.items[0].is_selected)
 
+    def test_preview_plan_uses_stt_word_span_instead_of_window_lead_in(self):
+        seg = {
+            "start": 62.0,
+            "end": 66.0,
+            "timeline_start": 62.0,
+            "timeline_end": 66.0,
+            "text": "아 이게 시림프 갈릭 소스",
+            "stt_pending": True,
+            "stt_preview_source": "STT1",
+            "words": [
+                {"word": "아", "start": 67.1, "end": 67.25},
+                {"word": "소스", "start": 68.2, "end": 68.9},
+            ],
+        }
+
+        plan = build_stt_preview_lane_paint_plan(
+            preview_segments=[seg],
+            clip_left=0,
+            clip_right=1000,
+            lane_top=40,
+            lane_bot=70,
+            pps=20.0,
+            ultra_dense_segment_mode=False,
+            selected_final_stt_segments=[],
+            selected_final_stt_index={},
+            sec_to_x=lambda sec: int(sec * 10),
+        )
+
+        self.assertEqual(len(plan.items), 1)
+        self.assertEqual(plan.items[0].rect.x(), int(67.1 * 10) + 1)
+
     def test_visible_pixel_span_drops_tiny_clipped_edge_fragment(self):
         self.assertIsNone(
             visible_pixel_span(100, 108, clip_left=0, clip_right=100, min_edge_fragment_px=2)

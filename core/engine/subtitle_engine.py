@@ -1095,6 +1095,93 @@ def _segment_has_multi_speaker_linebreak_permission(row: dict) -> bool:
     return len(set(speakers)) >= 2
 
 
+def _canonical_speaker_id(value) -> str:
+    speaker = str(value or "").strip()
+    if speaker.startswith("SPEAKER_"):
+        speaker = speaker.replace("SPEAKER_", "", 1)
+    return speaker
+
+
+def _speaker_values_from_row(row: dict | None) -> list[str]:
+    if not isinstance(row, dict):
+        return []
+    values: list[str] = []
+    for item in list(row.get("speaker_list") or []):
+        speaker = _canonical_speaker_id(item)
+        if speaker:
+            values.append(speaker)
+    for key in ("speaker", "speaker2", "spk", "spk_id"):
+        speaker = _canonical_speaker_id(row.get(key))
+        if speaker:
+            values.append(speaker)
+    out: list[str] = []
+    seen: set[str] = set()
+    for speaker in values:
+        if speaker in seen:
+            continue
+        seen.add(speaker)
+        out.append(speaker)
+        if len(out) >= 2:
+            break
+    return out
+
+
+def _stt_text_has_speaker_marker(text: str) -> bool:
+    raw = str(text or "").replace("\u2028", "\n").strip()
+    if not raw:
+        return False
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if len(lines) >= 2 and all(line.startswith("-") for line in lines[:2]):
+        return True
+    compact = re.sub(r"\s+", " ", raw.replace("\n", " ")).strip()
+    if not compact.startswith("-"):
+        return False
+    return len(re.findall(r"(?:^|\s)-\s*[^-\s]", compact)) >= 2
+
+
+def _stt_decision_speaker_fields(row: dict | None, fallback: dict | None = None) -> dict:
+    speakers = _speaker_values_from_row(row)
+    if not speakers:
+        speakers = _speaker_values_from_row(fallback)
+    fields: dict = {}
+    if speakers:
+        fields["speaker"] = speakers[0]
+        fields["speaker_list"] = speakers
+        if len(speakers) >= 2:
+            fields["speaker2"] = speakers[1]
+    text = str((row or {}).get("text", "") or "")
+    if _stt_text_has_speaker_marker(text) or len(set(speakers)) >= 2:
+        fields["_stt_speaker_marker_preserved"] = True
+    return fields
+
+
+def _find_matching_stt_candidate_for_decision(seg: dict, decision: dict) -> dict | None:
+    decision_text = re.sub(r"\s+", "", str((decision or {}).get("text", "") or "")).strip().lower()
+    decision_source = str((decision or {}).get("source", "") or "").strip().upper()
+    if not decision_text:
+        return None
+    best: dict | None = None
+    best_score = -1
+    for candidate in list((seg or {}).get("stt_candidates") or []):
+        if not isinstance(candidate, dict):
+            continue
+        cand_text = re.sub(r"\s+", "", str(candidate.get("text", "") or "")).strip().lower()
+        if not cand_text:
+            continue
+        cand_source = str(candidate.get("source", "") or "").strip().upper()
+        score = 0
+        if cand_text == decision_text:
+            score += 4
+        elif decision_text in cand_text or cand_text in decision_text:
+            score += 2
+        if decision_source and cand_source == decision_source:
+            score += 1
+        if score > best_score:
+            best = candidate
+            best_score = score
+    return best if best_score >= 2 else None
+
+
 def _is_speaker_split_multiline_segment(row: dict) -> bool:
     lines = _subtitle_text_lines(str(row.get("text", "") or ""))
     if len(lines) <= 1:
@@ -1840,6 +1927,15 @@ def _select_stt_candidate_fast(seg: dict, settings: dict | None = None) -> dict 
     if len(unique) < 2:
         return None
 
+    raw_guard_decision = _select_raw_stt_candidate_when_current_is_unbacked(
+        seg,
+        unique,
+        settings,
+        selector="stt_raw_candidate_guard",
+    )
+    if raw_guard_decision:
+        return raw_guard_decision
+
     lattice_decision, lattice_meta = select_stt_lattice_text(seg, settings, _profile_from_settings(settings))
     if lattice_decision:
         lattice_meta = dict(lattice_meta or {})
@@ -1909,7 +2005,113 @@ def _select_stt_candidate_fast(seg: dict, settings: dict | None = None) -> dict 
                 "words": list(best_candidate.get("words") or []),
                 "score": best_candidate.get("score", best_candidate.get("stt_score")),
                 "selector": "stt_candidate_score_fallback",
+                **_stt_decision_speaker_fields(best_candidate, seg),
             }
+    return None
+
+
+def _llm_model_disabled(model: str | None) -> bool:
+    return not str(model or "").strip() or "사용 안함" in str(model or "")
+
+
+def _raw_stt_candidates(candidates: list[dict] | tuple[dict, ...]) -> list[dict]:
+    rows = []
+    for candidate in list(candidates or []):
+        if not isinstance(candidate, dict):
+            continue
+        source = str(
+            candidate.get("source")
+            or candidate.get("stt_preview_source")
+            or candidate.get("stt_source")
+            or candidate.get("engine")
+            or ""
+        ).strip().upper()
+        text = str(candidate.get("text", candidate.get("output", "")) or "").strip()
+        if source in {"STT1", "STT2"} and text:
+            item = dict(candidate)
+            item["source"] = source
+            item["text"] = text
+            rows.append(item)
+    return rows
+
+
+def _candidate_decision_from_raw_stt(candidate: dict, selector: str, reason: str) -> dict:
+    selected_text = str(candidate.get("text", "") or "").strip()
+    selected_source = str(candidate.get("source", "") or "").strip().upper()
+    return {
+        "text": selected_text,
+        "source": selected_source,
+        "label": str(candidate.get("label") or candidate.get("stt_label") or reason or selected_source or "raw").strip(),
+        "start": candidate.get("start"),
+        "end": candidate.get("end"),
+        "words": list(candidate.get("words") or []),
+        "score": candidate.get("score", candidate.get("stt_score")),
+        "selector": selector,
+        "_stt_no_llm_raw_candidate_policy": {
+            "task": "stt_no_llm_raw_candidate_lock",
+            "reason": reason,
+            "source": selected_source,
+            "raw_text": selected_text,
+        },
+        **_stt_decision_speaker_fields(candidate, {}),
+    }
+
+
+def _select_stt_candidate_without_llm(seg: dict, candidates: list[dict], settings: dict | None) -> dict | None:
+    raw_candidates = _raw_stt_candidates(candidates)
+    if not raw_candidates:
+        return None
+
+    selected_sources = []
+    for key in (
+        "manual_stt_candidate_source",
+        "stt_selected_source",
+        "stt_ensemble_llm_selected_source",
+        "stt_ensemble_fast_selected_source",
+        "stt_ensemble_source",
+    ):
+        source = str(seg.get(key, "") or "").strip().upper()
+        if source in {"STT1", "STT2"} and source not in selected_sources:
+            selected_sources.append(source)
+    for source in selected_sources:
+        matches = [candidate for candidate in raw_candidates if str(candidate.get("source", "") or "").strip().upper() == source]
+        if matches:
+            chosen = max(matches, key=_stt_candidate_score100)
+            return _candidate_decision_from_raw_stt(chosen, "stt_raw_candidate_no_llm", "selected_source")
+
+    raw_guard_decision = _select_raw_stt_candidate_when_current_is_unbacked(
+        seg,
+        raw_candidates,
+        settings,
+        selector="stt_raw_candidate_guard_no_llm",
+    )
+    if raw_guard_decision:
+        return raw_guard_decision
+
+    current_text = str(seg.get("text", "") or "").strip()
+    if current_text:
+        current_key = _stt_candidate_compact_text(current_text)
+        if any(_stt_candidate_compact_text(str(candidate.get("text", "") or "")) == current_key for candidate in raw_candidates):
+            return None
+
+    if _setting_bool(settings or {}, "stt_selection_score_fallback_enabled", True):
+        best_candidate = _best_scored_stt_candidate(raw_candidates)
+        best_score = _stt_candidate_score100(best_candidate)
+        current_score = _stt_current_candidate_score(seg, raw_candidates)
+        min_score = _setting_float(settings or {}, "stt_selection_score_fallback_min_score", 84.0)
+        min_margin = _setting_float(settings or {}, "stt_selection_score_fallback_min_margin", 12.0)
+        if (
+            best_candidate
+            and best_score >= min_score
+            and (best_score - current_score) >= min_margin
+            and _stt_candidate_similarity(str(best_candidate.get("text", "") or ""), current_text) < 0.995
+        ):
+            get_logger().log(
+                "[STT앙상블-LLM꺼짐] raw STT 후보만 보수 선택: "
+                f"{str(best_candidate.get('source', '') or '-')} score={best_score:.1f} "
+                f"'{str(best_candidate.get('text', '') or '')[:18]}...'"
+            )
+            return _candidate_decision_from_raw_stt(best_candidate, "stt_candidate_score_fallback_no_llm", "score_fallback")
     return None
 
 
@@ -2032,6 +2234,47 @@ def _stt_current_candidate_score(seg: dict, candidates: list[dict] | tuple[dict,
     if best_match_similarity >= 0.96:
         return best_match_score
     return current_score
+
+
+def _select_raw_stt_candidate_when_current_is_unbacked(
+    seg: dict,
+    candidates: list[dict] | tuple[dict, ...],
+    settings: dict | None,
+    *,
+    selector: str,
+) -> dict | None:
+    if not _setting_bool(settings or {}, "stt_selection_raw_guard_enabled", True):
+        return None
+    raw_candidates = _raw_stt_candidates(candidates)
+    if not raw_candidates:
+        return None
+    current_text = str((seg or {}).get("text", "") or "").strip()
+    if not current_text:
+        return None
+    best_similarity = max(_stt_candidate_similarity(current_text, str(candidate.get("text", "") or "")) for candidate in raw_candidates)
+    compact_len = len(_stt_candidate_compact_text(current_text))
+    min_similarity = _setting_float(settings or {}, "stt_selection_raw_guard_min_similarity", 0.68)
+    if compact_len <= 12:
+        min_similarity = max(min_similarity, 0.76)
+    elif compact_len <= 24:
+        min_similarity = max(min_similarity, 0.72)
+    if best_similarity >= min_similarity:
+        return None
+    best_candidate = _best_scored_stt_candidate(raw_candidates)
+    if not best_candidate:
+        return None
+    min_score = _setting_float(settings or {}, "stt_selection_raw_guard_min_score", 0.0)
+    best_score = _stt_candidate_score100(best_candidate)
+    if best_score < min_score:
+        return None
+    source = str(best_candidate.get("source", "") or "").strip().upper()
+    selected_text = str(best_candidate.get("text", "") or "").strip()
+    get_logger().log(
+        "[STT원문가드] 현재 자막이 STT1/STT2 후보와 멀어 raw 후보로 복구: "
+        f"{source or '-'} similarity={best_similarity:.3f}/{min_similarity:.3f} "
+        f"score={best_score:.1f} '{selected_text[:18]}...'"
+    )
+    return _candidate_decision_from_raw_stt(best_candidate, selector, "current_not_stt_candidate")
 
 
 def _stt_decision_matches_raw_candidate(decision: dict | None, candidates: list[dict], settings: dict | None) -> tuple[bool, dict]:
@@ -2190,6 +2433,8 @@ def _apply_stt_candidate_decision(seg: dict, selected_decision: dict | None) -> 
         "stt_candidate_llm_judge",
         "stt_candidate_score_fallback",
     }
+    matched_candidate = _find_matching_stt_candidate_for_decision(seg, selected_decision)
+    speaker_fields = _stt_decision_speaker_fields(selected_decision, matched_candidate or seg)
     out = {
         **dict(seg or {}),
         "text": selected_text,
@@ -2202,8 +2447,10 @@ def _apply_stt_candidate_decision(seg: dict, selected_decision: dict | None) -> 
         "stt_ensemble_deep_selected_score": selected_decision.get("score") if is_deep_selector else None,
         "stt_ensemble_deep_selected_margin": selected_decision.get("margin") if is_deep_selector else None,
         "_stt_lattice_policy": selected_decision.get("_stt_lattice_policy") or seg.get("_stt_lattice_policy"),
+        "_stt_no_llm_raw_candidate_policy": selected_decision.get("_stt_no_llm_raw_candidate_policy") or seg.get("_stt_no_llm_raw_candidate_policy"),
         "_deep_candidate_selector_policy": selected_decision.get("_deep_candidate_selector_policy") or seg.get("_deep_candidate_selector_policy"),
         "_llm_gate_policy": selected_decision.get("_llm_gate_policy") or seg.get("_llm_gate_policy"),
+        **speaker_fields,
     }
     if selected_decision.get("words"):
         out["words"] = list(selected_decision.get("words") or [])
@@ -2253,6 +2500,8 @@ def _select_stt_candidate_text(
             unique.append(cand)
     if len(unique) < 2:
         return None
+    if _llm_model_disabled(model):
+        return _select_stt_candidate_without_llm(seg, unique, settings)
     fast_decision = _select_stt_candidate_fast({**seg, "stt_candidates": unique}, settings)
     if fast_decision:
         return fast_decision
@@ -2362,6 +2611,7 @@ def _select_stt_candidate_text(
             "score": fallback_candidate.get("score", fallback_candidate.get("stt_score")),
             "selector": "stt_candidate_score_fallback",
             "_llm_gate_policy": stt_llm_gate,
+            **_stt_decision_speaker_fields(fallback_candidate, seg),
         }
     selected_index = labels.index(selected_label)
     selected_candidate = unique[selected_index]
@@ -2381,6 +2631,7 @@ def _select_stt_candidate_text(
         "score": selected_candidate.get("score", selected_candidate.get("stt_score")),
         "selector": "stt_candidate_llm_judge",
         "_llm_gate_policy": stt_llm_gate,
+        **_stt_decision_speaker_fields(selected_candidate, seg),
     }
 
 
@@ -2408,6 +2659,20 @@ def _stt_selection_metadata(seg: dict) -> dict:
         "stt_score_label",
         "stt_score_flags",
         "stt_score_components",
+        "speaker_list",
+        "speaker2",
+        "_stt_speaker_marker_preserved",
+        "_stt_original_candidate_start",
+        "_stt_original_candidate_end",
+        "_stt_original_candidate_start_frame",
+        "_stt_original_candidate_end_frame",
+        "_stt_candidate_word_timing_anchor_policy",
+        "_stt_word_match_timing_policy",
+        "_llm_stt_text_guard_policy",
+        "_stt_no_llm_raw_candidate_policy",
+        "_stt_no_llm_raw_text",
+        "original_start",
+        "original_end",
         "_stt_lattice_policy",
         "_deep_candidate_selector_policy",
         "_llm_gate_policy",
@@ -2422,6 +2687,28 @@ def _stt_selection_metadata(seg: dict) -> dict:
 def _sanitize(segments: list[dict] | None) -> list[dict]:
     """Backward-compatible test hook for legacy subtitle filter overrides."""
     return [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+
+
+def _restore_no_llm_raw_stt_text(segments: list[dict] | None) -> list[dict]:
+    rows = []
+    for seg in list(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        row = dict(seg)
+        policy = dict(row.get("_stt_no_llm_raw_candidate_policy") or {})
+        raw_text = str(row.get("_stt_no_llm_raw_text") or policy.get("raw_text") or "").strip()
+        if raw_text and str(row.get("text", "") or "").strip() != raw_text:
+            row["text"] = raw_text
+            policy.update(
+                {
+                    "task": "stt_no_llm_raw_text_lock",
+                    "restored_after_postprocess": True,
+                    "raw_text": raw_text,
+                }
+            )
+            row["_stt_no_llm_raw_candidate_policy"] = policy
+        rows.append(row)
+    return rows
 
 
 def _has_explicit_lora_runtime_context(seg: dict | None) -> bool:
@@ -2521,6 +2808,173 @@ def _annotate_stt_candidate_context(segments: list[dict], window: int = 2) -> li
     return annotated
 
 
+def _chunk_timing_match_text(value: object) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(value or "")).lower()
+
+
+def _word_text_for_chunk_timing(word: dict) -> str:
+    return str(word.get("word", word.get("text", "")) or "").strip()
+
+
+def _word_time_bounds(word: dict) -> tuple[float, float] | None:
+    try:
+        start = float(word.get("start"))
+        end = float(word.get("end"))
+    except (TypeError, ValueError):
+        return None
+    if end <= start:
+        return None
+    return start, end
+
+
+def _chunk_words_text(words: list[dict]) -> str:
+    parts = [_word_text_for_chunk_timing(word) for word in words if _word_text_for_chunk_timing(word)]
+    return re.sub(r"\s+", " ", " ".join(parts)).strip()
+
+
+def _guard_llm_chunk_text_with_stt_words(final_text: str, chunk_words: list[dict]) -> tuple[str, dict | None]:
+    stt_text = _chunk_words_text(chunk_words)
+    if not stt_text:
+        return final_text, None
+    final_key = _chunk_timing_match_text(final_text)
+    stt_key = _chunk_timing_match_text(stt_text)
+    if not final_key or not stt_key:
+        return final_text, None
+    ratio = difflib.SequenceMatcher(None, final_key, stt_key).ratio()
+    if final_key == stt_key or ratio >= 0.78:
+        return final_text, None
+    if (final_key in stt_key or stt_key in final_key) and min(len(final_key), len(stt_key)) / max(len(final_key), len(stt_key)) >= 0.45:
+        return final_text, None
+    return stt_text, {
+        "task": "llm_stt_text_guard",
+        "reason": "llm_chunk_diverged_from_matched_stt_words",
+        "llm_text": str(final_text or "")[:80],
+        "stt_text": stt_text[:80],
+        "similarity": round(float(ratio), 3),
+    }
+
+
+def _match_chunk_words_to_stt_timing(
+    words: list[dict],
+    chunk_text: str,
+    cursor: int,
+) -> dict | None:
+    target = _chunk_timing_match_text(chunk_text)
+    if not target or not words:
+        return None
+
+    best: dict | None = None
+    max_window_words = 14
+    max_extra_chars = max(4, min(12, len(target)))
+    start_range = range(max(0, cursor), len(words))
+    for start_idx in start_range:
+        acc = ""
+        last_idx = start_idx
+        for end_idx in range(start_idx, min(len(words), start_idx + max_window_words)):
+            token = _chunk_timing_match_text(_word_text_for_chunk_timing(words[end_idx]))
+            if not token:
+                continue
+            acc += token
+            last_idx = end_idx
+            ratio = difflib.SequenceMatcher(None, target, acc).ratio()
+            length_delta = abs(len(acc) - len(target)) / max(1, len(target))
+            cursor_gap = max(0, start_idx - cursor)
+            relation_bonus = 0.0
+            if acc == target:
+                relation_bonus = 0.30
+            elif target in acc or acc in target:
+                relation_bonus = 0.12
+            score = ratio + relation_bonus - min(0.22, length_delta * 0.12) - min(0.18, cursor_gap * 0.018)
+            candidate = {
+                "score": score,
+                "ratio": ratio,
+                "start_idx": start_idx,
+                "end_idx": last_idx + 1,
+                "acc": acc,
+                "relation": "exact" if acc == target else ("contains" if target in acc or acc in target else "fuzzy"),
+            }
+            if (
+                best is None
+                or candidate["score"] > best["score"]
+                or (
+                    abs(candidate["score"] - best["score"]) < 0.001
+                    and abs(len(acc) - len(target)) < abs(len(best["acc"]) - len(target))
+                )
+            ):
+                best = candidate
+            if acc == target:
+                break
+            if len(acc) > len(target) + max_extra_chars and target not in acc and ratio < 0.65:
+                break
+
+    if not best:
+        return None
+    if best["ratio"] < 0.72 and not (best["relation"] in {"exact", "contains"} and best["ratio"] >= 0.55):
+        return None
+
+    chunk_words = [dict(word) for word in words[best["start_idx"]:best["end_idx"]]]
+    bounds = [_word_time_bounds(word) for word in chunk_words]
+    bounds = [bound for bound in bounds if bound is not None]
+    if not chunk_words or not bounds:
+        return None
+    start = min(bound[0] for bound in bounds)
+    end = max(bound[1] for bound in bounds)
+    if end <= start:
+        return None
+    return {
+        "start": start,
+        "end": end,
+        "words": chunk_words,
+        "next_cursor": int(best["end_idx"]),
+        "policy": {
+            "task": "stt_chunk_word_timing_match",
+            "target": target[:80],
+            "matched": best["acc"][:80],
+            "source_start_index": int(best["start_idx"]),
+            "source_end_index": int(best["end_idx"]),
+            "previous_cursor": int(cursor),
+            "ratio": round(float(best["ratio"]), 3),
+            "relation": best["relation"],
+        },
+    }
+
+
+def _fallback_consume_chunk_words(
+    words: list[dict],
+    chunk_text: str,
+    cursor: int,
+    cur_start: float,
+) -> dict:
+    chunk_clean = _chunk_timing_match_text(chunk_text) or re.sub(r"\s+", "", str(chunk_text or ""))
+    t_start = None
+    t_end = None
+    matched = 0
+    chunk_words = []
+    w_idx = cursor
+    while w_idx < len(words) and matched < len(chunk_clean):
+        word = words[w_idx]
+        wc = _chunk_timing_match_text(_word_text_for_chunk_timing(word))
+        bounds = _word_time_bounds(word)
+        if bounds is not None:
+            if t_start is None:
+                t_start = bounds[0]
+            t_end = bounds[1]
+        matched += len(wc)
+        chunk_words.append(word)
+        w_idx += 1
+    if t_start is None:
+        t_start = cur_start
+    if t_end is None or t_end <= t_start:
+        t_end = t_start + 0.1
+    return {
+        "start": float(t_start),
+        "end": float(t_end),
+        "words": chunk_words,
+        "next_cursor": w_idx,
+        "policy": None,
+    }
+
+
 def _process_one(args: tuple) -> list[dict]:
     if len(args) == 9:
         seg, rules, threshold, corrections, model, user_prompt, api_key, conservative, runtime_settings = args
@@ -2536,6 +2990,7 @@ def _process_one(args: tuple) -> list[dict]:
         api_key = ""
         conservative = False
         runtime_settings = None
+    llm_disabled = _llm_model_disabled(model)
 
     spk  = seg.get("speaker", "SPEAKER_00")
     raw_text = str(seg.get("text", "") or "")
@@ -2558,6 +3013,7 @@ def _process_one(args: tuple) -> list[dict]:
             candidate_selected = True
             seg, _applied = _apply_stt_candidate_decision(seg, selected_decision)
             text = str(seg.get("text", "") or "").strip()
+            spk = seg.get("speaker", spk)
             segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
 
     threshold = _setting_int(segment_settings, "split_length_threshold", threshold)
@@ -2588,7 +3044,7 @@ def _process_one(args: tuple) -> list[dict]:
     # [수정] LLM 호출 분기 부분
     should_call_llm = False
     candidate_options: list[dict] | None = None
-    if "사용 안함" in str(model or ""):
+    if llm_disabled:
         chunks = None
     else:
         should_call_llm, segment_lora = _apply_llm_confidence_gate(seg, text, threshold, duration, segment_settings, segment_lora)
@@ -2653,46 +3109,45 @@ def _process_one(args: tuple) -> list[dict]:
         w_idx    = 0
         cur_start = seg["start"]
         for chunk in chunks:
-            chunk_clean = re.sub(r"\s+", "", chunk)
+            final_text = _clean(chunk, corrections)
+            chunk_clean = _chunk_timing_match_text(final_text or chunk)
             if not chunk_clean:
                 continue
-            t_start = None
-            t_end   = None
-            matched = 0
-            chunk_words = []
-            while w_idx < len(words) and matched < len(chunk_clean):
-                w = words[w_idx]
-                wc = re.sub(r"\s+|\.", "", w["word"])
-                if t_start is None:
-                    t_start = w["start"]
-                t_end   = w["end"]
-                matched += len(wc)
-                chunk_words.append(w)
-                w_idx   += 1
-            if t_start is None:
-                t_start = cur_start
+            timing_match = _match_chunk_words_to_stt_timing(words, final_text or str(chunk), w_idx)
+            if timing_match is None:
+                timing_match = _fallback_consume_chunk_words(words, final_text or str(chunk), w_idx, float(cur_start))
+            t_start = float(timing_match["start"])
+            t_end = float(timing_match["end"])
+            chunk_words = list(timing_match.get("words") or [])
+            w_idx = int(timing_match.get("next_cursor", w_idx))
             t_start = max(t_start, cur_start)
-            if t_end is None or t_end <= t_start:
+            if t_end <= t_start:
                 t_end = t_start + 0.1
-                
-            # 💡 [최적화 완료] 여기서 _clean을 딱 한 번만 확실하게 호출합니다!
-            final_text = _clean(chunk, corrections)
             
             # 텍스트가 유효할 때만 결과에 추가
             if final_text:
-                _chunk_settings, chunk_lora = _segment_lora_runtime(
-                    {**seg, "start": t_start, "end": t_end, "text": final_text, "words": chunk_words},
-                    segment_settings,
-                    rules,
-                )
-                result.append(_attach_lora_and_deep_timing({
+                guarded_text, text_guard_policy = _guard_llm_chunk_text_with_stt_words(final_text, chunk_words)
+                if text_guard_policy:
+                    final_text = _clean(guarded_text, corrections)
+                timing_policy = timing_match.get("policy")
+                row = {
                     **_stt_selection_metadata(seg),
                     "start":   t_start,
                     "end":     t_end,
                     "text":    final_text,
                     "speaker": spk,
                     "words":   chunk_words,
-                }, chunk_lora or segment_lora, _chunk_settings))
+                }
+                if timing_policy:
+                    row["_stt_word_match_timing_policy"] = timing_policy
+                if text_guard_policy:
+                    row["_llm_stt_text_guard_policy"] = text_guard_policy
+                _chunk_settings, chunk_lora = _segment_lora_runtime(
+                    {**seg, "start": t_start, "end": t_end, "text": final_text, "words": chunk_words},
+                    segment_settings,
+                    rules,
+                )
+                result.append(_attach_lora_and_deep_timing(row, chunk_lora or segment_lora, _chunk_settings))
             cur_start = t_end
             
         # 💡 [불필요한 2차 _clean 루프 완전 삭제] 이미 정리된 텍스트의 길이만 확인합니다.
@@ -2763,6 +3218,7 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
     else:
         seg, rules, threshold, corrections, model, user_prompt, api_key, conservative = args
         runtime_settings = None
+    llm_disabled = _llm_model_disabled(model)
     spk = seg.get("speaker", "SPEAKER_00")
     raw_text = str(seg.get("text", "") or "")
     text = _strip_stt_control_tokens(raw_text).strip()
@@ -2782,12 +3238,13 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
             candidate_selected = True
             seg, _applied = _apply_stt_candidate_decision(seg, selected_decision)
             text = str(seg.get("text", "") or "").strip()
+            spk = seg.get("speaker", spk)
             segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
 
-    cleaned_text = _clean(text, corrections)
+    cleaned_text = _clean(text, None if llm_disabled else corrections)
     if not cleaned_text:
         return []
-    truth_text, truth_meta = apply_recent_editor_truth_patterns(cleaned_text, segment_settings)
+    truth_text, truth_meta = (cleaned_text, None) if llm_disabled else apply_recent_editor_truth_patterns(cleaned_text, segment_settings)
     if truth_meta:
         cleaned_text = truth_text
         segment_lora = dict(segment_lora or {})
@@ -2804,10 +3261,22 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
     if str(seg.get("text", "") or "").strip() != cleaned_text:
         segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": cleaned_text}, runtime_settings, rules, threshold)
     threshold = _setting_int(segment_settings, "split_length_threshold", threshold)
-    if "사용 안함" in str(model or "") or (
+    if llm_disabled or (
         candidate_selected and len(cleaned_text.replace(" ", "").replace("\n", "")) <= threshold
     ):
-        return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
+        row = {**seg, "text": cleaned_text}
+        if llm_disabled:
+            row["_stt_no_llm_raw_text"] = cleaned_text
+            policy = dict(row.get("_stt_no_llm_raw_candidate_policy") or {})
+            policy.update(
+                {
+                    "task": "stt_no_llm_raw_text_lock",
+                    "reason": policy.get("reason") or "subtitle_llm_disabled",
+                    "raw_text": cleaned_text,
+                }
+            )
+            row["_stt_no_llm_raw_candidate_policy"] = policy
+        return [_attach_lora_and_deep_timing(row, segment_lora, segment_settings)]
     if duration < _LLM_SKIP_DUR or len(cleaned_text.replace(" ", "")) <= (threshold - 5):
         return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
 
@@ -2892,42 +3361,43 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
     w_idx = 0
     cur_start = float(seg.get("start", 0.0) or 0.0)
     for chunk in chunks:
-        chunk_clean = re.sub(r"\s+", "", str(chunk or ""))
+        final_text = _clean(str(chunk), corrections)
+        chunk_clean = _chunk_timing_match_text(final_text or chunk)
         if not chunk_clean:
             continue
-        t_start = None
-        t_end = None
-        matched = 0
-        chunk_words = []
-        while w_idx < len(words) and matched < len(chunk_clean):
-            word = words[w_idx]
-            wc = re.sub(r"\s+|\.", "", str(word.get("word", "") or ""))
-            if t_start is None:
-                t_start = float(word.get("start", cur_start) or cur_start)
-            t_end = float(word.get("end", t_start or cur_start) or (t_start or cur_start))
-            matched += len(wc)
-            chunk_words.append(word)
-            w_idx += 1
-        if t_start is None:
-            t_start = cur_start
+        timing_match = _match_chunk_words_to_stt_timing(words, final_text or str(chunk), w_idx)
+        if timing_match is None:
+            timing_match = _fallback_consume_chunk_words(words, final_text or str(chunk), w_idx, float(cur_start))
+        t_start = float(timing_match["start"])
+        t_end = float(timing_match["end"])
+        chunk_words = list(timing_match.get("words") or [])
+        w_idx = int(timing_match.get("next_cursor", w_idx))
         t_start = max(float(t_start), cur_start)
-        if t_end is None or float(t_end) <= t_start:
+        if float(t_end) <= t_start:
             t_end = t_start + 0.1
-        final_text = _clean(str(chunk), corrections)
         if final_text:
-            _chunk_settings, chunk_lora = _segment_lora_runtime(
-                {**seg, "start": t_start, "end": t_end, "text": final_text, "words": chunk_words},
-                segment_settings,
-                rules,
-            )
-            result.append(_attach_lora_and_deep_timing({
+            guarded_text, text_guard_policy = _guard_llm_chunk_text_with_stt_words(final_text, chunk_words)
+            if text_guard_policy:
+                final_text = _clean(guarded_text, corrections)
+            timing_policy = timing_match.get("policy")
+            row = {
                 **_stt_selection_metadata(seg),
                 "start": t_start,
                 "end": t_end,
                 "text": final_text,
                 "speaker": spk,
                 "words": chunk_words,
-            }, chunk_lora or segment_lora, _chunk_settings))
+            }
+            if timing_policy:
+                row["_stt_word_match_timing_policy"] = timing_policy
+            if text_guard_policy:
+                row["_llm_stt_text_guard_policy"] = text_guard_policy
+            _chunk_settings, chunk_lora = _segment_lora_runtime(
+                {**seg, "start": t_start, "end": t_end, "text": final_text, "words": chunk_words},
+                segment_settings,
+                rules,
+            )
+            result.append(_attach_lora_and_deep_timing(row, chunk_lora or segment_lora, _chunk_settings))
         cur_start = float(t_end)
 
     if len(result) > 1:
@@ -3649,6 +4119,8 @@ def optimize_segments(
     optimized = _enforce_final_subtitle_text_policy(optimized, None)
     optimized = _expand_non_speaker_multiline_segments(optimized, loaded_settings)
     optimized = _final_transcript_integrity_guard(optimized, original_segments, vad_segments or [], loaded_settings)
+    if _llm_model_disabled(model):
+        optimized = _restore_no_llm_raw_stt_text(optimized)
     _emit_processing_preview(
         stage_segments_callback,
         stage="final_integrity_guard",

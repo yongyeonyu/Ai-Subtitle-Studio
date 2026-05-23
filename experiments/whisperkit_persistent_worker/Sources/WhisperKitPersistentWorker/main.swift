@@ -10,6 +10,8 @@ struct WorkerRequest: Decodable {
     let language: String
     let wordTimestamps: Bool
     let concurrentWorkerCount: Int?
+    let streamResults: Bool?
+    let computeProfile: String?
 
     enum CodingKeys: String, CodingKey {
         case op
@@ -19,6 +21,8 @@ struct WorkerRequest: Decodable {
         case language
         case wordTimestamps = "word_timestamps"
         case concurrentWorkerCount = "concurrent_worker_count"
+        case streamResults = "stream_results"
+        case computeProfile = "compute_profile"
     }
 }
 
@@ -78,27 +82,24 @@ struct WordPayload: Encodable {
 
 @MainActor
 final class ModelCache {
-    private var cachedModel: String = ""
+    private var cachedKey: String = ""
     private var whisperKit: WhisperKit?
 
-    func model(named model: String) async throws -> WhisperKit {
-        if let existing = whisperKit, cachedModel == model {
+    func model(named model: String, computeProfile: String?) async throws -> WhisperKit {
+        let profile = normalizedComputeProfile(computeProfile)
+        let cacheKey = "\(model)|\(profile)"
+        if let existing = whisperKit, cachedKey == cacheKey {
             return existing
         }
-        let computeOptions = ModelComputeOptions(
-            melCompute: .all,
-            audioEncoderCompute: .all,
-            textDecoderCompute: .all
-        )
         let config = WhisperKitConfig(
             model: model,
-            computeOptions: computeOptions,
+            computeOptions: computeOptions(for: profile),
             verbose: false,
             prewarm: false
         )
         let kit = try await WhisperKit(config)
         whisperKit = kit
-        cachedModel = model
+        cachedKey = cacheKey
         return kit
     }
 }
@@ -107,13 +108,13 @@ let encoder = JSONEncoder()
 encoder.outputFormatting = []
 let decoder = JSONDecoder()
 let cache = ModelCache()
+let newlineData = Data([0x0A])
 
 func emit(_ response: WorkerResponse) {
     do {
         let data = try encoder.encode(response)
-        if let line = String(data: data, encoding: .utf8) {
-            FileHandle.standardOutput.write(Data((line + "\n").utf8))
-        }
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(newlineData)
     } catch {
         let fallback = #"{"task_id":"","error":"encode_failed","stage":"emit"}"#
         FileHandle.standardOutput.write(Data((fallback + "\n").utf8))
@@ -136,91 +137,36 @@ func emitError(taskId: String, index: Int? = nil, error: Error, stage: String) {
     )
 }
 
-func segmentPayloads(from results: [TranscriptionResult], includeWords: Bool) -> [SegmentPayload] {
-    var rows: [SegmentPayload] = []
-    for result in results {
-        for segment in result.segments {
-            let words: [WordPayload]
-            if includeWords {
-                words = (segment.words ?? []).map { item in
-                    WordPayload(
-                        word: item.word.trimmingCharacters(in: .whitespacesAndNewlines),
-                        start: Double(item.start),
-                        end: Double(item.end),
-                        confidence: Double(item.probability)
-                    )
-                }.filter { !$0.word.isEmpty && $0.end >= $0.start }
-            } else {
-                words = []
-            }
-            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty {
-                rows.append(
-                    SegmentPayload(
-                        start: Double(segment.start),
-                        end: max(Double(segment.start), Double(segment.end)),
-                        text: text,
-                        words: words
-                    )
-                )
-            }
-        }
-    }
-    if rows.isEmpty {
-        let text = results.map { $0.text }.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty {
-            rows.append(SegmentPayload(start: 0.0, end: 0.0, text: text, words: []))
-        }
-    }
-    return rows
-}
-
 @MainActor
 func handle(_ request: WorkerRequest) async {
     do {
-        let kit = try await cache.model(named: request.model)
-        let options = DecodingOptions(
-            verbose: false,
-            task: .transcribe,
-            language: request.language,
-            wordTimestamps: request.wordTimestamps,
-            concurrentWorkerCount: max(1, request.concurrentWorkerCount ?? 1)
-        )
-        let batchSize = max(1, min(request.concurrentWorkerCount ?? 1, max(1, request.chunkPaths.count)))
-        var batchStart = 0
-        while batchStart < request.chunkPaths.count {
-            let batchEnd = min(request.chunkPaths.count, batchStart + batchSize)
-            let batchPaths = Array(request.chunkPaths[batchStart..<batchEnd])
-            let batchResults = await kit.transcribeWithResults(audioPaths: batchPaths, decodeOptions: options)
-            for (offset, result) in batchResults.enumerated() {
-                let index = batchStart + offset
-                switch result {
-                case .success(let results):
-                    let payload = TranscriptionPayload(
-                        backend: "whisperkit-persistent",
+        let kit = try await cache.model(named: request.model, computeProfile: request.computeProfile)
+        let workerCount = max(1, request.concurrentWorkerCount ?? 1)
+        if request.streamResults == true {
+            await transcribeStreamingRollingPool(kit: kit, request: request, workerCount: workerCount)
+        } else {
+            let options = decodeOptions(
+                language: request.language,
+                wordTimestamps: request.wordTimestamps,
+                workerCount: workerCount
+            )
+            let batchSize = max(1, min(workerCount, max(1, request.chunkPaths.count)))
+            var batchStart = 0
+            while batchStart < request.chunkPaths.count {
+                let batchEnd = min(request.chunkPaths.count, batchStart + batchSize)
+                let batchPaths = Array(request.chunkPaths[batchStart..<batchEnd])
+                let batchResults = await kit.transcribeWithResults(audioPaths: batchPaths, decodeOptions: options)
+                for (offset, result) in batchResults.enumerated() {
+                    emitTranscribeResult(
+                        taskId: request.taskId,
+                        index: batchStart + offset,
+                        result: result,
                         loadedModel: request.model,
-                        segments: segmentPayloads(from: results, includeWords: request.wordTimestamps),
-                        text: results.map { $0.text }.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines),
                         wordTimestamps: request.wordTimestamps
                     )
-                    emit(
-                        WorkerResponse(
-                            backend: "whisperkit-persistent",
-                            taskId: request.taskId,
-                            index: index,
-                            result: payload,
-                            loadedModel: request.model,
-                            wordTimestamps: request.wordTimestamps,
-                            done: nil,
-                            error: nil,
-                            stage: nil
-                        )
-                    )
-                case .failure(let error):
-                    emitError(taskId: request.taskId, index: index, error: error, stage: "transcribe")
                 }
+                batchStart = batchEnd
             }
-            batchStart = batchEnd
         }
         emit(
             WorkerResponse(

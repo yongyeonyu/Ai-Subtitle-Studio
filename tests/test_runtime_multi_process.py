@@ -120,6 +120,7 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertFalse(settings["cut_boundary_wait_follower_before_stt"])
         self.assertEqual(settings["cut_boundary_wait_follower_before_stt_timeout_sec"], 0.0)
         self.assertEqual(settings["stt_word_timestamps_mode"], "selective")
+        self.assertEqual(settings["llm_threads"], 4)
         self.assertEqual(settings["llm_threads_resource_max"], 5)
         self.assertEqual(settings["local_ollama_llm_max_workers"], 2)
         self.assertTrue(settings["native_cpp_llm_macro_groups_enabled"])
@@ -208,6 +209,7 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(settings["io_workers"], 10)
         self.assertEqual(settings["audio_chunk_route_max_workers"], 10)
         self.assertEqual(settings["ffmpeg_filter_threads"], 10)
+        self.assertEqual(settings["llm_threads"], 6)
         self.assertEqual(settings["llm_threads_resource_max"], 8)
         self.assertTrue(settings["stt_window_ensemble_enabled"])
         self.assertTrue(settings["stt_window_parallel_enabled"])
@@ -615,6 +617,86 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(workers, 2)
         self.assertEqual(meta["reason"], "resource_adaptive")
         self.assertEqual(meta["coordinator"], "runtime_llm_worker_plan")
+
+    def test_runtime_llm_worker_plan_applies_native_allocator_worker_count(self):
+        native_result = {
+            "task": "subtitle_llm",
+            "workers": 3,
+            "action": "expand",
+            "lease_ms": 220,
+        }
+        with patch("core.runtime.multi_process.adaptive_llm_worker_count", return_value=(2, {"reason": "resource_adaptive"})), \
+             patch("core.runtime.multi_process.native_task_allocation", return_value=native_result) as native_alloc:
+            workers, meta = runtime_llm_worker_plan(
+                settings={
+                    "native_resource_allocator_worker_plan_enabled": True,
+                    "llm_threads_resource_max": 4,
+                },
+                workload=8,
+                provider="ollama",
+                model="exaone3.5:7.8b",
+                task="subtitle",
+                requested=4,
+            )
+
+        self.assertEqual(workers, 3)
+        self.assertEqual(meta["native_resource_allocator_previous_workers"], 2)
+        self.assertTrue(meta["native_resource_allocator_applied"])
+        self.assertEqual(meta["native_resource_allocator_task"], "subtitle_llm")
+        self.assertEqual(meta["native_resource_allocator_action"], "expand")
+        self.assertEqual(meta["native_resource_allocator_lease_ms"], 220)
+        native_alloc.assert_called_once()
+        self.assertEqual(native_alloc.call_args.args[0], "subtitle_llm")
+        self.assertEqual(native_alloc.call_args.kwargs["requested_workers"], 2)
+        self.assertEqual(native_alloc.call_args.kwargs["maximum"], 4)
+
+    def test_runtime_llm_worker_plan_full_core_can_request_configured_workers(self):
+        native_result = {
+            "task": "subtitle_llm",
+            "workers": 4,
+            "action": "expand",
+            "lease_ms": 220,
+        }
+        with patch("core.runtime.multi_process.adaptive_llm_worker_count", return_value=(1, {"reason": "resource_adaptive"})), \
+             patch("core.runtime.multi_process.native_task_allocation", return_value=native_result) as native_alloc:
+            workers, meta = runtime_llm_worker_plan(
+                settings={
+                    "benchmark_runtime_profile": APPLE_M_FULL_CORE_THROUGHPUT_PROFILE,
+                    "native_resource_allocator_worker_plan_enabled": True,
+                    "llm_threads_resource_max": 8,
+                },
+                workload=8,
+                provider="ollama",
+                model="exaone3.5:7.8b",
+                task="subtitle",
+                requested=4,
+            )
+
+        self.assertEqual(workers, 4)
+        self.assertEqual(meta["native_resource_allocator_previous_workers"], 1)
+        self.assertEqual(meta["native_resource_allocator_requested_workers"], 4)
+        self.assertEqual(native_alloc.call_args.kwargs["requested_workers"], 4)
+        self.assertEqual(native_alloc.call_args.kwargs["maximum"], 8)
+
+    def test_runtime_llm_worker_plan_keeps_api_single_worker_off_native_allocator(self):
+        with patch("core.runtime.multi_process.adaptive_llm_worker_count", return_value=(1, {"reason": "api_single_worker"})), \
+             patch("core.runtime.multi_process.native_task_allocation") as native_alloc:
+            workers, meta = runtime_llm_worker_plan(
+                settings={
+                    "benchmark_runtime_profile": APPLE_M_FULL_CORE_THROUGHPUT_PROFILE,
+                    "native_resource_allocator_worker_plan_enabled": True,
+                    "llm_threads_resource_max": 8,
+                },
+                workload=8,
+                provider="openai",
+                model="gpt-4.1",
+                task="subtitle",
+                requested=4,
+            )
+
+        self.assertEqual(workers, 1)
+        self.assertEqual(meta["coordinator"], "runtime_llm_worker_plan")
+        native_alloc.assert_not_called()
 
     def test_runtime_resource_coordinator_poll_writes_snapshot_and_formats_status(self):
         snapshot = {

@@ -61,6 +61,9 @@ class LlmCandidatePolicyTests(unittest.TestCase):
 
         self.assertIn("[후보 잠금 모드]", prompt)
         self.assertIn("LoRA ground truth", prompt)
+        self.assertIn("STT lane", prompt)
+        self.assertIn("후보 밖 텍스트 생성은 금지", prompt)
+        self.assertIn("명백한 오인식 단어 1개", prompt)
         self.assertIn('"id": "A"', prompt)
         self.assertIn('"result"', prompt)
 

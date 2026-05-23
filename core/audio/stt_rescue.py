@@ -99,6 +99,29 @@ def budget_recheck_ranges(
         return []
     seg_limit = max_recheck_segments(settings) if max_segments is None else max(1, min(200, int(max_segments)))
     sec_limit = max_recheck_audio_sec(settings) if max_audio_sec is None else max(10.0, min(1800.0, float(max_audio_sec)))
+    try:
+        from core.native_stt_recheck import budget_recheck_indices as native_budget_recheck_indices
+
+        native_indices = native_budget_recheck_indices(
+            starts=[float(item.start) for item in ranges],
+            ends=[max(float(item.start), float(item.end)) for item in ranges],
+            best_scores=[float(item.best_original_score) for item in ranges],
+            has_text=[1 if (str(item.primary_text or "").strip() or str(item.secondary_text or "").strip()) else 0 for item in ranges],
+            limit=seg_limit,
+            max_audio_sec=sec_limit,
+        )
+    except Exception:
+        native_indices = None
+    if native_indices is not None:
+        selected: list[SttRecheckRange] = []
+        seen: set[int] = set()
+        for idx in native_indices:
+            if idx in seen or idx < 0 or idx >= len(ranges):
+                continue
+            seen.add(idx)
+            selected.append(ranges[idx])
+        if selected:
+            return selected
 
     def _priority(item: SttRecheckRange) -> tuple[float, float, float]:
         missing_voice = not item.primary_text and not item.secondary_text

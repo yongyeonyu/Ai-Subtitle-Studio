@@ -375,6 +375,20 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_transport_buttons_pin_dark_tooltip_style(self):
+        widget = VideoPlayerWidget()
+        try:
+            style = widget.btn_play.styleSheet()
+
+            self.assertIn("QToolTip", style)
+            self.assertIn("QTipLabel", style)
+            self.assertIn("#202A31", style)
+            self.assertIn("#F5F7FA", style)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_preview_starts_hevc_proxy_build_and_uses_original_until_ready(self):
         widget = VideoPlayerWidget()
         try:
@@ -812,11 +826,11 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             left, right = widget._apply_control_bar_video_content_insets()
             state = widget._quick_control_bar_state()
 
-            self.assertEqual((left, right), (0, 0))
+            self.assertEqual((left, right), (55, 56))
             margins = widget._control_bar_widget.layout().contentsMargins()
-            self.assertEqual((margins.left(), margins.right()), (0, 0))
-            self.assertEqual(state["contentLeftInset"], 0)
-            self.assertEqual(state["contentRightInset"], 0)
+            self.assertEqual((margins.left(), margins.right()), (55, 56))
+            self.assertEqual(state["contentLeftInset"], 55)
+            self.assertEqual(state["contentRightInset"], 56)
         finally:
             widget.close()
             widget.deleteLater()
@@ -1437,6 +1451,56 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                 set_position.assert_called_once_with(3000)
                 hide_thumbnail.assert_called_once()
                 show_thumb.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_processing_thumbnail_seek_uses_cache_without_sync_ffmpeg(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._auto_processing_active = True
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch.object(widget, "_show_precomputed_thumbnail_at", return_value=True) as show_precomputed, \
+                 patch("ui.editor.video_player_surface.subprocess.run") as run:
+                widget._extract_and_show_thumbnail_at(f.name, 3.0)
+
+            show_precomputed.assert_called_once_with(f.name, 3.0, width=640)
+            run.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_processing_show_cached_thumbnail_does_not_generate_new_thumbnail(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._auto_processing_active = True
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch.object(widget, "_show_precomputed_thumbnail_at", return_value=False) as show_precomputed, \
+                 patch("ui.editor.video_player_surface.ensure_thumbnail") as ensure:
+                result = widget.show_cached_thumbnail_at(f.name, 3.0, width=640)
+
+            self.assertFalse(result)
+            show_precomputed.assert_called_once_with(f.name, 3.0, width=640)
+            ensure.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_processing_prefetch_thumbnail_does_not_generate_new_thumbnail(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._auto_processing_active = True
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch.object(widget, "_cached_thumbnail_path", return_value="/tmp/missing-thumb.jpg") as cached_path, \
+                 patch("ui.editor.video_player_surface.ensure_thumbnail") as ensure:
+                result = widget.prefetch_thumbnail_at(f.name, 3.0, width=640)
+
+            self.assertEqual(result, "")
+            cached_path.assert_called_once_with(f.name, 3.0, width=640)
+            ensure.assert_not_called()
         finally:
             widget.close()
             widget.deleteLater()

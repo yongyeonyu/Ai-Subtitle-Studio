@@ -176,7 +176,13 @@ if getattr(config, "MACBOOK_ONLY_APP", False) and not getattr(config, "IS_MAC", 
     sys.stderr.write("AI Subtitle Studio macOS native branch requires macOS.\n")
     sys.exit(78)
 
-from core.performance import configure_native_runtime, configure_qt_gpu_rendering_before_app, configure_qt_runtime
+from core.performance import (
+    configure_native_runtime,
+    configure_qt_gpu_rendering_before_app,
+    configure_qt_runtime,
+    configure_qt_tooltip_theme,
+    qt_tooltip_stylesheet,
+)
 from core.platform_compat import (
     cleanup_app_child_processes,
     cleanup_app_runtime_processes,
@@ -352,12 +358,9 @@ def main():
             border: 1px solid #74A9FF;
             padding-top: 1px;
         }}
-        QToolTip {{
-            background: #333333; color: #ffffff;
-            border: 1px solid #555555; padding: 4px;
-            font-size: 13px;
-        }}
+        {qt_tooltip_stylesheet()}
     """)
+    configure_qt_tooltip_theme()
     install_button_click_feedback(app)
 
     win = MainWindow()

@@ -832,6 +832,119 @@ class WordResegmenterTests(unittest.TestCase):
         self.assertAlmostEqual(result[1]["start"], 1.0)
         self.assertAlmostEqual(result[1]["end"], 1.8)
 
+    def test_llm_split_matches_chunk_text_to_later_stt_words(self):
+        segment = {
+            "start": 136.0,
+            "end": 143.0,
+            "text": "구와봐 와 말린 과일이네 히프소스",
+            "words": [
+                {"word": "구와봐", "start": 136.0, "end": 136.4},
+                {"word": "와", "start": 136.5, "end": 136.7},
+                {"word": "말린", "start": 140.9, "end": 141.2},
+                {"word": "과일이네", "start": 141.24, "end": 141.8},
+                {"word": "히프소스", "start": 142.1, "end": 142.7},
+            ],
+        }
+
+        with (
+            mock.patch.object(subtitle_engine, "_apply_llm_confidence_gate", return_value=(True, {})),
+            mock.patch.object(subtitle_engine, "_verify_llm_chunks", return_value=(["말린 과일이네", "히프소스"], {})),
+            mock.patch.object(subtitle_engine, "_deep_rerank_chunks", side_effect=lambda _text, chunks, _settings, lora: (chunks, lora)),
+            mock.patch.object(subtitle_engine, "ask_exaone_to_split", return_value=["말린 과일이네", "히프소스"]),
+        ):
+            result = subtitle_engine._process_one(
+                (
+                    segment,
+                    {},
+                    6,
+                    {},
+                    "exaone3.5:7.8b",
+                    "",
+                    "",
+                    False,
+                    {"deep_timing_adjustment_enabled": False},
+                )
+            )
+
+        self.assertEqual([item["text"] for item in result], ["말린 과일이네", "히프소스"])
+        self.assertEqual([word["word"] for word in result[0]["words"]], ["말린", "과일이네"])
+        self.assertAlmostEqual(result[0]["start"], 140.9)
+        self.assertAlmostEqual(result[0]["end"], 141.8)
+        self.assertEqual(result[0]["_stt_word_match_timing_policy"]["source_start_index"], 2)
+
+    def test_llm_split_uses_stt_words_when_chunk_text_diverges(self):
+        segment = {
+            "start": 79.0,
+            "end": 83.0,
+            "text": "그냥 가져가 뭐야 뭐야",
+            "words": [
+                {"word": "그냥", "start": 79.0, "end": 79.3},
+                {"word": "가져가", "start": 79.34, "end": 79.9},
+                {"word": "뭐야", "start": 80.2, "end": 80.5},
+                {"word": "뭐야", "start": 80.7, "end": 81.0},
+            ],
+        }
+
+        with (
+            mock.patch.object(subtitle_engine, "_apply_llm_confidence_gate", return_value=(True, {})),
+            mock.patch.object(subtitle_engine, "_verify_llm_chunks", return_value=(["뭐야, 그냥 해, 그냥 해, 그냥 해"], {})),
+            mock.patch.object(subtitle_engine, "_deep_rerank_chunks", side_effect=lambda _text, chunks, _settings, lora: (chunks, lora)),
+            mock.patch.object(subtitle_engine, "ask_exaone_to_split", return_value=["뭐야, 그냥 해, 그냥 해, 그냥 해"]),
+        ):
+            result = subtitle_engine._process_one(
+                (
+                    segment,
+                    {},
+                    6,
+                    {},
+                    "exaone3.5:7.8b",
+                    "",
+                    "",
+                    False,
+                    {"deep_timing_adjustment_enabled": False},
+                )
+            )
+
+        self.assertEqual(result[0]["text"], "그냥 가져가 뭐야 뭐야")
+        self.assertAlmostEqual(result[0]["start"], 79.0)
+        self.assertAlmostEqual(result[0]["end"], 81.0)
+        self.assertEqual(result[0]["_llm_stt_text_guard_policy"]["reason"], "llm_chunk_diverged_from_matched_stt_words")
+
+    def test_resegment_preserves_stt_timing_anchor_metadata(self):
+        policy = {"task": "stt_chunk_word_timing_match", "source_start_index": 2}
+        text_guard = {"task": "llm_stt_text_guard"}
+        result = resegment_by_word_timestamps(
+            [
+                {
+                    "start": 140.9,
+                    "end": 141.8,
+                    "text": "말린 과일이네",
+                    "speaker": "00",
+                    "speaker_list": ["00", "01"],
+                    "speaker2": "01",
+                    "_stt_original_candidate_start": 136.0,
+                    "_stt_original_candidate_end": 143.0,
+                    "_stt_candidate_word_timing_anchor_policy": {"task": "stt_candidate_word_timing_anchor"},
+                    "_stt_word_match_timing_policy": policy,
+                    "_llm_stt_text_guard_policy": text_guard,
+                    "words": [
+                        {"word": "말린", "start": 140.9, "end": 141.2, "speaker": "00"},
+                        {"word": "과일이네", "start": 141.24, "end": 141.8, "speaker": "00"},
+                    ],
+                }
+            ],
+            max_chars=20,
+            max_duration=6.0,
+            max_cps=20.0,
+            min_duration=0.1,
+            gap_break_sec=1.5,
+        )
+
+        self.assertEqual(result[0]["_stt_original_candidate_start"], 136.0)
+        self.assertEqual(result[0]["_stt_word_match_timing_policy"], policy)
+        self.assertEqual(result[0]["_llm_stt_text_guard_policy"], text_guard)
+        self.assertEqual(result[0]["speaker_list"], ["00", "01"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,7 @@ from core.project.project_context import (
 )
 from core.project.project_assets import (
     PROJECT_EXTERNAL_STORAGE,
+    clear_project_text_asset_files,
     copy_project_rows,
     externalize_project_text_assets,
     hydrate_project_text_asset_cache,
@@ -988,6 +989,7 @@ def _externalize_project_payload(
     segments: list[dict] | None,
     user_settings: dict | None = None,
     rewrite_stt_reference_tracks: bool = True,
+    recover_external_assets_on_empty: bool = True,
 ) -> dict:
     if not _external_text_storage_enabled(project, user_settings):
         return project
@@ -995,10 +997,14 @@ def _externalize_project_payload(
     stt_tracks = _project_stt_candidate_tracks(project)
     has_subtitles = _segments_have_text(rows)
     has_stt = _track_map_has_text(stt_tracks)
-    recovered_subtitles = load_external_subtitle_segments(project) if not has_subtitles else []
+    recovered_subtitles = (
+        load_external_subtitle_segments(project)
+        if recover_external_assets_on_empty and not has_subtitles
+        else []
+    )
     recovered_stt_tracks = (
         load_external_stt_tracks(project)
-        if not has_stt and rewrite_stt_reference_tracks
+        if recover_external_assets_on_empty and not has_stt and rewrite_stt_reference_tracks
         else {}
     )
     recovered_has_subtitles = _segments_have_text(recovered_subtitles)
@@ -1006,6 +1012,12 @@ def _externalize_project_payload(
     final_segments = recovered_subtitles if recovered_has_subtitles else rows
     final_stt_tracks = recovered_stt_tracks if recovered_has_stt else stt_tracks
     if not _segments_have_text(final_segments) and not _track_map_has_text(final_stt_tracks):
+        if not recover_external_assets_on_empty:
+            clear_project_text_asset_files(filepath, project)
+        project.pop("_external_subtitle_segments_cache", None)
+        project.pop("_external_stt_tracks_cache", None)
+        project.pop("_hot_open_subtitle_segments_cache", None)
+        project.pop("_hot_open_stt_preview_segments_cache", None)
         project.pop("asset_storage", None)
         subtitles = project.setdefault("subtitles", {})
         subtitles.pop("external_track", None)
@@ -1258,6 +1270,7 @@ def save_project(
     persist_analysis_artifacts: bool = True,
     rewrite_stt_reference_tracks: bool = True,
     preliminary_middle_segments: Optional[List[dict]] = None,
+    recover_external_assets_on_empty: bool = True,
 ):
     """기존 프로젝트 JSON 업데이트"""
     if not os.path.exists(filepath):
@@ -1516,6 +1529,7 @@ def save_project(
         segments=project_segment_rows,
         user_settings=effective_user_settings,
         rewrite_stt_reference_tracks=bool(rewrite_stt_reference_tracks),
+        recover_external_assets_on_empty=bool(recover_external_assets_on_empty),
     )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)

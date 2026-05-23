@@ -61,6 +61,8 @@ STT_SEGMENT_METADATA_KEYS = (
     "stt_recheck_original_scores",
     "stt_lattice_artifact_path",
     "stt_preview_source",
+    "stt_preview_sublane",
+    "stt_preview_sublane_count",
     "score",
     "stt_score",
     "score_color",
@@ -1080,6 +1082,8 @@ def build_stt_candidate_tracks(
             "quality",
             "quality_history",
             "quality_candidates",
+            "stt_preview_sublane",
+            "stt_preview_sublane_count",
         ):
             if key_name in row:
                 item[key_name] = row.get(key_name)
@@ -1664,6 +1668,8 @@ def _normalized_stt_preview_segment(
     item["timeline_end_frame"] = item["end_frame"]
     item["frame_rate"] = fps
     item["timeline_frame_rate"] = fps
+    item["timeline_start"] = frame_to_sec(item["timeline_start_frame"], fps)
+    item["timeline_end"] = frame_to_sec(item["timeline_end_frame"], fps)
     item["frame_range"] = {
         "unit": "frame",
         "start": item["start_frame"],

@@ -146,6 +146,52 @@ def uncovered_vad_indices(
         return None
 
 
+def budget_recheck_indices(
+    *,
+    starts: list[float],
+    ends: list[float],
+    best_scores: list[float],
+    has_text: list[int] | list[bool],
+    limit: int,
+    max_audio_sec: float,
+) -> list[int] | None:
+    if not native_stt_recheck_enabled():
+        return None
+    try:
+        values = _native.budget_recheck_indices(
+            [float(item) for item in list(starts or [])],
+            [float(item) for item in list(ends or [])],
+            [float(item) for item in list(best_scores or [])],
+            [1 if bool(item) else 0 for item in list(has_text or [])],
+            int(limit),
+            float(max_audio_sec),
+        )
+        if not isinstance(values, list):
+            return None
+        return [int(item) for item in values if int(item) >= 0]
+    except Exception:
+        return None
+
+
+def duration_desc_order_indices(
+    *,
+    starts: list[float],
+    durations: list[float],
+) -> list[int] | None:
+    if not native_stt_recheck_enabled():
+        return None
+    try:
+        values = _native.duration_desc_order_indices(
+            [float(item) for item in list(starts or [])],
+            [float(item) for item in list(durations or [])],
+        )
+        if not isinstance(values, list):
+            return None
+        return [int(item) for item in values if int(item) >= 0]
+    except Exception:
+        return None
+
+
 def overlap_segment_groups(
     *,
     range_starts: list[float],
@@ -266,8 +312,49 @@ def match_low_score_pair_indices(
         return None
 
 
+def word_precision_candidate_indices(
+    *,
+    starts: list[float],
+    ends: list[float],
+    scores: list[float],
+    has_scores: list[int] | list[bool],
+    needs_precision: list[int] | list[bool],
+    selected_flags: list[int] | list[bool],
+    red_flags: list[int] | list[bool],
+    yellow_flags: list[int] | list[bool],
+    risk_flags: list[int] | list[bool],
+    missing_word_flags: list[int] | list[bool],
+    limit: int,
+    max_audio_sec: float,
+) -> list[int] | None:
+    if not native_stt_recheck_enabled():
+        return None
+    try:
+        values = _native.word_precision_candidate_indices(
+            [float(item) for item in list(starts or [])],
+            [float(item) for item in list(ends or [])],
+            [float(item) for item in list(scores or [])],
+            [1 if bool(item) else 0 for item in list(has_scores or [])],
+            [1 if bool(item) else 0 for item in list(needs_precision or [])],
+            [1 if bool(item) else 0 for item in list(selected_flags or [])],
+            [1 if bool(item) else 0 for item in list(red_flags or [])],
+            [1 if bool(item) else 0 for item in list(yellow_flags or [])],
+            [1 if bool(item) else 0 for item in list(risk_flags or [])],
+            [1 if bool(item) else 0 for item in list(missing_word_flags or [])],
+            int(limit),
+            float(max_audio_sec),
+        )
+        if not isinstance(values, list):
+            return None
+        return [int(item) for item in values if int(item) >= 0]
+    except Exception:
+        return None
+
+
 __all__ = [
     "HAS_NATIVE_STT_RECHECK",
+    "budget_recheck_indices",
+    "duration_desc_order_indices",
     "low_score_primary_indices",
     "match_low_score_pair_indices",
     "native_stt_recheck_enabled",
@@ -275,4 +362,5 @@ __all__ = [
     "overlap_segment_groups",
     "stt_recheck_backend",
     "uncovered_vad_indices",
+    "word_precision_candidate_indices",
 ]

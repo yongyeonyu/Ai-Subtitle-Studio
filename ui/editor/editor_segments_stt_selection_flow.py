@@ -9,6 +9,7 @@ from PyQt6.QtCore import QTimer
 from core.engine.subtitle_timing import align_stt_preview_to_subtitle_segments
 from core.native_swift_timeline import apply_subtitle_magnet_via_swift
 from core.project.project_srt import strip_whisper_control_tokens
+from core.timeline_time import segment_display_time_bounds
 from ui.editor.editor_subtitle_assist import (
     apply_netflix_subtitle_magnet,
     compute_subtitle_magnet_policy,
@@ -46,18 +47,15 @@ class EditorSegmentsSttSelectionFlowMixin:
                     pass
             subtitle_preview = sorted(
                 explicit_subtitle_preview,
-                key=lambda seg: (
-                    float(seg.get("start", 0.0) or 0.0),
-                    float(seg.get("end", 0.0) or 0.0),
-                ),
+                key=lambda seg: segment_display_time_bounds(seg),
             )
         elif bool(getattr(self, "_stt_preview_subtitle_drafts_enabled", True)):
             subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
         combined = sorted(
             confirmed + subtitle_preview + preview,
-            key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
+            key=lambda seg: segment_display_time_bounds(seg),
         )
-        total_dur = combined[-1]["end"] if combined else 0.0
+        total_dur = segment_display_time_bounds(combined[-1])[1] if combined else 0.0
         if hasattr(self, "video_player") and self.video_player.total_time > 0.0:
             total_dur = max(total_dur, self.video_player.total_time)
         return confirmed, preview, subtitle_preview, total_dur
@@ -75,6 +73,9 @@ class EditorSegmentsSttSelectionFlowMixin:
                 existing_preview = self._clamp_segments_to_clip_duration(existing_preview, log_changes=False)
             except Exception:
                 pass
+        from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
+
+        ensure_stt_preview_lane_numbers(existing_preview, mutate=True)
         self._live_stt_preview_segments = existing_preview
 
     def _stt_selection_magnet_policy(self) -> tuple[dict, float]:

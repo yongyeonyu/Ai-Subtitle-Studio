@@ -62,6 +62,13 @@ def _whisperkit_empty_fallback_active(settings: dict[str, Any] | None) -> bool:
     return bool(value)
 
 
+def _native_exact_mlx_model_enabled(settings: dict[str, Any] | None) -> bool:
+    value = dict(settings or {}).get("stt_native_exact_mlx_model_enabled", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "on", "yes", "사용", "켜짐"}
+    return bool(value)
+
+
 def _whisperkit_model(model: str) -> str:
     raw = str(model or "").strip()
     lowered = raw.lower()
@@ -217,6 +224,13 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "fast_policy_selected_model")
     if policy == "native":
         model_for_native = requested_model or "large-v3-turbo"
+        inferred_backend = _infer_backend(model_for_native)
+        if (
+            bool(getattr(config, "IS_MAC", False))
+            and inferred_backend == "mlx"
+            and _native_exact_mlx_model_enabled(data)
+        ):
+            return SttBackendChoice("mlx", _model_for_backend("mlx", model_for_native), "native_policy_selected_mlx_model")
         if (
             bool(getattr(config, "IS_MAC", False))
             and not _whisperkit_empty_fallback_active(data)

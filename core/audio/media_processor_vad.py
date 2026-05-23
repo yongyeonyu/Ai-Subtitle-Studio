@@ -11,6 +11,7 @@ import sys
 import wave
 
 from core.runtime.logger import get_logger
+from core.native_swift_vad import vad_flags_to_segments_via_swift
 from core.audio.silero_vad_runtime import load_silero_vad_runtime
 from core.audio.torch_acceleration import move_torch_model_to_preferred_device, move_torch_tensor_to_device
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
@@ -21,6 +22,13 @@ _CHUNK_DURATION = 30
 def _runtime_get_logger():
     owner = sys.modules.get("core.audio.media_processor")
     return getattr(owner, "get_logger", get_logger)()
+
+
+def _vad_estimated_audio_bytes(wav_path: str) -> int:
+    try:
+        return max(0, int(os.path.getsize(wav_path))) * 2
+    except Exception:
+        return 0
 
 
 class VideoProcessorVadMixin:
@@ -137,7 +145,21 @@ class VideoProcessorVadMixin:
         speech_pad_sec: float,
         source: str,
         for_post_stt_align: bool = False,
+        settings: dict | None = None,
     ) -> list[dict]:
+        native_segments = vad_flags_to_segments_via_swift(
+            flags,
+            hop_sec=hop_sec,
+            min_speech_sec=min_speech_sec,
+            min_silence_sec=min_silence_sec,
+            speech_pad_sec=speech_pad_sec,
+            source=source,
+            for_post_stt_align=for_post_stt_align,
+            settings=settings,
+        )
+        if native_segments is not None:
+            return native_segments
+
         raw: list[tuple[float, float]] = []
         start_idx = None
         for idx, flag in enumerate(flags):
@@ -240,6 +262,7 @@ class VideoProcessorVadMixin:
                 speech_pad_sec=speech_pad,
                 source=vad_model,
                 for_post_stt_align=for_post_stt_align,
+                settings=effective_s,
             )
         except Exception as e:
             _runtime_get_logger().log(f"  ⚠️ TEN VAD 실행 실패 또는 미설치: {e}")
@@ -353,13 +376,25 @@ class VideoProcessorVadMixin:
                 finally:
                     self._stop_vad_heartbeat(heartbeat)
                 self._vad_loaded = True
-                move_torch_model_to_preferred_device(self._vad_model, settings=effective_s, log_label=f"{label} VAD")
+                move_torch_model_to_preferred_device(
+                    self._vad_model,
+                    settings=effective_s,
+                    log_label=f"{label} VAD",
+                    task="vad",
+                    estimated_bytes=_vad_estimated_audio_bytes(wav_path),
+                )
                 _runtime_get_logger().log(f"  └ [VAD 후처리] {label} 모델 준비 완료")
 
             model = self._vad_model
             utils = self._vad_utils
             (get_speech_timestamps, _, read_audio, _, _) = utils
-            device_name = move_torch_model_to_preferred_device(model, settings=effective_s, log_label=f"{label} VAD")
+            device_name = move_torch_model_to_preferred_device(
+                model,
+                settings=effective_s,
+                log_label=f"{label} VAD",
+                task="vad",
+                estimated_bytes=_vad_estimated_audio_bytes(wav_path),
+            )
             v_thresh = float(effective_s.get("vad_threshold", 0.5))
             v_min_sp = int(float(effective_s.get("vad_min_speech", 0.25)) * 1000)
             v_min_sil = int(float(effective_s.get("vad_min_silence", 2.0)) * 1000)
@@ -552,12 +587,24 @@ class VideoProcessorVadMixin:
             if not self._vad_loaded:
                 self._vad_model, self._vad_utils, _loader = load_silero_vad_runtime()
                 self._vad_loaded = True
-                move_torch_model_to_preferred_device(self._vad_model, settings=effective_s, log_label=f"{vad_model.upper()} VAD")
+                move_torch_model_to_preferred_device(
+                    self._vad_model,
+                    settings=effective_s,
+                    log_label=f"{vad_model.upper()} VAD",
+                    task="vad",
+                    estimated_bytes=_vad_estimated_audio_bytes(wav_path),
+                )
 
             model = self._vad_model
             utils = self._vad_utils
             (get_speech_timestamps, _, read_audio, _, _) = utils
-            device_name = move_torch_model_to_preferred_device(model, settings=effective_s, log_label=f"{vad_model.upper()} VAD")
+            device_name = move_torch_model_to_preferred_device(
+                model,
+                settings=effective_s,
+                log_label=f"{vad_model.upper()} VAD",
+                task="vad",
+                estimated_bytes=_vad_estimated_audio_bytes(wav_path),
+            )
 
             v_thresh = float(effective_s.get("vad_threshold", 0.5))
             v_min_sp = int(float(effective_s.get("vad_min_speech", 0.25)) * 1000)

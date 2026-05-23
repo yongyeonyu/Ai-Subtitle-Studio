@@ -59,11 +59,14 @@ class EditorCanvasStateMixin:
             self.set_voice_activity_segments(list(voice_activity_segments or []))
 
         if stt_preview_segments is not None:
+            from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
+
             self._live_stt_preview_segments = [
                 dict(seg)
                 for seg in stt_preview_segments
                 if isinstance(seg, dict)
             ]
+            ensure_stt_preview_lane_numbers(self._live_stt_preview_segments, mutate=True)
 
         if stt_preview_subtitle_drafts is not None:
             self._stt_preview_subtitle_drafts_enabled = bool(stt_preview_subtitle_drafts)

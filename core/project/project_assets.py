@@ -86,6 +86,8 @@ _COMPACT_META_KEYS = {
     "stt_recheck_original_scores",
     "stt_lattice_artifact_path",
     "stt_preview_source",
+    "stt_preview_sublane",
+    "stt_preview_sublane_count",
     "source",
     "score",
     "stt_score",
@@ -264,6 +266,72 @@ def _inferred_track_ref(project: dict[str, Any] | None, key: str) -> dict[str, A
     if str(key).startswith(_STT_TRACK_PREFIX):
         track["source"] = str(key)[len(_STT_TRACK_PREFIX) :].upper()
     return track
+
+
+def _asset_path_is_inside(asset_root: str, path: str) -> bool:
+    try:
+        root = os.path.abspath(asset_root)
+        target = os.path.abspath(path)
+        return target == root or target.startswith(root + os.sep)
+    except Exception:
+        return False
+
+
+def _collect_track_asset_paths(project_path: str, project: dict[str, Any] | None) -> set[str]:
+    asset_root = project_asset_dir(project_path)
+    subtitle_dir = os.path.join(asset_root, "subtitles")
+    paths = {
+        os.path.join(subtitle_dir, "final.srt"),
+        os.path.join(subtitle_dir, "stt1.srt"),
+        os.path.join(subtitle_dir, "stt2.srt"),
+    }
+    if not isinstance(project, dict):
+        return paths
+    project_ref = dict(project)
+    project_ref.setdefault("_project_file_path", os.path.abspath(project_path))
+
+    def add_path(value: Any) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        resolved = resolve_project_asset_path(project_ref, text)
+        if resolved and _asset_path_is_inside(asset_root, resolved):
+            paths.add(resolved)
+
+    asset_storage = project.get("asset_storage") if isinstance(project.get("asset_storage"), dict) else {}
+    tracks = asset_storage.get("tracks") if isinstance(asset_storage.get("tracks"), dict) else {}
+    for track in tracks.values() if isinstance(tracks, dict) else []:
+        if isinstance(track, dict):
+            add_path(track.get("path"))
+
+    subtitles = project.get("subtitles") if isinstance(project.get("subtitles"), dict) else {}
+    add_path(subtitles.get("srt_path") if isinstance(subtitles, dict) else "")
+    direct = subtitles.get("external_track") if isinstance(subtitles, dict) and isinstance(subtitles.get("external_track"), dict) else {}
+    add_path(direct.get("path") if isinstance(direct, dict) else "")
+    external_tracks = subtitles.get("external_tracks") if isinstance(subtitles, dict) and isinstance(subtitles.get("external_tracks"), dict) else {}
+    for track in external_tracks.values() if isinstance(external_tracks, dict) else []:
+        if isinstance(track, dict):
+            add_path(track.get("path"))
+
+    return paths
+
+
+def clear_project_text_asset_files(project_path: str, project: dict[str, Any] | None = None) -> list[str]:
+    """Remove only project-owned external text assets for an intentional full restart."""
+    if not project_path:
+        return []
+    asset_root = project_asset_dir(project_path)
+    removed: list[str] = []
+    for path in sorted(_collect_track_asset_paths(project_path, project)):
+        if not _asset_path_is_inside(asset_root, path):
+            continue
+        try:
+            if os.path.exists(path) and os.path.isfile(path):
+                os.remove(path)
+                removed.append(path)
+        except OSError:
+            continue
+    return removed
 
 
 def _existing_stt_track_manifest(
@@ -1098,6 +1166,7 @@ __all__ = [
     "copy_project_rows",
     "copy_project_track_rows",
     "copy_project_track_rows_with_counts",
+    "clear_project_text_asset_files",
     "externalize_project_text_assets",
     "hydrate_project_text_asset_cache",
     "load_external_stt_tracks",

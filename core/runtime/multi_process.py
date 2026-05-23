@@ -264,6 +264,7 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         else:
             set_opt(key, value)
     set_opt("llm_workers", min(llm_workers, 4))
+    set_opt("llm_threads", min(llm_workers, 4))
     set_opt("llm_threads_resource_max", llm_workers)
     set_opt("local_ollama_llm_max_workers", local_llm_workers)
     set_opt("roughcut_llm_threads_auto_enabled", True)
@@ -286,6 +287,7 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         set_opt("subtitle_native_prepass_workers", full_core_workers)
         set_opt("subtitle_native_prepass_workers_resource_max", full_core_workers)
         set_opt("llm_workers", min(full_core_llm_workers, 6))
+        set_opt("llm_threads", min(full_core_llm_workers, 6))
         set_opt("llm_threads_resource_max", full_core_llm_workers)
         set_opt("roughcut_llm_threads_resource_max", full_core_llm_workers)
         set_opt("stt_window_ensemble_enabled", True)
@@ -620,15 +622,68 @@ def runtime_llm_worker_plan(
     task: str = "subtitle",
     requested: Any = None,
 ) -> tuple[int, dict[str, Any]]:
+    settings = dict(settings or {})
+    workload_count = max(1, _positive_int(workload, 1))
     workers, meta = adaptive_llm_worker_count(
         settings=settings,
         requested=requested,
-        workload=workload,
+        workload=workload_count,
         provider=provider,
         model=model,
         task=task,
     )
+    workers = max(1, min(_positive_int(workers, 1), workload_count))
     meta = dict(meta or {})
+    provider_text = str(provider or "").strip().lower()
+    model_text = str(model or "").strip().lower()
+    is_api_provider = provider_text in {"openai", "google", "gemini", "anthropic"} or "gemini" in model_text or model_text.startswith("gpt")
+    task_key = str(task or "subtitle").strip().lower()
+    if task_key in {"roughcut", "roughcut_llm"}:
+        native_task = "roughcut_llm"
+        maximum_key = "roughcut_llm_threads_resource_max"
+    elif task_key in {"subtitle_optimize", "subtitle_optimizer"}:
+        native_task = "subtitle_optimize"
+        maximum_key = "llm_threads_resource_max"
+    else:
+        native_task = "subtitle_llm"
+        maximum_key = "llm_threads_resource_max"
+    configured_maximum = _positive_int(settings.get(maximum_key), 0)
+    maximum_workers = configured_maximum if configured_maximum > 0 else max(1, int(workers or 1))
+    maximum_workers = max(1, min(workload_count, maximum_workers))
+    requested_count = max(1, _positive_int(requested, int(workers or 1)))
+    native_requested = int(workers or 1)
+    # Full-core benchmark mode is the only path that may ask native allocation
+    # to raise local LLM fanout.  Normal app mode keeps adaptive LLM's model-size
+    # conservatism and lets the native allocator shrink/reclaim under pressure.
+    if _apple_m_full_core_aggressive_requested(settings) and not is_api_provider:
+        native_requested = max(native_requested, min(requested_count, maximum_workers))
+    if (
+        not is_api_provider
+        and _setting_bool(settings.get("native_resource_allocator_worker_plan_enabled"), False)
+    ):
+        try:
+            native_allocation = native_task_allocation(
+                native_task,
+                settings=settings,
+                workload=workload_count,
+                requested_workers=native_requested,
+                minimum=1,
+                maximum=maximum_workers,
+                active_labels=[native_task, task_key],
+            )
+        except Exception:
+            native_allocation = None
+        if isinstance(native_allocation, dict) and native_allocation:
+            native_workers = _positive_int(native_allocation.get("workers"), workers)
+            adjusted_workers = max(1, min(int(native_workers or workers), maximum_workers, workload_count))
+            if adjusted_workers != int(workers or 0):
+                meta["native_resource_allocator_previous_workers"] = int(workers or 0)
+                workers = adjusted_workers
+            meta["native_resource_allocator_applied"] = True
+            meta["native_resource_allocator_task"] = native_task
+            meta["native_resource_allocator_requested_workers"] = int(native_requested)
+            meta["native_resource_allocator_action"] = str(native_allocation.get("action") or "")
+            meta["native_resource_allocator_lease_ms"] = int(native_allocation.get("lease_ms", 0) or 0)
     meta["coordinator"] = "runtime_llm_worker_plan"
     return workers, meta
 

@@ -29,9 +29,9 @@ from ui.timeline.timeline_canvas import TimelineCanvasBase
 from ui.timeline.timeline_global import (
     GlobalCanvasBase,
     MINIMAP_HEIGHT,
+    MINIMAP_MARKER_LANE_H,
     MINIMAP_PRELIMINARY_LANE_BG,
     MINIMAP_REFERENCE_LANE_BG,
-    MINIMAP_SILENCE_LANE_BG,
     MINIMAP_SUBTITLE_LANE_BG,
     MINIMAP_TOP_LANE_BG,
 )
@@ -3523,7 +3523,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             pixmap = canvas._build_static_cache()
             image = pixmap.toImage()
             bg = QColor(MINIMAP_TOP_LANE_BG).name()
-            top_lane_center_y = max(4, ((canvas.height() // 2) - 1) // 2)
+            top_lane_center_y = max(4, MINIMAP_MARKER_LANE_H // 2)
             inside_x = canvas._sec_to_px(5.0)
             border_x = canvas._sec_to_px(2.0)
 
@@ -3562,7 +3562,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             pixmap = canvas._build_static_cache()
             image = pixmap.toImage()
-            top_lane_h = max(1, (canvas.height() // 2) - 1)
+            top_lane_h = max(1, MINIMAP_MARKER_LANE_H)
             preview_inside_y = max(2, top_lane_h // 4)
             reference_inside_y = max(preview_inside_y + 2, (top_lane_h * 3) // 4)
             inside_x = canvas._sec_to_px(5.0)
@@ -3574,7 +3574,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
-    def test_global_canvas_keeps_silence_lane_without_drawing_silence_blocks(self):
+    def test_global_canvas_uses_single_subtitle_lane_without_silence_strip(self):
         timeline = TimelineWidget()
         try:
             canvas = timeline.global_canvas
@@ -3590,15 +3590,15 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             pixmap = canvas._build_static_cache()
             image = pixmap.toImage()
-            subtitle_y = (canvas.height() // 2) + 4
-            silence_y = canvas.height() - 5
+            subtitle_y = MINIMAP_MARKER_LANE_H + 6
+            bottom_y = canvas.height() - 5
             subtitle_x = canvas._sec_to_px(2.0)
-            silence_x = canvas._sec_to_px(0.3)
+            empty_x = canvas._sec_to_px(0.3)
             subtitle_px = image.pixelColor(subtitle_x, subtitle_y)
-            silence_px = image.pixelColor(silence_x, silence_y)
+            empty_px = image.pixelColor(empty_x, bottom_y)
 
             self.assertNotEqual(subtitle_px.name(), QColor(MINIMAP_SUBTITLE_LANE_BG).name())
-            self.assertEqual(silence_px.name(), QColor(MINIMAP_SILENCE_LANE_BG).name())
+            self.assertEqual(empty_px.name(), QColor(MINIMAP_SUBTITLE_LANE_BG).name())
             self.assertGreater(subtitle_px.blue(), subtitle_px.red())
         finally:
             timeline.close()
@@ -3620,7 +3620,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             pixmap = canvas._build_static_cache()
             image = pixmap.toImage()
-            subtitle_y = (canvas.height() // 2) + 4
+            subtitle_y = MINIMAP_MARKER_LANE_H + 6
             bridge_x = canvas._sec_to_px(1.22)
             bridge_px = image.pixelColor(bridge_x, subtitle_y)
 

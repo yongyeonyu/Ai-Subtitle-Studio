@@ -57,10 +57,13 @@ def test_native_resource_allocation_attaches_default_task_priorities():
             {},
             requests=[
                 {"task": "roughcut_llm", "workload": 1},
+                {"task": "vad", "workload": 1},
+                {"task": "audio_extract", "workload": 1},
                 {"task": "cut_pioneer", "workload": 1},
                 {"task": "stt_precision", "workload": 1},
                 {"task": "stt2", "workload": 1},
                 {"task": "subtitle_llm", "workload": 1},
+                {"task": "subtitle_optimize", "workload": 1},
             ],
             max_age_sec=0,
         )
@@ -70,6 +73,10 @@ def test_native_resource_allocation_attaches_default_task_priorities():
     assert priorities["cut_pioneer"] > priorities["stt_precision"]
     assert priorities["stt_precision"] > priorities["stt2"]
     assert priorities["stt_precision"] > priorities["subtitle_llm"]
+    assert priorities["subtitle_llm"] > priorities["subtitle_optimize"]
+    assert priorities["subtitle_optimize"] > priorities["audio_extract"]
+    assert priorities["audio_extract"] > priorities["vad"]
+    assert priorities["vad"] > priorities["roughcut_llm"]
     assert priorities["subtitle_llm"] > priorities["roughcut_llm"]
 
 
