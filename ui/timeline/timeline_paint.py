@@ -47,7 +47,11 @@ from ui.timeline.timeline_analysis import (
     roughcut_major_markers_for_widget,
     subtitle_score_overlay_marker,
 )
-from ui.timeline.timeline_roughcut_paint import coalesce_roughcut_paint_markers, visible_roughcut_label_span
+from ui.timeline.timeline_roughcut_paint import (
+    coalesce_roughcut_paint_markers,
+    expanded_roughcut_marker_span,
+    visible_roughcut_label_span,
+)
 from ui.timeline.paint_passes import (
     build_aggregate_vector_subtitle_paint_plan,
     build_cut_boundary_work_lane_paint_plan,
@@ -72,6 +76,7 @@ from ui.timeline.timeline_segment_style import (
     final_stt_selection_source,
     segment_text_kind,  # noqa: F401 - compatibility re-export for tests/legacy callers
     speaker_segment_fill_hex,
+    speaker_segment_text_hex,
     stt_candidate_selected,  # noqa: F401 - compatibility re-export for tests/legacy callers
     stt_candidate_selected_by_llm,  # noqa: F401 - compatibility re-export for tests/legacy callers
     stt_candidate_selection_state,  # noqa: F401 - compatibility re-export for tests/legacy callers
@@ -788,7 +793,7 @@ class TimelinePaintMixin:
             box_h = max(12, lane_h - 6)
             text_color = QColor("#E7F5EE")
             text_shadow = QColor(0, 0, 0, 120)
-            text_font = QFont(config.FONT, 9, QFont.Weight.Bold)
+            text_font = QFont(config.FONT, 11, QFont.Weight.Bold)
 
             def _draw_major_label(marker, x1: int, x2: int) -> None:
                 width = max(2, int(x2 - x1) + 1)
@@ -822,8 +827,7 @@ class TimelinePaintMixin:
                 for marker in markers:
                     start = max(0.0, float(marker.get("start", 0.0) or 0.0))
                     end = max(start, float(marker.get("end", start) or start))
-                    x1 = self._x(start)
-                    x2 = self._x(end)
+                    x1, x2 = expanded_roughcut_marker_span(self._x(start), self._x(end))
                     if x2 < clip.left() or x1 > clip.right():
                         continue
                     color = QColor(str(marker.get("color", "#34C759")))
@@ -853,8 +857,7 @@ class TimelinePaintMixin:
             for marker in markers:
                 start = max(0.0, float(marker.get("start", 0.0) or 0.0))
                 end = max(start, float(marker.get("end", start) or start))
-                x1 = self._x(start)
-                x2 = self._x(end)
+                x1, x2 = expanded_roughcut_marker_span(self._x(start), self._x(end))
                 if x2 < clip.left() or x1 > clip.right():
                     continue
                 color = QColor(str(marker.get("color", "#34C759")))
@@ -1268,7 +1271,17 @@ class TimelinePaintMixin:
             for seg, rect, selection_state, is_selected, visual in detail_items:
                     text_color = QColor(visual["text"])
                     badge_w = 36 if is_selected and rect.width() >= 90 else 0
-                    text_rect = QRect(rect.x() + 8, rect.y() + 5, max(8, rect.width() - 16 - badge_w), rect.height() - 10)
+                    center_stt1_badge = bool(
+                        badge_w
+                        and selection_state != "llm"
+                        and stt_preview_source(seg) == "STT1"
+                    )
+                    text_rect = QRect(
+                        rect.x() + 8,
+                        rect.y() + 5,
+                        max(8, rect.width() - 16 - (0 if center_stt1_badge else badge_w)),
+                        rect.height() - 10,
+                    )
                     p.setPen(text_color)
                     preview_text = str(seg.get("text", "") or "")
                     if not preview_text.strip().strip(".·…"):
@@ -1285,7 +1298,18 @@ class TimelinePaintMixin:
                         p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, preview_text)
                     p.restore()
                     if badge_w:
-                        badge_rect = QRect(rect.right() - badge_w - 4, rect.y() + 6, badge_w, 18)
+                        if center_stt1_badge:
+                            # KEEP: only the STT1 preview "선택" badge lives in the
+                            # visual center. Subtitle-segment badges and STT2 badges
+                            # intentionally keep their prior edge-aligned placement.
+                            badge_rect = QRect(
+                                rect.x() + max(4, (rect.width() - badge_w) // 2),
+                                rect.y() + 6,
+                                badge_w,
+                                18,
+                            )
+                        else:
+                            badge_rect = QRect(rect.right() - badge_w - 4, rect.y() + 6, badge_w, 18)
                         badge_fill = QColor(COLORS["warning_badge"] if selection_state == "llm" else "#174A2A")
                         badge_border = QColor(COLORS["warning"] if selection_state == "llm" else "#34C759")
                         badge_text = "LLM" if selection_state == "llm" else "선택"
@@ -1386,7 +1410,7 @@ class TimelinePaintMixin:
                     speaker_color_key = str(row.get("color") or "#8E8E93")
                     speaker_color_name = speaker_color_cache.get(speaker_color_key)
                     if speaker_color_name is None:
-                        speaker_color_name = QColor(speaker_color_key).darker(135).name()
+                        speaker_color_name = speaker_segment_fill_hex(speaker_color_key)
                         speaker_color_cache[speaker_color_key] = speaker_color_name
                     speaker_batches.setdefault(speaker_color_name, []).append(row_rect)
                 drawn_ids.add(id(seg))
@@ -1905,8 +1929,15 @@ class TimelinePaintMixin:
         return out
 
     def _fill_speaker_rows(self, p, rect: QRect, rows: list[dict] | None):
-        for row, row_rect in self._speaker_row_rects(rect, rows):
+        row_rects = self._speaker_row_rects(rect, rows)
+        p.save()
+        for row, row_rect in row_rects:
             p.fillRect(row_rect, QColor(speaker_segment_fill_hex(str(row.get("color") or "#8E8E93"))))
+        if len(row_rects) > 1:
+            p.setPen(QPen(QColor(0, 0, 0, 120), 1))
+            for _row, row_rect in row_rects[:-1]:
+                p.drawLine(row_rect.left(), row_rect.bottom(), row_rect.right(), row_rect.bottom())
+        p.restore()
 
     def _draw_speaker_names(self, p, rect: QRect, color: QColor, names: list[str], rows: list[dict] | None = None):
         row_entries = [dict(row or {}) for row in list(rows or [])[:2]]
@@ -1929,30 +1960,20 @@ class TimelinePaintMixin:
         visible_names = [str(row.get("name", "") or "").strip() for row in visible_rows]
         multi_line = len(visible_names) > 1
         font_size = 7 if multi_line else 8
+        p.save()
         p.setFont(QFont(config.FONT, font_size, QFont.Weight.Bold))
         fm = p.fontMetrics()
-        dot = 6 if multi_line else 8
-        text_gap = 5 if multi_line else 6
-        max_row_w = max(
-            dot + text_gap + fm.horizontalAdvance(name)
-            for name in visible_names
-        )
-        x = rect.x() + max(6, (rect.width() - max_row_w) // 2)
-        max_text_w = max(8, rect.right() - x - dot - text_gap - 4)
-
+        text_pad = 7
         for row, row_rect in self._speaker_row_rects(rect, visible_rows):
             name = str(row.get("name", "") or "").strip()
             if not name:
                 continue
-            dot_color = QColor(str(row.get("color") or color.name()))
-            dot_y = row_rect.y() + max(0, (row_rect.height() - dot) // 2)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(dot_color)
-            p.drawEllipse(QRect(x, dot_y, dot, dot))
-            p.setPen(QColor("#E8EEF4"))
-            text_rect = QRect(x + dot + text_gap, row_rect.y(), max_text_w, row_rect.height())
+            p.setPen(QColor(speaker_segment_text_hex(str(row.get("color") or color.name()))))
+            text_rect = row_rect.adjusted(text_pad, 0, -text_pad, 0)
+            max_text_w = max(8, text_rect.width())
             text = fm.elidedText(name, Qt.TextElideMode.ElideRight, max_text_w)
             p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        p.restore()
 
     def _hover_handle_matches(self, seg, edge: str) -> bool:
         hovered = getattr(self, "_hover_handle", None)

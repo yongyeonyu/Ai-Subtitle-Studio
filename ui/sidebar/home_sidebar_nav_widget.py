@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
+from core.runtime import config
 from ui.gpu_rendering import scenegraph_enabled
 
 
@@ -41,6 +42,8 @@ class HomeSidebarNavWidget(QWidget):
             layout.addWidget(fallback)
 
     def _create_quick_panel(self):
+        if not self._scenegraph_nav_allowed():
+            return None
         if not scenegraph_enabled("project"):
             return None
         qml_path = os.path.normpath(
@@ -70,6 +73,21 @@ class HomeSidebarNavWidget(QWidget):
             return quick
         except Exception:
             return None
+
+    def _scenegraph_nav_allowed(self) -> bool:
+        # KEEP: this nav is the one widget in the left-top sidebar that updates
+        # every time subtitle-generation stage/runtime text changes. On macOS,
+        # the transparent QQuickWidget path can leave stale fragments or clipped
+        # rows during those live updates, which shows up exactly as the
+        # "top-left UI broke while subtitle generation moved stages" bug.
+        #
+        # Keep the QWidget fallback as the default stable path on macOS and
+        # require an explicit opt-in to revive the SceneGraph version for
+        # diagnostics. Do not remove this guard unless the live stage-refresh
+        # path is revalidated against repeated generation runs in the real app.
+        if not bool(getattr(config, "IS_MAC", False)):
+            return True
+        return str(os.environ.get("AI_SUBTITLE_HOME_NAV_SCENEGRAPH", "0")).strip().lower() in {"1", "true", "yes", "on"}
 
     def set_items(self, items: list[dict]):
         self._items = [dict(item or {}) for item in (items or [])]

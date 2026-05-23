@@ -628,6 +628,19 @@ def prepare_editor_segments_for_load_via_swift(
     segments: list | tuple,
     fps: float = 30.0,
 ) -> list[dict[str, Any]] | None:
+    decoded = prepare_editor_segment_sync_model_via_swift(
+        segments=segments,
+        fps=fps,
+    )
+    rows = decoded.get("segments") if isinstance(decoded, dict) else None
+    return list(rows) if isinstance(rows, list) else None
+
+
+def prepare_editor_segment_sync_model_via_swift(
+    *,
+    segments: list | tuple,
+    fps: float = 30.0,
+) -> dict[str, Any] | None:
     payload: dict[str, Any] = {
         "segments": [
             {
@@ -636,6 +649,13 @@ def prepare_editor_segments_for_load_via_swift(
                 "end": float(item.get("end", item.get("start", 0.0)) or item.get("start", 0.0) or 0.0),
                 "text": str(item.get("text", "") or ""),
                 "isGap": bool(item.get("is_gap", False)),
+                "speaker": str(item.get("speaker", item.get("spk", "")) or ""),
+                "speaker2": str(item.get("speaker2", "") or ""),
+                "speakerList": [
+                    str(value or "")
+                    for value in list(item.get("speaker_list") or [])
+                    if str(value or "")
+                ],
             }
             for index, item in enumerate(list(segments or []))
             if isinstance(item, dict)
@@ -645,8 +665,7 @@ def prepare_editor_segments_for_load_via_swift(
     decoded = _request_worker("editor_load_prep", payload)
     if decoded is None:
         decoded = _run_json_command("timeline-editor-load-prep-json", payload, timeout=3.0)
-    rows = decoded.get("segments") if isinstance(decoded, dict) else None
-    return list(rows) if isinstance(rows, list) else None
+    return decoded if isinstance(decoded, dict) else None
 
 
 def build_subtitle_drag_snap_base_via_swift(
@@ -783,6 +802,7 @@ __all__ = [
     "build_live_subtitle_preview_via_swift",
     "plan_stt_candidate_selection_via_swift",
     "match_srt_project_metadata_via_swift",
+    "prepare_editor_segment_sync_model_via_swift",
     "prepare_editor_segments_for_load_via_swift",
     "build_subtitle_drag_snap_base_via_swift",
     "plan_subtitle_timing_edit_via_swift",

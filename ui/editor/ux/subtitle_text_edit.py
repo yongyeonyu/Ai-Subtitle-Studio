@@ -1158,11 +1158,12 @@ class SubtitleTextEdit(QTextEdit):
 
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             parent = getattr(self, "_parent_widget", None)
-            if parent and getattr(parent, "_stt_mode_enabled", False) and hasattr(parent, "_handle_stt_enter"):
-                parent._handle_stt_enter()
-                return
+            # 변경 금지: Cmd/Ctrl+Enter는 STT 입력 확정보다 우선하는 화자 자동 분리 단축키다.
             if mod & Qt.KeyboardModifier.ControlModifier or mod & Qt.KeyboardModifier.MetaModifier:
                 self._handle_speaker_split()
+                return
+            if parent and getattr(parent, "_stt_mode_enabled", False) and hasattr(parent, "_handle_stt_enter"):
+                parent._handle_stt_enter()
                 return
             elif mod & Qt.KeyboardModifier.ShiftModifier:
                 self._handle_simple_break()
@@ -1204,12 +1205,17 @@ class SubtitleTextEdit(QTextEdit):
 
     def _handle_speaker_split(self):
         cur = self.textCursor()
+        parent = getattr(self, "_parent_widget", None)
+        split_handler = getattr(parent, "split_speaker_segment_with_text", None)
+        if callable(split_handler):
+            split_handler(cur.block().blockNumber(), cur.columnNumber())
+            return
+
         block = cur.block()
         ud = block.userData()
         start_sec = ud.start_sec if isinstance(ud, SubtitleBlockData) else 0.0
         spk = ud.spk_id if isinstance(ud, SubtitleBlockData) else "00"
         
-        parent = getattr(self, "_parent_widget", None)
         spk1_id = "00"; spk2_id = "01"
         if parent and hasattr(parent, "settings"):
             spk1_id = parent.settings.get("spk1_id", "00")

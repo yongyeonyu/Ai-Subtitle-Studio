@@ -105,52 +105,7 @@ extension TimelineEditing {
     }
 
     public static func prepareEditorSegmentsForLoad(_ request: TimelineEditorLoadRequest) -> TimelineEditorLoadResponse {
-        let fps = max(1.0, request.frameRate.isFinite ? request.frameRate : 30.0)
-        var prepared: [TimelineEditorLoadPreparedSegment] = []
-        prepared.reserveCapacity(request.segments.count)
-
-        for item in request.segments {
-            let start = snapSecToFrame(max(0.0, item.start), fps: fps)
-            var end = snapSecToFrame(max(start, item.end.isFinite ? item.end : start), fps: fps)
-            if end <= start {
-                end = snapSecToFrame(start + 0.5, fps: fps)
-            }
-
-            if item.isGap ?? false {
-                prepared.append(
-                    TimelineEditorLoadPreparedSegment(
-                        sourceIndex: item.sourceIndex,
-                        start: start,
-                        end: end,
-                        text: "",
-                        parts: [],
-                        isGap: true
-                    )
-                )
-                continue
-            }
-
-            let cleaned = cleanEditorLoadText(item.text)
-            let parts = cleaned
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .map(String.init)
-                .filter { !$0.isEmpty }
-            if parts.isEmpty {
-                continue
-            }
-            prepared.append(
-                TimelineEditorLoadPreparedSegment(
-                    sourceIndex: item.sourceIndex,
-                    start: start,
-                    end: end,
-                    text: parts.joined(separator: "\n"),
-                    parts: parts,
-                    isGap: false
-                )
-            )
-        }
-
-        return TimelineEditorLoadResponse(segments: prepared)
+        SubtitleEditorSyncNative.prepareLoadResponse(request)
     }
 
     static func cleanEditorLoadText(_ text: String) -> String {

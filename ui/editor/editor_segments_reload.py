@@ -87,6 +87,16 @@ class EditorSegmentsReloadMixin:
             self._rebuild_subtitle_memory_cache(timeline_segments)
         else:
             self._cached_segs = timeline_segments
+        capture_canonical = getattr(self, "_capture_canonical_editor_sync_snapshot", None)
+        if callable(capture_canonical):
+            try:
+                # 변경 금지: 수동 시간 편집/화살표 병합 직후에는 기존 canonical
+                # timestamp snapshot이 방금 바뀐 end_sec를 되돌릴 수 있다.
+                # 런타임 캐시를 갱신한 같은 tick에서 canonical도 현재 문서 상태로
+                # 갱신해야 에디터/세그먼트/타임라인 시간이 다시 갈라지지 않는다.
+                capture_canonical(segments=timeline_segments)
+            except Exception:
+                pass
         refresher = getattr(self, "_refresh_editor_timestamp_metadata", None)
         if callable(refresher):
             refresher(full=True)
@@ -112,6 +122,7 @@ class EditorSegmentsReloadMixin:
         self._reload_segments_clear_runtime_queues()
         self._is_initial_load = (True if segs else False) and not bool(preserve_view)
         prev_suspend_autoseek = bool(getattr(self, "_suspend_append_segments_autoseek", False))
+        timeline_segments = list(segs)
         if preserve_view:
             self._suspend_append_segments_autoseek = True
         text_edit, timestamp_area, timeline = self._reload_segments_suspend_updates()
@@ -125,3 +136,15 @@ class EditorSegmentsReloadMixin:
                 timestamp_area=timestamp_area,
                 timeline=timeline,
             )
+        sync_guard = getattr(self, "_enforce_editor_segment_sync_after_reload", None)
+        if callable(sync_guard):
+            try:
+                sync_guard(list(timeline_segments or []))
+            except Exception:
+                pass
+        timeline_sync_guard = getattr(self, "_enforce_timeline_segment_sync_after_reload", None)
+        if callable(timeline_sync_guard):
+            try:
+                timeline_sync_guard(list(timeline_segments or []))
+            except Exception:
+                pass

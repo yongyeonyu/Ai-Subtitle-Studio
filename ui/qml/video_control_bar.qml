@@ -3,6 +3,7 @@ import QtQuick 2.15
 Rectangle {
     id: root
     property int gap: 6
+    property int groupGap: 6
     property string timeText: "00:00 / 00:00"
     property string infoText: ""
     property string frameText: ""
@@ -13,6 +14,10 @@ Rectangle {
     property bool scanNextActive: false
     property int contentLeftInset: 0
     property int contentRightInset: 0
+    property int timeWidth: 108
+    property int frameWidth: 124
+    property int infoWidth: 220
+    property int sourceWidth: 240
 
     signal playRequested()
     signal prevFrameRequested()
@@ -162,7 +167,7 @@ Rectangle {
         }
 
         Rectangle {
-            width: timeTextItem.implicitWidth + 22
+            width: root.timeWidth
             height: 32
             radius: 9
             color: badgeBackground()
@@ -170,18 +175,21 @@ Rectangle {
             border.color: playing ? "#34C759" : "#313A42"
             Text {
                 id: timeTextItem
-                anchors.centerIn: parent
+                anchors.left: parent.left
+                anchors.leftMargin: 11
+                anchors.verticalCenter: parent.verticalCenter
                 text: root.timeText
                 color: "#EAF2F8"
                 font.pixelSize: 11
                 font.bold: true
+                elide: Text.ElideRight
             }
         }
 
         Rectangle {
             id: frameBadge
             visible: root.frameText.length > 0
-            width: visible ? 124 : 0
+            width: visible ? root.frameWidth : 0
             height: 32
             radius: 9
             color: "#132831"
@@ -202,7 +210,7 @@ Rectangle {
     Item {
         id: statusRow
         anchors.left: controlRow.right
-        anchors.leftMargin: root.gap
+        anchors.leftMargin: root.groupGap
         anchors.right: parent.right
         anchors.rightMargin: root.contentRightInset + 8
         anchors.verticalCenter: parent.verticalCenter
@@ -211,14 +219,9 @@ Rectangle {
         Rectangle {
             id: infoBadge
             anchors.left: parent.left
+            anchors.right: sourceBadge.visible ? sourceBadge.left : parent.right
+            anchors.rightMargin: sourceBadge.visible ? root.groupGap : 0
             anchors.verticalCenter: parent.verticalCenter
-            width: Math.max(
-                160,
-                Math.min(
-                    Math.ceil(infoTextMetrics.boundingRect.width) + 28,
-                    Math.max(160, Math.floor(parent.width * 0.24))
-                )
-            )
             height: 36
             radius: 0
             color: "transparent"
@@ -228,8 +231,8 @@ Rectangle {
             Text {
                 id: infoTextItem
                 anchors.fill: parent
-                anchors.leftMargin: 13
-                anchors.rightMargin: 13
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
                 anchors.topMargin: 4
                 anchors.bottomMargin: 4
                 text: root.infoText
@@ -247,13 +250,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             visible: root.sourceNameText.length > 0
-            width: visible ? Math.max(
-                156,
-                Math.min(
-                    Math.ceil(sourceTextMetrics.boundingRect.width) + 28,
-                    Math.max(156, Math.floor(parent.width * 0.22))
-                )
-            ) : 0
+            width: visible ? Math.min(root.sourceWidth, Math.max(0, parent.width - root.groupGap)) : 0
             height: 36
             radius: 0
             color: "transparent"
@@ -263,8 +260,8 @@ Rectangle {
             Text {
                 id: sourceText
                 anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
+                anchors.leftMargin: 8
+                anchors.rightMargin: 6
                 anchors.topMargin: 4
                 anchors.bottomMargin: 4
                 text: root.sourceNameText

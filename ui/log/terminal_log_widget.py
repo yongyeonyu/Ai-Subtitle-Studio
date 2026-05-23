@@ -2,11 +2,12 @@
 # Phase: PHASE2
 """Terminal log panel widget."""
 
+import sys
 import re
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QTextCursor
-from PyQt6.QtWidgets import QTextEdit, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
 from ui.style import named_panel_style
 
@@ -486,6 +487,61 @@ class FriendlyTerminalLogTextEdit(QTextEdit):
             self.verticalScrollBar().setValue(scroll_value)
 
 
+class _NullScrollBar:
+    def maximum(self) -> int:
+        return 0
+
+    def setValue(self, _value: int) -> None:
+        return
+
+
+class BufferedTerminalLogSink:
+    """Non-widget log sink for stdin helper/bootstrap runs."""
+
+    def __init__(self) -> None:
+        self._max_lines = 800
+        self._raw_lines: list[str] = []
+        self._display_entries: list[tuple[str, str]] = []
+        self._progress_snapshot_getter = None
+        self._scroll_bar = _NullScrollBar()
+
+    def raw_log_text(self) -> str:
+        return "\n".join(self._raw_lines)
+
+    def toPlainText(self) -> str:
+        return "\n".join(summary for _, summary in self._display_entries)
+
+    def set_progress_snapshot_getter(self, getter) -> None:
+        self._progress_snapshot_getter = getter if callable(getter) else None
+
+    def append(self, text: str) -> None:
+        line = str(text or "")
+        if not line.strip():
+            return
+        self._raw_lines.append(line)
+        if len(self._raw_lines) > self._max_lines:
+            self._raw_lines = self._raw_lines[-self._max_lines:]
+        category, summary = _friendly_log_entry(line)
+        if not summary:
+            return
+        if self._display_entries and self._display_entries[-1][0] == category:
+            if self._display_entries[-1][1] == summary:
+                return
+            self._display_entries[-1] = (category, summary)
+        else:
+            self._display_entries.append((category, summary))
+        if len(self._display_entries) > self._max_lines:
+            self._display_entries = self._display_entries[-self._max_lines:]
+
+    def verticalScrollBar(self) -> _NullScrollBar:
+        return self._scroll_bar
+
+
+def should_use_lightweight_terminal_panel() -> bool:
+    argv0 = str((sys.argv or [""])[0] or "").strip()
+    return argv0 in {"-", "-c"}
+
+
 class TerminalLogWidget(QWidget):
     """Terminal log panel that owns the QTextEdit used by MainWindow logging."""
 
@@ -523,3 +579,28 @@ class TerminalLogWidget(QWidget):
         if max_height is not None:
             target = min(int(max_height), target)
         return max(0, int(target))
+
+
+class LightweightTerminalLogPanel(QWidget):
+    """stdin helper path should not build the QTextEdit startup tree."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("TerminalLogPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(named_panel_style("TerminalLogPanel", "surface", radius=7))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(0)
+
+        label = QLabel("Helper log panel")
+        label.setStyleSheet("color: #6D7780; background: transparent; border: none; font-size: 10px;")
+        layout.addWidget(label)
+        self.log_text = BufferedTerminalLogSink()
+
+    def preferred_panel_height(self, *, min_height: int = 128, max_height: int | None = 188) -> int:
+        target = max(0, int(min_height))
+        if max_height is not None:
+            target = min(int(max_height), target)
+        return target

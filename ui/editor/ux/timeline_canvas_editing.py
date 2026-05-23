@@ -583,14 +583,50 @@ class TimelineInlineEditMixin:
             rect = rect.adjusted(0, 0, 180, 0)
         return rect
 
+    def _inline_edit_fast_refresh_rect(self, line_num=None) -> QRect:
+        bounds = QRect(0, 0, max(1, int(self.width())), max(1, int(self.height())))
+        rect = self._inline_edit_repaint_rect(line_num)
+        if not rect.isValid() or rect.isEmpty():
+            return bounds
+        return rect.adjusted(-8, -8, 8, 8).intersected(bounds)
+
+    def _flush_inline_edit_fast_refresh(self, rect: QRect) -> None:
+        try:
+            if not self.isVisible():
+                return
+            if rect.isValid() and not rect.isEmpty():
+                self.update(rect.intersected(QRect(0, 0, max(1, self.width()), max(1, self.height()))))
+            else:
+                self.update()
+            notify = getattr(self, "_notify_scenegraph_layer", None)
+            if callable(notify):
+                notify()
+        except RuntimeError:
+            return
+
+    def _request_inline_edit_fast_refresh(self, line_num=None, *, immediate: bool = False) -> None:
+        rect = self._inline_edit_fast_refresh_rect(line_num)
+        if hasattr(self, "_update_dirty_rect"):
+            self._update_dirty_rect(rect)
+        elif rect.isValid() and not rect.isEmpty():
+            self.update(rect)
+        else:
+            self.update()
+        if immediate:
+            try:
+                self.repaint(rect)
+            except RuntimeError:
+                pass
+        for delay_ms in (0, 16, 48):
+            QTimer.singleShot(
+                delay_ms,
+                lambda r=QRect(rect): self._flush_inline_edit_fast_refresh(r),
+            )
+
     def _update_inline_edit_region(self, line_num=None):
         if self._edit_active:
             self._sync_inline_editor_geometry()
-        rect = self._inline_edit_repaint_rect(line_num)
-        if hasattr(self, "_update_dirty_rect"):
-            self._update_dirty_rect(rect)
-        else:
-            self.update()
+        self._request_inline_edit_fast_refresh(line_num)
 
     def _set_pending_split_from_playhead(self, seg: dict | None, *, enabled: bool) -> None:
         if hasattr(self, "_pending_split_sec"):
@@ -657,13 +693,9 @@ class TimelineInlineEditMixin:
         editor.show()
         editor.raise_()
         editor.setFocus(Qt.FocusReason.MouseFocusReason if click_x is not None else Qt.FocusReason.OtherFocusReason)
-        dirty = self._inline_edit_repaint_rect(line_num)
+        self._request_inline_edit_fast_refresh(line_num, immediate=True)
         if old_line >= 0:
-            dirty = dirty.united(self._inline_edit_repaint_rect(old_line))
-        if hasattr(self, "_update_dirty_rect"):
-            self._update_dirty_rect(dirty)
-        else:
-            self.update()
+            self._request_inline_edit_fast_refresh(old_line)
 
     def _blink_cursor(self):
         if self._edit_active and not self._native_inline_editor_active():
@@ -714,7 +746,7 @@ class TimelineInlineEditMixin:
         self._cursor_timer.stop()
         if editor is not None:
             editor.clearFocus(); editor.hide()
-        self._update_inline_edit_region(line)
+        self._request_inline_edit_fast_refresh(line, immediate=True)
         # 편집 종료 신호 전에 canvas 포커스를 회복해야 전역 Space 재생 단축키가 다시 켜진다.
         self.setFocus(); self.sig_editing_mode.emit(False)
 

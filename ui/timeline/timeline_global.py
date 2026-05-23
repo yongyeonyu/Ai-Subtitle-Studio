@@ -18,6 +18,7 @@ from ui.timeline.timeline_analysis import (
 )
 from ui.dialogs.qml_popup import show_context_menu
 from ui.gpu_rendering import configure_lightweight_paint
+from ui.timeline.timeline_segment_style import stt_preview_source
 from ui.ux.apple_black_palette import APPLE_BLACK_MINIMAP
 
 GLOBAL_TIMELINE_RENDER_BACKEND_2D = "qwidget-2d"
@@ -38,7 +39,10 @@ MINIMAP_PENDING_FILL = QColor(*APPLE_BLACK_MINIMAP["pending_fill_rgba"])
 MINIMAP_PENDING_BORDER = QColor(APPLE_BLACK_MINIMAP["pending_border"])
 MINIMAP_SUBTITLE_MERGE_GAP_PX = 4
 MINIMAP_MARKER_LANE_H = 28
-MINIMAP_HEIGHT = 104
+# KEEP: the lower summary area was reduced by 20% (75px -> 60px) so the
+# recovered space can make STT1/STT2 preview rows taller without changing the
+# rest of the timeline scenario.
+MINIMAP_HEIGHT = 89
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -145,6 +149,17 @@ class GlobalCanvas(GlobalCanvasBase):
     def update_segments(self, segs, total_dur, *, signature=None, rows=None):
         if rows is None:
             rows = [s for s in segs if not s.get("is_gap")]
+        lane_checksum = 0
+        for seg in rows:
+            try:
+                start_ms = int(round(float(seg.get("start", 0.0) or 0.0) * 1000.0))
+                end_ms = int(round(float(seg.get("end", seg.get("start", 0.0)) or 0.0) * 1000.0))
+            except Exception:
+                start_ms = 0
+                end_ms = 0
+            source = self._minimap_lane_for_segment(seg)
+            lane_hash = {"SUBTITLE": 11, "STT1": 17, "STT2": 23}.get(source, 5)
+            lane_checksum = ((lane_checksum * 1000003) ^ (start_ms * 31) ^ (end_ms * 17) ^ lane_hash) & 0xFFFFFFFF
         if signature is None:
             checksum = 0
             for seg in rows:
@@ -156,6 +171,7 @@ class GlobalCanvas(GlobalCanvasBase):
                     end_ms = 0
                 checksum = ((checksum * 1000003) ^ (start_ms * 31) ^ end_ms) & 0xFFFFFFFF
             signature = (len(rows), int(round(float(total_dur or 0.0) * 1000.0)), checksum)
+        signature = (signature, lane_checksum)
         if signature == getattr(self, "_segments_signature", None):
             self.segments = rows
             self.total_duration = total_dur
@@ -193,6 +209,14 @@ class GlobalCanvas(GlobalCanvasBase):
         return int(max(0.0, float(sec or 0.0)) * self.width() / total)
 
     def _static_key(self):
+        silence_signature = tuple(
+            (
+                round(float(marker.get("start", 0.0) or 0.0), 3),
+                round(float(marker.get("end", marker.get("start", 0.0)) or 0.0), 3),
+                str(marker.get("kind", "") or ""),
+            )
+            for marker in self._minimap_silence_source_segments()
+        )
         major_signature = tuple(
             (
                 round(float(marker.get("start", 0.0) or 0.0), 3),
@@ -230,6 +254,7 @@ class GlobalCanvas(GlobalCanvasBase):
             len(self.segments),
             len(self.vad_segments),
             id(self._waveform),
+            silence_signature,
             major_signature,
             preliminary_signature,
             topicless_signature,
@@ -278,22 +303,37 @@ class GlobalCanvas(GlobalCanvasBase):
         self._waveform_columns = columns
         return columns
 
-    def _merged_minimap_subtitle_segments(self, width: int, total: float) -> list[dict]:
+    def _minimap_lane_for_segment(self, seg: dict) -> str:
+        if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
+            source = stt_preview_source(seg)
+            return "STT2" if source == "STT2" else "STT1"
+        return "SUBTITLE"
+
+    def _merged_minimap_segments(
+        self,
+        width: int,
+        total: float,
+        *,
+        lanes: tuple[str, ...],
+        output_lane: str,
+    ) -> list[dict]:
         rows: list[dict] = []
         if width <= 0 or total <= 0:
             return rows
+        lane_set = set(str(name) for name in lanes)
         max_gap_sec = float(MINIMAP_SUBTITLE_MERGE_GAP_PX) * float(total) / float(max(1, width))
         for seg in sorted(list(self.segments or []), key=lambda item: float(item.get("start", 0.0) or 0.0)):
+            if self._minimap_lane_for_segment(seg) not in lane_set:
+                continue
             try:
                 start = max(0.0, float(seg.get("start", 0.0) or 0.0))
                 end = max(start, float(seg.get("end", start) or start))
             except Exception:
                 continue
-            pending = bool(seg.get("stt_pending"))
             text = str(seg.get("text", "") or "").strip()
             if rows:
                 prev = rows[-1]
-                if pending == bool(prev.get("stt_pending")) and start <= float(prev.get("end", 0.0) or 0.0) + max_gap_sec:
+                if start <= float(prev.get("end", 0.0) or 0.0) + max_gap_sec:
                     prev["end"] = max(float(prev.get("end", 0.0) or 0.0), end)
                     if text:
                         prev_text = str(prev.get("text", "") or "").strip()
@@ -305,12 +345,92 @@ class GlobalCanvas(GlobalCanvasBase):
                 {
                     "start": start,
                     "end": end,
-                    "stt_pending": pending,
+                    "lane": output_lane,
                     "text": text,
                     "count": 1,
                 }
             )
         return rows
+
+    def _merged_minimap_subtitle_segments(self, width: int, total: float, *, lane: str = "SUBTITLE") -> list[dict]:
+        return self._merged_minimap_segments(width, total, lanes=(lane,), output_lane=lane)
+
+    def _merged_minimap_pending_segments(self, width: int, total: float) -> list[dict]:
+        return self._merged_minimap_segments(width, total, lanes=("STT1", "STT2"), output_lane="PENDING")
+
+    def _minimap_silence_source_segments(self) -> list[dict]:
+        timeline = self.parent()
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        rows: list[dict] = []
+        if canvas is not None:
+            cached_markers = []
+            if hasattr(canvas, "generation_silence_markers_cached"):
+                try:
+                    cached_markers = list(canvas.generation_silence_markers_cached() or [])
+                except Exception:
+                    cached_markers = []
+            for marker in cached_markers:
+                if not isinstance(marker, dict):
+                    continue
+                kind = str(marker.get("kind", "") or "").strip().lower()
+                if kind and kind != "generation_silence":
+                    continue
+                rows.append(marker)
+            if rows:
+                return rows
+            for gap in list(getattr(canvas, "gap_segments", []) or []):
+                if isinstance(gap, dict):
+                    rows.append(gap)
+        return rows
+
+    def _merged_minimap_silence_segments(self, width: int, total: float) -> list[dict]:
+        rows: list[dict] = []
+        if width <= 0 or total <= 0:
+            return rows
+        max_gap_sec = float(MINIMAP_SUBTITLE_MERGE_GAP_PX) * float(total) / float(max(1, width))
+        for seg in sorted(self._minimap_silence_source_segments(), key=lambda item: float(item.get("start", 0.0) or 0.0)):
+            try:
+                start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+                end = max(start, float(seg.get("end", start) or start))
+            except Exception:
+                continue
+            if end <= start:
+                continue
+            if rows:
+                prev = rows[-1]
+                if start <= float(prev.get("end", 0.0) or 0.0) + max_gap_sec:
+                    prev["end"] = max(float(prev.get("end", 0.0) or 0.0), end)
+                    prev["count"] = int(prev.get("count", 1) or 1) + 1
+                    continue
+            rows.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "lane": "SILENCE",
+                    "count": 1,
+                }
+            )
+        return rows
+
+    def _bottom_lane_layout(self, bottom_lane: QRect, *, include_stt: bool) -> dict[str, QRect]:
+        # KEEP: the global canvas must remain a strict two-row minimap:
+        # upper purple row = silence summary, lower blue row = final subtitles.
+        # Re-expanding phrase/STT rows or reintroducing a third strip recreates
+        # the lower-widget layout the user explicitly removed.
+        names = ("SILENCE", "SUBTITLE")
+        top = int(bottom_lane.y())
+        height = max(1, int(bottom_lane.height()))
+        lanes: dict[str, QRect] = {}
+        for idx, name in enumerate(names):
+            row_top = top + int(round(height * idx / len(names)))
+            row_bot = top + int(round(height * (idx + 1) / len(names)))
+            lanes[name] = QRect(
+                int(bottom_lane.x()),
+                int(row_top),
+                max(1, int(bottom_lane.width())),
+                max(1, int(row_bot - row_top)),
+            )
+        return lanes
 
     def _build_static_cache(self) -> QPixmap:
         key = self._static_key()
@@ -419,34 +539,49 @@ class GlobalCanvas(GlobalCanvasBase):
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         if total > 0:
-            subtitle_lane = bottom_lane
-            p.fillRect(subtitle_lane, QColor(MINIMAP_SUBTITLE_LANE_BG))
+            silence_segments = self._merged_minimap_silence_segments(w, total)
+            subtitle_segments = self._merged_minimap_subtitle_segments(w, total, lane="SUBTITLE")
+            lane_rects = self._bottom_lane_layout(bottom_lane, include_stt=True)
+            for lane_name, lane_rect in lane_rects.items():
+                lane_bg = MINIMAP_SUBTITLE_LANE_BG if lane_name == "SUBTITLE" else MINIMAP_SILENCE_LANE_BG
+                p.fillRect(lane_rect, QColor(lane_bg))
+            if len(lane_rects) > 1:
+                p.setPen(QPen(MINIMAP_DIVIDER, 1))
+                for lane_rect in list(lane_rects.values())[1:]:
+                    p.drawLine(0, lane_rect.y() - 1, w, lane_rect.y() - 1)
             p.setPen(Qt.PenStyle.NoPen)
-            pending_rects: list[QRect] = []
+            silence_rects: list[QRect] = []
             confirmed_rects: list[QRect] = []
-            for s in self._merged_minimap_subtitle_segments(w, total):
-                rect = _rect_for_lane(
-                    float(s.get("start", 0.0) or 0.0),
-                    float(s.get("end", 0.0) or 0.0),
-                    subtitle_lane,
-                    min_h_pad=1,
-                )
-                if s.get("stt_pending"):
-                    pending_rects.append(rect)
-                else:
-                    confirmed_rects.append(rect)
+            for lane_name, lane_segments in (
+                ("SILENCE", silence_segments),
+                ("SUBTITLE", subtitle_segments),
+            ):
+                lane_rect = lane_rects.get(lane_name)
+                if lane_rect is None:
+                    continue
+                for s in lane_segments:
+                    rect = _rect_for_lane(
+                        float(s.get("start", 0.0) or 0.0),
+                        float(s.get("end", 0.0) or 0.0),
+                        lane_rect,
+                        min_h_pad=2 if len(lane_rects) > 1 else 1,
+                    )
+                    if lane_name == "SUBTITLE":
+                        confirmed_rects.append(rect)
+                    else:
+                        silence_rects.append(rect)
             if confirmed_rects:
                 p.setBrush(MINIMAP_SUBTITLE_FILL)
                 p.drawRects(confirmed_rects)
                 p.setPen(QPen(MINIMAP_SUBTITLE_BORDER, 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRects(confirmed_rects)
-            if pending_rects:
+            if silence_rects:
                 p.setBrush(MINIMAP_PENDING_FILL)
-                p.drawRects(pending_rects)
+                p.drawRects(silence_rects)
                 p.setPen(QPen(MINIMAP_PENDING_BORDER, 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRects(pending_rects)
+                p.drawRects(silence_rects)
 
         p.end()
         self._static_cache = pixmap

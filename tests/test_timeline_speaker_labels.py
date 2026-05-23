@@ -8,6 +8,7 @@ from ui.timeline.speaker_labels import (
     speaker_label_for_segment,
     speaker_rows_for_segment,
 )
+from ui.timeline.timeline_segment_style import speaker_segment_fill_hex, speaker_segment_text_hex
 
 
 class TimelineSpeakerLabelsTests(unittest.TestCase):
@@ -50,6 +51,12 @@ class TimelineSpeakerLabelsTests(unittest.TestCase):
 
         self.assertEqual([row["name"] for row in rows], ["인터뷰어", "게스트"])
         self.assertEqual([row["color"] for row in rows], ["#579DFF", "#75C76B"])
+
+    def test_speaker_segment_text_uses_configured_color_and_fill_uses_complement(self):
+        self.assertEqual(speaker_segment_text_hex("#579DFF"), "#579DFF")
+        self.assertEqual(speaker_segment_text_hex("#75c76b"), "#75C76B")
+        self.assertEqual(speaker_segment_fill_hex("#579DFF"), "#A86200")
+        self.assertEqual(speaker_segment_fill_hex("#75c76b"), "#8A3894")
 
 
 if __name__ == "__main__":

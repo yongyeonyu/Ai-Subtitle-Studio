@@ -230,6 +230,8 @@ class EditorSegmentsRuntimeCacheMixin:
         text_edit = getattr(self, "text_edit", None)
         if text_edit is None or not hasattr(text_edit, "document"):
             return 0
+        canonical_snapshot = getattr(text_edit, "_canonical_timestamp_block_meta_snapshot", None)
+        canonical_text_snapshot = getattr(text_edit, "_canonical_timestamp_block_text_snapshot", None)
         cache_valid = bool(getattr(self, "_segment_cache_valid", False))
         if not cache_valid:
             try:
@@ -258,9 +260,49 @@ class EditorSegmentsRuntimeCacheMixin:
             end_line = max(0, int(doc.blockCount()) - 1)
 
         repaired = 0
+        normalize_text = getattr(self, "_editor_sync_normalized_block_text", None)
+        if not callable(normalize_text):
+            normalize_text = lambda value: re.sub(r"\s+", " ", str(value or "").replace("\u2028", "\n").strip())
         block = doc.findBlockByNumber(int(start_line))
         while block.isValid() and block.blockNumber() <= int(end_line):
             current_meta = block.userData()
+            line_number = int(block.blockNumber())
+            current_text = normalize_text(block.text())
+            canonical_meta = None
+            if isinstance(canonical_snapshot, dict):
+                canonical_meta = canonical_snapshot.get(line_number)
+            canonical_text = None
+            if isinstance(canonical_text_snapshot, dict):
+                canonical_text = canonical_text_snapshot.get(line_number)
+            if isinstance(canonical_meta, dict):
+                canonical_text_ok = canonical_text is None or normalize_text(canonical_text) == current_text
+                if canonical_text_ok:
+                    needs_canonical_repair = not isinstance(current_meta, SubtitleBlockData)
+                    if isinstance(current_meta, SubtitleBlockData):
+                        try:
+                            canonical_start = float(canonical_meta.get("start_sec", 0.0) or 0.0)
+                            current_start = float(getattr(current_meta, "start_sec", 0.0) or 0.0)
+                            canonical_end = canonical_meta.get("end_sec")
+                            current_end = getattr(current_meta, "end_sec", None)
+                            canonical_gap = bool(canonical_meta.get("is_gap", False))
+                            current_gap = bool(getattr(current_meta, "is_gap", False))
+                            needs_canonical_repair = (
+                                abs(canonical_start - current_start) > 0.01
+                                or canonical_gap != current_gap
+                                or (canonical_end is None) != (current_end is None)
+                                or (
+                                    canonical_end is not None
+                                    and current_end is not None
+                                    and abs(float(canonical_end) - float(current_end)) > 0.01
+                                )
+                            )
+                        except Exception:
+                            needs_canonical_repair = False
+                    if needs_canonical_repair:
+                        block.setUserData(subtitle_block_data_from_meta(canonical_meta))
+                        repaired += 1
+                        block = block.next()
+                        continue
             seg = cached_line_map.get(int(block.blockNumber()))
             snapshot_meta = None
             if not isinstance(current_meta, SubtitleBlockData) and isinstance(snapshot, dict):
@@ -272,7 +314,21 @@ class EditorSegmentsRuntimeCacheMixin:
             if cache_valid and isinstance(current_meta, SubtitleBlockData) and isinstance(seg, dict):
                 try:
                     seg_start = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
-                    needs_repair = abs(float(current_meta.start_sec) - float(seg_start)) > 0.01
+                    seg_end = self._frame_time(max(seg_start, float(seg.get("end", seg_start) or seg_start)))
+                    current_end_raw = getattr(current_meta, "end_sec", None)
+                    current_end = (
+                        float(current_end_raw)
+                        if current_end_raw is not None
+                        else float(current_meta.start_sec)
+                    )
+                    # 변경 금지: 자막 에디터/세그먼트 싱크 복구는 start뿐 아니라
+                    # end도 반드시 비교해야 한다. 우측 화살표 병합/지우기 뒤에는
+                    # 텍스트와 start가 같아도 end만 바뀌는 경우가 있어, end 비교가
+                    # 빠지면 에디터는 0-1초, 타임라인은 0-2초처럼 서로 갈라진다.
+                    needs_repair = (
+                        abs(float(current_meta.start_sec) - float(seg_start)) > 0.01
+                        or abs(float(current_end) - float(seg_end)) > 0.01
+                    )
                 except Exception:
                     needs_repair = False
             if needs_repair:

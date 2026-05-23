@@ -106,6 +106,80 @@ class SubtitleLineBreakTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_reload_sync_repairs_corrupted_block_metadata_from_canonical_snapshot(self):
+        editor = self._editor()
+        try:
+            loaded = editor._bulk_load_segments_to_document(
+                [
+                    {"start": 1.0, "end": 3.0, "text": "- 안녕하세요\n- 반갑습니다", "speaker_list": ["00", "01"]},
+                    {"start": 4.0, "end": 5.0, "text": "다음 줄", "speaker_list": ["00"]},
+                ]
+            )
+
+            self.assertEqual(sorted(getattr(editor.text_edit, "_canonical_timestamp_block_meta_snapshot", {}).keys()), [0, 1, 2])
+            editor._rebuild_subtitle_memory_cache(loaded)
+            doc = editor.text_edit.document()
+            doc.findBlockByNumber(1).setUserData(SubtitleBlockData("01", 8.8, False, end_sec=9.4))
+            editor.text_edit._timestamp_block_meta_snapshot = {
+                0: {"spk_id": "00", "start_sec": 1.0, "end_sec": 3.0, "is_gap": False},
+                1: {"spk_id": "01", "start_sec": 8.8, "end_sec": 9.4, "is_gap": False},
+                2: {"spk_id": "00", "start_sec": 4.0, "end_sec": 5.0, "is_gap": False},
+            }
+
+            corrupted = editor._get_current_segments(force_rebuild=True)
+            self.assertNotEqual(
+                [(round(seg["start"], 1), round(seg["end"], 1), seg["text"]) for seg in corrupted],
+                [(1.0, 3.0, "- 안녕하세요\n- 반갑습니다"), (4.0, 5.0, "다음 줄")],
+            )
+
+            editor._enforce_editor_segment_sync_after_reload(loaded)
+
+            repaired = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(
+                [(round(seg["start"], 1), round(seg["end"], 1), seg["text"]) for seg in repaired],
+                [(1.0, 3.0, "- 안녕하세요\n- 반갑습니다"), (4.0, 5.0, "다음 줄")],
+            )
+        finally:
+            editor.text_edit.close()
+
+    def test_reload_sync_pushes_editor_canonical_rows_back_to_timeline_canvas(self):
+        class _Timeline:
+            def __init__(self):
+                self.canvas = type(
+                    "Canvas",
+                    (),
+                    {
+                        "segments": [
+                            {"start": 1.0, "end": 2.0, "text": "예전 자막"},
+                            {"start": 2.1, "end": 2.4, "text": "-", "stt_pending": True, "stt_preview_source": "STT2"},
+                        ]
+                    },
+                )()
+                self.updated = None
+
+            def update_segments(self, segs, active_sec, total_dur):
+                self.updated = (list(segs or []), active_sec, total_dur)
+                self.canvas.segments = list(segs or [])
+
+            def update(self):
+                pass
+
+        editor = self._editor()
+        try:
+            editor.timeline = _Timeline()
+            expected = [
+                {"start": 1.0, "end": 2.0, "text": "메뇨"},
+                {"start": 2.0, "end": 3.0, "text": "용유커피"},
+            ]
+
+            editor._enforce_timeline_segment_sync_after_reload(expected)
+
+            self.assertIsNotNone(editor.timeline.updated)
+            self.assertEqual([seg["text"] for seg in editor.timeline.canvas.segments], ["메뇨", "용유커피"])
+            self.assertFalse(any(seg.get("stt_pending") for seg in editor.timeline.canvas.segments))
+        finally:
+            editor.text_edit.close()
+
     def test_flush_queue_sorts_out_of_order_generated_segments_before_insert(self):
         editor = self._editor()
         try:

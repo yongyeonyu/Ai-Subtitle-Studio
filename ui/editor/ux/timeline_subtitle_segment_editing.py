@@ -2261,7 +2261,13 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             merge_pair = tuple(getattr(self, "_drag_merge_pair", ()) or ())
             guide_secs = self._drag_release_guide_secs()
             if edge in {"square_left", "square_right"} and len(merge_pair) == 2:
+                # 변경 금지: 화살표 병합/지우기 메뉴는 드래그 중 열린 QTextCursor
+                # edit block을 먼저 닫은 뒤 실행해야 한다. 닫기 전에 자막 블록
+                # userData(start/end)를 쓰면 Qt가 블록 병합 정리 과정에서 원래
+                # 시간으로 되돌려 자막 세그먼트와 에디터 싱크가 어긋난다.
+                self.drag_finished.emit()
                 self.diamond_merge.emit(int(merge_pair[0]), int(merge_pair[1]))
+                self._suppress_next_drag_finished_emit = True
             else:
                 self.seg_time_changed.emit(
                     self._drag_seg.get("line", 0),

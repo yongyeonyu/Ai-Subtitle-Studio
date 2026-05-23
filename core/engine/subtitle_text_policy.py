@@ -15,6 +15,7 @@ from typing import Any
 from core import correction_dictionary_db
 from core import native_text_cleanup
 from core.runtime.logger import get_logger
+from core.text_utils import strip_subtitle_quote_marks
 
 _TS_BRACKET = re.compile(r"\[\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s*\]\s*")
 _TS_NO_BRACKET = re.compile(r"^\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s+")
@@ -32,6 +33,14 @@ def strip_stt_control_tokens(text: str) -> str:
 
 def strip_forbidden_sentence_periods(text: str) -> str:
     return str(text or "").replace(".", "")
+
+
+def strip_forbidden_subtitle_quotes(text: str) -> str:
+    # KEEP: user subtitles do not use decorative quote marks.
+    # STT raw text, LLM rewrites, and LoRA prompt examples can still surface
+    # wrapped "..." / ‘...’ fragments, so the final subtitle contract strips
+    # them here for editor/save/render alike while preserving inner apostrophes.
+    return strip_subtitle_quote_marks(text)
 
 
 def normalize_subtitle_text_lines(text: str) -> str:
@@ -88,12 +97,12 @@ def _prepare_subtitle_text(text: str) -> str:
     if text != original:
         get_logger().log(f"[정제-시간태그] 삭제: '{str(original)[:15]}' => '{text[:15]}'")
     text = _JUNK_PATTERN.sub("", text)
-    text = strip_forbidden_sentence_periods(text).replace("\r", "")
+    text = strip_forbidden_subtitle_quotes(strip_forbidden_sentence_periods(text)).replace("\r", "")
     return normalize_subtitle_text_lines(text)
 
 
 def _finalize_subtitle_text(text: str) -> str:
-    return normalize_subtitle_text_lines(strip_forbidden_sentence_periods(text))
+    return normalize_subtitle_text_lines(strip_forbidden_subtitle_quotes(strip_forbidden_sentence_periods(text)))
 
 
 def _multi_speaker_linebreak_allowed(item: dict[str, Any]) -> bool:

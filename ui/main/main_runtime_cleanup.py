@@ -545,6 +545,83 @@ class MainRuntimeCleanupMixin:
         except Exception:
             return False
 
+    def _prioritize_video_playback_runtime(
+        self,
+        *,
+        editor=None,
+        reason: str = "video_playback_start",
+    ) -> dict:
+        """Hand runtime ownership back to video playback after subtitle generation."""
+        target_editor = editor if editor is not None else getattr(self, "_editor_widget", None)
+        if target_editor is None:
+            return {"prioritized": False, "reason": "editor_missing"}
+
+        post_generation_release_window = bool(
+            getattr(target_editor, "_subtitle_generation_completed", False)
+            or getattr(target_editor, "_post_generation_models_release_requested", False)
+            or getattr(target_editor, "_post_generation_models_released", False)
+            or getattr(self, "_editor_ai_runtime_release_requested_for_editor_mode", False)
+        )
+        if (self._is_editor_ai_busy(target_editor) or self._is_backend_ai_busy()) and not post_generation_release_window:
+            return {"prioritized": False, "reason": "ai_busy"}
+
+        if post_generation_release_window:
+            _run_cleanup_step(
+                "video playback force editor idle after generation",
+                lambda: self._force_editor_idle_after_generation(target_editor, reason=reason),
+                default=None,
+            )
+            try:
+                target_editor._post_generation_models_release_requested = True
+                target_editor._post_generation_models_released = False
+            except Exception:
+                pass
+
+        _run_cleanup_step("video playback stop post completion idle timer", self._stop_post_completion_idle_timer, default=None)
+
+        cancel_roughcut = getattr(target_editor, "_cancel_post_generation_roughcut_draft", None)
+        if callable(cancel_roughcut):
+            _run_cleanup_step(
+                "video playback cancel post generation roughcut",
+                lambda: cancel_roughcut(reason="재생 시작"),
+                default=False,
+            )
+
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            hold_ms = max(180_000, int(getattr(self, "_post_completion_idle_ms", 600_000) or 600_000))
+            _run_cleanup_step(
+                "video playback foreground pause",
+                lambda: pause_lora("video_playback", hold_ms=hold_ms),
+                default=None,
+            )
+
+        try:
+            self._editor_ai_runtime_release_requested_for_editor_mode = True
+        except Exception:
+            pass
+
+        _run_cleanup_step(
+            "video playback runtime cache clear",
+            lambda: self._clear_runtime_memory_caches(include_gpu=True),
+            default=None,
+        )
+        _run_cleanup_step(
+            "video playback ai model release",
+            lambda: self._release_ai_models_for_editor_mode(
+                force=True,
+                preserve_roughcut_status=True,
+                ollama_timeout_sec=1.2,
+            ),
+            default=None,
+        )
+        _run_cleanup_step(
+            "video playback post generation gc schedule",
+            lambda: self._schedule_post_generation_gc(editor=target_editor, delay_ms=900),
+            default=None,
+        )
+        return {"prioritized": True, "reason": reason}
+
     def _schedule_post_generation_gc(self, *, editor=None, delay_ms: int = 1600) -> None:
         if bool(getattr(self, "_post_generation_gc_scheduled", False)):
             return

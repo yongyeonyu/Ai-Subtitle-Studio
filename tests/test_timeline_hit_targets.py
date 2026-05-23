@@ -696,6 +696,28 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             canvas.deleteLater()
 
+    def test_inline_edit_fast_refresh_schedules_followup_repaints(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(640, canvas.height())
+            canvas.pps = 120.0
+            canvas.total_duration = 3.0
+            canvas.segments = [
+                {"start": 0.0, "end": 2.0, "text": "편집 잔상", "line": 0},
+            ]
+            canvas._edit_line = 0
+
+            with patch.object(canvas, "update") as update, \
+                 patch.object(canvas, "repaint") as repaint, \
+                 patch("ui.editor.ux.timeline_canvas_editing.QTimer.singleShot") as single_shot:
+                canvas._request_inline_edit_fast_refresh(0, immediate=True)
+
+            update.assert_called()
+            repaint.assert_called_once()
+            self.assertEqual([call.args[0] for call in single_shot.call_args_list], [0, 16, 48])
+        finally:
+            canvas.deleteLater()
+
     def test_auto_gap_generation_can_be_disabled_for_direct_srt_resize(self):
         canvas = TimelineCanvas()
         try:

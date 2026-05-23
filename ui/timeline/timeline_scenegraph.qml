@@ -191,7 +191,7 @@ Item {
                         anchors.leftMargin: 7
                         anchors.rightMargin: 7
                         text: modelData.name || ""
-                        color: "#E8EEF4"
+                        color: modelData.color || "#8E8E93"
                         font.family: root.fontFamily
                         font.pixelSize: speakerBar.speakerRows.length > 1 ? 9 : 10
                         font.bold: true

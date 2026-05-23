@@ -25,7 +25,7 @@ from ui.editor.editor_lifecycle import EditorLifecycleMixin
 from ui.main.bottom_work_panel import BottomWorkPanel
 from ui.main.workspace_stack import MainWorkspaceStack
 from ui.sidebar.project_sidebar_widget import ProjectSidebarWidget
-from ui.log.terminal_log_widget import TerminalLogWidget
+from ui.log.terminal_log_widget import TerminalLogWidget, LightweightTerminalLogPanel, should_use_lightweight_terminal_panel
 from ui.responsive_profile import responsive_profile_for_size, responsive_sidebar_width
 from ui.style import APP_PANEL_GAP, button_style, label_style, line_icon
 
@@ -854,7 +854,15 @@ class MainWindow(
             QTimer.singleShot(0, self._sync_sidebar_terminal_panel_height)
 
     def _create_sidebar_terminal_panel(self):
-        panel = TerminalLogWidget(self.home_page)
+        if should_use_lightweight_terminal_panel():
+            # KEEP: crash reports with `pymain_run_stdin` are not the real app
+            # startup path. Inline helper Python runs can import/build MainWindow
+            # just to inspect state, and they do not need the QTextEdit-based
+            # sidebar log panel. Skip that heavy widget tree there so helper
+            # processes do not die inside QTextEdit construction.
+            panel = LightweightTerminalLogPanel(self.home_page)
+        else:
+            panel = TerminalLogWidget(self.home_page)
         panel.setMinimumHeight(116)
         panel.setMaximumHeight(16777215)
         panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)

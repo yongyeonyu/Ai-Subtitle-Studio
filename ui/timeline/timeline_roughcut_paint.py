@@ -3,7 +3,10 @@
 """Paint-prep helpers for the roughcut timeline lane."""
 from __future__ import annotations
 
+import math
 from typing import Any
+
+ROUGHCUT_VISUAL_LENGTH_SCALE = 1.5
 
 
 _PAINT_IDENTITY_KEYS = (
@@ -90,4 +93,25 @@ def visible_roughcut_label_span(
     return left, right
 
 
-__all__ = ["coalesce_roughcut_paint_markers", "visible_roughcut_label_span"]
+def expanded_roughcut_marker_span(
+    x1: int | float,
+    x2: int | float,
+    *,
+    scale: float = ROUGHCUT_VISUAL_LENGTH_SCALE,
+    min_width_px: int = 3,
+) -> tuple[int, int]:
+    """Return a paint-only roughcut span widened around its time center."""
+    left = min(float(x1), float(x2))
+    right = max(float(x1), float(x2))
+    width = max(float(min_width_px), right - left)
+    target_width = width * max(1.0, float(scale or 1.0))
+    center = (left + right) / 2.0
+    return int(math.floor(center - (target_width / 2.0))), int(math.ceil(center + (target_width / 2.0)))
+
+
+__all__ = [
+    "ROUGHCUT_VISUAL_LENGTH_SCALE",
+    "coalesce_roughcut_paint_markers",
+    "expanded_roughcut_marker_span",
+    "visible_roughcut_label_span",
+]

@@ -35,6 +35,66 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
         self._next_live_processing_stage_at = 0.0
         self._pipeline_stop_timer(getattr(self, "_spinner_timer", None), label="spinner timer 정지")
 
+    @staticmethod
+    def _post_completion_sync_segment_signature(rows) -> tuple[tuple[float, float, str], ...]:
+        signature: list[tuple[float, float, str]] = []
+        for raw_seg in list(rows or []):
+            if not isinstance(raw_seg, dict):
+                continue
+            if raw_seg.get("is_gap") or raw_seg.get("stt_pending") or raw_seg.get("_live_stt_preview") or raw_seg.get("_live_subtitle_preview"):
+                continue
+            text = str(raw_seg.get("text", "") or "").strip()
+            if not text:
+                continue
+            try:
+                start = float(raw_seg.get("start", 0.0) or 0.0)
+                end = float(raw_seg.get("end", start) or start)
+            except Exception:
+                continue
+            if end <= start:
+                continue
+            signature.append((round(start, 3), round(end, 3), text))
+        return tuple(signature)
+
+    @staticmethod
+    def _post_completion_sync_is_transient_stt_row(row: dict) -> bool:
+        if not isinstance(row, dict):
+            return False
+        return bool(
+            row.get("stt_pending")
+            or row.get("_live_stt_preview")
+            or row.get("_live_subtitle_preview")
+        )
+
+    def _post_completion_sync_allows_stt_work_rows(self, rows: list[dict] | None = None) -> bool:
+        if bool(getattr(self, "_stt_mode_enabled", False)):
+            return True
+        for row in list(rows or []):
+            if isinstance(row, dict) and bool(row.get("stt_mode")):
+                return True
+        return False
+
+    def _post_completion_sync_confirmed_segments(self) -> list[dict]:
+        getter = getattr(self, "_get_current_segments", None)
+        rows = []
+        if callable(getter):
+            try:
+                rows = list(getter(force_rebuild=True) or [])
+            except TypeError:
+                rows = list(getter() or [])
+            except Exception:
+                rows = []
+        if not rows:
+            rows = list(getattr(self, "_cached_segs", []) or [])
+        allow_stt_work_rows = self._post_completion_sync_allows_stt_work_rows(rows)
+        return [
+            dict(seg)
+            for seg in rows
+            if isinstance(seg, dict)
+            and not bool(seg.get("is_gap"))
+            and (allow_stt_work_rows or not self._post_completion_sync_is_transient_stt_row(seg))
+        ]
+
     def _safe_enable_start_btn(self):
         try:
             if hasattr(self, "btn_start") and self.btn_start:
@@ -134,7 +194,60 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
             label="사이드바 폭 잠금 해제",
             log=False,
         )
-        QTimer.singleShot(120, self._safe_enable_start_btn)
+        safe_enable = getattr(self, "_safe_enable_start_btn", None)
+        if callable(safe_enable):
+            QTimer.singleShot(120, safe_enable)
+
+    def _fail_generation_completion_without_segments(self, *, reason: str = "backend_done"):
+        """Leave processing mode when backend completion produced no final rows."""
+        get_logger().log("⚠️ 자막 생성 완료 보류 해제: 최종 자막 세그먼트가 없어 재시작 대기 상태로 복귀합니다.")
+        for attr_name, value in (
+            ("_completion_handled", False),
+            ("_process_completed_finalized", True),
+            ("_generation_completion_autosave_pending", False),
+            ("_is_ai_processing", False),
+            ("_live_editor_preview_pending", False),
+            ("_backend_finished", True),
+        ):
+            try:
+                setattr(self, attr_name, value)
+            except Exception:
+                pass
+        self._abort_pending_editor_processing_ui_work()
+        self._clear_processing_indicators()
+        try:
+            self.sm.stop_processing("⚠️ 최종 자막 세그먼트 없음")
+        except Exception as exc:
+            self._pipeline_log_nonfatal("최종 자막 없음 상태 전환", exc)
+        main_w = self._pipeline_window()
+        if main_w is not None:
+            for backend in (getattr(main_w, "backend", None), getattr(main_w, "backend_fast", None)):
+                if backend is None:
+                    continue
+                try:
+                    setattr(backend, "_active", False)
+                except Exception:
+                    pass
+            self._pipeline_call_if_callable(
+                main_w,
+                "_unlock_workspace_sidebar_width",
+                label="최종 자막 없음 사이드바 잠금 해제",
+                log=False,
+            )
+            self._pipeline_call_if_callable(
+                main_w,
+                "sync_menu_from_editor",
+                self,
+                label="최종 자막 없음 메뉴 동기화",
+                log=False,
+            )
+            try:
+                setattr(main_w, "_auto_processing_active", False)
+            except Exception:
+                pass
+        safe_enable = getattr(self, "_safe_enable_start_btn", None)
+        if callable(safe_enable):
+            QTimer.singleShot(120, safe_enable)
 
     def _finalize_generation_from_backend(self, *, reason: str = "backend_done", attempt: int = 0):
         """Backend-side completion safety net for missed final progress signals."""
@@ -173,6 +286,7 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
                     label="생성 완료 보류 상태 표시",
                     log=False,
                 )
+                self._fail_generation_completion_without_segments(reason=str(reason or "backend_done"))
                 return
             self._pipeline_set_attr("_completion_handled", True, label="completion handled 설정")
             self._set_process_completed()
@@ -423,6 +537,11 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
 
     def _clear_live_generation_preview_artifacts(self) -> bool:
         """Rebuild the editor from confirmed rows to drop transient live previews."""
+        allow_checker = getattr(self, "_post_completion_sync_allows_stt_work_rows", None)
+        if callable(allow_checker):
+            allow_stt_work_rows = bool(allow_checker())
+        else:
+            allow_stt_work_rows = EditorPipelineCleanupMixin._post_completion_sync_allows_stt_work_rows(self)
         has_preview_state = any(
             bool(getattr(self, attr, None))
             for attr in (
@@ -431,6 +550,7 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
             )
         )
         has_live_blocks = False
+        has_transient_stt_blocks = False
         text_edit = getattr(self, "text_edit", None)
         if text_edit is not None and hasattr(text_edit, "document"):
             try:
@@ -440,10 +560,16 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
                     if getattr(data, "live_preview", False):
                         has_live_blocks = True
                         break
+                    if (
+                        not allow_stt_work_rows
+                        and getattr(data, "stt_pending", False)
+                    ):
+                        has_transient_stt_blocks = True
                     block = block.next()
             except Exception:
                 has_live_blocks = False
-        if not has_preview_state and not has_live_blocks:
+                has_transient_stt_blocks = False
+        if not has_preview_state and not has_live_blocks and not has_transient_stt_blocks:
             return False
 
         try:
@@ -457,13 +583,19 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
             dict(seg)
             for seg in current
             if not bool(seg.get("is_gap"))
+            and (allow_stt_work_rows or not self._post_completion_sync_is_transient_stt_row(seg))
             and (
                 str(seg.get("text", "") or "").strip()
-                or bool(seg.get("stt_pending"))
-                or bool(seg.get("stt_mode"))
+                or (
+                    allow_stt_work_rows
+                    and (
+                        bool(seg.get("stt_pending"))
+                        or bool(seg.get("stt_mode"))
+                    )
+                )
             )
         ]
-        if confirmed_rows:
+        if confirmed_rows or has_preview_state or has_live_blocks or has_transient_stt_blocks:
             current = confirmed_rows
 
         try:
@@ -515,18 +647,52 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
         try:
             timeline = getattr(self, "timeline", None)
             canvas = getattr(timeline, "canvas", None)
-            cached = [seg for seg in list(getattr(self, "_cached_segs", []) or []) if not seg.get("is_gap")]
+            confirmed = self._post_completion_sync_confirmed_segments()
             canvas_segments = list(getattr(canvas, "segments", []) or []) if canvas is not None else []
-            timeline_current = bool(cached and len(canvas_segments) == len(cached))
-            if timeline_current:
-                try:
-                    timeline_current = (
-                        abs(float(canvas_segments[0].get("start", 0.0) or 0.0) - float(cached[0].get("start", 0.0) or 0.0)) < 0.001
-                        and abs(float(canvas_segments[-1].get("end", 0.0) or 0.0) - float(cached[-1].get("end", 0.0) or 0.0)) < 0.001
-                    )
-                except Exception:
-                    timeline_current = False
+            confirmed_signature = self._post_completion_sync_segment_signature(confirmed)
+            canvas_signature = self._post_completion_sync_segment_signature(canvas_segments)
+            allow_stt_work_rows = self._post_completion_sync_allows_stt_work_rows(confirmed)
+            canvas_has_transient = any(
+                self._post_completion_sync_is_transient_stt_row(seg)
+                for seg in canvas_segments
+                if isinstance(seg, dict)
+            )
+            timeline_current = (
+                bool(confirmed_signature)
+                and canvas_signature == confirmed_signature
+                and (allow_stt_work_rows or not canvas_has_transient)
+            )
             if not timeline_current:
+                # 변경 금지: 마카오 케이스처럼 저장된 최종 자막/왼쪽 편집문서는 이미
+                # 올바른데 타임라인만 예전 경계를 붙잡는 경우가 있었다. 첫/마지막
+                # 세그먼트만 비교하면 중간 경계 이동(예: "가자" -> "하나 들고 가시모")
+                # 을 놓친다. 또 STT2 임시 row("-")가 final row처럼 남으면 에디터와
+                # 타임라인 글자가 달라진다. 완료 시점에는 문서 전체 경계/텍스트와
+                # 임시 row 잔존 여부까지 확인하고, 다르면 최신 문서 세그먼트만
+                # 캐시에 재주입한 뒤 타임라인을 강제로 다시 그려야 동일한 오차가
+                # 재발하지 않는다.
+                if not allow_stt_work_rows:
+                    for attr, value in (
+                        ("_live_stt_preview_segments", []),
+                        ("_live_editor_preview_segments", []),
+                        ("_live_editor_preview_queue", []),
+                        ("_live_editor_preview_keys", set()),
+                    ):
+                        try:
+                            setattr(self, attr, value.copy() if hasattr(value, "copy") else value)
+                        except Exception:
+                            pass
+                cache_writer = getattr(self, "_cache_current_segments", None)
+                if callable(cache_writer):
+                    try:
+                        cache_writer(confirmed)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        self._cached_segs = [dict(seg) for seg in confirmed]
+                    except Exception:
+                        pass
                 self._redraw_timeline()
         except Exception:
             pass

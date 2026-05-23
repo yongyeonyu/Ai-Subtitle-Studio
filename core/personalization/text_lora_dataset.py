@@ -28,6 +28,7 @@ from core.project.project_context import project_segments_to_editor
 from core.frame_time import normalize_fps, sec_to_frame
 from core.subtitle_quality.correction_memory import load_correction_memory
 from core.subtitle_quality.wrong_answer_memory import load_wrong_answer_memory
+from core.text_utils import strip_subtitle_quote_marks
 
 
 TEXT_LORA_STORE_DIR = Path(LORA_PERSONALIZATION_DIR)
@@ -117,7 +118,7 @@ def _write_jsonl_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
 def _speech_training_text(text: Any) -> str:
     """Remove user-added editorial notes before any subtitle learning row is built."""
     extracted = extract_parenthetical_segments(str(text or ""))
-    return _normalize_text(extracted.get("speech_training_text"))
+    return strip_subtitle_quote_marks(_normalize_text(extracted.get("speech_training_text")))
 
 
 def _iter_project_paths(project_root: str | Path | None = None) -> list[Path]:

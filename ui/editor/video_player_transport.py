@@ -35,8 +35,13 @@ class _MirrorLabel(QLabel):
 
 class VideoPlayerTransportMixin:
     _CONTROL_BADGE_HEIGHT = 36
-    _SOURCE_INFO_BADGE_MAX_WIDTH = 220
-    _SOURCE_NAME_BADGE_MAX_WIDTH = 200
+    _CONTROL_BAR_GAP = 6
+    _CONTROL_BAR_RIGHT_SAFE_MARGIN = 18
+    _FRAME_COUNT_LABEL_WIDTH = 124
+    _SOURCE_INFO_BADGE_MIN_WIDTH = 132
+    _SOURCE_INFO_BADGE_MAX_WIDTH = 260
+    _SOURCE_NAME_BADGE_MIN_WIDTH = 260
+    _SOURCE_NAME_BADGE_MAX_WIDTH = 560
 
     def _log_video_transport_nonfatal(self, stage: str, exc: Exception) -> None:
         try:
@@ -76,7 +81,7 @@ class VideoPlayerTransportMixin:
         ctrl = QWidget()
         ctrl.setFixedHeight(44)
         ctrl.setStyleSheet("background: transparent; border: none;")
-        uniform_gap = 6
+        uniform_gap = self._CONTROL_BAR_GAP
         ctrl_layout = QHBoxLayout(ctrl)
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
         ctrl_layout.setSpacing(uniform_gap)
@@ -129,6 +134,10 @@ class VideoPlayerTransportMixin:
         ctrl_layout.addWidget(self.btn_scan_next_cut)
 
         self.time_label = _MirrorLabel("00:00 / 00:00")
+        self.time_label.setObjectName("VideoTimeLabel")
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.time_label.setWordWrap(False)
+        self.time_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.time_label.setStyleSheet("color: #A9B0B7; font-size: 11px; font-weight: 500; background: transparent; border: none;")
         ctrl_layout.addWidget(self.time_label)
 
@@ -137,7 +146,7 @@ class VideoPlayerTransportMixin:
         self.frame_count_label.setToolTip("현재 프레임 / 전체 프레임")
         self.frame_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.frame_count_label.setWordWrap(False)
-        self.frame_count_label.setFixedWidth(124)
+        self.frame_count_label.setFixedWidth(self._FRAME_COUNT_LABEL_WIDTH)
         self.frame_count_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.frame_count_label.setStyleSheet(
             "QLabel#VideoFrameCountLabel {"
@@ -163,8 +172,8 @@ class VideoPlayerTransportMixin:
         self.info_label.setObjectName("VideoSourceMetaLabel")
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.info_label.setWordWrap(True)
-        self.info_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.info_label.setMinimumWidth(152)
+        self.info_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.info_label.setMinimumWidth(self._SOURCE_INFO_BADGE_MIN_WIDTH)
         self.info_label.setMaximumWidth(self._SOURCE_INFO_BADGE_MAX_WIDTH)
         self.info_label.setFixedHeight(self._CONTROL_BADGE_HEIGHT)
         self.info_label.setStyleSheet(
@@ -173,7 +182,7 @@ class VideoPlayerTransportMixin:
             " background: transparent;"
             " border: none;"
             " border-radius: 0px;"
-            " padding: 2px 10px 1px 10px;"
+            " padding: 2px 8px 1px 8px;"
             " font-size: 9px;"
             "}"
         )
@@ -184,9 +193,9 @@ class VideoPlayerTransportMixin:
         self.source_name_label.setObjectName("VideoSourceNameLabel")
         self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.source_name_label.setWordWrap(True)
-        self.source_name_label.setMinimumWidth(152)
+        self.source_name_label.setMinimumWidth(self._SOURCE_NAME_BADGE_MIN_WIDTH)
         self.source_name_label.setMaximumWidth(self._SOURCE_NAME_BADGE_MAX_WIDTH)
-        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.source_name_label.setFixedHeight(self._CONTROL_BADGE_HEIGHT)
         self.source_name_label.setStyleSheet(
             "QLabel#VideoSourceNameLabel {"
@@ -194,7 +203,7 @@ class VideoPlayerTransportMixin:
             " background: transparent;"
             " border: none;"
             " border-radius: 0px;"
-            " padding: 2px 10px 1px 10px;"
+            " padding: 2px 6px 1px 8px;"
             " font-size: 10px;"
             " font-weight: 700;"
             "}"
@@ -202,7 +211,118 @@ class VideoPlayerTransportMixin:
         status_layout.addWidget(self.source_name_label, 0)
 
         ctrl_layout.addWidget(self.status_info_container, 1)
+        self._update_control_bar_info_layout(force=True)
         return ctrl
+
+    def _control_bar_time_width(self) -> int:
+        label = getattr(self, "time_label", None)
+        if label is None:
+            return 108
+        try:
+            metrics = QFontMetrics(label.font())
+            sample_width = int(metrics.horizontalAdvance("000:00 / 000:00") or 0)
+        except Exception:
+            sample_width = 92
+        return max(108, sample_width + 18)
+
+    def _control_bar_status_widths(self) -> tuple[int, int]:
+        container = getattr(self, "status_info_container", None)
+        if container is None:
+            return (self._SOURCE_INFO_BADGE_MAX_WIDTH, self._SOURCE_NAME_BADGE_MAX_WIDTH)
+        try:
+            available = int(container.width() or 0)
+        except Exception:
+            available = 0
+        if available <= 0:
+            return (self._SOURCE_INFO_BADGE_MAX_WIDTH, self._SOURCE_NAME_BADGE_MAX_WIDTH)
+
+        gap = self._CONTROL_BAR_GAP
+        usable = max(0, available - gap)
+        info_min = self._SOURCE_INFO_BADGE_MIN_WIDTH
+        info_max = self._SOURCE_INFO_BADGE_MAX_WIDTH
+        source_min = self._SOURCE_NAME_BADGE_MIN_WIDTH
+        source_max = self._SOURCE_NAME_BADGE_MAX_WIDTH
+
+        if usable <= 0:
+            return (0, 0)
+        if usable <= 180:
+            return (0, usable)
+
+        # KEEP: the filename badge is right-aligned and expands leftward.
+        # Prioritize it over the technical metadata so long DJI names do not
+        # clip at the player edge when the preview column is narrow.
+        source_floor = min(source_min, usable)
+        source_width = min(source_max, max(source_floor, int(round(usable * 0.70))))
+        info_width = max(0, usable - source_width)
+
+        if info_width > info_max:
+            extra = info_width - info_max
+            info_width = info_max
+            source_width = min(source_max, source_width + extra)
+            info_width = max(0, usable - source_width)
+
+        if 0 < info_width < info_min:
+            if usable >= source_floor + info_min:
+                deficit = info_min - info_width
+                shrink = min(deficit, max(0, source_width - source_floor))
+                source_width -= shrink
+                info_width += shrink
+            else:
+                source_width = min(usable, max(source_floor, usable - info_width))
+                info_width = max(0, usable - source_width)
+
+        total = info_width + source_width
+        if total < usable:
+            extra = usable - total
+            grow_source = min(extra, max(0, source_max - source_width))
+            source_width += grow_source
+            extra -= grow_source
+            if extra > 0:
+                info_width = min(info_max, info_width + extra)
+
+        overflow = max(0, info_width + source_width - usable)
+        if overflow > 0:
+            shrink_info = min(overflow, info_width)
+            info_width -= shrink_info
+            overflow -= shrink_info
+            if overflow > 0:
+                source_width = max(0, source_width - overflow)
+
+        return (int(info_width), int(source_width))
+
+    def _update_control_bar_info_layout(self, *, force: bool = False) -> None:
+        time_label = getattr(self, "time_label", None)
+        frame_label = getattr(self, "frame_count_label", None)
+        info_label = getattr(self, "info_label", None)
+        source_label = getattr(self, "source_name_label", None)
+        status_container = getattr(self, "status_info_container", None)
+        if any(item is None for item in (time_label, frame_label, info_label, source_label, status_container)):
+            return
+        next_time_width = self._control_bar_time_width()
+        next_info_width, next_source_width = self._control_bar_status_widths()
+
+        changed = force
+        if int(time_label.width() or 0) != next_time_width:
+            time_label.setFixedWidth(next_time_width)
+            changed = True
+        if int(frame_label.width() or 0) != self._FRAME_COUNT_LABEL_WIDTH:
+            frame_label.setFixedWidth(self._FRAME_COUNT_LABEL_WIDTH)
+            changed = True
+        if int(info_label.width() or 0) != next_info_width:
+            info_label.setFixedWidth(next_info_width)
+            changed = True
+        if int(source_label.width() or 0) != next_source_width:
+            source_label.setFixedWidth(next_source_width)
+            changed = True
+        if changed:
+            info_label.updateGeometry()
+            source_label.updateGeometry()
+            status_container.updateGeometry()
+            # KEEP: width changes must immediately reflow the visible metadata
+            # and filename text. If the label text keeps an older narrow wrap,
+            # the footer can look clipped even after the layout itself was fixed.
+            self._refresh_source_info_label()
+            self._refresh_source_name_label()
 
     def _control_bar_video_content_insets(self) -> tuple[int, int]:
         control = getattr(self, "_control_bar_widget", None)
@@ -218,6 +338,7 @@ class VideoPlayerTransportMixin:
             left = max(0, int(round(int(video_rect.left()) * scale)))
             right_src = max(0, video_w - int(video_rect.left()) - int(video_rect.width()))
             right = max(0, int(round(right_src * scale)))
+            right += self._CONTROL_BAR_RIGHT_SAFE_MARGIN
             return (left, right)
         except Exception:
             return (0, 0)
@@ -233,6 +354,7 @@ class VideoPlayerTransportMixin:
                     layout.setContentsMargins(left, 0, right, 0)
             except Exception:
                 pass
+        self._update_control_bar_info_layout()
         return (left, right)
 
     def _frame_step_hold_interval_ms(self) -> int:
@@ -562,6 +684,23 @@ class VideoPlayerTransportMixin:
             return text
 
         break_chars = " _-./|"
+        fully_wrapped: tuple[int, str, str] | None = None
+        for index in range(1, len(text)):
+            first = text[:index]
+            second = text[index:]
+            if not first or not second:
+                continue
+            first_width = metrics.horizontalAdvance(first)
+            second_width = metrics.horizontalAdvance(second)
+            if first_width > available or second_width > available:
+                continue
+            penalty = 0 if text[index - 1] in break_chars or text[index] in break_chars else 24
+            score = abs(first_width - second_width) + penalty
+            if fully_wrapped is None or score < fully_wrapped[0]:
+                fully_wrapped = (score, first, second)
+        if fully_wrapped is not None:
+            return f"{fully_wrapped[1]}\n{fully_wrapped[2]}"
+
         best: tuple[int, str, str] | None = None
         for index in range(1, len(text)):
             first = text[:index]
@@ -587,6 +726,7 @@ class VideoPlayerTransportMixin:
         super().resizeEvent(event)
         self._layout_video_overlay()
         self._apply_control_bar_video_content_insets()
+        self._update_control_bar_info_layout(force=True)
         self._refresh_source_info_label()
         self._refresh_source_name_label()
         self._sync_quick_control_bar()
@@ -643,15 +783,22 @@ class VideoPlayerTransportMixin:
                 info_text = str(info_label.text() or "")
             except Exception:
                 info_text = ""
+        time_width = self._control_bar_time_width()
+        info_width, source_width = self._control_bar_status_widths()
         content_left, content_right = self._control_bar_video_content_insets()
         return {
             "timeText": str(getattr(self.time_label, "text", lambda: "")() or ""),
             "infoText": info_text,
             "frameText": str(getattr(self.frame_count_label, "text", lambda: "")() or ""),
+            "timeWidth": int(time_width),
+            "frameWidth": int(self._FRAME_COUNT_LABEL_WIDTH),
+            "infoWidth": int(info_width),
+            "sourceWidth": int(source_width),
+            "groupGap": int(self._CONTROL_BAR_GAP),
             "contentLeftInset": content_left,
             "contentRightInset": content_right,
             "sourceNameText": (
-                str(getattr(self.source_name_label, "text", lambda: "")() or "")
+                str(getattr(self, "_source_display_name", "") or "")
                 if not bool(getattr(self.source_name_label, "isHidden", lambda: True)())
                 else ""
             ),
@@ -743,6 +890,26 @@ class VideoPlayerTransportMixin:
             owner = next_owner
         self.frame_step_requested.emit(step)
 
+    def _prioritize_runtime_for_playback_start(self) -> None:
+        try:
+            main_w = self.window()
+        except Exception:
+            main_w = None
+        request = getattr(main_w, "_prioritize_video_playback_runtime", None)
+        if not callable(request):
+            return
+        try:
+            # KEEP: subtitle generation completion cleanup is async. If the user
+            # hits play immediately, queued roughcut / idle personalization /
+            # model residency can still steal GPU and RAM from the player.
+            # Playback start must reclaim runtime ownership before play().
+            request(
+                editor=getattr(main_w, "_editor_widget", None),
+                reason="video_playback_start",
+            )
+        except Exception as exc:
+            self._log_video_transport_nonfatal("prioritize_playback_runtime", exc)
+
     def toggle_play(self):
         source_prepared = False
         if not getattr(self, "_source_ready", True):
@@ -761,6 +928,7 @@ class VideoPlayerTransportMixin:
                     prepare_repeat()
                 except Exception as exc:
                     self._log_video_transport_nonfatal("prepare_repeat_playback", exc)
+            self._prioritize_runtime_for_playback_start()
         self._ensure_audio_outputs()
         if not source_prepared and not self._ensure_media_source_loaded():
             self._pending_autoplay = True

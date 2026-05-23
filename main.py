@@ -38,6 +38,7 @@ _STDERR_NOISE_FILTER_ORIGINAL_FD = None
 _STDERR_NOISE_PATTERNS = (
     b"TSM AdjustCapsLockLEDForKeyTransitionHandling",
     b"error messaging the mach port for IMKCFRunLoopWakeUpReliable",
+    b"Color primaries reserved is not supported.",
 )
 _PREV_SYS_EXCEPTHOOK = sys.excepthook
 
@@ -93,7 +94,7 @@ def _env_flag_enabled(name: str, default: bool = True) -> bool:
 
 
 def _install_macos_stderr_noise_filter() -> None:
-    """Drop noisy AppKit stderr lines while preserving real errors."""
+    """Drop noisy macOS stderr lines while preserving real errors."""
     global _STDERR_NOISE_FILTER_INSTALLED, _STDERR_NOISE_FILTER_ORIGINAL_FD
     if _STDERR_NOISE_FILTER_INSTALLED:
         return

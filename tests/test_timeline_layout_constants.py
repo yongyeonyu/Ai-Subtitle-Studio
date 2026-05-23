@@ -42,8 +42,8 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_canvas_height_allows_stt1_stt2_preview_lanes(self):
-        self.assertEqual(CANVAS_H, 348)
-        self.assertGreaterEqual(SEG_TOP - (RULER_H + WAVE_H), 34)
+        self.assertEqual(CANVAS_H, 373)
+        self.assertEqual(SEG_TOP - (RULER_H + WAVE_H), 45)
         self.assertEqual(SEG_BOT, CANVAS_H)
         self.assertGreater(SUBTITLE_TOP, RULER_H + WAVE_H)
         self.assertLess(SCORE_TOP, SUBTITLE_TOP)

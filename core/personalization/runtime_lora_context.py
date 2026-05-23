@@ -13,13 +13,17 @@ from core.personalization.lora_runtime_policy import (
 from core.personalization.lora_storage import load_best_settings, load_learned_rules
 from core.personalization.lora_vector_retriever import retrieve_lora_context
 from core.runtime import config
-from core.text_utils import clean_text as _norm, compact_text as _compact
+from core.text_utils import clean_text as _norm, compact_text as _compact, strip_subtitle_quote_marks
 from core.utils import load_subtitle_rules
 from core.subtitle_quality.correction_memory import search_correction_memory
 from core.subtitle_quality.wrong_answer_memory import search_wrong_answer_memory
 
 
 LEGACY_CORRECTION_PATH = Path(getattr(config, "CORRECTIONS_FILE", Path(config.DATASET_DIR) / "dataset_correction.json"))
+
+
+def _subtitle_style_text(value: Any) -> str:
+    return strip_subtitle_quote_marks(_norm(value))
 
 
 def runtime_lora_enabled(settings: dict[str, Any] | None) -> bool:
@@ -266,9 +270,9 @@ def _generation_profile_lines(settings: dict[str, Any] | None) -> list[str]:
             continue
         if item.get("text"):
             suffix = f", line={item.get('line_break_pattern')}" if item.get("line_break_pattern") else ""
-            examples.append(f"{_norm(item.get('text'))}{suffix}")
+            examples.append(f"{_subtitle_style_text(item.get('text'))}{suffix}")
         elif item.get("input") or item.get("output"):
-            examples.append(f"{_norm(item.get('input'))} -> {_norm(item.get('output'))}")
+            examples.append(f"{_subtitle_style_text(item.get('input'))} -> {_subtitle_style_text(item.get('output'))}")
     if examples:
         lines.append("- 자막별 유사 ground truth/교정 예시: " + "; ".join(examples))
     contexts = []
@@ -382,14 +386,14 @@ def _retrieved_lora_context_lines(
             media_refs.append(media_label)
             seen.add(media_key)
         if kind in {"text_lora_corpus", "text_lora_dataset"}:
-            src = _norm(payload.get("input"))[:72]
-            dst = _norm(payload.get("output"))[:72]
+            src = _subtitle_style_text(payload.get("input"))[:72]
+            dst = _subtitle_style_text(payload.get("output"))[:72]
             key = ("example", src, dst)
             if src and dst and src != dst and key not in seen:
                 examples.append(f"{src} -> {dst} (score {score:.1f})")
                 seen.add(key)
         elif kind == "truth_table":
-            speech = _norm(payload.get("speech_training_text"))[:76]
+            speech = _subtitle_style_text(payload.get("speech_training_text"))[:76]
             if speech:
                 pattern = _norm(payload.get("line_break_pattern"))
                 suffix = f", line={pattern}" if pattern else ""
@@ -492,16 +496,18 @@ def build_runtime_lora_prompt(
         lines.append(f"- 새 자막 시작단어 후보: {', '.join(start_words)}")
     if legacy_hits:
         lines.append("- 사용자 단어/교정사전: " + "; ".join(
-            f"{item['original']} -> {item['corrected']}" for item in legacy_hits
+            f"{_subtitle_style_text(item['original'])} -> {_subtitle_style_text(item['corrected'])}" for item in legacy_hits
         ))
     if correction_hits:
         lines.append("- 교정 memory: " + "; ".join(
-            f"{_norm(item.get('original'))} -> {_norm(item.get('corrected'))}"
+            f"{_subtitle_style_text(item.get('original'))} -> {_subtitle_style_text(item.get('corrected'))}"
             for item in correction_hits
         ))
     if wrong_hits:
         lines.append("- 오답/환각 memory: " + "; ".join(
-            _norm(item.get("phrase")) for item in wrong_hits if _norm(item.get("phrase"))
+            _subtitle_style_text(item.get("phrase"))
+            for item in wrong_hits
+            if _subtitle_style_text(item.get("phrase"))
         ))
     lines.extend(profile_lines)
     lines.extend(retrieval_lines)

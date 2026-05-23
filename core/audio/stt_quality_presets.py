@@ -118,9 +118,9 @@ def _high_runtime_detail_mapping() -> dict:
     return {
         "audio_preset_auto_benchmark_locked": True,
         "audio_chunk_routing_benchmark_locked": False,
-        "audio_chunk_routing_enabled": False,
-        "audio_chunk_route_vad_enabled": False,
-        "vad_backend_policy": "legacy",
+        "audio_chunk_routing_enabled": True,
+        "audio_chunk_route_vad_enabled": True,
+        "vad_backend_policy": "auto",
         "audio_chunk_profile_sec": 24.0,
         "audio_chunk_route_profile_samples": 3,
         "audio_chunk_route_profile_window_sec": 8.0,
@@ -140,6 +140,7 @@ def _high_runtime_detail_mapping() -> dict:
         "audio_chunk_route_precision_threshold": 0.74,
         "audio_chunk_route_secondary_recheck_threshold": 0.68,
         "audio_chunk_route_low_confidence_threshold": 0.58,
+        "audio_chunk_route_baseline_noisy_voice_extra_margin": 0.0,
         "audio_chunk_route_max_workers": 2,
         "scan_cut_audio_gain_enabled": True,
         "cut_boundary_detection_enabled": True,
@@ -664,7 +665,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
             "label": STT_QUALITY_PRESET_LABELS["precise"],
             "description": "Tiniping 11~17분 무자막 공백 제외 full rerun 기준 High 우승 조합: "
             f"WhisperKit 품질 + ffmpeg/silero relaxed + {HIGH_WINDOWED_STT_REFERENCE} + selective STT2/word precision + LLM "
-            "(adaptive chunk audio 엔진은 유지하지만 기본 High에는 아직 강제하지 않음)",
+            "(adaptive chunk audio/VAD 라우팅으로 잡음 구간만 강하게 보정)",
             "settings": mode_benchmark_locked_settings("precise"),
         },
         "stt": {

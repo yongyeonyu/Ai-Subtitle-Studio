@@ -285,6 +285,12 @@ class EditorSegmentsQueueFlushMixin:
 
         self._segment_queue.clear()
         self.text_edit.update_margins()
+        capture_sync = getattr(self, "_capture_canonical_editor_sync_snapshot", None)
+        if callable(capture_sync):
+            try:
+                capture_sync()
+            except Exception:
+                pass
         return added_end, focused_payload
 
     def _queue_flush_segment_text_parts(self, seg: dict) -> list[str]:

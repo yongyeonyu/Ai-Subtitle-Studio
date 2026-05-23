@@ -14,7 +14,7 @@ from core.audio.audio_presets import (
     resolve_audio_preset_combo_data,
     uses_default_audio_preset,
 )
-from core.audio.preset_auto_classifier import select_audio_candidate
+from core.audio.preset_auto_classifier import candidate_settings_for_id, select_audio_candidate
 from core.audio.media_processor import VideoProcessor
 
 
@@ -25,6 +25,21 @@ class AudioPresetTests(unittest.TestCase):
         self.assertEqual(processor._clearvoice_model_name({}), "MossFormerGAN_SE_16K")
         self.assertEqual(processor._clearvoice_input_sample_rate({}), 16000)
         self.assertEqual(processor._audio_processing_sample_rate("clearvoice", {}), 16000)
+
+    def test_noisy_voice_route_keeps_vad_and_strong_native_filter(self):
+        processor = VideoProcessor()
+        settings = candidate_settings_for_id("noisy_voice")
+
+        tune = processor._audio_route_tune_settings(settings, {"audio_chunk_route_vad_enabled": True})
+        filter_text = processor._build_macos_native_fast_audio_flatten_filter(settings)
+        tune_without_vad = processor._audio_route_tune_settings(settings, {"audio_chunk_route_vad_enabled": False})
+
+        self.assertEqual(tune["selected_audio_ai"], "clearvoice")
+        self.assertEqual(tune["selected_vad"], "ten_vad")
+        self.assertAlmostEqual(tune["ten_vad_threshold"], 0.58)
+        self.assertIn("afftdn=nf=-34", filter_text)
+        self.assertIn("volume=4.3", filter_text)
+        self.assertNotIn("selected_vad", tune_without_vad)
 
     def test_external_audio_overlap_preprocess_creates_cleaned_wav(self):
         processor = VideoProcessor()

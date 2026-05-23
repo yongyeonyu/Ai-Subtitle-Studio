@@ -92,7 +92,36 @@ class TimestampArea(QWidget):
         ud = block.userData()
         try:
             getattr(ud, "start_sec")
+            canonical_snapshot = getattr(self.editor, "_canonical_timestamp_block_meta_snapshot", None)
+            canonical_text_snapshot = getattr(self.editor, "_canonical_timestamp_block_text_snapshot", None)
+            meta = canonical_snapshot.get(int(block.blockNumber())) if isinstance(canonical_snapshot, dict) else None
+            if isinstance(meta, dict):
+                expected = canonical_text_snapshot.get(int(block.blockNumber())) if isinstance(canonical_text_snapshot, dict) else None
+                normalized_block = " ".join(str(block.text() or "").replace("\u2028", "\n").split())
+                normalized_expected = " ".join(str(expected or "").replace("\u2028", "\n").split())
+                if not normalized_expected or normalized_block == normalized_expected:
+                    try:
+                        current_start = float(getattr(ud, "start_sec", 0.0) or 0.0)
+                        canonical_start = float(meta.get("start_sec", 0.0) or 0.0)
+                        current_gap = bool(getattr(ud, "is_gap", False))
+                        canonical_gap = bool(meta.get("is_gap", False))
+                        if abs(current_start - canonical_start) > 0.01 or current_gap != canonical_gap:
+                            return _SnapshotBlockUserData(meta)
+                    except Exception:
+                        return _SnapshotBlockUserData(meta)
             return ud
+        except Exception:
+            pass
+        try:
+            canonical_snapshot = getattr(self.editor, "_canonical_timestamp_block_meta_snapshot", None)
+            canonical_text_snapshot = getattr(self.editor, "_canonical_timestamp_block_text_snapshot", None)
+            meta = canonical_snapshot.get(int(block.blockNumber())) if isinstance(canonical_snapshot, dict) else None
+            if isinstance(meta, dict):
+                expected = canonical_text_snapshot.get(int(block.blockNumber())) if isinstance(canonical_text_snapshot, dict) else None
+                normalized_block = " ".join(str(block.text() or "").replace("\u2028", "\n").split())
+                normalized_expected = " ".join(str(expected or "").replace("\u2028", "\n").split())
+                if not normalized_expected or normalized_block == normalized_expected:
+                    return _SnapshotBlockUserData(meta)
         except Exception:
             pass
         try:

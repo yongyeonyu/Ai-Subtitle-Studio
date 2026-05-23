@@ -796,6 +796,140 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertEqual(restored[0]["text"], "아 이게 시림프 갈릭소스 이게 그")
         self.assertEqual(restored[0]["stt_selected_source"], "STT1")
 
+    def test_final_stt_anchor_guard_restores_selected_stt1_when_final_appends_unbacked_words(self):
+        final_rows = [
+            {
+                "start": 71.0,
+                "end": 73.0,
+                "text": "이거 사장님, 센처 마피스에서 먹을게",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 71.0,
+                "end": 73.0,
+                "text": "이거 사장님, 센처",
+                "stt_selected_source": "STT1",
+                "stt_score": 92,
+            }
+        ]
+
+        restored = subtitle_engine._restore_final_stt_anchor_drift(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "이거 사장님, 센처")
+        self.assertEqual(restored[0]["stt_selected_source"], "STT1")
+        self.assertTrue(restored[0]["_final_stt_anchor_guard_policy"]["overextended_anchor"])
+
+    def test_final_stt_anchor_guard_ignores_polluted_current_text_when_raw_stt_candidate_exists(self):
+        final_rows = [
+            {
+                "start": 101.0,
+                "end": 103.2,
+                "text": "메뉴",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 101.0,
+                "end": 103.2,
+                "text": "메뉴",
+                "stt_selected_source": "STT1",
+                "stt_candidates": [
+                    {
+                        "source": "STT1",
+                        "start": 101.0,
+                        "end": 103.2,
+                        "text": "가자 하나 들고 가시오 이건가 본데",
+                        "score": 93,
+                    }
+                ],
+            }
+        ]
+
+        restored = subtitle_engine._restore_final_stt_anchor_drift(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "가자 하나 들고 가시오 이건가 본데")
+        self.assertEqual(restored[0]["stt_selected_source"], "STT1")
+        self.assertEqual(
+            restored[0]["_final_stt_anchor_guard_policy"]["action"],
+            "restore_stt_anchor",
+        )
+
+    def test_final_stt_anchor_rows_prioritize_selected_raw_stt_candidate_over_polluted_text(self):
+        source_rows = [
+            {
+                "start": 70.8,
+                "end": 74.8,
+                "text": "감사합니다",
+                "stt_selected_source": "STT2",
+                "stt_candidates": [
+                    {
+                        "source": "STT1",
+                        "start": 70.8,
+                        "end": 74.8,
+                        "text": "이게 샌체 마켓에 먹을게",
+                        "score": 84,
+                    },
+                    {
+                        "source": "STT2",
+                        "start": 70.8,
+                        "end": 74.8,
+                        "text": "우리 센처 마켓에 아~",
+                        "score": 81,
+                    },
+                ],
+            }
+        ]
+
+        anchors = subtitle_engine._source_stt_anchor_rows(source_rows)
+
+        self.assertEqual(anchors[0]["text"], "우리 센처 마켓에 아~")
+        self.assertEqual(anchors[0]["source"], "STT2")
+        self.assertNotIn("감사합니다", [anchor["text"] for anchor in anchors])
+
+    def test_final_stt_anchor_guard_keeps_merged_adjacent_primary_anchors(self):
+        final_rows = [
+            {
+                "start": 77.5,
+                "end": 81.5,
+                "text": "아 이거는 10원짤데 그냥 가져가?",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 77.5,
+                "end": 79.5,
+                "text": "아 이거는 10원짤데",
+                "stt_selected_source": "STT1",
+            },
+            {
+                "start": 79.5,
+                "end": 81.5,
+                "text": "그냥 가져가?",
+                "stt_selected_source": "STT1",
+            },
+        ]
+
+        restored = subtitle_engine._restore_final_stt_anchor_drift(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_anchor_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "아 이거는 10원짤데 그냥 가져가?")
+        self.assertNotIn("_final_stt_anchor_guard_policy", restored[0])
+
     def test_final_stt_anchor_guard_reinserts_missing_primary_anchor_and_trims_overlap(self):
         final_rows = [
             {
@@ -1751,6 +1885,19 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
 
         self.assertEqual(mode, "api")
         self.assertEqual(workers, 1)
+
+    def test_selected_llm_respects_provider_none_even_when_model_name_remains(self):
+        from core.engine import subtitle_settings
+
+        with unittest.mock.patch(
+            "core.engine.subtitle_settings._get_user_settings",
+            return_value={
+                "selected_model": "exaone3.5:7.8b",
+                "selected_llm_provider": "none",
+                "subtitle_llm_runtime_enabled": True,
+            },
+        ):
+            self.assertIn("사용 안함", subtitle_settings.get_selected_llm())
 
     def test_module_import_survives_invalid_numeric_settings(self):
         original_dataset_dir = config.DATASET_DIR

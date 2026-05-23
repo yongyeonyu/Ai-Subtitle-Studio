@@ -154,9 +154,12 @@ class _CompletionEditor(EditorPipelineMixin):
         self.sm = SimpleNamespace(
             complete_ai=Mock(),
             complete_auto_mode=Mock(),
+            stop_processing=Mock(),
+            update_progress=Mock(),
         )
         self._flush_pending_segment_queue_now = Mock()
         self._clear_processing_indicators = Mock()
+        self._safe_enable_start_btn = Mock()
         self._post_completion_sync = Mock()
         self._on_save = Mock(return_value=True)
         self._get_current_segments = Mock(side_effect=lambda: list(self._segment_state))
@@ -172,7 +175,10 @@ class _CompletionEditor(EditorPipelineMixin):
             sync_menu_from_editor=Mock(),
             _refresh_saved_status_label=Mock(),
             _start_post_completion_idle_timer=Mock(),
+            _unlock_workspace_sidebar_width=Mock(),
+            _auto_processing_active=False,
             backend=SimpleNamespace(
+                _active=False,
                 _last_generation_final_segments=[],
                 _last_generation_final_media_path="",
                 _cut_boundary_prescan_thread=None,
@@ -187,6 +193,37 @@ class _CompletionEditor(EditorPipelineMixin):
 
     def window(self):
         return self._window
+
+
+class _PostCompletionSyncEditor(EditorPipelineMixin):
+    def __init__(self, confirmed_segments, canvas_segments):
+        self._confirmed_segments = [dict(seg) for seg in list(confirmed_segments or []) if isinstance(seg, dict)]
+        self._cached_segs = [dict(seg) for seg in self._confirmed_segments]
+        self._get_current_segments = Mock(side_effect=self._get_segments_impl)
+        self._redraw_timeline = Mock()
+        self._cache_current_segments = Mock(side_effect=self._cache_segments_impl)
+        self.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(
+                segments=[dict(seg) for seg in list(canvas_segments or []) if isinstance(seg, dict)],
+                total_duration=max(
+                    [float(seg.get("end", seg.get("start", 0.0)) or 0.0) for seg in list(canvas_segments or []) if isinstance(seg, dict)]
+                    or [0.0]
+                ),
+                _multiclip_boxes=[],
+                update=Mock(),
+            ),
+            _fit_to_view_locked=True,
+            _manual_zoom_since_fit=True,
+            fit_to_view=Mock(),
+            global_canvas=SimpleNamespace(total_duration=0.0, update=Mock()),
+        )
+
+    def _get_segments_impl(self, force_rebuild: bool = False):
+        return [dict(seg) for seg in list(self._confirmed_segments)]
+
+    def _cache_segments_impl(self, segments):
+        self._cached_segs = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+        return [dict(seg) for seg in self._cached_segs]
 
 
 class _PipelineSignal:
@@ -547,6 +584,24 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual(editor.sm.update_progress.call_args_list[-1].args[3], "⏳ 최종 자막 반영 중...")
         single_shot.assert_called_once()
 
+    def test_backend_generation_finalizer_releases_busy_state_when_final_segments_never_arrive(self):
+        editor = _CompletionEditor()
+        editor._segment_state = []
+        editor._window.backend._active = True
+        editor._window._auto_processing_active = True
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
+            editor._finalize_generation_from_backend(reason="test", attempt=60)
+
+        editor.sm.stop_processing.assert_called_once_with("⚠️ 최종 자막 세그먼트 없음")
+        editor._clear_processing_indicators.assert_called_once()
+        editor._safe_enable_start_btn.assert_called_once()
+        self.assertTrue(editor._process_completed_finalized)
+        self.assertFalse(editor._window.backend._active)
+        self.assertFalse(editor._window._auto_processing_active)
+        editor._window._unlock_workspace_sidebar_width.assert_called_once()
+        editor._window.sync_menu_from_editor.assert_called_with(editor)
+
     def test_generation_completion_autosave_waits_when_segments_are_missing(self):
         editor = _CompletionEditor()
         editor._get_current_segments = Mock(return_value=[])
@@ -678,6 +733,78 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor._set_auto_cut_boundary_scan_lines.assert_not_called()
         editor._refresh_cut_boundary_placeholder_from_project.assert_not_called()
         editor._on_save.assert_not_called()
+
+    def test_post_completion_sync_redraws_when_middle_boundary_changed_but_endpoints_match(self):
+        confirmed = [
+            {"start": 94.995, "end": 96.73, "text": "커피 드는데?"},
+            {"start": 99.933, "end": 104.538, "text": "가자"},
+            {"start": 104.538, "end": 106.707, "text": "하나 들고 가시모"},
+        ]
+        stale_canvas = [
+            {"start": 94.995, "end": 96.73, "text": "커피 드는데?"},
+            {"start": 99.933, "end": 106.707, "text": "가자"},
+            {"start": 104.538, "end": 106.707, "text": "하나 들고 가시모"},
+        ]
+        editor = _PostCompletionSyncEditor(confirmed, stale_canvas)
+
+        editor._post_completion_sync()
+
+        editor._get_current_segments.assert_called_once_with(force_rebuild=True)
+        editor._cache_current_segments.assert_called_once()
+        self.assertEqual(editor._cache_current_segments.call_args.args[0], confirmed)
+        editor._redraw_timeline.assert_called_once()
+
+    def test_post_completion_sync_drops_transient_stt_rows_from_timeline(self):
+        confirmed_with_pending = [
+            {"start": 132.9, "end": 133.6, "text": "-", "stt_pending": True, "stt_preview_source": "STT2"},
+            {"start": 135.102, "end": 138.672, "text": "이런거 다 가네"},
+        ]
+        canvas_with_pending = [
+            {"start": 132.9, "end": 133.6, "text": "-", "stt_pending": True, "stt_preview_source": "STT2"},
+            {"start": 135.102, "end": 138.672, "text": "이런거 다 가네"},
+        ]
+        editor = _PostCompletionSyncEditor(confirmed_with_pending, canvas_with_pending)
+
+        editor._post_completion_sync()
+
+        editor._get_current_segments.assert_called_once_with(force_rebuild=True)
+        editor._cache_current_segments.assert_called_once()
+        self.assertEqual(
+            editor._cache_current_segments.call_args.args[0],
+            [{"start": 135.102, "end": 138.672, "text": "이런거 다 가네"}],
+        )
+        editor._redraw_timeline.assert_called_once()
+
+    def test_post_completion_sync_redraws_when_canvas_has_only_extra_stt_pending_row(self):
+        confirmed = [
+            {"start": 135.102, "end": 138.672, "text": "이런거 다 가네"},
+        ]
+        canvas_with_pending = [
+            {"start": 132.9, "end": 133.6, "text": "-", "stt_pending": True, "stt_preview_source": "STT2"},
+            {"start": 135.102, "end": 138.672, "text": "이런거 다 가네"},
+        ]
+        editor = _PostCompletionSyncEditor(confirmed, canvas_with_pending)
+
+        editor._post_completion_sync()
+
+        editor._get_current_segments.assert_called_once_with(force_rebuild=True)
+        editor._cache_current_segments.assert_called_once()
+        self.assertEqual(editor._cache_current_segments.call_args.args[0], confirmed)
+        editor._redraw_timeline.assert_called_once()
+
+    def test_post_completion_sync_skips_redraw_when_canvas_matches_confirmed_segments(self):
+        confirmed = [
+            {"start": 94.995, "end": 96.73, "text": "커피 드는데?"},
+            {"start": 99.933, "end": 104.538, "text": "가자"},
+            {"start": 104.538, "end": 106.707, "text": "하나 들고 가시모"},
+        ]
+        editor = _PostCompletionSyncEditor(confirmed, confirmed)
+
+        editor._post_completion_sync()
+
+        editor._get_current_segments.assert_called_once_with(force_rebuild=True)
+        editor._cache_current_segments.assert_not_called()
+        editor._redraw_timeline.assert_not_called()
 
     def test_project_save_suppresses_stale_provisional_boundaries_after_scan_completed(self):
         editor = _SaveBoundaryEditor()

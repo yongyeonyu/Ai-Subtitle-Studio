@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from PyQt6.QtGui import QTextCursor
 
 from core.runtime.logger import get_logger
@@ -328,6 +330,22 @@ class EditorSegmentsManualEditsMixin:
             return ""
         return text if text.startswith("-") else f"- {text.lstrip('- ').strip()}"
 
+    def _speaker_split_text_parts(self, full_text: str, cursor: int) -> tuple[str, str]:
+        text = str(full_text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\u2028", "\n")
+
+        # 변경 금지: Cmd/Ctrl+Enter 화자 분리는 "- A\n- B" 대화 자막을 두 화자 메타데이터로 보존해야 한다.
+        dash_lines = [line.strip() for line in text.split("\n") if line.strip()]
+        if len(dash_lines) >= 2 and dash_lines[0].startswith("-") and dash_lines[1].startswith("-"):
+            return dash_lines[0], "\n".join(dash_lines[1:])
+
+        compact = re.sub(r"\s+", " ", text.strip())
+        compact_split = re.search(r"(?<!^)\s+-\s+\S", compact)
+        if compact.startswith("-") and compact_split:
+            return compact[:compact_split.start()].strip(), compact[compact_split.start():].strip()
+
+        cursor = max(0, min(int(cursor), len(text)))
+        return text[:cursor].strip(), text[cursor:].strip()
+
     def split_speaker_segment_with_text(self, line_num: int, cursor: int):
         doc = self.text_edit.document()
         block = doc.findBlockByNumber(int(line_num))
@@ -344,15 +362,13 @@ class EditorSegmentsManualEditsMixin:
             return
 
         start_sec = self._frame_time(ud.start_sec)
+        end_sec = getattr(ud, "end_sec", None)
         current_spk = str(getattr(ud, "spk_id", "00") or "00")
         spk1_id = str(getattr(self, "settings", {}).get("spk1_id", "00") if hasattr(self, "settings") else "00")
         spk2_id = str(getattr(self, "settings", {}).get("spk2_id", "01") if hasattr(self, "settings") else "01")
         next_spk = spk2_id if current_spk == spk1_id else spk1_id
 
-        full_text = block.text().replace("\u2028", "\n")
-        cursor = max(0, min(int(cursor), len(full_text)))
-        before = full_text[:cursor].strip()
-        after = full_text[cursor:].strip()
+        before, after = self._speaker_split_text_parts(block.text(), cursor)
         if not before or not after:
             return
 
@@ -367,11 +383,11 @@ class EditorSegmentsManualEditsMixin:
         cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
         cur.removeSelectedText()
         cur.insertText(before_doc)
-        cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, is_gap=False))
+        cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, is_gap=False, end_sec=end_sec))
         cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
         cur.insertBlock()
         cur.insertText(after_doc)
-        cur.block().setUserData(SubtitleBlockData(next_spk, start_sec, is_gap=False))
+        cur.block().setUserData(SubtitleBlockData(next_spk, start_sec, is_gap=False, end_sec=end_sec))
         cur.endEditBlock()
 
         self._sync_lock = True

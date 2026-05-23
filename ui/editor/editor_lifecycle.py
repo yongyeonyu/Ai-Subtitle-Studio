@@ -148,6 +148,26 @@ class EditorLifecycleMixin:
     def _schedule_opened_srt_editor_runtime_refresh(self, editor) -> None:
         self._schedule_opened_editor_runtime_refresh(editor)
 
+    def _fallback_media_for_srt_open(self, srt_path: str) -> str:
+        editor = getattr(self, "_editor_widget", None)
+        candidates = [
+            getattr(editor, "media_path", ""),
+            getattr(self, "_current_media_path", ""),
+            getattr(self, "media_path", ""),
+        ]
+        srt_dir = os.path.dirname(os.path.abspath(str(srt_path or "")))
+        srt_stem = os.path.splitext(os.path.basename(str(srt_path or "")))[0].lower()
+        for raw in candidates:
+            path = str(raw or "").strip()
+            if not path or path.lower().endswith(".srt") or not os.path.exists(path):
+                continue
+            media_stem = os.path.splitext(os.path.basename(path))[0].lower()
+            same_dir = os.path.dirname(os.path.abspath(path)) == srt_dir
+            related_name = bool(media_stem and (media_stem in srt_stem or srt_stem in media_stem))
+            if same_dir or related_name:
+                return path
+        return ""
+
     def _open_srt_in_editor(self, srt_path):
         started = time.perf_counter()
         from core.srt_parser import parse_srt
@@ -162,8 +182,9 @@ class EditorLifecycleMixin:
             clear_multiclip=True,
             emit_boundary_signal=False,
         )
+        fallback_media_path = self._fallback_media_for_srt_open(srt_path)
         self._remove_old_editor()
-        media_path = find_media_for_srt(srt_path) or ""
+        media_path = find_media_for_srt(srt_path) or fallback_media_path or ""
         linked_project_path, linked_project = self._find_project_for_srt_open(srt_path, media_path)
         if linked_project:
             attach_project_session(

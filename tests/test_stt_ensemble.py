@@ -798,6 +798,135 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertEqual(decision["selector"], "stt_raw_candidate_guard_no_llm")
         self.assertEqual(decision["_stt_no_llm_raw_candidate_policy"]["raw_text"], "망고 구와바 말리거")
 
+    def test_no_llm_postprocess_restores_drift_to_stt1_or_stt2_candidate(self):
+        source = [
+            {
+                "start": 101.0,
+                "end": 103.2,
+                "text": "메뉴",
+                "stt_candidates": [
+                    {
+                        "source": "STT1",
+                        "text": "가자 하나 들고 가시오 이건가 본데",
+                        "start": 101.0,
+                        "end": 103.2,
+                        "score": 0.93,
+                    },
+                    {
+                        "source": "STT2",
+                        "text": "하나 들고 가시오 이건가 본데",
+                        "start": 101.0,
+                        "end": 103.2,
+                        "score": 0.84,
+                    },
+                ],
+            }
+        ]
+        final = [{"start": 101.0, "end": 103.2, "text": "메뉴"}]
+
+        restored = subtitle_engine._restore_no_llm_raw_stt_text(final, source, {})
+
+        self.assertEqual(restored[0]["text"], "가자 하나 들고 가시오 이건가 본데")
+        self.assertEqual(restored[0]["stt_selected_source"], "STT1")
+        self.assertEqual(
+            restored[0]["_stt_no_llm_raw_candidate_policy"]["reason"],
+            "postprocess_candidate_drift",
+        )
+
+    def test_no_llm_postprocess_restores_overtrimmed_stt_candidate_substring(self):
+        source = [
+            {
+                "start": 141.0,
+                "end": 143.5,
+                "text": "메뉴",
+                "stt_candidates": [
+                    {
+                        "source": "STT1",
+                        "text": "카페 메뉴 확인하고 주문하자",
+                        "start": 141.0,
+                        "end": 143.5,
+                        "score": 0.91,
+                    }
+                ],
+            }
+        ]
+
+        restored = subtitle_engine._restore_no_llm_raw_stt_text(
+            [{"start": 141.0, "end": 143.5, "text": "메뉴"}],
+            source,
+            {},
+        )
+
+        self.assertEqual(restored[0]["text"], "카페 메뉴 확인하고 주문하자")
+
+    def test_no_llm_optimize_does_not_run_output_selector_or_use_non_stt_text(self):
+        segments = [
+            {
+                "start": 101.0,
+                "end": 103.2,
+                "text": "메뉴",
+                "stt_candidates": [
+                    {
+                        "source": "STT1",
+                        "text": "가자 하나 들고 가시오 이건가 본데",
+                        "start": 101.0,
+                        "end": 103.2,
+                        "score": 0.93,
+                        "words": [
+                            {"word": "가자", "start": 101.0, "end": 101.35},
+                            {"word": "하나", "start": 101.36, "end": 101.7},
+                            {"word": "들고", "start": 101.71, "end": 102.05},
+                            {"word": "가시오", "start": 102.06, "end": 102.5},
+                            {"word": "이건가", "start": 102.51, "end": 102.9},
+                            {"word": "본데", "start": 102.91, "end": 103.2},
+                        ],
+                    },
+                    {
+                        "source": "STT2",
+                        "text": "하나 들고 가시오 이건가 본데",
+                        "start": 101.0,
+                        "end": 103.2,
+                        "score": 0.84,
+                    },
+                ],
+            }
+        ]
+        settings = {
+            "selected_model": "사용 안함 (Whisper 단독 진행)",
+            "selected_llm_provider": "none",
+            "subtitle_llm_runtime_enabled": False,
+            "stt_ensemble_llm_judge_enabled": True,
+            "stt_selection_raw_guard_enabled": True,
+            "stt_selection_raw_guard_min_score": 0.0,
+            "deep_subtitle_policy_enabled": False,
+            "editor_lora_runtime_enabled": False,
+            "subtitle_quality_auto_correct_enabled": False,
+            "runtime_quality_self_review_enabled": False,
+            "subtitle_output_selector_enabled": True,
+            "subtitle_context_consistency_enabled": False,
+            "subtitle_auto_review_enabled": False,
+            "subtitle_final_integrity_guard_enabled": False,
+            "subtitle_final_sequence_cleanup_enabled": False,
+            "deep_policy_event_logging_enabled": False,
+            "accuracy_decision_graph_enabled": False,
+            "split_length_threshold": 20,
+            "sub_min_duration": 0.2,
+            "sub_max_duration": 6.0,
+        }
+
+        with (
+            patch("core.engine.subtitle_engine.get_selected_llm", return_value="사용 안함 (Whisper 단독 진행)"),
+            patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+            patch("core.engine.subtitle_engine.get_local_dataset_corrections", return_value={}),
+            patch(
+                "core.engine.subtitle_engine.select_best_subtitle_output",
+                side_effect=AssertionError("output selector must not run when subtitle LLM is disabled"),
+            ),
+        ):
+            result = optimize_segments(segments)
+
+        self.assertEqual([row["text"] for row in result], ["가자 하나 들고 가시오 이건가 본데"])
+
     def test_no_llm_process_keeps_raw_stt_text_against_editor_truth(self):
         seg = {
             "start": 1.0,

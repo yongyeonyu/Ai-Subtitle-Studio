@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from PyQt6.QtGui import QTextCursor
 
@@ -17,6 +18,202 @@ from ui.editor.subtitle_text_edit import subtitle_block_data_to_meta
 
 class EditorSegmentsBulkLoadMixin(EditorSegmentsBulkPrepareMixin):
     """Fast QTextDocument rewrite path for already-final segment rows."""
+
+    @staticmethod
+    def _editor_sync_signature(segments: list[dict] | None) -> tuple[tuple[float, float, str, bool], ...]:
+        signature: list[tuple[float, float, str, bool]] = []
+        for item in list(segments or []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                start = round(float(item.get("start", 0.0) or 0.0), 3)
+            except Exception:
+                start = 0.0
+            try:
+                end = round(float(item.get("end", item.get("start", 0.0)) or item.get("start", 0.0) or 0.0), 3)
+            except Exception:
+                end = start
+            text = str(item.get("text", "") or "").replace("\u2028", "\n").strip()
+            signature.append((start, end, text, bool(item.get("is_gap", False))))
+        return tuple(signature)
+
+    @staticmethod
+    def _editor_sync_normalized_block_text(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "").replace("\u2028", "\n").strip())
+
+    def _capture_canonical_editor_sync_snapshot(
+        self,
+        *,
+        block_texts: list[str] | None = None,
+        block_meta: list | None = None,
+        segments: list[dict] | None = None,
+    ) -> None:
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None:
+            return
+        meta_snapshot: dict[int, dict] = {}
+        text_snapshot: dict[int, str] = {}
+
+        if isinstance(block_texts, list) and isinstance(block_meta, list):
+            for line_idx, meta in enumerate(block_meta):
+                if meta is None:
+                    continue
+                try:
+                    meta_snapshot[int(line_idx)] = subtitle_block_data_to_meta(meta)
+                    text_snapshot[int(line_idx)] = self._editor_sync_normalized_block_text(block_texts[line_idx])
+                except Exception:
+                    continue
+        else:
+            doc = text_edit.document() if hasattr(text_edit, "document") else None
+            block = doc.begin() if doc is not None else None
+            while block is not None and block.isValid():
+                try:
+                    meta = block.userData()
+                    if meta is not None:
+                        meta_snapshot[int(block.blockNumber())] = subtitle_block_data_to_meta(meta)
+                        text_snapshot[int(block.blockNumber())] = self._editor_sync_normalized_block_text(block.text())
+                except Exception:
+                    pass
+                block = block.next() if block is not None else None
+
+        if meta_snapshot:
+            setattr(text_edit, "_canonical_timestamp_block_meta_snapshot", meta_snapshot)
+            setattr(text_edit, "_canonical_timestamp_block_text_snapshot", text_snapshot)
+        if segments is not None:
+            setattr(self, "_canonical_editor_segment_signature", self._editor_sync_signature(segments))
+
+    def _enforce_editor_segment_sync_after_reload(self, expected_segments: list[dict]) -> None:
+        # 변경 금지:
+        # reload/open/completion 직후에는 자막 세그먼트, 에디터 QTextBlock metadata,
+        # 타임라인이 반드시 같은 정본 시그니처를 공유해야 한다.
+        # 이 가드를 빼면 "텍스트는 맞는데 에디터 시간만 예전 값"인 상태가 다시 생긴다.
+        expected_signature = self._editor_sync_signature(expected_segments)
+        if not expected_signature:
+            return
+        getter = getattr(self, "_get_current_segments", None)
+        if not callable(getter):
+            return
+        try:
+            current_signature = self._editor_sync_signature(getter(force_rebuild=True))
+        except Exception:
+            current_signature = ()
+        if current_signature == expected_signature:
+            setattr(self, "_canonical_editor_segment_signature", expected_signature)
+            return
+        restore_all = getattr(self, "_restore_all_block_user_data", None)
+        if callable(restore_all):
+            try:
+                restore_all()
+            except Exception:
+                pass
+        try:
+            repaired_signature = self._editor_sync_signature(getter(force_rebuild=True))
+        except Exception:
+            repaired_signature = ()
+        if repaired_signature == expected_signature:
+            setattr(self, "_canonical_editor_segment_signature", expected_signature)
+            return
+        if bool(getattr(self, "_editor_sync_guard_reloading", False)):
+            return
+        fast_loader = getattr(self, "_bulk_load_segments_to_document", None)
+        if not callable(fast_loader):
+            return
+        self._editor_sync_guard_reloading = True
+        try:
+            fast_loader(list(expected_segments or []), preserve_view=True)
+            if callable(restore_all):
+                try:
+                    restore_all()
+                except Exception:
+                    pass
+            try:
+                final_signature = self._editor_sync_signature(getter(force_rebuild=True))
+            except Exception:
+                final_signature = ()
+            if final_signature == expected_signature:
+                setattr(self, "_canonical_editor_segment_signature", expected_signature)
+        finally:
+            self._editor_sync_guard_reloading = False
+
+    @staticmethod
+    def _editor_sync_is_transient_timeline_row(seg: dict) -> bool:
+        if not isinstance(seg, dict):
+            return False
+        return bool(
+            seg.get("stt_pending")
+            or seg.get("_live_stt_preview")
+            or seg.get("_live_subtitle_preview")
+        )
+
+    def _editor_sync_allows_stt_work_rows(self, rows: list[dict] | None = None) -> bool:
+        if bool(getattr(self, "_stt_mode_enabled", False)):
+            return True
+        for seg in list(rows or []):
+            if isinstance(seg, dict) and bool(seg.get("stt_mode")):
+                return True
+        return False
+
+    def _editor_sync_canonical_timeline_rows(self, rows: list[dict], *, allow_stt_work_rows: bool) -> list[dict]:
+        canonical: list[dict] = []
+        for seg in list(rows or []):
+            if not isinstance(seg, dict):
+                continue
+            if not allow_stt_work_rows and self._editor_sync_is_transient_timeline_row(seg):
+                continue
+            canonical.append(dict(seg))
+        return canonical
+
+    def _enforce_timeline_segment_sync_after_reload(self, expected_segments: list[dict]) -> None:
+        """Keep the timeline canvas text identical to the editor's canonical rows."""
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if timeline is None or canvas is None or not hasattr(timeline, "update_segments"):
+            return
+
+        allow_stt_work_rows = self._editor_sync_allows_stt_work_rows(expected_segments)
+        expected_rows = self._editor_sync_canonical_timeline_rows(
+            list(expected_segments or []),
+            allow_stt_work_rows=allow_stt_work_rows,
+        )
+        expected_signature = self._editor_sync_signature(expected_rows)
+        canvas_rows = list(getattr(canvas, "segments", []) or [])
+        if not expected_signature:
+            if canvas_rows:
+                timeline.update_segments([], getattr(self, "_active_seg_start", None), 0.0)
+            return
+
+        canvas_signature = self._editor_sync_signature(
+            self._editor_sync_canonical_timeline_rows(
+                canvas_rows,
+                allow_stt_work_rows=allow_stt_work_rows,
+            )
+        )
+        canvas_has_transient = any(
+            self._editor_sync_is_transient_timeline_row(seg)
+            for seg in canvas_rows
+            if isinstance(seg, dict)
+        )
+        if canvas_signature == expected_signature and (allow_stt_work_rows or not canvas_has_transient):
+            return
+
+        # 변경 금지:
+        # 마카오 0075_D에서 final.srt/왼쪽 에디터는 "메뇨/용유커피/이런거 다 가네"로
+        # 맞는데 타임라인만 이전 STT 임시 row("-" 등)를 계속 그리는 문제가 있었다.
+        # 에디터 정본을 고친 뒤에는 반드시 같은 expected_rows를 타임라인 캔버스와
+        # 글로벌 캔버스에도 재주입해야 세 화면의 글자 싱크가 다시 갈라지지 않는다.
+        if hasattr(self, "_rebuild_subtitle_memory_cache"):
+            self._rebuild_subtitle_memory_cache(expected_rows)
+        else:
+            self._cached_segs = [dict(seg) for seg in expected_rows]
+
+        total_dur = expected_rows[-1]["end"] if expected_rows else 0.0
+        if hasattr(self, "video_player") and getattr(self.video_player, "total_time", 0.0) > 0:
+            total_dur = max(total_dur, self.video_player.total_time)
+        timeline.update_segments(expected_rows, getattr(self, "_active_seg_start", None), total_dur)
+        try:
+            timeline.update()
+        except Exception:
+            pass
 
     def _segment_quality_signature(self, seg: dict) -> str:
         payload = {
@@ -109,6 +306,11 @@ class EditorSegmentsBulkLoadMixin(EditorSegmentsBulkPrepareMixin):
         load_state = self._bulk_begin_document_replace(text_edit, doc, context=context)
         try:
             self._bulk_write_document_payload(text_edit, doc, block_texts=block_texts, block_meta=block_meta)
+            self._capture_canonical_editor_sync_snapshot(
+                block_texts=block_texts,
+                block_meta=block_meta,
+                segments=display_rows,
+            )
         finally:
             self._bulk_end_document_replace(text_edit, doc, context=context, load_state=load_state)
         self._bulk_refresh_loaded_document(text_edit, context=context)

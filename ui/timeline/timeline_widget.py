@@ -11,6 +11,7 @@ import numpy as np
 from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QHBoxLayout,
     QInputDialog,
@@ -849,6 +850,8 @@ class TimelineWidget(QWidget):
             except Exception:
                 pass
 
+        self._release_lingering_time_window_dialog_state()
+
         for btn in list(getattr(self, "_zoom_buttons", []) or []):
             try:
                 btn.releaseMouse()
@@ -872,6 +875,54 @@ class TimelineWidget(QWidget):
         except Exception:
             pass
         self._sync_focus_border()
+
+    def _release_lingering_time_window_dialog_state(self, dialog: QWidget | None = None) -> None:
+        seen: set[int] = set()
+        widgets = []
+        if dialog is not None:
+            widgets.append(dialog)
+        for getter in (
+            getattr(QApplication, "activePopupWidget", None),
+            getattr(QApplication, "activeModalWidget", None),
+        ):
+            if not callable(getter):
+                continue
+            try:
+                widget = getter()
+            except Exception:
+                widget = None
+            if widget is not None:
+                widgets.append(widget)
+
+        for widget in widgets:
+            if widget is None:
+                continue
+            widget_id = id(widget)
+            if widget_id in seen:
+                continue
+            seen.add(widget_id)
+            if widget is self:
+                continue
+            try:
+                widget.releaseMouse()
+            except Exception:
+                pass
+            try:
+                widget.releaseKeyboard()
+            except Exception:
+                pass
+            try:
+                widget.clearFocus()
+            except Exception:
+                pass
+            try:
+                widget.hide()
+            except Exception:
+                pass
+            try:
+                widget.close()
+            except Exception:
+                pass
 
     def _queue_toolbar_restore_after_time_window_dialog(self) -> None:
         self._restore_toolbar_after_time_window_dialog()
@@ -919,6 +970,7 @@ class TimelineWidget(QWidget):
                 dialog.releaseKeyboard()
             except Exception:
                 pass
+            self._release_lingering_time_window_dialog_state(dialog)
             try:
                 dialog.deleteLater()
             except Exception:
@@ -1697,6 +1749,8 @@ class TimelineWidget(QWidget):
             return
 
         path = str(path or "")
+        if not path or path.lower().endswith((".srt", ".vtt", ".ass", ".ssa")):
+            return
         path_changed = path != str(getattr(self, "_waveform_path", "") or "")
         if path_changed or force:
             self._reset_single_media_context(clear_duration=True)

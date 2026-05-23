@@ -32,6 +32,7 @@ from ui.timeline.timeline_global import (
     MINIMAP_MARKER_LANE_H,
     MINIMAP_PRELIMINARY_LANE_BG,
     MINIMAP_REFERENCE_LANE_BG,
+    MINIMAP_SILENCE_LANE_BG,
     MINIMAP_SUBTITLE_LANE_BG,
     MINIMAP_TOP_LANE_BG,
 )
@@ -1268,6 +1269,105 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_seg_time_changed_excludes_stale_stt_pending_rows_from_native_timing_plan(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._snapshot_timeline_view_for_resize = Mock(return_value={})
+        editor._redraw_timeline_preserve_resize_view = Mock()
+        editor.timeline = SimpleNamespace(
+            _begin_subtitle_resize_keep_view=Mock(),
+            _finish_subtitle_resize_keep_view=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n-\n메인 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            pending = editor.text_edit.document().findBlockByNumber(1)
+            second = editor.text_edit.document().findBlockByNumber(2)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            pending.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=2.5, stt_pending=True, stt_selected_source="STT2"))
+            second.setUserData(SubtitleBlockData("00", 4.0, False, end_sec=5.0))
+
+            captured = {}
+
+            def _capture_native_plan(**kwargs):
+                captured["segments"] = [dict(seg) for seg in list(kwargs.get("segments") or [])]
+                return None
+
+            with patch(
+                "ui.editor.editor_timeline_video.plan_subtitle_timing_edit_via_swift",
+                side_effect=_capture_native_plan,
+            ):
+                editor._on_seg_time_changed(2, 1.5, 5.0, "square_left")
+                self.app.processEvents()
+
+            helper_rows = captured.get("segments") or []
+            self.assertEqual([(seg["line"], seg["text"]) for seg in helper_rows], [
+                (0, "앞 자막"),
+                (2, "메인 자막"),
+            ])
+            self.assertTrue(all(not seg.get("stt_pending") for seg in helper_rows))
+        finally:
+            editor.text_edit.close()
+
+    def test_seg_time_changed_prunes_live_stt_preview_overlap_after_confirmed_resize(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._snapshot_timeline_view_for_resize = Mock(return_value={})
+        editor._redraw_timeline_preserve_resize_view = Mock()
+        editor.timeline = SimpleNamespace(
+            _begin_subtitle_resize_keep_view=Mock(),
+            _finish_subtitle_resize_keep_view=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=12.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n메인 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock())
+        editor._live_stt_preview_segments = [
+            {
+                "start": 2.0,
+                "end": 2.6,
+                "text": "-",
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT2",
+            },
+            {
+                "start": 6.0,
+                "end": 6.4,
+                "text": "유지",
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT2",
+            },
+        ]
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 4.0, False, end_sec=5.0))
+
+            with patch(
+                "ui.editor.editor_timeline_video.plan_subtitle_timing_edit_via_swift",
+                return_value=None,
+            ):
+                editor._on_seg_time_changed(1, 1.5, 5.0, "square_left")
+                self.app.processEvents()
+
+            remaining_preview = list(getattr(editor, "_live_stt_preview_segments", []) or [])
+            self.assertEqual(len(remaining_preview), 1)
+            self.assertEqual(remaining_preview[0]["text"], "유지")
+            self.assertAlmostEqual(float(remaining_preview[0]["start"]), 6.0)
+            self.assertAlmostEqual(float(remaining_preview[0]["end"]), 6.4)
+        finally:
+            editor.text_edit.close()
+
     def test_seg_time_changed_can_apply_native_timing_plan(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0
@@ -1572,6 +1672,204 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_diamond_delete_resolves_timeline_row_line_to_document_block(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("이전 줄 1\n이전 줄 2\n이거는 10원짜리인데\n흠\n감사합니다")
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+
+        canvas_segments = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "이전 줄 1\n이전 줄 2"},
+            {"line": 1, "start": 2.0, "end": 3.0, "text": "이거는 10원짜리인데"},
+            {"line": 2, "start": 3.0, "end": 3.5, "text": "흠"},
+            {"line": 3, "start": 3.5, "end": 4.0, "text": "감사합니다"},
+        ]
+        canvas = SimpleNamespace(
+            segments=canvas_segments,
+            _drag_seg={"line": 1, "start": 2.0, "end": 3.5, "text": "이거는 10원짜리인데"},
+            _drag_edge="square_right",
+            _drag_merge_pair=(1, 2),
+            _drag_s0_start=2.0,
+            _drag_s0_end=3.0,
+            _drag_adj_l=canvas_segments[0],
+            _drag_adj_r=canvas_segments[2],
+            _drag_adj_orig_start_l=0.0,
+            _drag_adj_orig_end_l=1.0,
+            _drag_adj_orig_start_r=3.0,
+            _drag_adj_orig_end_r=3.5,
+        )
+        canvas._segment_for_line = lambda line: next(
+            (seg for seg in canvas_segments if int(seg["line"]) == int(line)),
+            None,
+        )
+        editor.timeline = SimpleNamespace(canvas=canvas)
+
+        try:
+            blocks = [
+                ("00", 0.0, 1.0),
+                ("01", 0.0, 1.0),
+                ("00", 2.0, 3.0),
+                ("00", 3.0, 3.5),
+                ("00", 3.5, 4.0),
+            ]
+            for idx, (speaker, start, end) in enumerate(blocks):
+                editor.text_edit.document().findBlockByNumber(idx).setUserData(
+                    SubtitleBlockData(speaker, start, False, end_sec=end)
+                )
+
+            editor._on_diamond_delete(1, 2)
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(
+                editor.text_edit.toPlainText().splitlines(),
+                ["이전 줄 1", "이전 줄 2", "이거는 10원짜리인데", "감사합니다"],
+            )
+            self.assertEqual(
+                [(seg["start"], seg["end"], seg["text"]) for seg in rows],
+                [
+                    (0.0, 1.0, "이전 줄 1\n이전 줄 2"),
+                    (2.0, 3.5, "이거는 10원짜리인데"),
+                    (3.5, 4.0, "감사합니다"),
+                ],
+            )
+        finally:
+            editor.text_edit.close()
+
+    def test_diamond_merge_resolves_timeline_row_line_to_document_block(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("이전 줄 1\n이전 줄 2\n이거는 10원짜리인데\n흠\n감사합니다")
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+
+        canvas_segments = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "이전 줄 1\n이전 줄 2"},
+            {"line": 1, "start": 2.0, "end": 3.0, "text": "이거는 10원짜리인데"},
+            {"line": 2, "start": 3.0, "end": 3.5, "text": "흠"},
+            {"line": 3, "start": 3.5, "end": 4.0, "text": "감사합니다"},
+        ]
+        canvas = SimpleNamespace(
+            segments=canvas_segments,
+            _drag_seg={"line": 1, "start": 2.0, "end": 3.5, "text": "이거는 10원짜리인데"},
+            _drag_edge="square_right",
+            _drag_merge_pair=(1, 2),
+            _drag_s0_start=2.0,
+            _drag_s0_end=3.0,
+            _drag_adj_l=canvas_segments[0],
+            _drag_adj_r=canvas_segments[2],
+            _drag_adj_orig_start_l=0.0,
+            _drag_adj_orig_end_l=1.0,
+            _drag_adj_orig_start_r=3.0,
+            _drag_adj_orig_end_r=3.5,
+        )
+        canvas._segment_for_line = lambda line: next(
+            (seg for seg in canvas_segments if int(seg["line"]) == int(line)),
+            None,
+        )
+        editor.timeline = SimpleNamespace(canvas=canvas)
+
+        try:
+            blocks = [
+                ("00", 0.0, 1.0),
+                ("01", 0.0, 1.0),
+                ("00", 2.0, 3.0),
+                ("00", 3.0, 3.5),
+                ("00", 3.5, 4.0),
+            ]
+            for idx, (speaker, start, end) in enumerate(blocks):
+                editor.text_edit.document().findBlockByNumber(idx).setUserData(
+                    SubtitleBlockData(speaker, start, False, end_sec=end)
+                )
+
+            editor._on_diamond_merge(1, 2)
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(
+                editor.text_edit.toPlainText().splitlines(),
+                ["이전 줄 1", "이전 줄 2", "이거는 10원짜리인데 흠", "감사합니다"],
+            )
+            self.assertEqual(
+                [(seg["start"], seg["end"], seg["text"]) for seg in rows],
+                [
+                    (0.0, 1.0, "이전 줄 1\n이전 줄 2"),
+                    (2.0, 3.5, "이거는 10원짜리인데 흠"),
+                    (3.5, 4.0, "감사합니다"),
+                ],
+            )
+        finally:
+            editor.text_edit.close()
+
+    def test_diamond_delete_reverse_drag_keeps_dragged_segment_with_line_mismatch(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("이전 줄 1\n이전 줄 2\n이거는 10원짜리인데\n흠\n감사합니다")
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+
+        canvas_segments = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "이전 줄 1\n이전 줄 2"},
+            {"line": 1, "start": 2.0, "end": 3.0, "text": "이거는 10원짜리인데"},
+            {"line": 2, "start": 3.0, "end": 3.5, "text": "흠"},
+            {"line": 3, "start": 3.5, "end": 4.0, "text": "감사합니다"},
+        ]
+        canvas = SimpleNamespace(
+            segments=canvas_segments,
+            _drag_seg={"line": 2, "start": 2.0, "end": 3.5, "text": "흠"},
+            _drag_edge="square_left",
+            _drag_merge_pair=(1, 2),
+            _drag_s0_start=3.0,
+            _drag_s0_end=3.5,
+            _drag_adj_l=canvas_segments[1],
+            _drag_adj_r=canvas_segments[3],
+            _drag_adj_orig_start_l=2.0,
+            _drag_adj_orig_end_l=3.0,
+            _drag_adj_orig_start_r=3.5,
+            _drag_adj_orig_end_r=4.0,
+        )
+        canvas._segment_for_line = lambda line: next(
+            (seg for seg in canvas_segments if int(seg["line"]) == int(line)),
+            None,
+        )
+        editor.timeline = SimpleNamespace(canvas=canvas)
+
+        try:
+            blocks = [
+                ("00", 0.0, 1.0),
+                ("01", 0.0, 1.0),
+                ("00", 2.0, 3.0),
+                ("00", 3.0, 3.5),
+                ("00", 3.5, 4.0),
+            ]
+            for idx, (speaker, start, end) in enumerate(blocks):
+                editor.text_edit.document().findBlockByNumber(idx).setUserData(
+                    SubtitleBlockData(speaker, start, False, end_sec=end)
+                )
+
+            editor._on_diamond_delete(1, 2)
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(
+                editor.text_edit.toPlainText().splitlines(),
+                ["이전 줄 1", "이전 줄 2", "흠", "감사합니다"],
+            )
+            self.assertEqual(
+                [(seg["start"], seg["end"], seg["text"]) for seg in rows],
+                [
+                    (0.0, 1.0, "이전 줄 1\n이전 줄 2"),
+                    (2.0, 3.5, "흠"),
+                    (3.5, 4.0, "감사합니다"),
+                ],
+            )
+        finally:
+            editor.text_edit.close()
+
     def test_diamond_merge_request_can_choose_delete_action(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0
@@ -1678,6 +1976,43 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertAlmostEqual(second.start_sec, 1.2)
             editor.timeline.set_active.assert_called_once_with(1.2)
             editor.timeline.center_to_sec.assert_called_once_with(1.2, smooth=True)
+        finally:
+            editor.text_edit.close()
+
+    def test_canvas_speaker_split_preserves_existing_dash_dialogue_lines(self):
+        editor = _DummyEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("- 왜?\u2028- 어?")
+        editor.video_player = SimpleNamespace(total_time=60.0)
+        editor.timeline = SimpleNamespace(set_active=Mock(), center_to_sec=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 27.06, False, end_sec=29.46))
+
+            editor.split_speaker_segment_with_text(0, 99)
+
+            lines = editor.text_edit.toPlainText().splitlines()
+            first = editor.text_edit.document().findBlockByNumber(0).userData()
+            second = editor.text_edit.document().findBlockByNumber(1).userData()
+            self.assertEqual(lines, ["- 왜?", "- 어?"])
+            self.assertEqual(first.spk_id, "00")
+            self.assertEqual(second.spk_id, "01")
+            self.assertAlmostEqual(first.start_sec, 27.06)
+            self.assertAlmostEqual(second.start_sec, 27.06)
+            self.assertAlmostEqual(first.end_sec, 29.46)
+            self.assertAlmostEqual(second.end_sec, 29.46)
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["text"], "- 왜?\n- 어?")
+            self.assertEqual(rows[0]["speaker_list"], ["00", "01"])
         finally:
             editor.text_edit.close()
 
@@ -2344,6 +2679,30 @@ class TimelinePlayheadFitTests(unittest.TestCase):
                     grabber.releaseMouse()
             except Exception:
                 pass
+            timeline.close()
+
+    def test_time_window_dialog_restore_closes_lingering_popup_and_modal_widgets(self):
+        timeline = TimelineWidget()
+        popup = QWidget()
+        modal = QWidget()
+        try:
+            timeline.show()
+            popup.show()
+            modal.show()
+            self.app.processEvents()
+
+            timeline._time_window_dialog_pending = True
+            with patch("ui.timeline.timeline_widget.QApplication.activePopupWidget", return_value=popup), \
+                 patch("ui.timeline.timeline_widget.QApplication.activeModalWidget", return_value=modal):
+                timeline._restore_toolbar_after_time_window_dialog()
+            self.app.processEvents()
+
+            self.assertFalse(timeline._time_window_dialog_pending)
+            self.assertFalse(popup.isVisible())
+            self.assertFalse(modal.isVisible())
+        finally:
+            popup.close()
+            modal.close()
             timeline.close()
 
     def test_show_ten_second_edit_window_uses_saved_user_preference(self):
@@ -3464,7 +3823,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         self.assertIs(TimelineCanvasBase, QWidget)
         self.assertIs(GlobalCanvasBase, QWidget)
 
-    def test_global_canvas_uses_two_lane_minimap_without_waveform_dependency(self):
+    def test_global_canvas_uses_expanded_minimap_without_waveform_dependency(self):
         timeline = TimelineWidget()
         try:
             timeline.global_canvas.resize(420, timeline.global_canvas.height())
@@ -3486,7 +3845,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
-    def test_global_canvas_expands_into_available_bottom_space(self):
+    def test_global_canvas_expands_into_extra_bottom_space(self):
         timeline = TimelineWidget()
         try:
             base_height = timeline.sizeHint().height()
@@ -3499,6 +3858,33 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             pixmap = timeline.global_canvas._build_static_cache()
             self.assertFalse(pixmap.isNull())
             self.assertEqual(pixmap.height(), timeline.global_canvas.height())
+        finally:
+            timeline.close()
+
+    def test_global_canvas_silence_and_subtitle_lanes_share_expanded_height_evenly(self):
+        timeline = TimelineWidget()
+        try:
+            canvas = timeline.global_canvas
+            canvas.resize(420, MINIMAP_HEIGHT)
+            canvas.total_duration = 20.0
+            stt1 = {"start": 1.0, "end": 4.0, "text": "stt1", "stt_pending": True, "stt_preview_source": "STT1"}
+            stt2 = {"start": 2.0, "end": 6.0, "text": "stt2", "stt_pending": True, "stt_preview_source": "STT2"}
+            final = {"start": 7.0, "end": 10.0, "text": "final"}
+            canvas.update_segments([stt1, stt2, final], 20.0)
+
+            bottom_lane = QRect(0, MINIMAP_MARKER_LANE_H, 420, MINIMAP_HEIGHT - MINIMAP_MARKER_LANE_H - 1)
+            lanes = canvas._bottom_lane_layout(bottom_lane, include_stt=True)
+
+            self.assertEqual(list(lanes.keys()), ["SILENCE", "SUBTITLE"])
+            self.assertLessEqual(abs(lanes["SILENCE"].height() - lanes["SUBTITLE"].height()), 1)
+            self.assertEqual(lanes["SILENCE"].height() + lanes["SUBTITLE"].height(), bottom_lane.height())
+            self.assertEqual([row["lane"] for row in canvas._merged_minimap_subtitle_segments(420, 20.0, lane="STT1")], ["STT1"])
+            self.assertEqual([row["lane"] for row in canvas._merged_minimap_subtitle_segments(420, 20.0, lane="STT2")], ["STT2"])
+            self.assertTrue(all(row["lane"] == "SILENCE" for row in canvas._merged_minimap_silence_segments(420, 20.0)))
+
+            pixmap = canvas._build_static_cache()
+            self.assertFalse(pixmap.isNull())
+            self.assertEqual(pixmap.height(), MINIMAP_HEIGHT)
         finally:
             timeline.close()
 
@@ -3574,7 +3960,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
-    def test_global_canvas_uses_single_subtitle_lane_without_silence_strip(self):
+    def test_global_canvas_renders_silence_lane_above_subtitle_lane(self):
         timeline = TimelineWidget()
         try:
             canvas = timeline.global_canvas
@@ -3587,19 +3973,27 @@ class TimelinePlayheadFitTests(unittest.TestCase):
                 10.0,
             )
             canvas.set_vad_segments([])
+            timeline.canvas.gap_segments = [
+                {"start": 0.0, "end": 1.0, "is_gap": True},
+                {"start": 4.0, "end": 10.0, "is_gap": True},
+            ]
 
             pixmap = canvas._build_static_cache()
             image = pixmap.toImage()
-            subtitle_y = MINIMAP_MARKER_LANE_H + 6
-            bottom_y = canvas.height() - 5
+            bottom_lane = QRect(0, MINIMAP_MARKER_LANE_H, 420, canvas.height() - MINIMAP_MARKER_LANE_H - 1)
+            lanes = canvas._bottom_lane_layout(bottom_lane, include_stt=True)
+            silence_y = lanes["SILENCE"].y() + max(2, lanes["SILENCE"].height() // 2)
+            subtitle_y = lanes["SUBTITLE"].y() + max(2, lanes["SUBTITLE"].height() // 2)
             subtitle_x = canvas._sec_to_px(2.0)
-            empty_x = canvas._sec_to_px(0.3)
+            silence_x = canvas._sec_to_px(0.4)
             subtitle_px = image.pixelColor(subtitle_x, subtitle_y)
-            empty_px = image.pixelColor(empty_x, bottom_y)
+            silence_px = image.pixelColor(silence_x, silence_y)
 
             self.assertNotEqual(subtitle_px.name(), QColor(MINIMAP_SUBTITLE_LANE_BG).name())
-            self.assertEqual(empty_px.name(), QColor(MINIMAP_SUBTITLE_LANE_BG).name())
+            self.assertNotEqual(silence_px.name(), QColor(MINIMAP_SILENCE_LANE_BG).name())
             self.assertGreater(subtitle_px.blue(), subtitle_px.red())
+            self.assertGreater(silence_px.blue(), silence_px.red())
+            self.assertGreater(silence_px.red(), 60)
         finally:
             timeline.close()
 
@@ -3620,7 +4014,9 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             pixmap = canvas._build_static_cache()
             image = pixmap.toImage()
-            subtitle_y = MINIMAP_MARKER_LANE_H + 6
+            bottom_lane = QRect(0, MINIMAP_MARKER_LANE_H, 420, canvas.height() - MINIMAP_MARKER_LANE_H - 1)
+            lanes = canvas._bottom_lane_layout(bottom_lane, include_stt=True)
+            subtitle_y = lanes["SUBTITLE"].y() + max(2, lanes["SUBTITLE"].height() // 2)
             bridge_x = canvas._sec_to_px(1.22)
             bridge_px = image.pixelColor(bridge_x, subtitle_y)
 

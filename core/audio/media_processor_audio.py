@@ -62,6 +62,18 @@ def _media_command_error_summary(returncode: int, summary: str) -> str:
 
 
 class VideoProcessorAudioHelpersMixin:
+    _AUDIO_ROUTE_VAD_SETTING_KEYS = (
+        "selected_vad",
+        "vad_threshold",
+        "vad_min_speech",
+        "vad_min_silence",
+        "vad_speech_pad",
+        "vad_window_size",
+        "ten_vad_threshold",
+        "vad_pre_split_enabled",
+        "vad_post_stt_align_enabled",
+    )
+
     def _notify_stage(self, status: str):
         callback = getattr(self, "stage_callback", None)
         if not callable(callback):
@@ -689,6 +701,11 @@ class VideoProcessorAudioHelpersMixin:
     def _build_macos_native_fast_audio_flatten_filter(self, settings: dict) -> str:
         hp = int(self._float_setting(settings, "macos_native_fast_audio_flatten_hp", 150, 0, 500))
         lp = int(self._float_setting(settings, "macos_native_fast_audio_flatten_lp", 4600, 1000, 8000))
+        nf_raw = settings.get("macos_native_fast_audio_flatten_nf", None)
+        nf = None
+        if nf_raw is not None:
+            nf = self._float_setting(settings, "macos_native_fast_audio_flatten_nf", -30, -80, 0)
+        treble = self._float_setting(settings, "macos_native_fast_audio_flatten_treble", 0.0, -10.0, 20.0)
         comp_th = self._float_setting(settings, "macos_native_fast_audio_flatten_comp_th", -24, -60, 0)
         volume = self._float_setting(settings, "macos_native_fast_audio_flatten_volume", 3.2, 0.5, 8.0)
         limiter = self._float_setting(settings, "macos_native_fast_audio_flatten_limiter", 0.93, 0.1, 1.0)
@@ -698,10 +715,17 @@ class VideoProcessorAudioHelpersMixin:
             filters.append(f"highpass=f={hp}")
         if lp > 0:
             filters.append(f"lowpass=f={lp}")
+        if nf is not None:
+            filters.append(f"afftdn=nf={self._fmt_filter_num(nf)}")
         filters.append(
             f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:"
             "ratio=3:attack=5:release=55"
         )
+        if abs(treble) >= 0.01:
+            filters.append(
+                "equalizer=f=3200:width_type=h:width=2200:"
+                f"g={self._fmt_filter_num(treble)}"
+            )
         filters.append(f"volume={self._fmt_filter_num(volume)}")
         filters.append(f"alimiter=limit={self._fmt_filter_num(limiter)}")
         return ",".join(filters)
@@ -1297,6 +1321,24 @@ class VideoProcessorAudioHelpersMixin:
                 baseline[key] = deepcopy(data[key])
         return baseline
 
+    def _audio_route_tune_settings(self, candidate_settings: dict | None, runtime_settings: dict | None = None) -> dict:
+        from core.audio.audio_presets import auto_audio_settings_only
+
+        source = dict(candidate_settings or {})
+        tune = auto_audio_settings_only(source)
+        route_vad_enabled = self._settings_bool(
+            runtime_settings,
+            "audio_chunk_route_vad_enabled",
+            self._settings_bool(runtime_settings, "vad_post_stt_align_enabled", True),
+        )
+        if route_vad_enabled:
+            # 변경 금지: 청크별 오디오 라우팅에서는 후보가 고른 VAD까지 같이 보존해야
+            # 마카오처럼 잡음이 큰 구간이 clearvoice/ten_vad 경로로 실제 렌더링됩니다.
+            for key in self._AUDIO_ROUTE_VAD_SETTING_KEYS:
+                if key in source:
+                    tune[key] = deepcopy(source[key])
+        return tune
+
     def _score_audio_route_preview_candidate(
         self,
         *,
@@ -1692,10 +1734,10 @@ class VideoProcessorAudioHelpersMixin:
         index: int,
         tmpdir: str,
     ) -> dict:
-        from core.audio.audio_presets import auto_audio_settings_only
         from core.audio.preset_auto_classifier import (
             build_audio_profile,
             build_chunk_route_features,
+            candidate_settings_for_id,
             rank_audio_candidates,
             select_audio_candidate,
         )
@@ -1733,7 +1775,7 @@ class VideoProcessorAudioHelpersMixin:
             selected_strategy = feature_strategy
             selected_label = feature_label
             selected_confidence = feature_confidence
-            tune = auto_audio_settings_only(result.get("settings") or {})
+            tune = self._audio_route_tune_settings(candidate_settings_for_id(feature_strategy), settings)
             preview_best, preview_scores = self._preview_chunk_audio_route(
                 sample_path,
                 route_features=features,
@@ -1755,7 +1797,7 @@ class VideoProcessorAudioHelpersMixin:
                 selected_label = str(preview_best.get("label") or selected_label)
                 selected_confidence = float(preview_best.get("score", selected_confidence) or selected_confidence)
                 preview_self_score = float(preview_best.get("score", 0.0) or 0.0)
-                tune = auto_audio_settings_only(preview_best.get("settings") or tune)
+                tune = self._audio_route_tune_settings(preview_best.get("settings") or tune, settings)
                 route_reason = (
                     f"{route_reason}; 프리뷰 self-score {preview_self_score:.2f}로 "
                     f"{selected_label or selected_strategy} 유지/선택"
@@ -1778,7 +1820,7 @@ class VideoProcessorAudioHelpersMixin:
                 selected_strategy = str(baseline_guard.get("audio_strategy") or selected_strategy)
                 selected_label = str(baseline_guard.get("audio_strategy_label") or selected_label)
                 selected_confidence = float(baseline_guard.get("confidence", selected_confidence) or selected_confidence)
-                tune = auto_audio_settings_only(baseline_guard.get("settings") or tune)
+                tune = self._audio_route_tune_settings(baseline_guard.get("settings") or tune, settings)
                 preview_self_score = float(baseline_guard.get("baseline_preview_score", selected_confidence) or selected_confidence)
                 route_reason = (
                     f"{route_reason}; {str(baseline_guard.get('reason') or '').strip()}"

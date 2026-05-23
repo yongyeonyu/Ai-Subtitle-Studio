@@ -21,11 +21,15 @@ def get_local_dataset_corrections() -> dict:
 
 def get_selected_llm() -> str:
     settings = _get_user_settings()
+    model = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b")) or "").strip()
+    provider = str(settings.get("selected_llm_provider", "ollama") or "ollama").strip().lower()
     runtime_enabled = settings.get("subtitle_llm_runtime_enabled")
     if runtime_enabled is False:
         return "사용 안함 (모드 정책)"
+    if provider == "none" or not model or "사용 안함" in model:
+        return "사용 안함 (모드 정책)"
     if runtime_enabled is True:
-        return settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
+        return model
     try:
         from core.mode_policy import MODE_TOOL_STACKS, selected_mode_from_settings
 
@@ -34,7 +38,7 @@ def get_selected_llm() -> str:
             return "사용 안함 (모드 정책)"
     except Exception:
         pass
-    return settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
+    return model
 
 
 def _setting_int(settings: dict, key: str, default: int, fallback_key: str | None = None) -> int:

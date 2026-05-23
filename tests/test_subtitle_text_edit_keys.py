@@ -155,6 +155,35 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.deleteLater()
             self.app.processEvents()
 
+    def test_cmd_enter_speaker_split_precedes_stt_enter_mode(self):
+        edit = SubtitleTextEdit()
+        try:
+            stt_enter = Mock()
+            split_speaker = Mock()
+            edit._parent_widget = SimpleNamespace(
+                _stt_mode_enabled=True,
+                _handle_stt_enter=stt_enter,
+                split_speaker_segment_with_text=split_speaker,
+            )
+            edit.setPlainText("왜? 어?")
+            cursor = edit.textCursor()
+            cursor.setPosition(3)
+            edit.setTextCursor(cursor)
+
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_Return,
+                Qt.KeyboardModifier.MetaModifier,
+            )
+            edit.keyPressEvent(event)
+
+            split_speaker.assert_called_once_with(0, 3)
+            stt_enter.assert_not_called()
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
     def test_selection_lock_blocks_keyboard_cursor_movement(self):
         edit = SubtitleTextEdit()
         try:

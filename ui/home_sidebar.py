@@ -1113,6 +1113,9 @@ class HomeSidebarMixin:
             )
 
     def _subtitle_llm_enabled(self, settings: dict) -> bool:
+        runtime_enabled = (settings or {}).get("subtitle_llm_runtime_enabled", None)
+        if runtime_enabled is False:
+            return False
         model = str((settings or {}).get("selected_model", "") or "").strip()
         provider = str((settings or {}).get("selected_llm_provider", "ollama") or "ollama").strip().lower()
         if not model:

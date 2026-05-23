@@ -960,6 +960,7 @@ class EditorTimelineVideoMixin(
 
         old_start = float(ud.start_sec)
         old_end = float(ud.end_sec if ud.end_sec is not None else old_start)
+        editing_transient_stt = bool(getattr(ud, "stt_pending", False) or getattr(ud, "live_preview", False))
         eps = 0.001
         min_span = max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps())))
         trim_previous_subtitles = edge_type in {"square_left", "center"} and new_start < old_start - eps
@@ -972,6 +973,17 @@ class EditorTimelineVideoMixin(
                 current_segments = []
         else:
             current_segments = []
+        if not editing_transient_stt and current_segments:
+            # KEEP: confirmed subtitle timing edits must not retime or resurrect
+            # unfinished STT rows. If a stale STT2 preview survives underneath an
+            # already-confirmed subtitle, dragging the confirmed segment backward
+            # must not feed that preview row into the timing planner or it can
+            # reappear as a bogus "STT2 미확정" block in the uncovered range.
+            current_segments = [
+                seg
+                for seg in current_segments
+                if not bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview"))
+            ]
         native_timing_plan = None
         if current_segments and edge_type != "diamond":
             native_timing_plan = plan_subtitle_timing_edit_via_swift(
@@ -1040,6 +1052,9 @@ class EditorTimelineVideoMixin(
                 prev_ud = prev.userData()
                 if not isinstance(prev_ud, SubtitleBlockData):
                     break
+                if not editing_transient_stt and bool(getattr(prev_ud, "stt_pending", False) or getattr(prev_ud, "live_preview", False)):
+                    prev = prev.previous()
+                    continue
                 prev_start = float(prev_ud.start_sec)
                 prev_end = float(prev_ud.end_sec if prev_ud.end_sec is not None else prev_start)
                 if prev_ud.is_gap:
@@ -1074,6 +1089,9 @@ class EditorTimelineVideoMixin(
                 next_ud = nxt.userData()
                 if not isinstance(next_ud, SubtitleBlockData):
                     break
+                if not editing_transient_stt and bool(getattr(next_ud, "stt_pending", False) or getattr(next_ud, "live_preview", False)):
+                    nxt = nxt.next()
+                    continue
                 next_start = float(next_ud.start_sec)
                 next_end = float(next_ud.end_sec if next_ud.end_sec is not None else next_start)
                 if next_ud.is_gap:
@@ -1177,6 +1195,25 @@ class EditorTimelineVideoMixin(
 
         if hasattr(self, "_invalidate_segment_cache"):
             self._invalidate_segment_cache()
+        if not editing_transient_stt:
+            trim_preview = getattr(self, "_trim_segments_outside_range", None)
+            if callable(trim_preview):
+                try:
+                    from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
+
+                    preview_start = self._snap_to_frame(min(old_start, new_start))
+                    preview_end = self._snap_to_frame(max(old_end, new_end))
+                    current_preview = [
+                        dict(seg)
+                        for seg in list(getattr(self, "_live_stt_preview_segments", []) or [])
+                        if isinstance(seg, dict)
+                    ]
+                    if current_preview and preview_end > preview_start + eps:
+                        pruned_preview = trim_preview(current_preview, preview_start, preview_end)
+                        ensure_stt_preview_lane_numbers(pruned_preview, mutate=True)
+                        self._live_stt_preview_segments = pruned_preview
+                except Exception:
+                    pass
         prev_suspend_restore = bool(getattr(self, "_suspend_block_user_data_restore", False))
         self._suspend_block_user_data_restore = True
         try:

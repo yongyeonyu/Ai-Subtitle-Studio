@@ -10,7 +10,10 @@ from core.frame_time import frame_count, frame_to_sec, normalize_segment_to_fram
 RULER_H = 30
 WAVE_H = 34
 
-SEG_TOP_GAP = 34
+# KEEP: the roughcut strip sits directly under the waveform. The previous
+# gap produced a 22px roughcut lane; this makes that lane 50% taller (33px)
+# without changing the subtitle/STT editing scenario below it.
+SEG_TOP_GAP = 45
 SEG_TOP = RULER_H + WAVE_H + SEG_TOP_GAP
 
 SUBTITLE_TOP = SEG_TOP + 8
@@ -20,8 +23,11 @@ SCORE_TOP = SUBTITLE_TOP - 18
 SCORE_BOT = SUBTITLE_TOP - 2
 SCORE_H = SCORE_BOT - SCORE_TOP
 STT1_TOP = SUBTITLE_BOT + 2
-# Three STT sublanes still need a readable single-line text rect after paint padding.
-STT_PREVIEW_LANE_H = 80
+# KEEP: the global canvas bottom summary lanes were trimmed, and that recovered
+# height is intentionally returned to both STT preview sources here. Preserve a
+# larger candidate lane so the timeline scenario stays the same while STT1/2
+# previews become slightly easier to scan.
+STT_PREVIEW_LANE_H = 87
 STT1_BOT = STT1_TOP + STT_PREVIEW_LANE_H
 STT2_TOP = STT1_BOT
 STT2_BOT = STT2_TOP + STT_PREVIEW_LANE_H

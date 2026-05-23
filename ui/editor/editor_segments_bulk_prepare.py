@@ -4,21 +4,42 @@ from __future__ import annotations
 
 import re
 
-from core.native_swift_timeline import prepare_editor_segments_for_load_via_swift
+from core.native_swift_timeline import (
+    prepare_editor_segment_sync_model_via_swift,
+    prepare_editor_segments_for_load_via_swift,
+)
 from ui.editor.editor_helpers import should_split_multiline_part_into_block
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
 
 class EditorSegmentsBulkPrepareMixin:
-    def _bulk_native_prepared_by_source(self, rows: list[dict]) -> dict[int, dict]:
-        native_prepared_rows = None
+    def _bulk_native_sync_model(self, rows: list[dict]) -> dict | None:
         try:
-            native_prepared_rows = prepare_editor_segments_for_load_via_swift(
+            decoded = prepare_editor_segment_sync_model_via_swift(
                 segments=list(rows or []),
                 fps=float(getattr(self, "video_fps", 30.0) or 30.0),
             )
         except Exception:
-            native_prepared_rows = None
+            decoded = None
+        return decoded if isinstance(decoded, dict) else None
+
+    def _bulk_native_prepared_by_source(
+        self,
+        rows: list[dict],
+        *,
+        native_sync_model: dict | None = None,
+    ) -> dict[int, dict]:
+        native_prepared_rows = None
+        if native_sync_model is not None:
+            native_prepared_rows = native_sync_model.get("segments")
+        if native_prepared_rows is None:
+            try:
+                native_prepared_rows = prepare_editor_segments_for_load_via_swift(
+                    segments=list(rows or []),
+                    fps=float(getattr(self, "video_fps", 30.0) or 30.0),
+                )
+            except Exception:
+                native_prepared_rows = None
 
         prepared_by_source: dict[int, dict] = {}
         if isinstance(native_prepared_rows, list):
@@ -32,6 +53,29 @@ class EditorSegmentsBulkPrepareMixin:
                 if source_index >= 0:
                     prepared_by_source[source_index] = item
         return prepared_by_source
+
+    def _bulk_native_blocks_by_source(
+        self,
+        rows: list[dict],
+        *,
+        native_sync_model: dict | None = None,
+    ) -> dict[int, list[dict]]:
+        if native_sync_model is None:
+            native_sync_model = self._bulk_native_sync_model(rows)
+        native_blocks = native_sync_model.get("blocks") if isinstance(native_sync_model, dict) else None
+        grouped: dict[int, list[dict]] = {}
+        if isinstance(native_blocks, list):
+            for item in native_blocks:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    source_index = int(item.get("sourceIndex", -1))
+                except Exception:
+                    continue
+                if source_index < 0:
+                    continue
+                grouped.setdefault(source_index, []).append(item)
+        return grouped
 
     def _bulk_normalize_segment_text_parts(
         self,
@@ -148,6 +192,7 @@ class EditorSegmentsBulkPrepareMixin:
         display_rows: list[dict],
         spk1_id: str,
         spk2_id: str,
+        native_blocks: list[dict] | None = None,
     ) -> None:
         spk_list = list(seg.get("speaker_list", []) or [])
         current_spk = str((spk_list[0] if spk_list else seg.get("speaker", seg.get("spk", spk1_id))) or spk1_id)
@@ -162,19 +207,35 @@ class EditorSegmentsBulkPrepareMixin:
         )
 
         first_line = len(block_texts)
-        block_texts.append(parts[0])
-        block_meta.append(
-            SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
-        )
-        for part in parts[1:]:
-            if should_split_multiline_part_into_block(seg, part):
-                current_spk = spk2_id if current_spk == spk1_id else spk1_id
-                block_texts.append(part)
+        # 변경 금지:
+        # 자막 세그먼트, 자막 에디터 QTextBlock, 타임라인 세그먼트는
+        # 반드시 같은 정본 분해 결과를 써야 한다.
+        # 여기서 다시 Python 쪽 규칙으로 재조립하면 마카오처럼
+        # 텍스트는 맞는데 블록별 timestamp/userData가 뒤틀려
+        # 에디터 시간과 타임라인이 서로 다른 소스를 보게 된다.
+        block_plans = [dict(item) for item in list(native_blocks or []) if isinstance(item, dict)]
+        if block_plans:
+            for block_idx, block_plan in enumerate(block_plans):
+                if block_idx > 0:
+                    current_spk = spk2_id if current_spk == spk1_id else spk1_id
+                block_texts.append(str(block_plan.get("text", "") or ""))
                 block_meta.append(
                     SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
                 )
-            else:
-                block_texts[-1] = block_texts[-1] + "\u2028" + part
+        else:
+            block_texts.append(parts[0])
+            block_meta.append(
+                SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
+            )
+            for part in parts[1:]:
+                if should_split_multiline_part_into_block(seg, part):
+                    current_spk = spk2_id if current_spk == spk1_id else spk1_id
+                    block_texts.append(part)
+                    block_meta.append(
+                        SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
+                    )
+                else:
+                    block_texts[-1] = block_texts[-1] + "\u2028" + part
 
         display = dict(seg)
         display["line"] = first_line
@@ -189,7 +250,9 @@ class EditorSegmentsBulkPrepareMixin:
         display_rows.append(display)
 
     def _bulk_collect_document_payloads(self, rows: list[dict]) -> tuple[list[str], list[SubtitleBlockData], list[dict]]:
-        prepared_by_source = self._bulk_native_prepared_by_source(rows)
+        native_sync_model = self._bulk_native_sync_model(rows)
+        prepared_by_source = self._bulk_native_prepared_by_source(rows, native_sync_model=native_sync_model)
+        prepared_blocks_by_source = self._bulk_native_blocks_by_source(rows, native_sync_model=native_sync_model)
         block_texts: list[str] = []
         block_meta: list[SubtitleBlockData] = []
         display_rows: list[dict] = []
@@ -227,5 +290,6 @@ class EditorSegmentsBulkPrepareMixin:
                 display_rows=display_rows,
                 spk1_id=spk1_id,
                 spk2_id=spk2_id,
+                native_blocks=prepared_blocks_by_source.get(idx),
             )
         return block_texts, block_meta, display_rows

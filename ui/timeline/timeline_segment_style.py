@@ -211,9 +211,32 @@ def _mix_hex(base_hex: str, accent_hex: str, ratio: float) -> str:
     )
 
 
+def _normalize_hex_color(value: str | None, fallback: str) -> str:
+    raw = str(value or "").strip().lstrip("#")
+    if len(raw) == 3:
+        raw = "".join(ch * 2 for ch in raw)
+    if len(raw) != 6:
+        return str(fallback)
+    try:
+        int(raw, 16)
+    except ValueError:
+        return str(fallback)
+    return f"#{raw.upper()}"
+
+
+def speaker_segment_text_hex(accent_hex: str | None = None) -> str:
+    """Use the configured speaker-menu color directly for speaker text."""
+    return _normalize_hex_color(accent_hex, "#8E8E93")
+
+
 def speaker_segment_fill_hex(accent_hex: str | None = None) -> str:
-    """Keep speaker bars dark enough for white text while retaining a subtle speaker tint."""
-    return _mix_hex(SPEAKER_SEGMENT_FILL, str(accent_hex or "#8E8E93"), 0.12)
+    """Use the complementary color of speaker text for speaker timeline bars."""
+    normalized = speaker_segment_text_hex(accent_hex)
+    raw = normalized.lstrip("#")
+    red = 255 - int(raw[0:2], 16)
+    green = 255 - int(raw[2:4], 16)
+    blue = 255 - int(raw[4:6], 16)
+    return f"#{red:02X}{green:02X}{blue:02X}"
 
 
 def cut_boundary_scan_marker_verified(marker) -> bool:
@@ -691,6 +714,8 @@ __all__ = [
     "scan_boundary_marker_label",
     "scan_boundary_marker_visual",
     "segment_text_kind",
+    "speaker_segment_fill_hex",
+    "speaker_segment_text_hex",
     "stt_checked_source",
     "stt_checked_sources",
     "stt_candidate_selected",

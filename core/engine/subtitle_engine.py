@@ -1799,8 +1799,47 @@ def _source_stt_anchor_rows(source_segments: list[dict]) -> list[dict]:
         seg = dict(raw_seg)
         selected_source_name = str(seg.get("stt_selected_source") or seg.get("stt_ensemble_source") or "").strip().upper()
         selected_source_base = selected_source_name.split("_", 1)[0]
-        candidates = [seg]
-        candidates.extend(c for c in list(seg.get("stt_candidates") or []) if isinstance(c, dict))
+        raw_stt_candidates = []
+        for candidate in list(seg.get("stt_candidates") or []):
+            if not isinstance(candidate, dict):
+                continue
+            source_name = str(
+                candidate.get("source")
+                or candidate.get("stt_selected_source")
+                or candidate.get("stt_preview_source")
+                or candidate.get("stt_source")
+                or ""
+            ).strip().upper()
+            if source_name.split("_", 1)[0] not in {"STT1", "STT2"}:
+                continue
+            if not str(candidate.get("text", "") or "").strip():
+                continue
+            raw_stt_candidates.append(dict(candidate))
+        raw_stt_source_bases = {
+            str(candidate.get("source", "") or "").strip().upper().split("_", 1)[0]
+            for candidate in raw_stt_candidates
+        }
+        include_segment_anchor = (
+            not raw_stt_candidates
+            or (
+                selected_source_base in {"STT1", "STT2"}
+                and selected_source_base not in raw_stt_source_bases
+            )
+        )
+
+        if raw_stt_candidates:
+            def _anchor_candidate_order(candidate: dict) -> tuple[int, float]:
+                source_base = str(candidate.get("source", "") or "").strip().upper().split("_", 1)[0]
+                selected_penalty = 0 if selected_source_base and source_base == selected_source_base else 1
+                return selected_penalty, -_stt_candidate_score100(candidate)
+
+            # 변경 금지: 선택된 STT1/2 원문 후보가 있으면 이미 후처리된 seg["text"]를
+            # 같은 소스의 STT 앵커로 승격하지 않는다. 이 줄을 풀면 "STT1은 맞는데
+            # 최종 자막은 엉뚱함" 케이스에서 오염된 현재 텍스트가 복구 기준이 된다.
+            candidates = ([] if not include_segment_anchor else [seg])
+            candidates.extend(sorted(raw_stt_candidates, key=_anchor_candidate_order))
+        else:
+            candidates = [seg]
         for cand_index, candidate in enumerate(candidates):
             text = str(candidate.get("text", "") or "").strip()
             if not text or _stt_candidate_compact_text(text) in {"", "-"}:
@@ -1851,6 +1890,45 @@ def _subtitle_number_tokens(text: str) -> set[str]:
         for token in _FINAL_STT_ANCHOR_NUMBER_RE.findall(str(text or ""))
         if _stt_candidate_compact_text(token)
     }
+
+
+def _final_text_overextends_stt_anchor(text: str, anchor_text: str, settings: dict | None) -> bool:
+    text_compact = _stt_candidate_compact_text(text)
+    anchor_compact = _stt_candidate_compact_text(anchor_text)
+    if not text_compact or not anchor_compact or text_compact == anchor_compact:
+        return False
+    min_anchor_chars = max(3, _setting_int(settings or {}, "subtitle_final_stt_anchor_guard_overextend_min_chars", 5))
+    if len(anchor_compact) < min_anchor_chars or anchor_compact not in text_compact:
+        return False
+    extra_chars = max(0, len(text_compact) - len(anchor_compact))
+    max_extra_chars = max(2, _setting_int(settings or {}, "subtitle_final_stt_anchor_guard_overextend_max_extra_chars", 5))
+    max_extra_ratio = max(
+        0.05,
+        _setting_float(settings or {}, "subtitle_final_stt_anchor_guard_overextend_max_extra_ratio", 0.45),
+    )
+    allowed_extra = max(max_extra_chars, int(round(len(anchor_compact) * max_extra_ratio)))
+    return extra_chars > allowed_extra
+
+
+def _final_overextension_backed_by_adjacent_primary_anchor(text: str, anchor: dict, anchors: list[dict], settings: dict | None) -> bool:
+    text_compact = _stt_candidate_compact_text(text)
+    if not text_compact:
+        return False
+    current_key = _stt_anchor_guard_key(anchor)
+    current_source_index = anchor.get("_source_segment_index")
+    min_anchor_chars = max(3, _setting_int(settings or {}, "subtitle_final_stt_anchor_guard_overextend_min_chars", 5))
+    for other in list(anchors or []):
+        if _stt_anchor_guard_key(other) == current_key:
+            continue
+        if other.get("_source_segment_index") == current_source_index:
+            continue
+        if int(other.get("_source_candidate_index", 0) or 0) != 0:
+            continue
+        other_text = str(other.get("text", "") or "")
+        other_compact = _stt_candidate_compact_text(other_text)
+        if len(other_compact) >= min_anchor_chars and other_compact in text_compact:
+            return True
+    return False
 
 
 def _stt_anchor_guard_key(anchor: dict) -> tuple:
@@ -2057,7 +2135,12 @@ def _restore_final_stt_anchor_drift(
             rows.append(row)
             continue
         similarity = float(meta.get("text_similarity", 0.0) or 0.0)
-        if similarity >= min_similarity:
+        overextended = _final_text_overextends_stt_anchor(text, anchor_text, settings)
+        overextension_backed = (
+            overextended
+            and _final_overextension_backed_by_adjacent_primary_anchor(text, anchor, anchors, settings)
+        )
+        if similarity >= min_similarity and not (overextended and not overextension_backed):
             rows.append(row)
             continue
         overlap_ratio = float(meta.get("overlap_ratio", 0.0) or 0.0)
@@ -2082,6 +2165,7 @@ def _restore_final_stt_anchor_drift(
                 "source": str(anchor.get("source") or "STT"),
                 "source_segment_index": anchor.get("_source_segment_index"),
                 "source_candidate_index": anchor.get("_source_candidate_index"),
+                "overextended_anchor": bool(overextended),
                 **meta,
             },
         }
@@ -3141,7 +3225,11 @@ def _sanitize(segments: list[dict] | None) -> list[dict]:
     return [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
 
 
-def _restore_no_llm_raw_stt_text(segments: list[dict] | None) -> list[dict]:
+def _restore_no_llm_raw_stt_text(
+    segments: list[dict] | None,
+    source_segments: list[dict] | None = None,
+    settings: dict | None = None,
+) -> list[dict]:
     rows = []
     for seg in list(segments or []):
         if not isinstance(seg, dict):
@@ -3160,7 +3248,77 @@ def _restore_no_llm_raw_stt_text(segments: list[dict] | None) -> list[dict]:
             )
             row["_stt_no_llm_raw_candidate_policy"] = policy
         rows.append(row)
-    return rows
+    if not rows or not source_segments:
+        return rows
+
+    anchors = [
+        anchor
+        for anchor in _source_stt_anchor_rows(source_segments)
+        if str(anchor.get("source", "") or "").strip().upper().split("_", 1)[0] in {"STT1", "STT2"}
+    ]
+    if not anchors:
+        return rows
+    restored_count = 0
+    restored_rows: list[dict] = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        text = str(row.get("text", "") or "").strip()
+        if not text or row.get("is_gap"):
+            restored_rows.append(row)
+            continue
+        anchor, meta = _best_stt_anchor_for_final_row(row, anchors, settings or {})
+        if not anchor:
+            restored_rows.append(row)
+            continue
+        anchor_text = str(anchor.get("text", "") or "").strip()
+        if not anchor_text:
+            restored_rows.append(row)
+            continue
+        row_compact = _stt_candidate_compact_text(text)
+        anchor_compact = _stt_candidate_compact_text(anchor_text)
+        if row_compact == anchor_compact or (anchor_compact and anchor_compact in row_compact):
+            restored_rows.append(row)
+            continue
+        if row_compact and row_compact in anchor_compact:
+            missing_chars = max(0, len(anchor_compact) - len(row_compact))
+            allowed_missing = max(4, int(round(len(anchor_compact) * 0.33)))
+            if missing_chars <= allowed_missing:
+                restored_rows.append(row)
+                continue
+        similarity = _stt_candidate_similarity(text, anchor_text)
+        min_similarity = _setting_float(settings or {}, "subtitle_no_llm_raw_stt_lock_min_similarity", 0.82)
+        if similarity >= min_similarity:
+            restored_rows.append(row)
+            continue
+        row.update(
+            {
+                "text": anchor_text,
+                "start": float(anchor.get("start", row.get("start", 0.0)) or 0.0),
+                "end": float(anchor.get("end", row.get("end", row.get("start", 0.0))) or 0.0),
+                "stt_selected_source": str(anchor.get("source") or row.get("stt_selected_source") or "STT"),
+                "_stt_original_candidate_start": float(anchor.get("start", row.get("start", 0.0)) or 0.0),
+                "_stt_original_candidate_end": float(anchor.get("end", row.get("end", row.get("start", 0.0))) or 0.0),
+            }
+        )
+        policy = dict(row.get("_stt_no_llm_raw_candidate_policy") or {})
+        policy.update(
+            {
+                "task": "stt_no_llm_raw_text_lock",
+                "reason": "postprocess_candidate_drift",
+                "restored_after_postprocess": True,
+                "old_text": text,
+                "raw_text": anchor_text,
+                "source": str(anchor.get("source") or "STT"),
+                "similarity_to_raw_candidate": round(similarity, 4),
+                **dict(meta or {}),
+            }
+        )
+        row["_stt_no_llm_raw_candidate_policy"] = policy
+        restored_rows.append(row)
+        restored_count += 1
+    if restored_count:
+        get_logger().log(f"[STT원문잠금] 자막 LLM OFF 후처리 이탈 {restored_count}개를 STT1/2 원문으로 복구")
+    return restored_rows
 
 
 def _has_explicit_lora_runtime_context(seg: dict | None) -> bool:
@@ -4324,6 +4482,7 @@ def optimize_segments(
     original_segments = [dict(seg) for seg in segments if isinstance(seg, dict)]
     loaded_settings, rules, model, corrections, threshold, user_prompt, api_key, _raw_corr, _settings = _optimizer_context()
     model = _resolve_runtime_llm_model(model, logger=get_logger(), context="자막 LLM")
+    llm_disabled_final = _llm_model_disabled(model)
     short_m = model.split(":")[0].upper()
     get_logger().log(f"\n━━━ 자막 최적화 시작 ({len(segments)}개 세그먼트) ━━━")
     get_logger().log(
@@ -4350,7 +4509,7 @@ def optimize_segments(
     args = [(seg, rules, threshold, corrections, model, user_prompt, api_key, conservative, loaded_settings) for seg in segments]
     optimized: list[dict] = []
 
-    if "사용 안함" in model:
+    if llm_disabled_final:
         get_logger().log("⏩ LLM 미사용: 최종 자막은 원본 STT 텍스트를 유지하고 간격 패스만 적용합니다...")
         result_map: dict[int, list] = {}
         for idx in process_order:
@@ -4561,7 +4720,10 @@ def optimize_segments(
     optimized = align_stt_candidates_to_subtitle_segments(optimized)
     optimized = _self_review_subtitle_quality(optimized, vad_segments or [], loaded_settings)
     optimized = _annotate_context_consistency(optimized, loaded_settings)
-    optimized = _apply_output_variant_selector(optimized, original_segments, vad_segments or [], loaded_settings, stage="llm")
+    if llm_disabled_final:
+        optimized = _restore_no_llm_raw_stt_text(optimized, original_segments, loaded_settings)
+    else:
+        optimized = _apply_output_variant_selector(optimized, original_segments, vad_segments or [], loaded_settings, stage="llm")
     optimized = _enforce_final_subtitle_text_policy(optimized, corrections)
     optimized = _apply_final_sequence_cleanup(optimized, loaded_settings, stage="llm_final")
     optimized = _restore_final_stt_anchor_drift(optimized, original_segments, loaded_settings, stage="llm_final")
@@ -4585,8 +4747,8 @@ def optimize_segments(
     optimized = _enforce_final_subtitle_text_policy(optimized, None)
     optimized = _expand_non_speaker_multiline_segments(optimized, loaded_settings)
     optimized = _final_transcript_integrity_guard(optimized, original_segments, vad_segments or [], loaded_settings)
-    if _llm_model_disabled(model):
-        optimized = _restore_no_llm_raw_stt_text(optimized)
+    if llm_disabled_final:
+        optimized = _restore_no_llm_raw_stt_text(optimized, original_segments, loaded_settings)
         optimized = _restore_missing_final_stt_anchor_rows(
             optimized,
             original_segments,

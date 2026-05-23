@@ -18,6 +18,7 @@ from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, RULER_H, SCORE_H
 from ui.timeline.timeline_segment_style import speaker_segment_fill_hex
 from ui.timeline.stt_preview_layout import stt_preview_lane_geometry
 from ui.timeline.paint_passes import build_cut_boundary_work_lane_paint_plan
+from ui.timeline.timeline_roughcut_paint import expanded_roughcut_marker_span
 from ui.timeline.timeline_widget import TimelineWidget
 
 
@@ -613,8 +614,8 @@ class TimelineRenderCacheTests(unittest.TestCase):
                     "title": "A",
                     "status": "confirmed",
                     "color": "#34C759",
-                    "start": 0.0,
-                    "end": 7.0,
+                    "start": 1.0,
+                    "end": 5.0,
                 }
             ]
             canvas._invalidate_render_cache()
@@ -636,8 +637,9 @@ class TimelineRenderCacheTests(unittest.TestCase):
             sample_y = box_top + (box_h // 2)
             background_pixel = strip.pixel(int(canvas._x(7.6)), sample_y)
 
-            marker_start_x = int(canvas._x(0.0)) + 8
-            marker_end_x = int(canvas._x(7.0)) - 8
+            marker_x1, marker_x2 = expanded_roughcut_marker_span(canvas._x(1.0), canvas._x(5.0))
+            marker_start_x = int(marker_x1) + 8
+            marker_end_x = int(marker_x2) - 8
             self.assertGreater(marker_end_x, marker_start_x)
             interior_background_hits = sum(
                 1
@@ -647,6 +649,13 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertEqual(interior_background_hits, 0)
         finally:
             canvas.close()
+
+    def test_roughcut_marker_visuals_are_50_percent_larger(self):
+        lane_top = RULER_H + WAVE_H + 5
+        lane_h = max(18, SEG_TOP - lane_top - 7)
+
+        self.assertEqual(lane_h, 33)
+        self.assertEqual(expanded_roughcut_marker_span(100, 140), (90, 150))
 
     def test_viewport_paint_clip_limits_full_canvas_resize_repaint(self):
         scroll = QScrollArea()

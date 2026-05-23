@@ -103,6 +103,38 @@ class SubtitleRulesRuntimeTests(unittest.TestCase):
         self.assertIn("오늘은->여기까지", prompt)
         self.assertIn("새 자막 시작단어 후보", prompt)
 
+    def test_runtime_lora_prompt_strips_quote_marks_from_examples(self):
+        settings = {
+            "editor_lora_runtime_enabled": True,
+            "split_length_threshold": 20,
+            "_lora_generation_profile": {
+                "examples": [{"text": "\"왜?\"", "line_break_pattern": "1|1"}],
+            },
+        }
+        retrieval = {
+            "score_model": "hybrid",
+            "index_doc_count": 3,
+            "query_facets": {},
+            "items": [
+                {
+                    "kind": "truth_table",
+                    "retrieval_score": 91.0,
+                    "payload": {
+                        "speech_training_text": "\"티박스가 있어\"",
+                        "line_break_pattern": "1|1",
+                    },
+                }
+            ],
+        }
+
+        with patch("core.personalization.runtime_lora_context.retrieve_lora_context", return_value=retrieval):
+            prompt = build_runtime_lora_prompt("왜? 티박스가 있어", {}, settings)
+
+        self.assertIn("왜?, line=1|1", prompt)
+        self.assertIn("ground truth: 티박스가 있어, line=1|1", prompt)
+        self.assertNotIn("\"왜?\"", prompt)
+        self.assertNotIn("\"티박스가 있어\"", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

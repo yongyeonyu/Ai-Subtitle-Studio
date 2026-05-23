@@ -668,17 +668,21 @@ class VideoPlayerWidgetTests(unittest.TestCase):
     def test_source_name_badge_lives_on_control_bar_right(self):
         widget = VideoPlayerWidget()
         try:
+            widget.resize(1368, 760)
+            widget.show()
+            self.app.processEvents()
             widget.video_container.resize(640, 360)
             widget._source_aspect = 16 / 9
             path = "/tmp/DJI_20260504010101_very_long_camera_clip_name.MP4"
 
             widget._set_source_name_badge(path)
             widget._layout_video_overlay()
+            widget._update_control_bar_info_layout(force=True)
+            self.app.processEvents()
 
             label = widget.source_name_label
             self.assertFalse(label.isHidden())
             self.assertEqual(label.toolTip(), os.path.basename(path))
-            self.assertIn("\n", label.text())
             self.assertEqual(label.text().replace("\n", ""), os.path.basename(path))
             self.assertTrue(label.wordWrap())
             self.assertIn("background: transparent", label.styleSheet())
@@ -687,13 +691,56 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
             control_layout = label.parentWidget().layout()
             self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
-            self.assertEqual(control_layout.stretch(0), 0)
-            self.assertEqual(control_layout.stretch(1), 1)
             self.assertEqual(control_layout.spacing(), 6)
-            self.assertEqual(widget.info_label.maximumWidth(), 220)
-            self.assertEqual(widget.source_name_label.maximumWidth(), 200)
+            self.assertEqual(control_layout.count(), 3)
+            self.assertEqual(control_layout.stretch(1), 1)
+            self.assertEqual(widget.time_label.width(), widget._control_bar_time_width())
+            self.assertLessEqual(widget.info_label.maximumWidth(), widget._SOURCE_INFO_BADGE_MAX_WIDTH)
+            self.assertLessEqual(widget.source_name_label.maximumWidth(), widget._SOURCE_NAME_BADGE_MAX_WIDTH)
+            self.assertGreater(widget.source_name_label.width(), widget.info_label.width())
+            self.assertGreaterEqual(widget.source_name_label.width(), widget._SOURCE_NAME_BADGE_MIN_WIDTH)
+            self.assertGreaterEqual(widget.source_name_label.geometry().right(), widget.info_label.geometry().right())
             self.assertIn("background: transparent", widget.info_label.styleSheet())
             self.assertIn("border: none", widget.info_label.styleSheet())
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_control_bar_keeps_time_and_filename_anchored_with_even_group_spacing(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget.resize(1368, 760)
+            widget.show()
+            self.app.processEvents()
+            widget.video_container.resize(720, 720)
+            widget._control_bar_widget.resize(920, 44)
+            widget._source_aspect = 1.0
+            widget._apply_control_bar_video_content_insets()
+            widget._set_source_name_badge("/tmp/DJI_202602172203_0075_D_LONGER_NAME_FOR_LAYOUT_CHECK.MP4")
+            widget.apply_source_media_probe("/tmp/DJI_202602172203_0075_D_LONGER_NAME_FOR_LAYOUT_CHECK.MP4", {
+                "duration": 179.0,
+                "fps": 29.97,
+                "width": 720,
+                "height": 720,
+                "bit_rate": 5300000,
+                "pix_fmt": "yuv420p",
+                "color_space": "bt709",
+            })
+            widget._update_control_bar_info_layout(force=True)
+            self.app.processEvents()
+
+            ctrl_layout = widget._control_bar_widget.layout()
+            status_layout = widget.status_info_container.layout()
+
+            self.assertEqual(ctrl_layout.spacing(), 6)
+            self.assertEqual(status_layout.spacing(), 6)
+            self.assertEqual(widget.time_label.width(), widget._control_bar_time_width())
+            self.assertEqual(widget.frame_count_label.width(), 124)
+            self.assertGreaterEqual(widget.source_name_label.width(), widget.info_label.width())
+            self.assertLessEqual(widget.source_name_label.geometry().right(), widget.status_info_container.width())
+            self.assertLessEqual(widget.source_name_label.geometry().right(), widget._control_bar_widget.width())
+            self.assertGreater(widget.source_name_label.width(), 200)
         finally:
             widget.close()
             widget.deleteLater()
@@ -725,7 +772,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertIn("yuv420p10le", info_text)
             self.assertIn("bt709", info_text)
             self.assertIn("42.1Mbps", info_text)
-            self.assertEqual(widget.source_name_label.text(), os.path.basename(f.name))
+            self.assertEqual(widget.source_name_label.text().replace("\n", ""), os.path.basename(f.name))
             state = widget._quick_control_bar_state()
             self.assertEqual(state["infoText"], info_text)
             self.assertEqual(state["sourceNameText"], os.path.basename(f.name))
@@ -826,11 +873,11 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             left, right = widget._apply_control_bar_video_content_insets()
             state = widget._quick_control_bar_state()
 
-            self.assertEqual((left, right), (55, 56))
+            self.assertEqual((left, right), (55, 74))
             margins = widget._control_bar_widget.layout().contentsMargins()
-            self.assertEqual((margins.left(), margins.right()), (55, 56))
+            self.assertEqual((margins.left(), margins.right()), (55, 74))
             self.assertEqual(state["contentLeftInset"], 55)
-            self.assertEqual(state["contentRightInset"], 56)
+            self.assertEqual(state["contentRightInset"], 74)
         finally:
             widget.close()
             widget.deleteLater()
@@ -1351,6 +1398,58 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         finally:
             widget.close()
             widget.deleteLater()
+            self.app.processEvents()
+
+    def test_toggle_play_prioritizes_runtime_before_playback_start(self):
+        host = QWidget()
+        host._prioritize_video_playback_runtime = Mock()
+        widget = VideoPlayerWidget(host)
+        try:
+            widget.total_time = 12.0
+            widget.set_frame_rate(30.0)
+            widget.current_time = 3.0
+            widget._source_ready = True
+
+            with patch.object(widget, "_ensure_media_source_loaded", return_value=True), \
+                 patch.object(widget, "_refresh_provider_segments"), \
+                 patch.object(widget, "_hide_thumbnail"), \
+                 patch.object(widget.media_player, "playbackState", return_value=QMediaPlayer.PlaybackState.PausedState), \
+                 patch.object(widget.media_player, "setPosition"), \
+                 patch.object(widget.media_player, "play") as play_mock, \
+                 patch.object(widget, "_ensure_audio_outputs"):
+                widget.toggle_play()
+
+            host._prioritize_video_playback_runtime.assert_called_once_with(
+                editor=None,
+                reason="video_playback_start",
+            )
+            play_mock.assert_called_once()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            host.close()
+            host.deleteLater()
+            self.app.processEvents()
+
+    def test_toggle_play_does_not_prioritize_runtime_when_pausing(self):
+        host = QWidget()
+        host._prioritize_video_playback_runtime = Mock()
+        widget = VideoPlayerWidget(host)
+        try:
+            with patch.object(widget, "_ensure_media_source_loaded", return_value=True), \
+                 patch.object(widget, "_hide_thumbnail"), \
+                 patch.object(widget.media_player, "playbackState", return_value=QMediaPlayer.PlaybackState.PlayingState), \
+                 patch.object(widget.media_player, "pause") as pause_mock, \
+                 patch.object(widget, "_ensure_audio_outputs"):
+                widget.toggle_play()
+
+            host._prioritize_video_playback_runtime.assert_not_called()
+            pause_mock.assert_called_once()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            host.close()
+            host.deleteLater()
             self.app.processEvents()
 
     def test_refresh_audio_output_routing_recreates_outputs_and_restores_playback(self):

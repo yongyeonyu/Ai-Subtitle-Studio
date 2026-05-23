@@ -279,6 +279,40 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
 
         self.assertEqual(lifecycle.subtitle_calls, [(str(srt_path), str(media_path), parsed_segments)])
 
+    def test_unlinked_srt_open_reuses_current_media_when_srt_has_no_exact_sidecar(self):
+        class _DelegatingLifecycle(EditorLifecycleMixin):
+            def __init__(self, media_path):
+                self._current_work_mode = ""
+                self._project_boundary_times = []
+                self._editor_widget = SimpleNamespace(media_path=str(media_path))
+                self.subtitle_calls = []
+
+            def _remove_old_editor(self):
+                return None
+
+            def _open_subtitle_segments_in_editor(self, srt_path, media_path, segments):
+                self.subtitle_calls.append((srt_path, media_path, list(segments or [])))
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_path = root / "clip.mp4"
+            srt_path = root / "clip_done.srt"
+            media_path.write_bytes(b"video")
+            srt_path.write_text("1\n00:00:01,000 --> 00:00:02,000\n외부 SRT\n\n", encoding="utf-8")
+            parsed_segments = [{"start": 1.0, "end": 2.0, "text": "외부 SRT"}]
+            lifecycle = _DelegatingLifecycle(media_path)
+
+            with mock.patch("ui.editor.editor_lifecycle.detach_project_session"), \
+                 mock.patch("core.subtitle_existing.find_media_for_srt", return_value=""), \
+                 mock.patch("core.subtitle_existing.validate_srt_duration", return_value=(True, "")) as validate, \
+                 mock.patch("core.srt_parser.parse_srt", return_value=parsed_segments), \
+                 mock.patch.object(_DelegatingLifecycle, "_find_project_for_srt_open", return_value=("", None)):
+                lifecycle._open_srt_in_editor(str(srt_path))
+
+        validate.assert_called_once_with(str(srt_path), str(media_path))
+        self.assertEqual(lifecycle.subtitle_calls, [(str(srt_path), str(media_path), parsed_segments)])
+
     def test_timestamp_area_uses_cached_srt_segments_when_block_metadata_is_missing(self):
         text_edit = SubtitleTextEdit()
         try:
@@ -299,6 +333,27 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
 
             self.assertAlmostEqual(data.start_sec, 1.25)
             self.assertEqual(data.spk_id, "01")
+            self.assertFalse(data.is_gap)
+        finally:
+            text_edit.close()
+
+    def test_timestamp_area_prefers_canonical_snapshot_when_runtime_snapshot_drifted(self):
+        text_edit = SubtitleTextEdit()
+        try:
+            text_edit.setPlainText("첫 줄")
+            block = text_edit.document().findBlockByNumber(0)
+            block.setUserData(None)
+            text_edit._canonical_timestamp_block_meta_snapshot = {
+                0: {"spk_id": "00", "start_sec": 1.25, "end_sec": 2.5, "is_gap": False}
+            }
+            text_edit._canonical_timestamp_block_text_snapshot = {0: "첫 줄"}
+            text_edit._timestamp_block_meta_snapshot = {
+                0: {"spk_id": "00", "start_sec": 8.75, "end_sec": 9.5, "is_gap": False}
+            }
+
+            data = text_edit.timestampArea._block_user_data(block)
+
+            self.assertAlmostEqual(data.start_sec, 1.25)
             self.assertFalse(data.is_gap)
         finally:
             text_edit.close()

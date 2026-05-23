@@ -99,6 +99,18 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_stdin_helper_path_uses_lightweight_terminal_panel(self):
+        with mock.patch.object(sys, "argv", ["-"]):
+            window = MainWindow()
+        try:
+            self.assertEqual(type(window.sidebar_terminal_panel).__name__, "LightweightTerminalLogPanel")
+            window.append_log("stdin helper log line")
+            self.assertIn("stdin helper log line", window.log_text.raw_log_text())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_sidebar_terminal_log_compacts_subtitle_stt1_stt2_progress_into_short_lines(self):
         window = MainWindow()
         try:
@@ -480,6 +492,48 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             nav.close()
             nav.deleteLater()
             self.app.processEvents()
+
+    def test_home_sidebar_nav_defaults_to_qwidget_fallback_on_macos_live_progress(self):
+        from ui.sidebar.home_sidebar_nav_widget import HomeSidebarNavWidget
+
+        with mock.patch("ui.sidebar.home_sidebar_nav_widget.scenegraph_enabled", return_value=True), \
+             mock.patch("ui.sidebar.home_sidebar_nav_widget.config.IS_MAC", True), \
+             mock.patch.dict(os.environ, {"AI_SUBTITLE_HOME_NAV_SCENEGRAPH": "0"}, clear=False):
+            nav = HomeSidebarNavWidget()
+            try:
+                nav.set_items(
+                    [
+                        {
+                            "id": "generation_status",
+                            "title": "자막 생성 | STT 1",
+                            "subtitle": "00:22 / 02:59",
+                            "badge": "AI",
+                            "accent": "#00D46A",
+                            "progressVisible": True,
+                            "progressPercent": 37,
+                            "progressText": "37%",
+                            "meta": "CPU 55% · PROC 10% · RAM 0.92GB",
+                            "fillColor": "#153A25",
+                            "height": 42,
+                        },
+                        {
+                            "id": "shortform",
+                            "title": "숏폼",
+                            "badge": "SF",
+                            "accent": "#A678F4",
+                            "enabled": True,
+                        },
+                    ]
+                )
+                self.app.processEvents()
+
+                self.assertIsNone(getattr(nav, "_quick", None))
+                self.assertEqual(nav.minimumHeight(), nav.maximumHeight())
+                self.assertGreaterEqual(nav.minimumHeight(), 72)
+            finally:
+                nav.close()
+                nav.deleteLater()
+                self.app.processEvents()
 
     def test_pipeline_model_column_uses_terminal_style_font(self):
         window = MainWindow()
@@ -2123,6 +2177,92 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             )
             self.assertEqual(single_shot_calls, [0])
             self.assertFalse(window._post_generation_gc_scheduled)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_prioritize_video_playback_runtime_releases_post_generation_models(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        editor.sm = SimpleNamespace(is_locked=False, state="ST_COMP")
+        editor._is_ai_processing = False
+        editor._subtitle_generation_completed = True
+        editor._post_generation_models_release_requested = False
+        editor._post_generation_models_released = False
+        editor._cancel_post_generation_roughcut_draft = mock.Mock(return_value=True)
+        try:
+            window._editor_widget = editor
+            window._post_completion_idle_ms = 222_000
+            with (
+                mock.patch.object(window, "_force_editor_idle_after_generation") as force_idle,
+                mock.patch.object(window, "_stop_post_completion_idle_timer") as stop_idle,
+                mock.patch.object(window, "_pause_personalization_for_foreground_activity") as pause_lora,
+                mock.patch.object(window, "_clear_runtime_memory_caches") as clear_runtime,
+                mock.patch.object(window, "_release_ai_models_for_editor_mode") as release_models,
+                mock.patch.object(window, "_schedule_post_generation_gc") as schedule_gc,
+            ):
+                result = window._prioritize_video_playback_runtime(
+                    editor=editor,
+                    reason="video_playback_start",
+                )
+
+            self.assertEqual(result, {"prioritized": True, "reason": "video_playback_start"})
+            force_idle.assert_called_once_with(editor, reason="video_playback_start")
+            stop_idle.assert_called_once_with()
+            editor._cancel_post_generation_roughcut_draft.assert_called_once_with(reason="재생 시작")
+            pause_lora.assert_called_once_with("video_playback", hold_ms=222_000)
+            clear_runtime.assert_called_once_with(include_gpu=True)
+            release_models.assert_called_once_with(
+                force=True,
+                preserve_roughcut_status=True,
+                ollama_timeout_sec=1.2,
+            )
+            schedule_gc.assert_called_once_with(editor=editor, delay_ms=900)
+            self.assertTrue(editor._post_generation_models_release_requested)
+            self.assertFalse(editor._post_generation_models_released)
+            self.assertTrue(window._editor_ai_runtime_release_requested_for_editor_mode)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_prioritize_video_playback_runtime_skips_while_generation_is_still_running(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        editor.sm = SimpleNamespace(is_locked=True, state="ST_PROC")
+        editor._is_ai_processing = True
+        editor._subtitle_generation_completed = False
+        editor._post_generation_models_release_requested = False
+        editor._post_generation_models_released = False
+        try:
+            window._editor_widget = editor
+            with (
+                mock.patch.object(window, "_force_editor_idle_after_generation") as force_idle,
+                mock.patch.object(window, "_stop_post_completion_idle_timer") as stop_idle,
+                mock.patch.object(window, "_pause_personalization_for_foreground_activity") as pause_lora,
+                mock.patch.object(window, "_clear_runtime_memory_caches") as clear_runtime,
+                mock.patch.object(window, "_release_ai_models_for_editor_mode") as release_models,
+                mock.patch.object(window, "_schedule_post_generation_gc") as schedule_gc,
+            ):
+                result = window._prioritize_video_playback_runtime(
+                    editor=editor,
+                    reason="video_playback_start",
+                )
+
+            self.assertEqual(result, {"prioritized": False, "reason": "ai_busy"})
+            force_idle.assert_not_called()
+            stop_idle.assert_not_called()
+            pause_lora.assert_not_called()
+            clear_runtime.assert_not_called()
+            release_models.assert_not_called()
+            schedule_gc.assert_not_called()
         finally:
             window._editor_widget = None
             editor.close()

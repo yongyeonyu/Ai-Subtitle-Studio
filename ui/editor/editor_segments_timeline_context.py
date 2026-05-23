@@ -15,7 +15,14 @@ class EditorSegmentsTimelineContextMixin:
             return timeline_segs
         confirmed = [seg for seg in timeline_segs if not seg.get("is_gap")]
         subtitle_preview = []
-        if bool(getattr(self, "_stt_preview_subtitle_drafts_enabled", True)):
+        preview_sync_active = False
+        checker = getattr(self, "_live_subtitle_preview_sync_active", None)
+        if callable(checker):
+            try:
+                preview_sync_active = bool(checker())
+            except Exception:
+                preview_sync_active = False
+        if preview_sync_active and bool(getattr(self, "_stt_preview_subtitle_drafts_enabled", True)):
             subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
         return sorted(
             confirmed + subtitle_preview + preview,
@@ -60,6 +67,20 @@ class EditorSegmentsTimelineContextMixin:
             list(getattr(self, "_live_stt_preview_segments", []) or [])
             or list(getattr(self, "_live_editor_preview_segments", []) or [])
         ):
+            return None
+        preview_sync_active = False
+        checker = getattr(self, "_live_subtitle_preview_sync_active", None)
+        if callable(checker):
+            try:
+                preview_sync_active = bool(checker())
+            except Exception:
+                preview_sync_active = False
+        if not preview_sync_active:
+            # 변경 금지:
+            # 비디오 overlay는 editor와 같은 draft만 보여줘야 한다. idle 상태에서
+            # raw STT preview만 남아 있으면 editor에는 row가 없는데 overlay만 "-"
+            # 를 띄우는 불일치가 생긴다. 이 경우는 final subtitle context로
+            # 내려가서 editor/overlay/timeline subtitle row가 같은 기준을 보게 한다.
             return None
         combiner = getattr(self, "_combined_timeline_segments_with_live_preview", None)
         if not callable(combiner):

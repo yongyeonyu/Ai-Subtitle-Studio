@@ -51,6 +51,7 @@ from ui.timeline.stt_preview_layout import (
     dedupe_stt_preview_segments_for_display,
     stt_preview_lane_geometry,
 )
+from ui.timeline.timeline_roughcut_paint import expanded_roughcut_marker_span
 
 class TimelineInputMixin:
     _REVIEW_FLAGS = {
@@ -400,7 +401,10 @@ class TimelineInputMixin:
         return None
 
     def _finish_timing_drag_cleanup(self, dirty: QRect | None = None) -> None:
-        self.drag_finished.emit()
+        if bool(getattr(self, "_suppress_next_drag_finished_emit", False)):
+            self._suppress_next_drag_finished_emit = False
+        else:
+            self.drag_finished.emit()
         self._drag_seg = self._drag_edge = self._drag_adj_l = self._drag_adj_r = None
         self._drag_diamond_idx = None
         self._drag_diamond_pair = None
@@ -871,8 +875,10 @@ class TimelineInputMixin:
             markers = []
         for marker in list(markers or []):
             try:
-                x1 = self._x(float(marker.get("start", 0.0) or 0.0))
-                x2 = self._x(float(marker.get("end", marker.get("start", 0.0)) or 0.0))
+                x1, x2 = expanded_roughcut_marker_span(
+                    self._x(float(marker.get("start", 0.0) or 0.0)),
+                    self._x(float(marker.get("end", marker.get("start", 0.0)) or 0.0)),
+                )
             except Exception:
                 continue
             if x1 <= int(x) <= x2:

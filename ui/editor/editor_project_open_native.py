@@ -144,6 +144,89 @@ def schedule_native_editor_post_open_tasks(
     _schedule(680, preload_segments_callback)
 
 
+def _is_subtitle_path(path: str | None) -> bool:
+    return str(path or "").strip().lower().endswith((".srt", ".vtt", ".ass", ".ssa"))
+
+
+def _can_load_waveform_for_direct_srt(media_path: str | None, srt_path: str | None = None) -> bool:
+    media = normalized_open_path(media_path)
+    if not media or _is_subtitle_path(media):
+        return False
+    subtitle = normalized_open_path(srt_path)
+    return not subtitle or media != subtitle
+
+
+def schedule_direct_srt_waveform_load(
+    owner,
+    editor,
+    media_path: str | None,
+    srt_path: str | None = None,
+    *,
+    delay_ms: int = 420,
+) -> None:
+    """Subtitle-only edit mode has no generation start event, so load its waveform after first paint."""
+    if owner is None or editor is None or not _can_load_waveform_for_direct_srt(media_path, srt_path):
+        return
+    path = str(media_path or "").strip()
+    token = getattr(editor, "_native_open_media_token", None)
+
+    try:
+        if not str(getattr(editor, "_deferred_open_waveform_path", "") or "").strip():
+            setattr(editor, "_deferred_open_waveform_path", path)
+        setattr(editor, "_deferred_open_waveform_loaded", bool(getattr(editor, "_deferred_open_waveform_loaded", False)))
+    except Exception:
+        pass
+
+    def _load() -> None:
+        current = getattr(owner, "_editor_widget", None)
+        if current is not editor:
+            return
+        if token is not None and getattr(editor, "_native_open_media_token", None) is not token:
+            return
+        try:
+            window_getter = getattr(editor, "window", None)
+            scope = window_getter() if callable(window_getter) else owner
+        except RuntimeError:
+            return
+        except Exception:
+            scope = owner
+        if bool(getattr(scope, "_multiclip_boundaries", []) or []):
+            return
+        if bool(getattr(editor, "_deferred_open_waveform_loaded", False)):
+            return
+        deferred_loader = getattr(editor, "_load_deferred_open_waveform", None)
+        if callable(deferred_loader):
+            try:
+                if deferred_loader(reason="direct_srt_open"):
+                    return
+            except TypeError:
+                try:
+                    if deferred_loader():
+                        return
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        timeline = getattr(editor, "timeline", None)
+        loader = getattr(timeline, "load_waveform", None) if timeline is not None else None
+        if not callable(loader):
+            return
+        try:
+            setattr(editor, "_deferred_open_waveform_loaded", True)
+            try:
+                loader(path, force=True)
+            except TypeError:
+                loader(path)
+        except Exception as exc:
+            try:
+                setattr(editor, "_deferred_open_waveform_loaded", False)
+            except Exception:
+                pass
+            get_logger().log(f"⚠️ 자막 편집 파형 로드 실패: {exc}")
+
+    QTimer.singleShot(max(0, int(delay_ms)), _load)
+
+
 def normalized_open_path(path: str | None) -> str:
     if not path:
         return ""
@@ -658,6 +741,7 @@ def open_subtitle_segments_in_editor(
     schedule_runtime_refresh = getattr(owner, "_schedule_opened_editor_runtime_refresh", None)
     if callable(schedule_runtime_refresh):
         schedule_runtime_refresh(editor)
+    schedule_direct_srt_waveform_load(owner, editor, target_media, srt_path)
     return True
 
 
@@ -867,6 +951,8 @@ def open_project_segments_in_editor(
         schedule_runtime_refresh = getattr(owner, "_schedule_opened_editor_runtime_refresh", None)
         if callable(schedule_runtime_refresh):
             schedule_runtime_refresh(editor)
+        if direct_srt_edit_mode:
+            schedule_direct_srt_waveform_load(owner, editor, media[0] if media else "", source_srt_path)
     except Exception as exc:
         get_logger().log(f"⚠️ 프로젝트 자막 복원 실패: {exc}")
     return True
@@ -885,6 +971,7 @@ __all__ = [
     "project_sidecar_candidates_for_srt",
     "refresh_opened_editor_runtime",
     "restore_project_context_for_srt_open",
+    "schedule_direct_srt_waveform_load",
     "schedule_editor_fit_to_view",
     "schedule_opened_editor_runtime_refresh",
     "segment_metadata_match_score",

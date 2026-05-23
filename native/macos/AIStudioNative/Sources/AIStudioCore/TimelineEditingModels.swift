@@ -402,6 +402,9 @@ public struct TimelineEditorLoadInputSegment: Codable, Equatable, Sendable {
     public var end: Double
     public var text: String
     public var isGap: Bool?
+    public var speaker: String?
+    public var speaker2: String?
+    public var speakerList: [String]?
 }
 
 public struct TimelineEditorLoadPreparedSegment: Codable, Equatable, Sendable {
@@ -413,6 +416,15 @@ public struct TimelineEditorLoadPreparedSegment: Codable, Equatable, Sendable {
     public var isGap: Bool
 }
 
+public struct TimelineEditorLoadPreparedBlock: Codable, Equatable, Sendable {
+    public var blockIndex: Int
+    public var sourceIndex: Int
+    public var start: Double
+    public var end: Double
+    public var text: String
+    public var isGap: Bool
+}
+
 public struct TimelineEditorLoadRequest: Codable, Equatable, Sendable {
     public var segments: [TimelineEditorLoadInputSegment]
     public var frameRate: Double
@@ -420,6 +432,7 @@ public struct TimelineEditorLoadRequest: Codable, Equatable, Sendable {
 
 public struct TimelineEditorLoadResponse: Codable, Equatable, Sendable {
     public var segments: [TimelineEditorLoadPreparedSegment]
+    public var blocks: [TimelineEditorLoadPreparedBlock]
 }
 
 public struct TimelineDragSnapBaseSegment: Codable, Equatable, Sendable {

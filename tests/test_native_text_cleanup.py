@@ -82,6 +82,20 @@ class NativeTextCleanupTests(unittest.TestCase):
 
         self.assertEqual(result[0]["text"], "안녕하세요\n반갑습니다")
 
+    def test_final_policy_strips_quote_marks_but_keeps_inner_apostrophes(self):
+        result = enforce_final_subtitle_text_policy(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "\"왜?\" ‘단독’ I’ll don't",
+                }
+            ],
+            None,
+        )
+
+        self.assertEqual(result[0]["text"], "왜? 단독 I’ll don't")
+
     def test_native_indexed_batch_keeps_matches_introduced_inside_replacement_text(self):
         corrections = {
             "ab": "pqx",
