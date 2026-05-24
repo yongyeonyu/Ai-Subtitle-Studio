@@ -172,7 +172,12 @@ class QASuiteRunnerTests(unittest.TestCase):
             "ok": True,
             "data": {
                 "editor_runtime": {
-                    "diamond_right": {"side": "right", "boundary_sec": 12.345},
+                    "diamond_right": {
+                        "side": "right",
+                        "boundary_sec": 12.345,
+                        "left": {"start": 10.0},
+                        "right": {"start": 12.345},
+                    },
                 }
             },
         }
@@ -185,8 +190,35 @@ class QASuiteRunnerTests(unittest.TestCase):
                     output_dir=Path(tmp),
                 )
 
-        self.assertEqual(command, ["editor-merge-diamond", "--start-sec", "12.345", "--side", "right"])
+        self.assertEqual(command, ["editor-merge-diamond", "--start-sec", "10.0", "--side", "right"])
         self.assertTrue(details["status_ok"])
+        self.assertEqual(details["selected_start"], "10.0")
+
+    def test_resolve_editor_compact_left_diamond_selects_right_segment_start(self):
+        payload = {
+            "ok": True,
+            "data": {
+                "editor_runtime": {
+                    "diamond_left": {
+                        "side": "left",
+                        "boundary_sec": 21.0,
+                        "left": {"start": 18.0},
+                        "right": {"start": 21.0},
+                    },
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.qa_suite_runner._app_status", return_value=(0, payload)):
+                command, details = qa_suite_runner._resolve_editor_compact_diamond_command(
+                    "editor-move-diamond",
+                    "left",
+                    qa_suite_runner.DEFAULT_PYTHON,
+                    output_dir=Path(tmp),
+                )
+
+        self.assertEqual(command, ["editor-move-diamond", "--start-sec", "21.0", "--side", "left"])
+        self.assertEqual(details["selected_start"], "21.0")
 
 
 if __name__ == "__main__":

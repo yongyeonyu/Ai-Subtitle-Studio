@@ -108,13 +108,53 @@ _native = _load_native_module()
 HAS_NATIVE_STT_LATTICE = _native is not None
 
 
-def native_stt_lattice_enabled() -> bool:
-    if _native is None:
+def _swift_stt_lattice_enabled() -> bool:
+    if not _env_enabled("AI_SUBTITLE_STUDIO_SWIFT_STT_LATTICE", "1"):
         return False
-    return _env_enabled("AI_SUBTITLE_NATIVE_STT_LATTICE", "1")
+    try:
+        from core.native_swift_stt_lattice import swift_stt_lattice_enabled
+
+        return bool(swift_stt_lattice_enabled())
+    except Exception:
+        return False
+
+
+def _swift_best_word_match(
+    *,
+    anchor_start: float,
+    anchor_end: float,
+    word_starts: list[float],
+    word_ends: list[float],
+    textual_scores: list[float],
+    used_indices: set[int] | list[int] | tuple[int, ...] | None,
+    min_match_score: float,
+) -> tuple[int | None, float] | None:
+    if not _swift_stt_lattice_enabled():
+        return None
+    try:
+        from core.native_swift_stt_lattice import best_word_match as _swift_match
+
+        return _swift_match(
+            anchor_start=anchor_start,
+            anchor_end=anchor_end,
+            word_starts=word_starts,
+            word_ends=word_ends,
+            textual_scores=textual_scores,
+            used_indices=used_indices,
+            min_match_score=min_match_score,
+        )
+    except Exception:
+        return None
+
+
+def native_stt_lattice_enabled() -> bool:
+    cpp_enabled = _native is not None and _env_enabled("AI_SUBTITLE_NATIVE_STT_LATTICE", "1")
+    return cpp_enabled or _swift_stt_lattice_enabled()
 
 
 def stt_lattice_backend() -> str:
+    if _swift_stt_lattice_enabled():
+        return "swift"
     return "cpp" if native_stt_lattice_enabled() else "python"
 
 
@@ -128,7 +168,19 @@ def best_word_match(
     used_indices: set[int] | list[int] | tuple[int, ...] | None,
     min_match_score: float,
 ) -> tuple[int | None, float] | None:
-    if not native_stt_lattice_enabled():
+    swift_values = _swift_best_word_match(
+        anchor_start=float(anchor_start),
+        anchor_end=float(anchor_end),
+        word_starts=[float(item) for item in list(word_starts or [])],
+        word_ends=[float(item) for item in list(word_ends or [])],
+        textual_scores=[float(item or 0.0) for item in list(textual_scores or [])],
+        used_indices=used_indices,
+        min_match_score=float(min_match_score),
+    )
+    if swift_values is not None:
+        return swift_values
+
+    if _native is None or not _env_enabled("AI_SUBTITLE_NATIVE_STT_LATTICE", "1"):
         return None
     try:
         values = _native.best_word_match(

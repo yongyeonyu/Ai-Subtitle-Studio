@@ -119,6 +119,8 @@ def _segment_vectors(rows: list[dict[str, Any]]) -> tuple[list[float], list[floa
     starts: list[float] = []
     ends: list[float] = []
     for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
         try:
             start = max(0.0, float(row.get("start", 0.0) or 0.0))
         except Exception:
@@ -175,18 +177,27 @@ def _python_global_canvas_summary(
     occupied = sum(1 for value in bins if value > 0)
     dense = sum(1 for value in bins if value > 1)
     max_bin_active = max(bins, default=0)
+    max_active_bin_index = next((idx for idx, value in enumerate(bins) if value == max_bin_active and value > 0), -1)
     avg_bin_active = sum(bins) / safe_bin_count if safe_bin_count else 0.0
 
     sorted_intervals = sorted(intervals)
     coverage = 0.0
     longest_gap = 0.0
+    longest_gap_start = 0.0
+    longest_gap_end = 0.0
     merged_start: float | None = None
     merged_end: float | None = None
     previous_end: float | None = None
     events: list[tuple[float, int]] = []
     for start, end in sorted_intervals:
         if previous_end is not None and start > previous_end:
-            longest_gap = max(longest_gap, start - previous_end)
+            gap = start - previous_end
+            # 변경 금지: Swift/C++와 같은 의미로 global canvas 빈 구간 위치를 기록합니다.
+            # 하단 minimap artifact가 자막/에디터와 어긋날 때 UI를 건드리지 않고 데이터 위치부터 확인합니다.
+            if gap > longest_gap:
+                longest_gap = gap
+                longest_gap_start = previous_end
+                longest_gap_end = start
         if merged_start is None:
             merged_start = start
             merged_end = end
@@ -221,14 +232,76 @@ def _python_global_canvas_summary(
         "empty_bin_count": max(0, safe_bin_count - occupied),
         "dense_bin_count": dense,
         "max_bin_active": max_bin_active,
+        "max_active_bin_index": max_active_bin_index,
         "avg_bin_active": round(avg_bin_active, 6),
         "coverage_duration": round(coverage, 6),
         "coverage_ratio": round(coverage / canvas_duration, 6) if canvas_duration > 0 else 0.0,
         "longest_empty_span_sec": round(longest_gap, 6),
+        "longest_empty_start_sec": round(longest_gap_start, 6),
+        "longest_empty_end_sec": round(longest_gap_end, 6),
         "max_active_segments": max_active,
         "stable_for_global_canvas": invalid == 0 and non_monotonic == 0,
         "native_backend": "python",
     }
+
+
+def _python_global_canvas_merged_segments(
+    rows: list[dict[str, Any]],
+    *,
+    lanes: tuple[str, ...] = ("SUBTITLE",),
+    output_lane: str = "SUBTITLE",
+    max_gap_sec: float = 0.0,
+    include_text: bool = True,
+) -> list[dict[str, Any]]:
+    lane_set = {str(lane or "") for lane in lanes}
+    max_gap = max(0.0, float(max_gap_sec or 0.0))
+    merged: list[dict[str, Any]] = []
+    sortable: list[dict[str, Any]] = []
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        lane = str(row.get("lane", "SUBTITLE") or "SUBTITLE")
+        if lane not in lane_set:
+            continue
+        try:
+            start = max(0.0, float(row.get("start", 0.0) or 0.0))
+            end = max(start, float(row.get("end", start) or start))
+        except Exception:
+            continue
+        if end <= start:
+            continue
+        sortable.append(
+            {
+                "start": start,
+                "end": end,
+                "lane": lane,
+                "text": str(row.get("text", "") or "").strip(),
+            }
+        )
+    for row in sorted(sortable, key=lambda item: float(item.get("start", 0.0) or 0.0)):
+        start = float(row["start"])
+        end = float(row["end"])
+        text = str(row.get("text", "") or "").strip()
+        if merged:
+            prev = merged[-1]
+            if start <= float(prev.get("end", 0.0) or 0.0) + max_gap:
+                prev["end"] = max(float(prev.get("end", 0.0) or 0.0), end)
+                if include_text and text:
+                    prev_text = str(prev.get("text", "") or "").strip()
+                    if text not in prev_text:
+                        prev["text"] = f"{prev_text} {text}".strip() if prev_text else text
+                prev["count"] = int(prev.get("count", 1) or 1) + 1
+                continue
+        item: dict[str, Any] = {
+            "start": start,
+            "end": end,
+            "lane": str(output_lane or ""),
+            "count": 1,
+        }
+        if include_text:
+            item["text"] = text
+        merged.append(item)
+    return merged
 
 
 def global_canvas_summary(
@@ -248,8 +321,45 @@ def global_canvas_summary(
     return _python_global_canvas_summary(rows, duration=duration, bin_count=bin_count)
 
 
+def global_canvas_merged_segments(
+    rows: list[dict[str, Any]],
+    *,
+    lanes: tuple[str, ...] = ("SUBTITLE",),
+    output_lane: str = "SUBTITLE",
+    max_gap_sec: float = 0.0,
+    include_text: bool = True,
+) -> list[dict[str, Any]]:
+    if native_subtitle_global_canvas_enabled():
+        try:
+            starts, ends = _segment_vectors(rows)
+            texts = [str(row.get("text", "") or "").strip() for row in list(rows or []) if isinstance(row, dict)]
+            row_lanes = [str(row.get("lane", "SUBTITLE") or "SUBTITLE") for row in list(rows or []) if isinstance(row, dict)]
+            result = _native.global_canvas_merged_segments(
+                starts,
+                ends,
+                texts,
+                row_lanes,
+                [str(lane or "") for lane in lanes],
+                str(output_lane or ""),
+                float(max_gap_sec or 0.0),
+                bool(include_text),
+            )
+            if isinstance(result, list):
+                return [dict(item) for item in result if isinstance(item, dict)]
+        except Exception:
+            pass
+    return _python_global_canvas_merged_segments(
+        rows,
+        lanes=lanes,
+        output_lane=output_lane,
+        max_gap_sec=max_gap_sec,
+        include_text=include_text,
+    )
+
+
 __all__ = [
     "HAS_NATIVE_SUBTITLE_GLOBAL_CANVAS",
+    "global_canvas_merged_segments",
     "global_canvas_summary",
     "native_subtitle_global_canvas_enabled",
 ]

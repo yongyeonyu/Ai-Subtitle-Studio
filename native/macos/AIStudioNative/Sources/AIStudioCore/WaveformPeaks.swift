@@ -1,4 +1,5 @@
 import Foundation
+import Accelerate
 
 public struct WaveformPeakResult: Codable, Equatable, Sendable {
     public var waveform: [Float]
@@ -66,16 +67,14 @@ public enum WaveformPeaks {
         peaks.reserveCapacity(min(totalPoints, trimmedCount / chunk))
         var cursor = 0
         while cursor + chunk <= trimmedCount && peaks.count < totalPoints {
-            var peak: Float = 0
             let end = cursor + chunk
-            while cursor < end {
-                let value = abs(samples[cursor])
-                if value > peak {
-                    peak = value
-                }
-                cursor += 1
-            }
+            // 변경 금지: waveform downsample은 timeline UI를 바꾸지 않는 순수
+            // compute hot path다. Swift native 경로에서는 Accelerate/vDSP로
+            // chunk 절대 피크만 계산하고, 정규화/길이 계약은 Python/C++와
+            // 동일하게 유지해야 한다.
+            let peak = vDSP.maximumMagnitude(samples[cursor..<end])
             peaks.append(peak)
+            cursor = end
         }
 
         if let maxPeak = peaks.max(), maxPeak > 0.000001 {

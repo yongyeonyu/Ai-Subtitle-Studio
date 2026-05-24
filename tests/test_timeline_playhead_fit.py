@@ -2660,6 +2660,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             button = timeline.time_window_btn
             timeline._time_window_dialog_pending = True
             button.setDown(True)
+            button.setEnabled(False)
             button.grabMouse()
             self.assertIs(QWidget.mouseGrabber(), button)
 
@@ -2672,6 +2673,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
                 self.assertEqual(toolbar_button.focusPolicy(), Qt.FocusPolicy.NoFocus)
                 self.assertFalse(toolbar_button.isDown())
                 self.assertFalse(toolbar_button.hasFocus())
+                self.assertTrue(toolbar_button.isEnabled())
         finally:
             try:
                 grabber = QWidget.mouseGrabber()
@@ -3430,6 +3432,35 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor._playhead_timer.setInterval.assert_called_once_with(80)
         editor.timeline.set_playback_center_lock.assert_called_once_with(False)
         editor._reset_playhead_smoothing.assert_called_once_with(3.2)
+
+    def test_playhead_timer_guard_restarts_stopped_timer_before_playback(self):
+        editor = _DummyTimelineVideoEditor()
+        editor.video_fps = 30.0
+        editor._playhead_timer = SimpleNamespace(
+            isActive=Mock(return_value=False),
+            start=Mock(),
+        )
+
+        editor._ensure_playhead_timer_running()
+
+        editor._playhead_timer.start.assert_called_once_with(editor._playhead_active_interval_ms())
+
+    def test_manual_seek_in_silent_gap_syncs_editor_to_nearest_real_segment(self):
+        editor = _PlaybackEditor()
+        editor._segments = [
+            {"start": 10.0, "end": 11.0, "line": 1, "text": "이전"},
+            {"start": 20.0, "end": 21.0, "line": 2, "text": "다음"},
+        ]
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._sync_cursor_to_seg = Mock()
+        editor._reset_playhead_smoothing = Mock()
+        editor.timeline = SimpleNamespace(set_playhead=Mock(), center_to_sec=Mock())
+
+        editor._sync_after_manual_seek(15.0)
+
+        editor._sync_cursor_to_seg.assert_called_once_with(editor._segments[0], sync_playhead=False)
+        editor.timeline.set_playhead.assert_called_once_with(15.0)
+        editor.timeline.center_to_sec.assert_called_once_with(15.0, smooth=False)
 
     def test_playing_segment_boundary_moves_editor_immediately(self):
         editor = _PlaybackEditor()

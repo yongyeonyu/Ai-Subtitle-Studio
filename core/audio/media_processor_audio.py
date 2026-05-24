@@ -501,12 +501,29 @@ class VideoProcessorAudioHelpersMixin:
 
     def _audio_ai_variant(self, audio_ai: str, settings: dict | None = None) -> str:
         audio_kind = str(audio_ai or "none").strip().lower()
-        if audio_kind != "none" and self._macos_native_fast_audio_flatten_enabled(settings):
+        fast_flatten_enabled = self._macos_native_fast_audio_flatten_enabled(settings)
+        native_ffmpeg_enabled = self._clearvoice_native_ffmpeg_enabled(settings)
+        clearvoice_model_name = self._clearvoice_model_name(settings)
+        try:
+            from core.native_swift_audio_filter import audio_ai_variant_via_swift
+
+            native = audio_ai_variant_via_swift(
+                audio_ai=audio_kind,
+                fast_flatten_enabled=fast_flatten_enabled,
+                clearvoice_native_ffmpeg_enabled=native_ffmpeg_enabled,
+                clearvoice_model_name=clearvoice_model_name,
+            )
+            if native is not None:
+                return native
+        except Exception:
+            pass
+
+        if audio_kind != "none" and fast_flatten_enabled:
             return "macos_native_fast_audio_flatten_v1"
         if audio_kind == "clearvoice":
-            if self._clearvoice_native_ffmpeg_enabled(settings):
+            if native_ffmpeg_enabled:
                 return "native_ffmpeg_v1"
-            return self._clearvoice_model_name(settings)
+            return clearvoice_model_name
         return ""
 
     @staticmethod
@@ -699,6 +716,15 @@ class VideoProcessorAudioHelpersMixin:
         return ",".join(filters) if filters else "anull"
 
     def _build_macos_native_fast_audio_flatten_filter(self, settings: dict) -> str:
+        try:
+            from core.native_swift_audio_filter import fast_flatten_filter_via_swift
+
+            native_filter = fast_flatten_filter_via_swift(settings)
+            if native_filter:
+                return native_filter
+        except Exception:
+            pass
+
         hp = int(self._float_setting(settings, "macos_native_fast_audio_flatten_hp", 150, 0, 500))
         lp = int(self._float_setting(settings, "macos_native_fast_audio_flatten_lp", 4600, 1000, 8000))
         nf_raw = settings.get("macos_native_fast_audio_flatten_nf", None)
@@ -931,6 +957,15 @@ class VideoProcessorAudioHelpersMixin:
         return VideoProcessorAudioHelpersMixin._settings_bool(data, "audio_chunk_routing_enabled", True)
 
     def _audio_route_sample_span(self, start: float, end: float, settings: dict | None = None) -> tuple[float, float]:
+        try:
+            from core.native_swift_audio_filter import audio_route_sample_span_via_swift
+
+            native = audio_route_sample_span_via_swift(start, end, settings)
+            if native is not None:
+                return native
+        except Exception:
+            pass
+
         start = max(0.0, float(start or 0.0))
         end = max(start, float(end or start))
         duration = max(0.0, end - start)
@@ -1039,6 +1074,47 @@ class VideoProcessorAudioHelpersMixin:
     def _audio_route_secondary_recheck_threshold(self, settings: dict | None = None) -> float:
         return self._float_setting(settings, "audio_chunk_route_secondary_recheck_threshold", 0.68, 0.0, 1.0)
 
+    def _audio_route_secondary_recheck_high_risk_max_confidence(self, settings: dict | None = None) -> float:
+        return self._float_setting(settings, "audio_chunk_route_secondary_recheck_high_risk_max_confidence", 0.74, 0.0, 1.0)
+
+    def _audio_route_vad_preserve_base_min_confidence(self, settings: dict | None = None) -> float:
+        return self._float_setting(settings, "audio_chunk_route_vad_preserve_base_min_confidence", 0.78, 0.0, 1.0)
+
+    def _audio_route_secondary_recheck_hint(self, confidence: float, risk_level: str, settings: dict | None = None) -> bool:
+        confidence = max(0.0, min(1.0, float(confidence or 0.0)))
+        risk = str(risk_level or "").strip().lower()
+        if confidence <= self._audio_route_secondary_recheck_threshold(settings):
+            return True
+        # 변경 금지: high-noise 판정만으로 STT2 재검사를 켜면 X5처럼 STT1이
+        # 정확한 구간도 넓은 재검사 범위에 묶여 타이밍/문장이 흔들린다.
+        # high-risk는 confidence가 별도 캡 이하일 때만 STT2 rescue 힌트로 쓴다.
+        return risk == "high" and confidence <= self._audio_route_secondary_recheck_high_risk_max_confidence(settings)
+
+    def _audio_route_preserve_base_vad_for_confident_route(
+        self,
+        confidence: float,
+        settings: dict | None = None,
+    ) -> bool:
+        data = dict(settings or {})
+        base_vad = str(data.get("selected_vad") or "").strip().lower()
+        if not base_vad or base_vad == "none":
+            return False
+        if not self._settings_bool(
+            data,
+            "audio_chunk_route_vad_enabled",
+            self._settings_bool(data, "vad_post_stt_align_enabled", True),
+        ):
+            return False
+        return float(confidence or 0.0) >= self._audio_route_vad_preserve_base_min_confidence(data)
+
+    def _audio_route_with_base_vad_settings(self, tune: dict, settings: dict | None = None) -> dict:
+        out = dict(tune or {})
+        data = dict(settings or {})
+        for key in self._AUDIO_ROUTE_VAD_SETTING_KEYS:
+            if key in data:
+                out[key] = deepcopy(data[key])
+        return out
+
     def _audio_route_low_confidence_threshold(self, settings: dict | None = None) -> float:
         return self._float_setting(settings, "audio_chunk_route_low_confidence_threshold", 0.58, 0.0, 1.0)
 
@@ -1107,6 +1183,15 @@ class VideoProcessorAudioHelpersMixin:
         return max(0.0, scores[0] - scores[1])
 
     def _audio_route_preview_divergence(self, route: dict) -> float:
+        try:
+            from core.native_swift_audio_filter import audio_route_preview_divergence_via_swift
+
+            native = audio_route_preview_divergence_via_swift(route)
+            if native is not None:
+                return native
+        except Exception:
+            pass
+
         feature_conf = None
         self_score = None
         try:
@@ -1183,6 +1268,29 @@ class VideoProcessorAudioHelpersMixin:
         preview_switch = bool(route.get("preview_route_switched"))
         baseline_guard = bool(route.get("baseline_guard_applied"))
         low_confidence = score < threshold
+        preview_divergence_min = self._audio_route_split_preview_divergence_min(settings)
+        try:
+            from core.native_swift_audio_filter import audio_route_split_decision_via_swift
+
+            native = audio_route_split_decision_via_swift(
+                fallback_like=fallback_like,
+                challenging=challenging,
+                low_confidence=low_confidence,
+                baseline_guard=baseline_guard,
+                preview_switch=preview_switch,
+                specialist=specialist,
+                volatile=volatile,
+                noise=noise,
+                candidate_gap=candidate_gap,
+                preview_gap=preview_gap,
+                gap_limit=gap_limit,
+                preview_divergence=preview_divergence,
+                preview_divergence_min=preview_divergence_min,
+            )
+            if native is not None:
+                return native
+        except Exception:
+            pass
 
         # Split only when the long chunk is both difficult and route selection
         # looks ambiguous enough that a finer-grained probe may legitimately win.
@@ -1190,11 +1298,11 @@ class VideoProcessorAudioHelpersMixin:
             return True
         if baseline_guard and (
             preview_switch
-            or preview_divergence >= self._audio_route_split_preview_divergence_min(settings)
+            or preview_divergence >= preview_divergence_min
             or candidate_gap <= gap_limit + 0.02
         ):
             return True
-        if preview_switch and preview_divergence >= self._audio_route_split_preview_divergence_min(settings):
+        if preview_switch and preview_divergence >= preview_divergence_min:
             return True
         if challenging and volatile and low_confidence and (
             candidate_gap <= gap_limit or preview_gap <= gap_limit
@@ -1826,6 +1934,17 @@ class VideoProcessorAudioHelpersMixin:
                     f"{route_reason}; {str(baseline_guard.get('reason') or '').strip()}"
                 ).strip("; ")
             risk_level = self._route_risk_level(selected_confidence, profile, settings)
+            if self._audio_route_preserve_base_vad_for_confident_route(selected_confidence, settings):
+                before_vad = str(tune.get("selected_vad") or "")
+                tune = self._audio_route_with_base_vad_settings(tune, settings)
+                after_vad = str(tune.get("selected_vad") or before_vad)
+                if before_vad and after_vad and before_vad != after_vad:
+                    # 변경 금지: 오디오 필터 선택과 VAD 선택은 분리한다. X5에서는
+                    # ClearVoice가 유효해도 ten_vad가 긴 VAD 덩어리를 만들어 STT2
+                    # 예산을 소모했다. confidence가 충분하면 기준 VAD(silero)를 유지한다.
+                    route_reason = (
+                        f"{route_reason}; confident route라 VAD는 기준값 {after_vad} 유지"
+                    ).strip("; ")
             return {
                 "audio_strategy": selected_strategy,
                 "audio_strategy_label": selected_label,
@@ -1844,7 +1963,7 @@ class VideoProcessorAudioHelpersMixin:
                 "decision_source": decision_source,
                 "risk_level": risk_level,
                 "precision_review": selected_confidence <= self._audio_route_precision_threshold(settings) or risk_level != "low",
-                "secondary_recheck_hint": selected_confidence <= self._audio_route_secondary_recheck_threshold(settings) or risk_level == "high",
+                "secondary_recheck_hint": self._audio_route_secondary_recheck_hint(selected_confidence, risk_level, settings),
                 "baseline_guard_applied": bool(baseline_guard and baseline_guard.get("applied")),
                 "baseline_guard_margin": None if not baseline_guard else baseline_guard.get("margin"),
                 "baseline_guard_scores": [] if not baseline_guard else list(baseline_guard.get("compare_scores") or []),

@@ -108,3 +108,17 @@
   품질: 두 후보 모두 `quality_score=87.502`, `CER=0.084433`, `raw/final=59/56`으로 품질은 유지됐다.
   결론: top-level text 조립 미세 최적화는 long High run에서 유의미한 이득이 없었고, 2차 후보는 STT1/단어정밀에서 memory `critical` worker reuse break를 유발했다. 기존 검증된 `segmentPayloads` + top-level text 조립 경로를 유지한다.
   artifact: `output/manual_verification/latest/20260523_whisperkit_payload_assembly_rejected/verification_summary.md`
+
+## 2026-05-24
+
+- `high_force_silero_vad_quality_policy_for_x5`: High preset의 `selected_vad=silero`를 런타임 `vad_backend_policy=quality`로 강제해 ten_vad autotune을 막는 방향
+  결과: X5 High 180초에서 VAD는 22개 Silero 구간으로 돌아왔지만 `quality_score=86.047~87.166`으로 최신 기준 `87.402`를 넘지 못했다.
+  품질: STT2/word precision 개입이 늘면서 `아 이 시트! 시트 되게 편해요`, `그리고 이 차가 좋은 게` 같은 짧은 자막이 과분할되거나 끝부분 자막 수가 흔들렸다.
+  결론: High 기본 VAD policy는 기존 `auto`를 유지한다. 실제 점수 회복은 VAD 강제가 아니라 word-timestamp 분할 보존 가드와 STT2 적용 범위 보호로 처리한다.
+  artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260524_071634/benchmark_results.md`, `.codex_work/benchmarks/subtitle_pipeline_variants/20260524_072651/benchmark_results.md`
+
+- `stt2_partial_fragment_keep_with_base_default`: STT2 짧은 부분 조각이 STT1 긴 자막 일부와 겹칠 때 원 STT1과 STT2 조각을 둘 다 남기거나 부분 조각을 광범위하게 버리는 방향
+  결과: X5 High 180초에서 둘 다 남기는 후보는 `quality_score=84.054`, 부분 조각 discard를 넓게 건 후보는 `quality_score=79.002`로 크게 회귀했다.
+  품질: 전자는 중복/문맥 위험이 증가했고, 후자는 STT2 후보가 과하게 줄어 `raw/final=46/46`, reference 대비 `segment_count_delta=-12`가 됐다.
+  결론: 병합 기본 정책을 넓게 바꾸지 않는다. STT2 부분 조각 문제는 더 좁은 fixture 기반 조건이 생기기 전까지 기존 병합 정책을 유지한다.
+  artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260524_073530/benchmark_results.md`, `.codex_work/benchmarks/subtitle_pipeline_variants/20260524_073917/benchmark_results.md`

@@ -107,3 +107,26 @@ def test_native_resource_allocation_sends_previous_plan_for_fast_reclaim_delta()
     assert result == payload
     sent = request.call_args.args[1]
     assert sent["previous_allocation"] == previous
+
+
+def test_native_resource_allocation_fills_topology_from_hardware_profile_for_swift_gpu_lanes():
+    clear_native_resource_allocation_cache()
+    payload = {"ok": True, "allocations": {}}
+    hardware = {
+        "logical_cores": 10,
+        "physical_cores": 10,
+        "performance_cores": 4,
+        "efficiency_cores": 6,
+        "gpu_cores": 10,
+        "neural_engine_cores": 16,
+        "memory_bytes": 16 * 1024 ** 3,
+    }
+    with patch("core.native_resource_allocator.IS_MAC", True), \
+         patch("core.native_resource_allocator.hardware_profile", return_value=hardware), \
+         patch("core.native_resource_allocator.native_swift_runtime_enabled", return_value=True), \
+         patch("core.native_resource_allocator.request_native_core_task", return_value=payload) as request:
+        native_resource_allocation({}, active_labels=["pipeline"], max_age_sec=0)
+
+    sent = request.call_args.args[1]
+    assert sent["topology"]["gpu_cores"] == 10
+    assert sent["topology"]["neural_engine_cores"] == 16

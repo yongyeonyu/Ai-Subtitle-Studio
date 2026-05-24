@@ -2969,6 +2969,37 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segments, [])
         loader.assert_called_once_with(project)
 
+    def test_project_segments_to_editor_canonicalizes_external_final_srt_order_and_duplicates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "macau.aissproj"
+            srt_path = Path(tmp) / "macau.assets" / "subtitles" / "final.srt"
+            write_srt_track(
+                [
+                    {"start": 10.0, "end": 11.0, "text": "뒤 자막", "speaker": "00"},
+                    {"start": 5.0, "end": 6.0, "text": "앞 자막", "speaker": "00"},
+                    {"start": 10.0, "end": 11.0, "text": "뒤 자막", "speaker": "00"},
+                ],
+                str(srt_path),
+                metadata_default_fps=24.0,
+            )
+            project = {
+                "project_path": str(project_path),
+                "_project_file_path": str(project_path),
+                "timeline": {
+                    "timebase": {"primary_fps": 24.0},
+                    "tracks": [{"clips": [{"timeline_start": 0.0, "duration": 20.0, "source_path": "/tmp/video.mp4"}]}],
+                },
+                "subtitles": {"storage": PROJECT_EXTERNAL_STORAGE},
+                "editor_state": {"subtitles": {"segments": []}},
+            }
+
+            segments = project_segments_to_editor(project, include_analysis_candidates=False)
+
+        self.assertEqual([(row["line"], row["index"], row["text"]) for row in segments], [
+            (0, 1, "앞 자막"),
+            (1, 2, "뒤 자막"),
+        ])
+
     def test_project_stt_preview_segments_loads_external_tracks_once_when_external_storage_is_authoritative(self):
         project = {
             "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
@@ -3014,6 +3045,37 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segments[0]["stt_candidates"][0]["source"], "STT1")
         self.assertNotIn("source", external_tracks["STT1"][0])
         self.assertNotIn("stt_preview_source", external_tracks["STT1"][0])
+
+    def test_project_segments_to_editor_restores_external_stt_candidates_by_overlap_after_final_retiming(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 29.97003}, "tracks": [{"clips": []}]},
+            "subtitles": {"storage": PROJECT_EXTERNAL_STORAGE},
+            "editor_state": {"subtitles": {"segments": []}},
+        }
+        external_segments = [
+            {"start": 63.063, "end": 64.164, "text": "아 이게 시림프 갈릭 소스", "speaker": "00"},
+            {"start": 64.164, "end": 66.5, "text": "이게 그건가 보다", "speaker": "00"},
+        ]
+        external_tracks = {
+            "STT1": [{"start": 63.0, "end": 66.0, "text": "아 이게 시림프 갈릭 소스 이게 그건가 보다"}],
+            "STT2": [{"start": 64.431, "end": 65.999, "text": "뭐지?"}],
+        }
+
+        with patch(
+            "core.project.project_context.load_external_subtitle_segments",
+            return_value=external_segments,
+        ), patch(
+            "core.project.project_context.load_external_stt_tracks",
+            return_value=external_tracks,
+        ):
+            segments = project_segments_to_editor(project)
+
+        self.assertEqual([row["text"] for row in segments], [
+            "아 이게 시림프 갈릭 소스",
+            "이게 그건가 보다",
+        ])
+        self.assertEqual(segments[0]["stt_candidates"][0]["source"], "STT1")
+        self.assertEqual([candidate["source"] for candidate in segments[1]["stt_candidates"]], ["STT1", "STT2"])
 
     def test_externalize_project_text_assets_does_not_mutate_input_rows_or_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:

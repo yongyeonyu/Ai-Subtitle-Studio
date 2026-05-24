@@ -835,6 +835,15 @@ class TimelineWidget(QWidget):
 
     def _restore_toolbar_after_time_window_dialog(self) -> None:
         self._time_window_dialog_pending = False
+        # 변경 금지: 편집 창 시간 QInputDialog는 macOS/Qt에서 취소 직후
+        # mouse/keyboard grab, override cursor, focus가 버튼 위에 남을 수 있다.
+        # 이 상태가 남으면 다른 툴바 버튼까지 먹통처럼 보이므로 모든 잔여
+        # dialog 상태를 여기서 반드시 해제한다.
+        for _ in range(4):
+            try:
+                QApplication.restoreOverrideCursor()
+            except Exception:
+                break
         for grabber_getter, releaser_name in (
             (QWidget.mouseGrabber, "releaseMouse"),
             (QWidget.keyboardGrabber, "releaseKeyboard"),
@@ -852,12 +861,17 @@ class TimelineWidget(QWidget):
 
         self._release_lingering_time_window_dialog_state()
 
+        try:
+            self.setEnabled(True)
+        except Exception:
+            pass
         for btn in list(getattr(self, "_zoom_buttons", []) or []):
             try:
                 btn.releaseMouse()
                 btn.releaseKeyboard()
                 btn.setDown(False)
                 btn.clearFocus()
+                btn.setEnabled(True)
                 btn.update()
             except Exception:
                 continue
@@ -867,11 +881,19 @@ class TimelineWidget(QWidget):
             owner = None
         if owner is not None and owner is not self:
             try:
+                owner.setEnabled(True)
+            except Exception:
+                pass
+            try:
                 owner.activateWindow()
             except Exception:
                 pass
         try:
             self.setFocus(Qt.FocusReason.OtherFocusReason)
+        except Exception:
+            pass
+        try:
+            QApplication.processEvents()
         except Exception:
             pass
         self._sync_focus_border()
@@ -1134,7 +1156,15 @@ class TimelineWidget(QWidget):
         border = getattr(self, "_focus_border", None)
         if border is None:
             return
-        border.setGeometry(0, 0, max(1, self.width()), max(1, self.height()))
+        # 변경 금지: 하단 포커스 테두리는 툴바와 맞닿아 있어 원래 높이 끝에
+        # 두면 QSS border가 잘린다. 테두리 두께만큼 위로 올려 파란 선을
+        # 항상 보이게 유지한다.
+        border.setGeometry(
+            0,
+            0,
+            max(1, self.width()),
+            max(1, self.height() - FOCUS_BORDER_WIDTH),
+        )
         visible = self._has_timeline_focus()
         border.setVisible(visible)
         if visible:
@@ -1187,7 +1217,9 @@ class TimelineWidget(QWidget):
             left = inset
             top = inset
             right = max(left, self.width() - FOCUS_BORDER_WIDTH)
-            bottom = max(top, self.height() - FOCUS_BORDER_WIDTH)
+            # 변경 금지: paintEvent의 백업 포커스 라인도 같은 좌표 정책을
+            # 써야 QSS 테두리와 서로 어긋나거나 하단에서 잘리지 않는다.
+            bottom = max(top, self.height() - (FOCUS_BORDER_WIDTH * 2))
             painter.drawLine(left, top, right, top)
             painter.drawLine(left, bottom, right, bottom)
             painter.drawLine(left, top, left, bottom)

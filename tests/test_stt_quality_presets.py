@@ -81,7 +81,7 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertEqual(precise["stt_window_sec"], 180.0)
         self.assertEqual(precise["stt_window_overlap_sec"], 8.0)
         self.assertEqual(precise["stt_window_hysteresis_sec"], 4.0)
-        self.assertFalse(precise["audio_chunk_routing_benchmark_locked"])
+        self.assertTrue(precise["audio_chunk_routing_benchmark_locked"])
         self.assertTrue(precise["audio_chunk_routing_enabled"])
         self.assertTrue(precise["audio_chunk_route_vad_enabled"])
         self.assertEqual(precise["vad_backend_policy"], "auto")

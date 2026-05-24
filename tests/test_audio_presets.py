@@ -749,6 +749,37 @@ class AudioPresetTests(unittest.TestCase):
         self.assertFalse(bool(guarded.get("applied")))
         self.assertIn("adaptive route 유지", str(guarded.get("reason") or ""))
 
+    def test_audio_route_high_noise_confidence_cap_prevents_stt2_hint_flooding(self):
+        processor = VideoProcessor()
+
+        # 변경 금지: X5 회귀에서 noise=high만으로 0.81 confidence 구간까지
+        # STT2 힌트가 붙어 정확한 STT1 세그먼트가 흔들렸다. high-risk라도
+        # 별도 confidence cap 이하일 때만 STT2 rescue를 켠다.
+        self.assertFalse(processor._audio_route_secondary_recheck_hint(0.81, "high", {}))
+        self.assertTrue(processor._audio_route_secondary_recheck_hint(0.70, "high", {}))
+        self.assertTrue(processor._audio_route_secondary_recheck_hint(0.67, "medium", {}))
+
+    def test_audio_route_confident_audio_filter_keeps_base_vad(self):
+        processor = VideoProcessor()
+        tune = {
+            "selected_audio_ai": "clearvoice",
+            "selected_vad": "ten_vad",
+            "ten_vad_threshold": 0.58,
+        }
+        settings = {
+            "audio_chunk_route_vad_enabled": True,
+            "audio_chunk_route_vad_preserve_base_min_confidence": 0.78,
+            "selected_vad": "silero",
+            "vad_threshold": 0.36,
+        }
+
+        self.assertTrue(processor._audio_route_preserve_base_vad_for_confident_route(0.83, settings))
+        preserved = processor._audio_route_with_base_vad_settings(tune, settings)
+
+        self.assertEqual(preserved["selected_audio_ai"], "clearvoice")
+        self.assertEqual(preserved["selected_vad"], "silero")
+        self.assertEqual(preserved["vad_threshold"], 0.36)
+
     def test_adaptive_chunk_audio_routing_can_split_large_windows_for_environment_changes(self):
         processor = VideoProcessor()
 

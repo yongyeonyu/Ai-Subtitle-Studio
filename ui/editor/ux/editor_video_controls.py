@@ -69,7 +69,12 @@ class EditorVideoControlsMixin:
 
     def _toggle_video_play(self):
         if hasattr(self, 'video_player'):
+            ensure_timer = getattr(self, "_ensure_playhead_timer_running", None)
+            if callable(ensure_timer):
+                ensure_timer()
             self.video_player.toggle_play()
+            if callable(ensure_timer):
+                QTimer.singleShot(0, ensure_timer)
 
     def _toggle_video(self):
         if self.video_player.isVisible():
@@ -175,11 +180,31 @@ class EditorVideoControlsMixin:
                     if hasattr(self, 'timeline'):
                         self.timeline.set_playhead(last_pos)
                         self.timeline.center_to_sec(last_pos, smooth=False)
+                    # 변경 금지: 프로젝트를 다시 열 때 저장된 마지막 위치를
+                    # 비디오/타임라인만 복원하면 왼쪽 자막 에디터는 0초에 남아
+                    # "자막 세그먼트가 음성보다 앞/뒤"처럼 보인다. 초기 레이아웃
+                    # 타이머가 마지막으로 0초 커서를 다시 올릴 수 있으므로 같은
+                    # 동기화를 몇 번 지연 실행해 세 화면을 같은 자막으로 고정한다.
+                    sync_after_seek = getattr(self, "_sync_after_manual_seek", None)
+                    if callable(sync_after_seek):
+                        def _restore_saved_playhead(p: float = float(last_pos), fn=sync_after_seek):
+                            try:
+                                if hasattr(self, "video_player"):
+                                    self.video_player.seek(self._global_to_local_sec(p))
+                            except Exception:
+                                pass
+                            fn(p)
+
+                        for delay in (0, 180, 460):
+                            QTimer.singleShot(delay, _restore_saved_playhead)
                 else:
                     if hasattr(self, 'video_player'):
                         self.video_player.seek(0.0)
             if hasattr(self, 'video_player'):
                 self.video_player.pause_video()
+                ensure_timer = getattr(self, "_ensure_playhead_timer_running", None)
+                if callable(ensure_timer):
+                    ensure_timer()
                 if hasattr(self, "_refresh_video_subtitle_context"):
                     self._refresh_video_subtitle_context()
                 if hasattr(self.video_player, "set_subtitle_display_time"):

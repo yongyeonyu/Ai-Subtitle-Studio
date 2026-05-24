@@ -672,8 +672,12 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
                 # 캐시에 재주입한 뒤 타임라인을 강제로 다시 그려야 동일한 오차가
                 # 재발하지 않는다.
                 if not allow_stt_work_rows:
+                    # 변경 금지: STT1/2 후보 레인은 final 자막과 별개로 사용자가
+                    # 직접 비교/선택하는 원본 증거다. 완료 후 ghost row("-")를
+                    # 지운다고 _live_stt_preview_segments까지 비우면 마카오 영상처럼
+                    # STT 후보가 사라져 최종 자막 선행/오인식 원인을 확인할 수 없다.
+                    # 타임라인 ghost row는 아래 cache 재주입과 redraw로만 제거한다.
                     for attr, value in (
-                        ("_live_stt_preview_segments", []),
                         ("_live_editor_preview_segments", []),
                         ("_live_editor_preview_queue", []),
                         ("_live_editor_preview_keys", set()),
@@ -699,12 +703,11 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
         try:
             if hasattr(self, "timeline"):
                 boxes = list(getattr(self.timeline.canvas, "_multiclip_boxes", []) or [])
-                can_auto_fit = not bool(getattr(self.timeline, "_fit_to_view_locked", False)) and not bool(
-                    getattr(self.timeline, "_manual_zoom_since_fit", False)
-                )
+                # 변경 금지: 자막/러프컷 완료 후처리는 사용자가 보고 있던 8초 창과
+                # 스크롤 위치를 옮기면 안 된다. fit_to_view()를 여기서 호출하면
+                # 러프컷 LLM 완료 직후 화면이 원복되듯 움직이고, 버튼/포커스 상태도
+                # 흔들린다. 완료 후에는 캔버스 데이터만 갱신한다.
                 if boxes:
-                    if can_auto_fit:
-                        self.timeline.fit_to_view()
                     gc = self.timeline.global_canvas
                     gc.total_duration = self.timeline.canvas.total_duration
                     gc.update()
@@ -712,8 +715,6 @@ class EditorPipelineCleanupMixin(EditorPipelineSafetyMixin):
                         self.timeline.canvas._update_viewport_region()
                     else:
                         self.timeline.canvas.update()
-                elif can_auto_fit:
-                    self.timeline.fit_to_view()
         except Exception:
             pass
         try:

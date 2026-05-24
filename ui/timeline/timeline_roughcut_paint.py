@@ -109,8 +109,46 @@ def expanded_roughcut_marker_span(
     return int(math.floor(center - (target_width / 2.0))), int(math.ceil(center + (target_width / 2.0)))
 
 
+def clamp_expanded_roughcut_marker_spans(
+    spans: list[tuple[Any, int | float, int | float, int | float, int | float]]
+    | tuple[tuple[Any, int | float, int | float, int | float, int | float], ...],
+    *,
+    min_gap_px: int = 1,
+) -> list[tuple[Any, int, int]]:
+    """Clamp widened roughcut spans so adjacent visual boxes never overlap.
+
+    The roughcut lane is intentionally painted 50% wider than the exact time
+    range, but that paint-only widening must not create overlapping boundaries.
+    Input tuple: (payload, raw_x1, raw_x2, expanded_x1, expanded_x2).
+    """
+    rows: list[tuple[int, Any, float, float, int, int]] = []
+    for idx, span in enumerate(spans or ()):
+        if len(span) != 5:
+            continue
+        payload, raw_x1, raw_x2, expanded_x1, expanded_x2 = span
+        raw_left = min(float(raw_x1), float(raw_x2))
+        raw_right = max(float(raw_x1), float(raw_x2))
+        left = int(math.floor(min(float(expanded_x1), float(expanded_x2))))
+        right = int(math.ceil(max(float(expanded_x1), float(expanded_x2))))
+        rows.append((idx, payload, raw_left, raw_right, left, right))
+    rows.sort(key=lambda item: (item[2], item[3], item[0]))
+
+    out: list[tuple[Any, int, int]] = []
+    previous_right: int | None = None
+    gap = max(0, int(min_gap_px))
+    for _idx, payload, _raw_left, _raw_right, left, right in rows:
+        if previous_right is not None and left <= previous_right + gap:
+            left = previous_right + gap
+        if right < left:
+            right = left
+        out.append((payload, int(left), int(right)))
+        previous_right = int(right)
+    return out
+
+
 __all__ = [
     "ROUGHCUT_VISUAL_LENGTH_SCALE",
+    "clamp_expanded_roughcut_marker_spans",
     "coalesce_roughcut_paint_markers",
     "expanded_roughcut_marker_span",
     "visible_roughcut_label_span",

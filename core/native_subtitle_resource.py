@@ -131,12 +131,24 @@ def _routing_rows(rows: list[dict[str, Any]]) -> tuple[list[str], list[str], lis
     return tasks, policies, gpu_lanes, ane_lanes
 
 
-def resource_lane_summary(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+def resource_lane_summary(
+    rows: list[dict[str, Any]],
+    *,
+    gpu_lane_capacity: int | None = None,
+    ane_model_lane_capacity: int | None = None,
+) -> dict[str, Any] | None:
     if not native_subtitle_resource_enabled():
         return None
     try:
         tasks, policies, gpu_lanes, ane_lanes = _routing_rows(rows)
-        result = _native.resource_lane_summary(tasks, policies, gpu_lanes, ane_lanes)
+        result = _native.resource_lane_summary(
+            tasks,
+            policies,
+            gpu_lanes,
+            ane_lanes,
+            max(0, int(gpu_lane_capacity or 0)),
+            max(0, int(ane_model_lane_capacity or 0)),
+        )
         if not isinstance(result, dict):
             return None
         result["native_backend"] = "cpp"

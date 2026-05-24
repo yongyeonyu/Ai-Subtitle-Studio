@@ -463,6 +463,76 @@ def uncovered_vad_indices(
     )
 
 
+def _merge_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    if not intervals:
+        return []
+    ordered = sorted(intervals)
+    merged: list[tuple[float, float]] = []
+    for start, end in ordered:
+        if end <= start:
+            continue
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+            continue
+        prev_start, prev_end = merged[-1]
+        merged[-1] = (prev_start, max(prev_end, end))
+    return merged
+
+
+def missing_voice_candidate_spans(
+    *,
+    vad_segments: list[dict[str, Any]],
+    primary_segments: list[dict[str, Any]],
+    min_duration: float,
+    internal_gap_min_duration: float,
+    max_end: float | None = None,
+) -> list[tuple[float, float]]:
+    """Return voice spans that VAD sees but the primary STT track did not cover."""
+    min_duration = max(0.2, float(min_duration))
+    internal_gap_min_duration = max(min_duration, float(internal_gap_min_duration))
+    spans: list[tuple[float, float]] = []
+    text_segments = [seg for seg in list(primary_segments or []) if isinstance(seg, dict) and _segment_text(seg)]
+
+    for vad in vad_segments or []:
+        if not isinstance(vad, dict):
+            continue
+        start = max(0.0, _as_float(vad.get("start"), 0.0))
+        end = max(start, _as_float(vad.get("end"), start))
+        if max_end is not None:
+            end = min(end, max(0.0, float(max_end)))
+        if end - start < min_duration:
+            continue
+
+        covered: list[tuple[float, float]] = []
+        for seg in text_segments:
+            seg_start = max(0.0, _as_float(seg.get("start"), 0.0))
+            seg_end = max(seg_start, _as_float(seg.get("end"), seg_start))
+            overlap_start = max(start, seg_start)
+            overlap_end = min(end, seg_end)
+            if overlap_end > overlap_start:
+                covered.append((overlap_start, overlap_end))
+
+        # Do not treat a long VAD row as covered just because some later STT text
+        # exists inside it. This keeps Macau/X5-style internal STT dropouts from
+        # bypassing the selective STT2 rescue stage.
+        previous = start
+        for covered_start, covered_end in _merge_intervals(covered):
+            gap = covered_start - previous
+            if gap >= internal_gap_min_duration:
+                spans.append((round(previous, 3), round(covered_start, 3)))
+            previous = max(previous, covered_end)
+        if end - previous >= internal_gap_min_duration:
+            spans.append((round(previous, 3), round(end, 3)))
+
+        if not covered and end - start >= min_duration:
+            span = (round(start, 3), round(end, 3))
+            if span not in spans:
+                spans.append(span)
+
+    spans.sort(key=lambda item: (item[0], item[1]))
+    return spans
+
+
 def missing_voice_recheck_ranges(
     *,
     primary_segments: list[dict[str, Any]],
@@ -479,6 +549,51 @@ def missing_voice_recheck_ranges(
         return []
 
     candidates: list[stt_rescue.SttRecheckRange] = []
+    internal_gap_min_duration = max(
+        max(0.2, float(min_duration)),
+        _as_float((settings or {}).get("stt_missing_voice_internal_gap_min_duration_sec"), 1.2),
+    )
+    configured_max_end = _as_float((settings or {}).get("_stt_recheck_target_end_sec"), -1.0)
+    max_end = configured_max_end if configured_max_end > 0.0 else None
+    for start, end in missing_voice_candidate_spans(
+        vad_segments=vad_segments,
+        primary_segments=primary_segments,
+        min_duration=max(0.2, float(min_duration)),
+        internal_gap_min_duration=internal_gap_min_duration,
+        max_end=max_end,
+    ):
+        # Missing-voice rescue must anchor on the gap start, not the midpoint.
+        # Long VAD spans can cross overlapped STT chunks; midpoint routing may
+        # pick the later chunk and silently trim away the actual missing audio.
+        source_path = str(chunk_path_for_time(start + 0.01) or "")
+        if not source_path:
+            continue
+        synthetic = {
+            "start": start,
+            "end": end,
+            "text": "",
+            "score": 0.0,
+            "chunk_path": source_path,
+            "asr_metadata": {"chunk_path": source_path, "missing_voice_candidate": True},
+        }
+        candidates.append(
+            stt_rescue.SttRecheckRange(
+                start=round(start, 3),
+                end=round(end, 3),
+                primary_score=0.0,
+                secondary_score=0.0,
+                primary_text="",
+                secondary_text="",
+                primary=synthetic,
+                secondary={},
+            )
+        )
+        if len(candidates) >= limit:
+            break
+
+    if candidates:
+        return candidates
+
     for idx in uncovered_vad_indices(
         vad_segments,
         primary_segments,
@@ -694,6 +809,36 @@ def _range_priority(item: stt_rescue.SttRecheckRange) -> tuple[float, float, flo
     return (has_text, best_score, -duration, float(item.start))
 
 
+def _is_missing_voice_range(item: stt_rescue.SttRecheckRange) -> bool:
+    if str(item.primary_text or "").strip() or str(item.secondary_text or "").strip():
+        return False
+    meta = dict((item.primary or {}).get("asr_metadata") or {})
+    return bool(meta.get("missing_voice_candidate"))
+
+
+def _collapsed_range_owner(
+    items: list[stt_rescue.SttRecheckRange],
+    *,
+    winner: stt_rescue.SttRecheckRange,
+    start: float,
+) -> stt_rescue.SttRecheckRange:
+    # Regression note: X5/Macau can produce a long VAD row with an internal STT
+    # dropout, then a later low-score text candidate from the overlapped next
+    # chunk. If the later text candidate owns the collapsed range, the prepared
+    # recheck clip starts at the later chunk boundary and the missing speech is
+    # trimmed away. Keep the earliest missing-voice source as owner whenever it
+    # defines the collapsed start; do not "simplify" this without checking real
+    # X5 timing artifacts.
+    missing_at_start = [
+        item
+        for item in items
+        if _is_missing_voice_range(item) and abs(float(item.start) - float(start)) <= 0.001
+    ]
+    if missing_at_start and float(missing_at_start[0].start) < float(winner.start) - 0.001:
+        return min(missing_at_start, key=lambda item: (float(item.start), float(item.end)))
+    return winner
+
+
 def collapse_duplicate_recheck_ranges(
     ranges: list[stt_rescue.SttRecheckRange],
     *,
@@ -714,16 +859,17 @@ def collapse_duplicate_recheck_ranges(
         winner = min(items, key=_range_priority)
         start = round(min(float(item.start) for item in items), 3)
         end = round(max(max(float(item.start), float(item.end)) for item in items), 3)
+        owner = _collapsed_range_owner(items, winner=winner, start=start)
         collapsed.append(
             stt_rescue.SttRecheckRange(
                 start=start,
                 end=max(start + 0.1, end),
-                primary_score=winner.primary_score,
-                secondary_score=winner.secondary_score,
-                primary_text=winner.primary_text,
-                secondary_text=winner.secondary_text,
-                primary=dict(winner.primary),
-                secondary=dict(winner.secondary),
+                primary_score=owner.primary_score,
+                secondary_score=owner.secondary_score,
+                primary_text=owner.primary_text,
+                secondary_text=owner.secondary_text,
+                primary=dict(owner.primary),
+                secondary=dict(owner.secondary),
             )
         )
     collapsed.sort(key=lambda item: (item.start, item.end))
@@ -1014,8 +1160,26 @@ def merge_segments_with_replacements(
         updated.sort(key=lambda seg: (_as_float(seg.get("start"), 0.0), _as_float(seg.get("end"), 0.0)))
         return updated
 
-    range_starts = [float(item.start) for item in applied_ranges]
-    range_ends = [max(float(item.start), float(item.end)) for item in applied_ranges]
+    # Regression note: STT2 rescue ranges are padded/wide requests, not a proof
+    # that STT2 produced replacement text for the whole span. Dropping STT1 by
+    # the request range deleted correct X5/Macau STT1 text when STT2 only
+    # returned a later fragment. Keep this anchored to actual replacement
+    # segment spans so blank parts of a recheck never erase accurate STT1 text.
+    effective_ranges = [
+        (
+            _as_float(seg.get("start"), 0.0),
+            max(_as_float(seg.get("start"), 0.0), _as_float(seg.get("end"), _as_float(seg.get("start"), 0.0))),
+        )
+        for seg in list(applied_segments or [])
+        if _segment_text(seg)
+    ]
+    if not effective_ranges:
+        effective_ranges = [
+            (float(item.start), max(float(item.start), float(item.end)))
+            for item in applied_ranges
+        ]
+    range_starts = [start for start, _end in effective_ranges]
+    range_ends = [end for _start, end in effective_ranges]
     segment_starts = [_as_float(seg.get("start"), 0.0) for seg in base_segments or []]
     segment_ends = [max(_as_float(seg.get("start"), 0.0), _as_float(seg.get("end"), _as_float(seg.get("start"), 0.0))) for seg in base_segments or []]
     groups = overlap_segment_groups(
@@ -1035,6 +1199,141 @@ def merge_segments_with_replacements(
     ):
         return None
     return updated
+
+
+def _word_precision_edges(
+    candidate: dict[str, Any],
+    *,
+    fallback_start: float,
+    fallback_end: float,
+) -> tuple[float, float, list[dict[str, Any]]] | None:
+    words = [dict(word) for word in (candidate.get("words") or [])]
+    if not words:
+        return None
+    start = _as_float(words[0].get("start", candidate.get("start", fallback_start)), fallback_start)
+    end = _as_float(words[-1].get("end", candidate.get("end", fallback_end)), fallback_end)
+    if end <= start + 0.05:
+        return None
+    return start, end, words
+
+
+def _word_precision_split_replacements(
+    *,
+    base: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    settings: dict[str, Any],
+    score_fn: Callable[[dict[str, Any]], float],
+    text_similarity_fn: Callable[[str, str], float] | None,
+    min_similarity: float,
+    max_timing_shift: float,
+) -> list[dict[str, Any]]:
+    if len(candidates) < 2:
+        return []
+    original_start = _as_float(base.get("start"), 0.0)
+    original_end = max(original_start, _as_float(base.get("end"), original_start))
+    original_text = _segment_text(base)
+    if not original_text:
+        return []
+    base_duration = original_end - original_start
+    split_min_base_duration = max(
+        0.8,
+        _as_float(settings.get("stt_word_timestamps_precision_split_min_base_duration_sec"), 3.0),
+    )
+    if base_duration < split_min_base_duration:
+        return []
+
+    prepared: list[tuple[float, float, dict[str, Any], list[dict[str, Any]]]] = []
+    seen: set[tuple[int, int, str]] = set()
+    for candidate in sorted(candidates, key=lambda item: (_as_float(item.get("start"), 0.0), _as_float(item.get("end"), 0.0))):
+        text = _segment_text(candidate)
+        if not text:
+            continue
+        edges = _word_precision_edges(candidate, fallback_start=original_start, fallback_end=original_end)
+        if edges is None:
+            continue
+        start, end, words = edges
+        if start < original_start - max_timing_shift or end > original_end + max_timing_shift:
+            continue
+        if end - start < 0.28:
+            continue
+        key = (int(round(start * 1000)), int(round(end * 1000)), text)
+        if key in seen:
+            continue
+        seen.add(key)
+        prepared.append((start, end, dict(candidate), words))
+
+    if len(prepared) < 2:
+        return []
+    combined_text = " ".join(_segment_text(candidate) for _start, _end, candidate, _words in prepared).strip()
+    if callable(text_similarity_fn):
+        similarity = float(text_similarity_fn(original_text, combined_text) or 0.0)
+    else:
+        similarity = 1.0 if original_text == combined_text else 0.5
+    # 변경 금지: word-timestamp 분할은 타이밍을 정밀하게 만들기 위한 장치이지
+    # STT1 원문을 축약하거나 누락시키는 교정 단계가 아니다. X5에서
+    # "아 이 시트! 시트 되게 편해요"가 "이 시트 / 시트"로 쪼개지며
+    # 뒤 자막이 한 칸씩 밀린 회귀가 있었으므로, 여러 후보를 합친 텍스트가
+    # 원문을 충분히 보존할 때만 분할한다.
+    split_min_similarity = max(
+        float(min_similarity),
+        min(1.0, max(0.74, _as_float(settings.get("stt_word_timestamps_precision_split_min_similarity"), 0.74))),
+    )
+    if similarity < split_min_similarity:
+        return []
+
+    combined_start = min(start for start, _end, _candidate, _words in prepared)
+    combined_end = max(end for _start, end, _candidate, _words in prepared)
+    if max(abs(combined_start - original_start), abs(combined_end - original_end)) > max_timing_shift:
+        return []
+
+    replacements: list[dict[str, Any]] = []
+    split_count = len(prepared)
+    for split_idx, (start, end, candidate, words) in enumerate(prepared):
+        out = dict(base)
+        out["start"] = start
+        out["end"] = end
+        # 변경 금지: 긴 STT1 자막 하나를 word-timestamp 후보 여러 개로
+        # 나눌 때는 원문 전체를 각 조각에 복제하지 않는다. X5 회귀 원인은
+        # 정확한 word 후보가 있었는데도 단일 후보 비교만 하며 분할을 버린 점이었다.
+        out["text"] = _segment_text(candidate)
+        out["words"] = words
+        for key in (
+            "quality",
+            "score",
+            "stt_score",
+            "score_color",
+            "stt_score_color",
+            "stt_score_label",
+            "stt_score_flags",
+            "stt_score_components",
+            "word_count",
+        ):
+            if key in candidate:
+                out[key] = candidate[key]
+        meta = dict(out.get("asr_metadata") or {})
+        meta["selective_word_timestamps"] = {
+            "enabled": True,
+            "source": str(candidate.get("stt_selected_source") or candidate.get("stt_ensemble_source") or "STT1"),
+            "similarity": round(similarity, 6),
+            "kept_original_text": False,
+            "split_from_base": True,
+            "split_index": split_idx,
+            "split_count": split_count,
+            "edge_shift": round(max(abs(start - original_start), abs(end - original_end)), 4),
+            "range_start": round(original_start, 3),
+            "range_end": round(original_end, 3),
+        }
+        out["asr_metadata"] = meta
+        out["stt_word_precision_applied"] = True
+        out["stt_word_precision_split_applied"] = True
+        if "stt_selected_source" not in out:
+            out["stt_selected_source"] = str(base.get("stt_selected_source") or "STT1")
+        if "stt_ensemble_source" not in out:
+            out["stt_ensemble_source"] = str(base.get("stt_ensemble_source") or "STT1_SELECTIVE")
+        replacements.append(out)
+
+    replacements.sort(key=lambda seg: (_as_float(seg.get("start"), 0.0), _as_float(seg.get("end"), 0.0)))
+    return replacements
 
 
 def apply_word_precision_segments(
@@ -1092,6 +1391,19 @@ def apply_word_precision_segments(
             ),
             reverse=True,
         )
+        split_replacements = _word_precision_split_replacements(
+            base=seg,
+            candidates=candidates,
+            settings=settings,
+            score_fn=score_fn,
+            text_similarity_fn=text_similarity_fn,
+            min_similarity=min_similarity,
+            max_timing_shift=max_timing_shift,
+        )
+        if split_replacements:
+            updated.extend(split_replacements)
+            applied += len(split_replacements)
+            continue
         chosen = candidates[0]
         if callable(text_similarity_fn):
             similarity = float(text_similarity_fn(str(seg.get("text") or ""), str(chosen.get("text") or "")) or 0.0)
@@ -1103,12 +1415,11 @@ def apply_word_precision_segments(
 
         original_start = _as_float(seg.get("start"), 0.0)
         original_end = max(original_start, _as_float(seg.get("end"), original_start))
-        words = [dict(word) for word in (chosen.get("words") or [])]
-        new_start = _as_float(words[0].get("start", chosen.get("start", original_start)), original_start)
-        new_end = _as_float(words[-1].get("end", chosen.get("end", original_end)), original_end)
-        if new_end <= new_start + 0.05:
+        edges = _word_precision_edges(chosen, fallback_start=original_start, fallback_end=original_end)
+        if edges is None:
             updated.append(seg)
             continue
+        new_start, new_end, words = edges
 
         edge_shift = max(abs(new_start - original_start), abs(new_end - original_end))
         original_duration = max(0.05, original_end - original_start)

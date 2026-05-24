@@ -148,6 +148,12 @@ class EditorCanvasStateMixin:
             )
         for idx, seg in enumerate(ordered):
             seg["line"] = idx
+        if ordered and not preserve_view:
+            # 변경 금지: 프로젝트 오픈은 EditorWidget 생성 시점에는 빈 세그먼트라
+            # 초기 뷰 모드가 fit으로 잡히지만, 직후 실제 자막을 로드한다. 이 값을
+            # window로 돌려두지 않으면 늦게 실행되는 초기 레이아웃 타이머가 저장된
+            # 8초 창/작업 위치를 전체 보기로 덮어 STT1/2 후보가 보이지 않게 된다.
+            self._initial_open_view_mode = "window"
 
         timeline = getattr(self, "timeline", None)
         if (

@@ -115,6 +115,50 @@ final class NativeResourceAllocatorTests: XCTestCase {
         XCTAssertEqual(accelerator["ane_lanes"] as? Int, 10)
     }
 
+    func testSelectiveSTT2RecheckGetsOwnFullCoreANEAndGPULanes() throws {
+        let response = NativeResourceAllocator.plan(
+            payload: [
+                "active_labels": ["pipeline", "stt", "stt2"],
+                "settings": [
+                    "benchmark_runtime_profile": "apple_m_full_core_throughput",
+                    "stt_selective_secondary_recheck_enabled": true,
+                    "stt_whisperkit_recheck_concurrent_workers": 8,
+                    "stt_whisperkit_recheck_concurrent_max_workers": 10,
+                    "stt_whisperkit_gpu_saturation_max_workers": 10,
+                ],
+                "topology": [
+                    "logical_cores": 10,
+                    "physical_cores": 10,
+                    "performance_cores": 4,
+                    "efficiency_cores": 6,
+                    "gpu_cores": 10,
+                    "neural_engine_cores": 16,
+                    "memory_bytes": 16 * 1_073_741_824,
+                ],
+                "memory": [
+                    "memory_bytes": 16 * 1_073_741_824,
+                    "available_memory_bytes": 6 * 1_073_741_824,
+                    "available_memory_ratio": 0.375,
+                    "pressure_stage": "normal",
+                ],
+            ]
+        )
+
+        let allocations = try XCTUnwrap(response["allocations"] as? [String: Any])
+        let stt2 = try XCTUnwrap(allocations["stt2"] as? [String: Any])
+        XCTAssertEqual(stt2["workers"] as? Int, 10)
+        XCTAssertEqual(stt2["compute_units"] as? String, "all")
+        let accelerator = try XCTUnwrap(stt2["accelerator"] as? [String: Any])
+        XCTAssertEqual(accelerator["policy"] as? String, "whisperkit_balanced")
+        XCTAssertEqual(accelerator["gpu_lanes"] as? Int, 10)
+        XCTAssertEqual(accelerator["ane_lanes"] as? Int, 10)
+
+        let ordered = try XCTUnwrap(response["ordered_allocations"] as? [[String: Any]])
+        let tasks = ordered.compactMap { $0["task"] as? String }
+        XCTAssertTrue(tasks.contains("stt2"))
+        XCTAssertLessThan(try XCTUnwrap(tasks.firstIndex(of: "stt_precision")), try XCTUnwrap(tasks.firstIndex(of: "stt2")))
+    }
+
     func testVadAndAudioMLUseMetalGPUHintsWithoutClaimingANE() throws {
         let response = NativeResourceAllocator.plan(
             payload: [

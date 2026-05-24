@@ -146,6 +146,30 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertAlmostEqual(ranges[0].start, 2.0)
         self.assertTrue(ranges[0].primary["asr_metadata"]["missing_voice_candidate"])
 
+    def test_missing_voice_recheck_ranges_splits_internal_stt_holes_inside_long_vad(self):
+        routed_times = []
+
+        ranges = stt_recheck_service.missing_voice_recheck_ranges(
+            primary_segments=[
+                {"start": 100.0, "end": 103.0, "text": "앞 음성"},
+                {"start": 116.0, "end": 120.0, "text": "뒤 음성"},
+            ],
+            vad_segments=[{"start": 100.0, "end": 120.0}],
+            settings={
+                "stt_low_score_recheck_max_segments": 4,
+                "stt_missing_voice_internal_gap_min_duration_sec": 1.0,
+            },
+            min_duration=0.55,
+            chunk_path_for_time=lambda target: routed_times.append(target) or "/tmp/chunk.wav",
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertAlmostEqual(ranges[0].start, 103.0)
+        self.assertAlmostEqual(ranges[0].end, 116.0)
+        self.assertAlmostEqual(routed_times[0], 103.01)
+        self.assertEqual(ranges[0].primary_text, "")
+        self.assertTrue(ranges[0].primary["asr_metadata"]["missing_voice_candidate"])
+
     def test_low_score_recheck_ranges_match_expected_pairing(self):
         ranges = stt_recheck_service.low_score_recheck_ranges(
             [
@@ -629,6 +653,53 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertAlmostEqual(ranges[0].start, 0.0)
         self.assertAlmostEqual(ranges[0].end, 1.0)
 
+    def test_collapsed_recheck_keeps_missing_voice_source_when_text_candidate_starts_later(self):
+        early_chunk = "/tmp/vad_000_0.000.wav"
+        late_chunk = "/tmp/vad_001_112.000.wav"
+        missing = stt_rescue.SttRecheckRange(
+            start=104.512,
+            end=164.592,
+            primary_score=0.0,
+            secondary_score=0.0,
+            primary_text="",
+            secondary_text="",
+            primary={
+                "start": 104.512,
+                "end": 164.592,
+                "text": "",
+                "chunk_path": early_chunk,
+                "asr_metadata": {
+                    "chunk_path": early_chunk,
+                    "missing_voice_candidate": True,
+                },
+            },
+            secondary={},
+        )
+        late_text = stt_rescue.SttRecheckRange(
+            start=112.0,
+            end=164.592,
+            primary_score=22.0,
+            secondary_score=0.0,
+            primary_text="아 시트 되게 편해요",
+            secondary_text="",
+            primary={
+                "start": 112.0,
+                "end": 164.592,
+                "text": "아 시트 되게 편해요",
+                "chunk_path": late_chunk,
+                "asr_metadata": {"chunk_path": late_chunk},
+            },
+            secondary={},
+        )
+
+        collapsed = stt_recheck_service.collapse_duplicate_recheck_ranges([missing, late_text])
+
+        self.assertEqual(len(collapsed), 1)
+        self.assertAlmostEqual(collapsed[0].start, 104.512)
+        self.assertAlmostEqual(collapsed[0].end, 164.592)
+        self.assertEqual(collapsed[0].primary.get("chunk_path"), early_chunk)
+        self.assertTrue(collapsed[0].primary["asr_metadata"]["missing_voice_candidate"])
+
     def test_select_recheck_replacements_marks_and_decorates_matching_segments(self):
         item = stt_rescue.SttRecheckRange(
             start=0.0,
@@ -739,6 +810,49 @@ class STTRecheckServiceTests(unittest.TestCase):
 
         self.assertEqual([seg["text"] for seg in merged], ["대체", "유지"])
 
+    def test_merge_segments_with_replacements_keeps_uncovered_stt1_text_inside_wide_recheck_range(self):
+        merged = stt_recheck_service.merge_segments_with_replacements(
+            base_segments=[
+                {"start": 104.76, "end": 110.38, "text": "그리고 지금 제가 한 시간 정도 운전을 했는데"},
+                {"start": 110.38, "end": 113.76, "text": "정말 마음에 드는 것 중에 하나는 뭐냐면"},
+                {"start": 113.76, "end": 116.0, "text": "아 이 시트 시트 되게 편해요"},
+            ],
+            applied_ranges=[
+                stt_rescue.SttRecheckRange(
+                    start=104.512,
+                    end=116.0,
+                    primary_score=22.0,
+                    secondary_score=0.0,
+                    primary_text="넓은 재검사 범위",
+                    secondary_text="",
+                    primary={},
+                    secondary={},
+                )
+            ],
+            applied_segments=[
+                {
+                    "start": 115.2,
+                    "end": 116.68,
+                    "text": "아 시트 되게 편해요",
+                    "asr_metadata": {
+                        "stt_low_score_recheck": {
+                            "range_start": 104.512,
+                            "range_end": 116.0,
+                        }
+                    },
+                }
+            ],
+        )
+
+        self.assertEqual(
+            [seg["text"] for seg in merged],
+            [
+                "그리고 지금 제가 한 시간 정도 운전을 했는데",
+                "정말 마음에 드는 것 중에 하나는 뭐냐면",
+                "아 시트 되게 편해요",
+            ],
+        )
+
     def test_merge_segments_with_replacements_respects_retention_guard(self):
         merged = stt_recheck_service.merge_segments_with_replacements(
             base_segments=[
@@ -806,6 +920,193 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertAlmostEqual(updated[0]["end"], 0.9)
         self.assertTrue(updated[0]["stt_word_precision_applied"])
         self.assertEqual(updated[1]["text"], "유지")
+
+    def test_apply_word_precision_segments_splits_long_base_when_precision_returns_multiple_parts(self):
+        updated, applied = stt_recheck_service.apply_word_precision_segments(
+            base_segments=[
+                {
+                    "start": 0.0,
+                    "end": 5.8,
+                    "text": "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요 80으로 크루즈 컨트롤 걸었고요",
+                    "asr_metadata": {},
+                    "stt_selected_source": "STT1",
+                }
+            ],
+            precision_segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.7,
+                    "text": "지금 에코프로를 놓은 상태고",
+                    "stt_score": 91,
+                    "stt_selected_source": "WORD_PRECISION",
+                    "words": [
+                        {"word": "지금", "start": 0.05, "end": 0.35},
+                        {"word": "상태고", "start": 1.25, "end": 1.62},
+                    ],
+                },
+                {
+                    "start": 1.7,
+                    "end": 3.5,
+                    "text": "크루즈 컨트롤 걸어볼게요",
+                    "stt_score": 90,
+                    "stt_selected_source": "WORD_PRECISION",
+                    "words": [
+                        {"word": "크루즈", "start": 1.74, "end": 2.1},
+                        {"word": "걸어볼게요", "start": 3.0, "end": 3.42},
+                    ],
+                },
+                {
+                    "start": 3.5,
+                    "end": 5.8,
+                    "text": "80으로 크루즈 컨트롤 걸었고요",
+                    "stt_score": 92,
+                    "stt_selected_source": "WORD_PRECISION",
+                    "words": [
+                        {"word": "80으로", "start": 3.55, "end": 3.9},
+                        {"word": "걸었고요", "start": 5.15, "end": 5.62},
+                    ],
+                },
+            ],
+            ranges=[
+                stt_rescue.SttRecheckRange(
+                    start=0.0,
+                    end=5.8,
+                    primary_score=22.0,
+                    secondary_score=0.0,
+                    primary_text="지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요 80으로 크루즈 컨트롤 걸었고요",
+                    secondary_text="",
+                    primary={},
+                    secondary={},
+                )
+            ],
+            settings={
+                "stt_word_timestamps_precision_keep_text": True,
+                "stt_word_timestamps_precision_split_min_similarity": 0.62,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+            text_similarity_fn=lambda left, right: 0.96 if "80으로" in left and "80으로" in right else 0.2,
+        )
+
+        self.assertEqual(applied, 3)
+        self.assertEqual([seg["text"] for seg in updated], [
+            "지금 에코프로를 놓은 상태고",
+            "크루즈 컨트롤 걸어볼게요",
+            "80으로 크루즈 컨트롤 걸었고요",
+        ])
+        self.assertTrue(all(seg["stt_word_precision_split_applied"] for seg in updated))
+        self.assertAlmostEqual(updated[0]["start"], 0.05)
+        self.assertAlmostEqual(updated[-1]["end"], 5.62)
+
+    def test_apply_word_precision_segments_rejects_split_that_drops_base_text(self):
+        updated, applied = stt_recheck_service.apply_word_precision_segments(
+            base_segments=[
+                {
+                    "start": 113.46,
+                    "end": 116.0,
+                    "text": "아 이 시트! 시트 되게 편해요",
+                    "asr_metadata": {},
+                    "stt_selected_source": "STT1",
+                }
+            ],
+            precision_segments=[
+                {
+                    "start": 113.71,
+                    "end": 115.01,
+                    "text": "이 시트",
+                    "stt_score": 83.25,
+                    "stt_selected_source": "WORD_PRECISION",
+                    "words": [
+                        {"word": "이", "start": 113.71, "end": 113.85},
+                        {"word": "시트", "start": 114.4, "end": 115.01},
+                    ],
+                },
+                {
+                    "start": 115.03,
+                    "end": 115.75,
+                    "text": "시트",
+                    "stt_score": 87.04,
+                    "stt_selected_source": "WORD_PRECISION",
+                    "words": [
+                        {"word": "시트", "start": 115.03, "end": 115.75},
+                    ],
+                },
+            ],
+            ranges=[
+                stt_rescue.SttRecheckRange(
+                    start=113.46,
+                    end=116.0,
+                    primary_score=22.0,
+                    secondary_score=0.0,
+                    primary_text="아 이 시트! 시트 되게 편해요",
+                    secondary_text="",
+                    primary={},
+                    secondary={},
+                )
+            ],
+            settings={"stt_word_timestamps_precision_keep_text": True},
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+            text_similarity_fn=lambda _left, _right: 0.625,
+        )
+
+        self.assertEqual(applied, 0)
+        self.assertEqual(len(updated), 1)
+        self.assertEqual(updated[0]["text"], "아 이 시트! 시트 되게 편해요")
+
+    def test_apply_word_precision_segments_keeps_short_base_as_one_subtitle(self):
+        updated, applied = stt_recheck_service.apply_word_precision_segments(
+            base_segments=[
+                {
+                    "start": 150.7,
+                    "end": 152.98,
+                    "text": "그리고 이 차가 좋은 게",
+                    "asr_metadata": {},
+                    "stt_selected_source": "STT1",
+                }
+            ],
+            precision_segments=[
+                {
+                    "start": 150.93,
+                    "end": 151.61,
+                    "text": "그리고 이 차가",
+                    "stt_score": 90,
+                    "stt_selected_source": "WORD_PRECISION",
+                    "words": [
+                        {"word": "그리고", "start": 150.93, "end": 151.15},
+                        {"word": "차가", "start": 151.35, "end": 151.61},
+                    ],
+                },
+                {
+                    "start": 152.39,
+                    "end": 152.53,
+                    "text": "좋은 게",
+                    "stt_score": 90,
+                    "stt_selected_source": "WORD_PRECISION",
+                    "words": [
+                        {"word": "좋은", "start": 152.39, "end": 152.45},
+                        {"word": "게", "start": 152.46, "end": 152.53},
+                    ],
+                },
+            ],
+            ranges=[
+                stt_rescue.SttRecheckRange(
+                    start=150.7,
+                    end=152.98,
+                    primary_score=22.0,
+                    secondary_score=0.0,
+                    primary_text="그리고 이 차가 좋은 게",
+                    secondary_text="",
+                    primary={},
+                    secondary={},
+                )
+            ],
+            settings={"stt_word_timestamps_precision_keep_text": True},
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+            text_similarity_fn=lambda _left, _right: 1.0,
+        )
+
+        self.assertEqual(applied, 0)
+        self.assertEqual(len(updated), 1)
+        self.assertEqual(updated[0]["text"], "그리고 이 차가 좋은 게")
 
     def test_apply_word_precision_segments_can_replace_text_when_allowed(self):
         updated, applied = stt_recheck_service.apply_word_precision_segments(

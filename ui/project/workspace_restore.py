@@ -140,25 +140,79 @@ class WorkspaceMixin:
                     # Deferred open restore must not undo a user/automation seek that landed before this timer fires.
                     playhead_was_changed = abs(current_playhead - scheduled_playhead) > 0.05
                     target_center = external_seek if external_seek is not None else (current_playhead if playhead_was_changed else playhead)
-                    if external_seek is not None:
-                        local_seek = external_seek
+                    restored_playhead: float | None = None
+                    restored_sync_video = True
+
+                    def _local_seek_for(global_sec: float) -> float:
+                        local_seek = float(global_sec or 0.0)
                         localizer = getattr(editor, "_global_to_local_sec", None)
                         if callable(localizer):
                             try:
-                                local_seek = float(localizer(external_seek) or 0.0)
+                                local_seek = float(localizer(local_seek) or 0.0)
                             except Exception:
-                                local_seek = external_seek
+                                local_seek = float(global_sec or 0.0)
+                        return local_seek
+
+                    def _sync_restored_playhead(global_sec: float, *, sync_video: bool = True) -> None:
+                        # 변경 금지: workspace의 last_cursor_block은 저장 당시 텍스트 블록 번호라
+                        # external final.srt 정규화, 중복 제거, 재분할 뒤에는 같은 자막을 가리키지
+                        # 않는다. 프로젝트 복원은 블록 번호가 아니라 시간(playhead)을 기준으로
+                        # 비디오/타임라인/자막 에디터를 다시 묶어야 마카오처럼 자막 세그먼트가
+                        # 음성보다 앞서 보이는 싱크 분리가 재발하지 않는다.
+                        try:
+                            sec = float(global_sec or 0.0)
+                        except Exception:
+                            return
+                        if sec <= 0:
+                            return
+                        if sync_video and hasattr(editor, "video_player"):
+                            try:
+                                editor.video_player.seek(_local_seek_for(sec))
+                            except Exception:
+                                pass
+                        try:
+                            if hasattr(editor, "timeline"):
+                                current = _current_playhead()
+                                if abs(current - sec) > 0.0005:
+                                    editor.timeline.set_playhead(sec)
+                        except Exception:
+                            pass
+                        sync_after_seek = getattr(editor, "_sync_after_manual_seek", None)
+                        if callable(sync_after_seek):
+                            try:
+                                sync_after_seek(sec)
+                                return
+                            except Exception:
+                                pass
+
+                    if external_seek is not None:
                         if external_sync_video and hasattr(editor, "video_player"):
-                            editor.video_player.seek(local_seek)
+                            editor.video_player.seek(_local_seek_for(external_seek))
                         if hasattr(editor, "timeline"):
                             editor.timeline.set_playhead(external_seek)
+                        restored_playhead = external_seek
+                        restored_sync_video = external_sync_video
                     elif playhead > 0 and not playhead_was_changed:
                         if hasattr(editor, "video_player"):
-                            editor.video_player.seek(playhead)
+                            editor.video_player.seek(_local_seek_for(playhead))
                         if hasattr(editor, "timeline"):
                             editor.timeline.set_playhead(playhead)
+                        restored_playhead = playhead
+                    elif target_center > 0:
+                        restored_playhead = target_center
+                        restored_sync_video = False
 
                     if hasattr(editor, "timeline"):
+                        try:
+                            # 변경 금지: 프로젝트 오픈 직후에는 editor 초기 레이아웃 fit 타이머와
+                            # workspace 복원 타이머가 동시에 살아 있다. workspace가 저장된
+                            # playhead/8초 창을 복원한 뒤 늦게 도착한 fit 타이머가 전체 보기로
+                            # 다시 펼치면 STT1/2 후보가 너무 작아져 "세그먼트가 안 나온다"는
+                            # 상태가 재발한다. workspace가 뷰 소유권을 가져가면 이전 초기
+                            # open-view 토큰은 반드시 무효화한다.
+                            editor.timeline._initial_open_view_token = object()
+                        except Exception:
+                            pass
                         preferred_seconds = (
                             editor.timeline.preferred_edit_window_seconds()
                             if hasattr(editor.timeline, "preferred_edit_window_seconds")
@@ -175,12 +229,23 @@ class WorkspaceMixin:
                                 editor.timeline.center_to_sec(target_center, smooth=False)
 
                     block_num = workspace.get("last_cursor_block", 0)
-                    if block_num > 0 and hasattr(editor, "text_edit"):
+                    if block_num > 0 and restored_playhead is None and hasattr(editor, "text_edit"):
                         block = editor.text_edit.document().findBlockByNumber(block_num)
                         if block.isValid():
                             cursor = QTextCursor(block)
                             editor.text_edit.setTextCursor(cursor)
                             editor.text_edit.ensureCursorVisible()
+
+                    if restored_playhead is not None and restored_playhead > 0:
+                        _sync_restored_playhead(restored_playhead, sync_video=False)
+                        for delay in (180, 460, 820):
+                            QTimer.singleShot(
+                                delay,
+                                lambda sec=restored_playhead, sv=restored_sync_video: _sync_restored_playhead(
+                                    sec,
+                                    sync_video=sv,
+                                ),
+                            )
 
                 except Exception:
                     pass

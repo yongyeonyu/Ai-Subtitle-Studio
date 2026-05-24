@@ -39,6 +39,38 @@ public enum SubtitleCoreNative {
             return subtitleTimingMetricsResponse(payload: requestPayload, operation: operation)
         case "subtitle_waveform_summary":
             return subtitleWaveformSummaryResponse(payload: requestPayload, operation: operation)
+        case "stt_lattice_best_word_match":
+            return sttLatticeBestWordMatchResponse(payload: requestPayload, operation: operation)
+        case "subtitle_lora_selective_merge_indexes":
+            return subtitleLoraSelectiveMergeResponse(payload: requestPayload, operation: operation)
+        case "subtitle_lora_merge_settings":
+            return subtitleLoraMergeSettingsResponse(payload: requestPayload, operation: operation)
+        case "subtitle_lora_packaging_mode":
+            return subtitleLoraPackagingModeResponse(payload: requestPayload, operation: operation)
+        case "subtitle_lora_packaging_candidate_score":
+            return subtitleLoraPackagingCandidateScoreResponse(payload: requestPayload, operation: operation)
+        case "subtitle_lora_packaging_reasons":
+            return subtitleLoraPackagingReasonsResponse(payload: requestPayload, operation: operation)
+        case "stt_duration_first_order":
+            return sttDurationFirstOrderResponse(payload: requestPayload, operation: operation)
+        case "stt_compute_profile":
+            return sttComputeProfileResponse(payload: requestPayload, operation: operation)
+        case "stt_duration_first_submission_enabled":
+            return sttDurationFirstSubmissionEnabledResponse(payload: requestPayload, operation: operation)
+        case "stt_worker_silence_timeout":
+            return sttWorkerSilenceTimeoutResponse(payload: requestPayload, operation: operation)
+        case "stt_straggler_config":
+            return sttStragglerConfigResponse(payload: requestPayload, operation: operation)
+        case "audio_fast_flatten_filter":
+            return audioFastFlattenFilterResponse(payload: requestPayload, operation: operation)
+        case "audio_route_sample_span":
+            return audioRouteSampleSpanResponse(payload: requestPayload, operation: operation)
+        case "audio_ai_variant":
+            return audioAIVariantResponse(payload: requestPayload, operation: operation)
+        case "audio_route_preview_divergence":
+            return audioRoutePreviewDivergenceResponse(payload: requestPayload, operation: operation)
+        case "audio_route_split_decision":
+            return audioRouteSplitDecisionResponse(payload: requestPayload, operation: operation)
         default:
             return errorResponse(operation: operation, message: "Unsupported subtitle core operation: \(operation)")
         }
@@ -151,6 +183,150 @@ public enum SubtitleCoreNative {
             "operation": operation,
             "backend": "swift",
             "result": SubtitleWaveformSummaryNative.evaluate(payload: payload),
+        ]
+    }
+
+    private static func sttLatticeBestWordMatchResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": STTLatticeMatchNative.evaluate(payload: payload),
+        ]
+    }
+
+    private static func subtitleLoraSelectiveMergeResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": SubtitleLoraSelectiveMergeNative.evaluate(payload: payload),
+        ]
+    }
+
+    private static func subtitleLoraMergeSettingsResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": SubtitleLoraSelectiveMergeNative.mergeSettings(payload: payload),
+        ]
+    }
+
+    private static func subtitleLoraPackagingModeResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": SubtitleLoraSelectiveMergeNative.packagingMode(payload: payload),
+        ]
+    }
+
+    private static func subtitleLoraPackagingCandidateScoreResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": SubtitleLoraSelectiveMergeNative.packagingCandidateScore(payload: payload),
+        ]
+    }
+
+    private static func subtitleLoraPackagingReasonsResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": SubtitleLoraSelectiveMergeNative.packagingReasons(payload: payload),
+        ]
+    }
+
+    private static func sttDurationFirstOrderResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": STTDurationFirstOrderNative.evaluate(payload: payload),
+        ]
+    }
+
+    private static func sttComputeProfileResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": STTDurationFirstOrderNative.computeProfile(payload: payload),
+        ]
+    }
+
+    private static func sttDurationFirstSubmissionEnabledResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": STTDurationFirstOrderNative.submissionEnabled(payload: payload),
+        ]
+    }
+
+    private static func sttWorkerSilenceTimeoutResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": STTDurationFirstOrderNative.workerSilenceTimeout(payload: payload),
+        ]
+    }
+
+    private static func sttStragglerConfigResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": STTDurationFirstOrderNative.stragglerConfig(payload: payload),
+        ]
+    }
+
+    private static func audioFastFlattenFilterResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": AudioFastFlattenFilterNative.evaluate(payload: payload),
+        ]
+    }
+
+    private static func audioRouteSampleSpanResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": AudioFastFlattenFilterNative.sampleSpan(payload: payload),
+        ]
+    }
+
+    private static func audioAIVariantResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": AudioFastFlattenFilterNative.audioAIVariant(payload: payload),
+        ]
+    }
+
+    private static func audioRoutePreviewDivergenceResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": AudioFastFlattenFilterNative.routePreviewDivergence(payload: payload),
+        ]
+    }
+
+    private static func audioRouteSplitDecisionResponse(payload: [String: Any], operation: String) -> [String: Any] {
+        [
+            "schema": responseSchema,
+            "operation": operation,
+            "backend": "swift",
+            "result": AudioFastFlattenFilterNative.routeSplitDecision(payload: payload),
         ]
     }
 

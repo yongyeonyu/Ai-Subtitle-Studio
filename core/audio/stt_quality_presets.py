@@ -117,7 +117,12 @@ def _ffmpeg_silero_relaxed_audio_mapping() -> dict:
 def _high_runtime_detail_mapping() -> dict:
     return {
         "audio_preset_auto_benchmark_locked": True,
-        "audio_chunk_routing_benchmark_locked": False,
+        # 변경 금지: High 품질 경로는 X5 기준 자막 점수보다 낮아지면 안 된다.
+        # 청크별 ClearVoice 라우팅은 오디오 self-score가 높아도 STT1 문장 분할을
+        # 거칠게 만들어 2026-05-24 X5 benchmark를 87.402 -> 80.507로 떨어뜨렸다.
+        # 노이즈 특화 라우팅은 명시 프리셋/개별 설정에서만 켜고, 기본 High는
+        # 검증된 benchmark audio path를 유지한다.
+        "audio_chunk_routing_benchmark_locked": True,
         "audio_chunk_routing_enabled": True,
         "audio_chunk_route_vad_enabled": True,
         "vad_backend_policy": "auto",
@@ -139,6 +144,8 @@ def _high_runtime_detail_mapping() -> dict:
         "audio_chunk_route_switch_confirmation_min_streak": 2,
         "audio_chunk_route_precision_threshold": 0.74,
         "audio_chunk_route_secondary_recheck_threshold": 0.68,
+        "audio_chunk_route_secondary_recheck_high_risk_max_confidence": 0.74,
+        "audio_chunk_route_vad_preserve_base_min_confidence": 0.78,
         "audio_chunk_route_low_confidence_threshold": 0.58,
         "audio_chunk_route_baseline_noisy_voice_extra_margin": 0.0,
         "audio_chunk_route_max_workers": 2,
@@ -555,6 +562,8 @@ def mode_benchmark_locked_settings(preset_key: str) -> dict:
             "stt_word_timestamps_precision_max_audio_sec": 100.0,
             "stt_word_timestamps_precision_keep_text": True,
             "stt_word_timestamps_precision_min_similarity": 0.36,
+            "stt_word_timestamps_precision_split_min_similarity": 0.74,
+            "stt_word_timestamps_precision_split_min_base_duration_sec": 3.0,
             "stt_word_timestamps_precision_max_timing_shift_sec": 0.28,
             "stt_word_timestamps_precision_min_duration_ratio": 0.45,
             "stt_word_timestamps_precision_max_duration_ratio": 1.8,

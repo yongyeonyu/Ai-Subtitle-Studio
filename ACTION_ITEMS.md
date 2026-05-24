@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.13-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_13_RELEASED
-Last-Updated: 2026-05-23
+Document-Version: 04.00.14-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_14_RELEASED
+Last-Updated: 2026-05-24
 Updated-By: Codex
 Purpose: Consolidated active execution queue. Former `idea_item.md` and `NATIVE_LIB_PLAN.md` content lives here.
 -->
@@ -127,9 +127,9 @@ gate and rollback branch.
 ## Metadata
 
 ```yaml
-app_version: "04.00.13"
-document_version: "04.00.13-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_13_RELEASED"
+app_version: "04.00.14"
+document_version: "04.00.14-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_14_RELEASED"
 queue_source_of_truth: "ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed; optimize generation time only with behavior-preserving changes."

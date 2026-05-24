@@ -565,12 +565,18 @@ class EditorAutomationMixin:
         except Exception:
             is_playing = False
         if normalized == "toggle":
+            ensure_timer = getattr(self, "_ensure_playhead_timer_running", None)
+            if callable(ensure_timer):
+                ensure_timer()
             if hasattr(video_player, "toggle_play"):
                 video_player.toggle_play()
             else:
                 raise ValueError("playback_control_unavailable")
         elif normalized == "play":
             if not is_playing:
+                ensure_timer = getattr(self, "_ensure_playhead_timer_running", None)
+                if callable(ensure_timer):
+                    ensure_timer()
                 if hasattr(video_player, "toggle_play"):
                     video_player.toggle_play()
                 elif hasattr(media_player, "play"):
@@ -585,6 +591,12 @@ class EditorAutomationMixin:
                     media_player.pause()
                 else:
                     raise ValueError("playback_control_unavailable")
+        sync_now = getattr(self, "_sync_playhead", None)
+        if callable(sync_now):
+            try:
+                sync_now()
+            except Exception:
+                pass
         return {
             "action": normalized,
             "editor_runtime": self.automation_editor_state_snapshot(),

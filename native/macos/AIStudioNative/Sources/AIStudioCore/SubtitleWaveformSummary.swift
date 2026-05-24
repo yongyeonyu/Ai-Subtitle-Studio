@@ -35,7 +35,7 @@ public enum SubtitleWaveformSummaryNative {
             "accelerator_summary": [
                 "compute_task": "subtitle_waveform",
                 "swift_vector_summary": true,
-                "accelerate_candidate": true,
+                "accelerate_vdsp": true,
                 "gpu_task_count": 0,
                 "ane_task_count": 0,
                 "metal_task_count": 0,

@@ -30,6 +30,12 @@ class NativeSubtitleTimingTests(unittest.TestCase):
         self.assertIsNotNone(metrics)
         self.assertAlmostEqual(metrics["timing_mae_sec"], sum(timing_errors) / len(timing_errors), places=9)
         self.assertAlmostEqual(metrics["overlap_score"], sum(overlaps) / len(overlaps) * 100.0, places=9)
+        self.assertEqual(metrics["matched_reference_indices"], [0, 1])
+        self.assertAlmostEqual(metrics["max_start_error_sec"], 0.2, places=9)
+        self.assertAlmostEqual(metrics["max_end_error_sec"], 0.1, places=9)
+        self.assertAlmostEqual(metrics["max_pair_timing_error_sec"], 0.15, places=9)
+        self.assertEqual(metrics["worst_match_hypothesis_index"], 1)
+        self.assertEqual(metrics["worst_match_reference_index"], 1)
         self.assertEqual(metrics["native_backend"], "cpp")
 
 

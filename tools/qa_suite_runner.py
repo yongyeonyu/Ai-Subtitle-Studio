@@ -423,7 +423,24 @@ def _resolve_editor_compact_diamond_command(
     boundary_start = pair.get("boundary_sec", None)
     command: list[str] | None = None
     if pair and boundary_start is not None:
-        command = [command_name, "--start-sec", str(boundary_start), "--side", selected_side]
+        left = dict(pair.get("left") or {})
+        right = dict(pair.get("right") or {})
+        # 변경 금지: appctl의 --start-sec는 diamond boundary 시간이 아니라
+        # 먼저 선택할 자막 세그먼트의 시작 시간이다. 오른쪽 다이아몬드는
+        # 왼쪽 세그먼트를 선택하고 --side right를 보내야 하며, 왼쪽
+        # 다이아몬드는 오른쪽 세그먼트를 선택하고 --side left를 보내야 한다.
+        # boundary_sec를 그대로 넘기면 오른쪽 세그먼트가 선택되어 merge가
+        # 한 칸 밀리고, 이동 직후 `diamond_pair_missing`이 재발한다.
+        selected_start = (
+            left.get("start")
+            if selected_side == "right"
+            else right.get("start")
+            if selected_side == "left"
+            else None
+        )
+        if selected_start is None:
+            selected_start = boundary_start
+        command = [command_name, "--start-sec", str(selected_start), "--side", selected_side]
     elif code != 0 or not runtime:
         # automation-4 hot path: status may be intentionally compact/fallback
         # while the app is busy. Drop stale line selection and let the editor
@@ -434,6 +451,7 @@ def _resolve_editor_compact_diamond_command(
         "requested_side": requested_side,
         "selected_key": selected_key,
         "selected_side": selected_side,
+        "selected_start": command[2] if command and "--start-sec" in command else None,
         "pair": pair,
         "command": command,
         "editor_runtime": runtime,

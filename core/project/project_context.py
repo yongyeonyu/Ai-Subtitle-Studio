@@ -584,6 +584,52 @@ def _project_stt_preview_segments_from_lattice_artifact(project: dict[str, Any])
     return out
 
 
+def _canonicalize_final_subtitle_rows(rows: list[dict[str, Any]], primary_fps: float) -> list[dict[str, Any]]:
+    """Return final subtitle rows in the single order shared by editor/timeline.
+
+    변경 금지: 마카오 프로젝트에서 final.srt tail rows가 중복으로 붙고 SRT row
+    순서가 뒤로 돌아가면서 왼쪽 자막 에디터, 타임라인 자막 세그먼트, 러프컷
+    subtitle_rows가 서로 다른 문장을 보게 됐다. 최종 자막은 이 함수에서만
+    시간순 정렬, 정확 중복 제거, line/index 재부여를 한 뒤 모든 UI로 전달한다.
+    STT 후보 레인은 별도 원본이므로 여기서는 final 자막 row만 정규화한다.
+    """
+    if not rows:
+        return []
+    fps = normalize_fps(primary_fps or 30.0)
+    ordered: list[tuple[float, float, int, dict[str, Any]]] = []
+    for original_idx, row in enumerate(list(rows or [])):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        start = _safe_float(item.get("start", item.get("timeline_start", 0.0)), 0.0)
+        end = _safe_float(item.get("end", item.get("timeline_end", start)), start)
+        item["start"] = start
+        item["end"] = max(start, end)
+        ordered.append((item["start"], item["end"], original_idx, item))
+    ordered.sort(key=lambda item: (item[0], item[1], item[2]))
+
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[int, int, str, str]] = set()
+    for _start, _end, _original_idx, item in ordered:
+        if not bool(item.get("is_gap")):
+            start_frame = sec_to_nearest_frame(_safe_float(item.get("start"), 0.0), fps)
+            end_frame = sec_to_nearest_frame(_safe_float(item.get("end"), 0.0), fps)
+            dedupe_key = (
+                int(start_frame),
+                int(end_frame),
+                " ".join(str(item.get("text", "") or "").split()),
+                str(item.get("speaker", item.get("spk", "00")) or "00"),
+            )
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+        clean = dict(item)
+        clean["line"] = len(out)
+        clean["index"] = len(out) + 1
+        out.append(clean)
+    return out
+
+
 def _project_raw_subtitle_segments(
     project: dict[str, Any],
     editor_subtitles: dict[str, Any],
@@ -786,6 +832,7 @@ def project_segments_to_editor(
             item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
     out = _trim_segments_to_project_duration(out, project, primary_fps=primary_fps)
+    out = _canonicalize_final_subtitle_rows(out, primary_fps)
     if out and include_analysis_candidates and external_text_assets:
         _attach_external_stt_candidates(out, load_external_stt_tracks(project))
         _attach_lattice_candidates_from_artifact(out, project)
@@ -816,6 +863,35 @@ def _candidate_rows_with_source_copy(rows: list[tuple[str, dict[str, Any]]]) -> 
     return out
 
 
+def _time_overlap_seconds(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+    return max(0.0, min(float(a_end), float(b_end)) - max(float(a_start), float(b_start)))
+
+
+def _external_stt_overlap_score(seg: dict[str, Any], row: dict[str, Any]) -> tuple[float, float, float] | None:
+    seg_start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)), 0.0)
+    seg_end = _safe_float(seg.get("end", seg.get("timeline_end", seg_start)), seg_start)
+    row_start = _safe_float(row.get("start", row.get("timeline_start", 0.0)), 0.0)
+    row_end = _safe_float(row.get("end", row.get("timeline_end", row_start)), row_start)
+    if seg_end <= seg_start or row_end <= row_start:
+        return None
+    overlap = _time_overlap_seconds(seg_start, seg_end, row_start, row_end)
+    if overlap <= 0.0:
+        return None
+    seg_ratio = overlap / max(0.001, seg_end - seg_start)
+    row_ratio = overlap / max(0.001, row_end - row_start)
+    # 변경 금지: 외부 final.srt는 후처리/LLM split 뒤에 STT 원본 시간과
+    # 프레임이 정확히 같지 않을 수 있다. exact frame match만 허용하면
+    # 마카오처럼 STT1/2가 맞아도 final 자막에는 후보 근거가 사라지고,
+    # 이후 재검사/선택/타이밍 보정이 final 문장만 믿어 앞당겨지는 버그가
+    # 재발한다. 80ms 이상 겹치고 한쪽 비율이 충분하면 같은 음성 근거로 본다.
+    if overlap < 0.08:
+        return None
+    if seg_ratio < 0.20 and row_ratio < 0.35 and overlap < 0.45:
+        return None
+    center_gap = abs(((seg_start + seg_end) / 2.0) - ((row_start + row_end) / 2.0))
+    return overlap, max(seg_ratio, row_ratio), -center_gap
+
+
 def _attach_external_stt_candidates(segments: list[dict[str, Any]], tracks: dict[str, list[dict[str, Any]]]) -> None:
     if not tracks:
         return
@@ -830,16 +906,32 @@ def _attach_external_stt_candidates(segments: list[dict[str, Any]], tracks: dict
         )
     )
     by_frame: dict[tuple[int, int], list[tuple[str, dict[str, Any]]]] = {}
+    source_order: dict[str, int] = {}
     for source, rows in tracks.items():
         source_text = str(source or "")
+        source_order.setdefault(source_text, len(source_order))
         for row in rows or []:
             if not isinstance(row, dict):
                 continue
             by_frame.setdefault(_candidate_lookup_key(row, primary_fps), []).append((source_text, row))
+    ordered_rows: list[tuple[str, dict[str, Any]]] = [
+        (str(source or ""), row)
+        for source, rows in tracks.items()
+        for row in list(rows or [])
+        if isinstance(row, dict)
+    ]
     for seg in segments:
         if not isinstance(seg, dict) or seg.get("stt_candidates"):
             continue
         candidates = by_frame.get(_candidate_lookup_key(seg, primary_fps), [])
+        if not candidates:
+            ranked: list[tuple[int, tuple[float, float, float], str, dict[str, Any]]] = []
+            for source_text, row in ordered_rows:
+                score = _external_stt_overlap_score(seg, row)
+                if score is not None:
+                    ranked.append((source_order.get(source_text, 999), score, source_text, row))
+            ranked.sort(key=lambda item: (item[0], -item[1][0], -item[1][1], -item[1][2]))
+            candidates = [(source, row) for _order, _score, source, row in ranked[:6]]
         if candidates:
             seg["stt_candidates"] = _candidate_rows_with_source_copy(candidates)
 

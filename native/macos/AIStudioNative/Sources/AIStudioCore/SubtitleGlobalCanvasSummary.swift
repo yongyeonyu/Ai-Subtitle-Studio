@@ -48,7 +48,7 @@ public enum SubtitleGlobalCanvasSummaryNative {
 
         let occupancy = summarizeBins(bins)
         let sweep = summarizeCoverage(intervals)
-        return [
+        var result: [String: Any] = [
             "schema": "ai_subtitle_studio.subtitle_global_canvas.summary.v1",
             "backend": "swift",
             "segment_count": segments.count,
@@ -62,10 +62,13 @@ public enum SubtitleGlobalCanvasSummaryNative {
             "empty_bin_count": max(0, binCount - occupancy.occupied),
             "dense_bin_count": occupancy.dense,
             "max_bin_active": occupancy.maxActive,
+            "max_active_bin_index": occupancy.maxActiveBinIndex,
             "avg_bin_active": round6(occupancy.average),
             "coverage_duration": round6(sweep.coverage),
             "coverage_ratio": round6(duration > 0.0 ? sweep.coverage / duration : 0.0),
             "longest_empty_span_sec": round6(sweep.longestGap),
+            "longest_empty_start_sec": round6(sweep.longestGapStart),
+            "longest_empty_end_sec": round6(sweep.longestGapEnd),
             "max_active_segments": sweep.maxActive,
             "stable_for_global_canvas": invalidDurationCount == 0 && nonMonotonicCount == 0,
             "accelerator_summary": [
@@ -77,28 +80,52 @@ public enum SubtitleGlobalCanvasSummaryNative {
                 "metal_claims_ane": false,
             ],
         ]
+        if boolValue(payload["include_merged_segments"], default: false) {
+            let allowedLanes = stringArray(payload["allowed_lanes"])
+            let outputLane = stringValue(payload["output_lane"], default: "SUBTITLE")
+            let maxGapSec = max(0.0, doubleValue(payload["merge_gap_sec"], default: 0.0))
+            let includeText = boolValue(payload["include_text"], default: true)
+            result["merged_segments"] = mergedSegments(
+                segments,
+                allowedLanes: allowedLanes.isEmpty ? ["SUBTITLE"] : allowedLanes,
+                outputLane: outputLane,
+                maxGapSec: maxGapSec,
+                includeText: includeText
+            )
+        }
+        return result
     }
 
-    private static func summarizeBins(_ bins: [Int]) -> (occupied: Int, dense: Int, maxActive: Int, average: Double) {
+    private static func summarizeBins(_ bins: [Int]) -> (occupied: Int, dense: Int, maxActive: Int, maxActiveBinIndex: Int, average: Double) {
         var occupied = 0
         var dense = 0
         var maxActive = 0
+        var maxActiveBinIndex = -1
         var total = 0
-        for value in bins {
+        for (idx, value) in bins.enumerated() {
             if value > 0 {
                 occupied += 1
             }
             if value > 1 {
                 dense += 1
             }
-            maxActive = max(maxActive, value)
+            if value > maxActive {
+                maxActive = value
+                maxActiveBinIndex = value > 0 ? idx : -1
+            }
             total += value
         }
         let average = bins.isEmpty ? 0.0 : Double(total) / Double(bins.count)
-        return (occupied, dense, maxActive, average)
+        return (occupied, dense, maxActive, maxActiveBinIndex, average)
     }
 
-    private static func summarizeCoverage(_ intervals: [(start: Double, end: Double)]) -> (coverage: Double, longestGap: Double, maxActive: Int) {
+    private static func summarizeCoverage(_ intervals: [(start: Double, end: Double)]) -> (
+        coverage: Double,
+        longestGap: Double,
+        longestGapStart: Double,
+        longestGapEnd: Double,
+        maxActive: Int
+    ) {
         let sorted = intervals.sorted { left, right in
             if left.start == right.start {
                 return left.end < right.end
@@ -107,6 +134,8 @@ public enum SubtitleGlobalCanvasSummaryNative {
         }
         var coverage = 0.0
         var longestGap = 0.0
+        var longestGapStart = 0.0
+        var longestGapEnd = 0.0
         var maxActive = 0
         var mergedStart: Double?
         var mergedEnd: Double?
@@ -115,7 +144,14 @@ public enum SubtitleGlobalCanvasSummaryNative {
 
         for interval in sorted {
             if let previousEnd, interval.start > previousEnd {
-                longestGap = max(longestGap, interval.start - previousEnd)
+                let gap = interval.start - previousEnd
+                // 변경 금지: global canvas의 빈 구간 위치를 데이터 계약으로 남깁니다.
+                // UI 배치를 바꾸지 않고 X5/실앱 artifact에서 하단 minimap drift를 바로 찾기 위한 값입니다.
+                if gap > longestGap {
+                    longestGap = gap
+                    longestGapStart = previousEnd
+                    longestGapEnd = interval.start
+                }
             }
             if mergedStart == nil {
                 mergedStart = interval.start
@@ -145,7 +181,71 @@ public enum SubtitleGlobalCanvasSummaryNative {
             active += event.delta
             maxActive = max(maxActive, active)
         }
-        return (coverage, longestGap, maxActive)
+        return (coverage, longestGap, longestGapStart, longestGapEnd, maxActive)
+    }
+
+    private static func mergedSegments(
+        _ segments: [[String: Any]],
+        allowedLanes: [String],
+        outputLane: String,
+        maxGapSec: Double,
+        includeText: Bool
+    ) -> [[String: Any]] {
+        struct Row {
+            var start: Double
+            var end: Double
+            var text: String
+            var order: Int
+        }
+
+        let allowed = Set(allowedLanes)
+        var rows: [Row] = []
+        for (idx, segment) in segments.enumerated() {
+            let lane = stringValue(segment["lane"], default: "SUBTITLE")
+            if !allowed.contains(lane) {
+                continue
+            }
+            let start = max(0.0, doubleValue(segment["start"], default: 0.0))
+            let end = max(start, doubleValue(segment["end"], default: start))
+            if end <= start {
+                continue
+            }
+            rows.append(Row(start: start, end: end, text: stringValue(segment["text"], default: "").trimmingCharacters(in: .whitespacesAndNewlines), order: idx))
+        }
+        rows.sort { left, right in
+            if left.start == right.start {
+                return left.order < right.order
+            }
+            return left.start < right.start
+        }
+
+        var mergedRows: [[String: Any]] = []
+        for row in rows {
+            if var previous = mergedRows.last,
+               row.start <= (previous["end"] as? Double ?? 0.0) + maxGapSec {
+                previous["end"] = max(previous["end"] as? Double ?? 0.0, row.end)
+                if includeText && !row.text.isEmpty {
+                    let previousText = (previous["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !previousText.contains(row.text) {
+                        previous["text"] = previousText.isEmpty ? row.text : "\(previousText) \(row.text)"
+                    }
+                }
+                previous["count"] = (previous["count"] as? Int ?? 1) + 1
+                mergedRows[mergedRows.count - 1] = previous
+                continue
+            }
+            var item: [String: Any] = [
+                "start": row.start,
+                "end": row.end,
+                "lane": outputLane,
+                "count": 1,
+            ]
+            if includeText {
+                item["text"] = row.text
+            }
+            mergedRows.append(item)
+        }
+        return mergedRows
     }
 
     private static func doubleValue(_ value: Any?, default fallback: Double) -> Double {
@@ -155,6 +255,42 @@ public enum SubtitleGlobalCanvasSummaryNative {
         }
         if let text = value as? String, let number = Double(text), number.isFinite {
             return number
+        }
+        return fallback
+    }
+
+    private static func stringValue(_ value: Any?, default fallback: String) -> String {
+        if let text = value as? String {
+            return text
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return fallback
+    }
+
+    private static func stringArray(_ value: Any?) -> [String] {
+        guard let values = value as? [Any] else {
+            return []
+        }
+        return values.map { stringValue($0, default: "") }.filter { !$0.isEmpty }
+    }
+
+    private static func boolValue(_ value: Any?, default fallback: Bool) -> Bool {
+        if let flag = value as? Bool {
+            return flag
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let text = value as? String {
+            let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["1", "true", "yes", "on"].contains(normalized) {
+                return true
+            }
+            if ["0", "false", "no", "off"].contains(normalized) {
+                return false
+            }
         }
         return fallback
     }

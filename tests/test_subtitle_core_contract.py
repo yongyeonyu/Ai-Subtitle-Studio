@@ -10,6 +10,22 @@ from core.subtitle_core_contract import (
     SUBTITLE_CORE_OPERATION_SUBTITLE_STT_SEGMENTS_SUMMARY,
     SUBTITLE_CORE_OPERATION_SUBTITLE_TIMING_METRICS,
     SUBTITLE_CORE_OPERATION_SUBTITLE_WAVEFORM_SUMMARY,
+    SUBTITLE_CORE_OPERATION_STT_LATTICE_BEST_WORD_MATCH,
+    SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_SELECTIVE_MERGE_INDEXES,
+    SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_MERGE_SETTINGS,
+    SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_PACKAGING_MODE,
+    SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_PACKAGING_CANDIDATE_SCORE,
+    SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_PACKAGING_REASONS,
+    SUBTITLE_CORE_OPERATION_STT_DURATION_FIRST_ORDER,
+    SUBTITLE_CORE_OPERATION_STT_COMPUTE_PROFILE,
+    SUBTITLE_CORE_OPERATION_STT_DURATION_FIRST_SUBMISSION_ENABLED,
+    SUBTITLE_CORE_OPERATION_STT_WORKER_SILENCE_TIMEOUT,
+    SUBTITLE_CORE_OPERATION_STT_STRAGGLER_CONFIG,
+    SUBTITLE_CORE_OPERATION_AUDIO_AI_VARIANT,
+    SUBTITLE_CORE_OPERATION_AUDIO_FAST_FLATTEN_FILTER,
+    SUBTITLE_CORE_OPERATION_AUDIO_ROUTE_PREVIEW_DIVERGENCE,
+    SUBTITLE_CORE_OPERATION_AUDIO_ROUTE_SPLIT_DECISION,
+    SUBTITLE_CORE_OPERATION_AUDIO_ROUTE_SAMPLE_SPAN,
     SUBTITLE_CORE_REQUEST_SCHEMA,
     SUBTITLE_CORE_RESPONSE_SCHEMA,
     build_subtitle_core_request,
@@ -88,6 +104,70 @@ class SubtitleCoreContractTests(unittest.TestCase):
         self.assertEqual(
             normalize_subtitle_core_operation("subtitle-waveform-summary"),
             SUBTITLE_CORE_OPERATION_SUBTITLE_WAVEFORM_SUMMARY,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("stt-lattice-best-word-match"),
+            SUBTITLE_CORE_OPERATION_STT_LATTICE_BEST_WORD_MATCH,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("subtitle-lora-selective-merge-indexes"),
+            SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_SELECTIVE_MERGE_INDEXES,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("subtitle-lora-merge-settings"),
+            SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_MERGE_SETTINGS,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("subtitle-lora-packaging-mode"),
+            SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_PACKAGING_MODE,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("subtitle-lora-packaging-candidate-score"),
+            SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_PACKAGING_CANDIDATE_SCORE,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("subtitle-lora-packaging-reasons"),
+            SUBTITLE_CORE_OPERATION_SUBTITLE_LORA_PACKAGING_REASONS,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("stt-duration-first-order"),
+            SUBTITLE_CORE_OPERATION_STT_DURATION_FIRST_ORDER,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("stt-compute-profile"),
+            SUBTITLE_CORE_OPERATION_STT_COMPUTE_PROFILE,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("stt-duration-first-submission-enabled"),
+            SUBTITLE_CORE_OPERATION_STT_DURATION_FIRST_SUBMISSION_ENABLED,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("stt-worker-silence-timeout"),
+            SUBTITLE_CORE_OPERATION_STT_WORKER_SILENCE_TIMEOUT,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("stt-straggler-config"),
+            SUBTITLE_CORE_OPERATION_STT_STRAGGLER_CONFIG,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("audio-ai-variant"),
+            SUBTITLE_CORE_OPERATION_AUDIO_AI_VARIANT,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("audio-route-preview-divergence"),
+            SUBTITLE_CORE_OPERATION_AUDIO_ROUTE_PREVIEW_DIVERGENCE,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("audio-route-split-decision"),
+            SUBTITLE_CORE_OPERATION_AUDIO_ROUTE_SPLIT_DECISION,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("audio-fast-flatten-filter"),
+            SUBTITLE_CORE_OPERATION_AUDIO_FAST_FLATTEN_FILTER,
+        )
+        self.assertEqual(
+            normalize_subtitle_core_operation("audio-route-sample-span"),
+            SUBTITLE_CORE_OPERATION_AUDIO_ROUTE_SAMPLE_SPAN,
         )
 
 

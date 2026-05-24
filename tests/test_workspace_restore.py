@@ -18,6 +18,7 @@ class _Timeline:
         self.canvas = SimpleNamespace(playhead_sec=0.0)
         self.playhead_calls = []
         self.window_centers = []
+        self._initial_open_view_token = "stale-fit-token"
 
     def set_playhead(self, sec):
         self.canvas.playhead_sec = float(sec)
@@ -34,6 +35,15 @@ class _Editor:
     def __init__(self):
         self.timeline = _Timeline()
         self.video_player = _VideoPlayer()
+        self.sync_calls = []
+
+    def _sync_after_manual_seek(self, sec):
+        self.sync_calls.append(float(sec))
+
+
+class _FailingTextEdit:
+    def document(self):
+        raise AssertionError("workspace restore must not trust stale block numbers when a playhead is restored")
 
 
 class _Owner(WorkspaceMixin):
@@ -60,6 +70,8 @@ class WorkspaceRestoreTests(unittest.TestCase):
         self.assertEqual(editor.video_player.seek_calls, [1444.226])
         self.assertEqual(editor.timeline.playhead_calls, [1444.226])
         self.assertEqual(editor.timeline.window_centers, [1444.226])
+        self.assertEqual(editor.sync_calls, [1444.226])
+        self.assertNotEqual(editor.timeline._initial_open_view_token, "stale-fit-token")
 
     def test_deferred_workspace_restore_does_not_override_recent_seek(self):
         editor = _Editor()
@@ -71,6 +83,7 @@ class WorkspaceRestoreTests(unittest.TestCase):
         self.assertEqual(editor.video_player.seek_calls, [])
         self.assertEqual(editor.timeline.playhead_calls, [])
         self.assertEqual(editor.timeline.window_centers, [977.91])
+        self.assertEqual(editor.sync_calls, [977.91])
 
     def test_deferred_workspace_restore_reapplies_external_seek_after_open_race(self):
         editor = _Editor()
@@ -85,6 +98,24 @@ class WorkspaceRestoreTests(unittest.TestCase):
         self.assertEqual(editor.video_player.seek_calls, [977.91])
         self.assertEqual(editor.timeline.playhead_calls, [977.91])
         self.assertEqual(editor.timeline.window_centers, [977.91])
+        self.assertEqual(editor.sync_calls, [977.91])
+
+    def test_deferred_workspace_restore_uses_time_sync_not_stale_cursor_block(self):
+        editor = _Editor()
+        editor.text_edit = _FailingTextEdit()
+        callback = self._schedule_restore(
+            editor,
+            {
+                "last_playhead": 170.90406666666667,
+                "last_cursor_block": 70,
+            },
+        )
+
+        callback()
+
+        self.assertEqual(editor.video_player.seek_calls, [170.90406666666667])
+        self.assertEqual(editor.timeline.playhead_calls, [170.90406666666667])
+        self.assertEqual(editor.sync_calls, [170.90406666666667])
 
 
 if __name__ == "__main__":

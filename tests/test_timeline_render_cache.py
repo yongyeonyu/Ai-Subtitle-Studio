@@ -18,7 +18,10 @@ from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, RULER_H, SCORE_H
 from ui.timeline.timeline_segment_style import speaker_segment_fill_hex
 from ui.timeline.stt_preview_layout import stt_preview_lane_geometry
 from ui.timeline.paint_passes import build_cut_boundary_work_lane_paint_plan
-from ui.timeline.timeline_roughcut_paint import expanded_roughcut_marker_span
+from ui.timeline.timeline_roughcut_paint import (
+    clamp_expanded_roughcut_marker_spans,
+    expanded_roughcut_marker_span,
+)
 from ui.timeline.timeline_widget import TimelineWidget
 
 
@@ -656,6 +659,18 @@ class TimelineRenderCacheTests(unittest.TestCase):
 
         self.assertEqual(lane_h, 33)
         self.assertEqual(expanded_roughcut_marker_span(100, 140), (90, 150))
+
+    def test_roughcut_marker_expansion_is_clamped_to_avoid_visual_overlap(self):
+        left = expanded_roughcut_marker_span(100, 200)
+        right = expanded_roughcut_marker_span(200, 300)
+
+        clamped = clamp_expanded_roughcut_marker_spans([
+            ("left", 100, 200, left[0], left[1]),
+            ("right", 200, 300, right[0], right[1]),
+        ])
+
+        self.assertEqual([item[0] for item in clamped], ["left", "right"])
+        self.assertLess(clamped[0][2], clamped[1][1])
 
     def test_viewport_paint_clip_limits_full_canvas_resize_repaint(self):
         scroll = QScrollArea()

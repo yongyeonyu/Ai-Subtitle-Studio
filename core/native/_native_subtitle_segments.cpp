@@ -2,7 +2,11 @@
 #include <Python.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -52,6 +56,28 @@ bool read_int_sequence(PyObject* value, std::vector<long>& out) {
     return true;
 }
 
+bool read_text_sequence(PyObject* value, std::vector<std::string>& out) {
+    PyObject* seq = PySequence_Fast(value, "expected a text sequence");
+    if (seq == nullptr) {
+        return false;
+    }
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    out.clear();
+    out.reserve(static_cast<size_t>(std::max<Py_ssize_t>(0, n)));
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject* item = PySequence_Fast_GET_ITEM(seq, i);
+        Py_ssize_t size = 0;
+        const char* text = PyUnicode_AsUTF8AndSize(item, &size);
+        if (text == nullptr) {
+            Py_DECREF(seq);
+            return false;
+        }
+        out.emplace_back(text, static_cast<size_t>(std::max<Py_ssize_t>(0, size)));
+    }
+    Py_DECREF(seq);
+    return true;
+}
+
 int set_item(PyObject* dict, const char* key, PyObject* value) {
     if (value == nullptr) {
         return -1;
@@ -68,11 +94,37 @@ double round6(double value) {
     return std::round(value * 1000000.0) / 1000000.0;
 }
 
+constexpr uint64_t kSegmentFeedSignatureOffset = 1469598103934665603ULL;
+constexpr uint64_t kSegmentFeedSignaturePrime = 1099511628211ULL;
+
+void mix_signature_value(uint64_t& hash, long long value) {
+    // 변경 금지: 최종 subtitle segment feed가 editor/timeline/save-reopen에서 같은 입력인지 검증하는 계약입니다.
+    // Swift/Python fallback과 같은 start/end ms, text length, UTF-8 text hash 순서를 유지해야 싱크 드리프트를 추적할 수 있습니다.
+    hash ^= static_cast<uint64_t>(value);
+    hash *= kSegmentFeedSignaturePrime;
+}
+
+uint64_t text_signature(const std::string& text) {
+    uint64_t hash = kSegmentFeedSignatureOffset;
+    for (unsigned char byte : text) {
+        hash ^= static_cast<uint64_t>(byte);
+        hash *= kSegmentFeedSignaturePrime;
+    }
+    return hash;
+}
+
+std::string signature_hex(uint64_t hash) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return out.str();
+}
+
 PyObject* py_segment_summary(PyObject*, PyObject* args) {
     PyObject* starts_obj = nullptr;
     PyObject* ends_obj = nullptr;
     PyObject* text_lengths_obj = nullptr;
-    if (!PyArg_ParseTuple(args, "OOO:segment_summary", &starts_obj, &ends_obj, &text_lengths_obj)) {
+    PyObject* texts_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OOO|O:segment_summary", &starts_obj, &ends_obj, &text_lengths_obj, &texts_obj)) {
         return nullptr;
     }
 
@@ -82,6 +134,10 @@ PyObject* py_segment_summary(PyObject*, PyObject* args) {
     if (!read_double_sequence(starts_obj, starts) ||
         !read_double_sequence(ends_obj, ends) ||
         !read_int_sequence(text_lengths_obj, text_lengths)) {
+        return nullptr;
+    }
+    std::vector<std::string> texts;
+    if (texts_obj != nullptr && !read_text_sequence(texts_obj, texts)) {
         return nullptr;
     }
 
@@ -94,16 +150,25 @@ PyObject* py_segment_summary(PyObject*, PyObject* args) {
     long total_chars = 0;
     double total_duration = 0.0;
     double max_gap = 0.0;
+    long max_gap_index = -1;
+    double max_overlap = 0.0;
+    long max_overlap_index = -1;
     double previous_start = 0.0;
     double previous_end = 0.0;
     bool has_previous = false;
     double first_start = 0.0;
     double last_end = 0.0;
+    uint64_t segment_feed_signature = kSegmentFeedSignatureOffset;
 
     for (size_t i = 0; i < count; ++i) {
         const double start = starts[i];
         const double end = ends[i];
         const long chars = std::max<long>(0, text_lengths[i]);
+        const uint64_t text_hash = i < texts.size() ? text_signature(texts[i]) : kSegmentFeedSignatureOffset;
+        mix_signature_value(segment_feed_signature, static_cast<long long>(std::llround(start * 1000.0)));
+        mix_signature_value(segment_feed_signature, static_cast<long long>(std::llround(end * 1000.0)));
+        mix_signature_value(segment_feed_signature, static_cast<long long>(chars));
+        mix_signature_value(segment_feed_signature, static_cast<long long>(text_hash));
         if (i == 0) {
             first_start = start;
         }
@@ -124,8 +189,19 @@ PyObject* py_segment_summary(PyObject*, PyObject* args) {
             }
             if (start < previous_end) {
                 ++overlap_count;
+                const double overlap = previous_end - start;
+                // 변경 금지: final segment feed의 일부 구간이 editor/timeline보다 먼저 튀어나오는 drift를 찾는 계약입니다.
+                // Swift/Python fallback과 같은 "현재 세그먼트 index" 기준을 유지해야 X5 artifact 비교가 가능합니다.
+                if (overlap > max_overlap) {
+                    max_overlap = overlap;
+                    max_overlap_index = static_cast<long>(i);
+                }
             } else {
-                max_gap = std::max(max_gap, start - previous_end);
+                const double gap = start - previous_end;
+                if (gap > max_gap) {
+                    max_gap = gap;
+                    max_gap_index = static_cast<long>(i);
+                }
             }
         }
         previous_start = start;
@@ -148,9 +224,13 @@ PyObject* py_segment_summary(PyObject*, PyObject* args) {
         set_item(result, "first_start", PyFloat_FromDouble(round6(first_start))) != 0 ||
         set_item(result, "last_end", PyFloat_FromDouble(round6(last_end))) != 0 ||
         set_item(result, "max_gap", PyFloat_FromDouble(round6(max_gap))) != 0 ||
+        set_item(result, "max_gap_index", PyLong_FromLong(max_gap_index)) != 0 ||
+        set_item(result, "max_overlap", PyFloat_FromDouble(round6(max_overlap))) != 0 ||
+        set_item(result, "max_overlap_index", PyLong_FromLong(max_overlap_index)) != 0 ||
         set_item(result, "max_chars", PyLong_FromLong(max_chars)) != 0 ||
         set_item(result, "avg_chars", PyFloat_FromDouble(round6(avg_chars))) != 0 ||
         set_item(result, "stable_for_save_reopen", PyBool_FromLong(invalid_duration_count == 0 && non_monotonic_count == 0)) != 0 ||
+        set_item(result, "segment_feed_signature", PyUnicode_FromString(signature_hex(segment_feed_signature).c_str())) != 0 ||
         set_item(result, "native_backend", PyUnicode_FromString("cpp")) != 0) {
         Py_DECREF(result);
         return nullptr;

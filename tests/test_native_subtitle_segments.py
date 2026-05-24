@@ -31,7 +31,16 @@ class NativeSubtitleSegmentsTests(unittest.TestCase):
         self.assertEqual(summary["non_monotonic_count"], 1)
         self.assertEqual(summary["overlap_count"], 3)
         self.assertEqual(summary["empty_text_count"], 1)
+        self.assertAlmostEqual(summary["max_overlap"], 0.2, places=6)
+        self.assertEqual(summary["max_overlap_index"], 2)
+        self.assertEqual(summary["max_gap_index"], -1)
+        self.assertEqual(summary["segment_feed_signature"], "f7561398dbe42cf2")
+        self.assertRegex(summary["segment_feed_signature"], r"^[0-9a-f]{16}$")
         self.assertFalse(summary["stable_for_save_reopen"])
+        with patch("core.native_subtitle_segments.native_subtitle_segments_enabled", return_value=False):
+            fallback = native.segment_summary(rows)
+        self.assertEqual(fallback["native_backend"], "python")
+        self.assertEqual(fallback["segment_feed_signature"], summary["segment_feed_signature"])
 
     def test_segment_summary_falls_back_to_python_when_native_disabled(self):
         rows = [
@@ -45,6 +54,10 @@ class NativeSubtitleSegmentsTests(unittest.TestCase):
         self.assertEqual(summary["segment_count"], 2)
         self.assertEqual(summary["invalid_duration_count"], 0)
         self.assertEqual(summary["max_gap"], 0.25)
+        self.assertEqual(summary["max_gap_index"], 1)
+        self.assertEqual(summary["max_overlap"], 0.0)
+        self.assertEqual(summary["max_overlap_index"], -1)
+        self.assertRegex(summary["segment_feed_signature"], r"^[0-9a-f]{16}$")
         self.assertTrue(summary["stable_for_save_reopen"])
 
     def test_swift_segments_summary_bridge_shapes_subtitle_core_payload(self):

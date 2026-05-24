@@ -2908,6 +2908,28 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual(recheck, 8)
 
+    def test_whisperkit_recheck_native_allocator_can_raise_stt2_slots_to_full_core_max(self):
+        with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
+             patch("core.native_resource_allocator.native_task_allocation", return_value={"workers": 10, "compute_units": "all"}) as allocator:
+            recheck = self.processor._whisperkit_concurrent_worker_count(
+                {
+                    "benchmark_runtime_profile": "apple_m_full_core_throughput",
+                    "stt_rescue_whisper_mode": True,
+                    "stt_word_timestamp_precision_pass": False,
+                    "stt_whisperkit_recheck_concurrent_workers": 8,
+                    "stt_whisperkit_recheck_concurrent_max_workers": 10,
+                    "stt_whisperkit_gpu_saturation_max_workers": 10,
+                    "stt_whisperkit_native_allocator_can_raise_workers": True,
+                },
+                total_chunks=10,
+                word_timestamps=False,
+            )
+
+        self.assertEqual(recheck, 10)
+        self.assertEqual(allocator.call_args.args[0], "stt2")
+        self.assertEqual(allocator.call_args.kwargs["requested_workers"], 10)
+        self.assertEqual(allocator.call_args.kwargs["maximum"], 10)
+
     def test_whisperkit_concurrent_workers_native_allocator_can_raise_precision_slots(self):
         with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
              patch("core.native_resource_allocator.native_task_allocation", return_value={"workers": 6, "compute_units": "all"}) as allocator:

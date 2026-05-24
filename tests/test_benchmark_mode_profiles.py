@@ -174,9 +174,18 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
                     "ane_lanes_total": 10,
                     "max_gpu_lanes": 8,
                     "max_ane_lanes": 8,
+                    "gpu_lane_capacity": 8,
+                    "ane_model_lane_capacity": 8,
+                    "gpu_lane_peak_ratio": 1.0,
+                    "ane_model_lane_peak_ratio": 1.0,
+                    "full_gpu_lane_task_count": 1,
+                    "full_ane_model_lane_task_count": 1,
+                    "gpu_lane_peak_saturated": True,
+                    "ane_model_lane_peak_saturated": True,
                     "gpu_tasks": ["stt", "stt_precision", "vad"],
                     "ane_tasks": ["stt", "stt_precision"],
                     "metal_tasks": ["vad"],
+                    "cpp_parity": True,
                     "metal_claims_ane": False,
                 },
             },
@@ -187,6 +196,14 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(summary["gpu_task_count"], 3)
         self.assertEqual(summary["ane_task_count"], 2)
         self.assertEqual(summary["metal_task_count"], 1)
+        self.assertEqual(summary["gpu_lane_capacity"], 8)
+        self.assertEqual(summary["ane_model_lane_capacity"], 8)
+        self.assertEqual(summary["gpu_lane_peak_ratio"], 1.0)
+        self.assertEqual(summary["ane_model_lane_peak_ratio"], 1.0)
+        self.assertEqual(summary["full_gpu_lane_task_count"], 1)
+        self.assertTrue(summary["gpu_lane_peak_saturated"])
+        self.assertTrue(summary["ane_model_lane_peak_saturated"])
+        self.assertTrue(summary["cpp_parity"])
         self.assertFalse(summary["metal_claims_ane"])
         self.assertIn("stt_precision", summary["ane_tasks"])
 
@@ -205,9 +222,13 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
                 "first_start": 0.0,
                 "last_end": 1.8,
                 "max_gap": 0.0,
+                "max_gap_index": -1,
+                "max_overlap": 0.2,
+                "max_overlap_index": 1,
                 "max_chars": 5,
                 "avg_chars": 4.5,
                 "stable_for_save_reopen": True,
+                "segment_feed_signature": "fedcba9876543210",
             },
         ):
             summary = _native_segments_summary_for_variant([{"start": 0.0, "end": 1.0, "text": "테스트"}])
@@ -215,7 +236,11 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(summary["backend"], "swift")
         self.assertEqual(summary["segment_count"], 2)
         self.assertEqual(summary["overlap_count"], 1)
+        self.assertEqual(summary["segment_feed_signature"], "fedcba9876543210")
         self.assertTrue(summary["stable_for_save_reopen"])
+        self.assertEqual(summary["max_gap_index"], -1)
+        self.assertEqual(summary["max_overlap"], 0.2)
+        self.assertEqual(summary["max_overlap_index"], 1)
 
     def test_native_stt_segments_summary_keeps_compact_stt2_counts(self):
         with mock.patch(
@@ -238,9 +263,16 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
                 "stt1_duration": 1.0,
                 "stt2_duration": 2.0,
                 "stt2_coverage_ratio": 0.666667,
+                "stt2_first_start": 1.1,
+                "stt2_last_end": 3.0,
+                "longest_stt2_run_sec": 1.9,
+                "longest_stt2_run_start": 1.1,
+                "longest_stt2_run_end": 3.0,
+                "longest_stt2_run_count": 2,
                 "stt2_active": True,
                 "selective_recheck_active": True,
                 "stable_for_timeline_feed": True,
+                "timeline_feed_signature": "0123456789abcdef",
             },
         ):
             summary = _native_stt_segments_summary_for_variant(
@@ -250,6 +282,11 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(summary["backend"], "swift")
         self.assertEqual(summary["stt2_selected_count"], 2)
         self.assertEqual(summary["recheck_applied_count"], 2)
+        self.assertEqual(summary["stt2_first_start"], 1.1)
+        self.assertEqual(summary["stt2_last_end"], 3.0)
+        self.assertEqual(summary["longest_stt2_run_sec"], 1.9)
+        self.assertEqual(summary["longest_stt2_run_count"], 2)
+        self.assertEqual(summary["timeline_feed_signature"], "0123456789abcdef")
         self.assertTrue(summary["stt2_active"])
         self.assertTrue(summary["stable_for_timeline_feed"])
 
@@ -269,10 +306,13 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
                 "empty_bin_count": 2,
                 "dense_bin_count": 1,
                 "max_bin_active": 2,
+                "max_active_bin_index": 1,
                 "avg_bin_active": 0.8,
                 "coverage_duration": 4.0,
                 "coverage_ratio": 0.4,
                 "longest_empty_span_sec": 2.0,
+                "longest_empty_start_sec": 4.0,
+                "longest_empty_end_sec": 6.0,
                 "max_active_segments": 2,
                 "stable_for_global_canvas": True,
             },
@@ -287,6 +327,9 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(summary["occupied_bin_count"], 3)
         self.assertEqual(summary["dense_bin_count"], 1)
         self.assertEqual(summary["max_active_segments"], 2)
+        self.assertEqual(summary["max_active_bin_index"], 1)
+        self.assertEqual(summary["longest_empty_start_sec"], 4.0)
+        self.assertEqual(summary["longest_empty_end_sec"], 6.0)
         self.assertTrue(summary["stable_for_global_canvas"])
 
     def test_quality_gate_tool_keeps_selective_variant_above_fast_loss(self):
@@ -323,12 +366,27 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
             return_value=None,
         ), mock.patch(
             "tools.benchmark_subtitle_pipeline_variants.cpp_timing_metrics",
-            return_value={"timing_mae_sec": 0.25, "overlap_score": 75.0, "native_backend": "cpp"},
+            return_value={
+                "timing_mae_sec": 0.25,
+                "overlap_score": 75.0,
+                "matched_reference_indices": [0],
+                "max_start_error_sec": 0.2,
+                "max_end_error_sec": 0.3,
+                "max_pair_timing_error_sec": 0.25,
+                "worst_match_hypothesis_index": 0,
+                "worst_match_reference_index": 0,
+                "native_backend": "cpp",
+            },
         ):
             score = score_against_reference(hypothesis, reference)
 
         self.assertEqual(score["timing_metrics_backend"], "cpp")
         self.assertEqual(score["timing_mae_sec"], 0.25)
+        self.assertEqual(score["max_start_error_sec"], 0.2)
+        self.assertEqual(score["max_end_error_sec"], 0.3)
+        self.assertEqual(score["max_pair_timing_error_sec"], 0.25)
+        self.assertEqual(score["worst_match_hypothesis_index"], 0)
+        self.assertEqual(score["worst_match_reference_index"], 0)
         self.assertEqual(score["overlap_score"], 75.0)
         self.assertEqual(score["local_text_score"], 100.0)
 

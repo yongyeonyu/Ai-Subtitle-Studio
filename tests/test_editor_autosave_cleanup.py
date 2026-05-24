@@ -792,6 +792,46 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual(editor._cache_current_segments.call_args.args[0], confirmed)
         editor._redraw_timeline.assert_called_once()
 
+    def test_post_completion_sync_keeps_stt_candidate_lanes_while_dropping_ghost_rows(self):
+        confirmed = [
+            {"start": 135.102, "end": 138.672, "text": "이런거 다 가네"},
+        ]
+        canvas_with_pending = [
+            {"start": 132.9, "end": 133.6, "text": "-", "stt_pending": True, "stt_preview_source": "STT2"},
+            {"start": 135.102, "end": 138.672, "text": "이런거 다 가네"},
+        ]
+        editor = _PostCompletionSyncEditor(confirmed, canvas_with_pending)
+        editor._live_stt_preview_segments = [
+            {"start": 132.9, "end": 133.6, "text": "-", "stt_preview_source": "STT2"},
+            {"start": 137.0, "end": 138.0, "text": "후보", "stt_preview_source": "STT1"},
+        ]
+
+        editor._post_completion_sync()
+
+        self.assertEqual(
+            editor._live_stt_preview_segments,
+            [
+                {"start": 132.9, "end": 133.6, "text": "-", "stt_preview_source": "STT2"},
+                {"start": 137.0, "end": 138.0, "text": "후보", "stt_preview_source": "STT1"},
+            ],
+        )
+        self.assertEqual(editor._cache_current_segments.call_args.args[0], confirmed)
+        editor._redraw_timeline.assert_called_once()
+
+    def test_post_completion_sync_does_not_fit_view_after_roughcut_or_subtitle_completion(self):
+        confirmed = [
+            {"start": 94.995, "end": 96.73, "text": "커피 드는데?"},
+        ]
+        editor = _PostCompletionSyncEditor(confirmed, confirmed)
+        editor.timeline.canvas._multiclip_boxes = [{"start": 0.0, "end": 180.0}]
+        editor.timeline._fit_to_view_locked = False
+        editor.timeline._manual_zoom_since_fit = False
+
+        editor._post_completion_sync()
+
+        editor.timeline.fit_to_view.assert_not_called()
+        editor.timeline.global_canvas.update.assert_called_once()
+
     def test_post_completion_sync_skips_redraw_when_canvas_matches_confirmed_segments(self):
         confirmed = [
             {"start": 94.995, "end": 96.73, "text": "커피 드는데?"},

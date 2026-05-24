@@ -2,7 +2,10 @@
 #include <Python.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 
 namespace {
@@ -68,6 +71,22 @@ double round6(double value) {
     return std::round(value * 1000000.0) / 1000000.0;
 }
 
+constexpr uint64_t kTimelineFeedSignatureOffset = 1469598103934665603ULL;
+constexpr uint64_t kTimelineFeedSignaturePrime = 1099511628211ULL;
+
+void mix_signature_value(uint64_t& hash, long long value) {
+    // 변경 금지: STT 후보 lane -> timeline feed가 같은 입력인지 추적하는 계약입니다.
+    // Swift/Python fallback과 같은 순서/반올림/overflow를 유지해야 자막-에디터 싱크 디버깅이 가능합니다.
+    hash ^= static_cast<uint64_t>(value);
+    hash *= kTimelineFeedSignaturePrime;
+}
+
+std::string signature_hex(uint64_t hash) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return out.str();
+}
+
 PyObject* py_stt_segments_summary(PyObject*, PyObject* args) {
     PyObject* starts_obj = nullptr;
     PyObject* ends_obj = nullptr;
@@ -124,12 +143,50 @@ PyObject* py_stt_segments_summary(PyObject*, PyObject* args) {
     double previous_end = 0.0;
     long previous_source = -1;
     bool has_previous = false;
+    uint64_t timeline_feed_signature = kTimelineFeedSignatureOffset;
+    bool has_stt2 = false;
+    double stt2_first_start = 0.0;
+    double stt2_last_end = 0.0;
+    bool has_current_stt2_run = false;
+    double current_stt2_run_start = 0.0;
+    double current_stt2_run_end = 0.0;
+    long current_stt2_run_count = 0;
+    double longest_stt2_run_sec = 0.0;
+    double longest_stt2_run_start = 0.0;
+    double longest_stt2_run_end = 0.0;
+    long longest_stt2_run_count = 0;
+
+    auto flush_stt2_run = [&]() {
+        if (!has_current_stt2_run) {
+            return;
+        }
+        const double run_sec = std::max(0.0, current_stt2_run_end - current_stt2_run_start);
+        if (run_sec > longest_stt2_run_sec ||
+            (std::abs(run_sec - longest_stt2_run_sec) <= 0.000000001 &&
+             current_stt2_run_count > longest_stt2_run_count)) {
+            longest_stt2_run_sec = run_sec;
+            longest_stt2_run_start = current_stt2_run_start;
+            longest_stt2_run_end = current_stt2_run_end;
+            longest_stt2_run_count = current_stt2_run_count;
+        }
+        has_current_stt2_run = false;
+        current_stt2_run_start = 0.0;
+        current_stt2_run_end = 0.0;
+        current_stt2_run_count = 0;
+    };
 
     for (size_t i = 0; i < count; ++i) {
         const double start = starts[i];
         const double end = ends[i];
         const double duration = std::max(0.0, end - start);
         const long source_code = source_codes[i];
+        const bool is_stt2_source = source_code == 2 || source_code == 3;
+        mix_signature_value(timeline_feed_signature, static_cast<long long>(std::llround(start * 1000.0)));
+        mix_signature_value(timeline_feed_signature, static_cast<long long>(std::llround(end * 1000.0)));
+        mix_signature_value(timeline_feed_signature, static_cast<long long>(source_code));
+        mix_signature_value(timeline_feed_signature, static_cast<long long>(recheck_flags[i] != 0 ? 1 : 0));
+        mix_signature_value(timeline_feed_signature, static_cast<long long>(precision_flags[i] != 0 ? 1 : 0));
+        mix_signature_value(timeline_feed_signature, static_cast<long long>(secondary_hint_flags[i] != 0 ? 1 : 0));
         if (!(end > start)) {
             ++invalid_duration_count;
         } else {
@@ -145,6 +202,28 @@ PyObject* py_stt_segments_summary(PyObject*, PyObject* args) {
             if (previous_source > 0 && source_code > 0 && previous_source != source_code) {
                 ++source_switch_count;
             }
+        }
+        // 변경 금지: STT2/RECHECK 연속 선택 구간은 자막 생성 정책이 아니라 X5/Macau artifact 진단값입니다.
+        // Swift/Python fallback과 동일하게 "연속된 STT2 계열 row"만 묶어 자막-에디터 드리프트 원인 추적에 사용합니다.
+        if (is_stt2_source) {
+            if (!has_stt2) {
+                has_stt2 = true;
+                stt2_first_start = start;
+                stt2_last_end = end;
+            } else {
+                stt2_last_end = std::max(stt2_last_end, end);
+            }
+            if (!has_current_stt2_run) {
+                has_current_stt2_run = true;
+                current_stt2_run_start = start;
+                current_stt2_run_end = end;
+                current_stt2_run_count = 1;
+            } else {
+                current_stt2_run_end = std::max(current_stt2_run_end, end);
+                ++current_stt2_run_count;
+            }
+        } else {
+            flush_stt2_run();
         }
         if (source_code == 1) {
             ++stt1_selected_count;
@@ -169,6 +248,7 @@ PyObject* py_stt_segments_summary(PyObject*, PyObject* args) {
         previous_source = source_code;
         has_previous = true;
     }
+    flush_stt2_run();
 
     const double stt2_coverage_ratio = total_duration > 0.0 ? stt2_duration / total_duration : 0.0;
     PyObject* result = PyDict_New();
@@ -191,9 +271,16 @@ PyObject* py_stt_segments_summary(PyObject*, PyObject* args) {
         set_item(result, "stt1_duration", PyFloat_FromDouble(round6(stt1_duration))) != 0 ||
         set_item(result, "stt2_duration", PyFloat_FromDouble(round6(stt2_duration))) != 0 ||
         set_item(result, "stt2_coverage_ratio", PyFloat_FromDouble(round6(stt2_coverage_ratio))) != 0 ||
+        set_item(result, "stt2_first_start", PyFloat_FromDouble(round6(has_stt2 ? stt2_first_start : 0.0))) != 0 ||
+        set_item(result, "stt2_last_end", PyFloat_FromDouble(round6(has_stt2 ? stt2_last_end : 0.0))) != 0 ||
+        set_item(result, "longest_stt2_run_sec", PyFloat_FromDouble(round6(longest_stt2_run_sec))) != 0 ||
+        set_item(result, "longest_stt2_run_start", PyFloat_FromDouble(round6(longest_stt2_run_start))) != 0 ||
+        set_item(result, "longest_stt2_run_end", PyFloat_FromDouble(round6(longest_stt2_run_end))) != 0 ||
+        set_item(result, "longest_stt2_run_count", PyLong_FromLong(longest_stt2_run_count)) != 0 ||
         set_item(result, "stt2_active", PyBool_FromLong(stt2_selected_count > 0 || recheck_applied_count > 0)) != 0 ||
         set_item(result, "selective_recheck_active", PyBool_FromLong(recheck_applied_count > 0)) != 0 ||
         set_item(result, "stable_for_timeline_feed", PyBool_FromLong(invalid_duration_count == 0 && non_monotonic_count == 0)) != 0 ||
+        set_item(result, "timeline_feed_signature", PyUnicode_FromString(signature_hex(timeline_feed_signature).c_str())) != 0 ||
         set_item(result, "native_backend", PyUnicode_FromString("cpp")) != 0) {
         Py_DECREF(result);
         return nullptr;

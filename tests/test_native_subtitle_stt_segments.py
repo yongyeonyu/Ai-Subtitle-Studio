@@ -47,9 +47,30 @@ class NativeSubtitleSTTSegmentsTests(unittest.TestCase):
         self.assertEqual(summary["secondary_hint_count"], 1)
         self.assertEqual(summary["overlap_count"], 1)
         self.assertEqual(summary["source_switch_count"], 3)
+        self.assertEqual(summary["timeline_feed_signature"], "8003ca89cdc8f7fe")
+        self.assertRegex(summary["timeline_feed_signature"], r"^[0-9a-f]{16}$")
+        self.assertEqual(summary["stt2_first_start"], 1.1)
+        self.assertEqual(summary["stt2_last_end"], 3.0)
+        self.assertEqual(summary["longest_stt2_run_sec"], 0.9)
+        self.assertEqual(summary["longest_stt2_run_start"], 1.1)
+        self.assertEqual(summary["longest_stt2_run_end"], 2.0)
+        self.assertEqual(summary["longest_stt2_run_count"], 1)
         self.assertTrue(summary["stt2_active"])
         self.assertTrue(summary["selective_recheck_active"])
         self.assertTrue(summary["stable_for_timeline_feed"])
+        with patch("core.native_subtitle_stt_segments.native_subtitle_stt_segments_enabled", return_value=False):
+            fallback = native.stt_segments_summary(rows)
+        self.assertEqual(fallback["native_backend"], "python")
+        self.assertEqual(fallback["timeline_feed_signature"], summary["timeline_feed_signature"])
+        for key in (
+            "stt2_first_start",
+            "stt2_last_end",
+            "longest_stt2_run_sec",
+            "longest_stt2_run_start",
+            "longest_stt2_run_end",
+            "longest_stt2_run_count",
+        ):
+            self.assertEqual(fallback[key], summary[key])
 
     def test_stt_segments_summary_falls_back_to_python_when_native_disabled(self):
         rows = [
@@ -63,6 +84,11 @@ class NativeSubtitleSTTSegmentsTests(unittest.TestCase):
         self.assertEqual(summary["stt1_selected_count"], 1)
         self.assertEqual(summary["stt2_selected_count"], 1)
         self.assertEqual(summary["stt2_coverage_ratio"], 0.428571)
+        self.assertEqual(summary["stt2_first_start"], 1.25)
+        self.assertEqual(summary["stt2_last_end"], 2.0)
+        self.assertEqual(summary["longest_stt2_run_sec"], 0.75)
+        self.assertEqual(summary["longest_stt2_run_count"], 1)
+        self.assertRegex(summary["timeline_feed_signature"], r"^[0-9a-f]{16}$")
         self.assertTrue(summary["stt2_active"])
 
     def test_swift_stt_segments_summary_bridge_shapes_subtitle_core_payload(self):

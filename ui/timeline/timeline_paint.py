@@ -48,6 +48,7 @@ from ui.timeline.timeline_analysis import (
     subtitle_score_overlay_marker,
 )
 from ui.timeline.timeline_roughcut_paint import (
+    clamp_expanded_roughcut_marker_spans,
     coalesce_roughcut_paint_markers,
     expanded_roughcut_marker_span,
     visible_roughcut_label_span,
@@ -824,10 +825,14 @@ class TimelinePaintMixin:
                 fill_batches: dict[tuple[str, int], list[QRect]] = {}
                 border_batches: dict[tuple[str, int, int], list[QRect]] = {}
                 label_items: list[tuple[dict, int, int]] = []
+                paint_spans = []
                 for marker in markers:
                     start = max(0.0, float(marker.get("start", 0.0) or 0.0))
                     end = max(start, float(marker.get("end", start) or start))
-                    x1, x2 = expanded_roughcut_marker_span(self._x(start), self._x(end))
+                    raw_x1, raw_x2 = self._x(start), self._x(end)
+                    x1, x2 = expanded_roughcut_marker_span(raw_x1, raw_x2)
+                    paint_spans.append((marker, raw_x1, raw_x2, x1, x2))
+                for marker, x1, x2 in clamp_expanded_roughcut_marker_spans(paint_spans):
                     if x2 < clip.left() or x1 > clip.right():
                         continue
                     color = QColor(str(marker.get("color", "#34C759")))
@@ -854,10 +859,14 @@ class TimelinePaintMixin:
             radius = max(4.0, min(7.0, float(box_h) / 2.1))
             was_antialias = p.renderHints() & QPainter.RenderHint.Antialiasing
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            paint_spans = []
             for marker in markers:
                 start = max(0.0, float(marker.get("start", 0.0) or 0.0))
                 end = max(start, float(marker.get("end", start) or start))
-                x1, x2 = expanded_roughcut_marker_span(self._x(start), self._x(end))
+                raw_x1, raw_x2 = self._x(start), self._x(end)
+                x1, x2 = expanded_roughcut_marker_span(raw_x1, raw_x2)
+                paint_spans.append((marker, raw_x1, raw_x2, x1, x2))
+            for marker, x1, x2 in clamp_expanded_roughcut_marker_spans(paint_spans):
                 if x2 < clip.left() or x1 > clip.right():
                     continue
                 color = QColor(str(marker.get("color", "#34C759")))

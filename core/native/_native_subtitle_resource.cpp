@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -89,12 +90,38 @@ PyObject* string_list(const std::vector<std::string>& values) {
     return list;
 }
 
+bool set_owned_item(PyObject* dict, const char* key, PyObject* value) {
+    if (value == nullptr) {
+        return false;
+    }
+    const int status = PyDict_SetItemString(dict, key, value);
+    Py_DECREF(value);
+    return status == 0;
+}
+
+double round6(double value) {
+    if (!std::isfinite(value)) {
+        return 0.0;
+    }
+    return std::round(value * 1000000.0) / 1000000.0;
+}
+
 PyObject* py_resource_lane_summary(PyObject*, PyObject* args) {
     PyObject* tasks_obj = nullptr;
     PyObject* policies_obj = nullptr;
     PyObject* gpu_lanes_obj = nullptr;
     PyObject* ane_lanes_obj = nullptr;
-    if (!PyArg_ParseTuple(args, "OOOO", &tasks_obj, &policies_obj, &gpu_lanes_obj, &ane_lanes_obj)) {
+    long gpu_lane_capacity_arg = 0;
+    long ane_model_lane_capacity_arg = 0;
+    if (!PyArg_ParseTuple(
+            args,
+            "OOOO|ll",
+            &tasks_obj,
+            &policies_obj,
+            &gpu_lanes_obj,
+            &ane_lanes_obj,
+            &gpu_lane_capacity_arg,
+            &ane_model_lane_capacity_arg)) {
         return nullptr;
     }
 
@@ -117,6 +144,10 @@ PyObject* py_resource_lane_summary(PyObject*, PyObject* args) {
     long ane_total = 0;
     long max_gpu = 0;
     long max_ane = 0;
+    const long gpu_lane_capacity = std::max<long>(0, gpu_lane_capacity_arg);
+    const long ane_model_lane_capacity = std::max<long>(0, ane_model_lane_capacity_arg);
+    long full_gpu_lane_task_count = 0;
+    long full_ane_model_lane_task_count = 0;
 
     for (size_t i = 0; i < count; ++i) {
         const long gpu = std::max<long>(0, gpu_lanes[i]);
@@ -135,25 +166,49 @@ PyObject* py_resource_lane_summary(PyObject*, PyObject* args) {
         if (policy.find("metal") != std::string::npos) {
             append_unique(metal_tasks, tasks[i]);
         }
+        // 변경 금지: ANE physical core 점유율이 아니라 Core ML/WhisperKit 모델 동시 처리 lane 포화 진단이다.
+        // Swift summary와 같은 capacity를 받아 benchmark artifact의 full GPU/ANE 확인에만 사용하고, 정책은 바꾸지 않는다.
+        if (gpu_lane_capacity > 0 && gpu >= gpu_lane_capacity) {
+            ++full_gpu_lane_task_count;
+        }
+        if (ane_model_lane_capacity > 0 && ane >= ane_model_lane_capacity) {
+            ++full_ane_model_lane_task_count;
+        }
     }
+    const double gpu_lane_peak_ratio = gpu_lane_capacity > 0 ? static_cast<double>(max_gpu) / static_cast<double>(gpu_lane_capacity) : 0.0;
+    const double ane_model_lane_peak_ratio =
+        ane_model_lane_capacity > 0 ? static_cast<double>(max_ane) / static_cast<double>(ane_model_lane_capacity) : 0.0;
 
     PyObject* result = PyDict_New();
     if (result == nullptr) {
         return nullptr;
     }
-    PyDict_SetItemString(result, "schema", PyUnicode_FromString("ai_subtitle_studio.subtitle_resource.summary.v1"));
-    PyDict_SetItemString(result, "task_count", PyLong_FromSize_t(count));
-    PyDict_SetItemString(result, "gpu_task_count", PyLong_FromSize_t(gpu_tasks.size()));
-    PyDict_SetItemString(result, "ane_task_count", PyLong_FromSize_t(ane_tasks.size()));
-    PyDict_SetItemString(result, "metal_task_count", PyLong_FromSize_t(metal_tasks.size()));
-    PyDict_SetItemString(result, "gpu_lanes_total", PyLong_FromLong(gpu_total));
-    PyDict_SetItemString(result, "ane_lanes_total", PyLong_FromLong(ane_total));
-    PyDict_SetItemString(result, "max_gpu_lanes", PyLong_FromLong(max_gpu));
-    PyDict_SetItemString(result, "max_ane_lanes", PyLong_FromLong(max_ane));
-    PyDict_SetItemString(result, "gpu_tasks", string_list(gpu_tasks));
-    PyDict_SetItemString(result, "ane_tasks", string_list(ane_tasks));
-    PyDict_SetItemString(result, "metal_tasks", string_list(metal_tasks));
-    PyDict_SetItemString(result, "metal_claims_ane", Py_False);
+    const bool ok =
+        set_owned_item(result, "schema", PyUnicode_FromString("ai_subtitle_studio.subtitle_resource.summary.v1")) &&
+        set_owned_item(result, "task_count", PyLong_FromSize_t(count)) &&
+        set_owned_item(result, "gpu_task_count", PyLong_FromSize_t(gpu_tasks.size())) &&
+        set_owned_item(result, "ane_task_count", PyLong_FromSize_t(ane_tasks.size())) &&
+        set_owned_item(result, "metal_task_count", PyLong_FromSize_t(metal_tasks.size())) &&
+        set_owned_item(result, "gpu_lanes_total", PyLong_FromLong(gpu_total)) &&
+        set_owned_item(result, "ane_lanes_total", PyLong_FromLong(ane_total)) &&
+        set_owned_item(result, "max_gpu_lanes", PyLong_FromLong(max_gpu)) &&
+        set_owned_item(result, "max_ane_lanes", PyLong_FromLong(max_ane)) &&
+        set_owned_item(result, "gpu_lane_capacity", PyLong_FromLong(gpu_lane_capacity)) &&
+        set_owned_item(result, "ane_model_lane_capacity", PyLong_FromLong(ane_model_lane_capacity)) &&
+        set_owned_item(result, "gpu_lane_peak_ratio", PyFloat_FromDouble(round6(gpu_lane_peak_ratio))) &&
+        set_owned_item(result, "ane_model_lane_peak_ratio", PyFloat_FromDouble(round6(ane_model_lane_peak_ratio))) &&
+        set_owned_item(result, "full_gpu_lane_task_count", PyLong_FromLong(full_gpu_lane_task_count)) &&
+        set_owned_item(result, "full_ane_model_lane_task_count", PyLong_FromLong(full_ane_model_lane_task_count)) &&
+        set_owned_item(result, "gpu_lane_peak_saturated", PyBool_FromLong(gpu_lane_capacity > 0 && max_gpu >= gpu_lane_capacity)) &&
+        set_owned_item(result, "ane_model_lane_peak_saturated", PyBool_FromLong(ane_model_lane_capacity > 0 && max_ane >= ane_model_lane_capacity)) &&
+        set_owned_item(result, "gpu_tasks", string_list(gpu_tasks)) &&
+        set_owned_item(result, "ane_tasks", string_list(ane_tasks)) &&
+        set_owned_item(result, "metal_tasks", string_list(metal_tasks)) &&
+        set_owned_item(result, "metal_claims_ane", PyBool_FromLong(0));
+    if (!ok) {
+        Py_DECREF(result);
+        return nullptr;
+    }
     return result;
 }
 

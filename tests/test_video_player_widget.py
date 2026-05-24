@@ -665,7 +665,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
              patch("ui.editor.video_overlay_widgets.scenegraph_enabled", return_value=True):
             self.assertIsNone(SubtitleQuickOverlay.create())
 
-    def test_source_name_badge_lives_on_control_bar_right(self):
+    def test_source_name_badge_lives_in_footer_zone_after_frame_counter(self):
         widget = VideoPlayerWidget()
         try:
             widget.resize(1368, 760)
@@ -690,7 +690,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertIs(label.parentWidget(), widget.status_info_container)
             self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
             control_layout = label.parentWidget().layout()
-            self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
+            self.assertLess(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
             self.assertEqual(control_layout.spacing(), 6)
             self.assertEqual(control_layout.count(), 3)
             self.assertEqual(control_layout.stretch(1), 1)
@@ -699,7 +699,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertLessEqual(widget.source_name_label.maximumWidth(), widget._SOURCE_NAME_BADGE_MAX_WIDTH)
             self.assertGreater(widget.source_name_label.width(), widget.info_label.width())
             self.assertGreaterEqual(widget.source_name_label.width(), widget._SOURCE_NAME_BADGE_MIN_WIDTH)
-            self.assertGreaterEqual(widget.source_name_label.geometry().right(), widget.info_label.geometry().right())
+            self.assertEqual(widget.source_name_label.geometry().left(), 0)
+            self.assertLess(widget.source_name_label.geometry().right(), widget.info_label.geometry().right())
             self.assertIn("background: transparent", widget.info_label.styleSheet())
             self.assertIn("border: none", widget.info_label.styleSheet())
         finally:
@@ -738,6 +739,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(widget.time_label.width(), widget._control_bar_time_width())
             self.assertEqual(widget.frame_count_label.width(), 124)
             self.assertGreaterEqual(widget.source_name_label.width(), widget.info_label.width())
+            self.assertEqual(widget.source_name_label.geometry().left(), 0)
+            self.assertLess(widget.source_name_label.geometry().right(), widget.info_label.geometry().right())
             self.assertLessEqual(widget.source_name_label.geometry().right(), widget.status_info_container.width())
             self.assertLessEqual(widget.source_name_label.geometry().right(), widget._control_bar_widget.width())
             self.assertGreater(widget.source_name_label.width(), 200)

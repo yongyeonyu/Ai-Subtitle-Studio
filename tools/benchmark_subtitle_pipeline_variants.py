@@ -691,9 +691,18 @@ def _native_resource_summary_for_variant(settings: dict[str, Any], *, run_llm: b
         "ane_lanes_total": int(summary.get("ane_lanes_total", 0) or 0),
         "max_gpu_lanes": int(summary.get("max_gpu_lanes", 0) or 0),
         "max_ane_lanes": int(summary.get("max_ane_lanes", 0) or 0),
+        "gpu_lane_capacity": int(summary.get("gpu_lane_capacity", 0) or 0),
+        "ane_model_lane_capacity": int(summary.get("ane_model_lane_capacity", 0) or 0),
+        "gpu_lane_peak_ratio": round(float(summary.get("gpu_lane_peak_ratio", 0.0) or 0.0), 6),
+        "ane_model_lane_peak_ratio": round(float(summary.get("ane_model_lane_peak_ratio", 0.0) or 0.0), 6),
+        "full_gpu_lane_task_count": int(summary.get("full_gpu_lane_task_count", 0) or 0),
+        "full_ane_model_lane_task_count": int(summary.get("full_ane_model_lane_task_count", 0) or 0),
+        "gpu_lane_peak_saturated": bool(summary.get("gpu_lane_peak_saturated", False)),
+        "ane_model_lane_peak_saturated": bool(summary.get("ane_model_lane_peak_saturated", False)),
         "gpu_tasks": list(summary.get("gpu_tasks") or []),
         "ane_tasks": list(summary.get("ane_tasks") or []),
         "metal_tasks": list(summary.get("metal_tasks") or []),
+        "cpp_parity": bool(summary.get("cpp_parity", False)),
         "metal_claims_ane": bool(summary.get("metal_claims_ane", False)),
     }
 
@@ -713,9 +722,13 @@ def _native_segments_summary_for_variant(rows: list[dict[str, Any]]) -> dict[str
         "first_start": round(float(summary.get("first_start", 0.0) or 0.0), 6),
         "last_end": round(float(summary.get("last_end", 0.0) or 0.0), 6),
         "max_gap": round(float(summary.get("max_gap", 0.0) or 0.0), 6),
+        "max_gap_index": int(summary.get("max_gap_index", -1)),
+        "max_overlap": round(float(summary.get("max_overlap", 0.0) or 0.0), 6),
+        "max_overlap_index": int(summary.get("max_overlap_index", -1)),
         "max_chars": int(summary.get("max_chars", 0) or 0),
         "avg_chars": round(float(summary.get("avg_chars", 0.0) or 0.0), 6),
         "stable_for_save_reopen": bool(summary.get("stable_for_save_reopen", False)),
+        "segment_feed_signature": str(summary.get("segment_feed_signature") or ""),
     }
 
 
@@ -740,9 +753,16 @@ def _native_stt_segments_summary_for_variant(rows: list[dict[str, Any]]) -> dict
         "stt1_duration": round(float(summary.get("stt1_duration", 0.0) or 0.0), 6),
         "stt2_duration": round(float(summary.get("stt2_duration", 0.0) or 0.0), 6),
         "stt2_coverage_ratio": round(float(summary.get("stt2_coverage_ratio", 0.0) or 0.0), 6),
+        "stt2_first_start": round(float(summary.get("stt2_first_start", 0.0) or 0.0), 6),
+        "stt2_last_end": round(float(summary.get("stt2_last_end", 0.0) or 0.0), 6),
+        "longest_stt2_run_sec": round(float(summary.get("longest_stt2_run_sec", 0.0) or 0.0), 6),
+        "longest_stt2_run_start": round(float(summary.get("longest_stt2_run_start", 0.0) or 0.0), 6),
+        "longest_stt2_run_end": round(float(summary.get("longest_stt2_run_end", 0.0) or 0.0), 6),
+        "longest_stt2_run_count": int(summary.get("longest_stt2_run_count", 0) or 0),
         "stt2_active": bool(summary.get("stt2_active", False)),
         "selective_recheck_active": bool(summary.get("selective_recheck_active", False)),
         "stable_for_timeline_feed": bool(summary.get("stable_for_timeline_feed", False)),
+        "timeline_feed_signature": str(summary.get("timeline_feed_signature") or ""),
     }
 
 
@@ -780,10 +800,13 @@ def _native_global_canvas_summary_for_variant(
         "empty_bin_count": int(summary.get("empty_bin_count", 0) or 0),
         "dense_bin_count": int(summary.get("dense_bin_count", 0) or 0),
         "max_bin_active": int(summary.get("max_bin_active", 0) or 0),
+        "max_active_bin_index": int(summary.get("max_active_bin_index", -1)),
         "avg_bin_active": round(float(summary.get("avg_bin_active", 0.0) or 0.0), 6),
         "coverage_duration": round(float(summary.get("coverage_duration", 0.0) or 0.0), 6),
         "coverage_ratio": round(float(summary.get("coverage_ratio", 0.0) or 0.0), 6),
         "longest_empty_span_sec": round(float(summary.get("longest_empty_span_sec", 0.0) or 0.0), 6),
+        "longest_empty_start_sec": round(float(summary.get("longest_empty_start_sec", 0.0) or 0.0), 6),
+        "longest_empty_end_sec": round(float(summary.get("longest_empty_end_sec", 0.0) or 0.0), 6),
         "max_active_segments": int(summary.get("max_active_segments", 0) or 0),
         "stable_for_global_canvas": bool(summary.get("stable_for_global_canvas", False)),
     }
@@ -1388,20 +1411,53 @@ def score_against_reference(hypothesis: list[dict[str, Any]], reference: list[di
         avg_timing_error = float(native_timing.get("timing_mae_sec", 0.0) or 0.0)
         overlap_score = float(native_timing.get("overlap_score", 0.0) or 0.0)
         timing_backend = str(native_timing.get("native_backend") or "native")
-        for row in hyp:
-            ref_row = _best_ref_for(row, ref)
-            if ref_row:
-                local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
+        max_start_error = float(native_timing.get("max_start_error_sec", 0.0) or 0.0)
+        max_end_error = float(native_timing.get("max_end_error_sec", 0.0) or 0.0)
+        max_pair_timing_error = float(native_timing.get("max_pair_timing_error_sec", 0.0) or 0.0)
+        worst_match_hypothesis_index = int(native_timing.get("worst_match_hypothesis_index", -1))
+        worst_match_reference_index = int(native_timing.get("worst_match_reference_index", -1))
+        matched_reference_indices = native_timing.get("matched_reference_indices")
+        # Keep benchmark text scoring locked to the exact reference rows selected by
+        # the native timing helper. Re-searching here can drift from Swift/C++ pair
+        # ownership when equal-score timing candidates exist.
+        if isinstance(matched_reference_indices, list) and len(matched_reference_indices) >= len(hyp):
+            for row, ref_index in zip(hyp, matched_reference_indices):
+                try:
+                    ref_row = ref[int(ref_index)]
+                except Exception:
+                    ref_row = _best_ref_for(row, ref)
+                if ref_row:
+                    local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
+        else:
+            for row in hyp:
+                ref_row = _best_ref_for(row, ref)
+                if ref_row:
+                    local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
     else:
         timing_errors: list[float] = []
         overlap_scores: list[float] = []
-        for row in hyp:
+        max_start_error = 0.0
+        max_end_error = 0.0
+        max_pair_timing_error = 0.0
+        worst_match_hypothesis_index = -1
+        worst_match_reference_index = -1
+        for hyp_index, row in enumerate(hyp):
             ref_row = _best_ref_for(row, ref)
             if not ref_row:
                 continue
             start_err = abs(float(row.get("start", 0.0) or 0.0) - float(ref_row.get("start", 0.0) or 0.0))
             end_err = abs(float(row.get("end", 0.0) or 0.0) - float(ref_row.get("end", 0.0) or 0.0))
-            timing_errors.append((start_err + end_err) / 2.0)
+            pair_timing_error = (start_err + end_err) / 2.0
+            timing_errors.append(pair_timing_error)
+            max_start_error = max(max_start_error, start_err)
+            max_end_error = max(max_end_error, end_err)
+            if pair_timing_error > max_pair_timing_error:
+                max_pair_timing_error = pair_timing_error
+                worst_match_hypothesis_index = hyp_index
+                try:
+                    worst_match_reference_index = ref.index(ref_row)
+                except ValueError:
+                    worst_match_reference_index = -1
             span = max(
                 float(row.get("end", 0.0) or 0.0) - float(row.get("start", 0.0) or 0.0),
                 float(ref_row.get("end", 0.0) or 0.0) - float(ref_row.get("start", 0.0) or 0.0),
@@ -1423,6 +1479,11 @@ def score_against_reference(hypothesis: list[dict[str, Any]], reference: list[di
         "global_text_similarity": round(float(text_similarity), 6),
         "text_score": round(text_score, 3),
         "timing_mae_sec": round(avg_timing_error, 4),
+        "max_start_error_sec": round(max_start_error, 4),
+        "max_end_error_sec": round(max_end_error, 4),
+        "max_pair_timing_error_sec": round(max_pair_timing_error, 4),
+        "worst_match_hypothesis_index": worst_match_hypothesis_index,
+        "worst_match_reference_index": worst_match_reference_index,
         "timing_score": round(timing_score, 3),
         "overlap_score": round(overlap_score, 3),
         "timing_metrics_backend": timing_backend,

@@ -153,6 +153,20 @@ class EditorTimelineVideoMixin(
             pass
         return False
 
+    def _ensure_playhead_timer_running(self) -> None:
+        timer = getattr(self, "_playhead_timer", None)
+        if timer is None:
+            return
+        try:
+            if not timer.isActive():
+                # 변경 금지: 홈/러프컷/LLM 종료 경로가 타이머를 잠시 멈춘 뒤
+                # 재생만 다시 살아나면 비디오는 진행되지만 타임라인 playhead와
+                # 자막 에디터가 이전 위치에 남는다. 재생 진입점에서는 반드시
+                # 이 타이머를 살려 영상/타임라인/에디터를 같은 시계에 묶는다.
+                timer.start(self._playhead_active_interval_ms())
+        except Exception:
+            pass
+
 
     # ---------------------------------------------------------
     # Common: Cursor ↔ Block Sync
@@ -768,7 +782,32 @@ class EditorTimelineVideoMixin(
         global_sec = self._snap_to_frame(max(0.0, float(global_sec or 0.0)))
         segs = self._get_current_segments()
         seg = find_segment_at(segs, global_sec, skip_gap=False)
+        if not seg:
+            real_segments = [
+                row for row in list(segs or [])
+                if isinstance(row, dict) and not bool(row.get("is_gap"))
+            ]
+            before = [
+                row for row in real_segments
+                if float(row.get("end", row.get("start", 0.0)) or 0.0) <= global_sec
+            ]
+            after = [
+                row for row in real_segments
+                if float(row.get("start", 0.0) or 0.0) >= global_sec
+            ]
+            prev_seg = before[-1] if before else None
+            next_seg = after[0] if after else None
+            if prev_seg and next_seg:
+                prev_gap = abs(global_sec - float(prev_seg.get("end", prev_seg.get("start", 0.0)) or 0.0))
+                next_gap = abs(float(next_seg.get("start", 0.0) or 0.0) - global_sec)
+                seg = prev_seg if prev_gap <= next_gap else next_seg
+            else:
+                seg = prev_seg or next_seg
         if seg and getattr(self, "_active_seg_start", None) != seg.get("start"):
+            # 변경 금지: 저장된 마지막 재생 위치나 수동 seek가 무음/빈 구간에
+            # 떨어져도 에디터를 0초 자막에 남기면 비디오/타임라인/자막 에디터가
+            # 서로 다른 문장을 보여준다. 빈 구간에서는 가장 가까운 실제 자막으로
+            # 커서를 맞춰 세 화면의 문맥을 같은 구간에 둔다.
             self._sync_cursor_to_seg(seg, sync_playhead=False)
         remember_repeat_segment = getattr(self, "_remember_repeat_segment", None)
         repeat_enabled = getattr(self, "_segment_repeat_enabled", None)

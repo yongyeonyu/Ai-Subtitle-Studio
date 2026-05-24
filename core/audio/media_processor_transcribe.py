@@ -711,13 +711,31 @@ class VideoProcessorTranscribeMixin:
                 from core.native_resource_allocator import native_task_allocation
 
                 task = "stt_precision" if word_timestamps else ("stt2" if recheck_pass else "stt1")
+                allocator_maximum = max(
+                    1,
+                    min(
+                        chunks,
+                        max(
+                            max_workers,
+                            int(data.get("stt_whisperkit_gpu_saturation_max_workers", 8) or 8),
+                        ),
+                    ),
+                )
+                allocator_requested = configured
+                if word_timestamps or recheck_pass:
+                    # 변경 금지: native allocator가 STT2 재검사/단어 정밀 STT의
+                    # ANE/GPU lane을 올릴 수 있어야 한다. 예전 구현은
+                    # requested_workers=configured로 묶여 있어서 full-core 설정의
+                    # 10-lane 상한을 전달해도 Swift allocator가 worker를 높일
+                    # 수 없었고, STT2가 적극적으로 쓰이지 않는 것처럼 보였다.
+                    allocator_requested = max(configured, allocator_maximum)
                 plan = native_task_allocation(
                     task,
                     settings=data,
                     workload=chunks,
-                    requested_workers=configured,
+                    requested_workers=allocator_requested,
                     minimum=1,
-                    maximum=max(1, min(chunks, int(data.get("stt_whisperkit_gpu_saturation_max_workers", 8) or 8))),
+                    maximum=allocator_maximum,
                     active_labels=[task, "stt"],
                 )
                 if isinstance(plan, dict):
@@ -741,6 +759,15 @@ class VideoProcessorTranscribeMixin:
         *,
         fallback: str = "ane_gpu",
     ) -> str:
+        try:
+            from core.native_swift_transcribe_plan import compute_profile_from_native_units_via_swift
+
+            native_profile = compute_profile_from_native_units_via_swift(compute_units, fallback=fallback)
+            if native_profile:
+                return native_profile
+        except Exception:
+            pass
+
         value = str(compute_units or "").strip()
         if not value:
             return fallback
@@ -798,13 +825,37 @@ class VideoProcessorTranscribeMixin:
         data = dict(settings or {})
         rescue_pass = bool(data.get("stt_rescue_whisper_mode", False))
         precision_pass = bool(data.get("stt_word_timestamp_precision_pass", False))
+        enabled_setting = self._setting_bool(data, "stt_duration_first_submission_enabled", True)
+        try:
+            from core.native_swift_transcribe_plan import duration_first_submission_enabled_via_swift
+
+            native = duration_first_submission_enabled_via_swift(
+                rescue_pass=rescue_pass,
+                precision_pass=precision_pass,
+                word_timestamps=word_timestamps,
+                enabled_setting=enabled_setting,
+            )
+            if native is not None:
+                return native
+        except Exception:
+            pass
+
         if not (rescue_pass or precision_pass or word_timestamps):
             return False
-        return self._setting_bool(data, "stt_duration_first_submission_enabled", True)
+        return enabled_setting
 
     def _duration_first_submission_order(self, items: list[dict], settings: dict | None) -> list[int]:
         if len(items or []) <= 1:
             return list(range(len(items or [])))
+        try:
+            from core.native_swift_transcribe_plan import duration_first_order_via_swift
+
+            swift_order = duration_first_order_via_swift(items)
+            if swift_order is not None:
+                return swift_order
+        except Exception:
+            pass
+
         starts = [float(item.get("ov_start_offset", idx) or idx) for idx, item in enumerate(items)]
         durations = [max(0.001, float(item.get("duration", 0.001) or 0.001)) for item in items]
         native_order = None
@@ -846,6 +897,19 @@ class VideoProcessorTranscribeMixin:
         log_label: str,
         word_timestamps: bool,
     ) -> float:
+        try:
+            from core.native_swift_transcribe_plan import stt_worker_silence_timeout_via_swift
+
+            native = stt_worker_silence_timeout_via_swift(
+                settings,
+                log_label=log_label,
+                word_timestamps=word_timestamps,
+            )
+            if native is not None:
+                return native
+        except Exception:
+            pass
+
         data = dict(settings or {})
         precision_pass = bool(data.get("stt_word_timestamp_precision_pass", False))
         label = str(log_label or "").strip()
@@ -867,6 +931,15 @@ class VideoProcessorTranscribeMixin:
         return max(0.05, min(600.0, value))
 
     def _stt_precision_straggler_timeout_sec(self, settings: dict | None) -> float:
+        try:
+            from core.native_swift_transcribe_plan import stt_straggler_config_via_swift
+
+            native = stt_straggler_config_via_swift(settings, mode="precision")
+            if native is not None:
+                return float(native["timeout"])
+        except Exception:
+            pass
+
         data = dict(settings or {})
         try:
             value = float(data.get("stt_word_timestamp_worker_straggler_timeout_sec", 12.0) or 0.0)
@@ -877,6 +950,15 @@ class VideoProcessorTranscribeMixin:
         return max(2.0, min(120.0, value))
 
     def _stt_precision_straggler_max_missing_chunks(self, settings: dict | None) -> int:
+        try:
+            from core.native_swift_transcribe_plan import stt_straggler_config_via_swift
+
+            native = stt_straggler_config_via_swift(settings, mode="precision")
+            if native is not None:
+                return int(native["max_missing_chunks"])
+        except Exception:
+            pass
+
         data = dict(settings or {})
         try:
             value = int(float(data.get("stt_word_timestamp_worker_straggler_max_missing_chunks", 1) or 1))
@@ -885,6 +967,15 @@ class VideoProcessorTranscribeMixin:
         return max(1, min(8, value))
 
     def _stt_precision_straggler_min_received_ratio(self, settings: dict | None) -> float:
+        try:
+            from core.native_swift_transcribe_plan import stt_straggler_config_via_swift
+
+            native = stt_straggler_config_via_swift(settings, mode="precision")
+            if native is not None:
+                return float(native["min_received_ratio"])
+        except Exception:
+            pass
+
         data = dict(settings or {})
         try:
             value = float(data.get("stt_word_timestamp_worker_straggler_min_received_ratio", 0.90) or 0.0)
@@ -895,6 +986,15 @@ class VideoProcessorTranscribeMixin:
         return max(0.50, min(1.0, value))
 
     def _stt_recheck_straggler_timeout_sec(self, settings: dict | None) -> float:
+        try:
+            from core.native_swift_transcribe_plan import stt_straggler_config_via_swift
+
+            native = stt_straggler_config_via_swift(settings, mode="recheck")
+            if native is not None:
+                return float(native["timeout"])
+        except Exception:
+            pass
+
         data = dict(settings or {})
         try:
             value = float(data.get("stt_recheck_worker_straggler_timeout_sec", 18.0) or 0.0)
@@ -905,6 +1005,15 @@ class VideoProcessorTranscribeMixin:
         return max(2.0, min(120.0, value))
 
     def _stt_recheck_straggler_max_missing_chunks(self, settings: dict | None) -> int:
+        try:
+            from core.native_swift_transcribe_plan import stt_straggler_config_via_swift
+
+            native = stt_straggler_config_via_swift(settings, mode="recheck")
+            if native is not None:
+                return int(native["max_missing_chunks"])
+        except Exception:
+            pass
+
         data = dict(settings or {})
         try:
             value = int(float(data.get("stt_recheck_worker_straggler_max_missing_chunks", 4) or 4))
@@ -913,6 +1022,15 @@ class VideoProcessorTranscribeMixin:
         return max(1, min(4, value))
 
     def _stt_recheck_straggler_min_received_ratio(self, settings: dict | None) -> float:
+        try:
+            from core.native_swift_transcribe_plan import stt_straggler_config_via_swift
+
+            native = stt_straggler_config_via_swift(settings, mode="recheck")
+            if native is not None:
+                return float(native["min_received_ratio"])
+        except Exception:
+            pass
+
         data = dict(settings or {})
         try:
             value = float(data.get("stt_recheck_worker_straggler_min_received_ratio", 0.60) or 0.0)
@@ -1305,6 +1423,7 @@ class VideoProcessorTranscribeMixin:
         settings: dict,
         vad_strict: list[dict],
         primary_model: str,
+        target_end_sec: float = None,
         preview_callback=None,
     ) -> list[dict]:
         if not chunk_segs or not self._selective_secondary_recheck_enabled(settings, primary_model):
@@ -1322,10 +1441,14 @@ class VideoProcessorTranscribeMixin:
             get_logger().log(f"  ⚠️ [{context_label}] STT1 점수 계산 실패: {exc}")
             return chunk_segs
 
+        range_settings = dict(settings)
+        if target_end_sec is not None:
+            range_settings["_stt_recheck_target_end_sec"] = float(target_end_sec)
+
         ranges, raw_range_count = build_selective_secondary_recheck_ranges(
             primary_segments=scored_primary,
             vad_segments=vad_strict,
-            settings=settings,
+            settings=range_settings,
             score_fn=self._segment_score_100,
             chunk_path_for_time=lambda target_sec: self._chunk_path_covering_time(chunk_dir, target_sec),
         )
@@ -1477,6 +1600,7 @@ class VideoProcessorTranscribeMixin:
                     settings,
                     vad_strict,
                     primary_model,
+                    target_end_sec=target_end_sec,
                     preview_callback=preview_callback,
                 )
 

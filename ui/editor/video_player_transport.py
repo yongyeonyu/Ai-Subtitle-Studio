@@ -168,6 +168,31 @@ class VideoPlayerTransportMixin:
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(uniform_gap)
 
+        self.source_name_label = _MirrorLabel("")
+        self.source_name_label.setObjectName("VideoSourceNameLabel")
+        # KEEP: the filename starts in the footer status zone directly after
+        # the frame counter. Do not move it back to the far-right edge; the
+        # user-marked red-box area is this label's fixed home.
+        self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.source_name_label.setWordWrap(True)
+        self.source_name_label.setMinimumWidth(self._SOURCE_NAME_BADGE_MIN_WIDTH)
+        self.source_name_label.setMaximumWidth(self._SOURCE_NAME_BADGE_MAX_WIDTH)
+        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.source_name_label.setFixedHeight(self._CONTROL_BADGE_HEIGHT)
+        self.source_name_label.setStyleSheet(
+            "QLabel#VideoSourceNameLabel {"
+            " color: #EAF2F8;"
+            " background: transparent;"
+            " border: none;"
+            " border-radius: 0px;"
+            " padding: 2px 6px 1px 8px;"
+            " font-size: 10px;"
+            " font-weight: 700;"
+            "}"
+        )
+        status_layout.addWidget(self.source_name_label, 0)
+        status_layout.addStretch(1)
+
         self.info_label = _MirrorLabel("영상 정보를 불러오는 중...")
         self.info_label.setObjectName("VideoSourceMetaLabel")
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -187,28 +212,6 @@ class VideoPlayerTransportMixin:
             "}"
         )
         status_layout.addWidget(self.info_label, 0)
-        status_layout.addStretch(1)
-
-        self.source_name_label = _MirrorLabel("")
-        self.source_name_label.setObjectName("VideoSourceNameLabel")
-        self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.source_name_label.setWordWrap(True)
-        self.source_name_label.setMinimumWidth(self._SOURCE_NAME_BADGE_MIN_WIDTH)
-        self.source_name_label.setMaximumWidth(self._SOURCE_NAME_BADGE_MAX_WIDTH)
-        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.source_name_label.setFixedHeight(self._CONTROL_BADGE_HEIGHT)
-        self.source_name_label.setStyleSheet(
-            "QLabel#VideoSourceNameLabel {"
-            " color: #EAF2F8;"
-            " background: transparent;"
-            " border: none;"
-            " border-radius: 0px;"
-            " padding: 2px 6px 1px 8px;"
-            " font-size: 10px;"
-            " font-weight: 700;"
-            "}"
-        )
-        status_layout.addWidget(self.source_name_label, 0)
 
         ctrl_layout.addWidget(self.status_info_container, 1)
         self._update_control_bar_info_layout(force=True)

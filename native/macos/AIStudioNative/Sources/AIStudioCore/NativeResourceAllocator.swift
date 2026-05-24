@@ -10,7 +10,7 @@ public enum NativeResourceAllocator {
         let topology = topologySnapshot(payload: payload)
         let pressureStage = normalizedStage(memory["pressure_stage"])
         let activeLabels = stringArray(payload["active_labels"])
-        let requests = resourceRequests(payload["requests"], activeLabels: activeLabels)
+        let requests = resourceRequests(payload["requests"], activeLabels: activeLabels, settings: settings)
             .sorted { left, right in
                 let leftPriority = taskPriority(left)
                 let rightPriority = taskPriority(right)
@@ -92,7 +92,7 @@ public enum NativeResourceAllocator {
         let performance = max(1, min(logical, intValue(override["performance_cores"]) ?? performanceCoreCount(fallbackPhysical: physical)))
         let efficiencyFallback = max(0, logical - performance)
         let efficiency = max(0, min(logical - performance, intValue(override["efficiency_cores"]) ?? efficiencyFallback))
-        let gpu = max(0, intValue(override["gpu_cores"]) ?? sysctlInt("hw.perflevel0.gpu_core_count") ?? 0)
+        let gpu = max(0, intValue(override["gpu_cores"]) ?? detectedGPUCoreCount(fallbackLogical: logical))
         let neural = max(0, intValue(override["neural_engine_cores"]) ?? 16)
         let memoryBytes = max(0, intValue(override["memory_bytes"]) ?? Int(ProcessInfo.processInfo.physicalMemory))
         return [
@@ -107,14 +107,33 @@ public enum NativeResourceAllocator {
         ]
     }
 
-    private static func resourceRequests(_ raw: Any?, activeLabels: [String]) -> [[String: Any]] {
+    private static func resourceRequests(_ raw: Any?, activeLabels: [String], settings: [String: Any]) -> [[String: Any]] {
         if let requests = raw as? [[String: Any]], !requests.isEmpty {
             return requests
         }
         let pipelineActive = activeLabels.contains("pipeline") || activeLabels.contains("fast")
         let editorActive = activeLabels.contains("editor")
         let subtitleOptimizeActive = activeLabels.contains("subtitle_optimize")
-        return [
+        let stt2Active = activeLabels.contains("stt2")
+            || activeLabels.contains("stt_recheck")
+            || boolValue(settings["stt_selective_secondary_recheck_enabled"])
+            || boolValue(settings["stt_low_score_recheck_enabled"])
+        let stt2Workers = max(
+            1,
+            intValue(settings["stt_whisperkit_recheck_concurrent_max_workers"])
+                ?? intValue(settings["stt_whisperkit_gpu_saturation_max_workers"])
+                ?? (pipelineActive ? 8 : 1)
+        )
+        let stt2ConfiguredWorkers = intValue(settings["stt_whisperkit_recheck_concurrent_workers"])
+        let stt2AllocatorCanRaise = settings["stt_whisperkit_native_allocator_can_raise_workers"] == nil
+            || boolValue(settings["stt_whisperkit_native_allocator_can_raise_workers"])
+        let stt2Requested = max(
+            1,
+            stt2AllocatorCanRaise
+                ? max(stt2ConfiguredWorkers ?? stt2Workers, stt2Workers)
+                : (stt2ConfiguredWorkers ?? stt2Workers)
+        )
+        var requests: [[String: Any]] = [
             ["task": "ui", "workload": 1, "minimum": 1, "priority": 120],
             ["task": "timeline", "workload": editorActive ? 2 : 1, "minimum": 1, "priority": 115],
             ["task": "cut_pioneer", "workload": pipelineActive ? 4 : 1, "minimum": 1, "priority": 110],
@@ -130,6 +149,24 @@ public enum NativeResourceAllocator {
             ["task": "roughcut_llm", "workload": 2, "minimum": 0, "priority": 45],
             ["task": "background", "workload": 4, "minimum": 0, "priority": 10],
         ]
+        if stt2Active {
+            // 변경 금지: STT2는 선택적 재검사 경로의 실제 worker owner다.
+            // resource summary에 STT2를 누락하면 ANE/GPU full-core 계획이
+            // STT1/precision만 쓰는 것처럼 보이고, Python 쪽 STT2 allocator
+            // 상한과 Swift 리포트가 다시 어긋난다.
+            requests.insert(
+                [
+                    "task": "stt2",
+                    "workload": stt2Workers,
+                    "requested_workers": stt2Requested,
+                    "minimum": 1,
+                    "priority": 90,
+                    "model": "whisperkit_turbo",
+                ],
+                at: min(6, requests.count)
+            )
+        }
+        return requests
     }
 
     private static func allocationForRequest(
@@ -700,6 +737,28 @@ public enum NativeResourceAllocator {
             return nil
         }
         return Int(value)
+    }
+
+    private static func detectedGPUCoreCount(fallbackLogical: Int) -> Int {
+        for key in [
+            "hw.perflevel0.gpu_core_count",
+            "hw.gpu_core_count",
+            "hw.optional.gpu_core_count",
+        ] {
+            if let value = sysctlInt(key), value > 0 {
+                return value
+            }
+        }
+        // 변경 금지: 일부 macOS/Apple Silicon 조합은 GPU core sysctl을
+        // 공개하지 않는다. 이때 0으로 두면 resource summary가
+        // `max_gpu_lanes=1`로 축소되어 STT2/정밀 STT의 GPU 사용량이
+        // 실제 full-core 계획보다 낮게 보고된다. Python facade가 넘기는
+        // hardware_profile topology가 최우선이고, Swift 단독 실행에서만
+        // Apple Silicon fallback으로 logical core 수를 lane hint로 쓴다.
+        if sysctlInt("hw.optional.arm64") == 1 {
+            return max(1, fallbackLogical)
+        }
+        return 0
     }
 
     private static func normalizedTask(_ value: Any?) -> String {

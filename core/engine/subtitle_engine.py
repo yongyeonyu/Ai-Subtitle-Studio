@@ -163,26 +163,50 @@ _LOCAL_LLM_BACKOFF_SEC = 60.0
 _LOCAL_LLM_UNAVAILABLE_UNTIL = 0.0
 _LOCAL_LLM_LOCK = threading.Lock()
 _FINAL_FILLER_FRAGMENTS = {
-    "네",
-    "네네",
-    "예",
-    "예예",
-    "응",
-    "음",
-    "어",
-    "아",
+    "네", "네네", "네네네",
+    "예", "예예", "예예예",
+    "응", "응응",
+    "음", "음음", "으음",
+    "어", "어어",
+    "아", "아아",
     "오",
     "와",
+    "흠",
+    "자",
+    "뭐",
+    "그",
+    "저",
 }
-_FINAL_CLOSING_PHRASES = {"감사합니다", "고맙습니다"}
+
+_FINAL_CLOSING_PHRASES = {
+    "감사합니다",
+    "고맙습니다",
+}
+
 _FINAL_DUPLICATE_BRIDGE_TOKENS = {
     "그래서",
+    "그래서요",
+    "그리고",
+    "그리고요",
+    "근데",
+    "그런데",
+    "그러니까",
+    "그러면",
+    "그럼",
     "여기까지",
     "여기까지고",
     "지금까지",
+    "이제",
+    "자",
+    "또",
+    "다음으로",
+    "그다음",
+    "그다음에",
+    "그 다음에",
 }
+
 _FINAL_CONTINUATION_TAIL_RE = re.compile(
-    r"(고|서|데|는데|니까|지만|면서|려고|라서|해서|이며|이고|하고)$"
+    r"(고|서|데|는데|은데|인데|니까|으니까|지만|면서|으면서|려고|으려고|라서|이라서|해서|이며|이고|하고|며|다가|거나|든지|더니|더라도|도록|듯이)$"
 )
 
 
@@ -761,6 +785,15 @@ def _bool_setting(settings: dict, key: str, default: bool = True) -> bool:
 
 def _lora_style_merge_settings(settings: dict | None) -> dict:
     settings = dict(settings or {})
+    try:
+        from core.native_swift_subtitle_lora_merge import lora_merge_settings_via_swift
+
+        native = lora_merge_settings_via_swift(settings)
+        if native is not None:
+            return native
+    except Exception:
+        pass
+
     lora_floor_chars = max(8, _setting_int(settings, "subtitle_lora_split_floor_chars", 20))
     max_chars = max(lora_floor_chars, _setting_int(settings, "split_length_threshold", 20))
     min_duration = max(
@@ -861,6 +894,15 @@ def _lora_readability_merge_reasons(segment: dict, settings: dict | None, merge_
 
 
 def _selective_lora_merge_indexes(rows: list[dict], settings: dict | None, merge_settings: dict) -> tuple[set[int], dict[int, list[str]]]:
+    try:
+        from core.native_swift_subtitle_lora_merge import selective_lora_merge_indexes_via_swift
+
+        native = selective_lora_merge_indexes_via_swift(rows, settings, merge_settings)
+        if native is not None:
+            return native
+    except Exception:
+        pass
+
     selected: set[int] = set()
     reasons_map: dict[int, list[str]] = {}
     for idx, row in enumerate(rows):
@@ -992,6 +1034,15 @@ def _apply_lora_style_micro_merge(
 
 
 def _lora_packaging_mode(settings: dict | None) -> str:
+    try:
+        from core.native_swift_subtitle_lora_merge import lora_packaging_mode_via_swift
+
+        native = lora_packaging_mode_via_swift(settings)
+        if native:
+            return native
+    except Exception:
+        pass
+
     raw = str(dict(settings or {}).get("subtitle_lora_packaging_mode") or "full").strip().lower()
     if raw in {"readability", "readability_selective", "selective"}:
         return "readability_selective"
@@ -1019,6 +1070,26 @@ def _lora_packaging_reasons(segment: dict, settings: dict | None) -> list[str]:
     target_line_count = max(0, _setting_int(settings or {}, "subtitle_target_line_count", 0))
     quality_label = _segment_quality_label(segment)
     quality_score = _segment_quality_score(segment)
+    quality_max_score = _setting_float(settings or {}, "subtitle_lora_packaging_quality_max_score", 84.0)
+    try:
+        from core.native_swift_subtitle_lora_merge import lora_packaging_reasons_via_swift
+
+        native = lora_packaging_reasons_via_swift(
+            threshold=threshold,
+            chars=chars,
+            line_count=len(lines),
+            current_pattern=current_pattern,
+            target_patterns=target_patterns,
+            target_line_count=target_line_count,
+            quality_label=quality_label,
+            quality_score=quality_score,
+            quality_max_score=quality_max_score,
+        )
+        if native is not None:
+            return native
+    except Exception:
+        pass
+
     reasons: list[str] = []
     if len(lines) <= 1 and chars >= max(10, int(threshold * 0.88)):
         reasons.append("single_line_overflow")
@@ -1028,7 +1099,7 @@ def _lora_packaging_reasons(segment: dict, settings: dict | None) -> list[str]:
         reasons.append("line_count_target")
     if quality_label in {"yellow", "red"}:
         reasons.append(f"quality_{quality_label}")
-    elif 0.0 < quality_score < float((settings or {}).get("subtitle_lora_packaging_quality_max_score", 84.0) or 84.0):
+    elif 0.0 < quality_score < quality_max_score:
         reasons.append("low_quality_score")
     return reasons
 
@@ -1048,6 +1119,23 @@ def _packaging_candidate_score(
     line_lengths = [max(1, _split_visible_len(chunk)) for chunk in chunks if str(chunk).strip()]
     if not line_lengths:
         return float("-inf")
+    try:
+        from core.native_swift_subtitle_lora_merge import lora_packaging_candidate_score_via_swift
+
+        native = lora_packaging_candidate_score_via_swift(
+            line_lengths=line_lengths,
+            pattern=pattern,
+            strategy=strategy,
+            current_pattern=current_pattern,
+            target_patterns=target_patterns,
+            target_line_count=target_line_count,
+            threshold=threshold,
+        )
+        if native is not None:
+            return native
+    except Exception:
+        pass
+
     max_line = max(line_lengths)
     min_line = min(line_lengths)
     score = 0.0

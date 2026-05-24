@@ -10,6 +10,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from core.runtime import config
+from core.native_subtitle_global_canvas import global_canvas_merged_segments
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_analysis import (
     preliminary_major_markers_for_widget,
@@ -135,8 +136,11 @@ class GlobalCanvas(GlobalCanvasBase):
         if not self._timeline_has_focus():
             return
         p.setPen(QPen(QColor(FOCUS_BORDER_COLOR), FOCUS_BORDER_WIDTH))
-        y = max(1, self.height() - FOCUS_BORDER_WIDTH)
-        p.drawLine(0, y, self.width(), y)
+        # 변경 금지: QPainter pen은 좌표를 중심으로 그려지므로 하단 끝에
+        # 붙이면 툴바/부모 클립 영역에 절반이 먹힌다. 파란 포커스 라인은
+        # 테두리 두께만큼 위로 올려 글로벌 캔버스 하단에서 항상 보이게 한다.
+        y = max(1, self.height() - (FOCUS_BORDER_WIDTH * 2))
+        p.drawLine(0, y, max(0, self.width() - 1), y)
 
     def set_playhead(self, sec):
         px = self._sec_to_px(sec)
@@ -317,40 +321,39 @@ class GlobalCanvas(GlobalCanvasBase):
         lanes: tuple[str, ...],
         output_lane: str,
     ) -> list[dict]:
-        rows: list[dict] = []
         if width <= 0 or total <= 0:
-            return rows
+            return []
         lane_set = set(str(name) for name in lanes)
         max_gap_sec = float(MINIMAP_SUBTITLE_MERGE_GAP_PX) * float(total) / float(max(1, width))
-        for seg in sorted(list(self.segments or []), key=lambda item: float(item.get("start", 0.0) or 0.0)):
-            if self._minimap_lane_for_segment(seg) not in lane_set:
-                continue
+        rows: list[dict] = []
+        for seg in list(self.segments or []):
             try:
                 start = max(0.0, float(seg.get("start", 0.0) or 0.0))
                 end = max(start, float(seg.get("end", start) or start))
             except Exception:
                 continue
+            lane = self._minimap_lane_for_segment(seg)
+            if lane not in lane_set:
+                continue
             text = str(seg.get("text", "") or "").strip()
-            if rows:
-                prev = rows[-1]
-                if start <= float(prev.get("end", 0.0) or 0.0) + max_gap_sec:
-                    prev["end"] = max(float(prev.get("end", 0.0) or 0.0), end)
-                    if text:
-                        prev_text = str(prev.get("text", "") or "").strip()
-                        if text not in prev_text:
-                            prev["text"] = f"{prev_text} {text}".strip() if prev_text else text
-                    prev["count"] = int(prev.get("count", 1) or 1) + 1
-                    continue
             rows.append(
                 {
                     "start": start,
                     "end": end,
-                    "lane": output_lane,
+                    "lane": lane,
                     "text": text,
-                    "count": 1,
                 }
             )
-        return rows
+        # 변경 금지: 글로벌 캔버스는 같은 두 줄 UI를 유지하고, 여기서는
+        # dense minimap용 interval 병합만 native helper로 넘긴다. 텍스트/시간
+        # 원본 세그먼트나 editor/timeline 시나리오를 이 경로에서 바꾸면 안 된다.
+        return global_canvas_merged_segments(
+            rows,
+            lanes=lanes,
+            output_lane=output_lane,
+            max_gap_sec=max_gap_sec,
+            include_text=True,
+        )
 
     def _merged_minimap_subtitle_segments(self, width: int, total: float, *, lane: str = "SUBTITLE") -> list[dict]:
         return self._merged_minimap_segments(width, total, lanes=(lane,), output_lane=lane)
@@ -384,11 +387,11 @@ class GlobalCanvas(GlobalCanvasBase):
         return rows
 
     def _merged_minimap_silence_segments(self, width: int, total: float) -> list[dict]:
-        rows: list[dict] = []
         if width <= 0 or total <= 0:
-            return rows
+            return []
         max_gap_sec = float(MINIMAP_SUBTITLE_MERGE_GAP_PX) * float(total) / float(max(1, width))
-        for seg in sorted(self._minimap_silence_source_segments(), key=lambda item: float(item.get("start", 0.0) or 0.0)):
+        rows: list[dict] = []
+        for seg in self._minimap_silence_source_segments():
             try:
                 start = max(0.0, float(seg.get("start", 0.0) or 0.0))
                 end = max(start, float(seg.get("end", start) or start))
@@ -396,21 +399,20 @@ class GlobalCanvas(GlobalCanvasBase):
                 continue
             if end <= start:
                 continue
-            if rows:
-                prev = rows[-1]
-                if start <= float(prev.get("end", 0.0) or 0.0) + max_gap_sec:
-                    prev["end"] = max(float(prev.get("end", 0.0) or 0.0), end)
-                    prev["count"] = int(prev.get("count", 1) or 1) + 1
-                    continue
             rows.append(
                 {
                     "start": start,
                     "end": end,
                     "lane": "SILENCE",
-                    "count": 1,
                 }
             )
-        return rows
+        return global_canvas_merged_segments(
+            rows,
+            lanes=("SILENCE",),
+            output_lane="SILENCE",
+            max_gap_sec=max_gap_sec,
+            include_text=False,
+        )
 
     def _bottom_lane_layout(self, bottom_lane: QRect, *, include_stt: bool) -> dict[str, QRect]:
         # KEEP: the global canvas must remain a strict two-row minimap:
@@ -614,9 +616,20 @@ class GlobalCanvas(GlobalCanvasBase):
             wx = int(whisper_sec * sc)
             p.drawRect(0, 0, wx, self.height())
 
-        p.setPen(QPen(QColor(config.ACCENT), 2))
+        p.setPen(QPen(QColor(config.ACCENT), FOCUS_BORDER_WIDTH))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(QRect(int(self.view_start * w), 1, max(1, int((self.view_end - self.view_start) * w)), max(1, self.height() - 3)))
+        # 변경 금지: 초록 뷰포트 테두리의 하단도 파란 포커스 라인과 같은
+        # 이유로 최하단에 붙이면 잘린다. 테두리 두께만큼 위로 당겨 두 선이
+        # 버튼 줄에 가려지지 않게 유지한다.
+        border_inset = max(1, FOCUS_BORDER_WIDTH)
+        p.drawRect(
+            QRect(
+                int(self.view_start * w),
+                border_inset,
+                max(1, int((self.view_end - self.view_start) * w)),
+                max(1, self.height() - (border_inset * 3)),
+            )
+        )
 
         # 선택 클립 라벨 (우상단 숫자만)
         if self._clip_label:

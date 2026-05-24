@@ -8,6 +8,7 @@ from typing import Any
 from core.native_json import dumps_json_text, json_default
 from core.native_swift_subtitle import native_swift_runtime_enabled, request_native_core_task
 from core.runtime.config import IS_MAC
+from core.runtime.hardware_profile import hardware_profile
 from core.runtime.setting_utils import KOREAN_FALSE_VALUES, env_bool as _env_bool, setting_bool as _setting_bool
 
 _CACHE_LOCK = threading.Lock()
@@ -77,6 +78,23 @@ def clear_native_resource_allocation_cache() -> None:
         _CACHE_VALUE = None
 
 
+def _default_topology() -> dict[str, Any]:
+    try:
+        profile = dict(hardware_profile() or {})
+    except Exception:
+        return {}
+    keys = (
+        "logical_cores",
+        "physical_cores",
+        "performance_cores",
+        "efficiency_cores",
+        "gpu_cores",
+        "neural_engine_cores",
+        "memory_bytes",
+    )
+    return {key: int(profile.get(key, 0) or 0) for key in keys if int(profile.get(key, 0) or 0) > 0 or key == "efficiency_cores"}
+
+
 def native_resource_allocation(
     settings: dict[str, Any] | None = None,
     *,
@@ -106,8 +124,9 @@ def native_resource_allocation(
         payload["requests"] = [_request_with_priority(item) for item in requests if isinstance(item, dict)]
     if memory:
         payload["memory"] = dict(memory)
-    if topology:
-        payload["topology"] = dict(topology)
+    resolved_topology = dict(topology or _default_topology())
+    if resolved_topology:
+        payload["topology"] = resolved_topology
     if previous_allocation:
         payload["previous_allocation"] = dict(previous_allocation)
 

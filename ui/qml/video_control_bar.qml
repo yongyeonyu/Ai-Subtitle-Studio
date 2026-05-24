@@ -218,9 +218,9 @@ Rectangle {
 
         Rectangle {
             id: infoBadge
-            anchors.left: parent.left
-            anchors.right: sourceBadge.visible ? sourceBadge.left : parent.right
-            anchors.rightMargin: sourceBadge.visible ? root.groupGap : 0
+            anchors.left: sourceBadge.visible ? sourceBadge.right : parent.left
+            anchors.leftMargin: sourceBadge.visible ? root.groupGap : 0
+            anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             height: 36
             radius: 0
@@ -247,7 +247,7 @@ Rectangle {
 
         Rectangle {
             id: sourceBadge
-            anchors.right: parent.right
+            anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             visible: root.sourceNameText.length > 0
             width: visible ? Math.min(root.sourceWidth, Math.max(0, parent.width - root.groupGap)) : 0
@@ -271,7 +271,10 @@ Rectangle {
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideRight
-                horizontalAlignment: Text.AlignRight
+                // KEEP: filename belongs in the red-box footer zone immediately
+                // after the frame counter. Do not right-anchor it to the far
+                // edge again; long DJI names must start inside this area.
+                horizontalAlignment: Text.AlignLeft
                 verticalAlignment: Text.AlignVCenter
             }
         }

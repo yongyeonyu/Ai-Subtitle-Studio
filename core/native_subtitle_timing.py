@@ -143,10 +143,19 @@ def timing_metrics(
         result = _native.timing_metrics(hyp_starts, hyp_ends, ref_starts, ref_ends)
         if not isinstance(result, dict):
             return None
+        matched_reference_indices = result.get("matched_reference_indices")
+        if not isinstance(matched_reference_indices, list):
+            matched_reference_indices = []
         return {
             "timing_mae_sec": float(result.get("timing_mae_sec", 0.0) or 0.0),
             "overlap_score": float(result.get("overlap_score", 0.0) or 0.0),
             "matched_pairs": int(result.get("matched_pairs", 0) or 0),
+            "matched_reference_indices": [int(index) for index in matched_reference_indices],
+            "max_start_error_sec": float(result.get("max_start_error_sec", 0.0) or 0.0),
+            "max_end_error_sec": float(result.get("max_end_error_sec", 0.0) or 0.0),
+            "max_pair_timing_error_sec": float(result.get("max_pair_timing_error_sec", 0.0) or 0.0),
+            "worst_match_hypothesis_index": int(result.get("worst_match_hypothesis_index", -1)),
+            "worst_match_reference_index": int(result.get("worst_match_reference_index", -1)),
             "native_backend": "cpp",
         }
     except Exception:
