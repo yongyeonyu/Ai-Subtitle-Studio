@@ -4,8 +4,14 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
+
+from core.engine.subtitle_dictionary import (
+    build_subtitle_dictionary_lookup_request,
+    build_subtitle_dictionary_text_update,
+    compact_subtitle_dictionary_text,
+    remove_subtitle_dictionary_wrong_phrases,
+)
 
 from .correction_memory import apply_correction_memory, search_correction_memory
 from .wrong_answer_memory import search_wrong_answer_memory
@@ -19,7 +25,7 @@ def _line_id(segment: dict[str, Any]) -> int:
 
 
 def _compact(text: Any) -> str:
-    return re.sub(r"\s+", "", str(text or ""))
+    return compact_subtitle_dictionary_text(text)
 
 
 def _candidate(candidate_id: str, segment: dict[str, Any], source: str, reason: str, *, score_bonus: float = 0.0, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -37,18 +43,6 @@ def _candidate(candidate_id: str, segment: dict[str, Any], source: str, reason: 
     }
 
 
-def _remove_wrong_phrases(text: str, wrong_items: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-    out = str(text or "")
-    applied: list[dict[str, Any]] = []
-    for item in sorted(wrong_items, key=lambda x: len(str(x.get("phrase", "") or "")), reverse=True):
-        phrase = str(item.get("phrase", "") or "")
-        if phrase and phrase in out:
-            out = out.replace(phrase, "").strip()
-            applied.append(dict(item))
-    out = re.sub(r"\s{2,}", " ", out).strip()
-    return out, applied
-
-
 def generate_quality_candidates(
     segment: dict[str, Any],
     *,
@@ -60,12 +54,27 @@ def generate_quality_candidates(
     base = dict(segment or {})
     candidates: list[dict[str, Any]] = [_candidate("existing", base, "existing", "기존 자막 유지")]
     text = str(base.get("text", "") or "")
+    dictionary_request = build_subtitle_dictionary_lookup_request(
+        text,
+        settings=settings,
+        context=context,
+    )
 
-    if settings.get("correction_memory_enabled", True):
-        memory_path = context.get("correction_memory_path")
-        memory_items = search_correction_memory(text, path=memory_path)
+    if dictionary_request.correction_enabled:
+        memory_items = search_correction_memory(
+            dictionary_request.text,
+            limit=dictionary_request.limit,
+            min_confidence=dictionary_request.min_confidence,
+            path=dictionary_request.correction_memory_path or None,
+        )
         corrected, applied = apply_correction_memory(text, memory_items)
-        if applied and _compact(corrected) != _compact(text):
+        update = build_subtitle_dictionary_text_update(
+            source="correction_memory",
+            before_text=text,
+            after_text=corrected,
+            applied_items=applied,
+        )
+        if applied and update.changed:
             item = dict(base)
             item["text"] = corrected
             candidates.append(
@@ -75,15 +84,24 @@ def generate_quality_candidates(
                     "correction_memory",
                     "사용자 교정 memory 적용",
                     score_bonus=8.0,
-                    metadata={"memory_items": applied},
+                    metadata={"memory_items": applied, "dictionary_update": update.to_dict()},
                 )
             )
 
-    if settings.get("wrong_answer_memory_enabled", True):
-        wrong_path = context.get("wrong_answer_memory_path")
-        wrong_items = search_wrong_answer_memory(text, path=wrong_path)
-        cleaned, applied_wrong = _remove_wrong_phrases(text, wrong_items)
-        if applied_wrong and cleaned and _compact(cleaned) != _compact(text):
+    if dictionary_request.wrong_answer_enabled:
+        wrong_items = search_wrong_answer_memory(
+            dictionary_request.text,
+            limit=dictionary_request.limit,
+            path=dictionary_request.wrong_answer_memory_path or None,
+        )
+        cleaned, applied_wrong = remove_subtitle_dictionary_wrong_phrases(text, wrong_items)
+        update = build_subtitle_dictionary_text_update(
+            source="wrong_answer_memory",
+            before_text=text,
+            after_text=cleaned,
+            applied_items=applied_wrong,
+        )
+        if applied_wrong and cleaned and update.changed:
             item = dict(base)
             item["text"] = cleaned
             candidates.append(
@@ -93,11 +111,11 @@ def generate_quality_candidates(
                     "wrong_answer_memory",
                     "오답 memory phrase 제거",
                     score_bonus=6.0,
-                    metadata={"wrong_answer_items": applied_wrong},
+                    metadata={"wrong_answer_items": applied_wrong, "dictionary_update": update.to_dict()},
                 )
             )
 
-    stripped = re.sub(r"\s+", " ", text).strip()
+    stripped = " ".join(text.split())
     if stripped and stripped != text:
         item = dict(base)
         item["text"] = stripped

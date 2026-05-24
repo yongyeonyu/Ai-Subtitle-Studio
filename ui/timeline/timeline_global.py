@@ -10,7 +10,12 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from core.runtime import config
-from core.native_subtitle_global_canvas import global_canvas_merged_segments
+from core.engine.subtitle_global_canvas import (
+    merged_global_canvas_minimap_segments,
+    merged_global_canvas_silence_segments,
+    subtitle_global_canvas_lane_for_segment,
+)
+from core.engine.subtitle_waveform import build_waveform_columns
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_analysis import (
     preliminary_major_markers_for_widget,
@@ -19,7 +24,6 @@ from ui.timeline.timeline_analysis import (
 )
 from ui.dialogs.qml_popup import show_context_menu
 from ui.gpu_rendering import configure_lightweight_paint
-from ui.timeline.timeline_segment_style import stt_preview_source
 from ui.ux.apple_black_palette import APPLE_BLACK_MINIMAP
 
 GLOBAL_TIMELINE_RENDER_BACKEND_2D = "qwidget-2d"
@@ -269,49 +273,17 @@ class GlobalCanvas(GlobalCanvasBase):
             return []
         if self._waveform_columns and len(self._waveform_columns) == width:
             return self._waveform_columns
-        wf = self._waveform
-        try:
-            from core.native_swift_timeline import build_waveform_columns_via_swift
-
-            native_columns = build_waveform_columns_via_swift(
-                wf,
-                width=width,
-                total_duration=total,
-                vad_segments=list(self.vad_segments or []),
-            )
-            if native_columns is not None and len(native_columns) == width:
-                self._waveform_columns = native_columns
-                return native_columns
-        except Exception:
-            pass
-        wf_len = len(wf)
-        speech_ranges: list[tuple[int, int]] = []
-        if self.vad_segments:
-            vad_scale = (wf_len / total) if total and total > 0 else 100.0
-            for vs in self.vad_segments:
-                try:
-                    s_idx = max(0, int(float(vs["start"]) * vad_scale))
-                    e_idx = min(wf_len, int(float(vs["end"]) * vad_scale) + 1)
-                except Exception:
-                    continue
-                if e_idx > s_idx:
-                    speech_ranges.append((s_idx, e_idx))
-        columns: list[tuple[int, bool]] = []
-        range_idx = 0
-        for x in range(width):
-            idx = min(wf_len - 1, int((x / max(1, width)) * wf_len))
-            while range_idx < len(speech_ranges) and idx >= speech_ranges[range_idx][1]:
-                range_idx += 1
-            in_speech = range_idx < len(speech_ranges) and speech_ranges[range_idx][0] <= idx < speech_ranges[range_idx][1]
-            columns.append((max(1, int(float(wf[idx]) * 14)), in_speech))
+        columns = build_waveform_columns(
+            self._waveform,
+            width=width,
+            total_duration=total,
+            vad_segments=list(self.vad_segments or []),
+        )
         self._waveform_columns = columns
         return columns
 
     def _minimap_lane_for_segment(self, seg: dict) -> str:
-        if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
-            source = stt_preview_source(seg)
-            return "STT2" if source == "STT2" else "STT1"
-        return "SUBTITLE"
+        return subtitle_global_canvas_lane_for_segment(seg)
 
     def _merged_minimap_segments(
         self,
@@ -321,37 +293,16 @@ class GlobalCanvas(GlobalCanvasBase):
         lanes: tuple[str, ...],
         output_lane: str,
     ) -> list[dict]:
-        if width <= 0 or total <= 0:
-            return []
-        lane_set = set(str(name) for name in lanes)
-        max_gap_sec = float(MINIMAP_SUBTITLE_MERGE_GAP_PX) * float(total) / float(max(1, width))
-        rows: list[dict] = []
-        for seg in list(self.segments or []):
-            try:
-                start = max(0.0, float(seg.get("start", 0.0) or 0.0))
-                end = max(start, float(seg.get("end", start) or start))
-            except Exception:
-                continue
-            lane = self._minimap_lane_for_segment(seg)
-            if lane not in lane_set:
-                continue
-            text = str(seg.get("text", "") or "").strip()
-            rows.append(
-                {
-                    "start": start,
-                    "end": end,
-                    "lane": lane,
-                    "text": text,
-                }
-            )
         # 변경 금지: 글로벌 캔버스는 같은 두 줄 UI를 유지하고, 여기서는
         # dense minimap용 interval 병합만 native helper로 넘긴다. 텍스트/시간
         # 원본 세그먼트나 editor/timeline 시나리오를 이 경로에서 바꾸면 안 된다.
-        return global_canvas_merged_segments(
-            rows,
+        return merged_global_canvas_minimap_segments(
+            self.segments,
+            width=width,
+            total=total,
             lanes=lanes,
             output_lane=output_lane,
-            max_gap_sec=max_gap_sec,
+            merge_gap_px=MINIMAP_SUBTITLE_MERGE_GAP_PX,
             include_text=True,
         )
 
@@ -387,31 +338,11 @@ class GlobalCanvas(GlobalCanvasBase):
         return rows
 
     def _merged_minimap_silence_segments(self, width: int, total: float) -> list[dict]:
-        if width <= 0 or total <= 0:
-            return []
-        max_gap_sec = float(MINIMAP_SUBTITLE_MERGE_GAP_PX) * float(total) / float(max(1, width))
-        rows: list[dict] = []
-        for seg in self._minimap_silence_source_segments():
-            try:
-                start = max(0.0, float(seg.get("start", 0.0) or 0.0))
-                end = max(start, float(seg.get("end", start) or start))
-            except Exception:
-                continue
-            if end <= start:
-                continue
-            rows.append(
-                {
-                    "start": start,
-                    "end": end,
-                    "lane": "SILENCE",
-                }
-            )
-        return global_canvas_merged_segments(
-            rows,
-            lanes=("SILENCE",),
-            output_lane="SILENCE",
-            max_gap_sec=max_gap_sec,
-            include_text=False,
+        return merged_global_canvas_silence_segments(
+            self._minimap_silence_source_segments(),
+            width=width,
+            total=total,
+            merge_gap_px=MINIMAP_SUBTITLE_MERGE_GAP_PX,
         )
 
     def _bottom_lane_layout(self, bottom_lane: QRect, *, include_stt: bool) -> dict[str, QRect]:

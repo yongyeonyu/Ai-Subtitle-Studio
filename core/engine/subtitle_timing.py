@@ -2,13 +2,21 @@
 # Phase: PHASE2
 """Final subtitle timing and frame-field adjustment helpers."""
 
+from core.engine.subtitle_timing_contracts import (
+    COMMON_SPLIT_GUARD_SCHEMA,
+    TIMING_FUSION_SCHEMA,
+    build_timing_frame_fields,
+    build_timing_fusion_policy,
+    compact_timing_text,
+    segment_scope_key,
+    segment_time_bounds,
+    timing_float,
+)
 from core.engine.subtitle_settings import _get_user_settings, _setting_float
 from core.frame_time import (
     frame_to_sec,
     normalize_fps,
-    sec_to_ceil_frame,
     sec_to_frame,
-    sec_to_nearest_frame,
 )
 from core.runtime.logger import get_logger
 
@@ -18,8 +26,10 @@ except Exception:  # pragma: no cover - optional macOS native bridge
     plan_common_split_via_swift = None  # type: ignore[assignment]
 
 
-TIMING_FUSION_SCHEMA = "ai_subtitle_studio.subtitle_timing_fusion.v1"
-COMMON_SPLIT_GUARD_SCHEMA = "ai_subtitle_studio.common_subtitle_split_guard.v1"
+_as_float = timing_float
+_compact_text = compact_timing_text
+_segment_scope_key = segment_scope_key
+_time_bounds = segment_time_bounds
 
 
 def _setting_bool(settings: dict, key: str, default: bool = True) -> bool:
@@ -43,34 +53,6 @@ def _clamp_int(value, lo: int, hi: int, default: int) -> int:
     except Exception:
         raw = int(default)
     return max(lo, min(hi, raw))
-
-
-def _segment_scope_key(seg: dict):
-    clip_idx = seg.get("_clip_idx")
-    if clip_idx is not None:
-        clip_key = ("clip_idx", str(clip_idx))
-    else:
-        clip_file = seg.get("_clip_file") or seg.get("clip_file")
-        if clip_file:
-            clip_key = ("clip_file", str(clip_file))
-        else:
-            clip_key = None
-
-    cut_scene = seg.get("cut_scene_index")
-    cut_start = seg.get("cut_scene_start_frame", seg.get("cut_scene_start"))
-    cut_end = seg.get("cut_scene_end_frame", seg.get("cut_scene_end"))
-    if cut_scene is not None or cut_start is not None or cut_end is not None:
-        return (
-            "cut_scene",
-            clip_key,
-            str(cut_scene if cut_scene is not None else ""),
-            str(cut_start if cut_start is not None else ""),
-            str(cut_end if cut_end is not None else ""),
-        )
-
-    if clip_key is not None:
-        return clip_key
-    return None
 
 
 def _cut_scene_bounds(seg: dict) -> tuple[float | None, float | None]:
@@ -232,9 +214,6 @@ def _same_timing_scope(prev: dict, cur: dict) -> bool:
 
 def _update_frame_fields(seg: dict, start: float, end: float) -> None:
     fps_value = seg.get("timeline_frame_rate") or seg.get("frame_rate") or seg.get("fps")
-    if fps_value in (None, ""):
-        return
-    fps = normalize_fps(fps_value)
     start_anchor, _ = _subtitle_start_anchor(seg)
     end_anchor, _ = _subtitle_end_anchor(seg)
     anchor_safe = bool(
@@ -243,40 +222,10 @@ def _update_frame_fields(seg: dict, start: float, end: float) -> None:
         or start_anchor is not None
         or end_anchor is not None
     )
-    if anchor_safe:
-        start_frame = sec_to_nearest_frame(start, fps)
-        if frame_to_sec(start_frame, fps) + 1e-9 < float(start):
-            start_frame = sec_to_ceil_frame(start, fps)
-        end_frame = sec_to_nearest_frame(end, fps)
-        if frame_to_sec(end_frame, fps) + 1e-9 < float(end):
-            end_frame = sec_to_ceil_frame(end, fps)
-    else:
-        start_frame = sec_to_frame(start, fps)
-        end_frame = sec_to_frame(end, fps)
-    end_frame = max(start_frame + 1, end_frame)
-    seg["timeline_start_frame"] = start_frame
-    seg["timeline_end_frame"] = end_frame
-    seg["start_frame"] = start_frame
-    seg["end_frame"] = end_frame
-    seg["frame_rate"] = fps
-    seg["timeline_frame_rate"] = fps
-    seg["timeline_start"] = frame_to_sec(start_frame, fps)
-    seg["timeline_end"] = frame_to_sec(end_frame, fps)
-    seg["start"] = seg["timeline_start"]
-    seg["end"] = seg["timeline_end"]
-    seg["frame_range"] = {
-        "unit": "frame",
-        "start": start_frame,
-        "end": end_frame,
-        "timeline_frame_rate": fps,
-    }
-
-
-def _as_float(value, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
+    fields = build_timing_frame_fields(start, end, fps_value, anchor_safe=anchor_safe)
+    if fields is None:
+        return
+    seg.update(fields)
 
 
 def _as_time(row: dict) -> float | None:
@@ -316,12 +265,6 @@ def _lora_split_floor_chars(settings: dict, segment: dict) -> int:
     return _clamp_int(settings.get("subtitle_lora_split_floor_chars"), 12, 36, 20)
 
 
-def _time_bounds(row: dict) -> tuple[float, float]:
-    start = _as_float(row.get("start", row.get("timeline_start", 0.0)))
-    end = _as_float(row.get("end", row.get("timeline_end", start)), start)
-    return start, max(start, end)
-
-
 def _word_span(seg: dict) -> tuple[float, float] | None:
     words = [word for word in list(seg.get("words") or []) if isinstance(word, dict)]
     if not words:
@@ -344,10 +287,6 @@ def _word_span(seg: dict) -> tuple[float, float] | None:
     ):
         return None
     return start, end
-
-
-def _compact_text(value: object) -> str:
-    return "".join(str(value or "").split()).lower()
 
 
 def _selected_stt_candidate_span(seg: dict) -> tuple[float, float] | None:
@@ -969,17 +908,13 @@ def apply_timing_fusion_policy(segment: dict, settings: dict | None = None) -> d
         return seg
     seg["start"] = start
     seg["end"] = end
-    seg["_timing_fusion_policy"] = {
-        "schema": TIMING_FUSION_SCHEMA,
-        "task": "subtitle_timing_fusion",
-        "old_start": round(old_start, 3),
-        "old_end": round(old_end, 3),
-        "new_start": start,
-        "new_end": end,
-        "start_shift": round(start - old_start, 4),
-        "end_shift": round(end - old_end, 4),
-        "evidence": evidence,
-    }
+    seg["_timing_fusion_policy"] = build_timing_fusion_policy(
+        old_start=old_start,
+        old_end=old_end,
+        new_start=start,
+        new_end=end,
+        evidence=evidence,
+    )
     return seg
 
 

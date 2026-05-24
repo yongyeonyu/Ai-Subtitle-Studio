@@ -30,6 +30,8 @@ from core.runtime.setting_utils import setting_bool as _setting_bool
 from core.runtime.subtitle_resource_manager import (
     active_runtime_labels_from_window,
     apple_m_accelerator_flag_report,
+    mixed_accelerator_parallelism_floor as _mixed_accelerator_parallelism_floor,
+    normalize_accelerator_name as _normalize_accelerator_name,
 )
 
 # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
@@ -392,47 +394,6 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         "full_parallel_stt_experiment": accelerator_flags["full_parallel_stt_experiment"],
     }
     return merged
-
-
-def _normalize_accelerator_name(value: Any) -> str:
-    raw = str(value or "").strip().lower()
-    if not raw:
-        return "cpu"
-    if raw in {"ane", "ne", "npu", "coreml", "neural_engine", "apple-neural-engine"}:
-        return "npu"
-    if raw in {"gpu", "cuda", "mps", "metal", "mlx"}:
-        return "gpu"
-    return "cpu"
-
-
-def _mixed_accelerator_parallelism_floor(task: str, accelerators: list[str], workload: int) -> int:
-    task_key = str(task or "").strip().lower()
-    if workload <= 1 or task_key not in {
-        "stt",
-        "stt_window",
-        "stt_precision",
-        "vad",
-        "diarize",
-        "audio_ml",
-        "ml",
-        "subtitle_llm",
-        "subtitle_optimize",
-        "roughcut_llm",
-    }:
-        return 0
-    normalized: list[str] = []
-    for item in accelerators:
-        name = _normalize_accelerator_name(item)
-        if name not in normalized:
-            normalized.append(name)
-    non_cpu = [item for item in normalized if item != "cpu"]
-    if len(non_cpu) >= 2:
-        if task_key in {"stt", "stt_window", "stt_precision"}:
-            return max(2, min(int(workload), len(non_cpu) + 1))
-        return max(2, min(int(workload), len(non_cpu) + (1 if "cpu" in normalized else 0)))
-    if len(non_cpu) == 1 and "cpu" in normalized:
-        return min(int(workload), 2)
-    return 0
 
 
 def _cut_boundary_topology_worker_limit(

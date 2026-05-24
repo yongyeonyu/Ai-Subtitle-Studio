@@ -22,12 +22,34 @@ APP_BUNDLE_EXECUTABLE = ROOT / "dist" / "macos" / "AI Subtitle Studio.app" / "Co
 APP_BUNDLE_MAIN = ROOT / "dist" / "macos" / "AI Subtitle Studio.app" / "Contents" / "Resources" / "app" / "main.py"
 
 MACAU_PROJECT = ROOT / "projects" / "DJI_20260217224203_0075_D.aissproj"
+MACAU_MEDIA = Path(
+    os.environ.get(
+        "AI_SUBTITLE_STUDIO_QA_MACAU_MEDIA",
+        "/Users/u_mo_c/Downloads/마카오테스트/DJI_20260217224203_0075_D.MP4",
+    )
+).expanduser()
+MACAU_SRT_CANDIDATES = (
+    Path(
+        os.environ.get(
+            "AI_SUBTITLE_STUDIO_QA_MACAU_SRT",
+            "/Users/u_mo_c/Downloads/마카오테스트/DJI_20260217224203_0075_D_화자.srt",
+        )
+    ).expanduser(),
+    Path("/Users/u_mo_c/Downloads/마카오테스트/DJI_20260217224203_0075_D.srt").expanduser(),
+)
 X5_MEDIA = ROOT / "test video" / "X5_시승기_후반.MP4"
 
 
 def _default_output_dir(profile: str) -> Path:
     stamp = time.strftime("%Y%m%d_%H%M%S")
     return LATEST_DIR / f"qa_suite_{profile}_{stamp}"
+
+
+def _resolve_output_dir(output_dir: Path | str) -> Path:
+    path = Path(output_dir).expanduser()
+    if path.is_absolute():
+        return path
+    return (ROOT / path).resolve()
 
 
 def _step(
@@ -62,6 +84,77 @@ def _app_sequence(
     }
 
 
+def _existing_macau_srt() -> Path | None:
+    for path in MACAU_SRT_CANDIDATES:
+        candidate = Path(path).expanduser()
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _fallback_macau_srt(fixture_dir: Path) -> Path:
+    path = fixture_dir / "DJI_20260217224203_0075_D_fallback.srt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(
+            "1\n"
+            "00:00:01,000 --> 00:00:02,200\n"
+            "마카오 검증 자막\n\n"
+            "2\n"
+            "00:00:03,000 --> 00:00:04,300\n"
+            "편집 자동화 확인\n",
+            encoding="utf-8",
+        )
+    return path
+
+
+def _macau_project_for_suite(output_root: Path) -> Path:
+    if MACAU_PROJECT.is_file():
+        return MACAU_PROJECT
+
+    media_path = MACAU_MEDIA.expanduser()
+    if not media_path.is_file():
+        return MACAU_PROJECT
+
+    fixture_dir = output_root / "_suite_fixtures"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    fixture_project = fixture_dir / MACAU_PROJECT.name
+    if fixture_project.is_file():
+        return fixture_project
+
+    srt_path = _existing_macau_srt() or _fallback_macau_srt(fixture_dir)
+    try:
+        from core.project import project_manager
+
+        previous_projects_dir = project_manager.PROJECTS_DIR
+        project_manager.PROJECTS_DIR = str(fixture_dir)
+        try:
+            created = project_manager.create_project(
+                fixture_project.stem,
+                media_paths=[str(media_path)],
+                srt_path=str(srt_path),
+                user_settings={"project_external_srt_storage_enabled": True},
+                prefill_analysis_artifacts=False,
+            )
+        finally:
+            project_manager.PROJECTS_DIR = previous_projects_dir
+        created_path = Path(created)
+        return created_path if created_path.is_file() else fixture_project
+    except Exception as exc:
+        _write_json(
+            fixture_dir / "macau_fixture_error.json",
+            {
+                "ok": False,
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "media": str(media_path),
+                "srt": str(srt_path),
+                "fallback_project": str(MACAU_PROJECT),
+            },
+        )
+        return MACAU_PROJECT
+
+
 def _full_media(
     scenario_id: str,
     output_dir: Path,
@@ -87,10 +180,11 @@ def build_feature_template_scenario(
     *,
     scenario_id: str = "template_new_feature_macau",
     description: str = "Template scenario for future UX automation expansion.",
-    project_path: str | Path = MACAU_PROJECT,
+    project_path: str | Path | None = None,
     extra_steps: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     scenario_dir = output_root / str(scenario_id)
+    project_path = project_path or _macau_project_for_suite(output_root)
     steps = [
         _step("open_project", "open-project", str(project_path), timeout=60.0, delay_sec=2.0),
         _step(
@@ -122,6 +216,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
         raise ValueError(f"unsupported profile: {profile}")
 
     scenarios: list[dict[str, Any]] = []
+    macau_project = _macau_project_for_suite(output_root)
 
     editor_dir = output_root / "editor_compact_macau"
     scenarios.append(
@@ -130,7 +225,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
             editor_dir,
             description="Compact editor action path on Macau project.",
             steps=[
-                _step("open_project", "open-project", str(MACAU_PROJECT), timeout=60.0, delay_sec=2.0),
+                _step("open_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
                 _step("capture_initial", "capture-snapshot", str(editor_dir / "snapshots" / "initial.png"), wait_for_path=str(editor_dir / "snapshots" / "initial.png")),
                 _step("set_playhead", "editor-set-playhead", "1.5", "--center", delay_sec=1.0),
                 _step("begin_smart_split", "editor-begin-smart-split", "--at-playhead", delay_sec=0.5),
@@ -155,7 +250,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                 video_dir,
                 description="Playback and video menu smoke on Macau project.",
                 steps=[
-                    _step("open_project", "open-project", str(MACAU_PROJECT), timeout=60.0, delay_sec=2.0),
+                    _step("open_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
                     _step("play", "editor-playback", "play", delay_sec=0.5),
                     _step("pause", "editor-playback", "pause", delay_sec=0.5),
                     _step("video_hide", "editor-video", "hide", delay_sec=0.5),
@@ -174,7 +269,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                 save_dir,
                 description="Project save, subtitle save, export, and subtitle video export on Macau project.",
                 steps=[
-                    _step("open_project", "open-project", str(MACAU_PROJECT), timeout=60.0, delay_sec=2.0),
+                    _step("open_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
                     _step("save_project", "save-project", timeout=60.0),
                     _step("save_subtitles", "save-subtitles", timeout=60.0),
                     _step("export_subtitles", "export-subtitles", str(save_dir / "exports" / "manual_export.srt"), timeout=60.0),
@@ -192,7 +287,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                 menu_dir,
                 description="Settings, speaker, dictionary, STT, and LoRA coverage on Macau project.",
                 steps=[
-                    _step("open_project", "open-project", str(MACAU_PROJECT), timeout=60.0, delay_sec=2.0),
+                    _step("open_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
                     _step("open_settings", "open-settings", delay_sec=0.5),
                     _step("capture_settings", "capture-active-dialog", str(menu_dir / "menu" / "settings_dialog.png"), wait_for_path=str(menu_dir / "menu" / "settings_dialog.png")),
                     _step("close_settings", "close-active-dialog", delay_sec=0.5),
@@ -710,6 +805,7 @@ def _suite_markdown(summary: dict[str, Any]) -> str:
 
 
 def run_suite(profile: str, output_dir: Path, python_bin: Path) -> int:
+    output_dir = _resolve_output_dir(output_dir)
     scenarios = build_scenarios(profile, output_dir)
     bootstrap = _ensure_app_ready(python_bin, output_dir=output_dir)
     manifest = {
@@ -797,7 +893,7 @@ def main() -> int:
     parser.add_argument("--python-bin", default=str(DEFAULT_PYTHON))
     args = parser.parse_args()
 
-    output_dir = Path(args.output_dir).expanduser() if args.output_dir else _default_output_dir(args.profile)
+    output_dir = _resolve_output_dir(args.output_dir) if args.output_dir else _default_output_dir(args.profile)
     python_bin = Path(args.python_bin).expanduser()
     return run_suite(args.profile, output_dir, python_bin)
 

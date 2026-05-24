@@ -6,6 +6,7 @@ import threading
 
 from PyQt6.QtCore import QTimer
 
+from core.engine.subtitle_live_editor_feed import build_subtitle_live_editor_feed
 from core.engine.subtitle_timing import align_stt_preview_to_subtitle_segments
 from core.native_swift_timeline import apply_subtitle_magnet_via_swift
 from core.project.project_srt import strip_whisper_control_tokens
@@ -205,14 +206,21 @@ class EditorSegmentsSttSelectionFlowMixin:
             )
         elif preview_sync_active and bool(getattr(self, "_stt_preview_subtitle_drafts_enabled", True)):
             subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
-        combined = sorted(
-            confirmed + subtitle_preview + preview,
-            key=lambda seg: segment_display_time_bounds(seg),
-        )
-        total_dur = segment_display_time_bounds(combined[-1])[1] if combined else 0.0
+        total_dur_floor = 0.0
         if hasattr(self, "video_player") and self.video_player.total_time > 0.0:
-            total_dur = max(total_dur, self.video_player.total_time)
-        return confirmed, preview, subtitle_preview, total_dur
+            total_dur_floor = float(self.video_player.total_time or 0.0)
+        feed = build_subtitle_live_editor_feed(
+            confirmed_segments=confirmed,
+            stt_preview_segments=preview,
+            subtitle_preview_segments=subtitle_preview,
+            total_duration_floor=total_dur_floor,
+        )
+        return (
+            list(feed.confirmed_segments),
+            list(feed.stt_preview_segments),
+            list(feed.subtitle_preview_segments),
+            feed.total_duration,
+        )
 
     def _prune_selected_preview_overlap(
         self,

@@ -7,13 +7,19 @@ import threading
 
 from PyQt6.QtCore import QTimer
 
+from core.engine.subtitle_live_sync_manager import (
+    build_subtitle_live_sync_progress,
+    normalize_live_processing_stage_text,
+    subtitle_live_sync_status_is_final,
+)
+
 
 class EditorPipelineStatusMixin:
     def set_live_processing_stage(self, text: str):
         if threading.current_thread() is not threading.main_thread():
             QTimer.singleShot(0, lambda t=str(text or ""): self.set_live_processing_stage(t))
             return
-        message = str(text or "").strip()
+        message = normalize_live_processing_stage_text(text)
         if not message:
             self._clear_processing_indicators()
             return
@@ -49,12 +55,12 @@ class EditorPipelineStatusMixin:
         total_vid_time = getattr(self.video_player, "total_time", 0.0) if hasattr(self, "video_player") else 0.0
         segs = self._get_current_segments()
         current_end = segs[-1].get("end", 0.0) if segs else 0.0
-
-        if total_vid_time > 0 and current_end > 0:
-            return min(100, int((current_end / total_vid_time) * 100))
-        if t_total > 0:
-            return min(100, int((c_idx / t_total) * 100))
-        return 0
+        return build_subtitle_live_sync_progress(
+            c_idx,
+            t_total,
+            current_segment_end=current_end,
+            total_duration=total_vid_time,
+        ).percent
 
     def _update_processing_stage_after_full_progress(self, c_idx, t_total, pct) -> None:
         if not (t_total > 0 and c_idx >= t_total and not getattr(self, "_completion_handled", False)):
@@ -77,8 +83,7 @@ class EditorPipelineStatusMixin:
         self._update_processing_stage_after_full_progress(c_idx, t_total, pct)
 
     def _is_final_status_message(self, text, is_final=False, is_raw=False) -> bool:
-        _ = is_raw
-        return bool(is_final or "에러" in str(text) or "실패" in str(text))
+        return subtitle_live_sync_status_is_final(text, is_final=is_final, is_raw=is_raw)
 
     def update_status(self, text, is_final=False, is_raw=False):
         if threading.current_thread() is not threading.main_thread():

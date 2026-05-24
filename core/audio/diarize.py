@@ -504,25 +504,6 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
     return speaker_map
 
 def get_speaker_for_segment(start_t: float, end_t: float, speaker_map: list[dict]) -> str:
-    if not speaker_map: return "SPEAKER_00"
-    mid_time = (start_t + end_t) / 2.0
-    
-    overlap_durations = {}
-    for spk_seg in speaker_map:
-        overlap_start = max(start_t, spk_seg["start"])
-        overlap_end = min(end_t, spk_seg["end"])
-        if overlap_start < overlap_end:
-            overlap = overlap_end - overlap_start
-            overlap_durations[spk_seg["speaker"]] = overlap_durations.get(spk_seg["speaker"], 0) + overlap
-            
-    if overlap_durations:
-        return max(overlap_durations.items(), key=lambda x: x[1])[0]
-        
-    closest_spk = "SPEAKER_00"
-    min_dist = float('inf')
-    for spk_seg in speaker_map:
-        if spk_seg["start"] <= mid_time <= spk_seg["end"]: return spk_seg["speaker"]
-        dist = min(abs(mid_time - spk_seg["start"]), abs(mid_time - spk_seg["end"]))
-        if dist < min_dist:
-            min_dist = dist; closest_spk = spk_seg["speaker"]
-    return closest_spk
+    from core.engine.subtitle_speaker_diarization import speaker_for_segment
+
+    return speaker_for_segment(start_t, end_t, speaker_map)

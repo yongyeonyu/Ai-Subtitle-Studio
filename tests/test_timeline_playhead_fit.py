@@ -12,7 +12,7 @@ from PyQt6.QtGui import QColor, QWheelEvent, QTextCursor
 from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QVBoxLayout, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QTextEdit, QWidget
 
 from core.frame_time import frame_to_sec
 from ui.editor.editor_segments import EditorSegmentsMixin
@@ -2705,6 +2705,43 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             popup.close()
             modal.close()
+            timeline.close()
+
+    def test_time_window_dialog_restore_rejects_tracked_modal_and_reenables_window(self):
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        timeline = TimelineWidget()
+        layout.addWidget(timeline)
+        dialog = QDialog(host)
+        try:
+            host.show()
+            timeline.show()
+            dialog.setModal(True)
+            dialog.show()
+            self.app.processEvents()
+
+            host.setEnabled(False)
+            timeline._time_window_dialog_pending = True
+            timeline._time_window_dialog = dialog
+            for toolbar_button in timeline._zoom_buttons:
+                toolbar_button.setDown(True)
+                toolbar_button.setEnabled(False)
+
+            with patch("ui.timeline.timeline_widget.QApplication.activePopupWidget", return_value=None), \
+                 patch("ui.timeline.timeline_widget.QApplication.activeModalWidget", return_value=None):
+                timeline._restore_toolbar_after_time_window_dialog()
+            self.app.processEvents()
+
+            self.assertFalse(timeline._time_window_dialog_pending)
+            self.assertTrue(host.isEnabled())
+            self.assertFalse(dialog.isVisible())
+            self.assertFalse(dialog.isModal())
+            for toolbar_button in timeline._zoom_buttons:
+                self.assertFalse(toolbar_button.isDown())
+                self.assertTrue(toolbar_button.isEnabled())
+        finally:
+            dialog.close()
+            host.close()
             timeline.close()
 
     def test_show_ten_second_edit_window_uses_saved_user_preference(self):

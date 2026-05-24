@@ -310,6 +310,123 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
             ],
         )
 
+    def test_final_sequence_cleanup_drops_new_closing_phrase_duplicate_outro(self):
+        segments = [
+            {
+                "start": 20.0,
+                "end": 22.0,
+                "text": "오늘 리뷰는 여기까지입니다",
+                "speaker": "00",
+            },
+            {
+                "start": 22.05,
+                "end": 22.7,
+                "text": "네 그럼 오늘 리뷰는 여기까지입니다",
+                "speaker": "00",
+            },
+        ]
+
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            segments,
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual([seg["text"] for seg in cleaned], ["오늘 리뷰는 여기까지입니다"])
+
+    def test_final_sequence_cleanup_normalizes_filler_before_new_closing_phrase(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "정리하면"},
+            {"start": 1.02, "end": 1.8, "text": "어 이상입니다"},
+        ]
+
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            segments,
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual([seg["text"] for seg in cleaned], ["정리하면", "이상입니다"])
+
+    def test_final_sequence_cleanup_drops_tiny_filler_tail_only_when_source_similarity_is_safe(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 2.0,
+                "text": "맞나 이게 뭔지",
+                "speaker": "00",
+                "stt_candidates": [{"source": "STT1", "text": "맞나 이게 뭔지"}],
+            },
+            {
+                "start": 2.02,
+                "end": 2.12,
+                "text": "어",
+                "speaker": "00",
+            },
+        ]
+
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            segments,
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual([seg["text"] for seg in cleaned], ["맞나 이게 뭔지"])
+        self.assertEqual(
+            cleaned[0].get("_final_sequence_cleanup_policy", {}).get("action"),
+            "drop_tiny_tail_fragment",
+        )
+
+    def test_final_sequence_cleanup_keeps_tiny_tail_when_source_similarity_needs_it(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 2.0,
+                "text": "맞나 이게 뭔지",
+                "speaker": "00",
+                "stt_candidates": [{"source": "STT1", "text": "맞나 이게 뭔지 어"}],
+            },
+            {
+                "start": 2.02,
+                "end": 2.12,
+                "text": "어",
+                "speaker": "00",
+            },
+        ]
+
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            segments,
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual([seg["text"] for seg in cleaned], ["맞나 이게 뭔지 어"])
+
+    def test_final_sequence_cleanup_keeps_meaningful_short_word_tail(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 2.0,
+                "text": "좋은 점은",
+                "speaker": "00",
+                "stt_candidates": [{"source": "STT1", "text": "좋은 점은"}],
+            },
+            {
+                "start": 2.02,
+                "end": 2.12,
+                "text": "차",
+                "speaker": "00",
+            },
+        ]
+
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            segments,
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual([seg["text"] for seg in cleaned], ["좋은 점은", "차"])
+
     def test_swift_common_split_bridge_matches_python_when_available(self):
         from core.native_swift_subtitle import find_native_cli_path
 

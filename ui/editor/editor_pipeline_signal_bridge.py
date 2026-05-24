@@ -7,6 +7,7 @@ import threading
 from PyQt6.QtCore import QTimer
 
 from core.runtime import config
+from core.engine.subtitle_live_sync_manager import build_cut_boundary_topicless_live_sync_payload
 from core.runtime.logger import get_logger
 from ui.editor.editor_pipeline_safety import EditorPipelineSafetyMixin
 
@@ -123,25 +124,14 @@ class EditorPipelineSignalBridgeMixin(EditorPipelineSafetyMixin):
         except Exception:
             pass
 
-        rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+        payload = build_cut_boundary_topicless_live_sync_payload(rows, source=source)
+        rows = [dict(row) for row in payload.rows]
         try:
             main_w = self.window()
         except Exception:
             main_w = None
 
-        result_dict = None
-        if rows:
-            result_dict = {
-                "segments": list(rows),
-                "chapters": [],
-                "edit_decisions": [],
-                "edl_segments": [],
-                "guide_markdown": "",
-                "schema_version": "roughcut_result.v2",
-                "draft_state": {"status": "review"},
-                "video_summary": f"컷 경계 기반 주제없음 중분류 {len(rows)}개",
-                "source": f"cut_boundary_{source}",
-            }
+        result_dict = payload.roughcut_result
 
         row_attrs = (
             "_cut_boundary_topicless_middle_segments",

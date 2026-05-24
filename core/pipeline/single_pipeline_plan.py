@@ -6,63 +6,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import threading
-from typing import Callable, Iterable
+from typing import Callable
 
-
-def _list_rows(rows: Iterable | None) -> list:
-    return [] if rows is None else list(rows)
-
-
-def normalize_pipeline_rows(rows: Iterable | None) -> list[dict]:
-    return [dict(row) for row in _list_rows(rows) if isinstance(row, dict)]
-
-
-def hard_cut_seconds_from_rows(rows: Iterable | None) -> list[float]:
-    seconds: set[float] = set()
-    for row in _list_rows(rows):
-        try:
-            if isinstance(row, dict):
-                sec = float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
-            else:
-                sec = float(row)
-        except (TypeError, ValueError):
-            continue
-        if sec > 0.0:
-            seconds.add(round(float(sec), 3))
-    return sorted(seconds)
-
-
-def _safe_int(value, fallback: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(fallback)
-
-
-def pipeline_overall_progress_percent(
-    *,
-    queue_index: int,
-    total_files: int,
-    chunk_index: int,
-    chunk_total: int,
-) -> int:
-    total = max(1, _safe_int(total_files, 1))
-    index = max(0, _safe_int(queue_index))
-    current = max(0, _safe_int(chunk_index))
-    chunk_count = max(0, _safe_int(chunk_total))
-    if chunk_count > 0:
-        return int(((index + (current / chunk_count)) / total) * 100)
-    return int((index / total) * 100)
-
-
-@dataclass(frozen=True)
-class SinglePipelineIterationPlan:
-    target_file: str
-    queue_index: int
-    total_files: int
-    cut_boundaries: tuple[dict, ...]
-    provisional_cut_boundaries: tuple[dict, ...]
-    hard_cut_boundaries: tuple[float, ...]
+from core.pipeline.subtitle_parallel_manager import (
+    SubtitleParallelIterationPlan as SinglePipelineIterationPlan,
+    build_subtitle_parallel_iteration_plan,
+    hard_cut_seconds_from_rows,
+    normalize_pipeline_rows,
+    pipeline_overall_progress_percent,
+)
 
 
 def build_single_pipeline_iteration_plan(
@@ -72,16 +24,11 @@ def build_single_pipeline_iteration_plan(
     total_files: int,
     cut_boundary_snapshot: dict | None,
 ) -> SinglePipelineIterationPlan:
-    snapshot = dict(cut_boundary_snapshot or {})
-    cut_rows = normalize_pipeline_rows(snapshot.get("cut_boundaries"))
-    provisional_rows = normalize_pipeline_rows(snapshot.get("provisional_cut_boundaries"))
-    return SinglePipelineIterationPlan(
-        target_file=str(target_file or ""),
-        queue_index=max(0, _safe_int(queue_index)),
-        total_files=max(0, _safe_int(total_files)),
-        cut_boundaries=tuple(cut_rows),
-        provisional_cut_boundaries=tuple(provisional_rows),
-        hard_cut_boundaries=tuple(hard_cut_seconds_from_rows(snapshot.get("cut_boundaries"))),
+    return build_subtitle_parallel_iteration_plan(
+        target_file=target_file,
+        queue_index=queue_index,
+        total_files=total_files,
+        cut_boundary_snapshot=cut_boundary_snapshot,
     )
 
 

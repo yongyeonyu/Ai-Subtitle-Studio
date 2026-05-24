@@ -10,7 +10,8 @@ import tools.qa_suite_runner as qa_suite_runner
 class QASuiteRunnerTests(unittest.TestCase):
     def test_build_scenarios_major_includes_core_macau_sequences(self):
         with tempfile.TemporaryDirectory() as tmp:
-            scenarios = qa_suite_runner.build_scenarios("major", Path(tmp))
+            with patch.object(qa_suite_runner, "MACAU_MEDIA", Path(tmp) / "missing.mp4"):
+                scenarios = qa_suite_runner.build_scenarios("major", Path(tmp))
 
         self.assertEqual(
             [item["id"] for item in scenarios],
@@ -24,7 +25,8 @@ class QASuiteRunnerTests(unittest.TestCase):
 
     def test_build_scenarios_full_adds_x5_rolling_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
-            scenarios = qa_suite_runner.build_scenarios("full", Path(tmp))
+            with patch.object(qa_suite_runner, "MACAU_MEDIA", Path(tmp) / "missing.mp4"):
+                scenarios = qa_suite_runner.build_scenarios("full", Path(tmp))
 
         self.assertEqual(scenarios[-1]["id"], "x5_high_rolling_180s")
         self.assertEqual(scenarios[-1]["type"], "full_media")
@@ -46,7 +48,8 @@ class QASuiteRunnerTests(unittest.TestCase):
             output_dir = Path(tmp) / "suite"
             with patch("tools.qa_suite_runner._ensure_app_ready", return_value={"ok": True, "started_app": False, "status": {"ok": True}}):
                 with patch("tools.qa_suite_runner._run_scenario", side_effect=_fake_run_scenario):
-                    exit_code = qa_suite_runner.run_suite("major", output_dir, qa_suite_runner.DEFAULT_PYTHON)
+                    with patch.object(qa_suite_runner, "MACAU_MEDIA", Path(tmp) / "missing.mp4"):
+                        exit_code = qa_suite_runner.run_suite("major", output_dir, qa_suite_runner.DEFAULT_PYTHON)
 
             manifest = json.loads((output_dir / "suite_manifest.json").read_text(encoding="utf-8"))
             summary = json.loads((output_dir / "suite_result.json").read_text(encoding="utf-8"))
@@ -66,7 +69,8 @@ class QASuiteRunnerTests(unittest.TestCase):
                 return_value={"ok": False, "started_app": True, "status": {"ok": False, "error": "app_unreachable"}},
             ):
                 with patch("tools.qa_suite_runner._run_scenario") as run_scenario:
-                    exit_code = qa_suite_runner.run_suite("quick", output_dir, qa_suite_runner.DEFAULT_PYTHON)
+                    with patch.object(qa_suite_runner, "MACAU_MEDIA", Path(tmp) / "missing.mp4"):
+                        exit_code = qa_suite_runner.run_suite("quick", output_dir, qa_suite_runner.DEFAULT_PYTHON)
 
             summary = json.loads((output_dir / "suite_result.json").read_text(encoding="utf-8"))
 
@@ -74,6 +78,71 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertEqual(summary["failed_count"], 1)
         self.assertEqual(summary["app_bootstrap"]["status"]["error"], "app_unreachable")
         run_scenario.assert_not_called()
+
+    def test_run_suite_resolves_relative_output_dir_against_repo_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(qa_suite_runner, "ROOT", root), patch.object(
+                qa_suite_runner,
+                "MACAU_MEDIA",
+                root / "missing.mp4",
+            ), patch(
+                "tools.qa_suite_runner._ensure_app_ready",
+                return_value={"ok": False, "started_app": False, "status": {"ok": False}},
+            ):
+                exit_code = qa_suite_runner.run_suite("quick", Path("relative_suite"), qa_suite_runner.DEFAULT_PYTHON)
+
+            resolved_output_dir = (root / "relative_suite").resolve()
+            summary_path = resolved_output_dir / "suite_result.json"
+            summary_exists = summary_path.is_file()
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertTrue(summary_exists)
+        self.assertEqual(summary["output_dir"], str(resolved_output_dir))
+
+    def test_macau_project_for_suite_uses_existing_project_without_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "macau.aissproj"
+            project_path.write_text("{}", encoding="utf-8")
+            with patch.object(qa_suite_runner, "MACAU_PROJECT", project_path), patch(
+                "core.project.project_manager.create_project"
+            ) as create_project:
+                resolved = qa_suite_runner._macau_project_for_suite(Path(tmp) / "suite")
+
+        self.assertEqual(resolved, project_path)
+        create_project.assert_not_called()
+
+    def test_macau_project_for_suite_creates_output_fixture_when_default_project_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_path = root / "DJI_20260217224203_0075_D.MP4"
+            media_path.write_bytes(b"media")
+            srt_path = root / "DJI_20260217224203_0075_D_화자.srt"
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n", encoding="utf-8")
+            missing_project = root / "projects" / "DJI_20260217224203_0075_D.aissproj"
+            output_root = root / "suite"
+            created_project = output_root / "_suite_fixtures" / missing_project.name
+
+            with patch.object(qa_suite_runner, "MACAU_PROJECT", missing_project), patch.object(
+                qa_suite_runner,
+                "MACAU_MEDIA",
+                media_path,
+            ), patch.object(
+                qa_suite_runner,
+                "MACAU_SRT_CANDIDATES",
+                (srt_path,),
+            ), patch(
+                "core.project.project_manager.create_project",
+                return_value=str(created_project),
+            ) as create_project:
+                scenarios = qa_suite_runner.build_scenarios("quick", output_root)
+
+        open_project_step = scenarios[0]["steps"][0]
+        self.assertEqual(open_project_step["command"], ["open-project", str(created_project)])
+        create_project.assert_called_once()
+        self.assertFalse(create_project.call_args.kwargs["prefill_analysis_artifacts"])
+        self.assertEqual(create_project.call_args.kwargs["srt_path"], str(srt_path))
 
     def test_prepare_app_for_scenario_reuses_app_for_quick(self):
         spec = {

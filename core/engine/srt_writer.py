@@ -7,7 +7,7 @@ import json
 import os
 from datetime import datetime
 
-from core.frame_time import normalize_fps, normalize_segments_to_frame_grid
+from core.engine.subtitle_segments import infer_save_fps, prepare_save_reopen_segments
 from core.runtime import config
 from core.utils import seconds_to_srt_time
 from core.runtime.logger import get_logger
@@ -21,30 +21,7 @@ def _normalize_saved_subtitle_text(text: str) -> str:
 
 
 def _infer_save_fps(segments: list[dict], fps: float | int | str | None = None) -> float | None:
-    try:
-        if fps is not None and float(fps) > 0.0:
-            return normalize_fps(fps)
-    except (TypeError, ValueError):
-        pass
-    for seg in list(segments or []):
-        if not isinstance(seg, dict):
-            continue
-        frame_range = seg.get("frame_range")
-        if isinstance(frame_range, dict):
-            value = frame_range.get("timeline_frame_rate")
-            try:
-                if value is not None and float(value) > 0.0:
-                    return normalize_fps(value)
-            except (TypeError, ValueError):
-                pass
-        for key in ("timeline_frame_rate", "frame_rate"):
-            value = seg.get(key)
-            try:
-                if value is not None and float(value) > 0.0:
-                    return normalize_fps(value)
-            except (TypeError, ValueError):
-                continue
-    return None
+    return infer_save_fps(segments, fps)
 
 
 def save_srt(
@@ -55,15 +32,15 @@ def save_srt(
     fps: float | int | str | None = None,
     write_backup: bool = True,
 ):
-    if apply_offset and callable(adjust_timing_func):
-        segments = adjust_timing_func(segments)
-
-    effective_fps = _infer_save_fps(segments, fps)
-    prepared_segments = (
-        normalize_segments_to_frame_grid(segments, effective_fps, min_frames=1, preserve_order=True)
-        if effective_fps is not None
-        else [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    prepared = prepare_save_reopen_segments(
+        segments,
+        apply_offset=apply_offset,
+        adjust_timing_func=adjust_timing_func,
+        fps=fps,
     )
+    segments = prepared.source_segments
+    effective_fps = prepared.fps
+    prepared_segments = prepared.prepared_segments
 
     settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
     s = {}

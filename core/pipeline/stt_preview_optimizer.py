@@ -3,6 +3,7 @@
 """Apply subtitle split and Gap rules to STT preview candidate lanes."""
 from __future__ import annotations
 
+from core.engine.subtitle_stt_segments import normalize_stt_source_label, prepare_stt_preview_timeline_rows
 from core.runtime.logger import get_logger
 
 
@@ -32,7 +33,7 @@ def optimize_stt_preview_segments(
     if not segments:
         return []
 
-    label = str(source_label or "STT1").strip().upper() or "STT1"
+    label = normalize_stt_source_label(source_label)
     raw = [dict(seg) for seg in segments if isinstance(seg, dict)]
     if not raw:
         return []
@@ -90,32 +91,15 @@ def optimize_stt_preview_segments(
         except Exception as exc:
             get_logger().log(f"  ⚠️ [{label}] 후보 점수 계산 실패, 색상 점수 없이 표시: {exc}")
 
-    offset = float(clip_offset or 0.0)
-    preview: list[dict] = []
-    for seg in optimized or []:
-        try:
-            start = float(seg.get("start", 0.0) or 0.0) + offset
-            end = float(seg.get("end", start) or start) + offset
-        except Exception:
-            continue
-        text = str(seg.get("text", "") or "").strip()
-        if not text:
-            continue
-        row = dict(seg)
-        row["start"] = start
-        row["end"] = max(start + 0.05, end)
-        row["text"] = text
-        row["stt_preview_source"] = label
-        row["stt_pending"] = True
-        row["_live_stt_preview"] = True
-        row["stt_preview_optimized"] = True
-        row["stt_preview_optimizer"] = "subtitle_split_gap_rules"
-        if clip_idx is not None:
-            row["_clip_idx"] = clip_idx
-        if clip_path:
-            row["_clip_file"] = clip_path
-        preview.append(row)
-    return preview
+    prepared = prepare_stt_preview_timeline_rows(
+        optimized,
+        source_label=label,
+        clip_offset=clip_offset,
+        clip_idx=clip_idx,
+        clip_path=clip_path,
+        optimized=True,
+    )
+    return prepared.rows
 
 
 def raw_stt_preview_segments(
@@ -130,35 +114,15 @@ def raw_stt_preview_segments(
     if not segments:
         return []
 
-    label = str(source_label or "STT1").strip().upper() or "STT1"
-    offset = float(clip_offset or 0.0)
-    preview: list[dict] = []
-    for seg in segments or []:
-        if not isinstance(seg, dict):
-            continue
-        try:
-            start = float(seg.get("start", 0.0) or 0.0) + offset
-            end = float(seg.get("end", start) or start) + offset
-        except Exception:
-            continue
-        text = str(seg.get("text", "") or "").strip()
-        if not text:
-            continue
-        row = dict(seg)
-        row["start"] = start
-        row["end"] = max(start + 0.05, end)
-        row["text"] = text
-        row["stt_preview_source"] = label
-        row["stt_pending"] = True
-        row["_live_stt_preview"] = True
-        row["stt_preview_optimized"] = False
-        row["stt_preview_optimizer"] = "raw_realtime"
-        if clip_idx is not None:
-            row["_clip_idx"] = clip_idx
-        if clip_path:
-            row["_clip_file"] = clip_path
-        preview.append(row)
-    return preview
+    prepared = prepare_stt_preview_timeline_rows(
+        segments,
+        source_label=source_label,
+        clip_offset=clip_offset,
+        clip_idx=clip_idx,
+        clip_path=clip_path,
+        optimized=False,
+    )
+    return prepared.rows
 
 
 __all__ = ["optimize_stt_preview_segments", "raw_stt_preview_segments"]

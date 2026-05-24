@@ -181,6 +181,9 @@ _FINAL_FILLER_FRAGMENTS = {
 _FINAL_CLOSING_PHRASES = {
     "감사합니다",
     "고맙습니다",
+    "이상입니다",
+    "여기까지입니다",
+    "마치겠습니다",
 }
 
 _FINAL_DUPLICATE_BRIDGE_TOKENS = {
@@ -208,6 +211,9 @@ _FINAL_DUPLICATE_BRIDGE_TOKENS = {
 _FINAL_CONTINUATION_TAIL_RE = re.compile(
     r"(고|서|데|는데|은데|인데|니까|으니까|지만|면서|으면서|려고|으려고|라서|이라서|해서|이며|이고|하고|며|다가|거나|든지|더니|더라도|도록|듯이)$"
 )
+_FINAL_TINY_FRAGMENT_MAX_SEC = 0.18
+_FINAL_TINY_FRAGMENT_MAX_CHARS = 2
+_FINAL_TINY_FRAGMENT_MAX_GAP_SEC = 0.08
 
 
 def _is_local_llm_connection_error(exc: BaseException) -> bool:
@@ -1664,6 +1670,89 @@ def _merge_adjacent_rows(left: dict, right: dict, *, stage: str, reason: str) ->
     return merged
 
 
+def _final_cleanup_source_texts(*rows: dict | None) -> list[str]:
+    texts: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in ("source_text", "original_text", "dictated_text", "raw_text", "_stt_no_llm_raw_text"):
+            value = str(row.get(key, "") or "").strip()
+            if value:
+                texts.append(value)
+        for candidate in list(row.get("stt_candidates") or []):
+            if not isinstance(candidate, dict):
+                continue
+            value = str(candidate.get("text", "") or "").strip()
+            if value:
+                texts.append(value)
+        words = row.get("words")
+        if isinstance(words, list):
+            word_text = " ".join(
+                str(word.get("word", word.get("text", "")) or "").strip()
+                for word in words
+                if isinstance(word, dict)
+            ).strip()
+            if word_text:
+                texts.append(word_text)
+    return [text for text in texts if len(_compact_subtitle_text(text)) >= 3]
+
+
+def _tiny_tail_drop_keeps_source_similarity(previous: dict, row: dict) -> bool:
+    source_texts = _final_cleanup_source_texts(previous, row)
+    if not source_texts:
+        return False
+    previous_text = " ".join(_subtitle_text_lines(str(previous.get("text", "") or "")))
+    row_text = " ".join(_subtitle_text_lines(str(row.get("text", "") or "")))
+    merged_text = f"{previous_text} {row_text}".strip()
+    best_previous = max((_stt_candidate_similarity(previous_text, source) for source in source_texts), default=0.0)
+    best_merged = max((_stt_candidate_similarity(merged_text, source) for source in source_texts), default=0.0)
+    return best_previous + 0.005 >= best_merged
+
+
+def _drop_tiny_tail_fragments(rows: list[dict], settings: dict | None, *, stage: str) -> tuple[list[dict], int]:
+    if not rows:
+        return rows, 0
+    max_sec = max(0.04, _setting_float(settings or {}, "subtitle_final_tiny_fragment_max_sec", _FINAL_TINY_FRAGMENT_MAX_SEC))
+    max_chars = max(1, _setting_int(settings or {}, "subtitle_final_tiny_fragment_max_chars", _FINAL_TINY_FRAGMENT_MAX_CHARS))
+    max_gap = max(0.0, _setting_float(settings or {}, "subtitle_final_tiny_fragment_max_gap_sec", _FINAL_TINY_FRAGMENT_MAX_GAP_SEC))
+    result: list[dict] = []
+    dropped = 0
+    for raw_row in rows:
+        row = dict(raw_row)
+        if not result:
+            result.append(row)
+            continue
+        previous = result[-1]
+        text = " ".join(_subtitle_text_lines(str(row.get("text", "") or "")))
+        compact = _compact_subtitle_text(text)
+        duration = max(0.0, _setting_float(row, "end", 0.0) - _setting_float(row, "start", 0.0))
+        gap = _setting_float(row, "start", 0.0) - _setting_float(previous, "end", 0.0)
+        if (
+            compact
+            and compact in _FINAL_FILLER_FRAGMENTS
+            and len(compact) <= max_chars
+            and duration <= max_sec
+            and 0.0 <= gap <= max_gap
+            and _same_segment_scope_local(previous, row)
+            and _compatible_speaker_signature(previous, row)
+            and not _is_speaker_split_multiline_segment(previous)
+            and not _is_speaker_split_multiline_segment(row)
+            and _tiny_tail_drop_keeps_source_similarity(previous, row)
+        ):
+            updated_previous = dict(previous)
+            updated_previous["_final_sequence_cleanup_policy"] = {
+                "task": "final_sequence_cleanup",
+                "stage": stage,
+                "action": "drop_tiny_tail_fragment",
+                "dropped_text": text,
+            }
+            result[-1] = updated_previous
+            dropped += 1
+            continue
+        result.append(row)
+    return result, dropped
+
+
 def _drop_shadowed_short_rows(rows: list[dict], settings: dict | None, *, stage: str) -> tuple[list[dict], int]:
     del stage
     if not rows:
@@ -1850,13 +1939,15 @@ def _apply_final_sequence_cleanup(
     rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
     if not rows:
         return segments
+    rows, dropped_tiny = _drop_tiny_tail_fragments(rows, settings, stage=stage)
     rows, dropped_shadow = _drop_shadowed_short_rows(rows, settings, stage=stage)
     rows, merged = _merge_likely_oversplit_rows(rows, settings, stage=stage)
     rows, trimmed = _trim_recent_overlap_rows(rows, settings, stage=stage)
-    if dropped_shadow or merged or trimmed:
+    if dropped_tiny or dropped_shadow or merged or trimmed:
         get_logger().log(
             "[자막후단보정] "
-            f"{stage}: 그림자 삭제 {dropped_shadow}개, 과분할 병합 {merged}개, 최근중복 정리 {trimmed}개"
+            f"{stage}: 초미세 tail 삭제 {dropped_tiny}개, 그림자 삭제 {dropped_shadow}개, "
+            f"과분할 병합 {merged}개, 최근중복 정리 {trimmed}개"
         )
     return rows
 

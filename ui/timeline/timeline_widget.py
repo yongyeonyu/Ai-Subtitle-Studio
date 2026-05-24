@@ -13,6 +13,7 @@ from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QHBoxLayout,
     QInputDialog,
     QPushButton,
@@ -465,6 +466,7 @@ class TimelineWidget(QWidget):
         self._fit_after_resize_pending = False
         self._manual_zoom_since_fit = False
         self._time_window_dialog_pending = False
+        self._time_window_dialog = None
         self._initial_open_view_request: dict[str, object] | None = None
         self._initial_open_view_token = None
         self.set_toolbar_tooltips(
@@ -889,6 +891,26 @@ class TimelineWidget(QWidget):
             except Exception:
                 pass
         try:
+            for top_level in list(QApplication.topLevelWidgets() or []):
+                try:
+                    top_level.releaseMouse()
+                except Exception:
+                    pass
+                try:
+                    top_level.releaseKeyboard()
+                except Exception:
+                    pass
+                try:
+                    top_level.setEnabled(True)
+                except Exception:
+                    pass
+                try:
+                    top_level.clearFocus()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
             self.setFocus(Qt.FocusReason.OtherFocusReason)
         except Exception:
             pass
@@ -903,6 +925,9 @@ class TimelineWidget(QWidget):
         widgets = []
         if dialog is not None:
             widgets.append(dialog)
+        tracked_dialog = getattr(self, "_time_window_dialog", None)
+        if tracked_dialog is not None:
+            widgets.append(tracked_dialog)
         for getter in (
             getattr(QApplication, "activePopupWidget", None),
             getattr(QApplication, "activeModalWidget", None),
@@ -937,6 +962,23 @@ class TimelineWidget(QWidget):
                 widget.clearFocus()
             except Exception:
                 pass
+            if isinstance(widget, QDialog):
+                try:
+                    widget.setModal(False)
+                except Exception:
+                    pass
+                try:
+                    widget.setWindowModality(Qt.WindowModality.NonModal)
+                except Exception:
+                    pass
+                try:
+                    widget.reject()
+                except Exception:
+                    pass
+                try:
+                    widget.done(0)
+                except Exception:
+                    pass
             try:
                 widget.hide()
             except Exception:
@@ -980,6 +1022,7 @@ class TimelineWidget(QWidget):
         dialog.setOkButtonText("적용")
         dialog.setCancelButtonText("취소")
         dialog.setStyleSheet(settings_dialog_stylesheet())
+        self._time_window_dialog = dialog
         try:
             if dialog.exec():
                 # exec() 종료 직후에도 값을 읽어야 하므로 자동 삭제를 켜지 않는다.
@@ -997,6 +1040,7 @@ class TimelineWidget(QWidget):
                 dialog.deleteLater()
             except Exception:
                 pass
+            self._time_window_dialog = None
             self._queue_toolbar_restore_after_time_window_dialog()
 
     def _create_playhead_overlay(self):
