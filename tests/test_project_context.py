@@ -1733,6 +1733,41 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(preview["stt_score"], 91)
         self.assertEqual(preview["stt_score_color"], "#52C759")
 
+    def test_save_project_resolves_subtitle_recheck_threshold_once_per_save(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.aissproj"
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.recheck_threshold", return_value=60.0) as threshold_mock, patch(
+                "core.project.project_context.recheck_threshold",
+                return_value=60.0,
+            ):
+                save_project(
+                    str(path),
+                    segments=[
+                        {"start": 0.0, "end": 1.0, "text": "첫 줄", "speaker": "00", "stt_score": 82},
+                        {"start": 1.0, "end": 2.0, "text": "둘째 줄", "speaker": "00", "stt_score": 79},
+                        {"start": 2.0, "end": 3.0, "text": "셋째 줄", "speaker": "00", "stt_score": 58},
+                    ],
+                    persist_analysis_artifacts=False,
+                    rewrite_stt_reference_tracks=False,
+                )
+
+        threshold_mock.assert_called_once()
+
     def test_project_save_and_phase1b_enrich_preserve_stt1_stt2_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"

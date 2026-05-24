@@ -68,7 +68,7 @@ from core.roughcut import (
     merge_editor_roughcut_draft_state,
     run_editor_roughcut_llm_draft,
 )
-from core.project.subtitle_status import subtitle_status_payload
+from core.project.subtitle_status import recheck_threshold, subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 from core.project.project_srt import parse_srt_to_segments
 from core.project.project_model_settings import (
@@ -1355,6 +1355,7 @@ def save_project(
         new_segs = []
         existing_subtitle_segments = project_segments_to_editor(project)
         existing_by_id, existing_by_time = _existing_segment_matchers(existing_subtitle_segments)
+        status_threshold = recheck_threshold() if segments else None
 
         for i, seg in enumerate(segments):
             if seg.get("start_frame", seg.get("timeline_start_frame")) is not None:
@@ -1406,7 +1407,11 @@ def save_project(
             if existing_seg is None:
                 existing_seg = existing_by_time.get(_segment_lookup_key(new_seg))
             _copy_missing_stt_metadata(new_seg, existing_seg)
-            new_seg.update({key: value for key, value in subtitle_status_payload(new_seg).items() if value not in (None, "")})
+            new_seg.update({
+                key: value
+                for key, value in subtitle_status_payload(new_seg, threshold=status_threshold).items()
+                if value not in (None, "")
+            })
             for key in (
                 "start_frame",
                 "end_frame",

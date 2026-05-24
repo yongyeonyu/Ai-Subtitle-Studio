@@ -108,6 +108,30 @@ class QueueClipCompletionOrderTests(unittest.TestCase):
             self.assertLess(statuses.index("🎥 자막영상출력(mov)"), statuses.index("✅ 완료"))
             self.assertEqual(statuses[-1], "✅ 완료")
 
+    def test_queue_clip_project_save_skips_foreground_analysis_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "clip_save.mp4")
+            srt_path = os.path.join(tmp, "clip_save.srt")
+            project_path = os.path.join(tmp, "clip_save.ai_project.json")
+            open(media_path, "wb").close()
+            ui = _Ui(export_video=False)
+            backend = _Backend(ui, media_path)
+
+            with (
+                patch("core.project.project_manager.create_project", return_value=project_path) as create_project,
+                patch("core.project.project_manager.save_project") as save_project,
+            ):
+                saved_path = backend._save_project_for_queue_clip(
+                    media_path,
+                    srt_path,
+                    [{"start": 0.0, "end": 1.0, "text": "hello"}],
+                )
+
+            self.assertEqual(saved_path, project_path)
+            self.assertFalse(create_project.call_args.kwargs["prefill_analysis_artifacts"])
+            self.assertFalse(save_project.call_args.kwargs["persist_analysis_artifacts"])
+            self.assertTrue(save_project.call_args.kwargs["rewrite_stt_reference_tracks"])
+
     def test_queue_clip_does_not_mark_complete_when_video_export_fails(self):
         operations = []
         with tempfile.TemporaryDirectory() as tmp:

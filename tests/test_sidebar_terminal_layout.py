@@ -535,6 +535,97 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 nav.deleteLater()
                 self.app.processEvents()
 
+    def test_home_sidebar_nav_removes_stale_fallback_rows_synchronously(self):
+        from ui.sidebar.home_sidebar_nav_widget import HomeSidebarNavWidget
+
+        with mock.patch("ui.sidebar.home_sidebar_nav_widget.scenegraph_enabled", return_value=False):
+            nav = HomeSidebarNavWidget()
+            try:
+                full_items = [
+                    {
+                        "id": "generation_status",
+                        "title": "자막 생성 | STT 1",
+                        "badge": "AI",
+                        "accent": "#00D46A",
+                        "progressVisible": True,
+                        "progressPercent": 66,
+                        "progressText": "66%",
+                        "meta": "CPU 8% · PROC 6%",
+                        "height": 42,
+                    },
+                    {"id": "home", "title": "홈", "badge": "HM"},
+                    {"id": "editor", "title": "에디터", "badge": "ED"},
+                    {"id": "roughcut", "title": "러프컷", "badge": "RC"},
+                    {"id": "shortform", "title": "숏폼", "badge": "SF"},
+                ]
+                nav.set_items(full_items)
+                self.assertEqual(len(nav.findChildren(QWidget, "MenuButton")), len(full_items))
+
+                nav.set_items(full_items[:1])
+
+                buttons = nav.findChildren(QWidget, "MenuButton")
+                self.assertEqual(len(buttons), 1)
+                self.assertIs(buttons[0].parentWidget(), getattr(nav, "_fallback_container", None))
+            finally:
+                nav.close()
+                nav.deleteLater()
+                self.app.processEvents()
+
+    def test_home_sidebar_nav_fallback_rows_are_visible_immediately_after_refresh(self):
+        from ui.sidebar.home_sidebar_nav_widget import HomeSidebarNavWidget
+
+        with mock.patch("ui.sidebar.home_sidebar_nav_widget.scenegraph_enabled", return_value=False):
+            nav = HomeSidebarNavWidget()
+            try:
+                nav.show()
+                self.app.processEvents()
+
+                nav.set_items(
+                    [
+                        {
+                            "id": "generation_status",
+                            "title": "자막 생성 | STT+LLM",
+                            "badge": "AI",
+                            "accent": "#00D46A",
+                            "progressVisible": True,
+                            "progressPercent": 70,
+                            "progressText": "70%",
+                            "meta": "CPU 8% · PROC 6%",
+                            "height": 42,
+                        },
+                        {"id": "home", "title": "홈", "badge": "HM"},
+                    ]
+                )
+
+                buttons = nav.findChildren(QWidget, "MenuButton")
+                self.assertEqual(len(buttons), 2)
+                self.assertTrue(all(button.isVisible() for button in buttons))
+
+                nav.set_items(
+                    [
+                        {
+                            "id": "generation_status",
+                            "title": "자막 생성 | 저장 준비 중",
+                            "badge": "AI",
+                            "accent": "#00D46A",
+                            "progressVisible": True,
+                            "progressPercent": 71,
+                            "progressText": "71%",
+                            "meta": "CPU 10% · PROC 7%",
+                            "height": 42,
+                        },
+                        {"id": "home", "title": "홈", "badge": "HM"},
+                    ]
+                )
+
+                refreshed = nav.findChildren(QWidget, "MenuButton")
+                self.assertEqual(len(refreshed), 2)
+                self.assertTrue(all(button.isVisible() for button in refreshed))
+            finally:
+                nav.close()
+                nav.deleteLater()
+                self.app.processEvents()
+
     def test_pipeline_model_column_uses_terminal_style_font(self):
         window = MainWindow()
         try:

@@ -20,25 +20,30 @@ class _DummyBackend(SinglePipelineMixin):
 
 
 class _Signal:
-    def __init__(self):
+    def __init__(self, owner=None, name: str = ""):
+        self.owner = owner
+        self.name = name
         self.args = None
         self.emissions = []
 
     def emit(self, *args):
         self.args = args
         self.emissions.append(args)
+        if self.owner is not None and self.name:
+            self.owner.events.append(self.name)
 
 
 class _LiveUi(QObject):
     def __init__(self):
         super().__init__()
-        self.sig = _Signal()
-        self._sig_preview_processing_segments = _Signal()
-        self._sig_finalize_generation_complete = _Signal()
-        self._sig_update_queue = _Signal()
-        self._sig_update_queue_payload = _Signal()
-        self._sig_update_queue_header = _Signal()
-        self._sig_update_queue_header_payload = _Signal()
+        self.events = []
+        self.sig = _Signal(self, "sig")
+        self._sig_preview_processing_segments = _Signal(self, "preview_processing_segments")
+        self._sig_finalize_generation_complete = _Signal(self, "finalize_generation_complete")
+        self._sig_update_queue = _Signal(self, "update_queue")
+        self._sig_update_queue_payload = _Signal(self, "update_queue_payload")
+        self._sig_update_queue_header = _Signal(self, "update_queue_header")
+        self._sig_update_queue_header_payload = _Signal(self, "update_queue_header_payload")
         self.called = False
 
     def open_editor_for_file(self):
@@ -106,6 +111,10 @@ class SinglePipelineUiGuardTests(unittest.TestCase):
         self.assertEqual(ui._sig_finalize_generation_complete.args, ("stt_optimizer_threads_done",))
         payload = normalize_queue_status_payload(ui._sig_update_queue_payload.emissions[-1][0])
         self.assertEqual(payload["status"], "저장 준비 중")
+        self.assertLess(
+            ui.events.index("update_queue_payload"),
+            ui.events.index("finalize_generation_complete"),
+        )
 
     def test_emit_generation_completion_ready_allows_inactive_fallback_when_not_stopped(self):
         ui = _LiveUi()

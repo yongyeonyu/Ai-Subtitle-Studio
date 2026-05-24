@@ -214,8 +214,8 @@ class PipelineProgressCoordinator:
         return int(pct)
 
     def emit_generation_completion_ready(self, queue_index: int, reason: str) -> bool:
-        finalized = bool(self._emit("_sig_finalize_generation_complete", str(reason or "backend_done")))
         self.emit_queue_status(queue_index, "저장 준비 중")
+        finalized = bool(self._emit("_sig_finalize_generation_complete", str(reason or "backend_done")))
         return finalized
 
     def emit_item_error(self, queue_index: int) -> bool:

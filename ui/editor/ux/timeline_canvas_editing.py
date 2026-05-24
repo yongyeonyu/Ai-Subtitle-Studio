@@ -527,13 +527,12 @@ class TimelineInlineEditMixin:
         self._ime_preedit = ""
         if not text_changed:
             return
-        if self._edit_text.strip():
-            for seg in self.segments:
-                if seg.get("line") == self._edit_line:
-                    seg["text"] = self._edit_text
-                    break
-            safe_text = self._edit_text.replace("\n", "\u2028")
-            self.sig_inline_text_changed.emit(self._edit_line, safe_text)
+        for seg in self.segments:
+            if seg.get("line") == self._edit_line:
+                seg["text"] = self._edit_text
+                break
+        safe_text = self._edit_text.replace("\n", "\u2028")
+        self.sig_inline_text_changed.emit(self._edit_line, safe_text)
         self._update_inline_edit_region()
 
     def _maybe_commit_inline_edit_from_focus_out(self) -> None:
@@ -863,14 +862,13 @@ class TimelineInlineEditMixin:
                 self._edit_text = text[:cur] + ch + text[cur:]
                 self._edit_cursor = cur + len(ch)
 
-        if self._edit_text.strip():
-            for seg in self.segments:
-                if seg.get("line") == self._edit_line:
-                    seg["text"] = self._edit_text
-                    break
+        for seg in self.segments:
+            if seg.get("line") == self._edit_line:
+                seg["text"] = self._edit_text
+                break
 
-            safe_text = self._edit_text.replace("\n", "\u2028")
-            self.sig_inline_text_changed.emit(self._edit_line, safe_text)
+        safe_text = self._edit_text.replace("\n", "\u2028")
+        self.sig_inline_text_changed.emit(self._edit_line, safe_text)
 
         self._cursor_vis = True
         self._update_inline_edit_region()

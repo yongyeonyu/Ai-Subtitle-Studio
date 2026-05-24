@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtTest import QTest
 
@@ -31,10 +31,12 @@ from ui.timeline.timeline_constants import (
 from ui.timeline.timeline_paint import (
     build_stt_selection_index,
     should_paint_subtitle_segment_text,
+    stt_preview_selection_badge_rect,
     stt_candidate_selected,
     stt_candidate_selected_by_llm,
     stt_candidate_selection_state,
     stt_candidate_unselected,
+    subtitle_segment_selection_badge_rect,
 )
 from ui.timeline.timeline_segment_style import official_boundary_marker_visual
 from ui.timeline.timeline_analysis import subtitle_detection_segments_for_editor
@@ -2313,6 +2315,37 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.close()
             canvas.deleteLater()
 
+    def test_native_inline_editor_backspace_clears_segment_text_live(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.pps = 120.0
+            canvas.total_duration = 4.0
+            canvas.segments = [
+                {"start": 1.0, "end": 2.8, "text": "로맨틱아!", "line": 0},
+            ]
+            emitted = []
+            canvas.sig_inline_text_changed.connect(lambda line, text: emitted.append((line, text)))
+            canvas.show()
+            self.app.processEvents()
+
+            canvas.start_inline_edit(0, 1.0)
+            editor = canvas._inline_editor
+            self.assertIsNotNone(editor)
+            editor.setFocus()
+            editor.selectAll()
+
+            QTest.keyClick(editor, Qt.Key.Key_Backspace)
+            self.app.processEvents()
+
+            self.assertEqual(editor.toPlainText(), "")
+            self.assertEqual(canvas._edit_text, "")
+            self.assertEqual(canvas.segments[0]["text"], "")
+            self.assertIn((0, ""), emitted)
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
     def test_native_inline_editor_routes_canvas_click_to_exact_cursor_position(self):
         canvas = TimelineCanvas()
         try:
@@ -2394,6 +2427,21 @@ class TimelineHitTargetTests(unittest.TestCase):
                 focus_detail=True,
             )
         )
+
+    def test_selected_subtitle_badge_is_centered_in_segment(self):
+        rect = QRect(200, SUBTITLE_TOP, 420, 52)
+        badge = subtitle_segment_selection_badge_rect(rect, 230, 590)
+
+        self.assertLessEqual(abs(badge.center().x() - rect.center().x()), 1)
+        self.assertGreaterEqual(badge.left(), 230)
+        self.assertLessEqual(badge.right(), 590)
+
+    def test_selected_stt_preview_badge_anchors_to_right_edge(self):
+        rect = QRect(200, STT1_TOP, 420, 28)
+        badge = stt_preview_selection_badge_rect(rect, 36)
+
+        self.assertEqual(badge.right(), rect.right() - 4)
+        self.assertGreater(badge.center().x(), rect.center().x())
 
     def test_inline_edit_enter_uses_playhead_split_when_started_with_split_mode(self):
         canvas = TimelineCanvas()

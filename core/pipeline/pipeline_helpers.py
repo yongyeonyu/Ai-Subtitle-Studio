@@ -497,6 +497,7 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                 media_paths=[target_file],
                 srt_path=srt_path,
                 user_settings=settings,
+                prefill_analysis_artifacts=False,
             )
             if ui is not None:
                 attach_project_session(
@@ -569,6 +570,8 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             stt_preview_segments=stt_preview_segments,
             provisional_cut_boundaries=provisional_cut_boundaries,
             recovery_state=recovery_state,
+            persist_analysis_artifacts=False,
+            rewrite_stt_reference_tracks=True,
         )
         return project_path
 

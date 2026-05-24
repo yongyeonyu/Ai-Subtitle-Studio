@@ -23,6 +23,7 @@ class HomeSidebarNavWidget(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._items: list[dict] = []
         self._quick = None
+        self._fallback_container = None
         self._fallback_layout = None
 
         layout = QVBoxLayout(self)
@@ -38,6 +39,7 @@ class HomeSidebarNavWidget(QWidget):
             fallback_layout = QVBoxLayout(fallback)
             fallback_layout.setContentsMargins(0, 0, 0, 0)
             fallback_layout.setSpacing(4)
+            self._fallback_container = fallback
             self._fallback_layout = fallback_layout
             layout.addWidget(fallback)
 
@@ -133,9 +135,12 @@ class HomeSidebarNavWidget(QWidget):
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
+        parent = self._fallback_container or self
         for item in self._items:
-            button = QWidget(self)
+            button = QWidget(parent)
             button.setObjectName("MenuButton")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             accent = str(item.get("accent", "#3F8CFF") or "#3F8CFF")
@@ -273,3 +278,9 @@ class HomeSidebarNavWidget(QWidget):
 
             button.mousePressEvent = _on_click
             layout.addWidget(button)
+            button.show()
+        layout.activate()
+        parent.updateGeometry()
+        parent.update()
+        self.updateGeometry()
+        self.update()

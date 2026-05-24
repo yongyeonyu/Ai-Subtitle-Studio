@@ -101,6 +101,44 @@ Rollback:
 - Revert native feature flag to Python path first.
 - If UI/live sync regresses, revert only the affected facade wiring and keep pure extraction modules if tests pass.
 
+### 2. Final Subtitle Boundary Rule Hardening
+
+Goal: `core/engine/subtitle_engine.py`의 final-sequence cleanup 규칙을 실제 fixture 근거로 좁게 보강해, filler/closing/duplicate bridge/continuation tail 때문에 생기는 과분할 또는 중복 outro를 줄인다.
+
+Status: pending
+
+Owner intent:
+
+- STT1/STT2/VAD source evidence는 그대로 유지하고, final 후단 cleanup의 deterministic rule만 좁게 조정한다.
+- UI/UX, STT 모델 선택, VAD backend, STT2 적용 범위, LLM prompt 기본 정책은 변경하지 않는다.
+- 이미 폐기된 넓은 병합/분할 기본 정책을 반복하지 않는다.
+
+Target owners:
+
+- `core/engine/subtitle_engine.py`: `_FINAL_FILLER_FRAGMENTS`, `_FINAL_CLOSING_PHRASES`, `_FINAL_DUPLICATE_BRIDGE_TOKENS`, `_FINAL_CONTINUATION_TAIL_RE`, `_apply_final_sequence_cleanup`
+- `tests/test_subtitle_engine_settings.py`: unit fixtures for safe filler merge, duplicate outro trim, closing phrase normalization, and continuation-tail guard
+- Real fixture windows: X5/Tinyping/Macau final SRT vs STT candidate evidence where final rows show tiny filler tails, duplicate bridge prefixes, or repeated closing phrases
+
+Execution order:
+
+1. Audit current rule coverage before adding tokens; many filler/bridge/continuation candidates are already present.
+2. Add only high-precision closing phrase candidates such as `이상입니다`, `여기까지입니다`, `마치겠습니다`, or compact multi-token outro phrases when tests prove they are duplicated outro text rather than spoken content.
+3. If adding tiny-tail cleanup, require same segment scope, compatible speaker signature, very short duration, very short text, small gap, and no source-text similarity regression.
+4. Add focused unit tests for every new rule, including negative cases where meaningful short Korean words must not be merged or dropped.
+5. Run targeted tests first, then compare representative saved `final.srt` rows against STT candidate rows on a real app/fixture window before enabling broader defaults.
+
+Acceptance gates:
+
+- No final subtitle text/timing drift away from selected STT candidate evidence.
+- No widened default STT2/VAD/LLM behavior.
+- No regression in segment count stability on X5/Tinyping/Macau smoke fixtures.
+- `tests/test_subtitle_engine_settings.py` covers positive and negative examples for new cleanup rules.
+
+Rollback:
+
+- Disable `subtitle_final_sequence_cleanup_enabled` for emergency fallback.
+- Otherwise revert only the new rule token/helper and keep unrelated final-sequence cleanup behavior intact.
+
 ## Native Migration Rules
 
 - Native migration follows the same active queue above; do not maintain a separate native queue.

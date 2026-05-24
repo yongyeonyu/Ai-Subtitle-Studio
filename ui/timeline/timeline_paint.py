@@ -117,6 +117,23 @@ def should_paint_subtitle_segment_text(
     return int(rect_width) >= 44 and (not bool(dense_segment_mode) or bool(focus_detail))
 
 
+def stt_preview_selection_badge_rect(rect: QRect, badge_width: int) -> QRect:
+    badge_w = max(1, int(badge_width or 1))
+    return QRect(rect.right() - badge_w - 3, rect.y() + 6, badge_w, 18)
+
+
+def subtitle_segment_selection_badge_rect(rect: QRect, text_left: int, text_right: int, badge_width: int = 38) -> QRect:
+    badge_w = max(1, int(badge_width or 1))
+    preferred_x = rect.x() + max(0, (rect.width() - badge_w) // 2)
+    min_x = max(rect.x() + 4, int(text_left) + 4)
+    max_x = min(rect.right() - badge_w - 4, int(text_right) - badge_w)
+    if max_x >= min_x:
+        badge_x = max(min_x, min(max_x, preferred_x))
+    else:
+        badge_x = max(rect.x() + 2, min(preferred_x, rect.right() - badge_w))
+    return QRect(int(badge_x), rect.y() + 6, badge_w, 18)
+
+
 class TimelinePaintMixin:
     def _timeline_playback_active(self) -> bool:
         owner = self.parent()
@@ -1280,15 +1297,10 @@ class TimelinePaintMixin:
             for seg, rect, selection_state, is_selected, visual in detail_items:
                     text_color = QColor(visual["text"])
                     badge_w = 36 if is_selected and rect.width() >= 90 else 0
-                    center_stt1_badge = bool(
-                        badge_w
-                        and selection_state != "llm"
-                        and stt_preview_source(seg) == "STT1"
-                    )
                     text_rect = QRect(
                         rect.x() + 8,
                         rect.y() + 5,
-                        max(8, rect.width() - 16 - (0 if center_stt1_badge else badge_w)),
+                        max(8, rect.width() - 16 - badge_w),
                         rect.height() - 10,
                     )
                     p.setPen(text_color)
@@ -1307,18 +1319,7 @@ class TimelinePaintMixin:
                         p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, preview_text)
                     p.restore()
                     if badge_w:
-                        if center_stt1_badge:
-                            # KEEP: only the STT1 preview "선택" badge lives in the
-                            # visual center. Subtitle-segment badges and STT2 badges
-                            # intentionally keep their prior edge-aligned placement.
-                            badge_rect = QRect(
-                                rect.x() + max(4, (rect.width() - badge_w) // 2),
-                                rect.y() + 6,
-                                badge_w,
-                                18,
-                            )
-                        else:
-                            badge_rect = QRect(rect.right() - badge_w - 4, rect.y() + 6, badge_w, 18)
+                        badge_rect = stt_preview_selection_badge_rect(rect, badge_w)
                         badge_fill = QColor(COLORS["warning_badge"] if selection_state == "llm" else "#174A2A")
                         badge_border = QColor(COLORS["warning"] if selection_state == "llm" else "#34C759")
                         badge_text = "LLM" if selection_state == "llm" else "선택"
@@ -1601,11 +1602,16 @@ class TimelinePaintMixin:
                     and (not dense_segment_mode or focus_detail)
                     and (text_right - text_left) >= 70
                 )
-                badge_reserved_w = 44 if show_badge else 0
+                badge_rect = (
+                    subtitle_segment_selection_badge_rect(rect, text_left, text_right)
+                    if show_badge
+                    else QRect()
+                )
+                text_content_right = min(text_right, badge_rect.x() - 6) if show_badge else text_right
                 text_rect = QRect(
                     text_left,
                     rect.y() + top_pad,
-                    max(8, text_right - text_left - badge_reserved_w),
+                    max(8, text_content_right - text_left),
                     rect.height() - top_pad - 6,
                 )
                 if is_editing and not native_inline_active:
@@ -1666,7 +1672,6 @@ class TimelinePaintMixin:
                         p.restore()
                         if show_badge:
                             is_llm_choice = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
-                            badge_rect = QRect(max(text_left + 6, text_right - 38), rect.y() + 6, 38, 18)
                             badge_fill = QColor("#5A4600" if is_llm_choice else "#174A2A")
                             badge_border = QColor(COLORS["warning"] if is_llm_choice else "#34C759")
                             badge_text_color = QColor("#FFF2A8" if is_llm_choice else "#D7FFE4")
