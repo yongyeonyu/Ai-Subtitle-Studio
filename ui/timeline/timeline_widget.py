@@ -9,7 +9,6 @@ import time
 import numpy as np
 
 from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -23,13 +22,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ui.editor.ux.timeline_playhead_mode import playhead_line_color_hex
+from ui.dialogs.qml_popup import show_context_menu
 from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, RULER_H, SEG_TOP, WAVE_H
 from ui.timeline.timeline_canvas import TimelineCanvas
+from ui.timeline.timeline_playhead_overlay import TimelinePlayheadOverlay
+from ui.timeline.timeline_time_window import TimelineTimeWindowMixin
 from ui.timeline.timeline_global import GlobalCanvas, MINIMAP_HEIGHT
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker, patch_waveform_buffer
 from ui.responsive_profile import responsive_profile_for_size
-from ui.style import COLORS, button_style, settings_dialog_stylesheet
+from ui.style import COLORS, button_style
 from core.settings import load_settings, save_settings
 from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 
@@ -120,172 +121,7 @@ def _compact_toolbar_checkbox_style(*, font_size: str = "11px", padding: str = "
     )
 
 
-class TimelinePlayheadOverlay(QWidget):
-    """Paint the moving playhead without invalidating the heavy timeline body."""
-
-    def __init__(self, timeline, parent=None):
-        super().__init__(parent)
-        self._timeline = timeline
-        self._sec = 0.0
-        self._shadow_sec: float | None = None
-        self._scroll_x = 0
-        self._center_locked = False
-        self._busy = False
-        self._last_visual_px: int | None = None
-        self._last_shadow_visual_px: int | None = None
-        self._last_state_signature = None
-        self._render_visuals = False
-        self._quick = self._create_quick_layer()
-        self._shutdown_in_progress = False
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAutoFillBackground(False)
-
-    def _visual_strip_rect(self, *positions: int | None) -> QRect | None:
-        xs = [int(pos) for pos in positions if pos is not None]
-        if not xs:
-            return None
-        left = max(0, min(xs) - 12)
-        right = min(max(1, self.width()), max(xs) + 13)
-        return QRect(left, 0, max(1, right - left), max(1, self.height()))
-
-    def set_state(
-        self,
-        sec: float,
-        scroll_x: int,
-        *,
-        center_locked: bool = False,
-        busy: bool = False,
-        shadow_sec: float | None = None,
-    ):
-        old_px = self._last_visual_px
-        old_shadow_px = self._last_shadow_visual_px
-        self._sec = max(0.0, float(sec or 0.0))
-        self._shadow_sec = None if shadow_sec is None else max(0.0, float(shadow_sec or 0.0))
-        self._scroll_x = max(0, int(scroll_x or 0))
-        self._center_locked = bool(center_locked)
-        self._busy = bool(busy)
-        visual_px = int(round(self._playhead_visual_x()))
-        shadow_px = None if self._shadow_sec is None else int(round(self._playhead_visual_x_for_sec(self._shadow_sec, center_locked=False)))
-        signature = (
-            visual_px,
-            shadow_px,
-            bool(self._center_locked),
-            bool(self._busy),
-            int(self.width()),
-            int(self.height()),
-        )
-        if signature == getattr(self, "_last_state_signature", None):
-            return False
-        self._last_visual_px = visual_px
-        self._last_shadow_visual_px = shadow_px
-        self._last_state_signature = signature
-        if not bool(getattr(self, "_render_visuals", False)): return True
-        if getattr(self, "_quick", None) is not None:
-            self._sync_quick_layer()
-            return True
-        dirty = self._visual_strip_rect(old_px, visual_px, old_shadow_px, shadow_px)
-        if dirty is not None:
-            self.update(dirty)
-        return True
-
-    def _create_quick_layer(self):
-        # A full-viewport QQuickWidget overlay can composite as an opaque black
-        # surface on macOS/Metal and hide the classic painter timeline canvas.
-        # Keep the playhead on the lightweight QWidget overlay instead.
-        return None
-
-    def _playhead_visual_x_for_sec(self, sec: float, *, center_locked: bool) -> float:
-        timeline = self._timeline
-        canvas = getattr(timeline, "canvas", None)
-        if canvas is None:
-            return 0.0
-        if center_locked:
-            return max(0.0, self.width() / 2.0)
-        return float(canvas._x(sec) if hasattr(canvas, "_x") else (float(sec or 0.0) * float(getattr(canvas, "pps", 1.0) or 1.0))) - float(self._scroll_x)
-
-    def _playhead_visual_x(self) -> float:
-        return self._playhead_visual_x_for_sec(self._sec, center_locked=bool(self._center_locked))
-
-    def _sync_quick_layer(self, quick=None):
-        quick = quick or getattr(self, "_quick", None)
-        if quick is None:
-            return
-        timeline = self._timeline
-        canvas = getattr(timeline, "canvas", None)
-        visible = bool(canvas is not None and float(getattr(canvas, "total_duration", 0.0) or 0.0) > 0)
-        line_color = playhead_line_color_hex(getattr(canvas, "focus_mode", None))
-        try:
-            root = quick.rootObject()
-            if root is None:
-                return
-            root.setProperty("playheadX", float(self._playhead_visual_x()))
-            root.setProperty("lineColor", str(line_color))
-            root.setProperty("playheadBusy", bool(self._busy))
-            root.setProperty("visiblePlayhead", bool(visible))
-            root.setProperty("centerLocked", bool(self._center_locked))
-        except Exception:
-            pass
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._last_state_signature = None
-        quick = getattr(self, "_quick", None)
-        if quick is not None:
-            quick.setGeometry(self.rect())
-            self._sync_quick_layer(quick)
-        else:
-            self.update()
-
-    def paintEvent(self, event):
-        if bool(getattr(self, "_shutdown_in_progress", False)):
-            return
-        if getattr(self, "_quick", None) is not None:
-            return
-        timeline = self._timeline
-        canvas = getattr(timeline, "canvas", None)
-        if canvas is None or float(getattr(canvas, "total_duration", 0.0) or 0.0) <= 0:
-            return
-        px = int(round(self._playhead_visual_x()))
-        shadow_sec = getattr(self, "_shadow_sec", None)
-        shadow_px = None if shadow_sec is None else int(round(self._playhead_visual_x_for_sec(shadow_sec, center_locked=False)))
-        current_visible = -16 <= px <= self.width() + 16
-        shadow_visible = shadow_px is not None and -16 <= shadow_px <= self.width() + 16
-        if not current_visible and not shadow_visible:
-            return
-        painter = QPainter(self)
-        if not painter.isActive():
-            return
-        try:
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-            painter.fillRect(event.rect(), Qt.GlobalColor.transparent)
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-        except Exception:
-            pass
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        if shadow_visible:
-            shadow_color = QColor(255, 214, 10, 170)
-            painter.setPen(QPen(shadow_color, 2, Qt.PenStyle.DashLine))
-            painter.drawLine(shadow_px, 0, shadow_px, self.height())
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor(255, 214, 10, 210), 1))
-            painter.drawEllipse(shadow_px - 6, 3, 12, 12)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        if current_visible:
-            color = QColor(playhead_line_color_hex(getattr(canvas, "focus_mode", None)))
-            painter.setPen(QPen(color, 2))
-            painter.drawLine(px, 0, px, self.height())
-            handle_r = 7
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setBrush(QBrush(QColor("#FF453A" if self._busy else COLORS["warning"])))
-            painter.setPen(QPen(QColor("#FFFFFF"), 1))
-            painter.drawEllipse(px - handle_r, 2, handle_r * 2, handle_r * 2)
-        painter.end()
-
-
-class TimelineWidget(QWidget):
+class TimelineWidget(TimelineTimeWindowMixin, QWidget):
     EDIT_WINDOW_SETTINGS_KEY = "timeline_edit_window_seconds"
     seg_clicked = pyqtSignal(int, float)
     seg_right_clicked = pyqtSignal(float, QPoint)
@@ -312,8 +148,13 @@ class TimelineWidget(QWidget):
     sig_clip_selected = pyqtSignal(int)
     waveform_ready = pyqtSignal(str, float)
     subtitle_magnet_requested = pyqtSignal()
+    subtitle_text_height_requested = pyqtSignal()
+    subtitle_transparent_mov_requested = pyqtSignal()
+    subtitle_overlay_video_requested = pyqtSignal()
     tab_timing_requested = pyqtSignal()
     roughcut_llm_run_requested = pyqtSignal()
+    subtitle_spellcheck_requested = pyqtSignal()
+    subtitle_translate_english_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -349,7 +190,7 @@ class TimelineWidget(QWidget):
         self.magnet_btn = QPushButton("자막자석")
         self.magnet_btn.setStyleSheet(_compact_toolbar_button_style())
         self.magnet_btn.setFixedHeight(24)
-        self.magnet_btn.clicked.connect(self.subtitle_magnet_requested.emit)
+        self.magnet_btn.clicked.connect(self._show_subtitle_button_menu)
         lock_row.addWidget(self.magnet_btn)
         self._zoom_buttons = []
         for text, tip, slot in (
@@ -435,6 +276,8 @@ class TimelineWidget(QWidget):
 
         self.global_canvas.seek_frac.connect(self._on_global_seek)
         self.global_canvas.roughcut_llm_run_requested.connect(self.roughcut_llm_run_requested.emit)
+        self.global_canvas.subtitle_spellcheck_requested.connect(self.subtitle_spellcheck_requested.emit)
+        self.global_canvas.subtitle_translate_english_requested.connect(self.subtitle_translate_english_requested.emit)
 
         self._wf_worker = None
         self._mc_worker = None
@@ -812,237 +655,6 @@ class TimelineWidget(QWidget):
         visible_start = float(self.scroll.horizontalScrollBar().value()) / pps
         return max(0.0, visible_start + (self._current_visible_seconds() / 2.0))
 
-    def _apply_edit_window_seconds(
-        self,
-        seconds: float,
-        *,
-        center_sec: float | None = None,
-    ) -> None:
-        try:
-            window_seconds = max(1.0, float(seconds or 10.0))
-        except Exception:
-            window_seconds = 10.0
-        anchor_sec = self._editing_window_anchor_sec() if center_sec is None else float(center_sec or 0.0)
-        self.show_time_window_seconds(window_seconds, center_sec=anchor_sec)
-        self._fit_to_view_locked = False
-        self._fit_after_resize_pending = False
-        self._manual_zoom_since_fit = True
-        self._begin_manual_scroll(hold_sec=1.2)
-
-    def _queue_time_window_seconds_dialog(self, _pos: QPoint | None = None) -> None:
-        if bool(getattr(self, "_time_window_dialog_pending", False)):
-            return
-        self._time_window_dialog_pending = True
-        QTimer.singleShot(0, self._show_time_window_seconds_dialog)
-
-    def _restore_toolbar_after_time_window_dialog(self) -> None:
-        self._time_window_dialog_pending = False
-        # 변경 금지: 편집 창 시간 QInputDialog는 macOS/Qt에서 취소 직후
-        # mouse/keyboard grab, override cursor, focus가 버튼 위에 남을 수 있다.
-        # 이 상태가 남으면 다른 툴바 버튼까지 먹통처럼 보이므로 모든 잔여
-        # dialog 상태를 여기서 반드시 해제한다.
-        for _ in range(4):
-            try:
-                QApplication.restoreOverrideCursor()
-            except Exception:
-                break
-        for grabber_getter, releaser_name in (
-            (QWidget.mouseGrabber, "releaseMouse"),
-            (QWidget.keyboardGrabber, "releaseKeyboard"),
-        ):
-            try:
-                grabber = grabber_getter()
-            except Exception:
-                grabber = None
-            if grabber is None:
-                continue
-            try:
-                getattr(grabber, releaser_name)()
-            except Exception:
-                pass
-
-        self._release_lingering_time_window_dialog_state()
-
-        try:
-            self.setEnabled(True)
-        except Exception:
-            pass
-        for btn in list(getattr(self, "_zoom_buttons", []) or []):
-            try:
-                btn.releaseMouse()
-                btn.releaseKeyboard()
-                btn.setDown(False)
-                btn.clearFocus()
-                btn.setEnabled(True)
-                btn.update()
-            except Exception:
-                continue
-        try:
-            owner = self.window()
-        except Exception:
-            owner = None
-        if owner is not None and owner is not self:
-            try:
-                owner.setEnabled(True)
-            except Exception:
-                pass
-            try:
-                owner.activateWindow()
-            except Exception:
-                pass
-        try:
-            for top_level in list(QApplication.topLevelWidgets() or []):
-                try:
-                    top_level.releaseMouse()
-                except Exception:
-                    pass
-                try:
-                    top_level.releaseKeyboard()
-                except Exception:
-                    pass
-                try:
-                    top_level.setEnabled(True)
-                except Exception:
-                    pass
-                try:
-                    top_level.clearFocus()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        try:
-            self.setFocus(Qt.FocusReason.OtherFocusReason)
-        except Exception:
-            pass
-        try:
-            QApplication.processEvents()
-        except Exception:
-            pass
-        self._sync_focus_border()
-
-    def _release_lingering_time_window_dialog_state(self, dialog: QWidget | None = None) -> None:
-        seen: set[int] = set()
-        widgets = []
-        if dialog is not None:
-            widgets.append(dialog)
-        tracked_dialog = getattr(self, "_time_window_dialog", None)
-        if tracked_dialog is not None:
-            widgets.append(tracked_dialog)
-        for getter in (
-            getattr(QApplication, "activePopupWidget", None),
-            getattr(QApplication, "activeModalWidget", None),
-        ):
-            if not callable(getter):
-                continue
-            try:
-                widget = getter()
-            except Exception:
-                widget = None
-            if widget is not None:
-                widgets.append(widget)
-
-        for widget in widgets:
-            if widget is None:
-                continue
-            widget_id = id(widget)
-            if widget_id in seen:
-                continue
-            seen.add(widget_id)
-            if widget is self:
-                continue
-            try:
-                widget.releaseMouse()
-            except Exception:
-                pass
-            try:
-                widget.releaseKeyboard()
-            except Exception:
-                pass
-            try:
-                widget.clearFocus()
-            except Exception:
-                pass
-            if isinstance(widget, QDialog):
-                try:
-                    widget.setModal(False)
-                except Exception:
-                    pass
-                try:
-                    widget.setWindowModality(Qt.WindowModality.NonModal)
-                except Exception:
-                    pass
-                try:
-                    widget.reject()
-                except Exception:
-                    pass
-                try:
-                    widget.done(0)
-                except Exception:
-                    pass
-            try:
-                widget.hide()
-            except Exception:
-                pass
-            try:
-                widget.close()
-            except Exception:
-                pass
-
-    def _queue_toolbar_restore_after_time_window_dialog(self) -> None:
-        self._restore_toolbar_after_time_window_dialog()
-        for delay in (0, 40, 120):
-            QTimer.singleShot(delay, self._restore_toolbar_after_time_window_dialog)
-
-    def _show_time_window_seconds_dialog(self, _pos: QPoint | None = None) -> None:
-        current_seconds = self._current_visible_seconds()
-        current_seconds_rounded = max(1, int(round(current_seconds)))
-        current_seconds_label = (
-            f"{current_seconds:.1f}초"
-            if abs(current_seconds - current_seconds_rounded) >= 0.05
-            else f"{current_seconds_rounded}초"
-        )
-        center_sec = self._current_visible_center_sec()
-        try:
-            owner = self.window()
-        except Exception:
-            owner = None
-        if owner is None:
-            owner = self
-        dialog = QInputDialog(owner)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        dialog.setWindowTitle("편집 창 시간")
-        dialog.setInputMode(QInputDialog.InputMode.IntInput)
-        dialog.setLabelText(
-            f"현재 표시 시간: {current_seconds_label}\n"
-            "표시할 편집 창 시간을 1초 단위로 조정하세요."
-        )
-        dialog.setIntRange(1, 600)
-        dialog.setIntStep(1)
-        dialog.setIntValue(current_seconds_rounded)
-        dialog.setOkButtonText("적용")
-        dialog.setCancelButtonText("취소")
-        dialog.setStyleSheet(settings_dialog_stylesheet())
-        self._time_window_dialog = dialog
-        try:
-            if dialog.exec():
-                # exec() 종료 직후에도 값을 읽어야 하므로 자동 삭제를 켜지 않는다.
-                selected_seconds = float(dialog.intValue())
-                self._apply_edit_window_seconds(selected_seconds, center_sec=center_sec)
-                self._save_preferred_edit_window_seconds(selected_seconds)
-        finally:
-            try:
-                dialog.releaseMouse()
-                dialog.releaseKeyboard()
-            except Exception:
-                pass
-            self._release_lingering_time_window_dialog_state(dialog)
-            try:
-                dialog.deleteLater()
-            except Exception:
-                pass
-            self._time_window_dialog = None
-            self._queue_toolbar_restore_after_time_window_dialog()
-
     def _create_playhead_overlay(self):
         return TimelinePlayheadOverlay(self, self.scroll.viewport())
 
@@ -1195,6 +807,45 @@ class TimelineWidget(QWidget):
             self.magnet_btn.setToolTip(str(magnet_tip or ""))
         if hasattr(self, "repeat_chk"):
             self.repeat_chk.setToolTip(str(repeat_tip or ""))
+
+    def _subtitle_button_menu_items(self) -> list[dict]:
+        return [
+            {
+                "id": "subtitle_magnet",
+                "label": "자막자석 실행",
+                "accent": "#34C759",
+            },
+            {"separator": True},
+            {
+                "id": "text_height",
+                "label": "텍스트 높이 조절",
+                "accent": "#34C759",
+            },
+            {"separator": True},
+            {
+                "id": "transparent_mov",
+                "label": "투명 자막 MOV 출력",
+                "accent": "#5AC8FA",
+            },
+            {
+                "id": "overlay_gpu",
+                "label": "영상+자막 오버레이 출력 (GPU)",
+                "accent": "#FFCC00",
+            },
+        ]
+
+    def _show_subtitle_button_menu(self) -> None:
+        btn = getattr(self, "magnet_btn", None)
+        pos = btn.mapToGlobal(btn.rect().bottomLeft()) if btn is not None else self.mapToGlobal(self.rect().center())
+        chosen = show_context_menu(self, pos, self._subtitle_button_menu_items())
+        if chosen == "subtitle_magnet":
+            self.subtitle_magnet_requested.emit()
+        elif chosen == "text_height":
+            self.subtitle_text_height_requested.emit()
+        elif chosen == "transparent_mov":
+            self.subtitle_transparent_mov_requested.emit()
+        elif chosen == "overlay_gpu":
+            self.subtitle_overlay_video_requested.emit()
 
     def _sync_focus_border(self):
         border = getattr(self, "_focus_border", None)
@@ -2069,158 +1720,6 @@ class TimelineWidget(QWidget):
         self.global_canvas.update()
         self._schedule_vp_sync()
         self._sync_playhead_overlay()
-
-    def _editing_window_anchor_sec(self) -> float | None:
-        canvas = getattr(self, "canvas", None)
-        if canvas is None:
-            return None
-
-        active_line = getattr(canvas, "active_seg_line", None)
-        if active_line is not None and hasattr(canvas, "_segment_for_line"):
-            seg = canvas._segment_for_line(int(active_line))
-            if isinstance(seg, dict):
-                try:
-                    start = float(seg.get("start", 0.0) or 0.0)
-                    end = float(seg.get("end", start) or start)
-                    if end > start:
-                        return (start + end) / 2.0
-                except Exception:
-                    pass
-
-        active_start = getattr(canvas, "active_seg_start", None)
-        if active_start is not None and hasattr(canvas, "_active_segment_candidates"):
-            try:
-                candidates = canvas._active_segment_candidates()
-            except Exception:
-                candidates = []
-            for seg in list(candidates or []):
-                if not isinstance(seg, dict) or bool(seg.get("is_gap")):
-                    continue
-                try:
-                    start = float(seg.get("start", 0.0) or 0.0)
-                    end = float(seg.get("end", start) or start)
-                    if end > start:
-                        return (start + end) / 2.0
-                except Exception:
-                    continue
-            try:
-                return float(active_start)
-            except Exception:
-                pass
-
-        try:
-            playhead = float(getattr(canvas, "playhead_sec", 0.0) or 0.0)
-        except Exception:
-            playhead = 0.0
-        return max(0.0, playhead)
-
-    def show_time_window_seconds(
-        self,
-        seconds: float = 15.0,
-        *,
-        center_sec: float | None = None,
-        start_sec: float | None = None,
-    ) -> None:
-        """Show a compact time window for newly opened subtitle/project files."""
-        total_dur = max(0.0, float(getattr(self.canvas, "total_duration", 0.0) or 0.0), self._fit_content_duration())
-        try:
-            window_sec = max(1.0, float(seconds or 15.0))
-        except Exception:
-            window_sec = 15.0
-        if total_dur <= 0.0:
-            return
-        visible_sec = min(window_sec, max(0.001, total_dur))
-        visible_w = max(1, self._fit_reference_width())
-        new_pps = max(0.001, min(500.0, float(visible_w) / max(0.001, visible_sec)))
-        target_w = self._canvas_width_for_duration(total_dur, new_pps)
-        viewport_w = max(1, int(self.scroll.viewport().width()))
-        max_scroll = max(0, int(target_w) - viewport_w)
-
-        if center_sec is not None:
-            try:
-                anchor = max(0.0, min(total_dur, float(center_sec or 0.0)))
-            except Exception:
-                anchor = 0.0
-            view_start_sec = anchor - (visible_sec / 2.0)
-        elif start_sec is not None:
-            try:
-                view_start_sec = float(start_sec or 0.0)
-            except Exception:
-                view_start_sec = 0.0
-        elif self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
-            view_start_sec = max(0.0, float(self._selected_clip_offset or 0.0))
-        else:
-            view_start_sec = 0.0
-        view_start_sec = max(0.0, min(view_start_sec, max(0.0, total_dur - visible_sec)))
-        target_scroll = max(0, min(self._scroll_x_for_sec(view_start_sec, new_pps), max_scroll))
-
-        self._fit_to_view_locked = False
-        self._fit_after_resize_pending = False
-        self._manual_zoom_since_fit = False
-        self.canvas.setUpdatesEnabled(False)
-        try:
-            self.canvas.pps = new_pps
-            if self.canvas.width() != target_w:
-                self.canvas.setFixedWidth(target_w)
-            self.scroll.horizontalScrollBar().setValue(target_scroll)
-            self._target_scroll_x = float(target_scroll)
-            self._current_scroll_x = float(target_scroll)
-        finally:
-            self.canvas.setUpdatesEnabled(True)
-        self._refresh_canvas_playhead_cache()
-
-        total_for_view = max(0.001, float(getattr(self.canvas, "total_duration", 0.0) or total_dur))
-        start_frac = max(0.0, min(1.0, view_start_sec / total_for_view))
-        end_frac = max(start_frac, min(1.0, (view_start_sec + visible_sec) / total_for_view))
-        self.global_canvas.update_viewport(start_frac, end_frac)
-        self.global_canvas.update()
-        if hasattr(self.canvas, "_update_viewport_region"):
-            self.canvas._update_viewport_region()
-        else:
-            self.canvas.update()
-        self._schedule_vp_sync()
-        self._sync_playhead_overlay()
-
-    def show_ten_second_edit_window(self) -> None:
-        anchor_sec = self._editing_window_anchor_sec()
-        self._apply_edit_window_seconds(self._preferred_edit_window_seconds, center_sec=anchor_sec)
-
-    def preferred_edit_window_seconds(self) -> float:
-        try:
-            value = float(getattr(self, "_preferred_edit_window_seconds", 10.0) or 10.0)
-        except Exception:
-            value = 10.0
-        return max(1.0, min(600.0, value))
-
-    def _load_preferred_edit_window_seconds(self) -> float:
-        try:
-            settings = dict(load_settings() or {})
-            value = float(settings.get(self.EDIT_WINDOW_SETTINGS_KEY, 10.0) or 10.0)
-        except Exception:
-            value = 10.0
-        return max(1.0, min(600.0, value))
-
-    def _save_preferred_edit_window_seconds(self, seconds: float) -> None:
-        try:
-            normalized = max(1.0, min(600.0, float(seconds or 10.0)))
-        except Exception:
-            normalized = 10.0
-        rounded_value = int(round(normalized))
-        self._preferred_edit_window_seconds = float(rounded_value)
-        self._refresh_time_window_button_tooltip()
-        try:
-            settings = dict(load_settings() or {})
-            settings[self.EDIT_WINDOW_SETTINGS_KEY] = rounded_value
-            save_settings(settings)
-        except Exception:
-            pass
-
-    def _refresh_time_window_button_tooltip(self) -> None:
-        button = getattr(self, "time_window_btn", None)
-        if button is None:
-            return
-        seconds = int(round(float(getattr(self, "_preferred_edit_window_seconds", 10.0) or 10.0)))
-        button.setToolTip(f"캔버스 {seconds}초 편집 창\n우클릭: 현재 시간창 조정")
 
     def schedule_initial_open_view(
         self,

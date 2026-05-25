@@ -11,9 +11,155 @@ import subprocess
 import tempfile
 import shutil
 import re
+import json
 
 from core.runtime import config
 from core.runtime.logger import get_logger
+
+
+def _ffprobe_video_info(path: str) -> dict:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,width,height,bit_rate",
+        "-of",
+        "json",
+        str(path or ""),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+        if result.returncode != 0:
+            return {}
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams") or []
+        return dict(streams[0]) if streams else {}
+    except Exception:
+        return {}
+
+
+def _video_toolbox_encode_args(video_info: dict, output_path: str) -> list[str]:
+    codec = str(video_info.get("codec_name") or "").lower()
+    try:
+        source_bitrate = int(video_info.get("bit_rate") or 0)
+    except Exception:
+        source_bitrate = 0
+    try:
+        width = int(video_info.get("width") or 0)
+        height = int(video_info.get("height") or 0)
+    except Exception:
+        width, height = 0, 0
+    fallback_bitrate = 45_000_000 if max(width, height) >= 3000 else 18_000_000
+    bitrate = max(8_000_000, source_bitrate or fallback_bitrate)
+    encoder = "hevc_videotoolbox" if codec in {"hevc", "h265"} else "h264_videotoolbox"
+    args = [
+        "-c:v",
+        encoder,
+        "-b:v",
+        str(bitrate),
+        "-maxrate",
+        str(int(bitrate * 1.5)),
+        "-bufsize",
+        str(int(bitrate * 2)),
+    ]
+    if encoder == "h264_videotoolbox":
+        args.extend(["-profile:v", "high"])
+    if str(output_path or "").lower().endswith(".mp4"):
+        args.extend(["-movflags", "+faststart"])
+    return args
+
+
+def _ffmpeg_error_tail(stderr: str, *, limit: int = 1800) -> str:
+    text = str(stderr or "").strip()
+    if not text:
+        return "(stderr 없음)"
+    lines = [line for line in text.splitlines() if line.strip()]
+    tail = "\n".join(lines[-24:])
+    return tail[-limit:]
+
+
+def render_subtitle_overlay_video_gpu(
+    srt_path: str,
+    target_file: str,
+    export_settings: dict | None = None,
+    output_path: str | None = None,
+) -> bool:
+    """Burn subtitles into the source video using a VideoToolbox GPU encoder."""
+    target_file = os.path.abspath(str(target_file or ""))
+    srt_path = os.path.abspath(str(srt_path or ""))
+    if not target_file or not os.path.exists(target_file):
+        get_logger().log("❌ 자막 오버레이 출력 실패: 원본 영상 파일이 없습니다.")
+        return False
+    if not srt_path or not os.path.exists(srt_path):
+        get_logger().log("❌ 자막 오버레이 출력 실패: SRT 파일이 없습니다.")
+        return False
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    base = os.path.splitext(os.path.basename(target_file))[0]
+    output_path = os.path.abspath(
+        str(output_path or os.path.join(os.path.dirname(target_file), f"{base}_자막입힘.mp4"))
+    )
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    video_info = _ffprobe_video_info(target_file)
+    work_dir = tempfile.mkdtemp(prefix="ai_subtitle_overlay_mov_")
+    encode_args = _video_toolbox_encode_args(video_info, output_path)
+    get_logger().log(f"🎥 영상+자막 오버레이 출력(GPU) 시작: {os.path.basename(output_path)}")
+    try:
+        render_settings = dict(export_settings or {})
+        render_settings["icloud"] = False
+        try:
+            source_width = int(video_info.get("width") or 0)
+        except Exception:
+            source_width = 0
+        render_settings["res"] = "4K (3840px)" if source_width >= 3000 else "FHD (1920px)"
+        temp_media_ref = os.path.join(work_dir, os.path.basename(target_file))
+        if not render_subtitle_mov(srt_path, temp_media_ref, render_settings, 1, 1):
+            get_logger().log("❌ 영상+자막 오버레이 출력 실패: 투명 자막 MOV 생성 실패")
+            return False
+        candidates = sorted(name for name in os.listdir(work_dir) if name.endswith("_자막소스.mov"))
+        if not candidates:
+            get_logger().log("❌ 영상+자막 오버레이 출력 실패: 투명 자막 MOV 파일이 없습니다.")
+            return False
+        subtitle_mov = os.path.join(work_dir, candidates[0])
+        overlay_filter = "[0:v][1:v]overlay=(main_w-overlay_w)/2:main_h-overlay_h:eof_action=pass:format=auto[v]"
+
+        def _cmd(audio_codec: str) -> list[str]:
+            return [
+                ffmpeg_bin,
+                "-y",
+                "-hwaccel",
+                "videotoolbox",
+                "-i",
+                target_file,
+                "-i",
+                subtitle_mov,
+                "-filter_complex",
+                overlay_filter,
+                "-map",
+                "[v]",
+                "-map",
+                "0:a?",
+                *encode_args,
+                "-c:a",
+                audio_codec,
+                output_path,
+            ]
+
+        result = subprocess.run(_cmd("copy"), capture_output=True, text=True)
+        if result.returncode != 0:
+            result = subprocess.run(_cmd("aac"), capture_output=True, text=True)
+        if result.returncode != 0:
+            get_logger().log(f"❌ 영상+자막 오버레이 출력 실패:\n{_ffmpeg_error_tail(result.stderr)}")
+            return False
+        if os.path.exists(output_path):
+            get_logger().log(f"✅ 영상+자막 오버레이 출력 완료: {os.path.basename(output_path)}")
+            return True
+        get_logger().log("❌ 영상+자막 오버레이 출력 실패: 출력 파일이 생성되지 않았습니다.")
+        return False
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def render_subtitle_mov(srt_path: str, target_file: str, export_settings: dict,
@@ -52,6 +198,10 @@ def render_subtitle_mov(srt_path: str, target_file: str, export_settings: dict,
     txt_c = QColor(s.get("txt_c", "#FFFFFF"))
     bdr_c = QColor(s.get("bdr_c", "#FFFFFF"))
     shd_c = QColor(s.get("shd_c", "#000000"))
+    try:
+        vertical_offset = int(int(s.get("text_height", 0) or 0) * res_scale)
+    except Exception:
+        vertical_offset = 0
 
     style = dict(
         font_path="",
@@ -69,6 +219,7 @@ def render_subtitle_mov(srt_path: str, target_file: str, export_settings: dict,
         ) if s.get("shadow", False) else None,
         shadow_x=int(int(s.get("shdx", 3)) * res_scale),
         shadow_y=int(int(s.get("shdy", 3)) * res_scale),
+        vertical_offset=vertical_offset,
         bg_rgba=bg_rgba,
         bg_radius=int(s.get("bg_radius", 10) * res_scale),
         bg_margin=int(s.get("bg_margin", 18) * res_scale),

@@ -87,7 +87,7 @@ final class SubtitleCoreTests: XCTestCase {
         let settings = try XCTUnwrap(result["settings_overrides"] as? [String: Any])
         XCTAssertEqual(settings["native_subtitle_assembly_enabled"] as? Bool, true)
         XCTAssertEqual(settings["native_subtitle_assembly_quality_floor"] as? String, "best_fast_auto_high")
-        XCTAssertEqual(settings["stt_accelerator_distribution"] as? String, "gpu+npu+cpu")
+        XCTAssertEqual(settings["stt_accelerator_distribution"] as? String, "ane+gpu")
         XCTAssertEqual(settings["stt_word_timestamps_precision_max_segments"] as? Int, 48)
     }
 

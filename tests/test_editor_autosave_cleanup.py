@@ -113,6 +113,36 @@ class _CompletedRecoverySaveEditor(EditorSaveManagerMixin):
         return "/tmp/project.json"
 
 
+class _DeferredProjectSaveEditor(EditorSaveManagerMixin):
+    def __init__(self):
+        self.media_path = "/tmp/deferred-source.mp4"
+        self.video_fps = 30.0
+        self.settings = {}
+        self._saved_segments_signature = ""
+        self._autosave_requires_manual_save = True
+        self._has_unsaved_changes = Mock(return_value=True)
+        self._flush_pending_segment_queue_now = Mock()
+        self._warn_pending_stt_before_save = Mock(return_value=True)
+        self._persist_editor_srts = Mock(return_value=True)
+        self._auto_save_project = Mock(return_value="/tmp/deferred-project.aissproj")
+        self._sync_queue_saved_state = Mock()
+        self._show_confirm_dialog = Mock()
+        self._window = SimpleNamespace(
+            _current_project_path="/tmp/deferred-project.aissproj",
+            _refresh_saved_status_label=Mock(),
+        )
+        self._segments = [{"start": 0.0, "end": 1.0, "text": "빠른 저장"}]
+
+    def _get_current_segments(self):
+        return [dict(seg) for seg in self._segments]
+
+    def window(self):
+        return self._window
+
+    def _segments_for_srt_output(self, segs):
+        return list(segs or [])
+
+
 class _SourceSrtSaveEditor(EditorSaveManagerMixin):
     def __init__(self):
         self.media_path = "/tmp/media.mp4"
@@ -163,6 +193,7 @@ class _CompletionEditor(EditorPipelineMixin):
         self._post_completion_sync = Mock()
         self._on_save = Mock(return_value=True)
         self._get_current_segments = Mock(side_effect=lambda: list(self._segment_state))
+        self._refresh_editor_timestamp_metadata = Mock(return_value=0)
         self.append_segments = Mock(side_effect=self._append_segments_impl)
         self._set_auto_cut_boundary_scan_active = Mock()
         self._set_auto_cut_boundary_scan_lines = Mock()
@@ -382,6 +413,37 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor._auto_save_project.assert_called_once()
         editor._mark_save_completed.assert_called_once_with(touch_saved_time=True)
 
+    def test_manual_save_defers_project_save_after_srt_persist(self):
+        editor = _DeferredProjectSaveEditor()
+
+        result = EditorSaveManagerMixin._on_save(
+            editor,
+            skip_auto_next=True,
+            schedule_analysis_refresh=False,
+            queue_learning=False,
+            auto_export=False,
+        )
+
+        self.assertTrue(result)
+        editor._persist_editor_srts.assert_called_once()
+        editor._auto_save_project.assert_not_called()
+        self.assertTrue(editor._deferred_project_save_pending)
+        self.assertEqual(editor._deferred_project_save_segments[0]["text"], "빠른 저장")
+
+    def test_close_flushes_deferred_project_save_without_prompt_when_clean(self):
+        editor = _DeferredProjectSaveEditor()
+        editor._schedule_deferred_project_save(
+            editor._get_current_segments(),
+            schedule_analysis_refresh=False,
+        )
+        editor._has_unsaved_changes = Mock(return_value=False)
+
+        self.assertTrue(editor._confirm_close_before_exit("종료 확인"))
+
+        editor._auto_save_project.assert_called_once()
+        editor._show_confirm_dialog.assert_not_called()
+        self.assertFalse(editor._deferred_project_save_pending)
+
     def test_persist_editor_srts_prefers_opened_source_srt_path_for_direct_srt_mode(self):
         editor = _SourceSrtSaveEditor()
 
@@ -550,6 +612,19 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertTrue(editor._on_save.call_args.kwargs["force"])
         self.assertTrue(editor._process_completed_finalized)
         self.assertTrue(getattr(editor, "_generation_completion_autosave_done", False))
+
+    def test_set_process_completed_refreshes_timestamp_layer_after_queue_flush(self):
+        editor = _CompletionEditor()
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
+            editor._set_process_completed()
+
+        refresh_kwargs = [
+            dict(call.kwargs)
+            for call in editor._refresh_editor_timestamp_metadata.call_args_list
+        ]
+        self.assertIn({"full": True}, refresh_kwargs)
+        self.assertIn({"full": False}, refresh_kwargs)
 
     def test_stt_progress_complete_does_not_finalize_before_backend_finalizer(self):
         editor = _CompletionEditor()

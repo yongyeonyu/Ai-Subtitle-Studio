@@ -774,9 +774,12 @@ class GlobalMenuBar(QWidget):
             self.main_window._toggle_main_video()
 
     def _open_export(self):
+        self._open_export_dialog()
+
+    def _open_export_dialog(self, output_mode: str | None = None, initial_tab: str | None = None):
         editor = self._active_editor()
         if editor is not None and hasattr(editor, "_show_export_dialog"):
-            editor._show_export_dialog()
+            editor._show_export_dialog(output_mode=output_mode, initial_tab=initial_tab)
         elif hasattr(self.main_window, "_open_main_export_dialog"):
             self.main_window._open_main_export_dialog()
 

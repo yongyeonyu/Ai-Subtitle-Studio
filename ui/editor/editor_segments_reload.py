@@ -64,6 +64,26 @@ class EditorSegmentsReloadMixin:
             timestamp_area.setUpdatesEnabled(True)
         if text_edit is not None and hasattr(text_edit, "setUpdatesEnabled"):
             text_edit.setUpdatesEnabled(True)
+        self._reload_segments_refresh_timestamp_layer_after_restore()
+
+    def _reload_segments_refresh_timestamp_layer_after_restore(self) -> None:
+        refresher = getattr(self, "_refresh_editor_timestamp_metadata", None)
+        if not callable(refresher):
+            return
+        try:
+            refresher(full=False)
+        except Exception:
+            return
+        try:
+            from PyQt6.QtCore import QTimer
+
+            for delay_ms in (0, 120, 360):
+                QTimer.singleShot(
+                    delay_ms,
+                    lambda e=self: e._refresh_editor_timestamp_metadata(full=False),
+                )
+        except Exception:
+            pass
 
     def _reload_segments_apply_rows(self, segs: list[dict], *, preserve_view: bool) -> list[dict]:
         loaded_segments = None

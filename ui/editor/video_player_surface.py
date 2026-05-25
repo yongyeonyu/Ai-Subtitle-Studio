@@ -126,6 +126,21 @@ class VideoPlayerSurfaceMixin:
 
     def _on_playback_state_changed(self, state):
         if state == QMediaPlayer.PlaybackState.PlayingState:
+            try:
+                main_w = self.window()
+                reserve = getattr(main_w, "_reserve_video_playback_runtime", None)
+                if callable(reserve):
+                    reserve(hold_sec=12.0)
+                scheduler = getattr(main_w, "_schedule_post_generation_gc", None)
+                editor = getattr(main_w, "_editor_widget", None)
+                release_pending = bool(
+                    getattr(editor, "_post_generation_models_release_requested", False)
+                    and not getattr(editor, "_post_generation_models_released", False)
+                )
+                if release_pending and callable(scheduler):
+                    scheduler(editor=editor, delay_ms=2200)
+            except Exception:
+                pass
             self._video_surface_primed = True
             self._hide_thumbnail()
         self._update_btn()

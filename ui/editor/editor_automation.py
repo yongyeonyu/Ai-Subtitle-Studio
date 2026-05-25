@@ -14,6 +14,26 @@ class EditorAutomationMixin:
         timeline = getattr(self, "timeline", None)
         return getattr(timeline, "canvas", None) if timeline is not None else None
 
+    def _automation_canvas_line_for_start(self, start_sec: float) -> int | None:
+        canvas = self._automation_canvas()
+        if canvas is None:
+            return None
+        try:
+            target = self._automation_snap_sec(float(start_sec))
+        except Exception:
+            return None
+        for seg in list(getattr(canvas, "segments", []) or []):
+            if not isinstance(seg, dict):
+                continue
+            try:
+                start = self._automation_snap_sec(float(seg.get("start", 0.0) or 0.0))
+                line = int(seg.get("line", -1))
+            except Exception:
+                continue
+            if line >= 0 and abs(start - target) < self._AUTOMATION_SEGMENT_TOLERANCE_SEC:
+                return line
+        return None
+
     def _automation_total_duration(self) -> float:
         canvas = self._automation_canvas()
         total = float(getattr(canvas, "total_duration", 0.0) or 0.0) if canvas is not None else 0.0
@@ -814,7 +834,17 @@ class EditorAutomationMixin:
                 timeline.set_active(start)
             if timeline is not None and hasattr(timeline, "center_to_sec"):
                 timeline.center_to_sec(center_sec, smooth=False)
+            canvas_line = self._automation_canvas_line_for_start(start)
+            if canvas_line is not None:
+                line_num = int(canvas_line)
             starter(line_num, start, split_at_playhead=True)
+            if not bool(getattr(canvas, "_edit_active", False)) or not hasattr(canvas, "_pending_split_sec"):
+                starter(line_num, start, split_at_playhead=False)
+                if bool(getattr(canvas, "_edit_active", False)):
+                    try:
+                        setattr(canvas, "_pending_split_sec", float(playhead))
+                    except Exception:
+                        pass
             if not bool(getattr(canvas, "_edit_active", False)) or not hasattr(canvas, "_pending_split_sec"):
                 raise ValueError("smart_split_unavailable")
             setattr(

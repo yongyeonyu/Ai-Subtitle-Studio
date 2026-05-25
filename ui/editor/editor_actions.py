@@ -1060,7 +1060,7 @@ class EditorActionsMixin:
     # ---------------------------------------------------------
     # 내보내기
     # ---------------------------------------------------------
-    def _show_export_dialog(self):
+    def _show_export_dialog(self, output_mode: str | None = None, initial_tab: str | None = None):
         is_dirty = False
         try:
             if hasattr(self, "sm"):
@@ -1086,7 +1086,13 @@ class EditorActionsMixin:
         from ui.dialogs.export_dialog import ExportDialog
         segs = self._get_current_segments()
         if segs:
-            dlg = ExportDialog(segs, getattr(self, 'video_name', ''), self)
+            dlg = ExportDialog(
+                segs,
+                getattr(self, 'video_name', ''),
+                self,
+                output_mode=output_mode,
+                initial_tab=initial_tab,
+            )
             if hasattr(self, 'video_player'):
                 dlg._video_player_ref = self.video_player
             dlg.exec()

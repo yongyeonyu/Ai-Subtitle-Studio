@@ -173,6 +173,42 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertEqual(result["mode"], "restart_app_per_scenario")
         restart_app.assert_called_once()
 
+    def test_app_launch_command_can_force_source_app(self):
+        with patch.dict("os.environ", {"AI_SUBTITLE_STUDIO_QA_USE_SOURCE": "1"}):
+            command = qa_suite_runner._app_launch_command(qa_suite_runner.DEFAULT_PYTHON)
+
+        self.assertEqual(command, [str(qa_suite_runner.DEFAULT_PYTHON), str(qa_suite_runner.APP_MAIN)])
+
+    def test_editor_compact_resolved_playhead_does_not_sync_video(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "editor_compact_macau"
+            spec = {
+                "id": "editor_compact_macau",
+                "type": "app_sequence",
+                "description": "",
+                "output_dir": output_dir,
+                "steps": [
+                    {
+                        "name": "set_playhead",
+                        "command": ["editor-set-playhead", "1.5", "--center"],
+                        "timeout": 30.0,
+                    }
+                ],
+            }
+            with patch(
+                "tools.qa_suite_runner._resolve_editor_compact_playhead",
+                return_value=(12.345, {"status_ok": True}),
+            ), patch(
+                "tools.qa_suite_runner._run_subprocess",
+                return_value=(0, {"ok": True, "message": "editor_playhead_set"}),
+            ) as run_subprocess:
+                result = qa_suite_runner._run_app_sequence(spec, qa_suite_runner.DEFAULT_PYTHON)
+
+        self.assertTrue(result["ok"])
+        argv = run_subprocess.call_args.args[0]
+        self.assertIn("--no-sync-video", argv)
+        self.assertLess(argv.index("--center"), argv.index("--no-sync-video"))
+
     def test_run_full_media_rejects_verifier_empty_subtitle_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "x5_high_rolling_180s"

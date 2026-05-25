@@ -646,7 +646,35 @@ class TimelineInlineEditMixin:
         old_line = getattr(self, "_edit_line", -1)
         self.active_seg_start = start_sec
 
+        try:
+            target_start = self._snap_to_frame(float(start_sec))
+        except Exception:
+            target_start = None
+
+        def _segment_at_requested_start():
+            if target_start is None:
+                return None
+            for candidate in self.segments:
+                try:
+                    candidate_start = self._snap_to_frame(float(candidate.get("start", 0.0) or 0.0))
+                except Exception:
+                    continue
+                if abs(candidate_start - target_start) < 0.05:
+                    return candidate
+            return None
+
         seg = next((s for s in self.segments if s.get("line") == line_num), None)
+        if seg and target_start is not None:
+            try:
+                line_start = self._snap_to_frame(float(seg.get("start", 0.0) or 0.0))
+            except Exception:
+                line_start = target_start
+            if abs(line_start - target_start) >= 0.05:
+                seg = _segment_at_requested_start() or seg
+        elif not seg:
+            seg = _segment_at_requested_start()
+        if seg:
+            line_num = seg.get("line", line_num)
         if not seg:
             return
         self._set_pending_split_from_playhead(seg, enabled=bool(split_at_playhead))

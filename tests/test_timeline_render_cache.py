@@ -554,6 +554,30 @@ class TimelineRenderCacheTests(unittest.TestCase):
         finally:
             canvas.close()
 
+    def test_inline_editor_falls_back_to_start_time_when_line_key_drifted(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(1200, CANVAS_H)
+            canvas.setFixedWidth(1200)
+            canvas.total_duration = 8.0
+            canvas.pps = 140.0
+            canvas.playhead_sec = 1.4
+            canvas.segments = [
+                {"start": 3.0, "end": 4.0, "text": "다른 라인", "line": 40},
+                {"start": 0.8, "end": 2.6, "text": "라인 키 보정", "line": 42},
+            ]
+            canvas.show()
+            self.app.processEvents()
+
+            canvas.start_inline_edit(40, 0.8, split_at_playhead=True)
+            self.app.processEvents()
+
+            self.assertTrue(getattr(canvas, "_edit_active", False))
+            self.assertEqual(getattr(canvas, "_edit_line", None), 42)
+            self.assertAlmostEqual(float(getattr(canvas, "_pending_split_sec")), 1.4)
+        finally:
+            canvas.close()
+
     def test_roughcut_lane_playback_render_stays_stable_with_dense_markers(self):
         canvas = TimelineCanvas()
         try:

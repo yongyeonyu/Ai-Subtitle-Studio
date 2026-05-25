@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.14-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_14_RELEASED
-Last-Updated: 2026-05-24
+Document-Version: 04.00.15-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_15_RELEASED
+Last-Updated: 2026-05-25
 Updated-By: Codex
 Purpose: Consolidated active execution queue. Former `idea_item.md` and `NATIVE_LIB_PLAN.md` content lives here.
 -->
@@ -40,7 +40,7 @@ Those standalone files were intentionally removed after consolidation.
 
 Goal: 자막 생성 전체를 기능 경계별 파일/함수로 분리하고, 안정된 compute hot path만 Swift/C++ native helper로 승격해 Apple Silicon ANE/GPU 사용 가능성을 넓힌다.
 
-Status: in_progress
+Status: completed
 
 Progress:
 
@@ -64,6 +64,12 @@ Progress:
 - 2026-05-24: Full regression refreshed after QA runner and `subtitle_cut_boundary` facade work: `venv/bin/python -m pytest tests -q` passed (`2796 passed, 1 warning, 5 subtests`) in `181.21s`.
 - 2026-05-24: Full regression refreshed after `subtitle_dictionary` and `subtitle_live_editor_feed` facade work: `venv/bin/python -m pytest tests -q` passed (`2804 passed, 1 warning, 5 subtests`) in `179.39s`. `subtitle_speaker_diarization` focused guard passed with `tests/test_subtitle_speaker_diarization_facade.py tests/test_pipeline_speaker_diarization.py` (`9 passed`), then full regression refreshed after the speaker facade passed (`2809 passed, 1 warning, 5 subtests`) in `180.16s`.
 - 2026-05-24: `subtitle_live_sync_manager` focused guard passed with `tests/test_subtitle_live_sync_manager.py tests/test_subtitle_generation_domain_map.py tests/test_single_pipeline_ui_guard.py tests/test_runtime_multi_process.py::RuntimeMultiProcessTests::test_runtime_resource_coordinator_active_labels_include_live_pipeline_stages` (`19 passed`), then full regression refreshed after the live-sync facade passed (`2815 passed, 1 warning, 5 subtests`) in `179.35s`.
+- 2026-05-25: Long-file cleanup continued without subtitle policy changes. `core/audio/media_processor_transcribe.py` was split into policy/recheck/run/windowed mixins; `core/audio/media_processor_audio.py` now delegates adaptive audio-route helpers to `core/audio/media_processor_audio_route.py`; and `core/engine/subtitle_engine.py` was reduced below 2000 lines by extracting LoRA packaging, LLM runtime wrappers, final-integrity guards, and STT candidate helper/selection modules.
+- 2026-05-25: The current top three runtime-code files were reduced below 2000 lines without UI/UX behavior changes: `tools/benchmark_subtitle_pipeline_variants.py` -> 1997 lines via benchmark settings/readability/artifact helpers, `ui/main/main_window.py` -> 1772 lines via automation/personalization mixins, and `ui/timeline/timeline_widget.py` -> 1849 lines via playhead overlay/time-window mixins.
+- 2026-05-25: Focused guards passed after the split work: `tests/test_media_processor_transcribe_split.py` (`4 passed`), `tests/test_benchmark_mode_profiles.py` (`24 passed`), `tests/test_timeline_playhead_fit.py` (`144 passed`), `tests/test_timeline_hit_targets.py tests/test_sidebar_terminal_layout.py` (`241 passed`), and subtitle/domain focused set (`104 passed`). X5 후반 60s High benchmark completed with no error at `.codex_work/benchmarks/subtitle_pipeline_variants/20260525_065941/benchmark_results.json` (`quality_score=72.239`, `raw_segments=33`, `final_segments=29`, Swift/native summaries stable).
+- 2026-05-25: Long-file cleanup continued until no non-test Python runtime file exceeds 2000 lines. Split behavior-preserving helpers into `core/roughcut/editor_draft_llm.py`, `core/pipeline/cut_boundary_snapshot.py`, `core/pipeline/cut_boundary_segment_ops.py`, `ui/editor/editor_quality_review.py`, `ui/editor/editor_scan_cut_project.py`, and `ui/editor/ux/timeline_input_shadow.py`; current top runtime files are `tools/benchmark_subtitle_pipeline_variants.py` 1997, `core/roughcut/editor_draft.py` 1984, `ui/timeline/timeline_paint.py` 1964. Focused guards passed: `tests/test_pipeline_cut_boundary_cache.py` (`21 passed`), `tests/test_timeline_hit_targets.py` (`144 passed`), `tests/test_editor_roughcut_draft.py` plus Codex roughcut provider guard (`57 passed`), and targeted py_compile checks for split modules.
+- 2026-05-25: Completion evidence for the long-file pass added in `LONG_FILE_OWNERSHIP_MAP.md` and linked from `SUBTITLE_GENERATION_DOMAIN_MAP.md`; map guard coverage updated in `tests/test_subtitle_generation_domain_map.py`.
+- 2026-05-25: Source-app quick smoke passed at `output/manual_verification/latest/20260525_action_item_completion_quick_source` (`failed_count=0`) after making the QA runner able to force current source execution with `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1`; automation-only smart-split guards now cover editor/canvas line-key drift without changing subtitle quality or UI/UX behavior.
 
 Owner intent:
 
@@ -150,9 +156,9 @@ gate and rollback branch.
 ## Metadata
 
 ```yaml
-app_version: "04.00.14"
-document_version: "04.00.14-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_14_RELEASED"
+app_version: "04.00.15"
+document_version: "04.00.15-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_15_RELEASED"
 queue_source_of_truth: "ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed; optimize generation time only with behavior-preserving changes."

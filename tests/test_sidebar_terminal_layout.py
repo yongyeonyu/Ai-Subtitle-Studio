@@ -12,6 +12,7 @@ from PyQt6.QtCore import QPoint, Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QCheckBox, QComboBox, QTableWidgetItem, QWidget, QMessageBox, QPushButton, QToolButton
 
 from ui.main.main_window import MainWindow
+from ui.home_ui import SIDEBAR_STATUS_CARD_COMPACT_HEIGHT
 from ui.style import APP_PANEL_GAP, COLORS
 
 
@@ -73,6 +74,36 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIn("설정 적용: LLM(exaone3.5:7.8b)", raw)
             self.assertIn("[텍스트 LoRA] 자동 교정 허용", raw)
             self.assertIn("[정제-교정사전] 누적적용 8회", raw)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_project_info_button_toggles_sidebar_terminal_overlay(self):
+        window = MainWindow()
+        try:
+            window.show_home()
+            window.append_log("설정 적용: LLM(exaone3.5:7.8b), 간격 설정은 최종 패스에서 적용")
+
+            window.sidebar_terminal_panel.setVisible(False)
+            window._toggle_project_info_card()
+            self.assertFalse(window.sidebar_terminal_panel.isHidden())
+            shown = window.log_text.toPlainText()
+            self.assertIn("프로젝트 정보", shown)
+            self.assertIn("영상", shown)
+            self.assertIn("열린 영상 없음", shown)
+            self.assertIn("설정 적용: LLM(exaone3.5:7.8b)", window.log_text.raw_log_text())
+
+            window.append_log("[정제-교정사전] 누적적용 8회: '하추핑' => '하츄핑'")
+            self.assertIn("프로젝트 정보", window.log_text.toPlainText())
+            self.assertIn("[정제-교정사전] 누적적용 8회", window.log_text.raw_log_text())
+
+            window._toggle_project_info_card()
+            self.assertTrue(window.sidebar_terminal_panel.isHidden())
+            restored = window.log_text.toPlainText()
+            self.assertNotIn("프로젝트 정보", restored)
+            self.assertIn("준비: 자막 품질 설정을 적용했어요.", restored)
+            self.assertIn("진행: 교정 · 사전 8회", restored)
         finally:
             window.close()
             window.deleteLater()
@@ -1864,7 +1895,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_project_info_button_stays_at_sidebar_bottom_and_opens_overlay(self):
+    def test_project_info_button_stays_at_sidebar_bottom_and_toggles_terminal(self):
         window = MainWindow()
         try:
             window._unified_dashboard = True
@@ -1892,16 +1923,14 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             window._toggle_project_info_card()
             self.app.processEvents()
-            overlay = getattr(window, "_project_info_overlay", None)
-            self.assertIsNotNone(overlay)
-            self.assertLess(
-                overlay.mapTo(window, QPoint(0, 0)).y(),
-                button.mapTo(window, QPoint(0, 0)).y(),
-            )
+            self.assertFalse(terminal.isHidden())
+            self.assertIn("프로젝트 정보", window.log_text.toPlainText())
+            self.assertIsNone(getattr(window, "_project_info_overlay", None))
 
             window._toggle_project_info_card()
             self.app.processEvents()
             self.assertIsNone(getattr(window, "_project_info_overlay", None))
+            self.assertNotIn("프로젝트 정보", window.log_text.toPlainText())
         finally:
             window.close()
             window.deleteLater()
@@ -1962,6 +1991,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             slot_top = slot.mapTo(window, QPoint(0, 0)).y()
             target_bottom = slot_top - 128 - (APP_PANEL_GAP * 2)
             target_top = target_bottom - 223
+            expected_status_top = target_bottom - SIDEBAR_STATUS_CARD_COMPACT_HEIGHT
             self.assertGreaterEqual(target_top - queue_top - APP_PANEL_GAP, 134)
 
             window._sidebar_status_alignment_targets = lambda: (target_top, target_bottom)
@@ -1973,11 +2003,11 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             queue_bottom = queue_panel.mapTo(window, QPoint(0, queue_panel.height())).y()
             terminal_top = terminal.mapTo(window, QPoint(0, 0)).y()
 
-            self.assertEqual(status_top, target_top)
+            self.assertEqual(status_top, expected_status_top)
             self.assertEqual(status_bottom, target_bottom)
             self.assertEqual(status_top - queue_bottom, 0)
             self.assertEqual(terminal_top - status_bottom, APP_PANEL_GAP)
-            self.assertEqual(status_card.height(), 223)
+            self.assertEqual(status_card.height(), SIDEBAR_STATUS_CARD_COMPACT_HEIGHT)
         finally:
             window.close()
             window.deleteLater()
@@ -2148,7 +2178,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_post_generation_cleanup_releases_models_immediately(self):
+    def test_post_generation_cleanup_defers_heavy_model_release_for_playback_grace(self):
         window = MainWindow()
         editor = QWidget(window)
         editor.sm = SimpleNamespace(is_locked=False, state="ST_COMP")
@@ -2174,17 +2204,15 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 )
 
             self.assertTrue(result["cleaned"])
-            self.assertEqual(
-                release_calls,
-                [{"force": True, "preserve_roughcut_status": True, "ollama_timeout_sec": 1.2}],
-            )
+            self.assertEqual(release_calls, [])
             editor._abort_pending_editor_processing_ui_work.assert_called_once()
             self.assertEqual(editor._live_editor_preview_queue, [])
             self.assertEqual(editor._live_editor_preview_segments, [])
             self.assertEqual(editor._subtitle_context_window_index_cache, {})
             self.assertTrue(editor._post_generation_models_release_requested)
             self.assertFalse(editor._post_generation_models_released)
-            schedule_gc.assert_called_once_with(editor=editor, delay_ms=450)
+            self.assertGreater(float(getattr(window, "_video_playback_runtime_hold_until", 0.0) or 0.0), 0.0)
+            schedule_gc.assert_called_once_with(editor=editor, delay_ms=1200)
         finally:
             window._editor_widget = None
             editor.close()
@@ -2236,6 +2264,65 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_post_generation_gc_defers_cache_trim_while_playback_runtime_is_reserved(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        callbacks = []
+        try:
+            window._editor_widget = editor
+            window._reserve_video_playback_runtime(hold_sec=5.0)
+
+            def _fake_single_shot(delay_ms, callback):
+                callbacks.append((int(delay_ms), callback))
+
+            with (
+                mock.patch("ui.main.main_runtime_cleanup.QTimer.singleShot", side_effect=_fake_single_shot),
+                mock.patch.object(window, "_clear_runtime_memory_caches") as clear_runtime,
+                mock.patch.object(window, "_release_ai_models_for_editor_mode") as release_models,
+            ):
+                window._schedule_post_generation_gc(editor=editor, delay_ms=0)
+                callbacks[0][1]()
+
+            clear_runtime.assert_not_called()
+            release_models.assert_not_called()
+            self.assertEqual(callbacks[1][0], 2200)
+            self.assertTrue(window._post_generation_gc_scheduled)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_forced_model_release_defers_while_playback_runtime_is_reserved(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        try:
+            window._editor_widget = editor
+            window._reserve_video_playback_runtime(hold_sec=5.0)
+            with (
+                mock.patch("ui.main.main_runtime_cleanup.QTimer.singleShot") as single_shot,
+                mock.patch("ui.main.main_runtime_cleanup._main_window_threading_module") as threading_module,
+            ):
+                window._release_ai_models_for_editor_mode(
+                    force=True,
+                    preserve_roughcut_status=True,
+                    ollama_timeout_sec=1.2,
+                )
+
+            single_shot.assert_called_once()
+            self.assertEqual(single_shot.call_args.args[0], 2200)
+            threading_module.assert_not_called()
+            self.assertTrue(window._editor_ai_release_retry_scheduled)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_post_generation_gc_stops_retry_after_release_finishes(self):
         window = MainWindow()
         editor = QWidget(window)
@@ -2276,7 +2363,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_prioritize_video_playback_runtime_releases_post_generation_models(self):
+    def test_prioritize_video_playback_runtime_defers_heavy_release_while_starting_playback(self):
         window = MainWindow()
         editor = QWidget(window)
         editor.sm = SimpleNamespace(is_locked=False, state="ST_COMP")
@@ -2306,16 +2393,13 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             stop_idle.assert_called_once_with()
             editor._cancel_post_generation_roughcut_draft.assert_called_once_with(reason="재생 시작")
             pause_lora.assert_called_once_with("video_playback", hold_ms=222_000)
-            clear_runtime.assert_called_once_with(include_gpu=True)
-            release_models.assert_called_once_with(
-                force=True,
-                preserve_roughcut_status=True,
-                ollama_timeout_sec=1.2,
-            )
-            schedule_gc.assert_called_once_with(editor=editor, delay_ms=900)
+            clear_runtime.assert_not_called()
+            release_models.assert_not_called()
+            schedule_gc.assert_called_once_with(editor=editor, delay_ms=2200)
             self.assertTrue(editor._post_generation_models_release_requested)
             self.assertFalse(editor._post_generation_models_released)
             self.assertTrue(window._editor_ai_runtime_release_requested_for_editor_mode)
+            self.assertGreater(float(getattr(window, "_video_playback_runtime_hold_until", 0.0) or 0.0), 0.0)
         finally:
             window._editor_widget = None
             editor.close()

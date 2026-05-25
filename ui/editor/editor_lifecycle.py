@@ -524,6 +524,12 @@ class EditorLifecycleMixin:
         if not old:
             return
         try:
+            flusher = getattr(old, "_flush_deferred_project_save", None)
+            if callable(flusher):
+                flusher(reason="editor_remove")
+        except Exception as exc:
+            get_logger().log(f"⚠️ 에디터 교체 전 프로젝트 지연 저장 실패: {exc}")
+        try:
             detach = getattr(old, "detach_external_menu_bar", None)
             if callable(detach):
                 detach()
@@ -602,6 +608,12 @@ class EditorLifecycleMixin:
                 except Exception:
                     skip_clean = True
                 if skip_clean:
+                    try:
+                        flusher = getattr(self._editor_widget, "_flush_deferred_project_save", None)
+                        if callable(flusher):
+                            flusher(reason="close_clean")
+                    except Exception as exc:
+                        get_logger().log(f"⚠️ 종료 전 프로젝트 지연 저장 실패: {exc}")
                     event.accept()
                     return
 
@@ -634,6 +646,12 @@ class EditorLifecycleMixin:
                         event.ignore()
                         return
             else:
+                try:
+                    flusher = getattr(self._editor_widget, "_flush_deferred_project_save", None)
+                    if callable(flusher):
+                        flusher(reason="close_clean")
+                except Exception as exc:
+                    get_logger().log(f"⚠️ 종료 전 프로젝트 지연 저장 실패: {exc}")
                 event.accept()
         else:
             event.accept()

@@ -140,7 +140,7 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(assembled.overrides.get("native_subtitle_assembly_quality_floor"), "best_fast_auto_high")
         self.assertTrue(bool(assembled.overrides.get("runtime_hardware_acceleration_enabled")))
         self.assertTrue(bool(assembled.overrides.get("whisperkit_native_auto_enabled")))
-        self.assertEqual(assembled.overrides.get("stt_accelerator_distribution"), "gpu+npu+cpu")
+        self.assertEqual(assembled.overrides.get("stt_accelerator_distribution"), "ane+gpu")
         self.assertTrue(bool(assembled.overrides.get("audio_torch_gpu_enabled")))
         self.assertTrue(bool(assembled.overrides.get("ffmpeg_videotoolbox_decode_enabled")))
         self.assertTrue(bool(assembled.overrides.get("scan_cut_pioneer_pipe_hwaccel_enabled")))

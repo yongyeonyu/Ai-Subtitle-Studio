@@ -39,9 +39,9 @@ class VideoPlayerTransportMixin:
     _CONTROL_BAR_RIGHT_SAFE_MARGIN = 18
     _FRAME_COUNT_LABEL_WIDTH = 124
     _SOURCE_INFO_BADGE_MIN_WIDTH = 132
-    _SOURCE_INFO_BADGE_MAX_WIDTH = 260
-    _SOURCE_NAME_BADGE_MIN_WIDTH = 260
-    _SOURCE_NAME_BADGE_MAX_WIDTH = 560
+    _SOURCE_INFO_BADGE_MAX_WIDTH = 220
+    _SOURCE_NAME_BADGE_MIN_WIDTH = 520
+    _SOURCE_NAME_BADGE_MAX_WIDTH = 16777215
 
     def _log_video_transport_nonfatal(self, stage: str, exc: Exception) -> None:
         try:
@@ -170,11 +170,8 @@ class VideoPlayerTransportMixin:
 
         self.source_name_label = _MirrorLabel("")
         self.source_name_label.setObjectName("VideoSourceNameLabel")
-        # KEEP: the filename starts in the footer status zone directly after
-        # the frame counter. Do not move it back to the far-right edge; the
-        # user-marked red-box area is this label's fixed home.
-        self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.source_name_label.setWordWrap(True)
+        self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.source_name_label.setWordWrap(False)
         self.source_name_label.setMinimumWidth(self._SOURCE_NAME_BADGE_MIN_WIDTH)
         self.source_name_label.setMaximumWidth(self._SOURCE_NAME_BADGE_MAX_WIDTH)
         self.source_name_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -190,8 +187,6 @@ class VideoPlayerTransportMixin:
             " font-weight: 700;"
             "}"
         )
-        status_layout.addWidget(self.source_name_label, 0)
-        status_layout.addStretch(1)
 
         self.info_label = _MirrorLabel("영상 정보를 불러오는 중...")
         self.info_label.setObjectName("VideoSourceMetaLabel")
@@ -212,6 +207,8 @@ class VideoPlayerTransportMixin:
             "}"
         )
         status_layout.addWidget(self.info_label, 0)
+        status_layout.addStretch(1)
+        status_layout.addWidget(self.source_name_label, 0)
 
         ctrl_layout.addWidget(self.status_info_container, 1)
         self._update_control_bar_info_layout(force=True)
@@ -240,7 +237,7 @@ class VideoPlayerTransportMixin:
             return (self._SOURCE_INFO_BADGE_MAX_WIDTH, self._SOURCE_NAME_BADGE_MAX_WIDTH)
 
         gap = self._CONTROL_BAR_GAP
-        usable = max(0, available - gap)
+        usable = max(0, available - (gap * 2))
         info_min = self._SOURCE_INFO_BADGE_MIN_WIDTH
         info_max = self._SOURCE_INFO_BADGE_MAX_WIDTH
         source_min = self._SOURCE_NAME_BADGE_MIN_WIDTH
@@ -251,28 +248,19 @@ class VideoPlayerTransportMixin:
         if usable <= 180:
             return (0, usable)
 
-        # KEEP: the filename badge is right-aligned and expands leftward.
-        # Prioritize it over the technical metadata so long DJI names do not
-        # clip at the player edge when the preview column is narrow.
+        if str(getattr(self, "_source_display_name", "") or "").strip():
+            return (0, int(min(source_max, usable)))
+
         source_floor = min(source_min, usable)
-        source_width = min(source_max, max(source_floor, int(round(usable * 0.70))))
+        source_width = min(source_max, max(source_floor, int(round(usable * 0.82))))
         info_width = max(0, usable - source_width)
 
-        if info_width > info_max:
-            extra = info_width - info_max
-            info_width = info_max
-            source_width = min(source_max, source_width + extra)
-            info_width = max(0, usable - source_width)
-
         if 0 < info_width < info_min:
-            if usable >= source_floor + info_min:
-                deficit = info_min - info_width
-                shrink = min(deficit, max(0, source_width - source_floor))
-                source_width -= shrink
-                info_width += shrink
-            else:
-                source_width = min(usable, max(source_floor, usable - info_width))
-                info_width = max(0, usable - source_width)
+            source_width = min(source_max, usable)
+            info_width = max(0, usable - source_width)
+        elif info_width > info_max:
+            info_width = info_max
+            source_width = min(source_max, max(source_width, usable - info_width))
 
         total = info_width + source_width
         if total < usable:
@@ -321,9 +309,6 @@ class VideoPlayerTransportMixin:
             info_label.updateGeometry()
             source_label.updateGeometry()
             status_container.updateGeometry()
-            # KEEP: width changes must immediately reflow the visible metadata
-            # and filename text. If the label text keeps an older narrow wrap,
-            # the footer can look clipped even after the layout itself was fixed.
             self._refresh_source_info_label()
             self._refresh_source_name_label()
 
@@ -664,66 +649,8 @@ class VideoPlayerTransportMixin:
         label.setText(self._format_source_name_badge_text(label, name))
         label.setToolTip(name)
 
-    def _badge_text_width(self, label: QLabel, *, fallback_width: int) -> int:
-        width = int(getattr(label, "width", lambda: 0)() or 0)
-        if width <= 0:
-            try:
-                max_width = int(label.maximumWidth() or 0)
-                if 0 < max_width < 16777215:
-                    width = max_width
-            except Exception:
-                width = 0
-        if width <= 0:
-            width = int(fallback_width or 0)
-        return max(64, width - 22)
-
     def _format_source_name_badge_text(self, label: QLabel, name: str) -> str:
-        text = str(name or "").replace("\n", " ").strip()
-        if not text:
-            return ""
-        metrics = QFontMetrics(label.font())
-        available = self._badge_text_width(label, fallback_width=self._SOURCE_NAME_BADGE_MAX_WIDTH)
-        if metrics.horizontalAdvance(text) <= available:
-            return text
-
-        break_chars = " _-./|"
-        fully_wrapped: tuple[int, str, str] | None = None
-        for index in range(1, len(text)):
-            first = text[:index]
-            second = text[index:]
-            if not first or not second:
-                continue
-            first_width = metrics.horizontalAdvance(first)
-            second_width = metrics.horizontalAdvance(second)
-            if first_width > available or second_width > available:
-                continue
-            penalty = 0 if text[index - 1] in break_chars or text[index] in break_chars else 24
-            score = abs(first_width - second_width) + penalty
-            if fully_wrapped is None or score < fully_wrapped[0]:
-                fully_wrapped = (score, first, second)
-        if fully_wrapped is not None:
-            return f"{fully_wrapped[1]}\n{fully_wrapped[2]}"
-
-        best: tuple[int, str, str] | None = None
-        for index in range(1, len(text)):
-            first = text[:index]
-            second = text[index:]
-            if not first or not second:
-                continue
-            if metrics.horizontalAdvance(first) > available:
-                continue
-            second_elided = metrics.elidedText(second, Qt.TextElideMode.ElideRight, available)
-            balance = abs(metrics.horizontalAdvance(first) - metrics.horizontalAdvance(second_elided))
-            penalty = 0 if text[index - 1] in break_chars or text[index] in break_chars else 24
-            score = balance + penalty
-            if best is None or score < best[0]:
-                best = (score, first, second_elided)
-        if best is None:
-            split_at = max(1, min(len(text) - 1, len(text) // 2))
-            first = metrics.elidedText(text[:split_at], Qt.TextElideMode.ElideRight, available)
-            second = metrics.elidedText(text[split_at:], Qt.TextElideMode.ElideRight, available)
-            return f"{first}\n{second}"
-        return f"{best[1]}\n{best[2]}"
+        return str(name or "").replace("\n", " ").strip()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

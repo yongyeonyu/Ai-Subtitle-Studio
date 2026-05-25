@@ -9,11 +9,10 @@ import re
 import shutil
 import sys
 import time
-import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +24,6 @@ from core.audio.npu_acceleration import prefer_npu_whisper_model  # noqa: E402
 from core.audio.stt_backend_router import select_stt_backend  # noqa: E402
 from core.audio.stt_candidate_scorer import annotate_stt_candidates, average_stt_score  # noqa: E402
 from core.engine import subtitle_engine  # noqa: E402
-from core.engine.subtitle_text_policy import normalize_subtitle_text_lines, split_visible_len  # noqa: E402
 from core.mode_policy import apply_mode_runtime_settings  # noqa: E402
 from core.native_swift_subtitle_assembly import (  # noqa: E402
     ASSEMBLED_VARIANT_NAME,
@@ -42,7 +40,6 @@ from core.native_subtitle_global_canvas import global_canvas_summary as cpp_glob
 from core.native_subtitle_segments import segment_summary as cpp_segment_summary  # noqa: E402
 from core.native_subtitle_stt_segments import stt_segments_summary as cpp_stt_segments_summary  # noqa: E402
 from core.native_subtitle_timing import timing_metrics as cpp_timing_metrics  # noqa: E402
-from core.native_text_similarity import character_error_rate, similarity_ratio  # noqa: E402
 from core.performance import hardware_profile  # noqa: E402
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin  # noqa: E402
 from core.runtime import config  # noqa: E402
@@ -50,8 +47,39 @@ from core.runtime.multi_process import (  # noqa: E402
     APPLE_M_FULL_CORE_THROUGHPUT_PROFILE,
     apply_apple_m_subtitle_pipeline_plan,
 )
-from core.settings_profiles import materialize_user_settings  # noqa: E402
 from core.speaker_profile_settings import automatic_speaker_ceiling, speaker_diarization_auto_enabled  # noqa: E402
+from tools.subtitle_benchmark_artifacts import (  # noqa: E402
+    _chunk_extraction_signature,
+    _chunk_wav_count,
+    _collect_transcribe,
+    _copy_chunk_dir,
+    _load_cached_raw_segments,
+    _load_vad,
+    _slim_segments_for_artifact,
+    _variant_chunk_settings,
+)
+from tools import subtitle_benchmark_scoring as _benchmark_scoring  # noqa: E402
+from tools.subtitle_benchmark_readability import score_readability  # noqa: E402
+from tools.subtitle_benchmark_scoring import (  # noqa: E402
+    _best_ref_for,
+    _compact_text,
+    _overlap,
+    clip_reference,
+    parse_srt,
+    srt_time_to_sec,
+)
+from tools.subtitle_benchmark_settings import (  # noqa: E402
+    AudioProfile,
+    Variant,
+    _base_benchmark_settings,
+    _llm_red_yellow_gate_overrides,
+    _netflix_style_timing_overrides,
+    _stt_swap_overrides,
+    _strong_lora_merge_overrides,
+    _timing_overrides,
+    _with_subtitle_llm,
+    _word_timestamp_overrides,
+)
 
 
 DEFAULT_FIXTURE_DIR = ROOT / "test video"
@@ -59,213 +87,6 @@ DEFAULT_MEDIA = DEFAULT_FIXTURE_DIR / "X5_시승기_후반.
 DEFAULT_REFERENCE = DEFAULT_FIXTURE_DIR / "X5_시스응기_후반.srt"
 if not DEFAULT_REFERENCE.exists():
     DEFAULT_REFERENCE = DEFAULT_FIXTURE_DIR / "X5_시승기_후반.srt"
-
-
-@dataclass(frozen=True)
-class Variant:
-    name: str
-    phase: str
-    description: str
-    method: str
-    overrides: dict[str, Any]
-    run_llm: bool
-
-
-@dataclass(frozen=True)
-class AudioProfile:
-    name: str
-    description: str
-    overrides: dict[str, Any]
-
-
-def _read_user_settings() -> dict[str, Any]:
-    settings = materialize_user_settings({})
-    settings_path = Path(config.DATASET_DIR) / "user_settings.json"
-    if settings_path.exists():
-        try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                settings.update(loaded)
-        except Exception:
-            pass
-    return settings
-
-
-def _base_benchmark_settings(stt_profile: str = "current") -> dict[str, Any]:
-    settings = _read_user_settings()
-    settings.update(
-        {
-            "benchmark_runtime_profile": "subtitle-pipeline-variants",
-            "apple_m_pipeline_respect_manual_worker_settings": True,
-            "audio_preset_auto_tune": {},
-            "stt_candidate_scoring_enabled": True,
-            "stt_low_score_recheck_enabled": True,
-            "stt_low_score_recheck_threshold": max(58.0, float(settings.get("stt_low_score_recheck_threshold", 58.0) or 58.0)),
-            "stt_low_score_recheck_max_segments": min(48, int(settings.get("stt_low_score_recheck_max_segments", 48) or 48)),
-            "stt_low_score_recheck_max_audio_sec": min(150.0, float(settings.get("stt_low_score_recheck_max_audio_sec", 150.0) or 150.0)),
-            "stt_selective_recheck_min_segment_retention_ratio": 0.9,
-            "stt_word_timestamps_mode": "selective",
-            "stt_word_timestamps_default_enabled": False,
-            "stt_word_timestamp_precision_pass": False,
-            "stt_word_timestamps_precision_enabled": False,
-            "stt_word_timestamps_precision_max_segments": min(16, int(settings.get("stt_word_timestamps_precision_max_segments", 16) or 16)),
-            "stt_word_timestamps_precision_max_audio_sec": min(70.0, float(settings.get("stt_word_timestamps_precision_max_audio_sec", 70.0) or 70.0)),
-            "subtitle_output_selector_enabled": True,
-            "runtime_quality_self_review_enabled": True,
-            "subtitle_context_consistency_enabled": True,
-            "subtitle_auto_review_enabled": True,
-            "llm_confidence_gate_enabled": True,
-            "llm_confidence_gate_strong_signal_score": 88.0,
-            "llm_confidence_gate_strong_max_compact_ratio": 1.85,
-            "llm_confidence_gate_strong_max_duration_ratio": 1.65,
-            "subtitle_llm_macro_chunk_enabled": True,
-            "subtitle_llm_macro_chunk_min_rows": 10,
-            "subtitle_llm_macro_chunk_max_rows": 15,
-            "direct_ffmpeg_chunk_extract": True,
-            "direct_ffmpeg_chunk_batch_extract": True,
-            "wav_pcm_fast_chunk_extract": True,
-        }
-    )
-    stt_profile_key = str(stt_profile or "").strip().lower()
-    if stt_profile_key in {"mlx-turbo", "mlx-large-v3"}:
-        secondary = str(settings.get("selected_whisper_model_secondary") or "").strip()
-        if not secondary or secondary == str(getattr(config, "MLX_FALLBACK_MODEL", "")):
-            secondary = "youngouk/whisper-medium-komixv2-mlx"
-        primary = (
-            "mlx-community/whisper-large-v3-mlx"
-            if stt_profile_key == "mlx-large-v3"
-            else getattr(config, "MLX_FALLBACK_MODEL", "mlx-community/whisper-large-v3-turbo")
-        )
-        settings.update(
-            {
-                "runtime_npu_acceleration_enabled": False,
-                "apple_m_pipeline_parallel_enabled": False,
-                "stt_npu_prefer_enabled": False,
-                "stt_backend_policy": "auto",
-                "whisperkit_native_auto_enabled": False,
-                "selected_whisper_model": primary,
-                "selected_whisper_model_secondary": secondary,
-                "stt_primary_fast_native_enabled": False,
-                "stt_primary_fast_native_model": "",
-            }
-        )
-    return settings
-
-
-def _with_subtitle_llm(base_settings: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    subtitle_llm = str(base_settings.get("selected_model") or "사용 안함 (benchmark)").strip()
-    if not subtitle_llm:
-        subtitle_llm = "사용 안함 (benchmark)"
-    return {"selected_model": subtitle_llm, **(overrides or {})}
-
-
-def _stt_swap_overrides(base_settings: dict[str, Any]) -> dict[str, Any]:
-    primary = str(base_settings.get("selected_whisper_model") or "").strip()
-    secondary = str(base_settings.get("selected_whisper_model_secondary") or "").strip()
-    return {
-        "runtime_npu_acceleration_enabled": False,
-        "apple_m_pipeline_parallel_enabled": False,
-        "stt_npu_prefer_enabled": False,
-        "whisperkit_native_auto_enabled": False,
-        "stt_primary_fast_native_enabled": False,
-        "stt_primary_fast_native_model": "",
-        "selected_whisper_model": secondary or "youngouk/whisper-medium-komixv2-mlx",
-        "selected_whisper_model_secondary": primary or "mlx-community/whisper-large-v3-mlx",
-    }
-
-
-def _strong_lora_merge_overrides() -> dict[str, Any]:
-    return {
-        "subtitle_lora_micro_merge_enabled": True,
-        "split_length_threshold": 28,
-        "sub_min_duration": 0.9,
-        "sub_max_cps": 14,
-        "subtitle_lora_micro_merge_min_duration": 2.0,
-        "sub_gap_break_sec": 2.2,
-        "subtitle_lora_micro_merge_gap_sec": 2.4,
-        "word_timing_gap_break_sec": 1.4,
-        "subtitle_lora_micro_merge_word_gap_sec": 1.6,
-        "continuous_threshold": 3.4,
-        "subtitle_lora_micro_merge_continuous_sec": 4.2,
-    }
-
-
-def _netflix_style_timing_overrides() -> dict[str, Any]:
-    return {
-        **_strong_lora_merge_overrides(),
-        "continuous_threshold": 3.8,
-        "gap_push_rate": 0.45,
-        "gap_pull_rate": 0.55,
-        "single_subtitle_end": 0.35,
-        "sub_min_duration": 1.0,
-        "sub_gap_break_sec": 2.6,
-        "word_timing_gap_break_sec": 1.8,
-        "sub_max_duration": 7.0,
-        "vad_post_stt_align_enabled": True,
-        "vad_post_stt_edge_pad_sec": 0.04,
-    }
-
-
-def _word_timestamp_overrides(mode: str) -> dict[str, Any]:
-    if mode == "off":
-        return {
-            "stt_word_timestamps_mode": "off",
-            "stt_word_timestamps_default_enabled": False,
-            "stt_word_timestamps_precision_enabled": False,
-            "stt_word_timestamp_precision_pass": False,
-        }
-    if mode == "all":
-        return {
-            "stt_word_timestamps_mode": "always",
-            "stt_word_timestamps_default_enabled": True,
-            "stt_word_timestamps_precision_enabled": False,
-            "stt_word_timestamp_precision_pass": False,
-        }
-    if mode == "vad_boundary":
-        return {
-            "stt_word_timestamps_mode": "selective",
-            "stt_word_timestamps_default_enabled": False,
-            "stt_word_timestamps_precision_enabled": True,
-            "stt_word_timestamp_precision_pass": False,
-            "stt_word_timestamps_precision_threshold": 60.0,
-            "stt_word_timestamps_precision_max_segments": 32,
-            "stt_word_timestamps_precision_max_audio_sec": 100.0,
-        }
-    return {
-        "stt_word_timestamps_mode": "selective",
-        "stt_word_timestamps_default_enabled": False,
-        "stt_word_timestamps_precision_enabled": True,
-        "stt_word_timestamp_precision_pass": False,
-        "stt_word_timestamps_precision_threshold": 72.0,
-        "stt_word_timestamps_precision_max_segments": 32,
-        "stt_word_timestamps_precision_max_audio_sec": 100.0,
-    }
-
-
-def _llm_red_yellow_gate_overrides(base_settings: dict[str, Any]) -> dict[str, Any]:
-    return _with_subtitle_llm(
-        base_settings,
-        {
-            "llm_confidence_gate_enabled": True,
-            "llm_confidence_gate_min_lora_score": 88.0,
-            "llm_confidence_gate_strong_signal_score": 92.0,
-            "llm_confidence_gate_strong_max_compact_ratio": 1.28,
-            "llm_confidence_gate_strong_max_duration_ratio": 1.35,
-            "subtitle_llm_macro_chunk_enabled": True,
-            "subtitle_llm_macro_chunk_min_rows": 10,
-            "subtitle_llm_macro_chunk_max_rows": 15,
-        },
-    )
-
-
-def _timing_overrides(*, vad: bool, confirmed_cut: bool, provisional_cut: bool, edge_pad: float) -> dict[str, Any]:
-    return {
-        "vad_post_stt_align_enabled": bool(vad),
-        "vad_post_stt_edge_pad_sec": float(edge_pad),
-        "subtitle_cut_boundary_guard_enabled": bool(confirmed_cut or provisional_cut),
-        "subtitle_bundle_use_confirmed_cuts": bool(confirmed_cut),
-        "subtitle_bundle_use_provisional_cuts": bool(provisional_cut),
-    }
 
 
 def benchmark_variants(base_settings: dict[str, Any]) -> list[Variant]:
@@ -1311,446 +1132,13 @@ def benchmark_audio_profiles(base_settings: dict[str, Any]) -> list[AudioProfile
     ]
 
 
-def parse_srt(path: Path) -> list[dict[str, Any]]:
-    text = path.read_text(encoding="utf-8-sig", errors="replace")
-    blocks = re.split(r"\n\s*\n", text.strip())
-    rows: list[dict[str, Any]] = []
-    for block in blocks:
-        lines = [line.strip("\ufeff") for line in block.splitlines() if line.strip()]
-        if not lines:
-            continue
-        time_line = next((line for line in lines if "-->" in line), "")
-        if not time_line:
-            continue
-        try:
-            left, right = [part.strip() for part in time_line.split("-->", 1)]
-            start = srt_time_to_sec(left)
-            end = srt_time_to_sec(right)
-        except Exception:
-            continue
-        idx = lines.index(time_line)
-        body = "\n".join(lines[idx + 1 :]).strip()
-        if body:
-            rows.append({"start": start, "end": end, "text": body})
-    return rows
-
-
-def srt_time_to_sec(value: str) -> float:
-    raw = str(value or "").strip().replace(",", ".")
-    hms = raw.split(":")
-    if len(hms) != 3:
-        raise ValueError(f"bad srt time: {value}")
-    hour = float(hms[0])
-    minute = float(hms[1])
-    sec = float(hms[2])
-    return hour * 3600.0 + minute * 60.0 + sec
-
-
-def clip_reference(rows: list[dict[str, Any]], start_sec: float, end_sec: float) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        start = float(row.get("start", 0.0) or 0.0)
-        end = float(row.get("end", start) or start)
-        if end <= start_sec or start >= end_sec:
-            continue
-        out.append(
-            {
-                **row,
-                "start": max(0.0, start - start_sec),
-                "end": max(0.0, min(end, end_sec) - start_sec),
-            }
-        )
-    return out
-
-
-def _compact_text(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(value or ""))
-    text = re.sub(r"\s+", "", text, flags=re.UNICODE)
-    for bracket in ("(", ")", "（", "）"):
-        text = text.replace(bracket, "")
-    return text.casefold()
-
-
-def _joined_text(rows: Iterable[dict[str, Any]]) -> str:
-    return " ".join(str(row.get("text", "") or "").replace("\n", " ").strip() for row in rows if str(row.get("text", "") or "").strip())
-
-
-def _overlap(left: dict[str, Any], right: dict[str, Any]) -> float:
-    start = max(float(left.get("start", 0.0) or 0.0), float(right.get("start", 0.0) or 0.0))
-    end = min(float(left.get("end", start) or start), float(right.get("end", start) or start))
-    return max(0.0, end - start)
-
-
-def _best_ref_for(hyp: dict[str, Any], refs: list[dict[str, Any]]) -> dict[str, Any] | None:
-    best_row = None
-    best_score = -1.0
-    hyp_mid = (float(hyp.get("start", 0.0) or 0.0) + float(hyp.get("end", 0.0) or 0.0)) / 2.0
-    for ref in refs:
-        overlap = _overlap(hyp, ref)
-        ref_mid = (float(ref.get("start", 0.0) or 0.0) + float(ref.get("end", 0.0) or 0.0)) / 2.0
-        proximity = max(0.0, 1.0 - abs(hyp_mid - ref_mid) / 4.0)
-        score = overlap * 2.0 + proximity
-        if score > best_score:
-            best_score = score
-            best_row = ref
-    return best_row
-
-
 def score_against_reference(hypothesis: list[dict[str, Any]], reference: list[dict[str, Any]]) -> dict[str, Any]:
-    hyp = [dict(row) for row in hypothesis if str(row.get("text", "") or "").strip()]
-    ref = [dict(row) for row in reference if str(row.get("text", "") or "").strip()]
-    ref_compact = _compact_text(_joined_text(ref))
-    hyp_compact = _compact_text(_joined_text(hyp))
-    cer = character_error_rate(ref_compact, hyp_compact) if ref_compact else 1.0
-    text_similarity = similarity_ratio(ref_compact, hyp_compact) if ref_compact or hyp_compact else 1.0
-    text_score = max(0.0, min(100.0, (1.0 - min(1.0, cer)) * 72.0 + text_similarity * 28.0))
-
-    native_timing = score_timing_metrics_via_swift(hyp, ref) or cpp_timing_metrics(hyp, ref)
-    local_text_scores: list[float] = []
-    if native_timing:
-        avg_timing_error = float(native_timing.get("timing_mae_sec", 0.0) or 0.0)
-        overlap_score = float(native_timing.get("overlap_score", 0.0) or 0.0)
-        timing_backend = str(native_timing.get("native_backend") or "native")
-        max_start_error = float(native_timing.get("max_start_error_sec", 0.0) or 0.0)
-        max_end_error = float(native_timing.get("max_end_error_sec", 0.0) or 0.0)
-        max_pair_timing_error = float(native_timing.get("max_pair_timing_error_sec", 0.0) or 0.0)
-        worst_match_hypothesis_index = int(native_timing.get("worst_match_hypothesis_index", -1))
-        worst_match_reference_index = int(native_timing.get("worst_match_reference_index", -1))
-        matched_reference_indices = native_timing.get("matched_reference_indices")
-        # Keep benchmark text scoring locked to the exact reference rows selected by
-        # the native timing helper. Re-searching here can drift from Swift/C++ pair
-        # ownership when equal-score timing candidates exist.
-        if isinstance(matched_reference_indices, list) and len(matched_reference_indices) >= len(hyp):
-            for row, ref_index in zip(hyp, matched_reference_indices):
-                try:
-                    ref_row = ref[int(ref_index)]
-                except Exception:
-                    ref_row = _best_ref_for(row, ref)
-                if ref_row:
-                    local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
-        else:
-            for row in hyp:
-                ref_row = _best_ref_for(row, ref)
-                if ref_row:
-                    local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
-    else:
-        timing_errors: list[float] = []
-        overlap_scores: list[float] = []
-        max_start_error = 0.0
-        max_end_error = 0.0
-        max_pair_timing_error = 0.0
-        worst_match_hypothesis_index = -1
-        worst_match_reference_index = -1
-        for hyp_index, row in enumerate(hyp):
-            ref_row = _best_ref_for(row, ref)
-            if not ref_row:
-                continue
-            start_err = abs(float(row.get("start", 0.0) or 0.0) - float(ref_row.get("start", 0.0) or 0.0))
-            end_err = abs(float(row.get("end", 0.0) or 0.0) - float(ref_row.get("end", 0.0) or 0.0))
-            pair_timing_error = (start_err + end_err) / 2.0
-            timing_errors.append(pair_timing_error)
-            max_start_error = max(max_start_error, start_err)
-            max_end_error = max(max_end_error, end_err)
-            if pair_timing_error > max_pair_timing_error:
-                max_pair_timing_error = pair_timing_error
-                worst_match_hypothesis_index = hyp_index
-                try:
-                    worst_match_reference_index = ref.index(ref_row)
-                except ValueError:
-                    worst_match_reference_index = -1
-            span = max(
-                float(row.get("end", 0.0) or 0.0) - float(row.get("start", 0.0) or 0.0),
-                float(ref_row.get("end", 0.0) or 0.0) - float(ref_row.get("start", 0.0) or 0.0),
-                0.001,
-            )
-            overlap_scores.append(min(1.0, _overlap(row, ref_row) / span))
-            local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
-        avg_timing_error = sum(timing_errors) / max(1, len(timing_errors))
-        overlap_score = (sum(overlap_scores) / max(1, len(overlap_scores))) * 100.0 if overlap_scores else 0.0
-        timing_backend = "python"
-    timing_score = max(0.0, min(100.0, 100.0 - avg_timing_error * 26.0))
-    local_text_score = (sum(local_text_scores) / max(1, len(local_text_scores))) * 100.0 if local_text_scores else 0.0
-    count_score = max(0.0, 100.0 - abs(len(hyp) - len(ref)) / max(1, len(ref)) * 100.0)
-    quality_score = text_score * 0.52 + timing_score * 0.22 + overlap_score * 0.12 + local_text_score * 0.08 + count_score * 0.06
-    return {
-        "reference_segments": len(ref),
-        "hypothesis_segments": len(hyp),
-        "cer": round(float(cer), 6),
-        "global_text_similarity": round(float(text_similarity), 6),
-        "text_score": round(text_score, 3),
-        "timing_mae_sec": round(avg_timing_error, 4),
-        "max_start_error_sec": round(max_start_error, 4),
-        "max_end_error_sec": round(max_end_error, 4),
-        "max_pair_timing_error_sec": round(max_pair_timing_error, 4),
-        "worst_match_hypothesis_index": worst_match_hypothesis_index,
-        "worst_match_reference_index": worst_match_reference_index,
-        "timing_score": round(timing_score, 3),
-        "overlap_score": round(overlap_score, 3),
-        "timing_metrics_backend": timing_backend,
-        "local_text_score": round(local_text_score, 3),
-        "count_score": round(count_score, 3),
-        "quality_score": round(quality_score, 3),
-    }
-
-
-def _segment_duration(row: dict[str, Any]) -> float:
-    start = float(row.get("start", 0.0) or 0.0)
-    end = float(row.get("end", start) or start)
-    return max(0.001, end - start)
-
-
-def _readability_line_lengths(text: Any) -> list[int]:
-    normalized = normalize_subtitle_text_lines(str(text or ""))
-    lengths = [split_visible_len(line) for line in normalized.split("\n") if str(line or "").strip()]
-    return [int(length) for length in lengths if int(length) > 0]
-
-
-def _readability_target_line_count(total_chars: int, settings: dict[str, Any]) -> int:
-    target_chars = max(8, int(settings.get("subtitle_common_split_target_chars", 16) or 16))
-    target_lines = settings.get("subtitle_target_line_count")
-    try:
-        explicit = int(target_lines)
-    except (TypeError, ValueError):
-        explicit = 0
-    if explicit in (1, 2):
-        if total_chars <= max(10, target_chars - 2):
-            return 1
-        return explicit
-    if total_chars <= max(10, target_chars + 2):
-        return 1
-    return 2
-
-
-def _readability_line_count_score(line_count: int, target_lines: int, max_line_chars: int, hard_max: int) -> float:
-    if line_count <= 0:
-        return 0.0
-    if line_count > 2:
-        return max(0.0, 20.0 - (line_count - 3) * 5.0)
-    if target_lines == 1:
-        if line_count == 1:
-            return 100.0
-        return 82.0 if max_line_chars <= hard_max else 56.0
-    if line_count == 2:
-        return 100.0
-    return 84.0 if max_line_chars <= hard_max else 62.0
-
-
-def _readability_line_length_score(lengths: list[int], *, target_chars: int, hard_max: int) -> float:
-    if not lengths:
-        return 0.0
-    penalty = 0.0
-    for length in lengths:
-        penalty += max(0, length - hard_max) * 8.0
-        penalty += max(0, length - target_chars) * 2.5
-    return max(0.0, min(100.0, 100.0 - penalty))
-
-
-def _readability_balance_score(lengths: list[int], target_lines: int) -> float:
-    if not lengths:
-        return 0.0
-    if len(lengths) == 1:
-        return 100.0 if target_lines == 1 else 72.0
-    if len(lengths) != 2:
-        return 25.0
-    longest = max(lengths)
-    shortest = min(lengths)
-    if longest <= 0:
-        return 0.0
-    ratio = shortest / longest
-    return max(0.0, min(100.0, 35.0 + ratio * 65.0))
-
-
-def _readability_orphan_score(lengths: list[int], total_chars: int) -> float:
-    if len(lengths) < 2 or total_chars < 10:
-        return 100.0
-    shortest = min(lengths)
-    if shortest <= 2:
-        return 15.0
-    if shortest == 3:
-        return 35.0
-    if shortest == 4:
-        return 60.0
-    if shortest <= 5:
-        return 82.0
-    return 100.0
-
-
-def _readability_cps_score(cps: float, max_cps: float) -> float:
-    if max_cps <= 0.0:
-        return 100.0
-    if cps <= max_cps:
-        return 100.0
-    return max(0.0, min(100.0, 100.0 - (cps - max_cps) * 14.0))
-
-
-def score_readability(rows: list[dict[str, Any]], settings: dict[str, Any] | None = None) -> dict[str, Any]:
-    settings = dict(settings or {})
-    usable_rows = [dict(row) for row in rows if str(row.get("text", "") or "").strip()]
-    if not usable_rows:
-        return {
-            "readability_score": 0.0,
-            "avg_segment_readability": 0.0,
-            "avg_lines_per_segment": 0.0,
-            "avg_max_line_chars": 0.0,
-            "avg_cps": 0.0,
-            "two_line_segments": 0,
-            "over_two_line_segments": 0,
-            "hard_overflow_segments": 0,
-            "orphan_line_segments": 0,
-            "balanced_two_line_segments": 0,
-            "packaging_changed_segments": 0,
-        }
-
-    target_chars = max(8, int(settings.get("subtitle_common_split_target_chars", 16) or 16))
-    hard_max = max(target_chars, int(settings.get("subtitle_common_split_hard_max_chars", 24) or 24))
-    max_cps = max(0.0, float(settings.get("sub_max_cps", 12.0) or 12.0))
-    duration_weighted_score = 0.0
-    duration_total = 0.0
-    line_total = 0
-    max_line_char_total = 0
-    cps_total = 0.0
-    two_line_segments = 0
-    over_two_line_segments = 0
-    hard_overflow_segments = 0
-    orphan_line_segments = 0
-    balanced_two_line_segments = 0
-    packaging_changed_segments = 0
-
-    for row in usable_rows:
-        line_lengths = _readability_line_lengths(row.get("text"))
-        if not line_lengths:
-            continue
-        line_count = len(line_lengths)
-        total_chars = sum(line_lengths)
-        max_line_chars = max(line_lengths)
-        cps = total_chars / _segment_duration(row)
-        target_lines = _readability_target_line_count(total_chars, settings)
-
-        line_count_score = _readability_line_count_score(line_count, target_lines, max_line_chars, hard_max)
-        line_length_score = _readability_line_length_score(line_lengths, target_chars=target_chars, hard_max=hard_max)
-        balance_score = _readability_balance_score(line_lengths, target_lines)
-        orphan_score = _readability_orphan_score(line_lengths, total_chars)
-        cps_score = _readability_cps_score(cps, max_cps)
-
-        segment_score = (
-            line_count_score * 0.24
-            + line_length_score * 0.28
-            + balance_score * 0.18
-            + orphan_score * 0.18
-            + cps_score * 0.12
-        )
-        duration = _segment_duration(row)
-        duration_weighted_score += segment_score * duration
-        duration_total += duration
-        line_total += line_count
-        max_line_char_total += max_line_chars
-        cps_total += cps
-        if line_count == 2:
-            two_line_segments += 1
-            longest = max(line_lengths)
-            shortest = min(line_lengths)
-            if longest > 0 and shortest / longest >= 0.72:
-                balanced_two_line_segments += 1
-        elif line_count > 2:
-            over_two_line_segments += 1
-        if max_line_chars > hard_max:
-            hard_overflow_segments += 1
-        if line_count >= 2 and total_chars >= 10 and min(line_lengths) <= 4:
-            orphan_line_segments += 1
-        if row.get("_lora_packaging_policy"):
-            packaging_changed_segments += 1
-
-    avg_segment_readability = duration_weighted_score / max(0.001, duration_total)
-    segment_count = max(1, len(usable_rows))
-    return {
-        "readability_score": round(avg_segment_readability, 3),
-        "avg_segment_readability": round(avg_segment_readability, 3),
-        "avg_lines_per_segment": round(line_total / segment_count, 3),
-        "avg_max_line_chars": round(max_line_char_total / segment_count, 3),
-        "avg_cps": round(cps_total / segment_count, 3),
-        "two_line_segments": two_line_segments,
-        "over_two_line_segments": over_two_line_segments,
-        "hard_overflow_segments": hard_overflow_segments,
-        "orphan_line_segments": orphan_line_segments,
-        "balanced_two_line_segments": balanced_two_line_segments,
-        "packaging_changed_segments": packaging_changed_segments,
-    }
-
-
-def _copy_chunk_dir(source: Path, target: Path) -> Path:
-    if not source.exists():
-        if target.exists():
-            return target
-        raise FileNotFoundError(source)
-    if target.exists():
-        shutil.rmtree(target, ignore_errors=True)
-    shutil.copytree(source, target, copy_function=_copy_benchmark_chunk_file)
-    return target
-
-
-def _copy_benchmark_chunk_file(src: str, dst: str) -> str:
-    if Path(src).suffix.lower() == ".wav":
-        try:
-            os.link(src, dst)
-            return dst
-        except OSError:
-            pass
-    return shutil.copy2(src, dst)
-
-
-_CHUNK_EXACT_KEYS = {
-    "subtitle_mode",
-    "simple_operation_mode",
-    "mode",
-    "user_facing_mode",
-    "auto_start_mode",
-    "stt_quality_preset",
-    "selected_audio_ai",
-    "selected_vad",
-    "use_basic_filter",
-    "ff_chunk",
-    "whisper_chunk_overlap_sec",
-    "direct_ffmpeg_chunk_extract",
-    "direct_ffmpeg_chunk_batch_extract",
-    "wav_pcm_fast_chunk_extract",
-    "vad_pre_split_enabled",
-    "vad_post_stt_align_enabled",
-    "vad_post_stt_edge_pad_sec",
-    "vad_backend_policy",
-    "audio_chunk_routing_enabled",
-    "audio_chunk_route_vad_enabled",
-    "audio_chunk_routing_benchmark_locked",
-    "audio_chunk_routing_disabled",
-    "audio_chunk_profile_sec",
-}
-_CHUNK_PREFIXES = (
-    "ff_",
-    "df_",
-    "none_",
-    "vad_",
-    "ten_vad_",
-    "audio_chunk_route_",
-    "direct_ffmpeg_",
-    "wav_pcm_",
-    "scan_cut_",
-    "cut_boundary_",
-    "review_vad_",
-)
-
-
-def _chunk_extraction_signature(settings: dict[str, Any]) -> str:
-    subset: dict[str, Any] = {}
-    for key, value in dict(settings or {}).items():
-        if key in _CHUNK_EXACT_KEYS or key.startswith(_CHUNK_PREFIXES):
-            subset[key] = value
-    return json.dumps(subset, ensure_ascii=False, sort_keys=True, default=str)
-
-
-def _variant_chunk_settings(base_settings: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    merged = dict(base_settings or {})
-    if overrides:
-        merged.update(dict(overrides))
-    return merged
+    return _benchmark_scoring.score_against_reference(
+        hypothesis,
+        reference,
+        swift_timing_backend=score_timing_metrics_via_swift,
+        cpp_timing_backend=cpp_timing_metrics,
+    )
 
 
 def _bind_processor_settings(processor: VideoProcessor, settings: dict[str, Any]) -> None:
@@ -1767,60 +1155,6 @@ def patched_subtitle_settings(settings: dict[str, Any], model: str):
         patch("core.engine.subtitle_engine.get_selected_llm", return_value=str(model or "")),
     ):
         yield
-
-
-def _collect_transcribe(generator) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for chunk_rows, _idx, _total in generator:
-        for row in chunk_rows or []:
-            if isinstance(row, dict) and str(row.get("text", "") or "").strip():
-                rows.append(dict(row))
-    rows.sort(key=lambda row: (float(row.get("start", 0.0) or 0.0), float(row.get("end", 0.0) or 0.0)))
-    return rows
-
-
-def _slim_segments_for_artifact(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    slim: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
-        words = item.pop("words", None)
-        if words:
-            item["word_count"] = len(words)
-        slim.append(item)
-    return slim
-
-
-def _chunk_wav_count(chunk_dir: Path) -> int:
-    try:
-        return sum(1 for path in chunk_dir.iterdir() if path.is_file() and path.suffix.lower() == ".wav")
-    except Exception:
-        return 0
-
-
-def _load_vad(chunk_dir: Path) -> list[dict[str, Any]]:
-    path = chunk_dir / "vad_strict.json"
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return [dict(row) for row in data if isinstance(row, dict)]
-    except Exception:
-        return []
-
-
-def _load_cached_raw_segments(settings: dict[str, Any]) -> list[dict[str, Any]]:
-    path_text = str(settings.get("_benchmark_cached_raw_segments_path") or "").strip()
-    if not path_text:
-        raise RuntimeError("cached_raw variant requires --cached-raw-segments")
-    path = Path(path_text).expanduser()
-    if not path.exists():
-        raise FileNotFoundError(path)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        data = data.get("segments") or data.get("rows") or data.get("raw_segments") or []
-    rows = [dict(row) for row in data if isinstance(row, dict) and str(row.get("text", "") or "").strip()]
-    rows.sort(key=lambda row: (float(row.get("start", 0.0) or 0.0), float(row.get("end", 0.0) or 0.0)))
-    return rows
 
 
 def _primary_model(settings: dict[str, Any]) -> str:

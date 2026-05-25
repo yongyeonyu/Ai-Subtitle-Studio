@@ -586,7 +586,9 @@ class SignalHandlersMixin:
         try:
             timeline = getattr(editor, "timeline", None)
             if timeline is not None and hasattr(timeline, "set_boundary_times"):
-                timeline.set_boundary_times(list(getattr(self, "_project_boundary_times", []) or []))
+                changed = timeline.set_boundary_times(list(getattr(self, "_project_boundary_times", []) or []))
+                if changed and hasattr(timeline, "_update_scan_boundary_lane"):
+                    timeline._update_scan_boundary_lane()
         except Exception as exc:
             get_logger().log(f"⚠️ 컷 경계 확정선 반영 실패: {exc}")
 

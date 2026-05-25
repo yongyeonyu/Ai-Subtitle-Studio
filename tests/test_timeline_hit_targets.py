@@ -13,6 +13,7 @@ from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtTest import QTest
 
 from ui.timeline.timeline_canvas import TimelineCanvas
+from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_constants import (
     DIAMOND_Y,
@@ -36,7 +37,6 @@ from ui.timeline.timeline_paint import (
     stt_candidate_selected_by_llm,
     stt_candidate_selection_state,
     stt_candidate_unselected,
-    subtitle_segment_selection_badge_rect,
 )
 from ui.timeline.timeline_segment_style import official_boundary_marker_visual
 from ui.timeline.timeline_analysis import subtitle_detection_segments_for_editor
@@ -2428,20 +2428,53 @@ class TimelineHitTargetTests(unittest.TestCase):
             )
         )
 
-    def test_selected_subtitle_badge_is_centered_in_segment(self):
-        rect = QRect(200, SUBTITLE_TOP, 420, 52)
-        badge = subtitle_segment_selection_badge_rect(rect, 230, 590)
-
-        self.assertLessEqual(abs(badge.center().x() - rect.center().x()), 1)
-        self.assertGreaterEqual(badge.left(), 230)
-        self.assertLessEqual(badge.right(), 590)
-
     def test_selected_stt_preview_badge_anchors_to_right_edge(self):
         rect = QRect(200, STT1_TOP, 420, 28)
         badge = stt_preview_selection_badge_rect(rect, 36)
 
         self.assertEqual(badge.right(), rect.right() - 4)
         self.assertGreater(badge.center().x(), rect.center().x())
+
+    def test_global_canvas_context_menu_includes_subtitle_post_llm_actions(self):
+        canvas = GlobalCanvas()
+        try:
+            labels = [
+                item.get("label")
+                for item in canvas._context_menu_items()
+                if not item.get("separator")
+            ]
+
+            self.assertIn("러프컷 LLM 실행", labels)
+            self.assertIn("띄워쓰기 맞춤법 검사", labels)
+            self.assertIn("영어로 번역", labels)
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_top_subtitle_button_menu_includes_overlay_gpu_export(self):
+        timeline = TimelineWidget()
+        try:
+            labels = [
+                item.get("label")
+                for item in timeline._subtitle_button_menu_items()
+                if not item.get("separator")
+            ]
+
+            self.assertIn("자막자석 실행", labels)
+            self.assertIn("텍스트 높이 조절", labels)
+            self.assertIn("투명 자막 MOV 출력", labels)
+            self.assertIn("영상+자막 오버레이 출력 (GPU)", labels)
+            self.assertLess(
+                labels.index("텍스트 높이 조절"),
+                labels.index("투명 자막 MOV 출력"),
+            )
+            self.assertLess(
+                labels.index("투명 자막 MOV 출력"),
+                labels.index("영상+자막 오버레이 출력 (GPU)"),
+            )
+        finally:
+            timeline.close()
+            timeline.deleteLater()
 
     def test_inline_edit_enter_uses_playhead_split_when_started_with_split_mode(self):
         canvas = TimelineCanvas()

@@ -218,10 +218,10 @@ Rectangle {
 
         Rectangle {
             id: infoBadge
-            anchors.left: sourceBadge.visible ? sourceBadge.right : parent.left
-            anchors.leftMargin: sourceBadge.visible ? root.groupGap : 0
-            anchors.right: parent.right
+            anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
+            visible: root.infoWidth > 0 && root.infoText.length > 0
+            width: visible ? Math.min(root.infoWidth, Math.max(0, parent.width - sourceBadge.width - root.groupGap)) : 0
             height: 36
             radius: 0
             color: "transparent"
@@ -247,10 +247,10 @@ Rectangle {
 
         Rectangle {
             id: sourceBadge
-            anchors.left: parent.left
+            anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             visible: root.sourceNameText.length > 0
-            width: visible ? Math.min(root.sourceWidth, Math.max(0, parent.width - root.groupGap)) : 0
+            width: visible ? Math.min(root.sourceWidth, Math.max(0, parent.width)) : 0
             height: 36
             radius: 0
             color: "transparent"
@@ -262,19 +262,16 @@ Rectangle {
                 anchors.fill: parent
                 anchors.leftMargin: 8
                 anchors.rightMargin: 6
-                anchors.topMargin: 4
-                anchors.bottomMargin: 4
+                anchors.topMargin: 0
+                anchors.bottomMargin: 0
                 text: root.sourceNameText
                 color: "#EAF2F8"
                 font.pixelSize: 10
                 font.bold: true
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                maximumLineCount: 2
-                elide: Text.ElideRight
-                // KEEP: filename belongs in the red-box footer zone immediately
-                // after the frame counter. Do not right-anchor it to the far
-                // edge again; long DJI names must start inside this area.
-                horizontalAlignment: Text.AlignLeft
+                wrapMode: Text.NoWrap
+                maximumLineCount: 1
+                elide: Text.ElideNone
+                horizontalAlignment: Text.AlignRight
                 verticalAlignment: Text.AlignVCenter
             }
         }

@@ -61,6 +61,15 @@ from ui.timeline.paint_passes import (
     coalesce_rects_by_row,
     visible_pixel_span,
 )
+from ui.timeline.timeline_paint_helpers import (
+    draw_speaker_names,
+    draw_timeline_segment_handle,
+    fill_speaker_rows,
+    hover_handle_matches,
+    should_paint_subtitle_segment_text,
+    speaker_row_rects,
+    stt_preview_selection_badge_rect,
+)
 from ui.timeline.stt_preview_layout import dedupe_stt_preview_segments_for_display
 from ui.timeline.speaker_labels import (
     current_speaker_settings,
@@ -77,7 +86,6 @@ from ui.timeline.timeline_segment_style import (
     final_stt_selection_source,
     segment_text_kind,  # noqa: F401 - compatibility re-export for tests/legacy callers
     speaker_segment_fill_hex,
-    speaker_segment_text_hex,
     stt_candidate_selected,  # noqa: F401 - compatibility re-export for tests/legacy callers
     stt_candidate_selected_by_llm,  # noqa: F401 - compatibility re-export for tests/legacy callers
     stt_candidate_selection_state,  # noqa: F401 - compatibility re-export for tests/legacy callers
@@ -103,36 +111,6 @@ WAVEFORM_BOTTOM_LOUD = QColor(*APPLE_BLACK_WAVEFORM["bottom_loud_rgba"])
 WAVEFORM_TOP_QUIET = QColor(*APPLE_BLACK_WAVEFORM["top_quiet_rgba"])
 WAVEFORM_BOTTOM_QUIET = QColor(*APPLE_BLACK_WAVEFORM["bottom_quiet_rgba"])
 WAVEFORM_VAD_OVERLAY = QColor(*APPLE_BLACK_WAVEFORM["vad_overlay_rgba"])
-
-
-def should_paint_subtitle_segment_text(
-    *,
-    native_inline_active: bool,
-    rect_width: int,
-    dense_segment_mode: bool,
-    focus_detail: bool,
-) -> bool:
-    if native_inline_active:
-        return False
-    return int(rect_width) >= 44 and (not bool(dense_segment_mode) or bool(focus_detail))
-
-
-def stt_preview_selection_badge_rect(rect: QRect, badge_width: int) -> QRect:
-    badge_w = max(1, int(badge_width or 1))
-    return QRect(rect.right() - badge_w - 3, rect.y() + 6, badge_w, 18)
-
-
-def subtitle_segment_selection_badge_rect(rect: QRect, text_left: int, text_right: int, badge_width: int = 38) -> QRect:
-    badge_w = max(1, int(badge_width or 1))
-    preferred_x = rect.x() + max(0, (rect.width() - badge_w) // 2)
-    min_x = max(rect.x() + 4, int(text_left) + 4)
-    max_x = min(rect.right() - badge_w - 4, int(text_right) - badge_w)
-    if max_x >= min_x:
-        badge_x = max(min_x, min(max_x, preferred_x))
-    else:
-        badge_x = max(rect.x() + 2, min(preferred_x, rect.right() - badge_w))
-    return QRect(int(badge_x), rect.y() + 6, badge_w, 18)
-
 
 class TimelinePaintMixin:
     def _timeline_playback_active(self) -> bool:
@@ -1277,7 +1255,6 @@ class TimelinePaintMixin:
                 seg = item.segment
                 rect = item.rect
                 selection_state = item.selection_state
-                is_selected = item.is_selected
                 visual = stt_preview_visual_style(
                     seg,
                     selection_state=selection_state,
@@ -1288,15 +1265,15 @@ class TimelinePaintMixin:
                 _append_batch(fills, (str(visual["fill"]), int(visual["alpha"])), rect)
                 _append_batch(borders, (str(visual["border"]), 255, int(visual["border_width"])), rect)
                 if rect.width() >= 40 and rect.height() >= 14 and not ultra_dense_segment_mode:
-                    detail_items.append((seg, rect, selection_state, is_selected, visual))
+                    detail_items.append((seg, rect, selection_state, visual))
             _draw_color_batches(fills)
             for (color_name, alpha, border_width), rects in borders.items():
                 color = QColor(color_name)
                 color.setAlpha(int(alpha))
                 _draw_rect_batch(rects, pen=QPen(color, int(border_width)))
-            for seg, rect, selection_state, is_selected, visual in detail_items:
+            for seg, rect, selection_state, visual in detail_items:
                     text_color = QColor(visual["text"])
-                    badge_w = 36 if is_selected and rect.width() >= 90 else 0
+                    badge_w = 36 if selection_state == "llm" and rect.width() >= 90 else 0
                     text_rect = QRect(
                         rect.x() + 8,
                         rect.y() + 5,
@@ -1322,14 +1299,13 @@ class TimelinePaintMixin:
                         badge_rect = stt_preview_selection_badge_rect(rect, badge_w)
                         badge_fill = QColor(COLORS["warning_badge"] if selection_state == "llm" else "#174A2A")
                         badge_border = QColor(COLORS["warning"] if selection_state == "llm" else "#34C759")
-                        badge_text = "LLM" if selection_state == "llm" else "선택"
                         p.fillRect(badge_rect, badge_fill)
                         p.setPen(QPen(badge_border, 1))
                         p.setBrush(Qt.BrushStyle.NoBrush)
                         p.drawRect(badge_rect)
                         p.setPen(QColor(COLORS["warning_text_soft"]))
                         p.setFont(QFont(config.FONT, 7, QFont.Weight.Bold))
-                        p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
+                        p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "LLM")
                         p.setFont(preview_font)
 
         def _draw_vector_subtitle_strips(segments):
@@ -1593,25 +1569,10 @@ class TimelinePaintMixin:
                     text_right = min(text_right, int(body_right))
                 text_left = max(rect.x() + 6, text_left)
                 text_right = min(rect.right() - 6, text_right)
-                selected_source = final_stt_selection_source(seg)
-                show_badge = bool(
-                    not playback_light_mode
-                    and not is_editing
-                    and selected_source
-                    and rect.width() >= 104
-                    and (not dense_segment_mode or focus_detail)
-                    and (text_right - text_left) >= 70
-                )
-                badge_rect = (
-                    subtitle_segment_selection_badge_rect(rect, text_left, text_right)
-                    if show_badge
-                    else QRect()
-                )
-                text_content_right = min(text_right, badge_rect.x() - 6) if show_badge else text_right
                 text_rect = QRect(
                     text_left,
                     rect.y() + top_pad,
-                    max(8, text_content_right - text_left),
+                    max(8, text_right - text_left),
                     rect.height() - top_pad - 6,
                 )
                 if is_editing and not native_inline_active:
@@ -1670,19 +1631,6 @@ class TimelinePaintMixin:
                         else:
                             p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg_text)
                         p.restore()
-                        if show_badge:
-                            is_llm_choice = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
-                            badge_fill = QColor("#5A4600" if is_llm_choice else "#174A2A")
-                            badge_border = QColor(COLORS["warning"] if is_llm_choice else "#34C759")
-                            badge_text_color = QColor("#FFF2A8" if is_llm_choice else "#D7FFE4")
-                            p.fillRect(badge_rect, badge_fill)
-                            p.setPen(QPen(badge_border, 1))
-                            p.setBrush(Qt.BrushStyle.NoBrush)
-                            p.drawRect(badge_rect)
-                            p.setPen(badge_text_color)
-                            p.setFont(QFont(config.FONT, 7, QFont.Weight.Bold))
-                            p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "선택")
-                            p.setFont(seg_font)
                 speaker_rect = QRect(rect.x(), speaker_top, rect.width(), speaker_bot - speaker_top)
                 if compact_seg:
                     self._fill_speaker_rows(p, speaker_rect, _speaker_rows(seg))
@@ -1918,89 +1866,16 @@ class TimelinePaintMixin:
         )
 
     def _draw_handle(self, p, bx, is_left, color):
-        cy = SEG_TOP + 32
-        w = HANDLE_R; hw = HANDLE_R // 2; hh = 12; th = 4
-        if is_left:
-            bx += 2
-            pts = QPolygon([QPoint(bx, cy), QPoint(bx + hw, cy - hh), QPoint(bx + hw, cy - th), QPoint(bx + w, cy - th), QPoint(bx + w, cy + th), QPoint(bx + hw, cy + th), QPoint(bx + hw, cy + hh)])
-        else:
-            bx -= 2
-            pts = QPolygon([QPoint(bx, cy), QPoint(bx - hw, cy - hh), QPoint(bx - hw, cy - th), QPoint(bx - w, cy - th), QPoint(bx - w, cy + th), QPoint(bx - hw, cy + th), QPoint(bx - hw, cy + hh)])
-        p.setPen(QPen(QColor("#000000"), 1)); p.setBrush(QBrush(color)); p.drawPolygon(pts); p.setBrush(Qt.BrushStyle.NoBrush)
+        draw_timeline_segment_handle(p, bx, is_left, color)
 
     def _speaker_row_rects(self, rect: QRect, rows: list[dict] | None):
-        visible_rows = [dict(row or {}) for row in list(rows or [])[:2]]
-        if not visible_rows:
-            visible_rows = [{"name": "", "color": "#8E8E93"}]
-        count = max(1, len(visible_rows))
-        top = int(rect.y())
-        height = max(1, int(rect.height()))
-        out: list[tuple[dict, QRect]] = []
-        for idx, row in enumerate(visible_rows):
-            row_top = top + int(round(height * idx / count))
-            row_bot = top + int(round(height * (idx + 1) / count))
-            out.append((row, QRect(rect.x(), row_top, max(1, rect.width()), max(1, row_bot - row_top))))
-        return out
+        return speaker_row_rects(rect, rows)
 
     def _fill_speaker_rows(self, p, rect: QRect, rows: list[dict] | None):
-        row_rects = self._speaker_row_rects(rect, rows)
-        p.save()
-        for row, row_rect in row_rects:
-            p.fillRect(row_rect, QColor(speaker_segment_fill_hex(str(row.get("color") or "#8E8E93"))))
-        if len(row_rects) > 1:
-            p.setPen(QPen(QColor(0, 0, 0, 120), 1))
-            for _row, row_rect in row_rects[:-1]:
-                p.drawLine(row_rect.left(), row_rect.bottom(), row_rect.right(), row_rect.bottom())
-        p.restore()
+        fill_speaker_rows(p, rect, rows)
 
     def _draw_speaker_names(self, p, rect: QRect, color: QColor, names: list[str], rows: list[dict] | None = None):
-        row_entries = [dict(row or {}) for row in list(rows or [])[:2]]
-        if not row_entries:
-            row_entries = [
-                {"name": str(name).strip(), "color": color.name()}
-                for name in list(names or [])[:2]
-                if str(name).strip()
-            ]
-        names = [str(row.get("name", "") or "").strip() for row in row_entries if str(row.get("name", "") or "").strip()]
-        if not names:
-            return
-
-        max_lines = 2
-        visible_rows = [
-            row
-            for row in row_entries[:max_lines]
-            if str(row.get("name", "") or "").strip()
-        ]
-        visible_names = [str(row.get("name", "") or "").strip() for row in visible_rows]
-        multi_line = len(visible_names) > 1
-        font_size = 7 if multi_line else 8
-        p.save()
-        p.setFont(QFont(config.FONT, font_size, QFont.Weight.Bold))
-        fm = p.fontMetrics()
-        text_pad = 7
-        for row, row_rect in self._speaker_row_rects(rect, visible_rows):
-            name = str(row.get("name", "") or "").strip()
-            if not name:
-                continue
-            p.setPen(QColor(speaker_segment_text_hex(str(row.get("color") or color.name()))))
-            text_rect = row_rect.adjusted(text_pad, 0, -text_pad, 0)
-            max_text_w = max(8, text_rect.width())
-            text = fm.elidedText(name, Qt.TextElideMode.ElideRight, max_text_w)
-            p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
-        p.restore()
+        draw_speaker_names(p, rect, color, names, rows)
 
     def _hover_handle_matches(self, seg, edge: str) -> bool:
-        hovered = getattr(self, "_hover_handle", None)
-        if not hovered or len(hovered) < 2 or hovered[1] != edge:
-            return False
-        hover_seg = hovered[0]
-        if hover_seg is seg:
-            return True
-        try:
-            return (
-                hover_seg.get("line") == seg.get("line")
-                and abs(float(hover_seg.get("start", -1.0)) - float(seg.get("start", -2.0))) < 0.001
-                and abs(float(hover_seg.get("end", -1.0)) - float(seg.get("end", -2.0))) < 0.001
-            )
-        except Exception:
-            return False
+        return hover_handle_matches(getattr(self, "_hover_handle", None), seg, edge)

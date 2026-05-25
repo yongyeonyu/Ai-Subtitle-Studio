@@ -38,6 +38,10 @@ from ui.main.main_nonfatal import run_nonfatal_ui_step
 from ui.style import APP_PANEL_GAP, COLORS, button_style, label_style, line_icon, tool_button_style
 
 
+SIDEBAR_STATUS_CARD_COMPACT_HEIGHT = 168
+SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT = 124
+
+
 class HomeUIMixin(HomeSidebarMixin):
     def _auto_source_scope_title(self, scope: str) -> str:
         return "NAS" if str(scope or "").strip().lower() == "nas" else "iCloud"
@@ -293,7 +297,7 @@ class HomeUIMixin(HomeSidebarMixin):
                 layout.addWidget(terminal_panel)
             layout.addWidget(self._project_info_card(expanded=False))
             if bool(getattr(self, "_project_info_expanded", False)):
-                QTimer.singleShot(0, self._show_project_info_overlay)
+                QTimer.singleShot(0, self._show_project_info_in_sidebar_terminal)
         bottom_bar = QHBoxLayout()
         from core.runtime.config import APP_VERSION
         if not is_unified:
@@ -322,7 +326,7 @@ class HomeUIMixin(HomeSidebarMixin):
 
     def _sidebar_status_card(self):
         card = QWidget()
-        card.setMinimumHeight(218)
+        card.setMinimumHeight(SIDEBAR_STATUS_CARD_COMPACT_HEIGHT)
         card.setStyleSheet(f"background: {COLORS['surface_alt']}; border: 1px solid {COLORS['separator']}; border-radius: 7px;")
         self._sidebar_status_card_widget = card
         lay = QVBoxLayout(card)
@@ -338,7 +342,7 @@ class HomeUIMixin(HomeSidebarMixin):
             self.sidebar_runtime_label = QLabel("", self.home_page)
         self.sidebar_settings_label.setWordWrap(True)
         self.sidebar_settings_label.setMinimumWidth(0)
-        self.sidebar_settings_label.setMinimumHeight(184)
+        self.sidebar_settings_label.setMinimumHeight(SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT)
         self.sidebar_settings_label.setTextFormat(Qt.TextFormat.RichText)
         self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
         self.sidebar_runtime_label.setWordWrap(True)
@@ -379,8 +383,8 @@ class HomeUIMixin(HomeSidebarMixin):
     def _sync_sidebar_status_card_height(self):
         def _restore_defaults(queue_panel, status_card, settings_label):
             queue_min = int(queue_panel.property("_sidebar_default_min_height") or 134)
-            status_min = int(status_card.property("_sidebar_default_min_height") or 218)
-            label_min = int(settings_label.property("_sidebar_default_min_height") or 184)
+            status_min = int(status_card.property("_sidebar_default_min_height") or SIDEBAR_STATUS_CARD_COMPACT_HEIGHT)
+            label_min = int(settings_label.property("_sidebar_default_min_height") or SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT)
             queue_panel.setMinimumHeight(queue_min)
             queue_panel.setMaximumHeight(16777215)
             status_card.setMinimumHeight(status_min)
@@ -404,9 +408,9 @@ class HomeUIMixin(HomeSidebarMixin):
             if queue_panel.property("_sidebar_default_min_height") in (None, 0):
                 queue_panel.setProperty("_sidebar_default_min_height", int(queue_panel.minimumHeight() or 134))
             if status_card.property("_sidebar_default_min_height") in (None, 0):
-                status_card.setProperty("_sidebar_default_min_height", int(status_card.minimumHeight() or 218))
+                status_card.setProperty("_sidebar_default_min_height", int(status_card.minimumHeight() or SIDEBAR_STATUS_CARD_COMPACT_HEIGHT))
             if settings_label.property("_sidebar_default_min_height") in (None, 0):
-                settings_label.setProperty("_sidebar_default_min_height", int(settings_label.minimumHeight() or 184))
+                settings_label.setProperty("_sidebar_default_min_height", int(settings_label.minimumHeight() or SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT))
             targets = self._sidebar_status_alignment_targets()
             if not targets:
                 _restore_defaults(queue_panel, status_card, settings_label)
@@ -414,13 +418,17 @@ class HomeUIMixin(HomeSidebarMixin):
             target_top, target_bottom = targets
             queue_top = int(queue_panel.mapTo(self, QPoint(0, 0)).y())
             queue_min = int(queue_panel.property("_sidebar_default_min_height") or 134)
-            desired_queue_height = max(queue_min, target_top - queue_top)
+            target_status_height = max(0, target_bottom - target_top)
             desired_status_height = max(
-                int(status_card.property("_sidebar_default_min_height") or 218),
-                target_bottom - target_top,
+                int(status_card.property("_sidebar_default_min_height") or SIDEBAR_STATUS_CARD_COMPACT_HEIGHT),
+                min(target_status_height, SIDEBAR_STATUS_CARD_COMPACT_HEIGHT),
             )
+            status_top = target_bottom - desired_status_height
+            desired_queue_height = max(queue_min, status_top - queue_top)
             # Editor timeline guide lines stay visually stable on macOS only if the
-            # sidebar stack uses the same vertical anchors as the painter canvas.
+            # sidebar stack keeps the status-card bottom on the painter guide.
+            # The card itself stays compact so the queue list gets the reclaimed
+            # vertical space during long generation runs.
             queue_panel.setFixedHeight(desired_queue_height)
             status_card.setFixedHeight(desired_status_height)
             if quality_row is not None:
@@ -428,7 +436,7 @@ class HomeUIMixin(HomeSidebarMixin):
                 spacing = int(status_card.layout().spacing())
                 quality_height = max(0, int(quality_row.height() or quality_row.sizeHint().height() or 24))
                 label_height = max(
-                    int(settings_label.property("_sidebar_default_min_height") or 184),
+                    int(settings_label.property("_sidebar_default_min_height") or SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT),
                     desired_status_height - margins.top() - margins.bottom() - spacing - quality_height,
                 )
                 settings_label.setFixedHeight(label_height)
@@ -1075,6 +1083,58 @@ class HomeUIMixin(HomeSidebarMixin):
             add_section("자막", [f"세그먼트: {seg_count}", f"화자: {len(speakers) if speakers else 0}", "상태: 편집 대기"]),
         ]
 
+    def _project_info_terminal_text(self) -> str:
+        lines = ["프로젝트 정보"]
+        for section in self._project_info_sections():
+            title = str(section.get("title") or "").strip()
+            if title:
+                lines.append("")
+                lines.append(title)
+            for row in list(section.get("rows") or []):
+                text = str(row or "").strip()
+                if text:
+                    lines.append(f"  {text}")
+        return "\n".join(lines)
+
+    def _project_info_log_text_widget(self):
+        terminal = (
+            self._ensure_sidebar_terminal_panel()
+            if hasattr(self, "_ensure_sidebar_terminal_panel")
+            else getattr(self, "sidebar_terminal_panel", None)
+        )
+        if terminal is None:
+            return None, None
+        return terminal, getattr(terminal, "log_text", None)
+
+    def _show_project_info_in_sidebar_terminal(self):
+        terminal, log_text = self._project_info_log_text_widget()
+        if terminal is None or log_text is None:
+            return
+        if not hasattr(self, "_project_info_terminal_prev_visible"):
+            self._project_info_terminal_prev_visible = not bool(terminal.isHidden())
+        show_temp = getattr(log_text, "show_temporary_text", None)
+        if callable(show_temp):
+            show_temp(self._project_info_terminal_text())
+        elif hasattr(log_text, "setPlainText"):
+            log_text.setPlainText(self._project_info_terminal_text())
+        terminal.setVisible(True)
+        if hasattr(self, "_sync_sidebar_terminal_panel_height"):
+            self._sync_sidebar_terminal_panel_height()
+
+    def _hide_project_info_from_sidebar_terminal(self):
+        terminal, log_text = self._project_info_log_text_widget()
+        if log_text is not None:
+            clear_temp = getattr(log_text, "clear_temporary_text", None)
+            if callable(clear_temp):
+                clear_temp()
+        previous = getattr(self, "_project_info_terminal_prev_visible", None)
+        if terminal is not None and previous is not None:
+            terminal.setVisible(bool(previous))
+        if hasattr(self, "_project_info_terminal_prev_visible"):
+            delattr(self, "_project_info_terminal_prev_visible")
+        if hasattr(self, "_sync_sidebar_terminal_panel_height"):
+            self._sync_sidebar_terminal_panel_height()
+
     def _on_project_info_button_click(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._toggle_project_info_card()
@@ -1157,17 +1217,18 @@ class HomeUIMixin(HomeSidebarMixin):
     def _toggle_project_info_card(self):
         expanded = bool(getattr(self, "_project_info_expanded", False))
         self._project_info_expanded = not expanded
-        if expanded:
-            overlay = getattr(self, "_project_info_overlay", None)
-            if overlay is not None:
-                try:
-                    overlay.setParent(None)
-                    overlay.deleteLater()
-                except RuntimeError:
-                    pass
+        overlay = getattr(self, "_project_info_overlay", None)
+        if overlay is not None:
+            try:
+                overlay.setParent(None)
+                overlay.deleteLater()
+            except RuntimeError:
+                pass
             self._project_info_overlay = None
+        if expanded:
+            self._hide_project_info_from_sidebar_terminal()
             return
-        self._show_project_info_overlay()
+        self._show_project_info_in_sidebar_terminal()
 
     def _nav_icon(self, name: str, color="#A9B0B7") -> QIcon:
         return line_icon(name, color)

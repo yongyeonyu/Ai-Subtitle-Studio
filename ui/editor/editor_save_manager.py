@@ -33,6 +33,7 @@ from ui.project.project_session_runtime import attach_project_session
 
 DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC = 300
 DEFAULT_PROJECT_ANALYSIS_REFRESH_DELAY_MS = 12_000
+DEFAULT_DEFERRED_PROJECT_SAVE_DELAY_MS = 1_500
 DEFAULT_DEFERRED_EDITOR_LEARNING_HOLD_MS = 600_000
 
 
@@ -666,23 +667,38 @@ class EditorSaveManagerMixin:
             self._skip_prev_confirm_once = True
 
         self._remember_saved_segments(segs)
+        project_path = ""
+        project_save_deferred = False
         try:
-            project_path = self._auto_save_project(
+            project_save_deferred = self._schedule_deferred_project_save(
                 segs,
                 persist_analysis_artifacts=False,
+                rewrite_stt_reference_tracks=False,
                 allow_create=allow_project_create,
+                schedule_analysis_refresh=schedule_analysis_refresh,
             )
         except Exception as exc:
-            get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {exc}")
-            project_path = ""
+            get_logger().log(f"⚠️ 프로젝트 지연 저장 예약 실패: {exc}")
+            project_save_deferred = False
+        if not project_save_deferred:
+            try:
+                project_path = self._auto_save_project(
+                    segs,
+                    persist_analysis_artifacts=False,
+                    allow_create=allow_project_create,
+                )
+            except Exception as exc:
+                get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {exc}")
+                project_path = ""
         try:
             should_auto_export = self._should_auto_export_after_editor_save() if auto_export is None else bool(auto_export)
             if should_auto_export:
                 self._schedule_auto_export_saved_subtitle_videos()
         except Exception as exc:
             get_logger().log(f"⚠️ 자막영상 자동 출력 실패: {exc}")
-        self._remember_saved_project_file(project_path)
-        if schedule_analysis_refresh:
+        if project_path:
+            self._remember_saved_project_file(project_path)
+        if project_path and schedule_analysis_refresh:
             try:
                 self._schedule_project_analysis_artifacts_refresh(
                     project_path,
@@ -725,7 +741,7 @@ class EditorSaveManagerMixin:
         return True
 
     def _on_save_for_exit(self) -> bool:
-        return bool(
+        saved = bool(
             self._on_save(
                 skip_auto_next=True,
                 write_backup=False,
@@ -735,6 +751,9 @@ class EditorSaveManagerMixin:
                 auto_export=False,
             )
         )
+        if saved:
+            return bool(self._flush_deferred_project_save(reason="exit"))
+        return False
 
     def _save_multiclip_srts(self, segs, multiclip_files, *, write_backup: bool = True):
         main_w = self.window()
@@ -902,6 +921,122 @@ class EditorSaveManagerMixin:
             except Exception as exc:
                 get_logger().log(f"⚠️ 자막영상 자동 출력 실패 [{idx}/{total}]: {exc}")
 
+    def _set_deferred_project_save_status(self, text: str) -> None:
+        try:
+            status = getattr(self, "status_lbl", None)
+            if status is not None:
+                status.setText(str(text or ""))
+        except Exception:
+            pass
+
+    def _has_deferred_project_save_pending(self) -> bool:
+        return bool(
+            getattr(self, "_deferred_project_save_pending", False)
+            or getattr(self, "_deferred_project_save_running", False)
+        )
+
+    def _schedule_deferred_project_save(
+        self,
+        segs: list | None,
+        *,
+        persist_analysis_artifacts: bool = False,
+        rewrite_stt_reference_tracks: bool = False,
+        allow_create: bool = True,
+        schedule_analysis_refresh: bool = True,
+        delay_ms: int = DEFAULT_DEFERRED_PROJECT_SAVE_DELAY_MS,
+    ) -> bool:
+        media_path = str(getattr(self, "media_path", "") or "")
+        if not media_path:
+            return False
+        generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0) + 1
+        self._deferred_project_save_generation = generation
+        self._deferred_project_save_segments = [dict(seg) for seg in list(segs or []) if isinstance(seg, dict)]
+        self._deferred_project_save_options = {
+            "persist_analysis_artifacts": bool(persist_analysis_artifacts),
+            "rewrite_stt_reference_tracks": bool(rewrite_stt_reference_tracks),
+            "allow_create": bool(allow_create),
+            "schedule_analysis_refresh": bool(schedule_analysis_refresh),
+            "saved_segments_signature": str(getattr(self, "_saved_segments_signature", "") or ""),
+        }
+        self._deferred_project_save_pending = True
+        self._set_deferred_project_save_status("에디터 | SRT 저장 완료 · 프로젝트 저장 예약")
+        get_logger().log("💾 SRT 저장 완료 · 프로젝트 파일은 지연 저장으로 예약했습니다.")
+        QTimer.singleShot(
+            max(0, int(delay_ms)),
+            lambda gen=generation: self._run_deferred_project_save(gen),
+        )
+        return True
+
+    def _run_deferred_project_save(self, generation: int, *, force: bool = False) -> bool:
+        current_generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
+        if int(generation or 0) != current_generation:
+            return False
+        if not bool(getattr(self, "_deferred_project_save_pending", False)):
+            return True
+        if bool(getattr(self, "_deferred_project_save_running", False)):
+            QTimer.singleShot(1_000, lambda gen=current_generation: self._run_deferred_project_save(gen, force=force))
+            return False
+        if not force:
+            try:
+                main_w = self.window()
+                active = bool(
+                    hasattr(main_w, "_is_editor_actively_editing")
+                    and main_w._is_editor_actively_editing()
+                )
+            except Exception:
+                active = False
+            if active:
+                QTimer.singleShot(5_000, lambda gen=current_generation: self._run_deferred_project_save(gen))
+                return False
+
+        segs = [dict(seg) for seg in list(getattr(self, "_deferred_project_save_segments", []) or [])]
+        options = dict(getattr(self, "_deferred_project_save_options", {}) or {})
+        self._deferred_project_save_pending = False
+        self._deferred_project_save_running = True
+        project_path = ""
+        try:
+            project_path = self._auto_save_project(
+                segs,
+                persist_analysis_artifacts=bool(options.get("persist_analysis_artifacts", False)),
+                rewrite_stt_reference_tracks=bool(options.get("rewrite_stt_reference_tracks", False)),
+                allow_create=bool(options.get("allow_create", True)),
+            )
+        except Exception as exc:
+            get_logger().log(f"⚠️ 프로젝트 지연 저장 실패: {exc}")
+            self._deferred_project_save_pending = True
+            QTimer.singleShot(5_000, lambda gen=current_generation: self._run_deferred_project_save(gen))
+            return False
+        finally:
+            self._deferred_project_save_running = False
+
+        if project_path:
+            self._remember_saved_project_file(project_path)
+            if bool(options.get("schedule_analysis_refresh", True)):
+                try:
+                    self._schedule_project_analysis_artifacts_refresh(
+                        project_path,
+                        segs,
+                        dict(getattr(self, "settings", {}) or {}),
+                        saved_segments_signature=str(options.get("saved_segments_signature", "") or ""),
+                    )
+                except Exception as exc:
+                    get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 예약 실패: {exc}")
+            self._set_deferred_project_save_status("에디터 | 프로젝트 저장 완료")
+        else:
+            self._set_deferred_project_save_status("에디터 | SRT 저장 완료")
+
+        latest_generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
+        if bool(getattr(self, "_deferred_project_save_pending", False)) and latest_generation != int(generation or 0):
+            QTimer.singleShot(0, lambda gen=latest_generation: self._run_deferred_project_save(gen))
+        return True
+
+    def _flush_deferred_project_save(self, *, reason: str = "manual") -> bool:
+        if not self._has_deferred_project_save_pending():
+            return True
+        generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
+        get_logger().log(f"💾 프로젝트 지연 저장 즉시 반영: {reason}")
+        return bool(self._run_deferred_project_save(generation, force=True))
+
     def _auto_save_project(
         self,
         segs: list = None,
@@ -1035,6 +1170,9 @@ class EditorSaveManagerMixin:
         return
 
     def _confirm_close_before_exit(self, title: str = "종료 확인") -> bool:
+        if self._has_deferred_project_save_pending():
+            if not self._flush_deferred_project_save(reason="close"):
+                return False
         is_dirty = False
         try:
             is_dirty = self._has_unsaved_changes()

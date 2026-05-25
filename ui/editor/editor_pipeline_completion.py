@@ -117,6 +117,23 @@ class EditorPipelineCompletionMixin:
                 label="컷 경계 placeholder 정리",
             )
 
+    def _refresh_generation_complete_timestamp_layer(self, *, full: bool = False) -> None:
+        refresher = getattr(self, "_refresh_editor_timestamp_metadata", None)
+        if not callable(refresher):
+            return
+        self._safe_generation_completion_step(
+            lambda: refresher(full=bool(full)),
+            label="타임태그 복원",
+        )
+
+    def _schedule_generation_complete_timestamp_refresh(self) -> None:
+        self._refresh_generation_complete_timestamp_layer(full=True)
+        for delay_ms in (0, 120, 360):
+            self._pipeline_single_shot(
+                delay_ms,
+                lambda e=self: e._refresh_generation_complete_timestamp_layer(full=False),
+            )
+
     def _load_generation_complete_waveform(self) -> bool:
         loader = getattr(self, "_load_deferred_open_waveform", None)
         if not callable(loader):
@@ -212,6 +229,7 @@ class EditorPipelineCompletionMixin:
                 label="preview 정리",
                 warn="생성 완료 preview 정리 실패",
             )
+        self._schedule_generation_complete_timestamp_refresh()
         self._safe_generation_completion_step(
             self._mark_generation_complete_state,
             label="상태 전환",

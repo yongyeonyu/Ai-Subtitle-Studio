@@ -53,6 +53,8 @@ MINIMAP_HEIGHT = 89
 class GlobalCanvas(GlobalCanvasBase):
     seek_frac = pyqtSignal(float)
     roughcut_llm_run_requested = pyqtSignal()
+    subtitle_spellcheck_requested = pyqtSignal()
+    subtitle_translate_english_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -605,17 +607,37 @@ class GlobalCanvas(GlobalCanvasBase):
         except Exception:
             return event.globalPos()
 
-    def _show_context_menu(self, event) -> bool:
-        items = [
+    def _context_menu_items(self) -> list[dict]:
+        return [
             {
                 "id": "roughcut_llm",
                 "label": "러프컷 LLM 실행",
                 "accent": "#5AC8FA",
             },
+            {"separator": True},
+            {
+                "id": "subtitle_spellcheck",
+                "label": "띄워쓰기 맞춤법 검사",
+                "accent": "#34C759",
+            },
+            {
+                "id": "subtitle_translate_english",
+                "label": "영어로 번역",
+                "accent": "#FFCC00",
+            },
         ]
+
+    def _show_context_menu(self, event) -> bool:
+        items = self._context_menu_items()
         chosen = show_context_menu(self, self._event_global_pos(event), items)
         if chosen == "roughcut_llm":
             self.roughcut_llm_run_requested.emit()
+            return True
+        if chosen == "subtitle_spellcheck":
+            self.subtitle_spellcheck_requested.emit()
+            return True
+        if chosen == "subtitle_translate_english":
+            self.subtitle_translate_english_requested.emit()
             return True
         return False
 

@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QMessageBox, QCheckBox, QColorDialog,
     QProgressDialog, QSlider, QGroupBox, QTabWidget, QWidget,
-    QSizePolicy,
+    QSizePolicy, QRadioButton, QButtonGroup,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRectF, QPointF
 from PyQt6.QtGui  import QColor, QPixmap, QImage, QFont, QPainter, QBrush, QFontMetrics
@@ -31,11 +31,19 @@ from ui.ux.apple_popup_theme import (
 _SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
 _EXPORT_SETTINGS_KEY = "export_dialog"
 _EXPORT_DEFAULTS_KEY = "export_dialog_defaults"
+OUTPUT_MODE_SUBTITLE_ONLY = "subtitle_only"
+OUTPUT_MODE_SUBTITLE_WITH_VIDEO = "subtitle_with_video"
 
 def _normalize_export_settings(d: dict) -> dict:
     d = dict(d or {})
     if not getattr(config, "IS_MAC", False):
         d["icloud"] = False
+    if d.get("output_mode") not in {OUTPUT_MODE_SUBTITLE_ONLY, OUTPUT_MODE_SUBTITLE_WITH_VIDEO}:
+        d["output_mode"] = OUTPUT_MODE_SUBTITLE_ONLY
+    try:
+        d["text_height"] = str(int(d.get("text_height", 0) or 0))
+    except Exception:
+        d["text_height"] = "0"
     return d
 
 def _load_es(key: str = _EXPORT_SETTINGS_KEY)->dict:
@@ -66,6 +74,16 @@ def _export_dialog_stylesheet() -> str:
         f"#subtitleExportLineModeLabel {{ color: {COLORS['muted']}; font-size: 12px; font-weight: 700; }} "
         f"#subtitleExportPreviewLabel {{ background: {COLORS['sidebar']}; border: 1px solid {COLORS['separator']}; border-radius: 12px; }} "
         f"#subtitleExportIcloudCheck {{ color: {COLORS['accent']}; font-weight: 800; padding-top: 8px; }}"
+        f"#subtitleExportModeRow {{ background: transparent; }}"
+        f"#subtitleExportModeLabel {{ color: {COLORS['text']}; font-size: 13px; font-weight: 800; }}"
+        "QRadioButton#exportSubtitleOnlyRadio, QRadioButton#exportSubtitleWithVideoRadio { "
+        f"color: {COLORS['text']}; background: transparent; font-size: 13px; font-weight: 800; spacing: 8px; padding: 8px 14px; "
+        f"border: 1px solid {COLORS['separator']}; border-radius: 8px; "
+        "} "
+        "QRadioButton#exportSubtitleOnlyRadio:checked, QRadioButton#exportSubtitleWithVideoRadio:checked { "
+        f"border-color: {COLORS['primary']}; background: {COLORS['surface_alt']}; color: #D7EBFF; "
+        "} "
+        "QRadioButton::indicator { width: 14px; height: 14px; }"
     )
 
 # ── 한글 지원 글꼴 ──
@@ -192,6 +210,11 @@ def _make_png(dest, text:str, width:int, height:int, style:dict):
     elif align == "right":x = width - text_w - int(width * 0.04)
     else:                 x = (width - text_w) // 2
     y = (height - text_h) // 2
+    try:
+        y -= int(style.get("vertical_offset", 0) or 0)
+    except Exception:
+        pass
+    y = max(0, min(y, max(0, height - text_h)))
     
     # 1. 텍스트 배경 그리기
     if style.get("bg_rgba"):
@@ -308,6 +331,36 @@ class _RenderWorker(QThread):
             self.done.emit(True,output)
         finally: shutil.rmtree(wd,ignore_errors=True)
 
+
+class _OverlayRenderWorker(QThread):
+    done=pyqtSignal(bool,str)
+
+    def __init__(self,p):
+        super().__init__()
+        self.p=p
+
+    def run(self):
+        srt_path = str(self.p.get("srt_path", "") or "")
+        try:
+            from core.renderer import render_subtitle_overlay_video_gpu
+
+            output_path = str(self.p.get("output_path", "") or "")
+            ok = render_subtitle_overlay_video_gpu(
+                srt_path,
+                str(self.p.get("media_path", "") or ""),
+                dict(self.p.get("settings", {}) or {}),
+                output_path=output_path,
+            )
+            self.done.emit(bool(ok), output_path if ok else "영상+자막 렌더링 실패")
+        except Exception:
+            self.done.emit(False, traceback.format_exc())
+        finally:
+            try:
+                if srt_path:
+                    os.remove(srt_path)
+            except OSError:
+                pass
+
 # ── 콤보박스 + +/- 버튼 헬퍼 ──
 def _combo_pm(values:list, default, step:int=1):
     combo=QComboBox()
@@ -338,14 +391,27 @@ def _combo_pm(values:list, default, step:int=1):
     return combo, h
 
 class ExportDialog(QDialog):
-    def __init__(self, segments, video_name, parent=None):
+    def __init__(
+        self,
+        segments,
+        video_name,
+        parent=None,
+        output_mode: str | None = None,
+        initial_tab: str | None = None,
+    ):
         super().__init__(parent)
         self.segments=segments; self.video_name=video_name
         self.setObjectName("subtitleExportDialog")
+        self._media_path = ""
         self._srt_dir=os.path.expanduser("~")
         if parent and hasattr(parent,"media_path"):
-            d=os.path.dirname(parent.media_path)
+            self._media_path = str(parent.media_path or "")
+            d=os.path.dirname(self._media_path)
             if d and os.path.exists(d): self._srt_dir=d
+        elif video_name and os.path.exists(str(video_name)):
+            self._media_path = os.path.abspath(str(video_name))
+            self.video_name = os.path.basename(self._media_path)
+            self._srt_dir = os.path.dirname(self._media_path) or self._srt_dir
         self._txt_c=QColor(config.ACCENT); self._bdr_c=QColor("#FFFFFF"); self._shd_c=QColor("#000000"); self._bg_c=QColor("#000000")
         self._fonts=_avail_fonts()
         self.setWindowTitle("자막 동영상 출력"); self.setMinimumWidth(860)
@@ -354,7 +420,11 @@ class ExportDialog(QDialog):
             + apple_popup_dialog_stylesheet("subtitleExportDialog", accent=COLORS["accent"])
             + _export_dialog_stylesheet()
         )
-        self._build_ui(); self._load(); self._refresh_preview()
+        self._build_ui(); self._load()
+        self.set_output_mode(output_mode or OUTPUT_MODE_SUBTITLE_ONLY)
+        if str(initial_tab or "").lower() in {"text", "text_height"}:
+            self.tabs.setCurrentIndex(1)
+        self._refresh_preview()
 
     def _build_ui(self):
         root=QVBoxLayout(self); root.setSpacing(8)
@@ -379,12 +449,34 @@ class ExportDialog(QDialog):
         if not getattr(config, "IS_MAC", False):
             self.icloud_chk.setVisible(False)
 
+        mode_row = QHBoxLayout()
+        mode_row.setObjectName("subtitleExportModeRow")
+        mode_lbl = QLabel("출력 모드:")
+        mode_lbl.setObjectName("subtitleExportModeLabel")
+        mode_lbl.setFixedWidth(130)
+        mode_row.addWidget(mode_lbl)
+        self.subtitle_only_radio = QRadioButton("자막")
+        self.subtitle_only_radio.setObjectName("exportSubtitleOnlyRadio")
+        self.subtitle_video_radio = QRadioButton("자막 + 영상")
+        self.subtitle_video_radio.setObjectName("exportSubtitleWithVideoRadio")
+        self.output_mode_group = QButtonGroup(self)
+        self.output_mode_group.setObjectName("exportOutputModeGroup")
+        self.output_mode_group.setExclusive(True)
+        self.output_mode_group.addButton(self.subtitle_only_radio)
+        self.output_mode_group.addButton(self.subtitle_video_radio)
+        self.subtitle_only_radio.setChecked(True)
+        mode_row.addWidget(self.subtitle_only_radio)
+        mode_row.addWidget(self.subtitle_video_radio)
+        mode_row.addStretch()
+        l1.addLayout(mode_row)
+
         # ── 탭2: 텍스트 ──
         t2=QWidget(); l2=QVBoxLayout(t2); self.tabs.addTab(t2,"텍스트")
         self.font_combo=QComboBox(); self.font_combo.addItems(sorted(self._fonts.keys())); self.font_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview()); l2.addLayout(lrow("글꼴:",self.font_combo))
         self.sz_combo,sz_h=_combo_pm([10,20,40,60,80,100],60); self.sz_combo.currentTextChanged.connect(self._refresh_preview); l2.addLayout(lrow("텍스트 크기:",sz_h))
         self.align_combo=QComboBox(); self.align_combo.addItems(["가운데","왼쪽","오른쪽"]); self.align_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview()); l2.addLayout(lrow("텍스트 정렬:",self.align_combo))
         self.lsp_combo,lsp_h=_combo_pm(list(range(0,51)),6); self.lsp_combo.currentTextChanged.connect(self._refresh_preview); l2.addLayout(lrow("줄 간격:",lsp_h))
+        self.text_height_combo,text_height_h=_combo_pm(list(range(-80,81,5)),0,step=5); self.text_height_combo.setObjectName("exportTextHeightCombo"); self.text_height_combo.setToolTip("양수는 자막을 위로, 음수는 아래로 이동합니다."); self.text_height_combo.currentTextChanged.connect(self._refresh_preview); l2.addLayout(lrow("텍스트 높이:",text_height_h))
         self.bold_chk=QCheckBox("굵게 (Bold)"); self.bold_chk.setChecked(True); self.bold_chk.toggled.connect(self._refresh_preview); l2.addWidget(self.bold_chk)
         self._txt_btn=QPushButton(); self._txt_btn.clicked.connect(lambda *a: self._pick("txt")); l2.addLayout(lrow("텍스트 색상:",self._txt_btn))
         l2.addStretch()
@@ -536,6 +628,10 @@ class ExportDialog(QDialog):
         except: shdy = 3
         shdy = int(shdy * effect_scale)
         
+        try: text_height = int(self.text_height_combo.currentText() or 0)
+        except: text_height = 0
+        vertical_offset = int(text_height * effect_scale)
+
         bg_radius = int(self.bg_rd_sl.value() * effect_scale)
         bg_margin = int(self.bg_mg_sl.value() * effect_scale)
 
@@ -550,6 +646,7 @@ class ExportDialog(QDialog):
             border_rgba=(self._bdr_c.red(),self._bdr_c.green(),self._bdr_c.blue(),255),
             shadow_rgba=(self._shd_c.red(),self._shd_c.green(),self._shd_c.blue(),200) if self.shd_chk.isChecked() else None,
             shadow_x=shdx, shadow_y=shdy,
+            vertical_offset=vertical_offset,
             bg_rgba=bg_rgba, bg_radius=bg_radius, bg_margin=bg_margin, bg_full_width=self.bg_full_chk.isChecked()
         )
 
@@ -559,6 +656,24 @@ class ExportDialog(QDialog):
 
     def _render_scale(self) -> float:
         return 4.0 if self._output_width() >= 3840 else 2.0
+
+    def output_mode(self) -> str:
+        if getattr(self, "subtitle_video_radio", None) is not None and self.subtitle_video_radio.isChecked():
+            return OUTPUT_MODE_SUBTITLE_WITH_VIDEO
+        return OUTPUT_MODE_SUBTITLE_ONLY
+
+    def set_output_mode(self, mode: str | None) -> None:
+        normalized = mode if mode in {OUTPUT_MODE_SUBTITLE_ONLY, OUTPUT_MODE_SUBTITLE_WITH_VIDEO} else OUTPUT_MODE_SUBTITLE_ONLY
+        if normalized == OUTPUT_MODE_SUBTITLE_WITH_VIDEO:
+            self.subtitle_video_radio.setChecked(True)
+        else:
+            self.subtitle_only_radio.setChecked(True)
+
+    def _overlay_output_path(self) -> str:
+        media_path = str(getattr(self, "_media_path", "") or "")
+        source_name = os.path.basename(media_path or str(self.video_name or "subtitle_video"))
+        base = os.path.splitext(source_name)[0] or "subtitle_video"
+        return os.path.join(self._srt_dir, f"{base}_자막입힘.mp4")
 
     def _preview_width(self) -> int:
         player = self._video_player()
@@ -614,7 +729,9 @@ class ExportDialog(QDialog):
             shadow=self.shd_chk.isChecked(), shd_c=self._shd_c.name(), shdx=self.shdx_combo.currentText(), shdy=self.shdy_combo.currentText(),
             bg=self.bg_chk.isChecked(), bg_full=self.bg_full_chk.isChecked(), bg_c=self._bg_c.name(), 
             bg_op=self.bg_op_sl.value(), bg_radius=self.bg_rd_sl.value(), bg_margin=self.bg_mg_sl.value(), bold=self.bold_chk.isChecked(),
-            icloud=self.icloud_chk.isChecked()
+            text_height=self.text_height_combo.currentText(),
+            icloud=self.icloud_chk.isChecked(),
+            output_mode=self.output_mode(),
         )
 
     def _apply_settings(self, s: dict) -> bool:
@@ -629,10 +746,12 @@ class ExportDialog(QDialog):
             self.bdr_w_combo.setCurrentText(str(s.get("bdr_w",2)))
             self.shd_chk.setChecked(s.get("shadow",False)); self._shd_c=QColor(s.get("shd_c","#000000")); self._cb(self._shd_btn,self._shd_c)
             self.shdx_combo.setCurrentText(str(s.get("shdx",3))); self.shdy_combo.setCurrentText(str(s.get("shdy",3)))
+            self.text_height_combo.setCurrentText(str(s.get("text_height",0)))
             self.bg_chk.setChecked(s.get("bg",False)); self.bg_full_chk.setChecked(s.get("bg_full",False))
             self._bg_c=QColor(s.get("bg_c","#000000")); self._cb(self.bg_col_btn,self._bg_c)
             self.bg_op_sl.setValue(int(s.get("bg_op",50))); self.bg_rd_sl.setValue(int(s.get("bg_radius",10))); self.bg_mg_sl.setValue(int(s.get("bg_margin",18))); self.bold_chk.setChecked(s.get("bold",True))
             self.icloud_chk.setChecked(bool(s.get("icloud", False)) and bool(getattr(config, "IS_MAC", False)))
+            self.set_output_mode(s.get("output_mode", OUTPUT_MODE_SUBTITLE_ONLY))
             self._refresh_preview()
             return True
         except Exception:
@@ -719,14 +838,25 @@ class ExportDialog(QDialog):
     def _render(self):
         tmp=tempfile.NamedTemporaryFile(suffix=".srt",delete=False,mode="w",encoding="utf-8"); tmp.close()
         save_srt(self.segments,tmp.name,apply_offset=False); segs=_parse_srt(tmp.name)
+        if not segs:
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
+            return
+        settings = self._collect()
+        _save_es(settings)
+
+        if self.output_mode() == OUTPUT_MODE_SUBTITLE_WITH_VIDEO:
+            self._render_overlay_video(tmp.name, settings)
+            return
+
         try:
             os.remove(tmp.name)
         except FileNotFoundError:
             pass
         except OSError as exc:
             get_logger().log(f"⚠️ 임시 SRT 삭제 실패: {exc}")
-        if not segs: return
-        _save_es(self._collect())
         
         safe_v = re.sub(r'[\\/:*?"<>|]', '_', self.video_name)
         out_p = os.path.join(self._srt_dir, f"{safe_v}_자막소스.mov")
@@ -740,6 +870,31 @@ class ExportDialog(QDialog):
         self._prog=QProgressDialog("렌더링 중...",None,0,100,self); self._prog.show()
         self._worker=_RenderWorker(dict(segs=segs,width=width,height=height,style=st,output=out_p,total_dur=max(s["end"] for s in segs)+0.5,fast="빠른" in self.quality_combo.currentText()))
         self._worker.progress.connect(self._prog.setValue); self._worker.done.connect(self._on_done); self._worker.start()
+
+    def _render_overlay_video(self, srt_path: str, settings: dict) -> None:
+        media_path = str(getattr(self, "_media_path", "") or "")
+        if not media_path or not os.path.exists(media_path):
+            try:
+                os.remove(srt_path)
+            except OSError:
+                pass
+            QMessageBox.warning(self, "자막 출력", "원본 영상 파일을 찾을 수 없습니다.")
+            return
+        output_path = self._overlay_output_path()
+        get_logger().log(f"🎥 영상+자막 렌더링 예약: {os.path.basename(output_path)}")
+        self._prog=QProgressDialog("영상+자막 렌더링 중...",None,0,0,self)
+        self._prog.setCancelButton(None)
+        self._prog.show()
+        self._worker=_OverlayRenderWorker(
+            dict(
+                srt_path=srt_path,
+                media_path=media_path,
+                settings=dict(settings or {}),
+                output_path=output_path,
+            )
+        )
+        self._worker.done.connect(self._on_done)
+        self._worker.start()
 
     # 💡 [핵심] iCloud 자동 업로드 처리 로직 및 터미널 로그 출력
     def _on_done(self, ok, msg):

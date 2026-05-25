@@ -665,7 +665,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
              patch("ui.editor.video_overlay_widgets.scenegraph_enabled", return_value=True):
             self.assertIsNone(SubtitleQuickOverlay.create())
 
-    def test_source_name_badge_lives_in_footer_zone_after_frame_counter(self):
+    def test_source_name_badge_lives_on_footer_right_as_single_line(self):
         widget = VideoPlayerWidget()
         try:
             widget.resize(1368, 760)
@@ -683,14 +683,17 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             label = widget.source_name_label
             self.assertFalse(label.isHidden())
             self.assertEqual(label.toolTip(), os.path.basename(path))
-            self.assertEqual(label.text().replace("\n", ""), os.path.basename(path))
-            self.assertTrue(label.wordWrap())
+            self.assertEqual(label.text(), os.path.basename(path))
+            self.assertNotIn("…", label.text())
+            self.assertNotIn("\n", label.text())
+            self.assertFalse(label.wordWrap())
+            self.assertEqual(label.alignment(), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.assertIn("background: transparent", label.styleSheet())
             self.assertIn("border: none", label.styleSheet())
             self.assertIs(label.parentWidget(), widget.status_info_container)
             self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
             control_layout = label.parentWidget().layout()
-            self.assertLess(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
+            self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
             self.assertEqual(control_layout.spacing(), 6)
             self.assertEqual(control_layout.count(), 3)
             self.assertEqual(control_layout.stretch(1), 1)
@@ -699,8 +702,16 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertLessEqual(widget.source_name_label.maximumWidth(), widget._SOURCE_NAME_BADGE_MAX_WIDTH)
             self.assertGreater(widget.source_name_label.width(), widget.info_label.width())
             self.assertGreaterEqual(widget.source_name_label.width(), widget._SOURCE_NAME_BADGE_MIN_WIDTH)
-            self.assertEqual(widget.source_name_label.geometry().left(), 0)
-            self.assertLess(widget.source_name_label.geometry().right(), widget.info_label.geometry().right())
+            self.assertEqual(widget.info_label.width(), 0)
+            self.assertGreaterEqual(
+                widget.source_name_label.width(),
+                widget.status_info_container.width() - 16,
+            )
+            self.assertGreater(widget.source_name_label.geometry().left(), widget.info_label.geometry().left())
+            self.assertGreaterEqual(
+                widget.source_name_label.geometry().right(),
+                widget.status_info_container.width() - 2,
+            )
             self.assertIn("background: transparent", widget.info_label.styleSheet())
             self.assertIn("border: none", widget.info_label.styleSheet())
         finally:
@@ -738,12 +749,11 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(status_layout.spacing(), 6)
             self.assertEqual(widget.time_label.width(), widget._control_bar_time_width())
             self.assertEqual(widget.frame_count_label.width(), 124)
-            self.assertGreaterEqual(widget.source_name_label.width(), widget.info_label.width())
-            self.assertEqual(widget.source_name_label.geometry().left(), 0)
-            self.assertLess(widget.source_name_label.geometry().right(), widget.info_label.geometry().right())
-            self.assertLessEqual(widget.source_name_label.geometry().right(), widget.status_info_container.width())
+            self.assertGreater(widget.source_name_label.width(), widget.info_label.width())
+            self.assertGreater(widget.source_name_label.geometry().left(), widget.info_label.geometry().left())
+            self.assertGreaterEqual(widget.source_name_label.geometry().right(), widget.status_info_container.width() - 2)
             self.assertLessEqual(widget.source_name_label.geometry().right(), widget._control_bar_widget.width())
-            self.assertGreater(widget.source_name_label.width(), 200)
+            self.assertGreater(widget.source_name_label.width(), 320)
         finally:
             widget.close()
             widget.deleteLater()

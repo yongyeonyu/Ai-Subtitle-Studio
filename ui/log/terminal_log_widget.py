@@ -311,22 +311,41 @@ class FriendlyTerminalLogTextEdit(QTextEdit):
         self._display_entries: list[tuple[str, str]] = []
         self._progress_snapshot_getter = None
         self._last_render_signature: tuple[str, ...] = ()
+        self._temporary_display_text: str | None = None
 
     def raw_log_text(self) -> str:
         return "\n".join(self._raw_lines)
+
+    def show_temporary_text(self, text: str) -> None:
+        self._temporary_display_text = str(text or "")
+        self._last_render_signature = ()
+        super().setPlainText(self._temporary_display_text)
+
+    def clear_temporary_text(self) -> None:
+        if self._temporary_display_text is None:
+            return
+        self._temporary_display_text = None
+        self._last_render_signature = ("__temporary_display__",)
+        self._render_display()
 
     def set_progress_snapshot_getter(self, getter) -> None:
         self._progress_snapshot_getter = getter if callable(getter) else None
         self.refresh_display()
 
     def refresh_display(self) -> None:
+        if self._temporary_display_text is not None:
+            super().setPlainText(self._temporary_display_text)
+            return
         self._render_display()
 
     def append(self, text: str) -> None:  # type: ignore[override]
         self._ingest_lines([str(text or "")])
+        if self._temporary_display_text is not None:
+            return
         self._render_display()
 
     def setPlainText(self, text: str) -> None:  # type: ignore[override]
+        self._temporary_display_text = None
         lines = str(text or "").splitlines()
         self._raw_lines = []
         self._display_entries = []
@@ -334,6 +353,7 @@ class FriendlyTerminalLogTextEdit(QTextEdit):
         self._render_display()
 
     def clear(self) -> None:  # type: ignore[override]
+        self._temporary_display_text = None
         self._raw_lines = []
         self._display_entries = []
         self._last_render_signature = ()
@@ -504,12 +524,21 @@ class BufferedTerminalLogSink:
         self._display_entries: list[tuple[str, str]] = []
         self._progress_snapshot_getter = None
         self._scroll_bar = _NullScrollBar()
+        self._temporary_display_text: str | None = None
 
     def raw_log_text(self) -> str:
         return "\n".join(self._raw_lines)
 
     def toPlainText(self) -> str:
+        if self._temporary_display_text is not None:
+            return self._temporary_display_text
         return "\n".join(summary for _, summary in self._display_entries)
+
+    def show_temporary_text(self, text: str) -> None:
+        self._temporary_display_text = str(text or "")
+
+    def clear_temporary_text(self) -> None:
+        self._temporary_display_text = None
 
     def set_progress_snapshot_getter(self, getter) -> None:
         self._progress_snapshot_getter = getter if callable(getter) else None

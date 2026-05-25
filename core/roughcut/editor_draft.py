@@ -2,23 +2,28 @@
 # Phase: PHASE2
 from __future__ import annotations
 
-from bisect import bisect_left, bisect_right
 import json
 import math
 import os
 import re
-import urllib.error
-import urllib.request
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Iterable
 
 from core.cut_boundary_audio import is_audio_gain_boundary
-from core.llm.openai_provider import is_codex_model, is_openai_model, resolve_openai_model
-from core.llm.secure_keys import get_api_key
+from core.llm.openai_provider import is_codex_model, is_openai_model
 from core.native_swift_roughcut import roughcut_boundary_candidates_via_swift
 from core.project.project_context import segment_signature
 
+from . import editor_draft_chunks as _editor_draft_chunks
+from .editor_draft_chunks import (
+    _indexed_chunk_break_candidates,
+    _int_setting,
+    _pick_chunk_break_candidate,
+    _plan_editor_roughcut_core_ranges as _chunk_plan_editor_roughcut_core_ranges,
+    _roughcut_effective_llm_model,
+    _roughcut_llm_uses_codex,
+)
 from .edl_generator import build_edl_segments, edl_to_dict, map_edl_segments_to_clip_sources
 from .guide_writer import build_markdown_guide
 from .models import (
@@ -36,6 +41,14 @@ from .roughcut_settings import merge_roughcut_settings
 from .roughcut_context_policy import resolve_roughcut_context_policy
 from .roughcut_llm_config import resolve_roughcut_llm_config
 from .roughcut_llm import prepare_roughcut_llm_model_for_run
+from .editor_draft_llm import (
+    _call_gemini_json,
+    _call_local_llm_json,
+    _call_ollama_json,
+    _call_openai_json,
+    _extract_openai_text,
+    _parse_json_object,
+)
 from .topic_labeler import apply_major_topic_labels
 from .subtitle_retimer import format_srt, retime_subtitles_for_edl
 
@@ -72,6 +85,35 @@ MAX_EDITOR_MAJOR_SEGMENTS = 26
 _ROUGHCUT_AUTORUN_FALSE_VALUES = frozenset({"0", "false", "off", "no", "사용 안함", "사용안함", "끔"})
 
 
+def _boundary_break_candidates(rows: list[dict[str, Any]], boundary_rows: list[Any], *, source: str) -> list[dict[str, Any]]:
+    return _editor_draft_chunks._boundary_break_candidates(
+        rows,
+        boundary_rows,
+        source=source,
+        candidate_backend=roughcut_boundary_candidates_via_swift,
+    )
+
+
+def _plan_editor_roughcut_core_ranges(
+    rows: list[dict[str, Any]],
+    settings: dict[str, Any],
+    *,
+    max_rows: int,
+    target_rows: int,
+    cut_boundaries: list[Any] | None = None,
+    provisional_cut_boundaries: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    return _chunk_plan_editor_roughcut_core_ranges(
+        rows,
+        settings,
+        max_rows=max_rows,
+        target_rows=target_rows,
+        cut_boundaries=cut_boundaries,
+        provisional_cut_boundaries=provisional_cut_boundaries,
+        candidate_backend=roughcut_boundary_candidates_via_swift,
+    )
+
+
 def _roughcut_llm_connection_unavailable(exc: Exception) -> bool:
     message = str(exc or "").lower()
     return any(
@@ -98,32 +140,6 @@ def _roughcut_llm_runtime_unavailable_reason(model: str) -> str:
         return "" if available else str(detail or "Codex CLI unavailable")
     except Exception as exc:
         return str(exc)
-
-
-def _int_setting(settings: dict[str, Any], key: str, default: int, *, minimum: int = 1, maximum: int = 9999) -> int:
-    try:
-        value = int(float(settings.get(key, default)))
-    except Exception:
-        value = default
-    return max(minimum, min(maximum, value))
-
-
-def _roughcut_effective_llm_model(settings: dict[str, Any] | None) -> tuple[str, str]:
-    source = settings or {}
-    merged = merge_roughcut_settings(source)
-    use_override = bool(merged.get("roughcut_llm_use_override", False))
-    provider = str(merged.get("roughcut_llm_provider") or "inherit").strip()
-    model = str(merged.get("roughcut_llm_model") or "").strip()
-    if not use_override or provider == "inherit":
-        provider = str(source.get("selected_llm_provider") or "ollama").strip()
-    if not use_override or model in ("", "inherit"):
-        model = str(source.get("selected_model") or "").strip()
-    return provider, model
-
-
-def _roughcut_llm_uses_codex(settings: dict[str, Any] | None) -> bool:
-    _provider, model = _roughcut_effective_llm_model(settings)
-    return is_codex_model(model)
 
 
 def _effective_roughcut_context_policy(
@@ -1611,223 +1627,6 @@ def _call_editor_roughcut_json(provider: str, model: str, prompt: str, *, timeou
     return _call_ollama_json(model, prompt, timeout=timeout)
 
 
-def _plan_editor_roughcut_core_ranges(
-    rows: list[dict[str, Any]],
-    settings: dict[str, Any],
-    *,
-    max_rows: int,
-    target_rows: int,
-    cut_boundaries: list[Any] | None = None,
-    provisional_cut_boundaries: list[Any] | None = None,
-) -> list[dict[str, Any]]:
-    if not rows:
-        return []
-    row_count = len(rows)
-    min_core, target_core, max_core = _roughcut_chunk_bounds(settings, max_rows=max_rows, target_rows=target_rows)
-    confirmed_candidates = _boundary_break_candidates(rows, cut_boundaries or [], source="confirmed")
-    provisional_candidates = _boundary_break_candidates(rows, provisional_cut_boundaries or [], source="provisional")
-    confirmed_index = _indexed_chunk_break_candidates(confirmed_candidates)
-    provisional_index = _indexed_chunk_break_candidates(provisional_candidates)
-    start = 0
-    chunks: list[dict[str, Any]] = []
-    while start < row_count:
-        remaining = row_count - start
-        if remaining <= max_core:
-            end = row_count - 1
-            source = "tail"
-        else:
-            min_end = min(row_count - 1, start + min_core - 1)
-            max_end = min(row_count - 1, start + max_core - 1)
-            target_end = min(row_count - 1, start + target_core - 1)
-            latest_safe_end = row_count - min_core - 1
-            if latest_safe_end >= min_end:
-                target_end = min(target_end, latest_safe_end)
-                max_end = min(max_end, max(min_end, latest_safe_end))
-            choice = _pick_chunk_break_candidate(
-                confirmed_candidates=confirmed_index,
-                provisional_candidates=provisional_index,
-                min_end=min_end,
-                target_end=target_end,
-                max_end=max_end,
-            )
-            if choice is not None:
-                end = int(choice["end_index"])
-                source = str(choice.get("source") or "boundary")
-            else:
-                end = max(min_end, min(max_end, target_end))
-                source = "row_window"
-        chunks.append(
-            {
-                "core_start_index": start,
-                "core_end_index": end,
-                "source": source,
-            }
-        )
-        start = end + 1
-    return chunks
-
-
-def _roughcut_chunk_bounds(settings: dict[str, Any], *, max_rows: int, target_rows: int) -> tuple[int, int, int]:
-    min_raw = int(settings.get("roughcut_llm_chunk_min_rows", 8) or 8)
-    max_raw = int(settings.get("roughcut_llm_chunk_max_rows", 18) or 18)
-    if _roughcut_llm_uses_codex(settings) and bool(merge_roughcut_settings(settings).get("roughcut_llm_rows_auto_enabled", True)):
-        codex_chunk = _int_setting(
-            merge_roughcut_settings(settings),
-            "roughcut_codex_chunk_rows",
-            72,
-            minimum=1,
-            maximum=max(1, max_rows),
-        )
-        max_raw = max(max_raw, codex_chunk, int(target_rows or 0))
-    min_core = max(1, min(max_rows, min_raw))
-    max_core = max(min_core, min(max_rows, max_raw))
-    target_core = max(min_core, min(max_core, int(target_rows or max_rows)))
-    return min_core, target_core, max_core
-
-
-def _boundary_break_candidates(rows: list[dict[str, Any]], boundary_rows: list[Any], *, source: str) -> list[dict[str, Any]]:
-    if len(rows) < 2 or not boundary_rows:
-        return []
-    if _roughcut_native_candidate_plan_worthwhile(rows, boundary_rows):
-        native = roughcut_boundary_candidates_via_swift(rows, list(boundary_rows or []), source=source)
-        if native is not None:
-            return native
-    midpoints = _roughcut_row_midpoints(rows)
-    midpoint_values = [midpoint for _idx, midpoint in midpoints]
-    monotonic = _is_nondecreasing(midpoint_values)
-    best_by_index: dict[int, dict[str, Any]] = {}
-    for item in list(boundary_rows or []):
-        boundary_time = _boundary_time(item)
-        if boundary_time is None:
-            continue
-        end_index, distance = _nearest_roughcut_midpoint(
-            midpoints,
-            midpoint_values,
-            boundary_time,
-            use_bisect=monotonic,
-        )
-        current = best_by_index.get(end_index)
-        if current is None or distance < float(current.get("distance", 999999.0)):
-            best_by_index[end_index] = {
-                "end_index": end_index,
-                "source": source,
-                "distance": distance,
-                "time": boundary_time,
-            }
-    return [best_by_index[index] for index in sorted(best_by_index)]
-
-
-def _roughcut_row_midpoints(rows: list[dict[str, Any]]) -> list[tuple[int, float]]:
-    return [
-        (
-            idx,
-            (float(rows[idx]["end"]) + float(rows[idx + 1]["start"])) / 2.0,
-        )
-        for idx in range(len(rows) - 1)
-    ]
-
-
-def _is_nondecreasing(values: list[float]) -> bool:
-    return all(values[index] <= values[index + 1] for index in range(len(values) - 1))
-
-
-def _roughcut_native_candidate_plan_worthwhile(rows: list[dict[str, Any]], boundary_rows: list[Any]) -> bool:
-    if len(rows) < 32 or len(boundary_rows) < 24:
-        return False
-    values = [midpoint for _idx, midpoint in _roughcut_row_midpoints(rows)]
-    return _is_nondecreasing(values) and (len(values) * len(boundary_rows)) >= 4096
-
-
-def _nearest_roughcut_midpoint(
-    midpoints: list[tuple[int, float]],
-    midpoint_values: list[float],
-    boundary_time: float,
-    *,
-    use_bisect: bool,
-) -> tuple[int, float]:
-    if not midpoints:
-        return 0, 0.0
-    if not use_bisect:
-        return min(
-            ((idx, abs(midpoint - boundary_time)) for idx, midpoint in midpoints),
-            key=lambda pair: pair[1],
-        )
-    pos = bisect_left(midpoint_values, boundary_time)
-    candidate_positions: list[int] = []
-    if pos < len(midpoint_values):
-        candidate_positions.append(pos)
-    if pos > 0:
-        left_value = midpoint_values[pos - 1]
-        candidate_positions.append(bisect_left(midpoint_values, left_value, 0, pos))
-    best_position = min(
-        candidate_positions,
-        key=lambda item: (abs(midpoint_values[item] - boundary_time), item),
-    )
-    idx, midpoint = midpoints[best_position]
-    return idx, abs(midpoint - boundary_time)
-
-
-def _pick_chunk_break_candidate(
-    *,
-    confirmed_candidates,
-    provisional_candidates,
-    min_end: int,
-    target_end: int,
-    max_end: int,
-) -> dict[str, Any] | None:
-    for pool in (confirmed_candidates, provisional_candidates):
-        filtered = _chunk_break_candidate_window(pool, min_end=min_end, max_end=max_end)
-        if filtered:
-            _end_index, _order, item = min(
-                filtered,
-                key=lambda entry: (
-                    abs(int(entry[0]) - target_end),
-                    float(entry[2].get("distance", 999999.0)),
-                    int(entry[1]),
-                ),
-            )
-            return item
-    return None
-
-
-def _indexed_chunk_break_candidates(candidates: list[dict[str, Any]] | None) -> dict[str, Any]:
-    entries: list[tuple[int, int, dict[str, Any]]] = []
-    for order, item in enumerate(candidates or []):
-        if not isinstance(item, dict):
-            continue
-        try:
-            end_index = int(item.get("end_index", -1))
-        except (TypeError, ValueError):
-            continue
-        entries.append((end_index, order, item))
-    entries.sort(key=lambda entry: (entry[0], entry[1]))
-    return {
-        "ends": [entry[0] for entry in entries],
-        "entries": entries,
-    }
-
-
-def _chunk_break_candidate_window(pool, *, min_end: int, max_end: int) -> list[tuple[int, int, dict[str, Any]]]:
-    if isinstance(pool, dict):
-        ends = pool.get("ends")
-        entries = pool.get("entries")
-        if isinstance(ends, list) and isinstance(entries, list):
-            left = bisect_left(ends, min_end)
-            right = bisect_right(ends, max_end)
-            return list(entries[left:right])
-    out: list[tuple[int, int, dict[str, Any]]] = []
-    for order, item in enumerate(pool or []):
-        if not isinstance(item, dict):
-            continue
-        try:
-            end_index = int(item.get("end_index", -1))
-        except (TypeError, ValueError):
-            continue
-        if min_end <= end_index <= max_end:
-            out.append((end_index, order, item))
-    return out
-
-
 def _groups_from_chunk_payload(
     payload: dict[str, Any] | None,
     *,
@@ -1892,120 +1691,6 @@ def _payload_from_major_groups(
         "_chunk_count": int(chunk_count or 0),
         "_local_fallback_chunks": int(local_fallback_count or 0),
     }
-
-
-def _boundary_time(value: Any) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    if not isinstance(value, dict):
-        return None
-    for key in ("timeline_sec", "time", "sec", "timestamp", "start", "at"):
-        candidate = value.get(key)
-        if candidate in (None, ""):
-            continue
-        try:
-            return float(candidate)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _call_ollama_json(model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
-    from core.llm.ollama_provider import generate_text
-
-    text = generate_text(
-        model,
-        prompt,
-        timeout=timeout,
-        keep_alive=-1,
-        num_predict=1024,
-        temperature=0.2,
-        json_format=True,
-        attempts=2,
-    )
-    return _parse_json_object(text)
-
-
-def _call_local_llm_json(provider: str, model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
-    from core.llm.provider_router import generate_text
-
-    text = generate_text(
-        provider,
-        model,
-        prompt,
-        timeout=timeout,
-        num_predict=1024,
-        temperature=0.2,
-        json_format=True,
-        attempts=1,
-    )
-    return _parse_json_object(text)
-
-
-def _call_openai_json(model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
-    if is_codex_model(model):
-        from core.llm.codex_provider import run_json as codex_run_json
-
-        return codex_run_json(model, prompt, timeout=timeout)
-    api_key = get_api_key("openai")
-    if not api_key:
-        return None
-    body = json.dumps(
-        {
-            "model": resolve_openai_model(model),
-            "input": prompt,
-            "text": {"format": {"type": "json_object"}},
-            "reasoning": {"effort": "none"},
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=body,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"OpenAI API 오류 {exc.code}: {detail}") from exc
-    return _parse_json_object(_extract_openai_text(payload))
-
-
-def _call_gemini_json(model: str, prompt: str) -> dict[str, Any] | None:
-    api_key = get_api_key("google")
-    if not api_key:
-        return None
-    from google import genai
-    from google.genai import types
-
-    gemini_model = "gemini-2.5-pro" if "Pro" in model else "gemini-2.5-flash"
-    response = genai.Client(api_key=api_key).models.generate_content(
-        model=gemini_model,
-        contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2),
-    )
-    return _parse_json_object(response.text or "")
-
-
-def _parse_json_object(text: str) -> dict[str, Any] | None:
-    text = (text or "").strip().strip("`")
-    if text.lower().startswith("json"):
-        text = text[4:].strip()
-    parsed = json.loads(text or "{}")
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _extract_openai_text(payload: dict[str, Any]) -> str:
-    if isinstance(payload.get("output_text"), str):
-        return payload["output_text"]
-    parts: list[str] = []
-    for item in payload.get("output", []) or []:
-        for content in item.get("content", []) or []:
-            text = content.get("text")
-            if isinstance(text, str):
-                parts.append(text)
-    return "\n".join(parts).strip()
 
 
 def _subtitle_id(subtitle: SubtitleSegment, fallback: int) -> int:

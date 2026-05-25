@@ -27,6 +27,8 @@ from core.pipeline.cut_boundary_cache import (
     cut_boundary_cache_settings_payload,
     truthy_setting,
 )
+from core.pipeline.cut_boundary_segment_ops import PipelineCutBoundarySegmentOpsMixin
+from core.pipeline.cut_boundary_snapshot import PipelineCutBoundarySnapshotMixin
 from core.pipeline.cut_boundary_strategy import (
     CutBoundaryCandidateStrategy,
     CutBoundaryPrescanStrategy,
@@ -40,7 +42,7 @@ from ui.queue.queue_dispatch import queue_active_row_index
 _truthy_setting = truthy_setting
 
 
-class PipelineCutBoundaryMixin:
+class PipelineCutBoundaryMixin(PipelineCutBoundarySnapshotMixin, PipelineCutBoundarySegmentOpsMixin):
     """Pipeline 컷 경계 분석/캐시/적용 헬퍼 모음."""
 
     def _cut_boundary_candidate_strategy(self) -> CutBoundaryCandidateStrategy:
@@ -56,146 +58,6 @@ class PipelineCutBoundaryMixin:
             strategy = CutBoundaryPrescanStrategy()
             self._cut_boundary_prescan_strategy_obj = strategy
         return strategy
-
-    def _cut_boundary_snapshot_for_pipeline(self, *, force_reload: bool = False) -> dict:
-        """Return cached cut-boundary/provisional rows for the current project.
-
-        Full subtitle generation calls these helpers many times from preview,
-        STT, LLM, and final post-process paths. Re-reading the project JSON on
-        each call creates avoidable I/O and jitter, so we cache by
-        project-path/mtime plus provisional in-memory fallback signature.
-        """
-        provisional_fallback = [dict(item) for item in list(getattr(self, "_cut_boundary_provisional_rows", []) or [])]
-        try:
-            provisional_signature = json.dumps(
-                provisional_fallback,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        except Exception:
-            provisional_signature = str(len(provisional_fallback))
-
-        ui = getattr(self, "ui", None)
-        project_path = str(getattr(ui, "_current_project_path", "") or "")
-        mtime_ns = None
-        if project_path and os.path.exists(project_path):
-            try:
-                st = os.stat(project_path)
-                mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)))
-            except Exception:
-                mtime_ns = None
-
-        cache = getattr(self, "_cut_boundary_pipeline_cache", None)
-        if (
-            not force_reload
-            and isinstance(cache, dict)
-            and cache.get("project_path") == project_path
-            and cache.get("mtime_ns") == mtime_ns
-            and cache.get("provisional_signature") == provisional_signature
-        ):
-            return {
-                "cut_boundaries": [dict(item) for item in list(cache.get("cut_boundaries", []) or [])],
-                "provisional_cut_boundaries": [dict(item) for item in list(cache.get("provisional_cut_boundaries", []) or [])],
-            }
-
-        cut_rows: list[dict] = []
-        provisional_rows: list[dict] = provisional_fallback
-        try:
-            from core.cut_boundary import project_cut_boundaries, project_cut_provisional_boundaries
-
-            if project_path and os.path.exists(project_path):
-                project = read_project_file(project_path)
-                cut_rows = [dict(item) for item in list(project_cut_boundaries(project) or [])]
-                project_provisional = [dict(item) for item in list(project_cut_provisional_boundaries(project) or [])]
-                if project_provisional:
-                    provisional_rows = project_provisional
-        except Exception:
-            cut_rows = []
-            provisional_rows = provisional_fallback
-
-        snapshot = {
-            "project_path": project_path,
-            "mtime_ns": mtime_ns,
-            "provisional_signature": provisional_signature,
-            "cut_boundaries": [dict(item) for item in cut_rows],
-            "provisional_cut_boundaries": [dict(item) for item in provisional_rows],
-        }
-        self._cut_boundary_pipeline_cache = snapshot
-        return {
-            "cut_boundaries": [dict(item) for item in cut_rows],
-            "provisional_cut_boundaries": [dict(item) for item in provisional_rows],
-        }
-
-    def _project_cut_boundaries_for_pipeline(self) -> list[dict]:
-        """Return saved visual cut boundaries from the current project file."""
-        try:
-            return list(self._cut_boundary_snapshot_for_pipeline().get("cut_boundaries", []) or [])
-        except Exception:
-            return []
-
-    def _project_provisional_cut_boundaries_for_pipeline(self) -> list[dict]:
-        try:
-            return list(self._cut_boundary_snapshot_for_pipeline().get("provisional_cut_boundaries", []) or [])
-        except Exception:
-            return [dict(item) for item in list(getattr(self, "_cut_boundary_provisional_rows", []) or [])]
-
-    def _project_cut_provisional_boundaries_for_pipeline(self) -> list[dict]:
-        """Backward-compatible alias for provisional cut-boundary rows."""
-        return self._project_provisional_cut_boundaries_for_pipeline()
-
-    def _clear_completed_cut_boundary_provisionals(
-        self,
-        project_path: str = "",
-        *,
-        settings: dict | None = None,
-        detected: list[dict] | None = None,
-        reviewed_rows: list[dict] | None = None,
-        emit: bool = True,
-    ) -> None:
-        """Remove temporary cut-boundary rows after follower verification finishes.
-
-        Provisional rows are useful while the pioneer/follower workers are
-        running, but once the follower has finished they must not remain in the
-        project file. Otherwise a later project refresh can resurrect gray
-        dotted "temporary" lines even though final cut boundaries are done.
-        """
-        try:
-            self._cut_boundary_provisional_rows = []
-        except Exception:
-            pass
-        try:
-            self._cut_boundary_pipeline_cache = None
-        except Exception:
-            pass
-        if emit:
-            try:
-                self._ui_emit("_sig_preview_cut_boundary_scan_lines", [])
-            except Exception:
-                pass
-
-        path = str(project_path or getattr(getattr(self, "ui", None), "_current_project_path", "") or "")
-        if not path or not os.path.exists(path):
-            return
-
-        try:
-            from core.cut_boundary import normalize_cut_boundaries, sync_project_cut_boundaries
-
-            project = read_project_file(path)
-            analysis = project.setdefault("analysis", {})
-            if detected is not None:
-                analysis["cut_boundaries"] = normalize_cut_boundaries(list(detected or []))
-            if reviewed_rows is not None:
-                analysis["cut_boundary_reviewed_rows"] = normalize_cut_boundaries(list(reviewed_rows or []))
-            analysis["cut_boundary_provisional_boundaries"] = []
-            sync_project_cut_boundaries(
-                project,
-                settings=settings if settings is not None else project.get("user_settings", {}),
-                provisional_boundaries=[],
-            )
-            write_project_file(path, project)
-        except Exception as exc:
-            get_logger().log(f"  ⚠️ [컷 경계] 완료 임시선 정리 저장 실패: {exc}")
 
     def _cut_boundary_cache_settings_payload(self, settings: dict) -> dict:
         return cut_boundary_cache_settings_payload(settings)
@@ -1917,12 +1779,9 @@ class PipelineCutBoundaryMixin:
                             except Exception:
                                 pass
                     with list_lock:
-                        final_detected = [dict(item) for item in detected]
+                        final_detected = self._finalized_cut_boundary_rows([dict(item) for item in detected])
                         final_reviewed_rows = [dict(item) for item in reviewed_middle_rows]
-                        final_middle_source_rows = self._reviewed_cut_boundary_rows_for_middle_segments(
-                            final_reviewed_rows,
-                            detected_rows=final_detected,
-                        )
+                        final_middle_source_rows = [dict(item) for item in final_detected]
                     self._clear_completed_cut_boundary_provisionals(
                         project_path,
                         settings=settings,
@@ -2083,66 +1942,3 @@ class PipelineCutBoundaryMixin:
             follower = getattr(self, "_cut_boundary_follower_thread", None)
             if follower is None or not follower.is_alive():
                 self._ui_emit("_sig_set_cut_boundary_scan_active", False)
-
-    def _split_by_saved_cut_boundaries(self, segments, *, offset: float = 0.0, context: str = "자막") -> list[dict]:
-        """Split subtitle/STT rows so no row crosses a saved visual cut."""
-        try:
-            from core.cut_boundary import cut_boundary_enabled, split_segments_by_cut_boundaries
-
-            settings = load_settings()
-            boundaries = self._project_cut_boundaries_for_pipeline()
-            if offset:
-                boundaries = self._shift_cut_boundary_rows_for_offset(boundaries, float(offset or 0.0))
-            if not boundaries:
-                return [dict(seg) for seg in (segments or [])]
-            result = split_segments_by_cut_boundaries(
-                segments,
-                boundaries,
-                enabled=cut_boundary_enabled(settings),
-            )
-            if len(result) != len(segments or []):
-                get_logger().log(f"  ✂️ [컷 경계] {context} {len(segments or [])}개 → {len(result)}개 절대 분할")
-            return result
-        except Exception as exc:
-            get_logger().log(f"  ⚠️ [컷 경계] {context} 분할 실패, 기존 세그먼트 유지: {exc}")
-            return [dict(seg) for seg in (segments or [])]
-
-    def _magnetize_by_saved_cut_boundaries(
-        self,
-        segments,
-        *,
-        offset: float = 0.0,
-        context: str = "자막",
-        include_confirmed: bool = True,
-        include_provisional: bool = True,
-        provisional_window_sec: float = 0.32,
-        confirmed_window_sec: float = 0.60,
-    ) -> list[dict]:
-        """Snap subtitle/STT rows to both provisional and confirmed saved cuts."""
-        try:
-            from core.cut_boundary import (
-                cut_boundary_enabled,
-                magnetize_segments_to_cut_boundaries,
-            )
-
-            settings = load_settings()
-            confirmed = self._project_cut_boundaries_for_pipeline() if include_confirmed else []
-            provisional = self._project_cut_provisional_boundaries_for_pipeline() if include_provisional else []
-            if offset:
-                offset = float(offset or 0.0)
-                confirmed = self._shift_cut_boundary_rows_for_offset(confirmed, offset)
-                provisional = self._shift_cut_boundary_rows_for_offset(provisional, offset)
-            if not confirmed and not provisional:
-                return [dict(seg) for seg in (segments or [])]
-            return magnetize_segments_to_cut_boundaries(
-                segments,
-                confirmed_boundaries=confirmed,
-                provisional_boundaries=provisional,
-                enabled=cut_boundary_enabled(settings),
-                provisional_window_sec=provisional_window_sec,
-                confirmed_window_sec=confirmed_window_sec,
-                min_duration_sec=0.05,
-            )
-        except Exception as exc:
-            get_logger().log(f"  ⚠️ [컷 경계] {context} 스냅 실패, 기존 세그먼트 유지: {exc}")
-            return [dict(seg) for seg in (segments or [])]

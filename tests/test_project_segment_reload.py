@@ -15,6 +15,7 @@ from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 from ui.editor.editor_lifecycle import EditorLifecycleMixin
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
+from ui.editor.editor_segments_reload import EditorSegmentsReloadMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
@@ -41,6 +42,42 @@ class _TextEdit:
 
     def clear(self):
         self.cleared = True
+
+
+class _UpdateProbe:
+    def __init__(self):
+        self._enabled = True
+
+    def setUpdatesEnabled(self, enabled):
+        self._enabled = bool(enabled)
+
+    def updatesEnabled(self):
+        return bool(self._enabled)
+
+
+class _ReloadTimestampProbeEditor(EditorSegmentsReloadMixin):
+    def __init__(self):
+        self.text_edit = _UpdateProbe()
+        self.text_edit.timestampArea = _UpdateProbe()
+        self.timeline = _UpdateProbe()
+        self.refresh_states = []
+        self._active_seg_start = None
+
+    def _reload_segments_apply_rows(self, segs, *, preserve_view):
+        return list(segs or [])
+
+    def _reload_segments_refresh_runtime(self, timeline_segments, *, mark_dirty):
+        self._refresh_editor_timestamp_metadata(full=True)
+
+    def _refresh_editor_timestamp_metadata(self, *, full=False):
+        self.refresh_states.append(
+            (
+                bool(full),
+                self.text_edit.updatesEnabled(),
+                self.text_edit.timestampArea.updatesEnabled(),
+            )
+        )
+        return 0
 
 
 class _VideoPlayer:
@@ -596,6 +633,18 @@ class ProjectSegmentReloadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_reload_refreshes_timestamp_layer_after_updates_are_restored(self):
+        editor = _ReloadTimestampProbeEditor()
+
+        editor._reload_segments_from_list(
+            [{"start": 1.0, "end": 2.0, "text": "자막"}],
+            preserve_view=True,
+            mark_dirty=False,
+        )
+
+        self.assertIn((True, False, False), editor.refresh_states)
+        self.assertIn((False, True, True), editor.refresh_states)
 
     def test_project_open_uses_same_video_subtitle_runtime_refresh_as_srt_open(self):
         editor = _ProjectOpenEditor()

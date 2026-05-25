@@ -54,7 +54,7 @@ def _fallback_subtitle_assembly_plan(available_variants: list[dict[str, Any]] | 
             "runtime_hardware_acceleration_enabled": True,
             "stt_backend_policy": "native",
             "whisperkit_native_auto_enabled": True,
-            "stt_accelerator_distribution": "gpu+npu+cpu",
+            "stt_accelerator_distribution": "ane+gpu",
             "audio_torch_gpu_enabled": True,
             "ffmpeg_videotoolbox_decode_enabled": True,
             "scan_cut_pioneer_pipe_hwaccel_enabled": True,

@@ -293,6 +293,60 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
             any(name == "_sig_preview_cut_boundary_scan_lines" and args == ([],) for name, args in backend.emitted)
         )
 
+    def test_clear_completed_provisionals_drops_unverified_temp_cut_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "sample.project.json")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "analysis": {
+                            "cut_boundaries": [],
+                            "cut_boundary_provisional_boundaries": [{"timeline_sec": 9.5, "time": 9.5}],
+                        },
+                        "editor_state": {"analysis": {}, "multiclip": {}},
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            backend = _DummyBackend(project_path)
+
+            backend._clear_completed_cut_boundary_provisionals(
+                project_path,
+                detected=[
+                    {"timeline_sec": 10.0, "time": 10.0, "status": "verified", "verified": True},
+                    {
+                        "timeline_sec": 11.0,
+                        "time": 11.0,
+                        "status": "provisional",
+                        "source": "audio_gain_provisional",
+                        "line_color": "#39FF14",
+                    },
+                    {
+                        "timeline_sec": 12.0,
+                        "time": 12.0,
+                        "status": "verified",
+                        "source": "visual_provisional",
+                        "visual_verify_skipped": True,
+                    },
+                    {
+                        "timeline_sec": 13.0,
+                        "time": 13.0,
+                        "status": "checked",
+                        "scan_checked": True,
+                    },
+                ],
+            )
+
+            with open(project_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+
+        cut_rows = saved["analysis"]["cut_boundaries"]
+        self.assertEqual([round(row["timeline_sec"], 1) for row in cut_rows], [10.0])
+        self.assertEqual(saved["analysis"]["cut_boundary_provisional_boundaries"], [])
+        self.assertEqual(saved["editor_state"]["analysis"]["cut_boundary_provisional_boundaries"], [])
+        self.assertEqual(saved["editor_state"]["multiclip"]["cut_boundary_provisional_boundaries"], [])
+
     def test_follower_keeps_single_a_middle_when_verified_rows_are_empty(self):
         old_output_dir = config.OUTPUT_DIR
         with tempfile.TemporaryDirectory() as tmpdir:

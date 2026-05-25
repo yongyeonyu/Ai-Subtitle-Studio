@@ -12,6 +12,7 @@ from core.project.data_manager import save_correction as _dm_save_correction
 
 # 수정 — 절대 import로 통일 (editor_widget.py, editor_timeline_video.py와 동일)
 from ui.editor.editor_roughcut_draft import EditorRoughcutDraftMixin
+from ui.editor.editor_subtitle_post_llm import EditorSubtitlePostLlmMixin
 from ui.editor.editor_segments_block_surgery import EditorSegmentsBlockSurgeryMixin
 from ui.editor.editor_segments_bulk_load import EditorSegmentsBulkLoadMixin
 from ui.editor.editor_segments_current_state import EditorSegmentsCurrentStateMixin
@@ -39,6 +40,7 @@ class EditorSegmentsMixin(
     EditorSegmentsSttSelectionFlowMixin,
     EditorSegmentsTextOpsMixin,
     EditorSegmentsTimelineContextMixin,
+    EditorSubtitlePostLlmMixin,
     EditorRoughcutDraftMixin,
 ):
     """자막 에디터 조작 / 큐 처리 / 세그먼트 I/O"""

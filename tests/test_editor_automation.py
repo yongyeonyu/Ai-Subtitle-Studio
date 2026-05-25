@@ -36,14 +36,21 @@ class _FakeCanvas:
         self.playhead_sec = 1.5
         self.active_seg_line = None
         self.active_seg_start = None
+        self.segments = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "첫째 줄"},
+            {"line": 1, "start": 1.0, "end": 3.0, "text": "둘째 줄"},
+        ]
         self._edit_active = False
         self._inline_editor = None
         self._pending_split_sec = None
         self.committed_cursor = None
+        self.reject_split_start = False
 
     def start_inline_edit(self, line, start, *, split_at_playhead=False):
         self.active_seg_line = int(line)
         self.active_seg_start = float(start)
+        if split_at_playhead and self.reject_split_start:
+            return
         self._edit_active = True
         self._pending_split_sec = float(self.playhead_sec) if split_at_playhead else None
         self._inline_editor = _FakeInlineEditor("둘째 줄")
@@ -135,6 +142,36 @@ def test_smart_split_recovers_when_playhead_is_outside_all_segments():
     assert result["line"] == 1
     assert result["selection_source"] == "nearest_splittable_fallback"
     assert result["split_sec"] == 2.0
+
+
+def test_smart_split_uses_canvas_line_when_editor_line_drifted():
+    editor = _FakeEditor()
+    editor._segments = [
+        {"line": 1, "start": 1.0, "end": 3.0, "text": "둘째 줄"},
+    ]
+    editor.timeline.canvas.segments = [
+        {"line": 40, "start": 4.0, "end": 5.0, "text": "다른 줄"},
+        {"line": 42, "start": 1.0, "end": 3.0, "text": "둘째 줄"},
+    ]
+
+    result = editor.automation_begin_smart_split_at_playhead(line=1)
+
+    assert result["line"] == 1
+    assert editor.timeline.canvas.active_seg_line == 42
+    assert editor.timeline.canvas.active_seg_start == 1.0
+    assert result["split_sec"] == 1.5
+
+
+def test_smart_split_recovers_when_canvas_rejects_split_mode_entry():
+    editor = _FakeEditor()
+    editor.timeline.canvas.reject_split_start = True
+
+    result = editor.automation_begin_smart_split_at_playhead(line=1)
+
+    assert result["line"] == 1
+    assert editor.timeline.canvas.active_seg_line == 1
+    assert editor.timeline.canvas._edit_active is True
+    assert editor.timeline.canvas._pending_split_sec == 1.5
 
 
 def test_set_playhead_syncs_active_segment_to_target_time():

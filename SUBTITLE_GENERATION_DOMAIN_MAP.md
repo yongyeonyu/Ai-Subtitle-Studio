@@ -2,9 +2,9 @@
 
 Generated: 2026-05-24
 
-Purpose: execution artifact for `ACTION_ITEMS.md` item 1, execution step 1.
-This map records the current owner files and dependency edges before extracting
-pure Python facades or moving any compute kernels into Swift/C++ helpers.
+Purpose: execution artifact for `ACTION_ITEMS.md` item 1. This map records the
+current owner files and dependency edges for extracted pure Python facades and
+feature-flagged Swift/C++ helper seams.
 
 ## Scope Guard
 
@@ -22,12 +22,22 @@ pure Python facades or moving any compute kernels into Swift/C++ helpers.
 - Audio and STT entry: `core/audio/media_processor.py`,
   `core/audio/media_processor_audio.py`,
   `core/audio/media_processor_transcribe.py`,
+  `core/audio/media_processor_audio_route.py`,
+  `core/audio/media_processor_transcribe_policy.py`,
+  `core/audio/media_processor_transcribe_recheck.py`,
+  `core/audio/media_processor_transcribe_run.py`,
+  `core/audio/media_processor_transcribe_windowed.py`,
   `core/audio/media_processor_vad.py`,
   `core/audio/stt_backend_router.py`, `core/audio/stt_quality_presets.py`,
   `core/audio/stt_lattice_service.py`, `core/audio/stt_recheck_service.py`,
   `core/audio/whisperkit_persistent.py`, `core/audio/whisper_mlx.py`,
   `core/audio/whisper_cpp.py`.
 - Subtitle engine and text/timing policy: `core/engine/subtitle_engine.py`,
+  `core/engine/subtitle_final_integrity.py`,
+  `core/engine/subtitle_llm_runtime.py`,
+  `core/engine/subtitle_lora_packaging.py`,
+  `core/engine/subtitle_stt_candidate_helpers.py`,
+  `core/engine/subtitle_stt_candidate_selection.py`,
   `core/engine/subtitle_cut_boundary.py`,
   `core/engine/subtitle_dictionary.py`,
   `core/engine/subtitle_global_canvas.py`,
@@ -51,6 +61,8 @@ pure Python facades or moving any compute kernels into Swift/C++ helpers.
   `core/pipeline/subtitle_parallel_manager.py`,
   `core/pipeline/pipeline_helpers.py`,
   `core/pipeline/cut_boundary_helpers.py`,
+  `core/pipeline/cut_boundary_segment_ops.py`,
+  `core/pipeline/cut_boundary_snapshot.py`,
   `core/pipeline/cut_boundary_strategy.py`,
   `core/pipeline/cut_boundary_cache.py`,
   `core/pipeline/cut_boundary_prescan_policy.py`,
@@ -73,6 +85,8 @@ pure Python facades or moving any compute kernels into Swift/C++ helpers.
 - Editor/live sync and persistence: `ui/editor/editor_pipeline.py`,
   `ui/editor/editor_pipeline_signal_bridge.py`,
   `ui/editor/editor_pipeline_completion.py`,
+  `ui/editor/editor_quality_review.py`,
+  `ui/editor/editor_scan_cut_project.py`,
   `ui/editor/editor_segments.py`,
   `ui/editor/editor_segments_live_preview.py`,
   `ui/editor/editor_segments_stt_candidates.py`,
@@ -80,13 +94,16 @@ pure Python facades or moving any compute kernels into Swift/C++ helpers.
   `ui/editor/editor_segments_timeline_context.py`,
   `ui/editor/editor_save_manager.py`,
   `ui/editor/editor_roughcut_draft.py`,
+  `ui/editor/editor_subtitle_post_llm.py`,
+  `ui/editor/ux/timeline_input_shadow.py`,
+  `ui/editor/ux/timeline_live_cut_detection.py`,
   `ui/editor/video_player_subtitles.py`,
   `ui/editor/video_overlay_widgets.py`.
 - Timeline and minimap feed: `ui/timeline/timeline_widget.py`,
   `ui/timeline/timeline_canvas.py`, `ui/timeline/timeline_paint.py`,
-  `ui/timeline/timeline_global.py`, `ui/timeline/timeline_waveform.py`,
-  `ui/timeline/timeline_analysis.py`, `ui/timeline/stt_preview_layout.py`,
-  `ui/timeline/segment_store.py`.
+  `ui/timeline/timeline_paint_helpers.py`, `ui/timeline/timeline_global.py`,
+  `ui/timeline/timeline_waveform.py`, `ui/timeline/timeline_analysis.py`,
+  `ui/timeline/stt_preview_layout.py`, `ui/timeline/segment_store.py`.
 - Native helper seams already present: `core/native_subtitle_segments.py`,
   `core/native_subtitle_stt_segments.py`, `core/native_subtitle_timing.py`,
   `core/native_subtitle_waveform.py`,
@@ -137,6 +154,8 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
 
 - Current owners: `core/engine/subtitle_cut_boundary.py`,
   `core/pipeline/cut_boundary_helpers.py`,
+  `core/pipeline/cut_boundary_segment_ops.py`,
+  `core/pipeline/cut_boundary_snapshot.py`,
   `core/pipeline/cut_boundary_strategy.py`,
   `core/pipeline/cut_boundary_cache.py`,
   `core/pipeline/cut_boundary_prescan_policy.py`,
@@ -151,6 +170,10 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
 - First facade target: pure boundary evidence and cache-plan module before any
   change to editor scan-cut UI. Initial cache settings/payload facade is now
   `core/engine/subtitle_cut_boundary.py`.
+- Extraction status: pipeline project snapshots and saved-boundary segment
+  split/snap operations now live in `core/pipeline/cut_boundary_snapshot.py`
+  and `core/pipeline/cut_boundary_segment_ops.py` while worker orchestration
+  stays in `core/pipeline/cut_boundary_helpers.py`.
 
 ### subtitle_stt
 
@@ -170,6 +193,12 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
   feed validation.
 - First facade target: STT orchestration plan and worker lifecycle summary with
   no change to model choice or quality gates.
+- Extraction status: long STT orchestration is now split across
+  `media_processor_transcribe_policy.py`, `media_processor_transcribe_recheck.py`,
+  `media_processor_transcribe_run.py`, and `media_processor_transcribe_windowed.py`;
+  final STT candidate selection helpers now live in
+  `core/engine/subtitle_stt_candidate_helpers.py` and
+  `core/engine/subtitle_stt_candidate_selection.py`.
 
 ### subtitle_stt1_segments
 
@@ -228,6 +257,9 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
   trimming only. Do not move provider calls or prompt policy wholesale.
 - First facade target: cleanup request/response envelope and context budget
   calculation.
+- Extraction status: LLM runtime wrappers, provider fallback state, verifier
+  helpers, and context/annotation utilities now live in
+  `core/engine/subtitle_llm_runtime.py`.
 
 ### subtitle_deep_learning
 
@@ -259,10 +291,15 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
 - Native candidates: `SubtitleLoraSelectiveMerge.swift`, bounded vector scoring
   in Metal/MLX only after parity and package checks.
 - First facade target: retrieval result and selective-merge request schema.
+- Extraction status: LoRA micro-merge, card packaging, and speaker-line helpers
+  now live in `core/engine/subtitle_lora_packaging.py`.
 
 ### subtitle_roughcut
 
 - Current owners: `core/roughcut/roughcut_pipeline.py`,
+  `core/roughcut/editor_draft.py`,
+  `core/roughcut/editor_draft_llm.py`,
+  `core/roughcut/editor_draft_chunks.py`,
   `core/roughcut/roughcut_llm.py`, `core/roughcut/major_segmenter.py`,
   `core/roughcut/chapter_segmenter.py`,
   `core/roughcut/subtitle_retimer.py`,
@@ -275,6 +312,10 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
 - Native candidates: `RoughcutChunkPlanner.swift` for deterministic chunk plan
   shaping only.
 - First facade target: roughcut transcript-pack and scene-row payload.
+- Extraction status: roughcut LLM provider JSON calls now live in
+  `core/roughcut/editor_draft_llm.py`; chunk-boundary planning now lives in
+  `core/roughcut/editor_draft_chunks.py`; `core/roughcut/editor_draft.py` keeps
+  orchestration and topic/EDL assembly.
 
 ### subtitle_dictionary
 
@@ -416,6 +457,8 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
 - First facade target: canonical segment schema with save/reopen invariant tests.
 - Extraction status: `core/engine/subtitle_segments.py` now owns the pure
   save/reopen segment preparation facade used by `core/engine/srt_writer.py`.
+  Final sequence cleanup, filler/closing/tiny-fragment rules, and STT anchor
+  integrity guards now live in `core/engine/subtitle_final_integrity.py`.
 
 ### subtitle_waveform
 
@@ -501,6 +544,7 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
 
 ## Verification Anchors
 
+- Long-file ownership guard: `LONG_FILE_OWNERSHIP_MAP.md`.
 - Unit guard for this map: `tests/test_subtitle_generation_domain_map.py`.
 - First facade guard: `tests/test_subtitle_segments_facade.py`.
 - STT feed facade guard: `tests/test_subtitle_stt_segments_facade.py`.

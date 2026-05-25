@@ -419,6 +419,8 @@ def _main_app_pids() -> list[int]:
 
 
 def _app_launch_command(python_bin: Path) -> list[str]:
+    if str(os.environ.get("AI_SUBTITLE_STUDIO_QA_USE_SOURCE", "") or "").strip().lower() in {"1", "true", "yes"}:
+        return [str(python_bin), str(APP_MAIN)]
     if APP_BUNDLE_EXECUTABLE.is_file():
         return [str(APP_BUNDLE_EXECUTABLE)]
     return [str(python_bin), str(APP_MAIN)]
@@ -666,7 +668,7 @@ def _run_app_sequence(spec: dict[str, Any], python_bin: Path) -> dict[str, Any]:
             resolved_playhead, resolved_details = _resolve_editor_compact_playhead(python_bin, output_dir=output_dir)
             _write_json(logs_dir / "set_playhead_resolved.json", resolved_details)
             if resolved_playhead is not None:
-                command_items = ["editor-set-playhead", str(resolved_playhead), "--center"]
+                command_items = ["editor-set-playhead", str(resolved_playhead), "--center", "--no-sync-video"]
         if spec.get("id") == "editor_compact_macau" and name in {"move_diamond", "merge_diamond"}:
             requested_side = "right"
             if "--side" in command_items:

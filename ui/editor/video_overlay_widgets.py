@@ -101,6 +101,13 @@ def _load_export_dialog_style() -> dict:
     return {"res": "FHD (1920px)", "size": "22", "align": "가운데"}
 
 
+def _scaled_text_height_offset(style: dict, res_scale: float, preview_scale: float) -> int:
+    try:
+        return int(int((style or {}).get("text_height", 0) or 0) * res_scale * preview_scale)
+    except Exception:
+        return 0
+
+
 def _wrap_overlay_text_lines(text: str, fm: QFontMetrics, max_width: int) -> list[str]:
     max_width = max(24, int(max_width))
     wrapped: list[str] = []
@@ -185,6 +192,8 @@ def paint_subtitle_overlay(painter: QPainter, bounds: QRectF, text: str, style: 
     else:
         x = left + (width - text_w) / 2
     y = top + max(8, height - text_h - int(height * 0.11))
+    y -= _scaled_text_height_offset(style, res_scale, preview_scale)
+    y = max(top + 0, min(y, top + max(0, height - text_h)))
 
     if style.get("bg", False):
         bg_c = _qcolor_from_style(style, "bg_c", "#000000")
@@ -544,6 +553,8 @@ class SubtitleLabel(QLabel):
         else:
             x = (self.width() - text_w) / 2
         y = max(8, self.height() - text_h - int(self.height() * 0.11))
+        y -= _scaled_text_height_offset(style, res_scale, preview_scale)
+        y = max(0, min(y, max(0, self.height() - text_h)))
 
         if style.get("bg", False):
             bg_c = self._qcolor("bg_c", "#000000")

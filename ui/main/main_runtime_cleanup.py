@@ -534,6 +534,27 @@ class MainRuntimeCleanupMixin:
         except Exception:
             return False
 
+    def _reserve_video_playback_runtime(self, *, hold_sec: float = 10.0) -> None:
+        """Keep heavy AI/GPU cleanup away from immediate post-generation playback."""
+        try:
+            hold = max(0.5, float(hold_sec or 0.0))
+        except Exception:
+            hold = 10.0
+        until = time.monotonic() + hold
+        try:
+            current = float(getattr(self, "_video_playback_runtime_hold_until", 0.0) or 0.0)
+        except Exception:
+            current = 0.0
+        self._video_playback_runtime_hold_until = max(current, until)
+
+    def _video_playback_runtime_reserved(self, editor=None) -> bool:
+        try:
+            if float(getattr(self, "_video_playback_runtime_hold_until", 0.0) or 0.0) > time.monotonic():
+                return True
+        except Exception:
+            pass
+        return self._is_editor_video_playing(editor)
+
     def _post_generation_release_retry_needed(self, editor=None) -> bool:
         target_editor = editor if editor is not None else getattr(self, "_editor_widget", None)
         if target_editor is None:
@@ -564,6 +585,8 @@ class MainRuntimeCleanupMixin:
         )
         if (self._is_editor_ai_busy(target_editor) or self._is_backend_ai_busy()) and not post_generation_release_window:
             return {"prioritized": False, "reason": "ai_busy"}
+
+        self._reserve_video_playback_runtime(hold_sec=12.0)
 
         if post_generation_release_window:
             _run_cleanup_step(
@@ -602,22 +625,8 @@ class MainRuntimeCleanupMixin:
             pass
 
         _run_cleanup_step(
-            "video playback runtime cache clear",
-            lambda: self._clear_runtime_memory_caches(include_gpu=True),
-            default=None,
-        )
-        _run_cleanup_step(
-            "video playback ai model release",
-            lambda: self._release_ai_models_for_editor_mode(
-                force=True,
-                preserve_roughcut_status=True,
-                ollama_timeout_sec=1.2,
-            ),
-            default=None,
-        )
-        _run_cleanup_step(
-            "video playback post generation gc schedule",
-            lambda: self._schedule_post_generation_gc(editor=target_editor, delay_ms=900),
+            "video playback post generation cleanup defer",
+            lambda: self._schedule_post_generation_gc(editor=target_editor, delay_ms=2200),
             default=None,
         )
         return {"prioritized": True, "reason": reason}
@@ -629,7 +638,7 @@ class MainRuntimeCleanupMixin:
 
         def _run_gc():
             self._post_generation_gc_scheduled = False
-            if self._is_editor_video_playing(editor):
+            if self._video_playback_runtime_reserved(editor):
                 self._schedule_post_generation_gc(editor=editor, delay_ms=2200)
                 return
             _run_cleanup_step(
@@ -1072,6 +1081,20 @@ class MainRuntimeCleanupMixin:
 
                 QTimer.singleShot(2200, _retry_release)
             return
+        if self._video_playback_runtime_reserved(editor) and not getattr(self, "_fast_exit_requested", False):
+            if not bool(getattr(self, "_editor_ai_release_retry_scheduled", False)):
+                self._editor_ai_release_retry_scheduled = True
+
+                def _retry_release_after_playback():
+                    self._editor_ai_release_retry_scheduled = False
+                    self._release_ai_models_for_editor_mode(
+                        force=force,
+                        preserve_roughcut_status=preserve_roughcut_status,
+                        ollama_timeout_sec=ollama_timeout_sec,
+                    )
+
+                QTimer.singleShot(2200, _retry_release_after_playback)
+            return
 
         self._editor_ai_release_in_progress = True
         try:
@@ -1094,6 +1117,8 @@ class MainRuntimeCleanupMixin:
 
             def _release():
                 try:
+                    if self._video_playback_runtime_reserved(editor) and not getattr(self, "_fast_exit_requested", False):
+                        return
                     if not force and (self._is_editor_ai_busy(editor) or self._is_backend_ai_busy()):
                         return
                     stopped_runtime = False
@@ -1118,6 +1143,8 @@ class MainRuntimeCleanupMixin:
                             stopped_runtime = True
                     except Exception as exc:
                         _log_cleanup_step_failure("editor ai release live stt stop", exc)
+                    if self._video_playback_runtime_reserved(editor) and not getattr(self, "_fast_exit_requested", False):
+                        return
                     try:
                         settings = _load_main_window_settings()
                         models = [
@@ -1145,6 +1172,8 @@ class MainRuntimeCleanupMixin:
                             stopped_runtime = True
                     except Exception as exc:
                         get_logger().log(f"⚠️ 에디터 모드 LLM 모델 종료 실패: {exc}")
+                    if self._video_playback_runtime_reserved(editor) and not getattr(self, "_fast_exit_requested", False):
+                        return
                     self._clear_runtime_memory_caches(include_gpu=True)
                     _run_cleanup_step(
                         "editor ai release post-generation flags",
