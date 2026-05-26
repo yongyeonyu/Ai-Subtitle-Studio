@@ -1089,30 +1089,6 @@ def align_stt_preview_to_subtitle_segments(
             or ""
         ).strip().upper()
         if source in {"STT1", "STT2"}:
-            span = _overlapped_subtitle_span(row, subtitles, edge_pad_sec=edge_pad_sec)
-            if span is not None:
-                row["timeline_start"] = round(max(0.0, span[0]), 3)
-                row["timeline_end"] = round(max(row["timeline_start"] + 0.05, span[1]), 3)
-                fps = _candidate_frame_rate(row, subtitles[0] if subtitles else row)
-                if fps:
-                    start_frame = sec_to_frame(row["timeline_start"], fps)
-                    end_frame = max(start_frame + 1, sec_to_frame(row["timeline_end"], fps))
-                    row["timeline_start_frame"] = start_frame
-                    row["timeline_end_frame"] = end_frame
-                    row["frame_rate"] = fps
-                    row["timeline_frame_rate"] = fps
-                    frame_range = dict(row.get("frame_range") or {})
-                    frame_range.update(
-                        {
-                            "unit": "frame",
-                            "start": start_frame,
-                            "end": end_frame,
-                            "timeline_frame_rate": fps,
-                        }
-                    )
-                    row["frame_range"] = frame_range
-                row["stt_preview_display_aligned_to_subtitle_segments"] = True
-            row["stt_preview_preserved_candidate_timing"] = True
             out.append(row)
             continue
         span = _overlapped_subtitle_span(row, subtitles, edge_pad_sec=edge_pad_sec)

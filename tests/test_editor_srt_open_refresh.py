@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QApplication
 
 from core.project.project_context import project_segments_to_editor
 from ui.editor.editor_lifecycle import EditorLifecycleMixin
+from ui.editor.editor_segments_runtime_cache import EditorSegmentsRuntimeCacheMixin
 from ui.editor.subtitle_text_edit import SubtitleBlockData, SubtitleTextEdit
 
 
@@ -62,6 +63,26 @@ class _Editor:
 
     def _global_to_local_sec(self, sec):
         return float(sec)
+
+
+class _RuntimeCacheProbe(EditorSegmentsRuntimeCacheMixin):
+    def __init__(self):
+        self.text_edit = SubtitleTextEdit()
+        self.settings = {}
+        self.video_player = SimpleNamespace(total_time=0.0)
+        self.timeline = SimpleNamespace(canvas=SimpleNamespace(segments=[]))
+        self._cached_segs = []
+        self._cached_line_map = {}
+        self._segment_cache_valid = False
+
+    def _frame_time(self, sec):
+        return float(sec)
+
+    def _get_current_segments(self, force_rebuild=False):
+        return []
+
+    def _clamp_segments_to_clip_duration(self, segments, *, log_changes=True):
+        return list(segments or [])
 
 
 class _Lifecycle(EditorLifecycleMixin):
@@ -337,6 +358,55 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
         finally:
             text_edit.close()
 
+    def test_timestamp_area_uses_timeline_segments_when_cached_metadata_is_missing(self):
+        text_edit = SubtitleTextEdit()
+        try:
+            text_edit.setPlainText("첫 줄")
+            block = text_edit.document().findBlockByNumber(0)
+            block.setUserData(None)
+            text_edit._timestamp_block_meta_snapshot = {}
+
+            parent = SimpleNamespace()
+            parent._cached_line_map = {}
+            parent._refresh_cached_line_map = lambda: {}
+            parent._timestamp_restore_line_map_from_timeline = lambda: {
+                0: {"line": 0, "start": 4.5, "end": 6.0, "text": "첫 줄", "speaker": "02"}
+            }
+            parent._segment_matches_block_text = lambda seg, text: str(seg.get("text")) == str(text)
+            text_edit._parent_widget = parent
+
+            data = text_edit.timestampArea._block_user_data(block)
+
+            self.assertAlmostEqual(data.start_sec, 4.5)
+            self.assertEqual(data.spk_id, "02")
+        finally:
+            text_edit.close()
+
+    def test_runtime_timestamp_repair_uses_timeline_segments_when_cache_is_empty(self):
+        editor = _RuntimeCacheProbe()
+        try:
+            editor.text_edit.setPlainText("첫 줄\n둘째 줄")
+            block = editor.text_edit.document().begin()
+            while block.isValid():
+                block.setUserData(None)
+                block = block.next()
+            editor.timeline.canvas.segments = [
+                {"line": 0, "start": 1.25, "end": 2.5, "text": "첫 줄", "speaker": "01"},
+                {"line": 1, "start": 3.75, "end": 5.0, "text": "둘째 줄", "speaker": "02"},
+            ]
+
+            repaired = editor._restore_all_block_user_data()
+
+            self.assertEqual(repaired, 2)
+            first = editor.text_edit.document().findBlockByNumber(0).userData()
+            second = editor.text_edit.document().findBlockByNumber(1).userData()
+            self.assertIsInstance(first, SubtitleBlockData)
+            self.assertIsInstance(second, SubtitleBlockData)
+            self.assertAlmostEqual(first.start_sec, 1.25)
+            self.assertAlmostEqual(second.start_sec, 3.75)
+        finally:
+            editor.text_edit.close()
+
     def test_timestamp_area_prefers_canonical_snapshot_when_runtime_snapshot_drifted(self):
         text_edit = SubtitleTextEdit()
         try:
@@ -355,6 +425,40 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
 
             self.assertAlmostEqual(data.start_sec, 1.25)
             self.assertFalse(data.is_gap)
+        finally:
+            text_edit.close()
+
+    def test_timestamp_layer_refresh_repairs_visible_metadata_before_paint(self):
+        text_edit = SubtitleTextEdit()
+        try:
+            text_edit.setPlainText("첫 줄")
+            block = text_edit.document().findBlockByNumber(0)
+            block.setUserData(None)
+            calls = []
+
+            def _repair_visible():
+                calls.append(True)
+                block.setUserData(SubtitleBlockData("00", 7.1, False, end_sec=8.2))
+                return 1
+
+            text_edit._parent_widget = SimpleNamespace(_restore_visible_block_user_data=_repair_visible)
+
+            self.assertTrue(text_edit.refresh_timestamp_layer())
+
+            self.assertEqual(len(calls), 1)
+            self.assertIsInstance(block.userData(), SubtitleBlockData)
+            self.assertAlmostEqual(block.userData().start_sec, 7.1)
+        finally:
+            text_edit.close()
+
+    def test_timestamp_layer_refresh_reenables_timestamp_area_updates(self):
+        text_edit = SubtitleTextEdit()
+        try:
+            text_edit.timestampArea.setUpdatesEnabled(False)
+
+            self.assertTrue(text_edit.refresh_timestamp_layer())
+
+            self.assertTrue(text_edit.timestampArea.updatesEnabled())
         finally:
             text_edit.close()
 

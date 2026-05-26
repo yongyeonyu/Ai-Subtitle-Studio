@@ -83,6 +83,22 @@ class MainFileOpsNonfatalTests(unittest.TestCase):
         self.app.processEvents()
         window._build_home_content.assert_called_once()
 
+    def test_file_dialog_marks_active_before_startup_events_are_processed(self):
+        window = _FileOpsWindow()
+        seen = []
+
+        def _process_events():
+            seen.append(bool(getattr(window, "_file_dialog_active", False)))
+
+        with (
+            mock.patch.object(QApplication, "processEvents", side_effect=_process_events),
+            mock.patch.object(QFileDialog, "getOpenFileNames", return_value=([], "")),
+        ):
+            window._safe_open_file_names("파일 선택", "/tmp", "Media")
+
+        self.assertEqual(seen, [True])
+        self.assertFalse(window._file_dialog_active)
+
     def test_file_dialog_selection_skips_stale_home_rebuild(self):
         window = _FileOpsWindow()
         window._pending_home_auto_source_rebuild = True

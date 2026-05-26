@@ -50,6 +50,7 @@ Item {
 
     Rectangle {
         anchors.fill: parent
+        anchors.margins: 1
         color: "#0F171B"
         border.color: "#31424A"
         border.width: 1

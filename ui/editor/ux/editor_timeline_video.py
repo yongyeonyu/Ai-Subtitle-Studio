@@ -1241,25 +1241,6 @@ class EditorTimelineVideoMixin(
 
         if hasattr(self, "_invalidate_segment_cache"):
             self._invalidate_segment_cache()
-        if not editing_transient_stt:
-            trim_preview = getattr(self, "_trim_segments_outside_range", None)
-            if callable(trim_preview):
-                try:
-                    from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
-
-                    preview_start = self._snap_to_frame(min(old_start, new_start))
-                    preview_end = self._snap_to_frame(max(old_end, new_end))
-                    current_preview = [
-                        dict(seg)
-                        for seg in list(getattr(self, "_live_stt_preview_segments", []) or [])
-                        if isinstance(seg, dict)
-                    ]
-                    if current_preview and preview_end > preview_start + eps:
-                        pruned_preview = trim_preview(current_preview, preview_start, preview_end)
-                        ensure_stt_preview_lane_numbers(pruned_preview, mutate=True)
-                        self._live_stt_preview_segments = pruned_preview
-                except Exception:
-                    pass
         prev_suspend_restore = bool(getattr(self, "_suspend_block_user_data_restore", False))
         self._suspend_block_user_data_restore = True
         try:

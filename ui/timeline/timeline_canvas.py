@@ -1391,7 +1391,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._update_dirty_rect(dirty)
 
     def _playhead_visual_x(self, sec: float | None = None) -> int:
-        value = self._playhead_visual_sec if sec is None else sec
+        if sec is None and getattr(self, "_last_playhead_px", None) is None:
+            value = getattr(self, "playhead_sec", 0.0)
+        else:
+            value = self._playhead_visual_sec if sec is None else sec
         try:
             return int(round(max(0.0, float(value or 0.0)) * max(0.001, float(getattr(self, "pps", 1.0) or 1.0))))
         except Exception:

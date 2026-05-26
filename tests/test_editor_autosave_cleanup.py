@@ -430,6 +430,34 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertTrue(editor._deferred_project_save_pending)
         self.assertEqual(editor._deferred_project_save_segments[0]["text"], "빠른 저장")
 
+    def test_manual_save_restores_time_tags_after_srt_persist(self):
+        editor = _DeferredProjectSaveEditor()
+        editor._restore_editor_time_tags_after_save = Mock()
+
+        result = EditorSaveManagerMixin._on_save(
+            editor,
+            skip_auto_next=True,
+            schedule_analysis_refresh=False,
+            queue_learning=False,
+            auto_export=False,
+        )
+
+        self.assertTrue(result)
+        editor._restore_editor_time_tags_after_save.assert_called_once()
+
+    def test_deferred_project_save_restores_time_tags_after_project_write(self):
+        editor = _DeferredProjectSaveEditor()
+        editor._schedule_deferred_project_save(
+            editor._get_current_segments(),
+            schedule_analysis_refresh=False,
+        )
+        editor._restore_editor_time_tags_after_save = Mock()
+
+        result = editor._run_deferred_project_save(editor._deferred_project_save_generation, force=True)
+
+        self.assertTrue(result)
+        editor._restore_editor_time_tags_after_save.assert_called_once()
+
     def test_close_flushes_deferred_project_save_without_prompt_when_clean(self):
         editor = _DeferredProjectSaveEditor()
         editor._schedule_deferred_project_save(

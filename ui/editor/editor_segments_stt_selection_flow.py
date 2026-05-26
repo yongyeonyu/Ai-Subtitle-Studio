@@ -222,24 +222,6 @@ class EditorSegmentsSttSelectionFlowMixin:
             feed.total_duration,
         )
 
-    def _prune_selected_preview_overlap(
-        self,
-        *,
-        cand_source: str,
-        selected_start: float,
-        selected_end: float,
-    ) -> None:
-        existing_preview = [dict(seg) for seg in list(getattr(self, "_live_stt_preview_segments", []) or [])]
-        if hasattr(self, "_clamp_segments_to_clip_duration"):
-            try:
-                existing_preview = self._clamp_segments_to_clip_duration(existing_preview, log_changes=False)
-            except Exception:
-                pass
-        from ui.timeline.stt_preview_layout import ensure_stt_preview_lane_numbers
-
-        ensure_stt_preview_lane_numbers(existing_preview, mutate=True)
-        self._live_stt_preview_segments = existing_preview
-
     def _stt_selection_magnet_policy(self) -> tuple[dict, float]:
         policy_getter = getattr(self, "_subtitle_magnet_policy", None)
         policy: dict | None = None
@@ -381,6 +363,92 @@ class EditorSegmentsSttSelectionFlowMixin:
         if "end_frame" in candidate:
             payload["_stt_original_end_frame"] = candidate.get("end_frame")
         return payload
+
+    def _refresh_subtitle_editor_tag_layer_after_stt_selection(self) -> None:
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None:
+            return
+        try:
+            if hasattr(text_edit, "setUpdatesEnabled"):
+                text_edit.setUpdatesEnabled(True)
+        except Exception:
+            pass
+        restore_all = getattr(self, "_restore_all_block_user_data", None)
+        if callable(restore_all):
+            try:
+                restore_all()
+            except Exception:
+                pass
+        refresher = getattr(self, "_refresh_editor_timestamp_metadata", None)
+        if callable(refresher):
+            try:
+                refresher(full=True)
+            except Exception:
+                pass
+        else:
+            refresh_layer = getattr(text_edit, "refresh_timestamp_layer", None)
+            if callable(refresh_layer):
+                try:
+                    refresh_layer()
+                except Exception:
+                    pass
+        updater = getattr(text_edit, "update_margins", None)
+        if callable(updater):
+            try:
+                updater()
+            except Exception:
+                pass
+        timestamp_area = getattr(text_edit, "timestampArea", None)
+        if timestamp_area is not None:
+            try:
+                if hasattr(timestamp_area, "setUpdatesEnabled"):
+                    timestamp_area.setUpdatesEnabled(True)
+                if hasattr(text_edit, "contentsRect"):
+                    cr = text_edit.contentsRect()
+                    timestamp_area.setGeometry(
+                        cr.left(),
+                        cr.top(),
+                        timestamp_area.sizeHint().width(),
+                        cr.height(),
+                    )
+                timestamp_area.show()
+                timestamp_area.raise_()
+                timestamp_area.update()
+            except RuntimeError:
+                return
+            except Exception:
+                try:
+                    timestamp_area.update()
+                except Exception:
+                    pass
+        try:
+            viewport = text_edit.viewport()
+            if viewport is not None:
+                viewport.update()
+        except Exception:
+            pass
+        quick_sync = getattr(text_edit, "_schedule_quick_layer_sync", None)
+        if callable(quick_sync):
+            try:
+                quick_sync(delay_ms=0)
+            except TypeError:
+                try:
+                    quick_sync()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+    def _restore_subtitle_editor_tags_after_stt_selection(self) -> None:
+        self._refresh_subtitle_editor_tag_layer_after_stt_selection()
+        try:
+            for delay_ms in (0, 80, 240):
+                QTimer.singleShot(
+                    delay_ms,
+                    lambda e=self: e._refresh_subtitle_editor_tag_layer_after_stt_selection(),
+                )
+        except Exception:
+            pass
 
     def select_stt_candidate_as_subtitle(self, candidate: dict):
         try:
@@ -616,18 +684,18 @@ class EditorSegmentsSttSelectionFlowMixin:
         current.extend(selected_segments)
         current.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
         current = self._retime_manual_stt_selection_segments(current, selected_segments=selected_segments)
-        self._prune_selected_preview_overlap(
-            cand_source=cand_source,
-            selected_start=selected_start,
-            selected_end=selected_end,
-        )
 
         for line, seg in enumerate(current):
             seg["line"] = line
         self._active_seg_start = candidate_anchor_sec
 
         if hasattr(self, "text_edit"):
-            self.text_edit.blockSignals(True)
+            try:
+                prev_text_edit_signals_blocked = bool(self.text_edit.blockSignals(True))
+            except Exception:
+                prev_text_edit_signals_blocked = False
+        else:
+            prev_text_edit_signals_blocked = False
 
         if hasattr(self, "_reload_segments_from_list"):
             self._reload_segments_from_list(current, preserve_view=True)
@@ -638,8 +706,15 @@ class EditorSegmentsSttSelectionFlowMixin:
                 self.reload_segments()
 
         if hasattr(self, "text_edit"):
-            self.text_edit.blockSignals(False)
-            self.text_edit.verticalScrollBar().setValue(saved_v_scroll)
+            try:
+                self.text_edit.blockSignals(prev_text_edit_signals_blocked)
+            except Exception:
+                pass
+            try:
+                self.text_edit.verticalScrollBar().setValue(saved_v_scroll)
+            except Exception:
+                pass
+            self._restore_subtitle_editor_tags_after_stt_selection()
         if hasattr(self, "timeline"):
             try:
                 if hasattr(self.timeline, "set_active"):

@@ -119,7 +119,14 @@ class EditorLifecycleMixin:
         self._refresh_opened_editor_runtime(editor)
 
     def _schedule_native_open_editor_media(self, editor, media_path: str | None) -> None:
-        native_schedule_native_open_editor_media(self, editor, media_path)
+        project_open = bool(str(getattr(self, "_current_project_path", "") or "").strip())
+        is_multiclip = bool(getattr(self, "_multiclip_boundaries", []) or [])
+        native_schedule_native_open_editor_media(
+            self,
+            editor,
+            media_path,
+            defer_waveform_until_start=not (project_open and not is_multiclip),
+        )
 
     def _schedule_native_editor_post_open_tasks(
         self,

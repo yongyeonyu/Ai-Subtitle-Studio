@@ -423,7 +423,7 @@ def build_stt_preview_lane_paint_plan(
         if cur_l is not None:
             spans.append((cur_l, cur_r))
         aggregate_rects = tuple(
-            QRect(left, preview_top, max(1, right - left), preview_height)
+            QRect(left, preview_top, max(1, right - left), max(1, preview_height - 1))
             for left, right in spans
         )
         return STTPreviewLanePaintPlan(aggregate_rects, ())
@@ -457,7 +457,7 @@ def build_stt_preview_lane_paint_plan(
             sublane_count,
             inset=STT_PREVIEW_VERTICAL_INSET,
         )
-        rect = QRect(int(draw_x1) + 1, int(sublane_y), max(2, int(sw) - 2), int(sublane_h))
+        rect = QRect(int(draw_x1) + 1, int(sublane_y), max(2, int(sw) - 2), max(1, int(sublane_h) - 1))
         selection_state = str(selection_state_map.get(id(seg), "") or "")
         if not selection_state and selected_final_stt_segments:
             selection_state = stt_candidate_selection_state(

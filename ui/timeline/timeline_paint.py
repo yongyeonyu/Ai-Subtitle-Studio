@@ -1244,7 +1244,10 @@ class TimelinePaintMixin:
                 return
             if plan.aggregate_rects:
                 _draw_rect_batch(plan.aggregate_rects, fill=QColor(fill_hex))
-                _draw_rect_batch(plan.aggregate_rects, pen=QPen(QColor(border_hex), 1))
+                _draw_rect_batch(
+                    [rect.adjusted(0, 0, -1, -1) for rect in plan.aggregate_rects if rect.width() > 1 and rect.height() > 1],
+                    pen=QPen(QColor(border_hex), 1),
+                )
                 return
             preview_font = self._stt_preview_font() if hasattr(self, "_stt_preview_font") else QFont(config.FONT, 10)
             p.setFont(preview_font)
@@ -1263,7 +1266,8 @@ class TimelinePaintMixin:
                     text_hex=text_hex,
                 )
                 _append_batch(fills, (str(visual["fill"]), int(visual["alpha"])), rect)
-                _append_batch(borders, (str(visual["border"]), 255, int(visual["border_width"])), rect)
+                border_rect = rect.adjusted(0, 0, -1, -1) if rect.width() > 1 and rect.height() > 1 else rect
+                _append_batch(borders, (str(visual["border"]), 255, int(visual["border_width"])), border_rect)
                 if rect.width() >= 40 and rect.height() >= 14 and not ultra_dense_segment_mode:
                     detail_items.append((seg, rect, selection_state, visual))
             _draw_color_batches(fills)
@@ -1725,7 +1729,18 @@ class TimelinePaintMixin:
 
                 p.setPen(QPen(QColor(color), width))
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRect(int(bx1), 0, int(bw), CANVAS_H)
+                # QPainter draws the stroke centered on the rect edge. Drawing
+                # at CANVAS_H clips the bottom edge, so keep multiclip borders
+                # inside the canvas by the active pen width.
+                inset = max(1, int(width))
+                p.drawRect(
+                    QRect(
+                        int(bx1) + inset,
+                        inset,
+                        max(1, int(bw) - (inset * 2)),
+                        max(1, CANVAS_H - (inset * 2)),
+                    )
+                )
 
                 # CLIP label: top-right outside box + delete
                 clip_label = f"CLIP {box.get('index', '?')}"

@@ -396,6 +396,58 @@ def _copy_missing_stt_metadata(target: dict, source: dict | None) -> None:
             target[key] = source.get(key)
 
 
+_SAVE_STT_BACKFILL_STATUS_ONLY_KEYS = {
+    "score",
+    "stt_score",
+    "score_color",
+    "stt_score_color",
+    "stt_score_label",
+    "stt_score_flags",
+    "stt_score_components",
+    "subtitle_review_state",
+    "subtitle_status_color",
+    "subtitle_status_schema",
+    "subtitle_status_score",
+    "subtitle_status_source",
+    "subtitle_auto_review",
+    "subtitle_auto_review_reasons",
+    "subtitle_auto_review_severity",
+    "subtitle_auto_review_score",
+    "subtitle_auto_review_actions",
+    "subtitle_auto_review_summary",
+    "subtitle_stage_confidence",
+    "subtitle_confidence_label",
+    "subtitle_confidence_score",
+    "subtitle_confidence_summary",
+    "subtitle_completion_report",
+    "_uncertainty_bucket",
+    "_uncertainty_risk_score",
+    "_uncertainty_schedule_summary",
+}
+
+_SAVE_STT_BACKFILL_SENTINEL_KEYS = tuple(
+    key
+    for key in STT_SEGMENT_METADATA_KEYS
+    if key not in _SAVE_STT_BACKFILL_STATUS_ONLY_KEYS
+)
+
+
+def _save_needs_existing_stt_backfill(
+    segments: list[dict] | None,
+    *,
+    rewrite_stt_reference_tracks: bool,
+) -> bool:
+    if bool(rewrite_stt_reference_tracks):
+        return True
+    for seg in list(segments or []):
+        if not isinstance(seg, dict):
+            return True
+        if any(seg.get(key) not in (None, "", [], {}, ()) for key in _SAVE_STT_BACKFILL_SENTINEL_KEYS):
+            continue
+        return True
+    return False
+
+
 def _vector_segment_count(project: dict) -> int:
     rows = (
         ((project.get("editor_state", {}) or {}).get("rendering", {}) or {})
@@ -1353,8 +1405,17 @@ def save_project(
             primary_fps=primary_fps,
         )
         new_segs = []
-        existing_subtitle_segments = project_segments_to_editor(project)
-        existing_by_id, existing_by_time = _existing_segment_matchers(existing_subtitle_segments)
+        existing_by_id: dict[str, dict] = {}
+        existing_by_time: dict[tuple[float, float], dict] = {}
+        # Manual-save paths often already carry persisted STT/status metadata on
+        # every row. In that case, rebuilding the full editor view from the
+        # project just to backfill metadata burns most of the save time.
+        if _save_needs_existing_stt_backfill(
+            segments,
+            rewrite_stt_reference_tracks=bool(rewrite_stt_reference_tracks),
+        ):
+            existing_subtitle_segments = project_segments_to_editor(project)
+            existing_by_id, existing_by_time = _existing_segment_matchers(existing_subtitle_segments)
         status_threshold = recheck_threshold() if segments else None
 
         for i, seg in enumerate(segments):

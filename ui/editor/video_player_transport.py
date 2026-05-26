@@ -38,7 +38,7 @@ class VideoPlayerTransportMixin:
     _CONTROL_BADGE_HEIGHT = 36
     _CONTROL_BAR_GAP = 6
     _CONTROL_BAR_RIGHT_SAFE_MARGIN = 18
-    _FRAME_COUNT_LABEL_WIDTH = 124
+    _FRAME_COUNT_LABEL_WIDTH = 108
     _SOURCE_INFO_BADGE_MIN_WIDTH = 132
     _SOURCE_INFO_BADGE_MAX_WIDTH = 220
     _SOURCE_NAME_BADGE_MIN_WIDTH = 520
@@ -218,13 +218,14 @@ class VideoPlayerTransportMixin:
     def _control_bar_time_width(self) -> int:
         label = getattr(self, "time_label", None)
         if label is None:
-            return 108
+            return 84
         try:
             metrics = QFontMetrics(label.font())
-            sample_width = int(metrics.horizontalAdvance("000:00 / 000:00") or 0)
+            text = str(label.text() or "00:00 / 00:00")
+            sample_width = int(metrics.horizontalAdvance(text) or 0)
         except Exception:
-            sample_width = 92
-        return max(108, sample_width + 18)
+            sample_width = 70
+        return max(84, sample_width + 14)
 
     def _control_bar_status_widths(self) -> tuple[int, int]:
         container = getattr(self, "status_info_container", None)

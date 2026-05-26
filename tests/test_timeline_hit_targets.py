@@ -1259,7 +1259,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertFalse(doc.findBlockByNumber(1).userData().is_gap)
             self.assertAlmostEqual(doc.findBlockByNumber(0).userData().start_sec, 0.0)
             self.assertAlmostEqual(doc.findBlockByNumber(1).userData().start_sec, 4.1)
-            self.assertEqual(editor._live_stt_preview_segments, [])
+            self.assertEqual(editor._live_stt_preview_segments, [{"start": 2.4, "end": 4.0, "text": "무음 후보"}])
             self.assertEqual(editor.timeline.canvas.voice_activity_segments, [])
             self.assertTrue(editor.finalized)
         finally:
@@ -1450,7 +1450,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_gap_generate_trims_detection_only_inside_selected_gap_range(self):
+    def test_gap_generate_preserves_live_stt_preview_inside_selected_gap_range(self):
         editor = _GapGenerateEditor()
         editor.finalized = False
         editor._undo_mgr = _Undo()
@@ -1469,16 +1469,14 @@ class TimelineHitTargetTests(unittest.TestCase):
                 {"start": 1.0, "end": 5.0, "text": "gap 후보", "stt_pending": True},
                 {"start": 5.2, "end": 5.8, "text": "뒤 후보", "stt_pending": True},
             ]
+            before_preview = [dict(seg) for seg in editor._live_stt_preview_segments]
 
             editor._on_gap_generate_requested(1.0, 5.0, 3.0, "from")
 
             self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞", "", "새자막", "뒤"])
             self.assertAlmostEqual(doc.findBlockByNumber(0).userData().start_sec, 0.0)
             self.assertAlmostEqual(doc.findBlockByNumber(3).userData().start_sec, 5.0)
-            self.assertEqual(
-                [(round(seg["start"], 1), round(seg["end"], 1)) for seg in editor._live_stt_preview_segments],
-                [(0.2, 0.8), (1.0, 3.0), (5.2, 5.8)],
-            )
+            self.assertEqual(editor._live_stt_preview_segments, before_preview)
         finally:
             editor.text_edit.close()
 
@@ -1512,6 +1510,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             {"start": 12.2, "end": 14.5, "text": "무음 안 후보", "stt_pending": True},
             {"start": 16.0, "end": 20.0, "text": "무음 밖 후보", "stt_pending": True},
         ]
+        before_preview = [dict(seg) for seg in editor._live_stt_preview_segments]
         try:
             editor.text_edit.setPlainText("앞\n\n뒤")
             doc = editor.text_edit.document()
@@ -1529,10 +1528,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertTrue(doc.findBlockByNumber(3).userData().is_gap)
             self.assertAlmostEqual(doc.findBlockByNumber(3).userData().start_sec, 15.0)
             self.assertAlmostEqual(doc.findBlockByNumber(4).userData().start_sec, 22.0)
-            self.assertEqual(
-                [(round(seg["start"], 1), round(seg["end"], 1)) for seg in editor._live_stt_preview_segments],
-                [(16.0, 20.0)],
-            )
+            self.assertEqual(editor._live_stt_preview_segments, before_preview)
         finally:
             editor.text_edit.close()
 
@@ -3652,7 +3648,7 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_segment_delete_removes_overlapping_live_detection_candidates(self):
+    def test_segment_delete_preserves_overlapping_live_stt_preview_candidates(self):
         editor = _GapGenerateEditor()
         editor._undo_mgr = _Undo()
         editor.settings = {"spk1_id": "00"}
@@ -3666,11 +3662,11 @@ class TimelineHitTargetTests(unittest.TestCase):
                 {"start": 8.5, "end": 9.5, "text": "STT1", "stt_pending": True},
                 {"start": 12.2, "end": 12.8, "text": "STT2", "stt_pending": True},
             ]
+            before_preview = [dict(seg) for seg in editor._live_stt_preview_segments]
 
             editor._on_seg_to_gap(0)
 
-            self.assertEqual(len(editor._live_stt_preview_segments), 1)
-            self.assertAlmostEqual(editor._live_stt_preview_segments[0]["start"], 12.2)
+            self.assertEqual(editor._live_stt_preview_segments, before_preview)
         finally:
             editor.text_edit.close()
 

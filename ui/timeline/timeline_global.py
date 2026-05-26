@@ -16,7 +16,7 @@ from core.engine.subtitle_global_canvas import (
     subtitle_global_canvas_lane_for_segment,
 )
 from core.engine.subtitle_waveform import build_waveform_columns
-from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
+from ui.timeline.timeline_constants import FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_analysis import (
     preliminary_major_markers_for_widget,
     roughcut_major_markers_for_widget,
@@ -48,6 +48,7 @@ MINIMAP_MARKER_LANE_H = 28
 # recovered space can make STT1/STT2 preview rows taller without changing the
 # rest of the timeline scenario.
 MINIMAP_HEIGHT = 89
+GLOBAL_CANVAS_CONTENT_BOTTOM_PAD = max(2, FOCUS_BORDER_WIDTH)
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -137,16 +138,6 @@ class GlobalCanvas(GlobalCanvasBase):
             if _has_focus(child):
                 return True
         return False
-
-    def _draw_focus_bottom(self, p: QPainter):
-        if not self._timeline_has_focus():
-            return
-        p.setPen(QPen(QColor(FOCUS_BORDER_COLOR), FOCUS_BORDER_WIDTH))
-        # 변경 금지: QPainter pen은 좌표를 중심으로 그려지므로 하단 끝에
-        # 붙이면 툴바/부모 클립 영역에 절반이 먹힌다. 파란 포커스 라인은
-        # 테두리 두께만큼 위로 올려 글로벌 캔버스 하단에서 항상 보이게 한다.
-        y = max(1, self.height() - (FOCUS_BORDER_WIDTH * 2))
-        p.drawLine(0, y, max(0, self.width() - 1), y)
 
     def set_playhead(self, sec):
         px = self._sec_to_px(sec)
@@ -383,7 +374,8 @@ class GlobalCanvas(GlobalCanvasBase):
         total = float(self.total_duration or 0.0)
         marker_lane_h = max(22, min(int(MINIMAP_MARKER_LANE_H), max(1, h - 24)))
         top_lane = QRect(0, 0, w, marker_lane_h)
-        bottom_lane = QRect(0, top_lane.bottom() + 1, w, max(1, h - top_lane.height() - 1))
+        bottom_lane_h = max(1, h - top_lane.height() - 1 - GLOBAL_CANVAS_CONTENT_BOTTOM_PAD)
+        bottom_lane = QRect(0, top_lane.bottom() + 1, w, bottom_lane_h)
         divider_y = top_lane.bottom() + 1
 
         p.fillRect(top_lane, QColor(MINIMAP_TOP_LANE_BG))
@@ -400,9 +392,24 @@ class GlobalCanvas(GlobalCanvasBase):
             return QRect(
                 x,
                 lane.y() + min_h_pad,
-                sw,
-                max(1, lane.height() - (min_h_pad * 2)),
+                max(1, min(sw, w - x - 1)),
+                max(1, lane.height() - (min_h_pad * 2) - 1),
             )
+
+        def _draw_visible_segment_outlines(rects: list[QRect], color: QColor) -> None:
+            outline_rects = [rect.adjusted(0, 0, -1, -1) for rect in rects if rect.width() > 1 and rect.height() > 1]
+            if not outline_rects:
+                return
+            p.setPen(QPen(color, 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRects(outline_rects)
+            # The lower minimap lanes sit close to the footer toolbar. Draw the
+            # bottom edge explicitly so the blue/green strip never looks cut off
+            # even when Qt antialiasing or parent clipping eats one pixel.
+            p.setPen(QPen(color, 2))
+            for rect in outline_rects:
+                bottom_y = max(rect.top(), rect.bottom() - 1)
+                p.drawLine(rect.left(), bottom_y, rect.right(), bottom_y)
 
         preliminary_markers = preliminary_major_markers_for_widget(self)
         topicless_markers = topicless_major_markers_for_widget(self)
@@ -508,15 +515,16 @@ class GlobalCanvas(GlobalCanvasBase):
             if confirmed_rects:
                 p.setBrush(MINIMAP_SUBTITLE_FILL)
                 p.drawRects(confirmed_rects)
-                p.setPen(QPen(MINIMAP_SUBTITLE_BORDER, 1))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRects(confirmed_rects)
+                _draw_visible_segment_outlines(confirmed_rects, MINIMAP_SUBTITLE_BORDER)
             if silence_rects:
                 p.setBrush(MINIMAP_PENDING_FILL)
                 p.drawRects(silence_rects)
-                p.setPen(QPen(MINIMAP_PENDING_BORDER, 1))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRects(silence_rects)
+                _draw_visible_segment_outlines(silence_rects, MINIMAP_PENDING_BORDER)
+            subtitle_lane = lane_rects.get("SUBTITLE")
+            if subtitle_lane is not None and not subtitle_lane.isEmpty():
+                p.setPen(QPen(MINIMAP_SUBTITLE_BORDER, 1))
+                bottom_y = max(subtitle_lane.top(), subtitle_lane.bottom() - 1)
+                p.drawLine(0, bottom_y, max(0, w - 1), bottom_y)
 
         p.end()
         self._static_cache = pixmap
@@ -537,7 +545,6 @@ class GlobalCanvas(GlobalCanvasBase):
         total = float(self.total_duration or 0.0)
 
         if total <= 0:
-            self._draw_focus_bottom(p)
             p.end()
             return
         sc = w / total
@@ -549,20 +556,23 @@ class GlobalCanvas(GlobalCanvasBase):
             wx = int(whisper_sec * sc)
             p.drawRect(0, 0, wx, self.height())
 
-        p.setPen(QPen(QColor(config.ACCENT), FOCUS_BORDER_WIDTH))
+        viewport_color = QColor(config.ACCENT)
+        p.setPen(QPen(viewport_color, FOCUS_BORDER_WIDTH))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        # 변경 금지: 초록 뷰포트 테두리의 하단도 파란 포커스 라인과 같은
-        # 이유로 최하단에 붙이면 잘린다. 테두리 두께만큼 위로 당겨 두 선이
-        # 버튼 줄에 가려지지 않게 유지한다.
+        # 변경 금지: 초록 뷰포트 테두리의 하단을 최하단에 붙이면
+        # QPainter pen 중심선이 클립되어 하단선이 흐려진다.
         border_inset = max(1, FOCUS_BORDER_WIDTH)
         p.drawRect(
-            QRect(
+            view_rect := QRect(
                 int(self.view_start * w),
                 border_inset,
-                max(1, int((self.view_end - self.view_start) * w)),
+                max(1, int((self.view_end - self.view_start) * w) - FOCUS_BORDER_WIDTH),
                 max(1, self.height() - (border_inset * 3)),
             )
         )
+        p.setPen(QPen(viewport_color, FOCUS_BORDER_WIDTH))
+        bottom_y = max(view_rect.top(), view_rect.bottom() - 1)
+        p.drawLine(view_rect.left(), bottom_y, view_rect.right(), bottom_y)
 
         # 선택 클립 라벨 (우상단 숫자만)
         if self._clip_label:
@@ -579,7 +589,7 @@ class GlobalCanvas(GlobalCanvasBase):
             px = int(self.playhead_sec * sc)
             p.drawLine(px, 0, px, self.height())
 
-        self._draw_focus_bottom(p)
+        p.end()
 
     def wheelEvent(self, ev):
         dy = ev.angleDelta().y()

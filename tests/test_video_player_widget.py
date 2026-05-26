@@ -748,7 +748,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(ctrl_layout.spacing(), 6)
             self.assertEqual(status_layout.spacing(), 6)
             self.assertEqual(widget.time_label.width(), widget._control_bar_time_width())
-            self.assertEqual(widget.frame_count_label.width(), 124)
+            self.assertEqual(widget.frame_count_label.width(), widget._FRAME_COUNT_LABEL_WIDTH)
             self.assertGreater(widget.source_name_label.width(), widget.info_label.width())
             self.assertGreater(widget.source_name_label.geometry().left(), widget.info_label.geometry().left())
             self.assertGreaterEqual(widget.source_name_label.geometry().right(), widget.status_info_container.width() - 2)
@@ -862,7 +862,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
             self.assertFalse(widget.frame_count_label.isHidden())
             self.assertEqual(widget.frame_count_label.text(), "F 51 / 250")
-            self.assertEqual(widget.frame_count_label.width(), 124)
+            self.assertEqual(widget.frame_count_label.width(), widget._FRAME_COUNT_LABEL_WIDTH)
             self.assertGreater(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.time_label))
             self.assertLess(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.status_info_container))
 

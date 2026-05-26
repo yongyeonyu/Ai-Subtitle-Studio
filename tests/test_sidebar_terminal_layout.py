@@ -12,7 +12,7 @@ from PyQt6.QtCore import QPoint, Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QCheckBox, QComboBox, QTableWidgetItem, QWidget, QMessageBox, QPushButton, QToolButton
 
 from ui.main.main_window import MainWindow
-from ui.home_ui import SIDEBAR_STATUS_CARD_COMPACT_HEIGHT
+from ui.home_ui import SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT, SIDEBAR_STATUS_CARD_COMPACT_HEIGHT
 from ui.style import APP_PANEL_GAP, COLORS
 
 
@@ -92,6 +92,10 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIn("프로젝트 정보", shown)
             self.assertIn("영상", shown)
             self.assertIn("열린 영상 없음", shown)
+            self.assertNotIn("/Volumes/NAS/Project", shown)
+            self.assertNotIn("해상도/프레임", shown)
+            self.assertEqual(window.log_text.verticalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.assertEqual(window.log_text.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self.assertIn("설정 적용: LLM(exaone3.5:7.8b)", window.log_text.raw_log_text())
 
             window.append_log("[정제-교정사전] 누적적용 8회: '하추핑' => '하츄핑'")
@@ -456,8 +460,40 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 if button.objectName() in {"icloudAutoSettingsButton", "nasAutoSettingsButton"}
             }
             self.assertEqual(set(settings_buttons), {"icloudAutoSettingsButton", "nasAutoSettingsButton"})
-            self.assertGreaterEqual(window.sidebar_terminal_panel.maximumHeight(), 116)
+            terminal = window.sidebar_terminal_panel
+            status_card = getattr(window, "_sidebar_status_card_widget", None)
+            slot = getattr(window, "_project_info_button_slot", None)
+            available_terminal_height = (
+                slot.mapTo(window, QPoint(0, 0)).y()
+                - (status_card.mapTo(window, QPoint(0, status_card.height())).y() + APP_PANEL_GAP)
+                - APP_PANEL_GAP
+            )
+            self.assertGreaterEqual(terminal.maximumHeight(), min(116, available_terminal_height))
             self.assertLessEqual(window.sidebar_terminal_panel.maximumHeight(), 188)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_status_card_reserves_height_for_ten_pipeline_rows(self):
+        window = MainWindow()
+        try:
+            window._unified_dashboard = True
+            window.resize(2048, 1258)
+            window._build_home_content()
+            window.show()
+            window._sidebar_status_alignment_targets = lambda: (100, 260)
+            window._sync_sidebar_status_card_height()
+            self.app.processEvents()
+
+            label = window.sidebar_settings_label
+            status_card = getattr(window, "_sidebar_status_card_widget", None)
+            self.assertIsNotNone(status_card)
+            self.assertIn("10. [딥러닝]", label.toolTip())
+            self.assertIn(">10</td>", label.text())
+            self.assertGreaterEqual(label.minimumHeight(), SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT)
+            self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()))
+            self.assertGreaterEqual(status_card.height(), SIDEBAR_STATUS_CARD_COMPACT_HEIGHT)
         finally:
             window.close()
             window.deleteLater()
@@ -1961,7 +1997,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             self.assertEqual(terminal_top - status_bottom, APP_PANEL_GAP)
             self.assertEqual(slot_top - terminal_bottom, APP_PANEL_GAP)
-            self.assertGreaterEqual(terminal.height(), 128)
+            self.assertGreaterEqual(terminal.height(), 116)
             self.assertLessEqual(terminal.height(), 188)
             self.assertGreater(queue_panel.height(), terminal.height())
         finally:
@@ -1969,7 +2005,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_sidebar_status_card_aligns_to_editor_guides_when_targets_exist(self):
+    def test_sidebar_status_card_keeps_ten_row_height_when_targets_exist(self):
         window = MainWindow()
         try:
             window._unified_dashboard = True
@@ -1991,23 +2027,28 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             slot_top = slot.mapTo(window, QPoint(0, 0)).y()
             target_bottom = slot_top - 128 - (APP_PANEL_GAP * 2)
             target_top = target_bottom - 223
-            expected_status_top = target_bottom - SIDEBAR_STATUS_CARD_COMPACT_HEIGHT
             self.assertGreaterEqual(target_top - queue_top - APP_PANEL_GAP, 134)
 
             window._sidebar_status_alignment_targets = lambda: (target_top, target_bottom)
             window._sync_sidebar_status_card_height()
             self.app.processEvents()
 
+            expected_status_height = window._sidebar_status_card_required_height(
+                status_card,
+                window.sidebar_settings_label,
+                getattr(window, "_sidebar_subtitle_quality_row_widget", None),
+            )
+            expected_status_top = target_bottom - expected_status_height
             status_top = status_card.mapTo(window, QPoint(0, 0)).y()
             status_bottom = status_card.mapTo(window, QPoint(0, status_card.height())).y()
             queue_bottom = queue_panel.mapTo(window, QPoint(0, queue_panel.height())).y()
             terminal_top = terminal.mapTo(window, QPoint(0, 0)).y()
 
-            self.assertEqual(status_top, expected_status_top)
-            self.assertEqual(status_bottom, target_bottom)
-            self.assertEqual(status_top - queue_bottom, 0)
+            self.assertGreaterEqual(status_top, expected_status_top)
+            self.assertGreaterEqual(status_bottom, target_bottom)
+            self.assertEqual(status_top - queue_bottom, APP_PANEL_GAP)
             self.assertEqual(terminal_top - status_bottom, APP_PANEL_GAP)
-            self.assertEqual(status_card.height(), SIDEBAR_STATUS_CARD_COMPACT_HEIGHT)
+            self.assertEqual(status_card.height(), expected_status_height)
         finally:
             window.close()
             window.deleteLater()

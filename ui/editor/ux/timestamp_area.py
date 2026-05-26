@@ -142,6 +142,14 @@ class TimestampArea(QWidget):
                 if not isinstance(line_map, dict):
                     refresher = getattr(parent, "_refresh_cached_line_map", None)
                     line_map = refresher() if callable(refresher) else {}
+                if not isinstance(line_map, dict) or line_num not in line_map:
+                    timeline_restore = getattr(parent, "_timestamp_restore_line_map_from_timeline", None)
+                    timeline_line_map = timeline_restore() if callable(timeline_restore) else {}
+                    if isinstance(timeline_line_map, dict) and timeline_line_map:
+                        merged_line_map = dict(timeline_line_map)
+                        if isinstance(line_map, dict):
+                            merged_line_map.update(line_map)
+                        line_map = merged_line_map
                 seg = line_map.get(line_num) if isinstance(line_map, dict) else None
                 if isinstance(seg, dict):
                     matcher = getattr(parent, "_segment_matches_block_text", None)

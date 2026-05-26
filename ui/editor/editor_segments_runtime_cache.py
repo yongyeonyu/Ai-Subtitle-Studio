@@ -156,6 +156,26 @@ class EditorSegmentsRuntimeCacheMixin:
         self._cached_line_map = line_map
         return line_map
 
+    def _timestamp_restore_line_map_from_timeline(self) -> dict[int, dict]:
+        canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+        rows = getattr(canvas, "segments", None) if canvas is not None else None
+        if not isinstance(rows, (list, tuple)):
+            return {}
+        line_map: dict[int, dict] = {}
+        for fallback_line, seg in enumerate(rows):
+            if not isinstance(seg, dict):
+                continue
+            source = str(seg.get("stt_preview_source", seg.get("source", "")) or "").strip().upper()
+            if bool(seg.get("_live_stt_preview")) or source in {"STT1", "STT2"}:
+                continue
+            try:
+                line = int(seg.get("line", fallback_line))
+            except Exception:
+                line = int(fallback_line)
+            if line >= 0:
+                line_map[line] = seg
+        return line_map
+
     def _subtitle_block_data_from_segment(self, seg: dict | None) -> SubtitleBlockData | None:
         if not isinstance(seg, dict):
             return None
@@ -244,6 +264,13 @@ class EditorSegmentsRuntimeCacheMixin:
             cached_line_map = self._refresh_cached_line_map()
         elif not isinstance(cached_line_map, dict):
             cached_line_map = {}
+        timeline_line_map = self._timestamp_restore_line_map_from_timeline()
+        if timeline_line_map:
+            merged_line_map = dict(timeline_line_map)
+            merged_line_map.update(cached_line_map)
+            cached_line_map = merged_line_map
+            if not getattr(self, "_cached_line_map", None):
+                self._cached_line_map = dict(cached_line_map)
         snapshot = getattr(text_edit, "_timestamp_block_meta_snapshot", None)
         if not cached_line_map and not isinstance(snapshot, dict):
             return 0

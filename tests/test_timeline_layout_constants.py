@@ -5,6 +5,8 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QRect
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QApplication
 
 from ui.timeline.stt_preview_layout import MAX_STT_PREVIEW_SUBLANES, stt_preview_lane_geometry
@@ -88,11 +90,45 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
 
             margins = timeline.layout().contentsMargins()
             self.assertEqual(margins.bottom(), 0)
-            self.assertGreater(timeline.global_canvas.height(), MINIMAP_HEIGHT)
+            self.assertGreaterEqual(timeline.global_canvas.height(), MINIMAP_HEIGHT)
             self.assertEqual(timeline.global_canvas.geometry().bottom(), timeline.rect().bottom())
         finally:
             timeline.close()
             timeline.deleteLater()
+
+    def test_global_canvas_subtitle_bottom_edge_spans_empty_gaps(self):
+        from ui.timeline.timeline_global import (
+            GLOBAL_CANVAS_CONTENT_BOTTOM_PAD,
+            GlobalCanvas,
+            MINIMAP_HEIGHT,
+            MINIMAP_MARKER_LANE_H,
+            MINIMAP_SUBTITLE_BORDER,
+        )
+
+        canvas = GlobalCanvas()
+        try:
+            canvas.resize(240, MINIMAP_HEIGHT)
+            canvas.segments = [
+                {"start": 0.0, "end": 0.8, "text": "left", "line": 0},
+                {"start": 3.2, "end": 4.0, "text": "right", "line": 1},
+            ]
+            canvas.total_duration = 4.0
+
+            image = canvas._build_static_cache().toImage()
+            marker_lane_h = max(22, min(int(MINIMAP_MARKER_LANE_H), max(1, image.height() - 24)))
+            bottom_lane_h = max(1, image.height() - marker_lane_h - 1 - GLOBAL_CANVAS_CONTENT_BOTTOM_PAD)
+            bottom_lane = QRect(0, marker_lane_h, image.width(), bottom_lane_h)
+            subtitle_lane = canvas._bottom_lane_layout(bottom_lane, include_stt=True)["SUBTITLE"]
+            sample_y = max(subtitle_lane.top(), subtitle_lane.bottom() - 1)
+            sample_x = image.width() // 2
+
+            self.assertEqual(
+                QColor(image.pixel(sample_x, sample_y)).name().lower(),
+                QColor(MINIMAP_SUBTITLE_BORDER).name().lower(),
+            )
+        finally:
+            canvas.close()
+            canvas.deleteLater()
 
     def test_focus_border_style_is_shared_with_editor_panel(self):
         from ui.editor.editor_widget import EditorWidget

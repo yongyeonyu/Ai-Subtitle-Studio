@@ -1947,6 +1947,160 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(tracks["STT1"][0]["text"], "후보 일")
         self.assertEqual(tracks["STT2"][0]["text"], "후보 이")
 
+    def test_save_project_skips_existing_editor_roundtrip_when_segments_already_carry_stt_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            save_project(
+                str(path),
+                media_paths=[str(media)],
+                segments=[{"id": "seg_a", "start": 0.0, "end": 1.0, "text": "최종 자막", "speaker": "00"}],
+                stt_preview_segments=[
+                    {"start": 0.0, "end": 1.0, "text": "후보 일", "stt_preview_source": "STT1"},
+                    {"start": 0.0, "end": 1.0, "text": "후보 이", "stt_preview_source": "STT2"},
+                ],
+            )
+
+            loaded = load_project(str(path))
+            rich_segments = project_segments_to_editor(loaded)
+            rich_segments[0]["text"] = "수정 자막"
+
+            with patch(
+                "core.project.project_manager.project_segments_to_editor",
+                side_effect=AssertionError("segments with persisted STT metadata should skip project roundtrip"),
+            ):
+                save_project(
+                    str(path),
+                    segments=rich_segments,
+                    persist_analysis_artifacts=False,
+                    rewrite_stt_reference_tracks=False,
+                )
+
+            reloaded = load_project(str(path))
+
+        restored = project_segments_to_editor(reloaded)
+        self.assertEqual(restored[0]["text"], "수정 자막")
+        self.assertTrue(restored[0]["stt_candidates"])
+        self.assertEqual({*reloaded["editor_state"]["stt"]["candidate_tracks"].keys()}, {"STT1", "STT2"})
+
+    def test_save_project_reuses_existing_editor_roundtrip_when_segments_are_stripped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            save_project(
+                str(path),
+                media_paths=[str(media)],
+                segments=[{"id": "seg_a", "start": 0.0, "end": 1.0, "text": "최종 자막", "speaker": "00"}],
+                stt_preview_segments=[
+                    {"start": 0.0, "end": 1.0, "text": "후보 일", "stt_preview_source": "STT1"},
+                    {"start": 0.0, "end": 1.0, "text": "후보 이", "stt_preview_source": "STT2"},
+                ],
+            )
+
+            with patch(
+                "core.project.project_manager.project_segments_to_editor",
+                wraps=project_manager.project_segments_to_editor,
+            ) as roundtrip:
+                save_project(
+                    str(path),
+                    segments=[{"id": "seg_a", "start": 0.0, "end": 1.0, "text": "수정 자막", "speaker": "00"}],
+                    persist_analysis_artifacts=False,
+                    rewrite_stt_reference_tracks=False,
+                )
+
+        roundtrip.assert_called_once()
+
+    def test_save_project_reuses_existing_editor_roundtrip_when_segments_only_carry_status_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            save_project(
+                str(path),
+                media_paths=[str(media)],
+                segments=[{"id": "seg_a", "start": 0.0, "end": 1.0, "text": "최종 자막", "speaker": "00"}],
+                stt_preview_segments=[
+                    {"start": 0.0, "end": 1.0, "text": "후보 일", "stt_preview_source": "STT1"},
+                    {"start": 0.0, "end": 1.0, "text": "후보 이", "stt_preview_source": "STT2"},
+                ],
+            )
+
+            status_only_segments = [
+                {
+                    "id": "seg_a",
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "수정 자막",
+                    "speaker": "00",
+                    "score": 91.0,
+                    "subtitle_status_schema": "subtitle_status.v1",
+                }
+            ]
+
+            with patch(
+                "core.project.project_manager.project_segments_to_editor",
+                wraps=project_manager.project_segments_to_editor,
+            ) as roundtrip:
+                save_project(
+                    str(path),
+                    segments=status_only_segments,
+                    persist_analysis_artifacts=False,
+                    rewrite_stt_reference_tracks=False,
+                )
+
+            reloaded = load_project(str(path))
+
+        roundtrip.assert_called_once()
+        restored = project_segments_to_editor(reloaded)
+        self.assertTrue(restored[0]["stt_candidates"])
+
     def test_save_project_persists_cut_boundaries_to_project_and_multiclip_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"

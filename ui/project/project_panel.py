@@ -349,6 +349,13 @@ class ProjectUIMixin:
             persist_analysis_artifacts=False,
             rewrite_stt_reference_tracks=False,
         )
+        editor = getattr(self, "_editor_widget", None)
+        restorer = getattr(editor, "_restore_editor_time_tags_after_save", None)
+        if callable(restorer):
+            try:
+                restorer()
+            except Exception:
+                pass
         get_logger().log("💾 프로젝트 저장 완료")
 
     def _add_video_to_project(self):

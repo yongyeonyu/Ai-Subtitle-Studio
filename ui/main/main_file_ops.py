@@ -167,10 +167,10 @@ class FileOpsMixin:
         QTimer.singleShot(0, _rebuild_if_home)
 
     def _run_foreground_file_dialog(self, opener):
-        self._prepare_dialog_state()
         self._file_dialog_active = True
         result = None
         try:
+            self._prepare_dialog_state()
             result = opener()
             return result
         finally:

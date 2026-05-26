@@ -227,6 +227,75 @@ def schedule_direct_srt_waveform_load(
     QTimer.singleShot(max(0, int(delay_ms)), _load)
 
 
+def schedule_direct_srt_media_finalize(
+    owner,
+    editor,
+    media_path: str | None,
+    srt_path: str | None = None,
+    *,
+    delay_ms: int = 180,
+) -> None:
+    """Subtitle-only edit mode should finish media probe/bootstrap without waiting for Start."""
+    if owner is None or editor is None or not _can_load_waveform_for_direct_srt(media_path, srt_path):
+        return
+    path = str(media_path or "").strip()
+    token = getattr(editor, "_native_open_media_token", None)
+
+    def _is_current_target() -> bool:
+        current = getattr(owner, "_editor_widget", None)
+        if current is not editor:
+            return False
+        if token is not None and getattr(editor, "_native_open_media_token", None) is not token:
+            return False
+        return True
+
+    def _finalize() -> None:
+        if not _is_current_target():
+            return
+        player = getattr(editor, "video_player", None)
+        try:
+            total_time = float(getattr(player, "total_time", 0.0) or 0.0)
+        except Exception:
+            total_time = 0.0
+        try:
+            source_status = str(getattr(player, "_source_info_status_text", "") or "").strip()
+        except Exception:
+            source_status = ""
+        needs_sync_probe = total_time <= 0.1 or source_status in {
+            "영상 정보를 불러오는 중...",
+            "영상을 불러오는 중...",
+            "메타데이터 준비 중",
+        }
+        if needs_sync_probe and not bool(getattr(editor, "_direct_srt_media_finalize_forced", False)):
+            loader = getattr(editor, "_load_video", None)
+            if callable(loader):
+                try:
+                    setattr(editor, "_direct_srt_media_finalize_forced", True)
+                except Exception:
+                    pass
+                try:
+                    loader(
+                        path,
+                        load_waveform=False,
+                        defer_media_probe=False,
+                    )
+                except TypeError:
+                    try:
+                        loader(path, load_waveform=False)
+                    except TypeError:
+                        loader(path)
+                except Exception as exc:
+                    get_logger().log(f"⚠️ 자막 편집 미디어 최종화 실패: {exc}")
+        runtime_refresh = getattr(owner, "_refresh_opened_editor_runtime", None)
+        if callable(runtime_refresh):
+            try:
+                runtime_refresh(editor)
+            except Exception:
+                pass
+
+    QTimer.singleShot(max(0, int(delay_ms)), _finalize)
+
+
 def normalized_open_path(path: str | None) -> str:
     if not path:
         return ""
@@ -742,6 +811,7 @@ def open_subtitle_segments_in_editor(
     if callable(schedule_runtime_refresh):
         schedule_runtime_refresh(editor)
     schedule_direct_srt_waveform_load(owner, editor, target_media, srt_path)
+    schedule_direct_srt_media_finalize(owner, editor, target_media, srt_path)
     return True
 
 
@@ -953,6 +1023,7 @@ def open_project_segments_in_editor(
             schedule_runtime_refresh(editor)
         if direct_srt_edit_mode:
             schedule_direct_srt_waveform_load(owner, editor, media[0] if media else "", source_srt_path)
+            schedule_direct_srt_media_finalize(owner, editor, media[0] if media else "", source_srt_path)
     except Exception as exc:
         get_logger().log(f"⚠️ 프로젝트 자막 복원 실패: {exc}")
     return True
@@ -971,6 +1042,7 @@ __all__ = [
     "project_sidecar_candidates_for_srt",
     "refresh_opened_editor_runtime",
     "restore_project_context_for_srt_open",
+    "schedule_direct_srt_media_finalize",
     "schedule_direct_srt_waveform_load",
     "schedule_editor_fit_to_view",
     "schedule_opened_editor_runtime_refresh",

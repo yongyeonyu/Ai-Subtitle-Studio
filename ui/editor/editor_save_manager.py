@@ -140,6 +140,79 @@ def backup_subtitle_file_copy(subtitle_path: str) -> str:
 class EditorSaveManagerMixin:
     """저장/자동저장/dirty/백업/캐쉬 관리 전용 믹스인."""
 
+    def _restore_editor_time_tags_after_save(self, *, full: bool = True, delayed: bool = True) -> None:
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None:
+            return
+        try:
+            if hasattr(text_edit, "setUpdatesEnabled"):
+                text_edit.setUpdatesEnabled(True)
+        except Exception:
+            pass
+        refresher = getattr(self, "_refresh_editor_timestamp_metadata", None)
+        if callable(refresher):
+            try:
+                refresher(full=bool(full))
+            except Exception:
+                pass
+        else:
+            refresh_layer = getattr(text_edit, "refresh_timestamp_layer", None)
+            if callable(refresh_layer):
+                try:
+                    refresh_layer()
+                except Exception:
+                    pass
+        updater = getattr(text_edit, "update_margins", None)
+        if callable(updater):
+            try:
+                updater()
+            except Exception:
+                pass
+        refresh_layer = getattr(text_edit, "refresh_timestamp_layer", None)
+        if callable(refresh_layer):
+            try:
+                refresh_layer()
+            except Exception:
+                pass
+        timestamp_area = getattr(text_edit, "timestampArea", None)
+        if timestamp_area is not None:
+            try:
+                if hasattr(timestamp_area, "setUpdatesEnabled"):
+                    timestamp_area.setUpdatesEnabled(True)
+                if hasattr(text_edit, "contentsRect"):
+                    cr = text_edit.contentsRect()
+                    timestamp_area.setGeometry(
+                        cr.left(),
+                        cr.top(),
+                        timestamp_area.sizeHint().width(),
+                        cr.height(),
+                    )
+                timestamp_area.show()
+                timestamp_area.raise_()
+                timestamp_area.update()
+            except RuntimeError:
+                return
+            except Exception:
+                try:
+                    timestamp_area.update()
+                except Exception:
+                    pass
+        try:
+            viewport = text_edit.viewport()
+            if viewport is not None:
+                viewport.update()
+        except Exception:
+            pass
+        if delayed:
+            try:
+                for delay_ms in (0, 120, 360):
+                    QTimer.singleShot(
+                        delay_ms,
+                        lambda e=self: e._restore_editor_time_tags_after_save(full=False, delayed=False),
+                    )
+            except Exception:
+                pass
+
     def _preferred_single_srt_output_path(self, media_path: str | None = None) -> str:
         source_srt_path = str(getattr(self, "_source_srt_path", "") or "").strip()
         if source_srt_path:
@@ -630,12 +703,26 @@ class EditorSaveManagerMixin:
                 if not self._has_unsaved_changes():
                     self._mark_save_completed(touch_saved_time=False)
                     self._autosave_requires_manual_save = False
+                    self._restore_editor_time_tags_after_save()
                     get_logger().log("💾 저장 생략: 변경사항이 없습니다.")
                     return True
             except Exception:
                 pass
         self._flush_pending_segment_queue_now()
         segs = self._get_current_segments()
+        if not segs:
+            self._restore_editor_time_tags_after_save()
+            try:
+                if hasattr(self, "_invalidate_segment_cache"):
+                    self._invalidate_segment_cache()
+                segs = self._get_current_segments(force_rebuild=True)
+            except TypeError:
+                try:
+                    segs = self._get_current_segments()
+                except Exception:
+                    segs = []
+            except Exception:
+                segs = []
         if not segs and (
             bool(getattr(self, "_subtitle_generation_completed", False))
             or bool(getattr(self, "_process_completed_finalized", False))
@@ -711,6 +798,7 @@ class EditorSaveManagerMixin:
         self._mark_save_completed(touch_saved_time=True)
         self._autosave_requires_manual_save = False
         self._sync_queue_saved_state()
+        self._restore_editor_time_tags_after_save()
         if queue_learning:
             try:
                 from core.personalization.deferred_editor_learning import enqueue_deferred_editor_learning
@@ -1024,6 +1112,7 @@ class EditorSaveManagerMixin:
             self._set_deferred_project_save_status("에디터 | 프로젝트 저장 완료")
         else:
             self._set_deferred_project_save_status("에디터 | SRT 저장 완료")
+        self._restore_editor_time_tags_after_save()
 
         latest_generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
         if bool(getattr(self, "_deferred_project_save_pending", False)) and latest_generation != int(generation or 0):
@@ -1161,6 +1250,7 @@ class EditorSaveManagerMixin:
             preliminary_middle_segments=preliminary_middle_segments,
         )
         get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
+        self._restore_editor_time_tags_after_save()
         return project_path
 
     def _editor_auto_save_allowed(self) -> bool:

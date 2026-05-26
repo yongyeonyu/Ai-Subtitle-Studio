@@ -14,10 +14,10 @@ Rectangle {
     property bool scanNextActive: false
     property int contentLeftInset: 0
     property int contentRightInset: 0
-    property int timeWidth: 108
-    property int frameWidth: 124
+    property int timeWidth: 84
+    property int frameWidth: 108
     property int infoWidth: 220
-    property int sourceWidth: 240
+    property int sourceWidth: 360
 
     signal playRequested()
     signal prevFrameRequested()

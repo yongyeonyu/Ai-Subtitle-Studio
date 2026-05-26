@@ -38,8 +38,8 @@ from ui.main.main_nonfatal import run_nonfatal_ui_step
 from ui.style import APP_PANEL_GAP, COLORS, button_style, label_style, line_icon, tool_button_style
 
 
-SIDEBAR_STATUS_CARD_COMPACT_HEIGHT = 168
-SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT = 124
+SIDEBAR_STATUS_CARD_COMPACT_HEIGHT = 204
+SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT = 166
 
 
 class HomeUIMixin(HomeSidebarMixin):
@@ -360,6 +360,36 @@ class HomeUIMixin(HomeSidebarMixin):
         lay.addWidget(self.sidebar_settings_label)
         return card
 
+    def _sidebar_settings_label_required_height(self, settings_label) -> int:
+        base_height = int(settings_label.property("_sidebar_default_min_height") or SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT)
+        width = int(settings_label.width() or 0)
+        if width <= 0:
+            parent = settings_label.parentWidget()
+            if parent is not None and parent.layout() is not None:
+                margins = parent.layout().contentsMargins()
+                width = max(0, int(parent.width()) - margins.left() - margins.right())
+        if width > 0 and settings_label.hasHeightForWidth():
+            try:
+                base_height = max(base_height, int(settings_label.heightForWidth(width)))
+            except Exception:
+                pass
+        return base_height
+
+    def _sidebar_status_card_required_height(self, status_card, settings_label, quality_row=None) -> int:
+        label_height = self._sidebar_settings_label_required_height(settings_label)
+        layout = status_card.layout()
+        if layout is None:
+            return max(SIDEBAR_STATUS_CARD_COMPACT_HEIGHT, label_height)
+        margins = layout.contentsMargins()
+        spacing = int(layout.spacing())
+        quality_height = 0
+        if quality_row is not None:
+            quality_height = max(0, int(quality_row.height() or quality_row.sizeHint().height() or 24))
+        return max(
+            SIDEBAR_STATUS_CARD_COMPACT_HEIGHT,
+            margins.top() + margins.bottom() + spacing + quality_height + label_height,
+        )
+
     def _sidebar_status_alignment_targets(self):
         if not bool(getattr(self, "_unified_dashboard", False)):
             return None
@@ -383,8 +413,9 @@ class HomeUIMixin(HomeSidebarMixin):
     def _sync_sidebar_status_card_height(self):
         def _restore_defaults(queue_panel, status_card, settings_label):
             queue_min = int(queue_panel.property("_sidebar_default_min_height") or 134)
-            status_min = int(status_card.property("_sidebar_default_min_height") or SIDEBAR_STATUS_CARD_COMPACT_HEIGHT)
-            label_min = int(settings_label.property("_sidebar_default_min_height") or SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT)
+            quality_row = getattr(self, "_sidebar_subtitle_quality_row_widget", None)
+            label_min = self._sidebar_settings_label_required_height(settings_label)
+            status_min = self._sidebar_status_card_required_height(status_card, settings_label, quality_row)
             queue_panel.setMinimumHeight(queue_min)
             queue_panel.setMaximumHeight(16777215)
             status_card.setMinimumHeight(status_min)
@@ -415,20 +446,17 @@ class HomeUIMixin(HomeSidebarMixin):
             if not targets:
                 _restore_defaults(queue_panel, status_card, settings_label)
                 return
-            target_top, target_bottom = targets
+            _target_top, target_bottom = targets
             queue_top = int(queue_panel.mapTo(self, QPoint(0, 0)).y())
             queue_min = int(queue_panel.property("_sidebar_default_min_height") or 134)
-            target_status_height = max(0, target_bottom - target_top)
-            desired_status_height = max(
-                int(status_card.property("_sidebar_default_min_height") or SIDEBAR_STATUS_CARD_COMPACT_HEIGHT),
-                min(target_status_height, SIDEBAR_STATUS_CARD_COMPACT_HEIGHT),
-            )
+            required_status_height = self._sidebar_status_card_required_height(status_card, settings_label, quality_row)
+            desired_status_height = required_status_height
             status_top = target_bottom - desired_status_height
-            desired_queue_height = max(queue_min, status_top - queue_top)
-            # Editor timeline guide lines stay visually stable on macOS only if the
-            # sidebar stack keeps the status-card bottom on the painter guide.
-            # The card itself stays compact so the queue list gets the reclaimed
-            # vertical space during long generation runs.
+            outer_gap = max(APP_PANEL_GAP, int(layout.spacing()))
+            desired_queue_height = max(queue_min, status_top - queue_top - outer_gap)
+            # Keep the status-card bottom on the painter guide, but never shrink
+            # the pipeline table below the height needed for all 10 visible rows.
+            # The queue gives up vertical space first during long generation runs.
             queue_panel.setFixedHeight(desired_queue_height)
             status_card.setFixedHeight(desired_status_height)
             if quality_row is not None:
@@ -436,7 +464,7 @@ class HomeUIMixin(HomeSidebarMixin):
                 spacing = int(status_card.layout().spacing())
                 quality_height = max(0, int(quality_row.height() or quality_row.sizeHint().height() or 24))
                 label_height = max(
-                    int(settings_label.property("_sidebar_default_min_height") or SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT),
+                    self._sidebar_settings_label_required_height(settings_label),
                     desired_status_height - margins.top() - margins.bottom() - spacing - quality_height,
                 )
                 settings_label.setFixedHeight(label_height)
@@ -1084,16 +1112,31 @@ class HomeUIMixin(HomeSidebarMixin):
         ]
 
     def _project_info_terminal_text(self) -> str:
-        lines = ["프로젝트 정보"]
-        for section in self._project_info_sections():
-            title = str(section.get("title") or "").strip()
-            if title:
-                lines.append("")
-                lines.append(title)
-            for row in list(section.get("rows") or []):
-                text = str(row or "").strip()
-                if text:
-                    lines.append(f"  {text}")
+        editor = self._active_editor()
+        project_path = str(getattr(self, "_current_project_path", "") or "").strip()
+        project_name = os.path.basename(project_path) if project_path else "열린 프로젝트 없음"
+        media_name = str(getattr(editor, "video_name", "") or "열린 영상 없음")
+        video_player = getattr(editor, "video_player", None) if editor is not None else None
+        duration = float(getattr(video_player, "total_time", 0.0) or 0.0)
+        seg_count = 0
+        if editor is not None and hasattr(editor, "_get_current_segments"):
+            try:
+                seg_count = len([s for s in editor._get_current_segments() if not s.get("is_gap")])
+            except Exception:
+                seg_count = 0
+        lines = [
+            "프로젝트 정보",
+            "",
+            "프로젝트",
+            f"  {project_name}",
+            "",
+            "영상",
+            f"  {media_name}",
+        ]
+        if duration > 0:
+            lines.append(f"  길이: {duration:0.1f}s")
+        if seg_count > 0:
+            lines.append(f"  자막: {seg_count}개")
         return "\n".join(lines)
 
     def _project_info_log_text_widget(self):
@@ -1117,6 +1160,13 @@ class HomeUIMixin(HomeSidebarMixin):
             show_temp(self._project_info_terminal_text())
         elif hasattr(log_text, "setPlainText"):
             log_text.setPlainText(self._project_info_terminal_text())
+        if hasattr(log_text, "setVerticalScrollBarPolicy"):
+            log_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        if hasattr(log_text, "setHorizontalScrollBarPolicy"):
+            log_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_bar = log_text.verticalScrollBar() if hasattr(log_text, "verticalScrollBar") else None
+        if scroll_bar is not None:
+            scroll_bar.setValue(0)
         terminal.setVisible(True)
         if hasattr(self, "_sync_sidebar_terminal_panel_height"):
             self._sync_sidebar_terminal_panel_height()

@@ -4,10 +4,44 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.renderer import render_subtitle_overlay_video_gpu
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from core.renderer import render_subtitle_mov, render_subtitle_overlay_video_gpu
 
 
 class RendererOverlayTests(unittest.TestCase):
+    def test_render_subtitle_mov_creates_qt_app_when_run_standalone(self):
+        commands = []
+
+        def fake_make_png(path, _text, _width, _height, _style):
+            with open(path, "wb") as handle:
+                handle.write(b"png")
+
+        def fake_run(cmd, **_kwargs):
+            commands.append(list(cmd))
+            with open(cmd[-1], "wb") as handle:
+                handle.write(b"mov")
+            return SimpleNamespace(returncode=0, stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "clip.mp4")
+            srt_path = os.path.join(tmp, "clip.srt")
+            with open(media_path, "wb") as handle:
+                handle.write(b"video")
+            with open(srt_path, "w", encoding="utf-8") as handle:
+                handle.write("1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+
+            with patch("core.renderer.subprocess.run", side_effect=fake_run), \
+                 patch("ui.dialogs.export_dialog._make_png", side_effect=fake_make_png):
+                ok = render_subtitle_mov(
+                    srt_path,
+                    media_path,
+                    {"res": "FHD (1920px)", "size": 40, "font": "Apple SD Gothic Neo", "icloud": False},
+                )
+
+        self.assertTrue(ok)
+        self.assertTrue(commands)
+
     def test_overlay_video_uses_transparent_mov_instead_of_subtitles_filter(self):
         commands = []
         render_settings = []

@@ -64,8 +64,9 @@ class SubtitleBoundaryAlignmentTests(unittest.TestCase):
 
         self.assertEqual(aligned[0]["text"], "STT2 전체")
         self.assertEqual((aligned[0]["start"], aligned[0]["end"]), (0.9, 4.1))
-        self.assertEqual((aligned[0]["timeline_start"], aligned[0]["timeline_end"]), (1.0, 4.0))
-        self.assertTrue(aligned[0]["stt_preview_preserved_candidate_timing"])
+        self.assertEqual(aligned[0], preview[0])
+        self.assertNotIn("timeline_start", aligned[0])
+        self.assertNotIn("timeline_end", aligned[0])
 
     def test_non_stt_preview_rows_align_to_final_subtitle_union(self):
         preview = [

@@ -366,6 +366,7 @@ class SubtitleTextEdit(QTextEdit):
         self.setCursorWidth(3)
         self.timestampArea = TimestampArea(self)
         try:
+            self.timestampArea.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
             self.timestampArea.show()
             self.timestampArea.raise_()
         except Exception:
@@ -406,6 +407,27 @@ class SubtitleTextEdit(QTextEdit):
         else:
             self._quick_layer_timer = None
         self._refresh_gpu_document_overlay_mode()
+
+    def _place_timestamp_area(self) -> bool:
+        area = getattr(self, "timestampArea", None)
+        if area is None:
+            return False
+        cr = self.contentsRect()
+        target = QRect(cr.left(), cr.top(), area.sizeHint().width(), cr.height())
+        if area.geometry() != target:
+            area.setGeometry(target)
+        if hasattr(area, "setUpdatesEnabled"):
+            area.setUpdatesEnabled(True)
+        if not area.isVisible():
+            area.show()
+        viewport = self.viewport()
+        if viewport is not None and viewport.parentWidget() is area.parentWidget():
+            try:
+                viewport.stackUnder(area)
+            except Exception:
+                pass
+        area.raise_()
+        return True
 
     @staticmethod
     def _editor_stylesheet(text_color: str, background_color: str) -> str:
@@ -450,12 +472,7 @@ class SubtitleTextEdit(QTextEdit):
         if area is None:
             return
         try:
-            cr = self.contentsRect()
-            target = QRect(cr.left(), cr.top(), area.sizeHint().width(), cr.height())
-            if area.geometry() != target:
-                area.setGeometry(target)
-            if not area.isVisible():
-                area.show()
+            self._place_timestamp_area()
             area.update()
         except RuntimeError:
             return
@@ -492,12 +509,18 @@ class SubtitleTextEdit(QTextEdit):
         if area is None:
             return False
         try:
+            parent = getattr(self, "_parent_widget", None)
+            suspend_restore = bool(getattr(parent, "_suspend_block_user_data_restore", False)) if parent is not None else False
+            if not bool(getattr(self, "_bulk_segment_load_active", False)) and not suspend_restore:
+                repairer = getattr(parent, "_restore_visible_block_user_data", None)
+                if callable(repairer):
+                    try:
+                        repairer()
+                    except Exception:
+                        pass
             self._refresh_timestamp_meta_snapshot()
             self._update_margin()
-            cr = self.contentsRect()
-            area.setGeometry(QRect(cr.left(), cr.top(), area.sizeHint().width(), cr.height()))
-            area.show()
-            area.raise_()
+            self._place_timestamp_area()
             area.update()
             self.viewport().update()
             return True

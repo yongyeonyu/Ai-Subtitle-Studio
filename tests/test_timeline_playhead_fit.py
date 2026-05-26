@@ -1,5 +1,6 @@
 # Version: 03.14.03
 # Phase: PHASE2
+import copy
 import os
 import time
 import unittest
@@ -1314,7 +1315,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_seg_time_changed_prunes_live_stt_preview_overlap_after_confirmed_resize(self):
+    def test_seg_time_changed_preserves_live_stt_preview_after_confirmed_resize(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0
         editor._snapshot_timeline_view_for_resize = Mock(return_value={})
@@ -1353,6 +1354,8 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
             second.setUserData(SubtitleBlockData("00", 4.0, False, end_sec=5.0))
 
+            before_preview = copy.deepcopy(editor._live_stt_preview_segments)
+
             with patch(
                 "ui.editor.editor_timeline_video.plan_subtitle_timing_edit_via_swift",
                 return_value=None,
@@ -1360,11 +1363,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
                 editor._on_seg_time_changed(1, 1.5, 5.0, "square_left")
                 self.app.processEvents()
 
-            remaining_preview = list(getattr(editor, "_live_stt_preview_segments", []) or [])
-            self.assertEqual(len(remaining_preview), 1)
-            self.assertEqual(remaining_preview[0]["text"], "유지")
-            self.assertAlmostEqual(float(remaining_preview[0]["start"]), 6.0)
-            self.assertAlmostEqual(float(remaining_preview[0]["end"]), 6.4)
+            self.assertEqual(editor._live_stt_preview_segments, before_preview)
         finally:
             editor.text_edit.close()
 
@@ -3837,8 +3836,8 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             call_args = editor.timeline.follow_playhead_centered.call_args
             follow_sec = call_args.kwargs["visual_sec"]
             editor.timeline.follow_playhead.assert_not_called()
-            self.assertGreater(follow_sec, 10.0)
             self.assertEqual(call_args.args[0], 10.2)
+            self.assertGreater(follow_sec, 10.0)
             self.assertLess(follow_sec, 10.2)
             editor.video_player.set_subtitle_display_time.assert_called_once_with(10.2)
             self.assertEqual(editor._playhead_display_sec, follow_sec)

@@ -1,10 +1,12 @@
 # Version: 03.14.05
 # Phase: PHASE2
+import copy
 import unittest
 import json
 import re
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PyQt6.QtGui import QTextCursor
@@ -14,11 +16,12 @@ from ui.editor.editor_actions import EditorActionsMixin
 from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 from ui.editor.editor_lifecycle import EditorLifecycleMixin
 from ui.editor.editor_pipeline import EditorPipelineMixin
+from ui.editor.editor_save_manager import EditorSaveManagerMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_segments_reload import EditorSegmentsReloadMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
 from ui.editor.editor_widget import EditorWidget
-from ui.editor.subtitle_text_edit import SubtitleBlockData
+from ui.editor.subtitle_text_edit import SubtitleBlockData, SubtitleTextEdit
 from ui.editor.undo_manager import UndoManager
 from core.project.project_manager import get_boundary_times
 from ui.editor import editor_project_open_native as project_open_native_module
@@ -607,6 +610,18 @@ class _BootstrapEditor:
         self.load_calls.append((str(path), bool(load_waveform), bool(defer_media_probe)))
 
 
+class _DirectSrtFinalizeEditor(_BootstrapEditor):
+    def __init__(self, *, total_time=0.0, status_text="영상 정보를 불러오는 중..."):
+        super().__init__()
+        self.video_player = SimpleNamespace(total_time=float(total_time), _source_info_status_text=str(status_text or ""))
+        self.runtime_refreshes = 0
+
+    def _load_video(self, path, *, load_waveform=True, defer_media_probe=False):
+        super()._load_video(path, load_waveform=load_waveform, defer_media_probe=defer_media_probe)
+        self.video_player.total_time = 12.0
+        self.video_player._source_info_status_text = ""
+
+
 class _Editor(EditorMulticlipOpsMixin):
     def __init__(self):
         self._queue_timer = _Timer()
@@ -1072,6 +1087,104 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.timeline.waveform_paths, [])
         self.assertEqual(getattr(editor, "_deferred_open_waveform_path", ""), "/tmp/clip.mp4")
         self.assertFalse(getattr(editor, "_deferred_open_waveform_loaded", True))
+
+    def test_native_open_media_bootstrap_can_load_project_waveform_after_first_paint(self):
+        owner = type("Owner", (), {"_editor_widget": None, "_multiclip_boundaries": []})()
+        editor = _BootstrapEditor()
+        owner._editor_widget = editor
+        delays = []
+
+        def _run_now(delay, callback):
+            delays.append(int(delay))
+            callback()
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=_run_now):
+            project_open_native_module.schedule_native_open_editor_media(
+                owner,
+                editor,
+                "/tmp/clip.mp4",
+                defer_waveform_until_start=False,
+            )
+
+        self.assertEqual(delays, [72, 260])
+        self.assertEqual(editor.load_calls, [("/tmp/clip.mp4", False, True)])
+        self.assertEqual(editor.timeline.waveform_paths, ["/tmp/clip.mp4"])
+        self.assertEqual(getattr(editor, "_deferred_open_waveform_path", ""), "")
+
+    def test_project_open_wrapper_schedules_single_media_waveform_without_start_trigger(self):
+        owner = EditorLifecycleMixin()
+        owner._current_project_path = "/tmp/sample-project.aissproj"
+        owner._multiclip_boundaries = []
+        editor = object()
+
+        with patch("ui.editor.editor_lifecycle.native_schedule_native_open_editor_media") as schedule:
+            owner._schedule_native_open_editor_media(editor, "/tmp/clip.mp4")
+
+        schedule.assert_called_once_with(
+            owner,
+            editor,
+            "/tmp/clip.mp4",
+            defer_waveform_until_start=False,
+        )
+
+    def test_project_open_wrapper_keeps_multiclip_waveform_on_multiclip_loader(self):
+        owner = EditorLifecycleMixin()
+        owner._current_project_path = "/tmp/sample-project.aissproj"
+        owner._multiclip_boundaries = [{"start": 0.0, "end": 1.0}]
+        editor = object()
+
+        with patch("ui.editor.editor_lifecycle.native_schedule_native_open_editor_media") as schedule:
+            owner._schedule_native_open_editor_media(editor, "/tmp/clip.mp4")
+
+        schedule.assert_called_once_with(
+            owner,
+            editor,
+            "/tmp/clip.mp4",
+            defer_waveform_until_start=True,
+        )
+
+    def test_direct_srt_media_finalize_forces_sync_probe_when_duration_is_still_zero(self):
+        editor = _DirectSrtFinalizeEditor(total_time=0.0)
+
+        def _refresh_runtime(current):
+            self.assertIs(current, editor)
+            editor.runtime_refreshes += 1
+
+        owner = SimpleNamespace(_editor_widget=editor, _refresh_opened_editor_runtime=_refresh_runtime)
+        editor._native_open_media_token = object()
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            project_open_native_module.schedule_direct_srt_media_finalize(
+                owner,
+                editor,
+                "/tmp/clip.mp4",
+                "/tmp/external.srt",
+            )
+
+        self.assertEqual(editor.load_calls, [("/tmp/clip.mp4", False, False)])
+        self.assertEqual(editor.runtime_refreshes, 1)
+        self.assertGreater(editor.video_player.total_time, 0.0)
+
+    def test_direct_srt_media_finalize_only_refreshes_runtime_when_media_is_already_ready(self):
+        editor = _DirectSrtFinalizeEditor(total_time=14.0, status_text="")
+
+        def _refresh_runtime(current):
+            self.assertIs(current, editor)
+            editor.runtime_refreshes += 1
+
+        owner = SimpleNamespace(_editor_widget=editor, _refresh_opened_editor_runtime=_refresh_runtime)
+        editor._native_open_media_token = object()
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            project_open_native_module.schedule_direct_srt_media_finalize(
+                owner,
+                editor,
+                "/tmp/clip.mp4",
+                "/tmp/external.srt",
+            )
+
+        self.assertEqual(editor.load_calls, [])
+        self.assertEqual(editor.runtime_refreshes, 1)
 
     def test_native_open_media_bootstrap_skips_stale_editor(self):
         owner = type("Owner", (), {"_editor_widget": None, "_multiclip_boundaries": []})()
@@ -2221,6 +2334,172 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             self.assertEqual(editor.video_player.seek_calls, [0.0])
             self.assertEqual(editor._segment_queue, [])
             self.assertTrue(editor._queue_timer.stopped)
+        finally:
+            editor.text_edit.close()
+
+    def test_select_stt_candidate_does_not_mutate_stt_preview_source_segments(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor._reload_segments_from_list([
+                {"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"},
+            ], preserve_view=True)
+            editor._live_stt_preview_segments = [
+                {
+                    "start": 1.05,
+                    "end": 1.82,
+                    "text": "STT1 후보",
+                    "stt_preview_source": "STT1",
+                    "stt_pending": True,
+                    "frame_range": {"unit": "frame", "start": 63, "end": 109, "timeline_frame_rate": 59.94},
+                },
+                {
+                    "start": 1.01,
+                    "end": 1.95,
+                    "text": "STT2 후보",
+                    "stt_preview_source": "STT2",
+                    "stt_pending": True,
+                },
+                {
+                    "start": 2.05,
+                    "end": 2.80,
+                    "text": "다음 STT1 후보",
+                    "stt_preview_source": "STT1",
+                    "stt_pending": True,
+                },
+            ]
+            before_preview = copy.deepcopy(editor._live_stt_preview_segments)
+
+            editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+
+            self.assertEqual(editor._live_stt_preview_segments, before_preview)
+            self.assertEqual(editor._cached_segs[0]["text"], "STT1 후보")
+            self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT1")
+        finally:
+            editor.text_edit.close()
+
+    def test_select_stt_candidate_restores_editor_time_tags_after_rewrite(self):
+        class _MetadataDroppingSelectionEditor(_ActualSelectionEditor):
+            def _reload_segments_from_list(self, *args, **kwargs):
+                result = super()._reload_segments_from_list(*args, **kwargs)
+                block = self.text_edit.document().begin()
+                while block.isValid():
+                    block.setUserData(None)
+                    block = block.next()
+                return result
+
+        editor = _MetadataDroppingSelectionEditor()
+        try:
+            editor._reload_segments_from_list([
+                {"start": 0.0, "end": 1.0, "text": "앞", "speaker": "00"},
+                {"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"},
+                {"start": 2.0, "end": 3.0, "text": "뒤", "speaker": "00"},
+            ], preserve_view=True)
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "STT1 후보", "stt_preview_source": "STT1"}
+            ])
+
+            editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+
+            block = editor.text_edit.document().begin()
+            rows = []
+            while block.isValid():
+                data = block.userData()
+                rows.append(
+                    (
+                        block.text(),
+                        isinstance(data, SubtitleBlockData),
+                        getattr(data, "start_sec", None),
+                        getattr(data, "end_sec", None),
+                        getattr(data, "stt_selected_source", ""),
+                    )
+                )
+                block = block.next()
+            self.assertEqual([row[0] for row in rows], ["앞", "STT1 후보", "뒤"])
+            self.assertTrue(all(row[1] for row in rows))
+            self.assertEqual([(row[2], row[3]) for row in rows], [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)])
+            self.assertEqual(rows[1][4], "STT1")
+        finally:
+            editor.text_edit.close()
+
+    def test_select_stt_candidate_restores_visible_timestamp_layer_after_rewrite(self):
+        class _HiddenTagLayerSelectionEditor(_ActualSelectionEditor):
+            def __init__(self):
+                super().__init__()
+                self.text_edit.close()
+                self.text_edit = SubtitleTextEdit()
+                self.text_edit._parent_widget = self
+                self.text_edit.resize(640, 360)
+                self.text_edit.show()
+
+            def _reload_segments_from_list(self, *args, **kwargs):
+                result = super()._reload_segments_from_list(*args, **kwargs)
+                timestamp_area = self.text_edit.timestampArea
+                timestamp_area.hide()
+                self.text_edit.setViewportMargins(0, 0, 0, 0)
+                block = self.text_edit.document().begin()
+                while block.isValid():
+                    block.setUserData(None)
+                    block = block.next()
+                return result
+
+        editor = _HiddenTagLayerSelectionEditor()
+        try:
+            self.app.processEvents()
+            editor._reload_segments_from_list([
+                {"start": 0.0, "end": 1.0, "text": "앞", "speaker": "00"},
+                {"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"},
+            ], preserve_view=True)
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "STT1 후보", "stt_preview_source": "STT1"}
+            ])
+
+            editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+            self.app.processEvents()
+
+            timestamp_area = editor.text_edit.timestampArea
+            self.assertTrue(timestamp_area.isVisible())
+            self.assertGreaterEqual(editor.text_edit.viewportMargins().left(), timestamp_area.sizeHint().width())
+            self.assertEqual(timestamp_area.geometry().width(), timestamp_area.sizeHint().width())
+            self.assertGreater(timestamp_area.geometry().height(), 0)
+        finally:
+            editor.text_edit.close()
+
+    def test_save_restores_visible_timestamp_layer_after_metadata_drop(self):
+        class _SaveTagLayerEditor(EditorSaveManagerMixin, _ActualSelectionEditor):
+            def __init__(self):
+                super().__init__()
+                self.text_edit.close()
+                self.text_edit = SubtitleTextEdit()
+                self.text_edit._parent_widget = self
+                self.text_edit.resize(640, 360)
+                self.text_edit.show()
+
+        editor = _SaveTagLayerEditor()
+        try:
+            self.app.processEvents()
+            editor._reload_segments_from_list([
+                {"start": 0.0, "end": 1.0, "text": "앞", "speaker": "00"},
+                {"start": 1.0, "end": 2.0, "text": "저장 후", "speaker": "00"},
+            ], preserve_view=True)
+            editor.text_edit.timestampArea.hide()
+            editor.text_edit.setViewportMargins(0, 0, 0, 0)
+            block = editor.text_edit.document().begin()
+            while block.isValid():
+                block.setUserData(None)
+                block = block.next()
+
+            editor._restore_editor_time_tags_after_save()
+            self.app.processEvents()
+
+            timestamp_area = editor.text_edit.timestampArea
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            self.assertIsInstance(first.userData(), SubtitleBlockData)
+            self.assertIsInstance(second.userData(), SubtitleBlockData)
+            self.assertTrue(timestamp_area.isVisible())
+            self.assertGreaterEqual(editor.text_edit.viewportMargins().left(), timestamp_area.sizeHint().width())
+            self.assertEqual(timestamp_area.geometry().width(), timestamp_area.sizeHint().width())
+            self.assertGreater(timestamp_area.geometry().height(), 0)
         finally:
             editor.text_edit.close()
 

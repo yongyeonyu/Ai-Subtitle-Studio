@@ -17,6 +17,40 @@ from core.runtime import config
 from core.runtime.logger import get_logger
 
 
+_RENDER_QT_APP = None
+
+
+def _ensure_qt_application_for_rendering() -> object | None:
+    """Create a minimal QApplication when renderer helpers run standalone."""
+    global _RENDER_QT_APP
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from PyQt6.QtWidgets import QApplication
+    except Exception:
+        return None
+
+    app = QApplication.instance() or _RENDER_QT_APP
+    if app is not None:
+        _RENDER_QT_APP = app
+        return app
+
+    # CLI/manual render helpers can run outside the main app process. Without a
+    # QApplication, font/database access aborts the Python process on macOS.
+    try:
+        app = QApplication([])
+    except Exception:
+        return None
+    _RENDER_QT_APP = app
+
+    try:
+        from core.runtime.qt_runtime import configure_qt_application_font
+
+        configure_qt_application_font()
+    except Exception:
+        pass
+    return app
+
+
 def _ffprobe_video_info(path: str) -> dict:
     cmd = [
         "ffprobe",
@@ -165,6 +199,7 @@ def render_subtitle_overlay_video_gpu(
 def render_subtitle_mov(srt_path: str, target_file: str, export_settings: dict,
                         current_idx: int = 1, total_cnt: int = 1) -> bool:
     """투명 자막 영상(MOV) 렌더링 + iCloud 복사"""
+    _ensure_qt_application_for_rendering()
     from PyQt6.QtGui import QColor, QImage
     from PyQt6.QtCore import Qt
 
