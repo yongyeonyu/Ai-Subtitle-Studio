@@ -12,6 +12,7 @@ from core.performance import qt_tooltip_stylesheet
 from core.runtime import config
 from core.runtime.logger import get_logger
 from ui.gpu_rendering import scenegraph_enabled
+from ui.timeline.render_clock import display_frame_interval_ms
 
 
 class _MirrorLabel(QLabel):
@@ -756,9 +757,11 @@ class VideoPlayerTransportMixin:
     def _get_video_ui_interval_ms(self) -> int:
         try:
             fps = normalize_fps(getattr(self, "frame_rate", 30.0) or 30.0)
-            return max(16, min(80, int(round(1000.0 / fps))))
+            display_ms = display_frame_interval_ms(self)
+            video_ms = int(round(1000.0 / max(1.0, fps)))
+            return max(4, min(80, min(display_ms, video_ms)))
         except Exception:
-            return 33
+            return 17
 
     def _refresh_ui_timer_intervals(self) -> None:
         play_interval = int(self._get_video_ui_interval_ms())

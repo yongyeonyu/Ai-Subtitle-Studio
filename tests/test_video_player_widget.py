@@ -1644,15 +1644,22 @@ class VideoPlayerWidgetTests(unittest.TestCase):
     def test_video_ui_timer_intervals_track_current_frame_rate(self):
         widget = VideoPlayerWidget()
         try:
-            widget.set_frame_rate(24.0)
-            self.assertEqual(widget._play_ui_interval_ms, 42)
-            self.assertEqual(widget._idle_ui_interval_ms, 126)
-            self.assertEqual(widget._ui_timer.interval(), 126)
+            with patch.dict(os.environ, {"AI_SUBTITLE_UI_REFRESH_HZ": "120"}):
+                widget.set_frame_rate(24.0)
+                self.assertEqual(widget._play_ui_interval_ms, 8)
+                self.assertEqual(widget._idle_ui_interval_ms, 90)
+                self.assertEqual(widget._ui_timer.interval(), 90)
 
-            widget.set_frame_rate(60.0)
-            self.assertEqual(widget._play_ui_interval_ms, 17)
-            self.assertEqual(widget._idle_ui_interval_ms, 90)
-            self.assertEqual(widget._ui_timer.interval(), 90)
+            with patch.dict(os.environ, {"AI_SUBTITLE_UI_REFRESH_HZ": "60"}):
+                widget.set_frame_rate(24.0)
+                self.assertEqual(widget._play_ui_interval_ms, 17)
+                self.assertEqual(widget._idle_ui_interval_ms, 90)
+                self.assertEqual(widget._ui_timer.interval(), 90)
+
+                widget.set_frame_rate(60.0)
+                self.assertEqual(widget._play_ui_interval_ms, 17)
+                self.assertEqual(widget._idle_ui_interval_ms, 90)
+                self.assertEqual(widget._ui_timer.interval(), 90)
         finally:
             widget.close()
             widget.deleteLater()

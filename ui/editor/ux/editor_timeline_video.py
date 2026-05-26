@@ -50,9 +50,13 @@ class EditorTimelineVideoMixin(
 
     def _playhead_active_interval_ms(self) -> int:
         try:
-            return max(16, min(80, int(round(1000.0 / self._current_frame_fps()))))
+            from ui.timeline.render_clock import display_frame_interval_ms
+
+            display_ms = display_frame_interval_ms(getattr(self, "timeline", self))
+            video_ms = int(round(1000.0 / max(1.0, self._current_frame_fps())))
+            return max(4, min(80, min(display_ms, video_ms)))
         except Exception:
-            return 33
+            return 17
 
     def _snap_to_frame(self, sec: float) -> float:
         return snap_sec_to_frame(sec, self._current_frame_fps())
@@ -105,7 +109,7 @@ class EditorTimelineVideoMixin(
                 smoothed = previous + max_step
 
         self._last_playhead_smooth_tick = now_mono
-        self._playhead_display_sec = self._snap_to_frame(max(0.0, smoothed))
+        self._playhead_display_sec = max(0.0, smoothed)
         self._playhead_anchor_global_sec = raw_global_sec
         self._playhead_anchor_mono = now_mono
         return self._playhead_display_sec
@@ -535,11 +539,14 @@ class EditorTimelineVideoMixin(
         display_sec = self._smooth_playhead_sec(raw_current_sec, now_mono, dur_ms / 1000.0)
         self._schedule_background_prefetch(raw_current_sec)
         if hasattr(self.timeline, "follow_playhead_centered"):
-            self.timeline.follow_playhead_centered(display_sec, smooth=True)
+            self.timeline.follow_playhead_centered(raw_current_sec, smooth=True, visual_sec=display_sec)
         elif hasattr(self.timeline, "follow_playhead"):
-            self.timeline.follow_playhead(display_sec, smooth=True, threshold_px=24.0)
+            self.timeline.follow_playhead(raw_current_sec, smooth=True, threshold_px=24.0, visual_sec=display_sec)
         else:
-            self.timeline.set_playhead(display_sec)
+            try:
+                self.timeline.set_playhead(raw_current_sec, visual_sec=display_sec)
+            except TypeError:
+                self.timeline.set_playhead(raw_current_sec)
 
         # Context sync: skip resolve if within cached clip bounds (C fix v2)
         if hasattr(self, '_resolve_active_context') and hasattr(self, 'video_player'):

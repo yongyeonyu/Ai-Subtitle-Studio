@@ -29,7 +29,7 @@ TEXT_RULES: tuple[dict[str, Any], ...] = (
         "owner": "TimelineSingleOwnerPlayheadInvalidation",
         "backend": "qwidget-2d-full-canvas-repaint",
         "required": (
-            "def set_playhead(self, sec):",
+            "def set_playhead(self, sec, *, visual_sec: float | None = None):",
             "def set_shadow_playhead(self, sec) -> bool:",
             "def set_drag_shadow_playhead(self, sec) -> bool:",
             "def _update_dirty_rect(self, rect: QRect):",

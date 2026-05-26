@@ -3071,6 +3071,21 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_timeline_playhead_keeps_logical_frame_snap_with_subframe_visual_position(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.canvas.pps = 100.0
+
+            timeline.set_playhead(1.0, visual_sec=1.25)
+
+            self.assertEqual(timeline.canvas.playhead_sec, 1.0)
+            self.assertEqual(timeline.global_canvas.playhead_sec, 1.0)
+            self.assertAlmostEqual(timeline.canvas._playhead_visual_sec, 1.25)
+            self.assertEqual(timeline.canvas._last_playhead_px, 125)
+            self.assertTrue(timeline.canvas._playhead_handle_hit_rect().contains(QPoint(125, 8)))
+        finally:
+            timeline.close()
+
     def test_playhead_overlay_skips_duplicate_pixel_updates(self):
         timeline = TimelineWidget()
         try:
@@ -3778,7 +3793,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         try:
             editor._sync_playhead()
 
-            editor.timeline.follow_playhead_centered.assert_called_once_with(27.0, smooth=True)
+            editor.timeline.follow_playhead_centered.assert_called_once_with(27.0, smooth=True, visual_sec=27.0)
             editor.timeline.follow_playhead.assert_not_called()
             editor.video_player.set_subtitle_display_time.assert_called_once_with(27.0)
             self.assertEqual(editor._playhead_display_sec, 27.0)
@@ -3819,9 +3834,11 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             with patch("ui.editor.editor_timeline_video.time.monotonic", return_value=100.016):
                 editor._sync_playhead()
 
-            follow_sec = editor.timeline.follow_playhead_centered.call_args.args[0]
+            call_args = editor.timeline.follow_playhead_centered.call_args
+            follow_sec = call_args.kwargs["visual_sec"]
             editor.timeline.follow_playhead.assert_not_called()
             self.assertGreater(follow_sec, 10.0)
+            self.assertEqual(call_args.args[0], 10.2)
             self.assertLess(follow_sec, 10.2)
             editor.video_player.set_subtitle_display_time.assert_called_once_with(10.2)
             self.assertEqual(editor._playhead_display_sec, follow_sec)
@@ -3830,12 +3847,31 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
     def test_playhead_active_interval_tracks_current_frame_rate(self):
         editor = _DummyTimelineVideoEditor()
-        editor.video_fps = 24.0
-        editor.settings = {"playhead_active_interval_ms": 24}
-        self.assertEqual(editor._playhead_active_interval_ms(), 42)
+        with patch.dict(os.environ, {"AI_SUBTITLE_UI_REFRESH_HZ": "120"}):
+            editor.video_fps = 24.0
+            self.assertEqual(editor._playhead_active_interval_ms(), 8)
 
-        editor.video_fps = 60.0
-        self.assertEqual(editor._playhead_active_interval_ms(), 17)
+        with patch.dict(os.environ, {"AI_SUBTITLE_UI_REFRESH_HZ": "60"}):
+            editor.video_fps = 24.0
+            self.assertEqual(editor._playhead_active_interval_ms(), 17)
+
+            editor.video_fps = 60.0
+            self.assertEqual(editor._playhead_active_interval_ms(), 17)
+
+    def test_playhead_smoothing_keeps_subframe_display_time(self):
+        editor = _DummyTimelineVideoEditor()
+        editor.video_fps = 24.0
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(playhead_sec=10.0))
+        editor._playhead_display_sec = 10.0
+        editor._playhead_anchor_global_sec = 10.0
+        editor._playhead_anchor_mono = 100.0
+        editor._last_playhead_smooth_tick = 100.0
+
+        value = editor._smooth_playhead_sec(10.2, 100.016, 60.0)
+
+        self.assertGreater(value, 10.0)
+        self.assertLess(value, 10.2)
+        self.assertNotAlmostEqual(value, editor._snap_to_frame(value), places=5)
 
     def test_playhead_smoothing_ignores_small_backward_jitter(self):
         editor = _DummyTimelineVideoEditor()

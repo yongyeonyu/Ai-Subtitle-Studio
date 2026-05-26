@@ -103,6 +103,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.active_seg_start: float | None = None
         self.active_seg_line: int | None = None
         self.playhead_sec: float = 0.0
+        self._playhead_visual_sec: float = 0.0
         self._last_playhead_px: int | None = None
         self.shadow_playhead_sec: float | None = None
         self._shadow_playhead_armed_sec: float | None = None
@@ -425,6 +426,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self._sync_active_segment_key(self.active_seg_start)
         if getattr(self, "playhead_sec", None) is not None:
             self.playhead_sec = self._normalize_canvas_sec(self.playhead_sec)
+            self._playhead_visual_sec = max(0.0, float(getattr(self, "_playhead_visual_sec", self.playhead_sec) or self.playhead_sec))
+            self._last_playhead_px = self._playhead_visual_x(self._playhead_visual_sec)
         if getattr(self, "shadow_playhead_sec", None) is not None:
             self.shadow_playhead_sec = self._normalize_canvas_sec(self.shadow_playhead_sec)
             self._last_shadow_playhead_px = self._x(self.shadow_playhead_sec)
@@ -1387,13 +1390,28 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         dirty = old_rect.united(self._active_segment_repaint_rect(playback_focus=playback_focus))
         self._update_dirty_rect(dirty)
 
-    def set_playhead(self, sec):
+    def _playhead_visual_x(self, sec: float | None = None) -> int:
+        value = self._playhead_visual_sec if sec is None else sec
+        try:
+            return int(round(max(0.0, float(value or 0.0)) * max(0.001, float(getattr(self, "pps", 1.0) or 1.0))))
+        except Exception:
+            return self._x(float(getattr(self, "playhead_sec", 0.0) or 0.0))
+
+    def set_playhead(self, sec, *, visual_sec: float | None = None):
         sec = self._snap_to_frame(sec)
-        px = self._x(sec)
-        if self.playhead_sec == sec or self._last_playhead_px == px:
+        if visual_sec is None:
+            visual_sec = sec
+        try:
+            visual_sec = max(0.0, float(visual_sec or 0.0))
+        except Exception:
+            visual_sec = sec
+        px = self._playhead_visual_x(visual_sec)
+        visual_delta = abs(float(getattr(self, "_playhead_visual_sec", sec) or 0.0) - float(visual_sec))
+        if self.playhead_sec == sec and visual_delta < 0.0005 and self._last_playhead_px == px:
             return
         old_px = self._last_playhead_px
         self.playhead_sec = sec
+        self._playhead_visual_sec = visual_sec
         self._last_playhead_px = px
         if self._timeline_uses_single_owner_2d():
             self.update()

@@ -460,7 +460,7 @@ class TimelinePaintMixin:
             )
             if self.playhead_sec < 0 or external_overlay:
                 return
-            px = int(self._x(self.playhead_sec))
+            px = int(self._playhead_visual_x() if hasattr(self, "_playhead_visual_x") else self._x(self.playhead_sec))
             ph_color = QColor(playhead_line_color_hex(getattr(self, "focus_mode", None)))
             p.setPen(QPen(ph_color, 2))
             if include_non_subtitle_band:

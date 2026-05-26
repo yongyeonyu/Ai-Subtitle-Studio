@@ -1184,7 +1184,10 @@ class TimelineInputMixin(TimelineInputShadowMixin):
 
     def _playhead_handle_hit_rect(self) -> QRect:
         handle_r = 7
-        px = self._x(float(getattr(self, "playhead_sec", 0.0) or 0.0))
+        if hasattr(self, "_playhead_visual_x"):
+            px = self._playhead_visual_x()
+        else:
+            px = self._x(float(getattr(self, "playhead_sec", 0.0) or 0.0))
         slop = self._touch_hit_slop(handle_r * 2)
         return QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2).adjusted(-slop, -slop, slop, slop)
 
