@@ -67,9 +67,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.00.13-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_13_RELEASED
-Last-Updated: 2026-05-22
+Document-Version: 04.00.15-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_15_RELEASED
+Last-Updated: 2026-05-26
 Updated-By: Codex
 Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 -->
@@ -78,8 +78,8 @@ Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.00.13`
-- Latest release checkpoint: `v04.00.13`
+- App version in code: `04.00.15`
+- Latest release checkpoint: `v04.00.15`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -91,14 +91,14 @@ Read these first when continuing work:
 
 1. `AGENTS.md`
 2. `ACTION_ITEMS.md`
-3. `README.md`
-4. `test_case.md`
-5. `test_result.md`
-6. `waste_action_item.md`
-7. `lesson_n_learned.md`
-8. `File_structure.txt`
-9. `CODEMAP.md` if present
-10. Latest `RELEASE_v*.md`
+3. `File_structure.txt`
+4. `CODEMAP.md` if present
+5. Latest `RELEASE_v*.md`
+6. `README.md`
+7. `test_case.md`
+8. `test_result.md`
+9. `waste_action_item.md`
+10. `lesson_n_learned.md`
 
 When validating the current release baseline, also read:
 
@@ -139,6 +139,16 @@ Completed item rule:
   - command: `./venv/bin/python tools/qa_suite_runner.py full`
   - result: pass, `failed_count=0`
   - scenarios: `editor_compact_macau`, `video_menu_macau`, `save_export_macau`, `menu_stt_lora_macau`, `x5_high_rolling_180s`
+- Latest source-app quick smoke for the current release line:
+  - `output/manual_verification/latest/qa_suite_quick_20260525_141648`
+  - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
+  - result: pass, `failed_count=0`
+- Latest local non-release commit:
+  - `9967c7f7` - `perf: smooth high-refresh timeline playback`
+- Latest focused guard set for that local playback patch:
+  - command: `./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py tests/test_editor_rendering_ownership_audit.py tests/test_timeline_render_cache.py`
+  - result: `272 passed`
+  - note: focused/unit verification is complete, but no new real-app Macau/X5 artifact has been captured yet for this local patch.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_20260522_081710/x5_high_rolling_180s`
   - `total_elapsed_sec=61.142`
@@ -151,7 +161,7 @@ Completed item rule:
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `ACTION_ITEMS.md`, section `Active Execution Queue`.
-- Current active item: X5 High post-STT UI/status hot path trim.
+- Current active item: High-refresh 2D playback validation and promotion.
 
 ## Current Risks
 
@@ -160,19 +170,22 @@ Completed item rule:
 - Long-flow STT2 rescue and word timestamp precision still have meaningful wall-clock cost; optimize only by reducing waiting, cleanup churn, UI/status hot paths, or safe resource lifetime waste.
 - Do not lower X5 quality gates, skip STT2, skip LLM, downgrade models, or loosen subtitle quality policy as a speed optimization.
 - Tinyping long-flow is manual-only unless the owner explicitly requests it.
+- The latest high-refresh playback patch is committed and unit-covered, but it still needs real-app Macau/X5 proof before it should be treated as a promoted baseline.
+- The repository may still contain unrelated local unstaged edits after that commit; always re-check `git status` before widening a follow-up patch.
 
 ## Narrow Next Item
 
 Use `ACTION_ITEMS.md` as the executable queue. The current narrow target is:
 
-1. Prevent STT live preview from synchronously generating 4K seek thumbnails through `ffmpeg` during backend processing. Keep text live updates.
-2. Make `guided-subtitle-status` expose compact current fields even when full status is busy/truncated: `generation_stage`, `last_stage_key`, subtitle count, roughcut state, runtime timestamp.
-3. Add resource active labels for `subtitle_optimize`/subtitle LLM and a short pressure gate before roughcut LLM if `stt_transcribe_done` leaves pressure at `critical`.
+1. Reopen Macau and X5 fixtures on the source app and verify that playback smoothness, visible playhead, time footer, and subtitle overlay stay aligned under the new display-refresh-aware timer path.
+2. Re-check save/open/seek, shadow playhead, and handle hit targets so the visual-only playhead path does not change subtitle timing persistence or interaction semantics.
+3. After real-app proof for that patch is captured, resume the X5 High post-STT UI/status hot-path trim item from `ACTION_ITEMS.md`.
 
 QA gate for that item:
 
-- X5 High real-app run must keep final subtitle count and roughcut LLM completion behavior equivalent.
-- `output/memory_monitor/subtitle_generation_latest.json` must show pressure evidence without subtitle quality policy changes.
+- Focused regression set must stay green:
+  - `./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py tests/test_editor_rendering_ownership_audit.py tests/test_timeline_render_cache.py`
+- Real-app Macau and X5 verification must show no `00:00 / 00:00` regression, ghost playhead, or playhead/handle hit-target mismatch.
 - If app-command, automation, or bundle-facing surface changes, rebuild the app bundle before `major` or `full` QA with `./packaging/macos/build_app_bundle.sh`.
 
 ## Fixtures

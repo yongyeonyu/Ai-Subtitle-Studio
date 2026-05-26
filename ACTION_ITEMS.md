@@ -1,7 +1,7 @@
 <!--
 Document-Version: 04.00.15-mac-native
 Phase: MAC_NATIVE_APPSTORE_V4_0_15_RELEASED
-Last-Updated: 2026-05-25
+Last-Updated: 2026-05-26
 Updated-By: Codex
 Purpose: Consolidated active execution queue. Former `idea_item.md` and `NATIVE_LIB_PLAN.md` content lives here.
 -->
@@ -36,99 +36,85 @@ Those standalone files were intentionally removed after consolidation.
 
 ## Active Execution Queue
 
-### 1. Subtitle Generation Domain Split And Native Acceleration Plan
+### 1. High-Refresh 2D Playback Validation And Promotion
 
-Goal: 자막 생성 전체를 기능 경계별 파일/함수로 분리하고, 안정된 compute hot path만 Swift/C++ native helper로 승격해 Apple Silicon ANE/GPU 사용 가능성을 넓힌다.
+Goal: Keep the Qt Widgets/QPainter 2D editor path intact while making playback, playhead follow, and footer time UI track the display refresh rate instead of only the source video fps.
 
-Status: completed
+Status: active
 
-Progress:
+Scope:
 
-- 2026-05-24: Execution order 1 completed with `SUBTITLE_GENERATION_DOMAIN_MAP.md`, covering current owners and dependency edges from `core/audio/media_processor*`, `core/engine/subtitle_engine.py`, `core/pipeline/*`, `core/personalization/*`, `ui/editor/*`, and `ui/timeline/*`. Drift guard added in `tests/test_subtitle_generation_domain_map.py`.
-- 2026-05-24: Execution order 2 started with the first pure Python facade: `core/engine/subtitle_segments.py` now owns save/reopen segment preparation for `core/engine/srt_writer.py`, with coverage in `tests/test_subtitle_segments_facade.py`.
-- 2026-05-24: Execution order 2 continued with `core/engine/subtitle_stt_segments.py`, a pure Python facade for shared STT1/STT2 preview timeline row shaping used by `core/pipeline/stt_preview_optimizer.py`. Coverage added in `tests/test_subtitle_stt_segments_facade.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_resource_manager`: `core/runtime/subtitle_resource_manager.py` now owns accelerator name normalization and mixed accelerator parallelism floor decisions used by `core/runtime/multi_process.py`. Coverage added in `tests/test_subtitle_resource_manager.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_global_canvas`: `core/engine/subtitle_global_canvas.py` now owns minimap lane row preparation and merge-helper request shaping used by `ui/timeline/timeline_global.py`. Coverage added in `tests/test_subtitle_global_canvas_facade.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_waveform`: `core/engine/subtitle_waveform.py` now owns global-canvas waveform column feed calculation used by `ui/timeline/timeline_global.py`. Coverage added in `tests/test_subtitle_waveform_facade.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_timing`: `core/engine/subtitle_timing_contracts.py` now owns pure timing bounds/scope/text normalization, frame-field payload construction, and timing-fusion policy payloads consumed by `core/engine/subtitle_timing.py`. Coverage added in `tests/test_subtitle_timing_contracts.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_parallel_manager`: `core/pipeline/subtitle_parallel_manager.py` now owns pure queue progress, cut-boundary iteration planning, and subtitle stage DAG contracts consumed through `core/pipeline/single_pipeline_plan.py`. Coverage added in `tests/test_subtitle_parallel_manager.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_cut_boundary`: `core/engine/subtitle_cut_boundary.py` now owns pure cut-boundary cache settings/payload summaries consumed through `core/pipeline/cut_boundary_cache.py`. Coverage added in `tests/test_subtitle_cut_boundary_facade.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_dictionary`: `core/engine/subtitle_dictionary.py` now owns immutable dictionary lookup/update request payloads and wrong-answer phrase removal consumed by `core/subtitle_quality/candidate_generator.py`. Coverage added in `tests/test_subtitle_dictionary_facade.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_live_sync_manager`: `core/engine/subtitle_live_sync_manager.py` now owns pure live progress/status normalization and cut-boundary topicless live payload shaping consumed by `ui/editor/editor_pipeline_status.py` and `ui/editor/editor_pipeline_signal_bridge.py`. Coverage added in `tests/test_subtitle_live_sync_manager.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_live_editor_feed`: `core/engine/subtitle_live_editor_feed.py` now owns immutable confirmed/STT-preview/subtitle-preview feed payload assembly consumed by `ui/editor/editor_segments_stt_selection_flow.py`. Coverage added in `tests/test_subtitle_live_editor_feed_facade.py`.
-- 2026-05-24: Execution order 2 continued for `subtitle_speaker_diarization`: `core/engine/subtitle_speaker_diarization.py` now owns pure speaker-id normalization, speaker-map segment lookup, inline two-speaker dialogue restoration, and runtime row grouping consumed through `core/pipeline/pipeline_helpers.py` and `core/audio/diarize.py`. Coverage added in `tests/test_subtitle_speaker_diarization_facade.py`.
-- 2026-05-24: Execution order 3 started with `tests/test_subtitle_facade_project_reopen_contracts.py`, which drives representative DJI/X5-style rows through segment preparation, external SRT project storage/reopen hydration, STT1 candidate tracks, global canvas rows, waveform feed, and subtitle parallel iteration planning.
-- 2026-05-24: Execution order 4 readiness guard started with `core/runtime/subtitle_native_readiness.py`, a metadata-only manifest for existing feature-flagged native subtitle helpers. Coverage added in `tests/test_subtitle_native_readiness.py` to keep Python fallback paths enabled when native flags are off and avoid unsupported ANE claims.
-- 2026-05-24: Verification gate refreshed after domain split work: full pytest passed (`2788 passed, 1 warning, 5 subtests`) and X5 High 180s full-media verification passed at `output/manual_verification/latest/20260524_domain_split_x5_high_180/tinyping_full_verify.json` (`ok=true`, `pipeline_elapsed_sec=84.786`, `final_segment_count=56`, `raw_segment_count=49`). App quick smoke was attempted at `output/manual_verification/latest/20260524_domain_split_quick_app` but remains a separate app-UI gate because the default Macau project path was missing (`project_not_found`) and the app command endpoint later timed out.
-- 2026-05-24: App quick smoke gate fixed and passed: `tools/qa_suite_runner.py` now creates a temporary Macau fixture project under the suite output directory when the legacy default project file is absent, normalizes CLI output paths to absolute paths for bundled app command handling, and passed `quick` at `output/manual_verification/latest/20260524_domain_split_quick_app_retry2` (`failed_count=0`).
-- 2026-05-24: Full regression refreshed after QA runner and `subtitle_cut_boundary` facade work: `venv/bin/python -m pytest tests -q` passed (`2796 passed, 1 warning, 5 subtests`) in `181.21s`.
-- 2026-05-24: Full regression refreshed after `subtitle_dictionary` and `subtitle_live_editor_feed` facade work: `venv/bin/python -m pytest tests -q` passed (`2804 passed, 1 warning, 5 subtests`) in `179.39s`. `subtitle_speaker_diarization` focused guard passed with `tests/test_subtitle_speaker_diarization_facade.py tests/test_pipeline_speaker_diarization.py` (`9 passed`), then full regression refreshed after the speaker facade passed (`2809 passed, 1 warning, 5 subtests`) in `180.16s`.
-- 2026-05-24: `subtitle_live_sync_manager` focused guard passed with `tests/test_subtitle_live_sync_manager.py tests/test_subtitle_generation_domain_map.py tests/test_single_pipeline_ui_guard.py tests/test_runtime_multi_process.py::RuntimeMultiProcessTests::test_runtime_resource_coordinator_active_labels_include_live_pipeline_stages` (`19 passed`), then full regression refreshed after the live-sync facade passed (`2815 passed, 1 warning, 5 subtests`) in `179.35s`.
-- 2026-05-25: Long-file cleanup continued without subtitle policy changes. `core/audio/media_processor_transcribe.py` was split into policy/recheck/run/windowed mixins; `core/audio/media_processor_audio.py` now delegates adaptive audio-route helpers to `core/audio/media_processor_audio_route.py`; and `core/engine/subtitle_engine.py` was reduced below 2000 lines by extracting LoRA packaging, LLM runtime wrappers, final-integrity guards, and STT candidate helper/selection modules.
-- 2026-05-25: The current top three runtime-code files were reduced below 2000 lines without UI/UX behavior changes: `tools/benchmark_subtitle_pipeline_variants.py` -> 1997 lines via benchmark settings/readability/artifact helpers, `ui/main/main_window.py` -> 1772 lines via automation/personalization mixins, and `ui/timeline/timeline_widget.py` -> 1849 lines via playhead overlay/time-window mixins.
-- 2026-05-25: Focused guards passed after the split work: `tests/test_media_processor_transcribe_split.py` (`4 passed`), `tests/test_benchmark_mode_profiles.py` (`24 passed`), `tests/test_timeline_playhead_fit.py` (`144 passed`), `tests/test_timeline_hit_targets.py tests/test_sidebar_terminal_layout.py` (`241 passed`), and subtitle/domain focused set (`104 passed`). X5 후반 60s High benchmark completed with no error at `.codex_work/benchmarks/subtitle_pipeline_variants/20260525_065941/benchmark_results.json` (`quality_score=72.239`, `raw_segments=33`, `final_segments=29`, Swift/native summaries stable).
-- 2026-05-25: Long-file cleanup continued until no non-test Python runtime file exceeds 2000 lines. Split behavior-preserving helpers into `core/roughcut/editor_draft_llm.py`, `core/pipeline/cut_boundary_snapshot.py`, `core/pipeline/cut_boundary_segment_ops.py`, `ui/editor/editor_quality_review.py`, `ui/editor/editor_scan_cut_project.py`, and `ui/editor/ux/timeline_input_shadow.py`; current top runtime files are `tools/benchmark_subtitle_pipeline_variants.py` 1997, `core/roughcut/editor_draft.py` 1984, `ui/timeline/timeline_paint.py` 1964. Focused guards passed: `tests/test_pipeline_cut_boundary_cache.py` (`21 passed`), `tests/test_timeline_hit_targets.py` (`144 passed`), `tests/test_editor_roughcut_draft.py` plus Codex roughcut provider guard (`57 passed`), and targeted py_compile checks for split modules.
-- 2026-05-25: Completion evidence for the long-file pass added in `LONG_FILE_OWNERSHIP_MAP.md` and linked from `SUBTITLE_GENERATION_DOMAIN_MAP.md`; map guard coverage updated in `tests/test_subtitle_generation_domain_map.py`.
-- 2026-05-25: Source-app quick smoke passed at `output/manual_verification/latest/20260525_action_item_completion_quick_source` (`failed_count=0`) after making the QA runner able to force current source execution with `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1`; automation-only smart-split guards now cover editor/canvas line-key drift without changing subtitle quality or UI/UX behavior.
+- `ui/timeline/render_clock.py`
+- `ui/timeline/timeline_widget.py`
+- `ui/timeline/timeline_canvas.py`
+- `ui/timeline/timeline_paint.py`
+- `ui/editor/ux/editor_timeline_video.py`
+- `ui/editor/video_player_transport.py`
+- `ui/editor/ux/timeline_input.py`
+- `tests/test_timeline_playhead_fit.py`
+- `tests/test_video_player_widget.py`
+- `tests/test_timeline_render_cache.py`
+- `tests/test_editor_rendering_ownership_audit.py`
 
-Owner intent:
+Current baseline:
 
-- 지금처럼 한 경로에 자막 생성, STT, LLM, LoRA, 러프컷, editor live update, timeline paint가 얽히는 구조를 줄인다.
-- UI/UX와 자막 품질 정책은 변경하지 않는다.
-- 모델 축소, STT2 생략, LLM 생략, 품질 게이트 완화 없이 구조/성능만 개선한다.
-- native는 Python parity와 실앱 artifact가 확보된 부분만 적용한다.
-
-Target split map:
-
-- `subtitle_cut_boundary`: 컷 경계 탐지, 컷 후발대, playhead 주변 컷 검증
-- `subtitle_stt`: STT orchestration, STT worker lifecycle, rolling window scheduling
-- `subtitle_stt1_segments`: STT1 preview/final candidate segment model and timeline feed
-- `subtitle_stt2_segments`: STT2 verification candidate segment model and timeline feed
-- `subtitle_llm`: 자막 LLM cleanup, conservative prompt, provider routing
-- `subtitle_deep_learning`: deep runtime adaptation, confidence gate tuning, learned policy application
-- `subtitle_lora`: LoRA retrieval, training-plan metadata, runtime personalization, GPU/native scoring helpers
-- `subtitle_roughcut`: roughcut LLM, topic/scene row generation, post-subtitle roughcut ordering
-- `subtitle_dictionary`: 단어장/교정 memory/wrong-answer memory lookup and update
-- `subtitle_timing`: 자막 간격, 재정렬, frame-grid snap, fixed boundary rules
-- `subtitle_parallel_manager`: cut/STT/STT2/LLM/roughcut dependency DAG and bounded parallel execution
-- `subtitle_resource_manager`: native resource allocator, Apple core/memory pressure, ANE/GPU/CPU budget hints
-- `subtitle_live_sync_manager`: backend progress to editor/timeline/video overlay live event bridge
-- `subtitle_live_editor_feed`: generated subtitle rows pushed into editor almost-real-time
-- `subtitle_segments`: canonical final subtitle segment schema, merge/split/save/reopen invariants
-- `subtitle_waveform`: waveform extraction/cache/render feed
-- `subtitle_global_canvas`: minimap/global canvas lanes and segment summaries
-- `subtitle_speaker_diarization`: 화자인식/분리, speaker map, two-speaker row payload
-
-Native / open-source candidate policy:
-
-- Swift first for Apple platform helpers with stable structs and deterministic output.
-- C++ first for tight loops, interval math, frame-grid timing, waveform summarization, and cache-friendly segment transforms.
-- Core ML / Vision / Accelerate / vDSP candidates: waveform stats, simple vector reductions, audio feature windows, cut-boundary numeric kernels.
-- Metal / MLX candidates: bounded vector scoring, LoRA retrieval math, batch numeric transforms. Keep PyTorch MPS behind an explicit experimental gate unless a crash-free real fixture run proves safety.
-- ANE candidates must go through Core ML models only; do not claim ANE use for ordinary C++/Metal/Python loops.
-- External OSS is allowed only when it removes a proven hot path and passes license/runtime packaging checks. Candidate classes: `whisper.cpp`/CoreML only for STT helper parity, `mlx`/`mlx-lm` only for Mac-native LoRA training/scoring experiments, `onnxruntime-coreml` only if package size and runtime stability are acceptable.
+- Local commit `9967c7f7` (`perf: smooth high-refresh timeline playback`) landed display-refresh-aware timers plus logical/visual playhead separation.
+- Focused guard set currently passes:
+  - `./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py tests/test_editor_rendering_ownership_audit.py tests/test_timeline_render_cache.py`
+  - Result: `272 passed`
+- No new real-app Macau/X5 verification artifact has been captured yet for this local patch.
 
 Execution order:
 
-1. Inventory current owners and write a dependency map from `core/audio/media_processor*`, `core/engine/subtitle_engine.py`, `core/pipeline/*`, `core/personalization/*`, `ui/editor/*`, and `ui/timeline/*`.
-2. Extract pure Python facade modules first with no behavior change and no native code.
-3. Add contract tests for each facade using existing X5/Macau/Tinyping fixtures and current project reopen/save paths.
-4. Move only stable compute kernels into Swift/C++ helpers behind feature flags.
-5. Verify parity against Python on unit tests and real app artifacts before enabling any native helper by default.
-6. Run one real High-mode app test and capture queue, terminal logs, timeline, editor, overlay, STT1/STT2 rows, global canvas, waveform, and output SRT.
+1. Reopen the source app on Macau and X5 fixtures and verify playback smoothness, visible playhead, footer time label, and subtitle overlay stay aligned.
+2. Re-check save/open/seek, shadow playhead, handle hit targets, and selected-playhead behavior so the visual-only playhead path does not change subtitle timing persistence or interaction semantics.
+3. If command surface or bundle-facing paths change, rebuild the app bundle before bundle-based QA. Otherwise validate on the source app first.
+4. If drift or ghosting appears, back out display-only wiring first. Do not reintroduce QML, SceneGraph, OpenGL, Metal UI surfaces, or playhead-only dirty-strip defaults.
 
 Acceptance gates:
 
-- Existing subtitle text/timing quality does not regress on representative fixtures.
-- Editor, video overlay, timeline segment, STT1 segment, STT2 segment, and saved SRT stay aligned.
-- Running app remains responsive during STT/LLM/LoRA/roughcut stages.
-- Memory pressure does not worsen compared with latest baseline.
-- Native helper can be disabled with a setting/env flag and Python fallback remains correct.
+- Subtitle timing/save policy remains frame-snapped and unchanged.
+- No `00:00 / 00:00` regression, ghost playhead, or visible handle-hit mismatch appears.
+- `AI_SUBTITLE_UI_REFRESH_HZ` override remains available for deterministic reproduction and rollback.
+- Real-app Macau and X5 verification artifacts are stored under `output/manual_verification/latest/`.
 
 Rollback:
 
-- Revert native feature flag to Python path first.
-- If UI/live sync regresses, revert only the affected facade wiring and keep pure extraction modules if tests pass.
+- Revert `render_clock.py` integrations first.
+- Preserve logical frame snap even if visual sub-frame motion is disabled.
+- Keep Qt Widgets/QPainter as the only default visible editor/timeline renderer.
+
+### 2. X5 High Post-STT UI And Status Hot Path Trim
+
+Goal: Continue the preexisting X5 High post-STT UI/status cleanup only after item 1 has real-app proof, and reduce avoidable UI churn without changing subtitle quality policy.
+
+Status: pending
+
+Scope:
+
+- `ui/editor/editor_segments_live_preview.py`
+- `ui/editor/editor_pipeline_status.py`
+- `ui/editor/editor_pipeline_signal_bridge.py`
+- `ui/editor/editor_save_manager.py`
+- `output/memory_monitor/subtitle_generation_latest.json`
+
+Execution order:
+
+1. Prevent live preview text updates from triggering heavy thumbnail/probe churn during backend processing.
+2. Keep compact guided status fields available even when full status payloads are busy or truncated.
+3. Add short pressure-aware guards around roughcut/LLM follow-up work only when pressure stays at `critical`.
+4. Validate on X5 High real-app flow before widening scope.
+
+Acceptance gates:
+
+- X5 High final subtitle count and roughcut completion stay equivalent.
+- Memory pressure evidence is captured without changing subtitle quality policy.
+- If command or app automation surface changes, rebuild the app bundle before `major` or `full` QA.
+
+Rollback:
+
+- Revert status/preview throttles before touching subtitle-generation logic.
+- Do not skip STT2, LoRA, LLM, or lower quality gates as a speed shortcut.
 
 ## Native Migration Rules
 
