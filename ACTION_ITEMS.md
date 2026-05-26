@@ -59,15 +59,19 @@ Scope:
 Current baseline:
 
 - Local commit `9967c7f7` (`perf: smooth high-refresh timeline playback`) landed display-refresh-aware timers plus logical/visual playhead separation.
+- Local commit `0ca501bf` (`fix: stabilize editor timeline and project UI`) followed up with editor/project reload guards, timestamp gutter restoration, STT preview preservation, global minimap bottom-line rendering, and playhead visual fallback stabilization.
 - Focused guard set currently passes:
   - `./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py tests/test_editor_rendering_ownership_audit.py tests/test_timeline_render_cache.py`
   - Result: `272 passed`
-- No new real-app Macau/X5 verification artifact has been captured yet for this local patch.
+- Broader editor/timeline guard set currently passes:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest tests/test_editor_autosave_cleanup.py tests/test_editor_srt_open_refresh.py tests/test_main_file_ops_nonfatal.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_renderer_overlay.py tests/test_sidebar_terminal_layout.py tests/test_subtitle_boundary_alignment.py tests/test_timeline_hit_targets.py tests/test_timeline_layout_constants.py tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py -q`
+  - Result: `709 passed`
+- No new stored Macau/X5 promotion artifact has been captured yet for the current local patch stack.
 
 Execution order:
 
-1. Reopen the source app on Macau and X5 fixtures and verify playback smoothness, visible playhead, footer time label, and subtitle overlay stay aligned.
-2. Re-check save/open/seek, shadow playhead, handle hit targets, and selected-playhead behavior so the visual-only playhead path does not change subtitle timing persistence or interaction semantics.
+1. Reopen the source app on Macau and X5 fixtures and verify playback smoothness, visible playhead, footer time label, subtitle overlay, timestamp gutter, and global minimap bottom lines stay aligned.
+2. Re-check save/open/seek, shadow playhead, handle hit targets, selected-playhead behavior, STT preview selection, and project reload so the visual-only playhead and editor restore paths do not change subtitle timing persistence or interaction semantics.
 3. If command surface or bundle-facing paths change, rebuild the app bundle before bundle-based QA. Otherwise validate on the source app first.
 4. If drift or ghosting appears, back out display-only wiring first. Do not reintroduce QML, SceneGraph, OpenGL, Metal UI surfaces, or playhead-only dirty-strip defaults.
 
@@ -75,6 +79,7 @@ Acceptance gates:
 
 - Subtitle timing/save policy remains frame-snapped and unchanged.
 - No `00:00 / 00:00` regression, ghost playhead, or visible handle-hit mismatch appears.
+- No timestamp-gutter loss, STT preview mutation from selection, project reload drift, or broken global minimap blue/green bottom line appears.
 - `AI_SUBTITLE_UI_REFRESH_HZ` override remains available for deterministic reproduction and rollback.
 - Real-app Macau and X5 verification artifacts are stored under `output/manual_verification/latest/`.
 

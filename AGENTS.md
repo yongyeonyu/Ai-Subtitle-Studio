@@ -144,11 +144,12 @@ Completed item rule:
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
   - result: pass, `failed_count=0`
 - Latest local non-release commit:
-  - `9967c7f7` - `perf: smooth high-refresh timeline playback`
-- Latest focused guard set for that local playback patch:
-  - command: `./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py tests/test_editor_rendering_ownership_audit.py tests/test_timeline_render_cache.py`
-  - result: `272 passed`
-  - note: focused/unit verification is complete, but no new real-app Macau/X5 artifact has been captured yet for this local patch.
+  - `0ca501bf` - `fix: stabilize editor timeline and project UI`
+- Latest focused guard set for the current local editor/timeline patch:
+  - command: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest tests/test_editor_autosave_cleanup.py tests/test_editor_srt_open_refresh.py tests/test_main_file_ops_nonfatal.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_renderer_overlay.py tests/test_sidebar_terminal_layout.py tests/test_subtitle_boundary_alignment.py tests/test_timeline_hit_targets.py tests/test_timeline_layout_constants.py tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py -q`
+  - result: `709 passed`
+  - additional checks: `py_compile` on touched Python modules and `git diff --check` passed before commit.
+  - note: source-app spot verification covered the Macau project editor UI and global minimap bottom line, but no new Macau/X5 promotion artifact has been stored under `output/manual_verification/latest/` yet.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_20260522_081710/x5_high_rolling_180s`
   - `total_elapsed_sec=61.142`
@@ -161,7 +162,7 @@ Completed item rule:
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `ACTION_ITEMS.md`, section `Active Execution Queue`.
-- Current active item: High-refresh 2D playback validation and promotion.
+- Current active item: High-refresh/editor-timeline 2D validation and promotion.
 
 ## Current Risks
 
@@ -170,15 +171,15 @@ Completed item rule:
 - Long-flow STT2 rescue and word timestamp precision still have meaningful wall-clock cost; optimize only by reducing waiting, cleanup churn, UI/status hot paths, or safe resource lifetime waste.
 - Do not lower X5 quality gates, skip STT2, skip LLM, downgrade models, or loosen subtitle quality policy as a speed optimization.
 - Tinyping long-flow is manual-only unless the owner explicitly requests it.
-- The latest high-refresh playback patch is committed and unit-covered, but it still needs real-app Macau/X5 proof before it should be treated as a promoted baseline.
-- The repository may still contain unrelated local unstaged edits after that commit; always re-check `git status` before widening a follow-up patch.
+- The latest high-refresh/editor-timeline patch is committed and focused-regression-covered, but it still needs stored real-app Macau/X5 proof before it should be treated as a promoted baseline.
+- Always re-check `git status` before widening a follow-up patch.
 
 ## Narrow Next Item
 
 Use `ACTION_ITEMS.md` as the executable queue. The current narrow target is:
 
-1. Reopen Macau and X5 fixtures on the source app and verify that playback smoothness, visible playhead, time footer, and subtitle overlay stay aligned under the new display-refresh-aware timer path.
-2. Re-check save/open/seek, shadow playhead, and handle hit targets so the visual-only playhead path does not change subtitle timing persistence or interaction semantics.
+1. Reopen Macau and X5 fixtures on the source app and verify that playback smoothness, visible playhead, time footer, subtitle overlay, timestamp gutter, and global minimap bottom lines stay aligned under the current 2D path.
+2. Re-check save/open/seek, shadow playhead, handle hit targets, STT preview selection, and project reload so the visual-only playhead and editor-state restore paths do not change subtitle timing persistence or interaction semantics.
 3. After real-app proof for that patch is captured, resume the X5 High post-STT UI/status hot-path trim item from `ACTION_ITEMS.md`.
 
 QA gate for that item:
