@@ -1,4 +1,5 @@
 import os
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -7,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QWidget
 
-from ui.main.main_window import MainWindow
+from ui.main.main_window import STARTUP_BACKGROUND_INITIAL_QUIET_MS, MainWindow
 
 
 class MainWindowNonfatalTests(unittest.TestCase):
@@ -93,10 +94,106 @@ class MainWindowNonfatalTests(unittest.TestCase):
         finally:
             self._cleanup_window(window)
 
+    def test_optional_startup_waits_while_home_foreground_action_is_pending(self):
+        owner = SimpleNamespace(_offscreen_test=False, _home_foreground_action_pending=True)
+
+        self.assertFalse(MainWindow._optional_startup_home_ready(owner))
+
+    def test_optional_startup_waits_during_initial_background_quiet_window(self):
+        owner = SimpleNamespace(
+            _offscreen_test=False,
+            _startup_background_quiet_until=time.monotonic() + 2.0,
+        )
+
+        self.assertGreaterEqual(STARTUP_BACKGROUND_INITIAL_QUIET_MS, 6000)
+        self.assertFalse(MainWindow._optional_startup_home_ready(owner))
+
+    def test_schedule_optional_startup_respects_background_quiet_window(self):
+        window = self._make_window()
+        try:
+            timer = SimpleNamespace(start=mock.Mock())
+            window._offscreen_test = False
+            window._optional_startup_timer = timer
+            window._startup_background_quiet_until = time.monotonic() + 2.0
+
+            window._schedule_optional_startup_tasks(delay_ms=50)
+
+            scheduled_ms = int(timer.start.call_args.args[0])
+            self.assertGreaterEqual(scheduled_ms, 1500)
+        finally:
+            self._cleanup_window(window)
+
+    def test_initial_home_auto_source_refresh_defers_during_startup_quiet_window(self):
+        window = self._make_window()
+        try:
+            window._offscreen_test = False
+            window._initial_home_scan_deferred = True
+            window._startup_background_quiet_until = time.monotonic() + 2.0
+            window._schedule_optional_startup_tasks = mock.Mock()
+
+            window._start_initial_home_auto_source_refresh(delay_ms=0)
+
+            self.assertTrue(window._pending_initial_home_auto_source_refresh)
+            self.assertFalse(window._home_auto_source_refresh_inflight)
+            window._schedule_optional_startup_tasks.assert_called_once()
+        finally:
+            self._cleanup_window(window)
+
+    def test_foreground_action_suspends_startup_background(self):
+        window = self._make_window()
+        try:
+            window._offscreen_test = False
+            timer = SimpleNamespace(stop=mock.Mock())
+            window._optional_startup_timer = timer
+            window._startup_background_quiet_until = 0.0
+            window._pause_personalization_for_foreground_activity = mock.Mock()
+
+            result = window._suspend_startup_background_for_foreground_action("file_dialog", hold_ms=3200)
+
+            self.assertTrue(result["suspended"])
+            self.assertGreater(window._startup_background_quiet_remaining_ms(), 2500)
+            timer.stop.assert_called_once()
+            window._pause_personalization_for_foreground_activity.assert_called_once_with(
+                "file_dialog",
+                hold_ms=3200,
+            )
+        finally:
+            self._cleanup_window(window)
+
+    def test_file_dialog_priority_defers_editor_ai_model_release(self):
+        window = self._make_window()
+        try:
+            window._foreground_file_open_requested = True
+            with (
+                mock.patch("ui.main.main_runtime_cleanup.QTimer.singleShot") as single_shot,
+                mock.patch("ui.main.main_runtime_cleanup._main_window_threading_module") as threading_module,
+            ):
+                window._release_ai_models_for_editor_mode(
+                    force=True,
+                    preserve_roughcut_status=True,
+                    ollama_timeout_sec=1.2,
+                )
+
+            single_shot.assert_called_once()
+            self.assertEqual(single_shot.call_args.args[0], 900)
+            threading_module.assert_not_called()
+            self.assertTrue(window._editor_ai_release_retry_scheduled)
+            self.assertEqual(
+                window._deferred_editor_ai_release_after_file_open,
+                {
+                    "force": True,
+                    "preserve_roughcut_status": True,
+                    "ollama_timeout_sec": 1.2,
+                },
+            )
+        finally:
+            self._cleanup_window(window)
+
     def test_optional_startup_tasks_run_when_home_is_ready(self):
         window = self._make_window()
         try:
             window._offscreen_test = False
+            window._startup_background_quiet_until = 0.0
             window._editor_widget = None
             window.stack.setCurrentIndex(0)
             window._auto_processing_active = False
@@ -200,13 +297,22 @@ class MainWindowNonfatalTests(unittest.TestCase):
             widget._normal_ss = "QWidget#MenuButton { background: #000; }"
             widget.setStyleSheet("QWidget#MenuButton { background: #fff; }")
             action = mock.Mock()
+            window._resume_deferred_editor_ai_release_after_file_open = mock.Mock()
 
             with mock.patch("PyQt6.QtWidgets.QApplication.processEvents", side_effect=AssertionError("should not run")):
                 with mock.patch("ui.home_ui.QTimer.singleShot") as single_shot:
                     window._defer_home_action(widget, action)
 
-            single_shot.assert_called_once_with(100, action)
+            single_shot.assert_called_once()
+            self.assertEqual(single_shot.call_args.args[0], 100)
             self.assertIn("#000", widget.styleSheet())
+            self.assertTrue(window._home_foreground_action_pending)
+
+            single_shot.call_args.args[1]()
+
+            action.assert_called_once()
+            self.assertFalse(window._home_foreground_action_pending)
+            window._resume_deferred_editor_ai_release_after_file_open.assert_called_once()
         finally:
             self._cleanup_window(window)
 
@@ -264,6 +370,30 @@ class MainWindowNonfatalTests(unittest.TestCase):
             self.assertEqual(window._home_auto_source_cache["icloud"][1], "대기")
             self.assertEqual(window._home_auto_source_cache["nas"][0][0][0], "folder")
             window._build_home_content.assert_called_once()
+        finally:
+            self._cleanup_window(window)
+
+    def test_home_auto_sources_ready_defers_rebuild_while_home_action_pending(self):
+        window = self._make_window()
+        try:
+            window._home_foreground_action_pending = True
+            window._initial_home_scan_deferred = True
+            window._home_auto_source_refresh_inflight = True
+            window._home_auto_source_refresh_token = 4
+            window._build_home_content = mock.Mock()
+            window.stack.setCurrentIndex(0)
+
+            window._on_home_auto_sources_ready(
+                {
+                    "token": 4,
+                    "icloud": ([("sample.mp4", "/tmp/sample.mp4")], "대기", ""),
+                    "nas": ([("folder", "/tmp/folder")], "대기", ""),
+                }
+            )
+
+            self.assertTrue(window._pending_home_auto_source_rebuild)
+            self.assertFalse(window._home_auto_source_refresh_inflight)
+            window._build_home_content.assert_not_called()
         finally:
             self._cleanup_window(window)
 

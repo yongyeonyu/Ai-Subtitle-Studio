@@ -66,6 +66,25 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         finally:
             self._cleanup_window(window)
 
+    def test_defer_home_action_marks_foreground_pending_until_action_runs(self):
+        window = MainWindow()
+        scheduled = []
+        calls = []
+        try:
+            with patch("ui.home_ui.QTimer.singleShot", side_effect=lambda delay, cb: scheduled.append((delay, cb))):
+                window._defer_home_action(window.home_page, lambda: calls.append("ran"))
+
+            self.assertTrue(window._home_foreground_action_pending)
+            self.assertEqual([delay for delay, _cb in scheduled], [100])
+            self.assertEqual(calls, [])
+
+            scheduled[0][1]()
+
+            self.assertEqual(calls, ["ran"])
+            self.assertFalse(window._home_foreground_action_pending)
+        finally:
+            self._cleanup_window(window)
+
     def test_home_auto_scan_ready_rebuilds_home_with_cached_results(self):
         window = MainWindow()
         try:

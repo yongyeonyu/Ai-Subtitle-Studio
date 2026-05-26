@@ -10,12 +10,13 @@ import os
 
 from PyQt6.QtCore import QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QMessageBox, QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from core.runtime import config
 from core.pipeline_status import generation_stage_label, process_mode_label
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 from ui.gpu_rendering import scenegraph_enabled
+from ui.dialogs.message_box import ask_yes_no, show_message
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import COLORS, label_style, line_icon, tool_button_style
 
@@ -388,6 +389,7 @@ class GlobalMenuBar(QWidget):
             ("비디오", "video", self._toggle_video, MENU_LEFT_ACCENT),
             ("자막", "export", self._open_export, MENU_LEFT_ACCENT),
             ("음성", "mic", self._toggle_stt_mode, MENU_LEFT_ACCENT),
+            ("정밀", "review", self._run_precision_refine, MENU_LEFT_ACCENT),
         ]:
             btn = self._small_button(text, icon, slot, color)
             self._register_qml_button(
@@ -399,6 +401,8 @@ class GlobalMenuBar(QWidget):
             )
             if text == "음성":
                 self.btn_stt_mode = btn
+            if text == "정밀":
+                self.btn_precision_refine = btn
             left.addWidget(btn)
         root.addWidget(self.left_group, stretch=1, alignment=Qt.AlignmentFlag.AlignLeft)
 
@@ -603,6 +607,16 @@ class GlobalMenuBar(QWidget):
             self.btn_stt_mode.setIcon(line_icon("mic", stt_color, 22))
             self.btn_stt_mode.setToolTip("STT 모드 ON" if stt_on else "STT 모드 OFF")
             self._apply_menu_button_style(self.btn_stt_mode, checked=stt_on)
+        if hasattr(self, "btn_precision_refine"):
+            precision_enabled = self._precision_refine_available_for_editor(editor)
+            precision_color = MENU_LEFT_ACCENT if precision_enabled else "#66727D"
+            self.btn_precision_refine.setText("정밀")
+            self.btn_precision_refine.setEnabled(precision_enabled)
+            self.btn_precision_refine.setIcon(line_icon("review", precision_color, 22))
+            self.btn_precision_refine.setToolTip(
+                "정밀 자막 작업" if precision_enabled else "자막 생성 완료 후 사용할 수 있습니다."
+            )
+            self._apply_menu_button_style(self.btn_precision_refine, checked=False)
         main = self.main_window
         auto_on = bool(getattr(main, "_auto_start_on", True))
         self.btn_auto_start.setText("자동")
@@ -787,6 +801,58 @@ class GlobalMenuBar(QWidget):
         editor = self._active_editor()
         if editor is not None and hasattr(editor, "_toggle_stt_mode"):
             editor._toggle_stt_mode()
+        self.refresh()
+
+    def _precision_refine_available_for_editor(self, editor) -> bool:
+        if editor is None:
+            return False
+        checker = getattr(editor, "_precision_refine_available", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return False
+        getter = getattr(editor, "_get_current_segments", None)
+        if callable(getter):
+            try:
+                return any(
+                    isinstance(seg, dict)
+                    and not bool(seg.get("is_gap"))
+                    and bool(str(seg.get("text", "") or "").strip())
+                    for seg in list(getter() or [])
+                )
+            except Exception:
+                return False
+        try:
+            canvas = editor.timeline.canvas
+            return bool(getattr(canvas, "segments", None))
+        except Exception:
+            return False
+
+    def _run_precision_refine(self):
+        editor = self._active_editor()
+        if not self._precision_refine_available_for_editor(editor):
+            self.refresh()
+            return
+        answer = ask_yes_no(
+            self.window() or self,
+            "정밀 작업",
+            "정밀 작업 실행 할까요?",
+            default_no=True,
+        )
+        if not answer:
+            self.refresh()
+            return
+        starter = getattr(editor, "start_precision_subtitle_refinement", None)
+        if callable(starter):
+            starter()
+        else:
+            show_message(
+                self.window() or self,
+                "정밀 작업",
+                "정밀 자막 작업을 시작할 수 없습니다.",
+                icon=QMessageBox.Icon.Warning,
+            )
         self.refresh()
 
     def _click_start(self):

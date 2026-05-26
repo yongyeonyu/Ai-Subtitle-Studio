@@ -59,6 +59,7 @@ from ui.editor.editor_speaker_ops import EditorSpeakerOpsMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
 from ui.editor.editor_quality_review import EditorQualityReviewMixin
 from ui.editor.editor_stt_mode import EditorSTTModeMixin
+from ui.editor.editor_precision_refine import EditorPrecisionRefineMixin
 
 DATASET_DIR   = "dataset"
 SETTINGS_FILE = os.path.join(DATASET_DIR, "user_settings.json")
@@ -67,6 +68,9 @@ EDITOR_VIDEO_PLAYER_FIXED_HEIGHT = 420
 EDITOR_VIDEO_PLAYER_MIN_WIDTH = 320
 EDITOR_VIDEO_PLAYER_16_9_ASPECT = 16 / 9
 EDITOR_VIDEO_PLAYER_16_9_TOLERANCE = 0.035
+# 변경 금지: 하단 global menu가 timeline focus box를 덮지 않도록 timeline
+# frame 전체를 위로 띄우는 여유다. 파란 하단선은 새로 그리지 않는다.
+EDITOR_TIMELINE_BOTTOM_CLEARANCE = 52
 QT_WIDGETSIZE_MAX = 16777215
 
 
@@ -86,6 +90,7 @@ class EditorWidget(
     EditorMulticlipOpsMixin,
     EditorQualityReviewMixin,
     EditorSTTModeMixin,
+    EditorPrecisionRefineMixin,
     QWidget,
 ):
     sig_start     = pyqtSignal()
@@ -546,7 +551,7 @@ class EditorWidget(
     # UI 빌드
     # ---------------------------------------------------------
     def _build_ui(self):
-        root = QVBoxLayout(self); root.setContentsMargins(2, 2, 2, 0); root.setSpacing(2)
+        root = QVBoxLayout(self); root.setContentsMargins(2, 0, 2, EDITOR_TIMELINE_BOTTOM_CLEARANCE); root.setSpacing(0)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
@@ -601,21 +606,20 @@ class EditorWidget(
         self._editor_focus_border.hide()
         self._sync_editor_focus_border()
         self.splitter.addWidget(editor_wrap)
-        # UI LOCK: keep the video player at a fixed editor height. The slot
-        # width is always derived as height * 16:9 so loading square/vertical
-        # media cannot steal horizontal space from the subtitle editor.
-        # Do not change this back to splitter-fill behavior.
+        # UI LOCK: the video slot is height-owned and may grow with the upper
+        # editor area, but width is still derived from the 16:9 preview height
+        # so square/vertical media cannot steal horizontal editor space.
         video_fixed_height = EDITOR_VIDEO_PLAYER_FIXED_HEIGHT
         self.video_frame = StableRenderFrame(
             "EditorVideoFrame",
             render_feature="video",
             min_width=EDITOR_VIDEO_PLAYER_MIN_WIDTH,
             min_height=video_fixed_height,
-            fixed_height=True,
+            fixed_height=False,
         )
         self.video_frame.setStyleSheet("QFrame#EditorVideoFrame { background: #000000; border: none; border-radius: 0px; }")
         self.video_player = VideoPlayerWidget(self.video_frame)
-        self.video_player.setFixedHeight(video_fixed_height)
+        self.video_player.setMinimumHeight(video_fixed_height)
         if hasattr(self.video_player, "set_subtitle_provider"):
             self.video_player.set_subtitle_provider(self._video_subtitle_context_for_player)
         if hasattr(self.video_player, "frame_step_requested"):
@@ -1446,16 +1450,12 @@ class EditorWidget(
         # source aspect. The video surface may letterbox/pillarbox inside it,
         # but the right panel width must not expand and squeeze the editor.
         preview_height = self._video_fixed_height()
-        layout_margin_width = 0
-        try:
-            margins = player.layout().contentsMargins()
-            layout_margin_width = int(margins.left()) + int(margins.right())
-        except Exception:
-            layout_margin_width = 0
+        layout_margin_width, _ = self._video_layout_margins()
         target_width = max(
             EDITOR_VIDEO_PLAYER_MIN_WIDTH,
             int(round(preview_height * EDITOR_VIDEO_PLAYER_16_9_ASPECT)) + layout_margin_width,
         )
+        target_width = min(target_width, self._available_video_width_in_splitter())
         self._set_video_preview_width_lock(target_width)
 
     def _video_source_aspect(self):
@@ -1594,15 +1594,77 @@ class EditorWidget(
         self._vertical_rebalance_scheduled = True
         QTimer.singleShot(0, self._rebalance_video_timeline_heights)
 
+    def _video_layout_margins(self) -> tuple[int, int]:
+        player = getattr(self, "video_player", None)
+        if player is None:
+            return 0, 0
+        try:
+            margins = player.layout().contentsMargins()
+            return int(margins.left()) + int(margins.right()), int(margins.top()) + int(margins.bottom())
+        except Exception:
+            return 0, 0
+
+    def _available_video_width_in_splitter(self) -> int:
+        splitter = getattr(self, "splitter", None)
+        editor_wrap = getattr(self, "_editor_wrap", None)
+        if splitter is None or editor_wrap is None:
+            return EDITOR_VIDEO_PLAYER_MIN_WIDTH
+        try:
+            total_width = int(splitter.width() or 0)
+            if total_width <= 0:
+                total_width = int(sum(splitter.sizes()) or 0)
+            handle_width = int(splitter.handleWidth() or 0) if splitter.count() > 1 else 0
+        except Exception:
+            return EDITOR_VIDEO_PLAYER_MIN_WIDTH
+        available = max(1, total_width - max(0, handle_width))
+        try:
+            editor_min = int(editor_wrap.minimumWidth() or 0)
+            hint = editor_wrap.minimumSizeHint()
+            editor_min = max(editor_min, int(hint.width() or 0))
+        except Exception:
+            editor_min = int(getattr(editor_wrap, "minimumWidth", lambda: 0)() or 0)
+        editor_min = max(260, editor_min)
+        return max(EDITOR_VIDEO_PLAYER_MIN_WIDTH, available - editor_min)
+
+    def _apply_video_preview_height_for_available_space(self) -> bool:
+        frame = getattr(self, "video_frame", None)
+        player = getattr(self, "video_player", None)
+        if frame is None or player is None:
+            return False
+        changed = False
+        for widget in (frame, player):
+            try:
+                if int(widget.minimumHeight()) != EDITOR_VIDEO_PLAYER_FIXED_HEIGHT:
+                    widget.setMinimumHeight(EDITOR_VIDEO_PLAYER_FIXED_HEIGHT)
+                    changed = True
+                if int(widget.maximumHeight()) != QT_WIDGETSIZE_MAX:
+                    widget.setMaximumHeight(QT_WIDGETSIZE_MAX)
+                    changed = True
+                policy = widget.sizePolicy()
+                if policy.verticalPolicy() != QSizePolicy.Policy.Expanding:
+                    widget.setSizePolicy(policy.horizontalPolicy(), QSizePolicy.Policy.Expanding)
+                    changed = True
+                widget.updateGeometry()
+            except Exception:
+                pass
+        try:
+            layout = player.layout()
+            if layout is not None:
+                layout.activate()
+        except Exception:
+            pass
+        return changed
+
     def _rebalance_video_timeline_heights(self):
         self._vertical_rebalance_scheduled = False
-        # UI LOCK: video/timeline heights are fixed; do not auto-redistribute
-        # letterbox space by enlarging or shrinking the video preview.
         self._timeline_height_bonus = 0
         self._vertical_rebalance_followups = 0
+        video_height_changed = self._apply_video_preview_height_for_available_space()
         timeline = getattr(self, "timeline", None)
         timeline_frame = getattr(self, "timeline_frame", None)
         if timeline is None or timeline_frame is None:
+            if video_height_changed:
+                self._apply_fixed_video_preview_width()
             return
         try:
             if hasattr(timeline, "set_canvas_height_bonus"):
@@ -1611,6 +1673,9 @@ class EditorWidget(
             pass
         timeline.updateGeometry()
         timeline_frame.updateGeometry()
+        self._apply_fixed_video_preview_width()
+        if video_height_changed:
+            QTimer.singleShot(0, self._apply_fixed_video_preview_width)
         self.updateGeometry()
 
     # ---------------------------------------------------------

@@ -89,6 +89,7 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
             self.app.processEvents()
 
             margins = timeline.layout().contentsMargins()
+            self.assertEqual(margins.top(), 0)
             self.assertEqual(margins.bottom(), 0)
             self.assertGreaterEqual(timeline.global_canvas.height(), MINIMAP_HEIGHT)
             self.assertEqual(timeline.global_canvas.geometry().bottom(), timeline.rect().bottom())
@@ -99,6 +100,7 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
     def test_global_canvas_subtitle_bottom_edge_spans_empty_gaps(self):
         from ui.timeline.timeline_global import (
             GLOBAL_CANVAS_CONTENT_BOTTOM_PAD,
+            GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE,
             GlobalCanvas,
             MINIMAP_HEIGHT,
             MINIMAP_MARKER_LANE_H,
@@ -121,6 +123,11 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
             subtitle_lane = canvas._bottom_lane_layout(bottom_lane, include_stt=True)["SUBTITLE"]
             sample_y = max(subtitle_lane.top(), subtitle_lane.bottom() - 1)
             sample_x = image.width() // 2
+            self.assertGreaterEqual(image.height() - 1 - sample_y, GLOBAL_CANVAS_CONTENT_BOTTOM_PAD)
+            self.assertEqual(
+                sample_y,
+                image.height() - GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE,
+            )
 
             self.assertEqual(
                 QColor(image.pixel(sample_x, sample_y)).name().lower(),
@@ -129,6 +136,70 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
         finally:
             canvas.close()
             canvas.deleteLater()
+
+    def test_global_canvas_viewport_bottom_box_hugs_content_edge(self):
+        from PyQt6.QtGui import QImage, QPainter
+
+        from core.runtime import config
+        from ui.timeline.timeline_constants import FOCUS_BORDER_WIDTH
+        from ui.timeline.timeline_global import (
+            GLOBAL_CANVAS_CONTENT_BOTTOM_PAD,
+            GLOBAL_CANVAS_VIEWPORT_CONTENT_SEAL,
+            GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE,
+            GLOBAL_CANVAS_VIEWPORT_SIDE_OVERSCAN,
+            GlobalCanvas,
+            MINIMAP_HEIGHT,
+        )
+
+        canvas = GlobalCanvas()
+        try:
+            canvas.resize(240, MINIMAP_HEIGHT)
+            canvas.total_duration = 10.0
+            canvas.view_start = 0.0
+            canvas.view_end = 1.0
+            canvas.playhead_sec = -1.0
+            self.assertGreaterEqual(GLOBAL_CANVAS_VIEWPORT_SIDE_OVERSCAN, 1)
+            self.assertEqual(
+                GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE,
+                GLOBAL_CANVAS_CONTENT_BOTTOM_PAD + GLOBAL_CANVAS_VIEWPORT_CONTENT_SEAL,
+            )
+            self.assertGreaterEqual(GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE, FOCUS_BORDER_WIDTH * 10)
+            image = QImage(canvas.size(), QImage.Format.Format_ARGB32)
+            image.fill(0)
+            painter = QPainter(image)
+            canvas.render(painter)
+            painter.end()
+
+            bottom_y = image.height() - GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE
+            sample_x = image.width() // 2
+            accent = QColor(config.ACCENT).name().lower()
+            for x in (0, sample_x, image.width() - 1):
+                self.assertEqual(QColor(image.pixel(x, bottom_y)).name().lower(), accent)
+            self.assertNotEqual(
+                QColor(image.pixel(sample_x, image.height() - 1)).name().lower(),
+                QColor(config.ACCENT).name().lower(),
+            )
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_timeline_focus_border_uses_box_height_not_extra_bottom_line(self):
+        from ui.timeline.timeline_widget import TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE, TimelineWidget
+
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.sizeHint().height() + 48)
+            timeline.show()
+            self.app.processEvents()
+            timeline._sync_focus_border()
+
+            border = timeline._focus_border
+            clearance = timeline.rect().bottom() - border.geometry().bottom()
+            self.assertEqual(TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE, 0)
+            self.assertEqual(clearance, TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE)
+        finally:
+            timeline.close()
+            timeline.deleteLater()
 
     def test_focus_border_style_is_shared_with_editor_panel(self):
         from ui.editor.editor_widget import EditorWidget

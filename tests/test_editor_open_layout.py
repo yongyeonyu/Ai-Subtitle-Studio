@@ -7,7 +7,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 
 from ui.editor.editor_widget import (
+    EDITOR_TIMELINE_BOTTOM_CLEARANCE,
     EDITOR_VIDEO_PLAYER_16_9_ASPECT,
+    EDITOR_VIDEO_PLAYER_FIXED_HEIGHT,
     EDITOR_VIDEO_PLAYER_MIN_WIDTH,
     EditorWidget,
 )
@@ -61,7 +63,7 @@ class EditorOpenLayoutTests(unittest.TestCase):
         finally:
             editor.close()
 
-    def test_fixed_video_width_rebalances_initial_splitter_even_when_width_is_unchanged(self):
+    def test_fixed_video_width_keeps_initial_splitter_balanced_when_width_is_unchanged(self):
         editor = EditorWidget(
             video_name="sample.mp4",
             segments=[],
@@ -85,7 +87,6 @@ class EditorOpenLayoutTests(unittest.TestCase):
 
             editor.splitter.setSizes([280, max(1, total - 280)])
             self.app.processEvents()
-            self.assertLess(editor.splitter.sizes()[0], expected_editor_width - 100)
 
             editor._apply_fixed_video_preview_width()
             self.app.processEvents()
@@ -93,6 +94,67 @@ class EditorOpenLayoutTests(unittest.TestCase):
             sizes = editor.splitter.sizes()
             self.assertAlmostEqual(sizes[0], expected_editor_width, delta=2)
             self.assertAlmostEqual(sizes[1], target_width, delta=2)
+        finally:
+            editor.close()
+
+    def test_timeline_slot_keeps_bottom_clearance_without_top_gap(self):
+        editor = EditorWidget(
+            video_name="sample.mp4",
+            segments=[],
+            media_path="",
+            defer_media_load=True,
+        )
+        try:
+            editor.resize(1280, 760)
+            editor.show()
+            self.app.processEvents()
+
+            root_margins = editor.layout().contentsMargins()
+            self.assertEqual(root_margins.top(), 0)
+            self.assertEqual(root_margins.bottom(), EDITOR_TIMELINE_BOTTOM_CLEARANCE)
+            self.assertGreaterEqual(EDITOR_TIMELINE_BOTTOM_CLEARANCE, 52)
+            self.assertEqual(editor.layout().spacing(), 0)
+            self.assertEqual(
+                editor.rect().bottom() - editor.timeline_frame.geometry().bottom(),
+                EDITOR_TIMELINE_BOTTOM_CLEARANCE,
+            )
+
+            timeline_margins = editor.timeline.layout().contentsMargins()
+            self.assertEqual(timeline_margins.top(), 0)
+            self.assertEqual(timeline_margins.bottom(), 0)
+        finally:
+            editor.close()
+
+    def test_video_player_height_and_width_expand_with_available_top_space(self):
+        editor = EditorWidget(
+            video_name="sample.mp4",
+            segments=[],
+            media_path="",
+            defer_media_load=True,
+        )
+        try:
+            editor.resize(1920, 1200)
+            editor.show()
+            self.app.processEvents()
+
+            editor._rebalance_video_timeline_heights()
+            self.app.processEvents()
+            editor._apply_fixed_video_preview_width()
+            self.app.processEvents()
+
+            self.assertGreater(editor.video_player.height(), EDITOR_VIDEO_PLAYER_FIXED_HEIGHT)
+
+            margins = editor.video_player.layout().contentsMargins()
+            expected_width = max(
+                EDITOR_VIDEO_PLAYER_MIN_WIDTH,
+                int(round(editor.video_player.video_container.height() * EDITOR_VIDEO_PLAYER_16_9_ASPECT))
+                + margins.left()
+                + margins.right(),
+            )
+            self.assertEqual(editor.video_frame.minimumWidth(), expected_width)
+            self.assertEqual(editor.video_frame.maximumWidth(), expected_width)
+            self.assertEqual(editor.video_player.minimumWidth(), expected_width)
+            self.assertEqual(editor.video_player.maximumWidth(), expected_width)
         finally:
             editor.close()
 

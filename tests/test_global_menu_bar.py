@@ -1,9 +1,10 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from ui.menu_bar import GlobalMenuBar
@@ -39,6 +40,31 @@ class GlobalMenuBarSubtitleOutputTests(unittest.TestCase):
             editor.export_calls,
             [{"output_mode": None, "initial_tab": None}],
         )
+
+    def test_precision_button_lives_next_to_voice_and_waits_until_available(self):
+        _, editor, bar = self._make_bar()
+        editor._precision_available = False
+        editor._precision_refine_available = lambda: bool(editor._precision_available)
+
+        bar.refresh()
+        left_texts = [button.text() for button in bar._left_qml_buttons]
+        self.assertEqual(left_texts[left_texts.index("음성") + 1], "정밀")
+        self.assertFalse(bar.btn_precision_refine.isEnabled())
+
+        editor._precision_available = True
+        bar.refresh()
+        self.assertTrue(bar.btn_precision_refine.isEnabled())
+
+    def test_precision_button_confirms_before_starting_editor_refine(self):
+        _, editor, bar = self._make_bar()
+        editor._precision_refine_available = lambda: True
+        editor.start_precision_subtitle_refinement = Mock()
+        bar.refresh()
+
+        with patch("ui.menu_bar.ask_yes_no", return_value=True):
+            bar._run_precision_refine()
+
+        editor.start_precision_subtitle_refinement.assert_called_once_with()
 
 
 if __name__ == "__main__":

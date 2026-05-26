@@ -373,9 +373,9 @@ class EditorSegmentsLivePreviewMixin:
 
         self._sync_processing_segment_view(
             global_sec,
-            show_thumbnail=True,
-            allow_processing_thumbnail=True,
-            defer_thumbnail=True,
+            show_thumbnail=False,
+            allow_processing_thumbnail=False,
+            defer_thumbnail=False,
         )
 
     def _sync_processing_segment_view(

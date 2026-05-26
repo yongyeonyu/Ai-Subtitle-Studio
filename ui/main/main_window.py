@@ -54,6 +54,9 @@ from core.path_manager import (
 from core.settings import load_settings, save_settings
 
 MAIN_PANEL_GAP = APP_PANEL_GAP
+STARTUP_BACKGROUND_INITIAL_QUIET_MS = 8000
+STARTUP_BACKGROUND_FOREGROUND_HOLD_MS = 7000
+STARTUP_BACKGROUND_RETRY_MS = 2200
 
 
 class MainWindow(
@@ -191,6 +194,11 @@ class MainWindow(
         self._startup_required_model_check_pending = not self._offscreen_test
         self._startup_llm_preflight_pending = not self._offscreen_test
         self._startup_auto_watchers_pending = False
+        self._startup_background_quiet_until = (
+            time.monotonic() + (STARTUP_BACKGROUND_INITIAL_QUIET_MS / 1000.0)
+            if not self._offscreen_test
+            else 0.0
+        )
 
         self._build_ui()
         _logger.log_perf(
@@ -281,6 +289,23 @@ class MainWindow(
     def _optional_startup_home_ready(self) -> bool:
         if bool(getattr(self, "_offscreen_test", False)):
             return False
+        quiet_remaining = 0
+        quiet_getter = getattr(self, "_startup_background_quiet_remaining_ms", None)
+        if callable(quiet_getter):
+            quiet_remaining = quiet_getter()
+        else:
+            try:
+                quiet_until = float(getattr(self, "_startup_background_quiet_until", 0.0) or 0.0)
+                quiet_remaining = max(0, int((quiet_until - time.monotonic()) * 1000.0))
+            except Exception:
+                quiet_remaining = 0
+        if quiet_remaining > 0:
+            return False
+        foreground_active = getattr(self, "_foreground_file_open_priority_active", None)
+        if callable(foreground_active) and foreground_active():
+            return False
+        if bool(getattr(self, "_home_foreground_action_pending", False)):
+            return False
         if bool(getattr(self, "_file_dialog_active", False)):
             return False
         if getattr(self, "_editor_widget", None) is not None:
@@ -301,13 +326,54 @@ class MainWindow(
             pass
         return True
 
+    def _startup_background_quiet_remaining_ms(self) -> int:
+        try:
+            until = float(getattr(self, "_startup_background_quiet_until", 0.0) or 0.0)
+        except Exception:
+            return 0
+        remaining = until - time.monotonic()
+        if remaining <= 0:
+            return 0
+        return int(max(0.0, remaining * 1000.0))
+
+    def _suspend_startup_background_for_foreground_action(
+        self,
+        reason: str = "foreground_action",
+        *,
+        hold_ms: int = STARTUP_BACKGROUND_FOREGROUND_HOLD_MS,
+    ) -> dict:
+        try:
+            hold = max(0, int(hold_ms or 0))
+        except Exception:
+            hold = STARTUP_BACKGROUND_FOREGROUND_HOLD_MS
+        if hold > 0:
+            until = time.monotonic() + (hold / 1000.0)
+            current = float(getattr(self, "_startup_background_quiet_until", 0.0) or 0.0)
+            self._startup_background_quiet_until = max(current, until)
+        timer = getattr(self, "_optional_startup_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            run_nonfatal_ui_step(
+                "foreground startup pause",
+                "pause personalization",
+                lambda: pause_lora(reason, hold_ms=hold),
+                default=None,
+            )
+        return {"suspended": True, "reason": str(reason or ""), "hold_ms": hold}
+
     def _schedule_optional_startup_tasks(self, *, delay_ms: int = 0) -> None:
         if bool(getattr(self, "_offscreen_test", False)):
             return
         timer = getattr(self, "_optional_startup_timer", None)
         if timer is None:
             return
-        timer.start(max(0, int(delay_ms or 0)))
+        quiet_ms = self._startup_background_quiet_remaining_ms()
+        timer.start(max(0, int(delay_ms or 0), quiet_ms))
 
     def _run_optional_startup_tasks(self) -> None:
         if bool(getattr(self, "_offscreen_test", False)):
@@ -326,7 +392,7 @@ class MainWindow(
         started = time.perf_counter()
         if not self._optional_startup_home_ready():
             self._schedule_optional_startup_tasks(
-                delay_ms=1800 if getattr(config, "IS_MAC", False) else 1200
+                delay_ms=STARTUP_BACKGROUND_RETRY_MS if getattr(config, "IS_MAC", False) else 1200
             )
             return
         if bool(getattr(self, "_pending_initial_home_auto_source_refresh", False)):
@@ -551,6 +617,11 @@ class MainWindow(
     def _start_initial_home_auto_source_refresh(self, *, delay_ms: int = 0) -> None:
         if not bool(getattr(self, "_initial_home_scan_deferred", False)):
             return
+        quiet_ms = self._startup_background_quiet_remaining_ms()
+        if quiet_ms > 0:
+            self._pending_initial_home_auto_source_refresh = True
+            self._schedule_optional_startup_tasks(delay_ms=max(quiet_ms, int(delay_ms or 0)))
+            return
         if not self._optional_startup_home_ready():
             self._pending_initial_home_auto_source_refresh = True
             self._schedule_optional_startup_tasks(delay_ms=max(0, int(delay_ms or 0)))
@@ -630,7 +701,11 @@ class MainWindow(
             icloud_rows=icloud_rows,
             nas_rows=nas_rows,
         )
-        if bool(getattr(self, "_file_dialog_active", False)):
+        if (
+            bool(getattr(self, "_home_foreground_action_pending", False))
+            or bool(getattr(self, "_file_dialog_active", False))
+            or self._startup_background_quiet_remaining_ms() > 0
+        ):
             self._pending_home_auto_source_rebuild = True
             return
         if int(getattr(self, "stack", None).currentIndex() if getattr(self, "stack", None) is not None else -1) == 0:

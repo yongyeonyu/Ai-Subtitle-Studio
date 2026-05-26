@@ -1759,7 +1759,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_live_editor_preview_follows_latest_draft_and_defers_thumbnail(self):
+    def test_live_editor_preview_follows_latest_draft_without_processing_thumbnail(self):
         editor = _ActualSelectionEditor()
         editor.video_player = _DirectSeekVideoPlayer(total_time=100.0)
         editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
@@ -1783,11 +1783,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             self.assertEqual(editor.timeline.playhead_calls[-1], (52.0, True))
             self.assertEqual(editor.video_player.direct_seek_calls[-1], (52.0, False))
             self.assertEqual(editor.video_player.thumbnail_calls, [])
-            self.assertEqual([delay for delay, _cb in scheduled], [80])
-
-            scheduled[0][1]()
-
-            self.assertEqual(editor.video_player.thumbnail_calls[-1], ("/tmp/source.mp4", 52.0))
+            self.assertEqual(scheduled, [])
         finally:
             editor.text_edit.close()
 

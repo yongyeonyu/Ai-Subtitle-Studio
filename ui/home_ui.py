@@ -610,6 +610,10 @@ class HomeUIMixin(HomeSidebarMixin):
                 self._nas_sync_manager.stop()
 
     def _defer_home_action(self, widget, action):
+        self._home_foreground_action_pending = True
+        suspend_startup = getattr(self, "_suspend_startup_background_for_foreground_action", None)
+        if callable(suspend_startup):
+            suspend_startup("home_action")
         # F fix v2: 모든 MenuButton hover 강제 리셋
         try:
             for child in self.home_page.findChildren(QWidget, "MenuButton"):
@@ -625,7 +629,17 @@ class HomeUIMixin(HomeSidebarMixin):
                 self.home_page.update()
         except Exception:
             pass
-        QTimer.singleShot(100, action)
+
+        def _run_action():
+            try:
+                action()
+            finally:
+                self._home_foreground_action_pending = False
+                resume_release = getattr(self, "_resume_deferred_editor_ai_release_after_file_open", None)
+                if callable(resume_release):
+                    resume_release()
+
+        QTimer.singleShot(100, _run_action)
 
     def _sidebar_nav_items(self) -> list[dict]:
         sidebar_mode = self._sidebar_active_mode()

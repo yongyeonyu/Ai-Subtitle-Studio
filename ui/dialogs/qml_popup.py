@@ -149,6 +149,34 @@ def _clamp_popup_pos(pos: QPoint, popup_size: QSize, available: QRect, *, margin
     return QPoint(max(min_x, min(x, max_x)), max(min_y, min(y, max_y)))
 
 
+def _popup_parent_center(parent, fallback_global_pos: QPoint | None = None) -> QPoint:
+    parent_widget = _widget_parent(parent)
+    if parent_widget is not None and not _qt_object_deleted(parent_widget):
+        try:
+            window = parent_widget.window()
+        except Exception:
+            window = None
+        if window is not None and not _qt_object_deleted(window):
+            try:
+                if window.isVisible():
+                    return window.frameGeometry().center()
+            except Exception:
+                pass
+        try:
+            return parent_widget.mapToGlobal(parent_widget.rect().center())
+        except Exception:
+            pass
+    return _screen_available_geometry(fallback_global_pos).center()
+
+
+def _centered_popup_pos(parent, popup_size: QSize, fallback_global_pos: QPoint | None = None) -> QPoint:
+    center = _popup_parent_center(parent, fallback_global_pos)
+    available = _screen_available_geometry(center)
+    bounded = _bounded_popup_size(popup_size, available)
+    top_left = center - QPoint(max(1, bounded.width()) // 2, max(1, bounded.height()) // 2)
+    return _clamp_popup_pos(top_left, bounded, available)
+
+
 def _button_bits(buttons) -> list[QMessageBox.StandardButton]:
     candidates = [
         QMessageBox.StandardButton.Ok,
@@ -284,15 +312,7 @@ class _QuickMessageDialog(QDialog):
         QTimer.singleShot(0, self._center_on_parent)
 
     def _center_on_parent(self):
-        parent = self.parentWidget()
-        if parent is not None:
-            geo = parent.frameGeometry()
-            self.move(geo.center() - self.rect().center())
-            return
-        screen = QApplication.primaryScreen()
-        if screen is not None:
-            available = screen.availableGeometry()
-            self.move(available.center() - self.rect().center())
+        self.move(_centered_popup_pos(self.parentWidget(), self.size(), self.mapToGlobal(self.rect().center())))
 
     def _on_triggered(self, button_id: str):
         self._selected = self._button_map.get(str(button_id or ""), QMessageBox.StandardButton.Cancel)
@@ -345,12 +365,15 @@ class _QuickContextMenuDialog(QDialog):
         height = max(44, rows * 34 + separators * 8 + 16)
         return width, height
 
-    def fit_to_screen(self, global_pos: QPoint) -> None:
+    def fit_to_screen(self, global_pos: QPoint, *, parent=None, centered: bool = False) -> None:
         available = _screen_available_geometry(global_pos)
         bounded = _bounded_popup_size(self.size(), available)
         if bounded != self.size():
             self.resize(bounded)
-        self.move(_clamp_popup_pos(global_pos, bounded, available))
+        if centered:
+            self.move(_centered_popup_pos(parent or self.parentWidget(), bounded, global_pos))
+        else:
+            self.move(_clamp_popup_pos(global_pos, bounded, available))
 
     def _on_triggered(self, item_id: str):
         self._selected_id = str(item_id or "")
@@ -427,6 +450,7 @@ def exec_message_box(
         btn = box.button(standard_button)
         if btn is not None:
             btn.setText(label)
+    QTimer.singleShot(0, lambda: box.move(_centered_popup_pos(parent_widget, box.sizeHint())))
     return box.exec()
 
 
@@ -454,7 +478,7 @@ def _fallback_qmenu(parent, global_pos: QPoint, items: list[dict]) -> str | None
     menu.setMaximumSize(bounded)
     if menu.sizeHint().width() > bounded.width():
         menu.setFixedWidth(bounded.width())
-    chosen = menu.exec(_clamp_popup_pos(global_pos, bounded, available))
+    chosen = menu.exec(_centered_popup_pos(parent, bounded, global_pos))
     return action_map.get(chosen)
 
 
@@ -465,7 +489,7 @@ def show_context_menu(parent, global_pos: QPoint, items: list[dict]) -> str | No
     if _quick_available(MENU_QML):
         try:
             dialog = _QuickContextMenuDialog(_widget_parent(parent), normalized)
-            dialog.fit_to_screen(QPoint(global_pos))
+            dialog.fit_to_screen(QPoint(global_pos), parent=parent, centered=True)
             loop = QEventLoop()
             dialog.finished.connect(loop.quit)
             dialog.show()

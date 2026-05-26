@@ -2,9 +2,10 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QFileDialog
 
-from ui.main.main_file_ops import FileOpsMixin
+from ui.main.main_file_ops import FILE_DIALOG_SELECTED_PRIORITY_HOLD_MS, FileOpsMixin
 from ui.main.main_window import MainWindow
 
 
@@ -98,6 +99,47 @@ class MainFileOpsNonfatalTests(unittest.TestCase):
 
         self.assertEqual(seen, [True])
         self.assertFalse(window._file_dialog_active)
+
+    def test_file_dialog_keeps_foreground_priority_until_selection_dispatches(self):
+        window = _FileOpsWindow()
+        callbacks = []
+        window._resume_deferred_editor_ai_release_after_file_open = mock.Mock()
+
+        def _single_shot(delay_ms, callback):
+            callbacks.append((int(delay_ms), callback))
+
+        with (
+            mock.patch.object(QTimer, "singleShot", side_effect=_single_shot),
+            mock.patch.object(QFileDialog, "getOpenFileNames", return_value=(["/tmp/clip.mp4"], "")),
+        ):
+            paths, _ = window._safe_open_file_names("파일 선택", "/tmp", "Media")
+
+        self.assertEqual(paths, ["/tmp/clip.mp4"])
+        self.assertFalse(window._file_dialog_active)
+        self.assertTrue(window._foreground_file_open_requested)
+        self.assertEqual(callbacks[0][0], FILE_DIALOG_SELECTED_PRIORITY_HOLD_MS)
+
+        callbacks[0][1]()
+        self.assertFalse(window._foreground_file_open_requested)
+        window._resume_deferred_editor_ai_release_after_file_open.assert_called_once()
+
+    def test_file_dialog_suspends_startup_background_before_native_dialog(self):
+        window = _FileOpsWindow()
+        window._suspend_startup_background_for_foreground_action = mock.Mock()
+
+        def _open(_parent, _title, _folder, _filter):
+            window._suspend_startup_background_for_foreground_action.assert_called_once()
+            self.assertTrue(window._foreground_file_open_requested)
+            self.assertTrue(window._file_dialog_active)
+            return ([], "")
+
+        with mock.patch.object(QFileDialog, "getOpenFileNames", side_effect=_open):
+            window._safe_open_file_names("파일 선택", "/tmp", "Media")
+
+        window._suspend_startup_background_for_foreground_action.assert_called_once_with(
+            "file_dialog",
+            hold_ms=FILE_DIALOG_SELECTED_PRIORITY_HOLD_MS,
+        )
 
     def test_file_dialog_selection_skips_stale_home_rebuild(self):
         window = _FileOpsWindow()

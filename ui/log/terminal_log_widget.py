@@ -35,6 +35,7 @@ _PROGRESS_ENTRY_CATEGORIES = {
     "cut_boundary",
     "cleanup",
     "timing",
+    "precision",
 }
 _SUPPLEMENTAL_ENTRY_CATEGORIES = {
     "settings",
@@ -58,6 +59,7 @@ _DEFAULT_PROGRESS_DETAILS = {
     "cut_boundary": "장면 탐색",
     "cleanup": "사전 교정",
     "timing": "시간 정렬",
+    "precision": "정밀 작업",
 }
 
 
@@ -190,6 +192,8 @@ def _compact_progress_stage(text: str) -> tuple[str, str]:
         return "roughcut", "러프컷"
     if any(token in lower for token in ("[정제-교정사전]", "교정사전", "교정")):
         return "cleanup", "교정"
+    if "[정밀 자막]" in text or "정밀 자막" in text:
+        return "precision", "정밀"
     if "word_timestamp" in lower or "단어 정밀" in cleaned:
         return "timing", "타이밍"
     if any(token in lower for token in ("[stt", "whisper", "병렬 인식", "진행 상황", "transcription completed")):
@@ -221,6 +225,25 @@ def _friendly_log_entry(raw_line: str) -> tuple[str, str]:
     if "[정제-교정사전]" in text:
         count = _extract_apply_count(text)
         return "cleanup", _with_progress_category("cleanup", "교정", percent, f"사전 {count}" if count else "사전")
+    if "[정밀 자막]" in text or "정밀 자막" in text:
+        if any(token in text for token in ("완료", "끝났")):
+            return "done", "완료: 정밀 자막 작업이 끝났어요."
+        if any(token in text for token in ("실패", "오류", "⚠️")):
+            return "warning", "알림: 정밀 자막 작업을 확인해 주세요."
+        detail = ""
+        if "VAD lattice" in text:
+            detail = "음성 경계"
+        elif "Whisper" in text:
+            detail = "부분 재인식"
+        elif "자막자석" in text:
+            detail = "자막자석"
+        elif "타이밍" in text:
+            detail = "시간 정렬"
+        elif "맞춤법" in text or "띄어쓰기" in text:
+            detail = "문장 교정"
+        elif "시작" in text or "예약" in text:
+            detail = "시작"
+        return "precision", _with_progress_category("precision", "정밀", percent, detail)
 
     if any(token in lower for token in ("[컷 경계]", "컷 경계", "scan-cut", "cut boundary")):
         if any(token in lower for token in ("완료", "재사용", "verified", "confirmed", "cache")):

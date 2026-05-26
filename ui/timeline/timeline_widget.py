@@ -35,6 +35,8 @@ from ui.style import COLORS, button_style
 from core.settings import load_settings, save_settings
 from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 
+TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE = 0
+
 
 def _scan_boundary_sec_value(item) -> float:
     try:
@@ -163,14 +165,14 @@ class TimelineWidget(TimelineTimeWindowMixin, QWidget):
 
         self._base_canvas_height = CANVAS_H
         self._canvas_height_bonus = 0
-        self._base_widget_height = CANVAS_H + MINIMAP_HEIGHT + 28
+        self._base_widget_height = CANVAS_H + MINIMAP_HEIGHT + 34
         self.setMinimumHeight(self._base_widget_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 4, 10, 0)
+        lay.setContentsMargins(10, 0, 10, 0)
         lay.setSpacing(0)
 
         toolbar_checkbox_style = _compact_toolbar_checkbox_style()
@@ -862,14 +864,13 @@ class TimelineWidget(TimelineTimeWindowMixin, QWidget):
         border = getattr(self, "_focus_border", None)
         if border is None:
             return
-        # 변경 금지: 하단 포커스 테두리는 툴바와 맞닿아 있어 원래 높이 끝에
-        # 두면 QSS border가 잘린다. 테두리 두께만큼 위로 올려 파란 선을
-        # 항상 보이게 유지한다.
+        # 변경 금지: 하단 마진에는 포커스 박스의 파란 선 하나만 들어가야 한다.
+        # 별도 하단선을 추가하지 말고 박스 높이만 border 두께만큼 줄인다.
         border.setGeometry(
             0,
             0,
             max(1, self.width()),
-            max(1, self.height() - FOCUS_BORDER_WIDTH),
+            max(1, self.height() - TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE),
         )
         visible = self._has_timeline_focus()
         border.setVisible(visible)
@@ -925,7 +926,7 @@ class TimelineWidget(TimelineTimeWindowMixin, QWidget):
             right = max(left, self.width() - FOCUS_BORDER_WIDTH)
             # 변경 금지: paintEvent의 백업 포커스 라인도 같은 좌표 정책을
             # 써야 QSS 테두리와 서로 어긋나거나 하단에서 잘리지 않는다.
-            bottom = max(top, self.height() - (FOCUS_BORDER_WIDTH * 2))
+            bottom = max(top, self.height() - FOCUS_BORDER_WIDTH)
             painter.drawLine(left, top, right, top)
             painter.drawLine(left, bottom, right, bottom)
             painter.drawLine(left, top, left, bottom)

@@ -30,6 +30,9 @@ from ui.project.project_session_runtime import (
     set_runtime_multiclip_state,
 )
 
+FILE_DIALOG_SELECTED_PRIORITY_HOLD_MS = 4500
+FILE_DIALOG_CANCEL_PRIORITY_HOLD_MS = 500
+
 
 def _reusable_cache_paths() -> list[str]:
     return _editor_reusable_cache_paths()
@@ -145,6 +148,7 @@ class FileOpsMixin:
 
     def _finish_file_dialog_foreground(self, result=None):
         self._file_dialog_active = False
+        self._schedule_foreground_file_open_priority_clear(result)
         if self._dialog_result_has_selection(result):
             self._pending_home_auto_source_rebuild = False
             return
@@ -166,7 +170,26 @@ class FileOpsMixin:
 
         QTimer.singleShot(0, _rebuild_if_home)
 
+    def _schedule_foreground_file_open_priority_clear(self, result=None):
+        delay_ms = (
+            FILE_DIALOG_SELECTED_PRIORITY_HOLD_MS
+            if self._dialog_result_has_selection(result)
+            else FILE_DIALOG_CANCEL_PRIORITY_HOLD_MS
+        )
+
+        def _clear_priority():
+            self._foreground_file_open_requested = False
+            resume_release = getattr(self, "_resume_deferred_editor_ai_release_after_file_open", None)
+            if callable(resume_release):
+                resume_release()
+
+        QTimer.singleShot(delay_ms, _clear_priority)
+
     def _run_foreground_file_dialog(self, opener):
+        self._foreground_file_open_requested = True
+        suspend_startup = getattr(self, "_suspend_startup_background_for_foreground_action", None)
+        if callable(suspend_startup):
+            suspend_startup("file_dialog", hold_ms=FILE_DIALOG_SELECTED_PRIORITY_HOLD_MS)
         self._file_dialog_active = True
         result = None
         try:

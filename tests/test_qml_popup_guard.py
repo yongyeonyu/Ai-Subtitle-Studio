@@ -4,7 +4,8 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import QPoint, QSize
+from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from ui.dialogs import qml_popup
 
@@ -32,6 +33,98 @@ class QmlPopupGuardTests(unittest.TestCase):
                         )
 
         self.assertEqual(reply, QMessageBox.StandardButton.No)
+
+    def test_context_menu_center_pos_ignores_click_point(self):
+        parent = QWidget()
+        try:
+            parent.resize(400, 300)
+            parent.move(40, 50)
+            popup_size = QSize(120, 80)
+
+            first = qml_popup._centered_popup_pos(parent, popup_size, QPoint(1, 1))
+            second = qml_popup._centered_popup_pos(parent, popup_size, QPoint(700, 500))
+
+            self.assertEqual(first, second)
+            center = qml_popup._popup_parent_center(parent, QPoint(1, 1))
+            self.assertAlmostEqual(first.x() + popup_size.width() / 2, center.x(), delta=1)
+            self.assertAlmostEqual(first.y() + popup_size.height() / 2, center.y(), delta=1)
+        finally:
+            parent.deleteLater()
+
+    def test_popup_parent_center_uses_visible_top_level_window_not_bottom_child(self):
+        window = QWidget()
+        child = QWidget(window)
+        try:
+            window.resize(900, 700)
+            window.move(80, 90)
+            child.setGeometry(0, 640, 900, 48)
+            window.show()
+            self.app.processEvents()
+
+            center = qml_popup._popup_parent_center(child, QPoint(1, 1))
+
+            self.assertAlmostEqual(center.x(), window.frameGeometry().center().x(), delta=1)
+            self.assertAlmostEqual(center.y(), window.frameGeometry().center().y(), delta=1)
+        finally:
+            window.close()
+            window.deleteLater()
+
+    def test_fallback_context_menu_execs_at_centered_position(self):
+        parent = QWidget()
+        parent.resize(400, 300)
+        expected_pos = QPoint(123, 234)
+        captured = {}
+
+        class _Action:
+            def setEnabled(self, _enabled):
+                pass
+
+            def setCheckable(self, _checkable):
+                pass
+
+            def setChecked(self, _checked):
+                pass
+
+        class _Menu:
+            def __init__(self, _parent):
+                self.action = _Action()
+
+            def setStyleSheet(self, _style):
+                pass
+
+            def addAction(self, _label):
+                return self.action
+
+            def addSeparator(self):
+                pass
+
+            def sizeHint(self):
+                return QSize(180, 92)
+
+            def setMaximumSize(self, _size):
+                pass
+
+            def setFixedWidth(self, _width):
+                pass
+
+            def exec(self, pos):
+                captured["pos"] = QPoint(pos)
+                return self.action
+
+        try:
+            with mock.patch.object(qml_popup, "QMenu", _Menu):
+                with mock.patch.object(qml_popup, "_centered_popup_pos", return_value=expected_pos) as centered:
+                    chosen = qml_popup._fallback_qmenu(
+                        parent,
+                        QPoint(700, 500),
+                        [{"id": "open", "label": "열기"}],
+                    )
+
+            self.assertEqual(chosen, "open")
+            self.assertEqual(captured["pos"], expected_pos)
+            centered.assert_called_once()
+        finally:
+            parent.deleteLater()
 
 
 if __name__ == "__main__":

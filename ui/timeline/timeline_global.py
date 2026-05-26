@@ -48,7 +48,20 @@ MINIMAP_MARKER_LANE_H = 28
 # recovered space can make STT1/STT2 preview rows taller without changing the
 # rest of the timeline scenario.
 MINIMAP_HEIGHT = 89
-GLOBAL_CANVAS_CONTENT_BOTTOM_PAD = max(2, FOCUS_BORDER_WIDTH)
+# 변경 금지: 초록 viewport 하단은 빈 하단 마진까지 감싸지 말고
+# 글로벌 캔버스 콘텐츠 하단에 붙인다. 이동량은 timeline focus box도 공유한다.
+GLOBAL_CANVAS_VIEWPORT_BASE_BOTTOM_CLEARANCE = max(8, FOCUS_BORDER_WIDTH * 4)
+GLOBAL_CANVAS_BOTTOM_BOX_RAISE = FOCUS_BORDER_WIDTH * 6
+GLOBAL_CANVAS_VIEWPORT_CONTENT_SEAL = FOCUS_BORDER_WIDTH + 1
+GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE = (
+    GLOBAL_CANVAS_VIEWPORT_BASE_BOTTOM_CLEARANCE
+    + GLOBAL_CANVAS_BOTTOM_BOX_RAISE
+    + GLOBAL_CANVAS_VIEWPORT_CONTENT_SEAL
+)
+GLOBAL_CANVAS_CONTENT_BOTTOM_PAD = (
+    GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE - GLOBAL_CANVAS_VIEWPORT_CONTENT_SEAL
+)
+GLOBAL_CANVAS_VIEWPORT_SIDE_OVERSCAN = max(1, FOCUS_BORDER_WIDTH // 2)
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -561,18 +574,19 @@ class GlobalCanvas(GlobalCanvasBase):
         p.setBrush(Qt.BrushStyle.NoBrush)
         # 변경 금지: 초록 뷰포트 테두리의 하단을 최하단에 붙이면
         # QPainter pen 중심선이 클립되어 하단선이 흐려진다.
+        # 하단선을 따로 추가하지 말고 QRect height가 bottom 좌표를 포함하게 한다.
         border_inset = max(1, FOCUS_BORDER_WIDTH)
+        viewport_bottom_y = max(border_inset, self.height() - GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE)
+        viewport_left_x = int(self.view_start * w) - GLOBAL_CANVAS_VIEWPORT_SIDE_OVERSCAN
+        viewport_right_x = int(self.view_end * w) + GLOBAL_CANVAS_VIEWPORT_SIDE_OVERSCAN - 1
         p.drawRect(
-            view_rect := QRect(
-                int(self.view_start * w),
+            QRect(
+                viewport_left_x,
                 border_inset,
-                max(1, int((self.view_end - self.view_start) * w) - FOCUS_BORDER_WIDTH),
-                max(1, self.height() - (border_inset * 3)),
+                max(1, viewport_right_x - viewport_left_x + 1),
+                max(1, viewport_bottom_y - border_inset + 1),
             )
         )
-        p.setPen(QPen(viewport_color, FOCUS_BORDER_WIDTH))
-        bottom_y = max(view_rect.top(), view_rect.bottom() - 1)
-        p.drawLine(view_rect.left(), bottom_y, view_rect.right(), bottom_y)
 
         # 선택 클립 라벨 (우상단 숫자만)
         if self._clip_label:

@@ -98,3 +98,61 @@
 - 장시간 High 검증은 성공 여부와 별개로 memory pressure snapshot을 같이 기록한다.
   - 이유: Tinyping long high 1회는 pass했지만 run 전후 pressure snapshot이 `critical`을 기록했다.
   - 다음 원칙: long high 최적화는 elapsed만 보지 말고 `runtime_monitor`, `subtitle_generation_monitor`, peak RSS, residual worker를 함께 본다.
+
+### 2026-05-27
+
+- 하단 타임라인/글로벌 캔버스 영역을 전체 0-margin으로 붙이지 않는다.
+  - 이유: 위쪽 gap을 없애는 과정에서 root bottom margin까지 0으로 만들면 하단 파란 테두리/상태 라인이 창 끝에 붙어 클리핑되거나 사라져 보일 수 있다.
+  - 다음 원칙: 위쪽과 내부 타임라인 gap은 0으로 줄이더라도, 하단 외부에는 최소 3-4px clearance를 유지하고 실제 앱에서 하단 테두리 표시를 확인한다.
+
+- 글로벌 미니맵 초록 viewport 테두리는 root margin만으로 보호했다고 판단하지 않는다.
+  - 이유: outer bottom margin이 있어도 QPainter viewport rect 하단선 자체가 minimap widget 최하단에 가까우면 선 두께의 일부만 보일 수 있다.
+  - 다음 원칙: 하단 테두리 문제는 outer margin과 minimap 내부 bottom clearance를 함께 확인하고, 초록 viewport 하단선은 최소 16px 위에서 그린다.
+
+- 하단 초록 viewport 테두리가 전부 보이는 것만으로 OK 처리하지 않는다.
+  - 이유: 8px clearance는 선이 잘리지 않는 최소 수준일 뿐, 실제 앱에서는 하단 조작 영역과 붙어 보여 여백이 부족하다는 판단을 받았다.
+  - 다음 원칙: 하단 테두리 QA는 "선이 보임"이 아니라 "선 아래 여유가 체감됨"을 기준으로 삼고, root bottom margin과 minimap 내부 bottom clearance를 16px 이상으로 둔다.
+
+- 파일 열기 foreground 동작보다 에디터 AI 모델 정리를 먼저 실행하지 않는다.
+  - 이유: `editor-release-ai-models`가 Ollama/STT/GPU 정리를 잡고 있으면 사용자가 파일 열기를 눌러도 다이얼로그/선택 dispatch가 정리 완료 로그 뒤로 밀려 보일 수 있다.
+  - 다음 원칙: 파일/폴더 다이얼로그 진입 직전에는 foreground file-open priority를 세우고, post-generation AI release와 cache trim은 파일 선택이 dispatch된 뒤 재시도한다.
+
+- 하단 메뉴 버튼에서 띄운 확인/오류 팝업을 버튼 parent 기준으로 중앙 정렬하지 않는다.
+  - 이유: parent가 `GlobalMenuBar`이면 QML/QMessageBox가 앱 중앙이 아니라 하단 바 중앙에 떠서 사용자가 팝업 위치를 NG로 판단한다.
+  - 다음 원칙: 모든 확인/오류/정보 modal은 즉시 클릭한 버튼이 아니라 visible top-level window 중심을 기준으로 배치하고, 하단 버튼 호출 케이스를 별도 테스트한다.
+
+- 정밀 자막 작업에서 cut boundary point와 clip boundary span을 섞지 않는다.
+  - 이유: `boundary_times`에는 float 초 단위 컷 포인트가 들어올 수 있는데 이를 `clip_boundaries`로 넘기면 recheck path가 `.get()`을 호출하며 `'float' object has no attribute 'get'`로 실패한다.
+  - 다음 원칙: 품질 pipeline의 `clip_boundaries`에는 `{start,end}` span row만 넘기고, 컷 포인트/임시 경계는 magnet과 canvas state에만 전달한다.
+
+- 사용자가 버튼으로 실행하는 수동 작업은 완료/실패 때만 로그를 남기지 않는다.
+  - 이유: 정밀 자막 작업처럼 긴 작업이 시작 직후 UI status만 바꾸면 터미널 로그 위젯과 macOS Terminal에서는 아무 작업도 안 하는 것처럼 보이고, 중간 단계 디버깅도 어렵다.
+  - 다음 원칙: 수동 작업은 시작 예약, 실제 시작, 주요 단계, 완료, 실패를 `get_logger().log(..., stage=...)`로 UI 터미널에 남기고, macOS Terminal 디버깅용 상세 값은 `terminal_debug(..., stage=...)`로 함께 남긴다.
+
+- 정밀/후처리처럼 VAD, 오디오 준비, Whisper를 포함하는 수동 작업을 UI 스레드에서 실행하지 않는다.
+  - 이유: `QTimer.singleShot(0, heavy_func)`는 비동기가 아니라 다음 Qt 이벤트에서 메인 스레드가 무거운 작업을 실행하므로 macOS 모래시계/무응답으로 보인다.
+  - 다음 원칙: 무거운 수동 작업은 background worker에서 계산하고, status/progress/result/error만 Qt signal로 UI 스레드에 반영한다. UI 반영 단계에서 실패해도 running 상태와 worker 핸들은 반드시 해제한다.
+
+- 하단 파란 테두리/자막선은 외부 margin 하나만 올려서 해결했다고 판단하지 않는다.
+  - 이유: root bottom margin을 올려도 글로벌 캔버스 내부 subtitle lane의 파란 하단선과 Timeline focus border가 각각 위로 올라오지 않으면 실제 앱에서는 여전히 하단 버튼/창 경계에 묻혀 안 보일 수 있다.
+  - 다음 원칙: 하단 라인 QA는 root bottom clearance, global canvas content bottom pad, timeline focus border bottom clearance를 함께 올리고 테스트로 잠근다.
+
+- 앱 시작 직후 홈 자동 소스 스캔/LLM 점검을 즉시 돌려 파일 선택과 경쟁시키지 않는다.
+  - 이유: 첫 실행 직후 사용자는 보통 바로 파일/프로젝트를 고르는데, iCloud/NAS 스캔, LLM warmup/preflight, 모델 확인, post-generation AI release retry가 같은 시간대에 붙으면 macOS 파일 선택기가 늦게 반응한다.
+  - 다음 원칙: startup optional work는 짧은 quiet window 뒤로 미루고, 파일/홈 foreground action이 감지되면 optional startup과 AI release retry가 파일 선택 dispatch 이후까지 양보하게 한다.
+
+- 글로벌 캔버스 하단 콘텐츠 pad는 초록 viewport 테두리보다 작게 두지 않는다.
+  - 이유: 초록 테두리 하단선 clearance가 콘텐츠 bottom pad보다 크면 보라/파란 글로벌 캔버스 막대가 테두리 바깥 아래로 내려가 보인다.
+  - 다음 원칙: 초록 테두리 위치가 승인된 상태에서는 테두리를 다시 움직이지 말고, 글로벌 캔버스의 content bottom pad를 viewport bottom clearance 이상으로 맞춘다.
+
+- 하단 마진에 파란 선을 보이게 하려고 별도 하단선을 추가하거나 포커스 테두리를 크게 위로 당기지 않는다.
+  - 이유: 마진 영역에는 파란 박스의 하단선 하나만 딱 맞게 들어가야 하는데, 별도 선이나 과한 bottom clearance를 주면 빨간 박스 영역처럼 여러 줄이 겹쳐 보인다.
+  - 다음 원칙: 하단 포커스 표시는 선을 새로 그리는 문제가 아니라 기존 파란 박스의 height/geometry를 border 두께만큼만 조절해서 네모 박스가 유지되게 처리한다.
+
+- 글로벌 캔버스 초록 viewport 하단 마진을 별도 보정선으로 처리하지 않는다.
+  - 이유: 2026-05-27 실제 앱에서 초록 viewport 박스 아래에 빨간 박스로 지적된 하단 여백이 남았고, 선을 추가하면 네모 박스가 아니라 겹친 줄처럼 보였다.
+  - 다음 원칙: 초록 viewport 하단은 `GLOBAL_CANVAS_VIEWPORT_BOTTOM_CLEARANCE`와 `QRect` height로만 맞추고, `drawRect` 이후 별도 `drawLine`을 덧그리지 않는다.
+
+- 하단 파란 포커스 박스가 안 보일 때 글로벌 캔버스 내부 선만 조정하지 않는다.
+  - 이유: 실제 문제는 하단 global menu와 timeline frame이 너무 가까워서 파란 focus box 하단이 버튼/창 경계에 먹히는 것이었고, 내부 미니맵/viewport 선 조정만으로는 해결되지 않았다.
+  - 다음 원칙: 파란 하단선 표시 문제는 `EDITOR_TIMELINE_BOTTOM_CLEARANCE`로 timeline frame 전체를 위로 올리고, 비디오 프리뷰 폭은 줄어든 높이의 16:9 계산을 따라 다시 잠근다.

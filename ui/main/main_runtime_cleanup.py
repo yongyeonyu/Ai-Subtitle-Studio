@@ -1053,6 +1053,65 @@ class MainRuntimeCleanupMixin:
             pass
         return False
 
+    def _foreground_file_open_priority_active(self) -> bool:
+        return bool(
+            getattr(self, "_foreground_file_open_requested", False)
+            or getattr(self, "_file_dialog_active", False)
+            or getattr(self, "_home_foreground_action_pending", False)
+        )
+
+    def _file_open_can_defer_editor_ai_release(self) -> bool:
+        return not bool(
+            getattr(self, "_fast_exit_requested", False)
+            or getattr(self, "_quick_exit_requested", False)
+        )
+
+    def _remember_deferred_editor_ai_release_after_file_open(
+        self,
+        *,
+        force: bool,
+        preserve_roughcut_status: bool,
+        ollama_timeout_sec: float | None,
+    ) -> None:
+        self._deferred_editor_ai_release_after_file_open = {
+            "force": bool(force),
+            "preserve_roughcut_status": bool(preserve_roughcut_status),
+            "ollama_timeout_sec": ollama_timeout_sec,
+        }
+
+    def _schedule_editor_ai_release_retry_after_file_open(
+        self,
+        *,
+        force: bool,
+        preserve_roughcut_status: bool,
+        ollama_timeout_sec: float | None,
+        delay_ms: int = 900,
+    ) -> None:
+        self._remember_deferred_editor_ai_release_after_file_open(
+            force=force,
+            preserve_roughcut_status=preserve_roughcut_status,
+            ollama_timeout_sec=ollama_timeout_sec,
+        )
+        if bool(getattr(self, "_editor_ai_release_retry_scheduled", False)):
+            return
+        self._editor_ai_release_retry_scheduled = True
+
+        def _retry_release_after_file_open():
+            self._editor_ai_release_retry_scheduled = False
+            self._resume_deferred_editor_ai_release_after_file_open()
+
+        QTimer.singleShot(max(0, int(delay_ms)), _retry_release_after_file_open)
+
+    def _resume_deferred_editor_ai_release_after_file_open(self) -> None:
+        pending = getattr(self, "_deferred_editor_ai_release_after_file_open", None)
+        if not isinstance(pending, dict):
+            return
+        if self._foreground_file_open_priority_active() and self._file_open_can_defer_editor_ai_release():
+            self._schedule_editor_ai_release_retry_after_file_open(**pending)
+            return
+        self._deferred_editor_ai_release_after_file_open = None
+        self._release_ai_models_for_editor_mode(**pending)
+
     def _release_ai_models_for_editor_mode(
         self,
         *,
@@ -1063,6 +1122,13 @@ class MainRuntimeCleanupMixin:
         if getattr(self, "_editor_ai_release_in_progress", False):
             return
         editor = getattr(self, "_editor_widget", None)
+        if self._foreground_file_open_priority_active() and self._file_open_can_defer_editor_ai_release():
+            self._schedule_editor_ai_release_retry_after_file_open(
+                force=force,
+                preserve_roughcut_status=preserve_roughcut_status,
+                ollama_timeout_sec=ollama_timeout_sec,
+            )
+            return
         if not force and (self._is_editor_ai_busy(editor) or self._is_backend_ai_busy()):
             return
         if not force and self._is_editor_actively_editing():
@@ -1116,13 +1182,27 @@ class MainRuntimeCleanupMixin:
                 )
 
             def _release():
+                def _defer_if_file_open() -> bool:
+                    if self._foreground_file_open_priority_active() and self._file_open_can_defer_editor_ai_release():
+                        self._remember_deferred_editor_ai_release_after_file_open(
+                            force=force,
+                            preserve_roughcut_status=preserve_roughcut_status,
+                            ollama_timeout_sec=ollama_timeout_sec,
+                        )
+                        return True
+                    return False
+
                 try:
+                    if _defer_if_file_open():
+                        return
                     if self._video_playback_runtime_reserved(editor) and not getattr(self, "_fast_exit_requested", False):
                         return
                     if not force and (self._is_editor_ai_busy(editor) or self._is_backend_ai_busy()):
                         return
                     stopped_runtime = False
                     for backend_name in ("backend", "backend_fast"):
+                        if _defer_if_file_open():
+                            return
                         backend = getattr(self, backend_name, None)
                         processor = getattr(backend, "video_processor", None) if backend is not None else None
                         if processor is None:
@@ -1143,6 +1223,8 @@ class MainRuntimeCleanupMixin:
                             stopped_runtime = True
                     except Exception as exc:
                         _log_cleanup_step_failure("editor ai release live stt stop", exc)
+                    if _defer_if_file_open():
+                        return
                     if self._video_playback_runtime_reserved(editor) and not getattr(self, "_fast_exit_requested", False):
                         return
                     try:
@@ -1172,6 +1254,8 @@ class MainRuntimeCleanupMixin:
                             stopped_runtime = True
                     except Exception as exc:
                         get_logger().log(f"⚠️ 에디터 모드 LLM 모델 종료 실패: {exc}")
+                    if _defer_if_file_open():
+                        return
                     if self._video_playback_runtime_reserved(editor) and not getattr(self, "_fast_exit_requested", False):
                         return
                     self._clear_runtime_memory_caches(include_gpu=True)
