@@ -16,8 +16,9 @@ Accuracy-first desktop subtitle production for long-form video, rough cuts, spea
 
 AI Subtitle Studio is built for one primary outcome: produce highly accurate subtitles on the first pass, even when that takes longer than a fast draft. The goal is to reduce manual correction time by combining STT, audio preprocessing, VAD, cut-boundary alignment, LLM cleanup, subtitle timing rules, LoRA personalization, and project-aware editing in one desktop workflow.
 
-Current development has moved to the macOS native/App Store branch. The app is now Apple Silicon first and macOS-only on this branch: Swift WhisperKit persistent STT is the default primary route, native backend policies are the default for STT, audio extraction, and cut-boundary scanning, editor rendering defaults to Qt Widgets/QPainter 2D, and packaging work targets a signed sandboxed macOS `.app`.
-The macOS packaging scripts under `packaging/macos/` can now build and validate the `.app`, compile the Swift native core and WhisperKit worker, create a local beta `.dmg`, run a batch-style `.command` updater for this Mac, prepare Developer ID notarization, build a signed App Store package, and validate or upload that package once Apple Developer credentials are available.
+Current development stays on the existing Python/PyQt6 source app. Active work focuses on accuracy-first subtitle generation, editor/timeline stability, project save/reopen safety, and real-app verification on macOS Apple Silicon. Native `.swift` / `.cpp` assets and packaging scripts may still be used for bounded acceleration or packaging support, but broad native migration is not the default roadmap unless the owner explicitly reopens it.
+
+The macOS packaging scripts under `packaging/macos/` still support local `.app` validation, Swift native helper builds, local updater flows, DMG creation, notarization prep, and App Store packaging. Treat those as opt-in release tooling rather than the default daily development path.
 
 ## Core Workflows
 
@@ -190,19 +191,32 @@ Do not commit private media, generated output, API keys, NAS paths, iCloud paths
 
 Project JSON numbered backups are stored in `projects/프로젝트백업/` next to the active project file. Legacy numbered backups in the project root are moved into that folder during the next save.
 
-## Handoff Documents
+## Documentation Map
 
-The repository uses five handoff documents for continuation between chats:
+Use the documents below as the current navigation set for this repository:
 
 | File | Role |
 | --- | --- |
-| `AGENTS.md` | Agent bootstrap rules and release-handoff rules. |
-| `ACTION_ITEMS.md` | Remaining work queue only. |
-| `File_structure.txt` | Actual project tree only. |
-| `README.md` | Product purpose, setup, and current direction. |
-| `RELEASE_v*.md` | One release note, based only on the immediately previous release. |
+| `AGENTS.md` | Agent bootstrap rules, role split, and guarded working rules. |
+| `ACTION_ITEMS.md` | Single source of truth for the active execution queue and hard rules. |
+| `docs/README.md` | Documentation index and read order. |
+| `docs/PROJECT_STATE.md` | Current product direction, constraints, and verified scope. |
+| `docs/HANDOFF.md` | Latest continuation snapshot, open risks, and next step. |
+| `README.md` | Setup, product summary, and high-level operational guidance. |
+| `RELEASE_v*.md` | Release checkpoints kept for recent continuity only. |
+| `test_case.md` | Validation expectations and fixture guidance. |
+| `test_result.md` | Latest recorded validation outcomes. |
+| `anti_agents.md` | Antigravity and `잼민이` delegation rules. |
+| `idea.md` | Shared scratchpad for ideas that still need `덱스` review before execution. |
 
-If a new chat receives only `AGENTS.md`, the assistant must find and read the other four files automatically.
+Recommended read order for a fresh continuation:
+
+1. `AGENTS.md`
+2. `ACTION_ITEMS.md`
+3. `docs/README.md`
+4. `docs/PROJECT_STATE.md`
+5. `docs/HANDOFF.md`
+6. Relevant release note, validation doc, or support doc for the exact task
 
 ## Current State
 

@@ -17,12 +17,25 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 Protected agent roles:
 
-- `덱스`: head operator and implementation owner. Reads `AGENTS.md` and `ACTION_ITEMS.md`, protects dirty worktree boundaries, applies narrow patches, runs verification, and leaves concise Korean reports for the owner.
-- `한결`: senior developer reviewer. Reviews architecture boundaries, maintainability, rollback safety, Apple Silicon/macOS realities, state ownership, resource lifetime, and whether a change risks subtitle quality.
-- `서린`: strict QE reviewer. Assumes the implementation may be wrong, demands real fixture evidence, checks subtitle count/final segment count, save/reload, seek/playhead, overlay, gutter, minimap, memory pressure, and misleading test confidence.
-- `유진`: editor workflow reviewer. Reviews whether real subtitle editing flows are efficient, understandable, and safe for the user's work, without proposing UI/UX changes beyond the owner's explicit scope.
+- `덱스`: head operator and implementation owner on the Codex side. Reads `AGENTS.md` and `ACTION_ITEMS.md`, protects dirty worktree boundaries, applies narrow patches, runs verification, and leaves concise Korean reports for the owner.
+- `한결`: senior developer reviewer on the Antigravity side. Reviews architecture boundaries, maintainability, rollback safety, Apple Silicon/macOS realities, state ownership, resource lifetime, and whether a change risks subtitle quality.
+- `서린`: strict QE reviewer on the Antigravity side. Assumes the implementation may be wrong, demands real fixture evidence, checks subtitle count/final segment count, save/reload, seek/playhead, overlay, gutter, minimap, memory pressure, and misleading test confidence.
+- `유진`: editor workflow reviewer on the Antigravity side. Reviews whether real subtitle editing flows are efficient, understandable, and safe for the user's work, without proposing UI/UX changes beyond the owner's explicit scope.
+- `잼민이`: utility delegate for owner-directed chores. Handles simple repetitive work, lightweight file reads, doc sync, narrow code search, bounded refactoring prep, and other clearly scoped support tasks before escalating to the specialist viewpoints above when needed.
 
-When planning meaningful app changes, Dex should convene `덱스`, `한결`, `서린`, and `유진` as separate review viewpoints before giving the owner a recommendation.
+Role ownership default:
+
+- Codex owns `덱스` implementation work.
+- Antigravity owns the `한결`, `서린`, and `유진` review, QE/QA, and workflow-review viewpoints.
+- `잼민이` may assist Antigravity with prep work, evidence gathering, and owner-directed chores.
+- At suitable checkpoints, `덱스` may explicitly assign file-scoped code review to Antigravity for one or more named files, then fold that feedback back into the final implementation or rollback decision.
+- When the active steering queue becomes crowded, or when `덱스` judges a task to be bounded, low-risk, and reviewable, `덱스` may proactively delegate that slice to `잼민이` without waiting for separate owner wording, then supervise the result before adoption.
+- As a default working style, when the owner assigns a non-trivial task to `덱스`, `덱스` should look for at least one bounded support slice that `잼민이` can handle in parallel such as file reading, candidate scouting, targeted review, doc sync, or validation prep, unless the task is too small, too urgent, or too risky to split safely.
+- When `잼민이` reports that a delegated task is done, `덱스` should treat that as a review checkpoint: pull the result immediately, inspect it before assigning more work, and decide accept / revise / defer before the next batch continues.
+- If the owner says `잼민이 멈춰`, treat that as an immediate stop order for the current Antigravity task. `잼민이` should stop the in-flight work, avoid starting follow-up work, and leave at most a three-line status note before waiting.
+- If the owner says `잼민이 하던 일 모두 취소`, treat that as a broader cancel order: stop the current task, cancel queued follow-up batches or auto-continuation, and remain idle until the next explicit owner or `덱스` instruction.
+
+When planning meaningful app changes, Dex should still gather the `한결`, `서린`, and `유진` viewpoints before giving the owner a recommendation, but those review passes should default to the Antigravity side unless the owner explicitly asks otherwise.
 
 ## 1. Think Before Coding
 

@@ -146,6 +146,17 @@ class EditorPipelineCompletionMixin:
             )
         )
 
+    def _run_generation_complete_background_work(self, main_w) -> None:
+        if main_w is not None:
+            self._run_generation_complete_cleanup(main_w)
+        self._load_generation_complete_waveform()
+
+    def _schedule_generation_complete_background_work(self, main_w) -> None:
+        self._pipeline_single_shot(
+            0,
+            lambda main_window=main_w: self._run_generation_complete_background_work(main_window),
+        )
+
     def _schedule_generation_complete_followups(self, main_w, *, suppress_post_generation_tasks: bool) -> None:
         if suppress_post_generation_tasks:
             self._pipeline_single_shot(0, self._post_completion_sync)
@@ -253,6 +264,5 @@ class EditorPipelineCompletionMixin:
             return
         if main_w is not None:
             self._queue_generation_complete_learning(main_w)
-            self._run_generation_complete_cleanup(main_w)
-        self._load_generation_complete_waveform()
         self._schedule_generation_complete_followups(main_w, suppress_post_generation_tasks=False)
+        self._schedule_generation_complete_background_work(main_w)

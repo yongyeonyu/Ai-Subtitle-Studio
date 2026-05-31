@@ -648,6 +648,28 @@ class SubtitleTextEdit(QTextEdit):
         if shortcut is not None:
             # 텍스트 편집 중 Space는 공백 입력이므로 창 재생 단축키가 영상을 시작하지 못하게 잠시 끈다.
             _run_text_edit_ui_step("focusInEvent disable space shortcut", lambda: shortcut.setEnabled(False))
+        owner_lookup = _qt_best_effort_getattr(parent, "window", None, step="focusInEvent parent window")
+        owner = _run_text_edit_ui_step(
+            "focusInEvent resolve owner window",
+            owner_lookup,
+            default=None,
+        ) if callable(owner_lookup) else None
+        prioritize = _qt_best_effort_getattr(
+            owner,
+            "_prioritize_manual_editor_interaction_runtime",
+            None,
+            step="focusInEvent prioritize manual interaction runtime",
+        )
+        if callable(prioritize):
+            _run_text_edit_ui_step(
+                "focusInEvent prioritize manual interaction runtime call",
+                lambda: prioritize(
+                    editor=parent,
+                    reason="editor_text_focus",
+                    roughcut_reason="편집 시작",
+                ),
+                default=None,
+            )
         # 💡 [클릭 오지랖 완벽 삭제] 창이 켜지면서 커서가 잡힐 때 상태가 바뀌는 것을 원천 차단!
         # ✅ 수정
         qt_parent = self.parent()

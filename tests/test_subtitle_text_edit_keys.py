@@ -338,6 +338,28 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.deleteLater()
             self.app.processEvents()
 
+    def test_focus_in_prioritizes_manual_editor_runtime_after_generation(self):
+        edit = SubtitleTextEdit()
+        shortcut = SimpleNamespace(setEnabled=Mock())
+        owner = SimpleNamespace(_prioritize_manual_editor_interaction_runtime=Mock())
+        parent = SimpleNamespace(
+            space_shortcut=shortcut,
+            window=lambda: owner,
+        )
+        edit._parent_widget = parent
+        try:
+            edit.focusInEvent(QFocusEvent(QEvent.Type.FocusIn))
+
+            owner._prioritize_manual_editor_interaction_runtime.assert_called_once_with(
+                editor=parent,
+                reason="editor_text_focus",
+                roughcut_reason="편집 시작",
+            )
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
     def test_focus_out_event_ignores_deleted_space_shortcut(self):
         edit = SubtitleTextEdit()
         deleted_shortcut = SimpleNamespace(

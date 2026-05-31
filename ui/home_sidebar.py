@@ -8,11 +8,10 @@ import time
 from html import escape
 
 from PyQt6.QtCore import Qt, QTimer, QSize, QDateTime
-from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QSizePolicy, QMenu, QDialog,
-    QVBoxLayout, QDialogButtonBox, QPlainTextEdit,
+    QVBoxLayout, QPlainTextEdit,
 )
 
 from core.runtime import config

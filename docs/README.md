@@ -26,6 +26,16 @@
 
 현재 체크아웃에는 `check_list.md`가 없습니다. 없는 파일은 건너뛰되, 위 순서를 기본 진입 순서로 유지합니다. 위 문서를 다 본 뒤에는 저장소 상황에 따라 `CODEMAP.md`, 최신 `RELEASE_v*.md`, `README.md`, `test_case.md`, `test_result.md`, `waste_action_item.md`, `lesson_n_learned.md`를 추가로 읽는 것이 안전합니다.
 
+## Document map
+
+| Group | Files | Purpose |
+| --- | --- | --- |
+| Bootstrap | `AGENTS.md`, `ACTION_ITEMS.md`, `docs/README.md`, `docs/PROJECT_STATE.md`, `docs/HANDOFF.md` | 다음 세션이 가장 먼저 읽어야 하는 운영 문서입니다. |
+| Product and structure reference | `README.md`, `docs/FEATURE_REGISTRY.md`, `docs/ARCHITECTURE.md`, `docs/VALIDATION.md`, `CODEMAP.md`, `LONG_FILE_OWNERSHIP_MAP.md` | 제품 범위, 구조 경계, owner 파일, 검증 경로를 찾을 때 사용합니다. |
+| Checkpoint and validation record | 최신 `RELEASE_v*.md`, `test_case.md`, `test_result.md` | 최근 릴리스 상태와 검증 기대치/결과를 확인할 때 사용합니다. |
+| Delegation and idea scratchpad | `anti_agents.md`, `idea.md` | Antigravity 역할 분담, `잼민이` 위임 규칙, 실행 전 아이디어 토론 메모를 남길 때 사용합니다. |
+| Learning and rejects | `lesson_n_learned.md`, `waste_action_item.md` | 반복 금지 실수와 폐기된 아이디어를 다시 확인할 때 사용합니다. |
+
 ## Stable project docs
 
 다음 문서는 저장소 구조와 작업 규칙을 설명하는 안정 문서입니다.
@@ -43,6 +53,8 @@
 - `AGENTS.md`
 - `ACTION_ITEMS.md`
 - `docs/HANDOFF.md`
+- `anti_agents.md`
+- `idea.md`
 - `test_case.md`
 - `test_result.md`
 - `lesson_n_learned.md`

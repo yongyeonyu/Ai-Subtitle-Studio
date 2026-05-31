@@ -4,7 +4,6 @@
 
 from core.engine.subtitle_timing_contracts import (
     COMMON_SPLIT_GUARD_SCHEMA,
-    TIMING_FUSION_SCHEMA,
     build_timing_frame_fields,
     build_timing_fusion_policy,
     compact_timing_text,

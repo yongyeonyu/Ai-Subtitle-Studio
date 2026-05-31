@@ -616,6 +616,19 @@ class EditorTimelineVideoMixin(
             except Exception:
                 pass
             return
+        if getattr(self, "_pending_scrub_sec", None) is None:
+            owner_getter = getattr(self, "window", None)
+            owner = owner_getter() if callable(owner_getter) else None
+            prioritize = getattr(owner, "_prioritize_manual_editor_interaction_runtime", None)
+            if callable(prioritize):
+                try:
+                    prioritize(
+                        editor=self,
+                        reason="editor_scrub_start",
+                        roughcut_reason="편집 시작",
+                    )
+                except Exception:
+                    pass
 
         sec = self._snap_to_frame(sec)
         self._reset_playhead_smoothing(sec)

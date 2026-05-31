@@ -566,13 +566,15 @@ class MainRuntimeCleanupMixin:
         except Exception:
             return False
 
-    def _prioritize_video_playback_runtime(
+    def _prioritize_post_generation_foreground_runtime(
         self,
         *,
         editor=None,
-        reason: str = "video_playback_start",
+        reason: str,
+        activity_key: str,
+        roughcut_reason: str,
+        hold_sec: float = 12.0,
     ) -> dict:
-        """Hand runtime ownership back to video playback after subtitle generation."""
         target_editor = editor if editor is not None else getattr(self, "_editor_widget", None)
         if target_editor is None:
             return {"prioritized": False, "reason": "editor_missing"}
@@ -586,11 +588,11 @@ class MainRuntimeCleanupMixin:
         if (self._is_editor_ai_busy(target_editor) or self._is_backend_ai_busy()) and not post_generation_release_window:
             return {"prioritized": False, "reason": "ai_busy"}
 
-        self._reserve_video_playback_runtime(hold_sec=12.0)
+        self._reserve_video_playback_runtime(hold_sec=hold_sec)
 
         if post_generation_release_window:
             _run_cleanup_step(
-                "video playback force editor idle after generation",
+                "foreground activity force editor idle after generation",
                 lambda: self._force_editor_idle_after_generation(target_editor, reason=reason),
                 default=None,
             )
@@ -600,13 +602,13 @@ class MainRuntimeCleanupMixin:
             except Exception:
                 pass
 
-        _run_cleanup_step("video playback stop post completion idle timer", self._stop_post_completion_idle_timer, default=None)
+        _run_cleanup_step("foreground activity stop post completion idle timer", self._stop_post_completion_idle_timer, default=None)
 
         cancel_roughcut = getattr(target_editor, "_cancel_post_generation_roughcut_draft", None)
         if callable(cancel_roughcut):
             _run_cleanup_step(
-                "video playback cancel post generation roughcut",
-                lambda: cancel_roughcut(reason="재생 시작"),
+                "foreground activity cancel post generation roughcut",
+                lambda: cancel_roughcut(reason=roughcut_reason),
                 default=False,
             )
 
@@ -614,8 +616,8 @@ class MainRuntimeCleanupMixin:
         if callable(pause_lora):
             hold_ms = max(180_000, int(getattr(self, "_post_completion_idle_ms", 600_000) or 600_000))
             _run_cleanup_step(
-                "video playback foreground pause",
-                lambda: pause_lora("video_playback", hold_ms=hold_ms),
+                "foreground activity pause personalization",
+                lambda: pause_lora(activity_key, hold_ms=hold_ms),
                 default=None,
             )
 
@@ -625,11 +627,42 @@ class MainRuntimeCleanupMixin:
             pass
 
         _run_cleanup_step(
-            "video playback post generation cleanup defer",
+            "foreground activity post generation cleanup defer",
             lambda: self._schedule_post_generation_gc(editor=target_editor, delay_ms=2200),
             default=None,
         )
         return {"prioritized": True, "reason": reason}
+
+    def _prioritize_video_playback_runtime(
+        self,
+        *,
+        editor=None,
+        reason: str = "video_playback_start",
+    ) -> dict:
+        """Hand runtime ownership back to video playback after subtitle generation."""
+        return self._prioritize_post_generation_foreground_runtime(
+            editor=editor,
+            reason=reason,
+            activity_key="video_playback",
+            roughcut_reason="재생 시작",
+            hold_sec=12.0,
+        )
+
+    def _prioritize_manual_editor_interaction_runtime(
+        self,
+        *,
+        editor=None,
+        reason: str = "editor_manual_interaction",
+        roughcut_reason: str = "편집 시작",
+    ) -> dict:
+        """Keep post-generation followups away from immediate manual editing or scrubbing."""
+        return self._prioritize_post_generation_foreground_runtime(
+            editor=editor,
+            reason=reason,
+            activity_key="editor_manual_interaction",
+            roughcut_reason=roughcut_reason,
+            hold_sec=8.0,
+        )
 
     def _schedule_post_generation_gc(self, *, editor=None, delay_ms: int = 1600) -> None:
         if bool(getattr(self, "_post_generation_gc_scheduled", False)):

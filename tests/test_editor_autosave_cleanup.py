@@ -273,6 +273,7 @@ class _CompletionEditor(EditorPipelineMixin):
         self._safe_enable_start_btn = Mock()
         self._post_completion_sync = Mock()
         self._on_save = Mock(return_value=True)
+        self._queue_generation_complete_learning = Mock()
         self._get_current_segments = Mock(side_effect=lambda: list(self._segment_state))
         self._refresh_editor_timestamp_metadata = Mock(return_value=0)
         self.append_segments = Mock(side_effect=self._append_segments_impl)
@@ -1023,6 +1024,29 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
         self.assertEqual(calls[:2], ["cleanup", ("waveform", "generation_complete")])
         editor._load_deferred_open_waveform.assert_called_once_with(reason="generation_complete")
+
+    def test_set_process_completed_defers_cleanup_bundle_until_next_event_turn(self):
+        editor = _CompletionEditor()
+        calls = []
+        editor._window._post_generation_resource_cleanup = Mock(side_effect=lambda **_kwargs: calls.append("cleanup"))
+        editor._load_deferred_open_waveform = Mock(side_effect=lambda **kwargs: calls.append(("waveform", kwargs.get("reason"))))
+
+        scheduled = []
+
+        def fake_single_shot(delay_ms, callback):
+            scheduled.append((delay_ms, callback))
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=fake_single_shot):
+            editor._set_process_completed()
+
+        self.assertEqual(calls, [])
+        zero_delay_callbacks = [callback for delay, callback in scheduled if delay == 0]
+        self.assertTrue(zero_delay_callbacks)
+
+        for callback in zero_delay_callbacks:
+            callback()
+
+        self.assertEqual(calls[:2], ["cleanup", ("waveform", "generation_complete")])
 
     def test_set_process_completed_can_skip_post_generation_side_effects_for_project_open(self):
         editor = _CompletionEditor()

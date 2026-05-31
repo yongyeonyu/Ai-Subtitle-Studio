@@ -2449,6 +2449,52 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_prioritize_manual_editor_interaction_runtime_defers_heavy_release_while_editing(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        editor.sm = SimpleNamespace(is_locked=False, state="ST_COMP")
+        editor._is_ai_processing = False
+        editor._subtitle_generation_completed = True
+        editor._post_generation_models_release_requested = False
+        editor._post_generation_models_released = False
+        editor._cancel_post_generation_roughcut_draft = mock.Mock(return_value=True)
+        try:
+            window._editor_widget = editor
+            window._post_completion_idle_ms = 222_000
+            with (
+                mock.patch.object(window, "_force_editor_idle_after_generation") as force_idle,
+                mock.patch.object(window, "_stop_post_completion_idle_timer") as stop_idle,
+                mock.patch.object(window, "_pause_personalization_for_foreground_activity") as pause_lora,
+                mock.patch.object(window, "_clear_runtime_memory_caches") as clear_runtime,
+                mock.patch.object(window, "_release_ai_models_for_editor_mode") as release_models,
+                mock.patch.object(window, "_schedule_post_generation_gc") as schedule_gc,
+            ):
+                result = window._prioritize_manual_editor_interaction_runtime(
+                    editor=editor,
+                    reason="editor_text_focus",
+                    roughcut_reason="편집 시작",
+                )
+
+            self.assertEqual(result, {"prioritized": True, "reason": "editor_text_focus"})
+            force_idle.assert_called_once_with(editor, reason="editor_text_focus")
+            stop_idle.assert_called_once_with()
+            editor._cancel_post_generation_roughcut_draft.assert_called_once_with(reason="편집 시작")
+            pause_lora.assert_called_once_with("editor_manual_interaction", hold_ms=222_000)
+            clear_runtime.assert_not_called()
+            release_models.assert_not_called()
+            schedule_gc.assert_called_once_with(editor=editor, delay_ms=2200)
+            self.assertTrue(editor._post_generation_models_release_requested)
+            self.assertFalse(editor._post_generation_models_released)
+            self.assertTrue(window._editor_ai_runtime_release_requested_for_editor_mode)
+            self.assertGreater(float(getattr(window, "_video_playback_runtime_hold_until", 0.0) or 0.0), 0.0)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_prioritize_video_playback_runtime_skips_while_generation_is_still_running(self):
         window = MainWindow()
         editor = QWidget(window)
@@ -2470,6 +2516,45 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 result = window._prioritize_video_playback_runtime(
                     editor=editor,
                     reason="video_playback_start",
+                )
+
+            self.assertEqual(result, {"prioritized": False, "reason": "ai_busy"})
+            force_idle.assert_not_called()
+            stop_idle.assert_not_called()
+            pause_lora.assert_not_called()
+            clear_runtime.assert_not_called()
+            release_models.assert_not_called()
+            schedule_gc.assert_not_called()
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_prioritize_manual_editor_interaction_runtime_skips_while_generation_is_still_running(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        editor.sm = SimpleNamespace(is_locked=True, state="ST_PROC")
+        editor._is_ai_processing = True
+        editor._subtitle_generation_completed = False
+        editor._post_generation_models_release_requested = False
+        editor._post_generation_models_released = False
+        try:
+            window._editor_widget = editor
+            with (
+                mock.patch.object(window, "_force_editor_idle_after_generation") as force_idle,
+                mock.patch.object(window, "_stop_post_completion_idle_timer") as stop_idle,
+                mock.patch.object(window, "_pause_personalization_for_foreground_activity") as pause_lora,
+                mock.patch.object(window, "_clear_runtime_memory_caches") as clear_runtime,
+                mock.patch.object(window, "_release_ai_models_for_editor_mode") as release_models,
+                mock.patch.object(window, "_schedule_post_generation_gc") as schedule_gc,
+            ):
+                result = window._prioritize_manual_editor_interaction_runtime(
+                    editor=editor,
+                    reason="editor_scrub_start",
+                    roughcut_reason="편집 시작",
                 )
 
             self.assertEqual(result, {"prioritized": False, "reason": "ai_busy"})

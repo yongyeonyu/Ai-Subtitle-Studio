@@ -829,6 +829,40 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor._scrub_preview_timer.start.assert_called_once()
         editor._scrub_settle_timer.start.assert_called_once()
 
+    def test_scrub_start_prioritizes_manual_editor_runtime_once_per_active_scrub(self):
+        editor = _ClickEditor()
+        editor.video_fps = 30.0
+        editor._active_seg_start = None
+        editor.applied_contexts = []
+        editor._scrub_preview_timer = _FakeScrubTimer()
+        editor._scrub_settle_timer = _FakeScrubTimer()
+        editor.timeline = SimpleNamespace(
+            set_playhead=Mock(),
+            canvas=SimpleNamespace(playhead_sec=0.0, _multiclip_boxes=[]),
+        )
+        editor.video_player = SimpleNamespace(
+            preview_seek=Mock(),
+            set_subtitle_display_time=Mock(),
+        )
+        owner = SimpleNamespace(
+            _prioritize_manual_editor_interaction_runtime=Mock(return_value={"prioritized": True, "reason": "editor_scrub_start"})
+        )
+        editor.window = Mock(return_value=owner)
+
+        with patch("ui.editor.editor_timeline_video.time.monotonic", return_value=10.0):
+            editor._on_scrub(3.0)
+
+        owner._prioritize_manual_editor_interaction_runtime.assert_called_once_with(
+            editor=editor,
+            reason="editor_scrub_start",
+            roughcut_reason="편집 시작",
+        )
+
+        with patch("ui.editor.editor_timeline_video.time.monotonic", return_value=10.01):
+            editor._on_scrub(3.5)
+
+        owner._prioritize_manual_editor_interaction_runtime.assert_called_once()
+
     def test_timing_drag_preview_updates_playhead_and_uses_lightweight_preview_seek(self):
         editor = _ClickEditor()
         editor.video_fps = 30.0

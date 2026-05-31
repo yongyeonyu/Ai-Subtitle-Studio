@@ -879,7 +879,6 @@ class EditorSaveManagerMixin:
 
         self._last_saved_srt_outputs = []
         try:
-            main_w = self.window()
             srt_started_at = time.perf_counter()
             if not self._persist_editor_srts(segs, autosave=False, write_backup=write_backup):
                 return False
