@@ -131,7 +131,7 @@ def _cut_crossing_evidence(seg: dict, settings: dict) -> dict:
 
 
 def _allow_cut_scene_crossing(seg: dict, settings: dict) -> bool:
-    enabled = settings.get("subtitle_cut_boundary_allow_high_confidence_crossing", True)
+    enabled = settings.get("subtitle_cut_boundary_allow_high_confidence_crossing", False)
     if isinstance(enabled, str):
         enabled = enabled.strip().lower() not in {"0", "false", "off", "no", "끔"}
     if not enabled:
@@ -210,6 +210,25 @@ def _same_timing_scope(prev: dict, cur: dict) -> bool:
     if prev_key is None and cur_key is None:
         return True
     return prev_key == cur_key
+
+
+def _gap_scope_key(seg: dict) -> tuple[str, str] | None:
+    key = _segment_scope_key(seg)
+    if isinstance(key, tuple) and key:
+        if key[0] == "cut_scene":
+            clip_key = key[1]
+            return clip_key if isinstance(clip_key, tuple) else None
+        if key[0] in {"clip_idx", "clip_file"} and len(key) >= 2:
+            return key[0], str(key[1])
+    return None
+
+
+def _same_gap_scope(left: dict, right: dict) -> bool:
+    left_key = _gap_scope_key(left)
+    right_key = _gap_scope_key(right)
+    if left_key is None and right_key is None:
+        return True
+    return left_key == right_key
 
 
 def _update_frame_fields(seg: dict, start: float, end: float) -> None:
@@ -667,6 +686,83 @@ def _nearby_audio_boundary(seg: dict, target: float, *, window_sec: float) -> fl
             if distance <= window_sec and (best is None or distance < best[0]):
                 best = (distance, value)
     return best[1] if best else None
+
+
+def _segment_boundary_value(seg: dict, key: str) -> float | None:
+    value = seg.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _gap_boundary_candidates(left: dict, right: dict) -> list[tuple[int, float, float, str]]:
+    left_end = _as_float(left.get("end"), 0.0)
+    right_start = _as_float(right.get("start"), left_end)
+    low = min(left_end, right_start)
+    high = max(left_end, right_start)
+    center = (low + high) / 2.0
+    candidates: list[tuple[int, float, float, str]] = []
+    seen: set[tuple[str, float]] = set()
+
+    def add(priority: int, sec: float | None, source: str) -> None:
+        if sec is None:
+            return
+        value = round(float(sec), 6)
+        if value < (low - 0.001) or value > (high + 0.001):
+            return
+        key = (source, value)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append((int(priority), abs(value - center), value, source))
+
+    for sec in (
+        _segment_boundary_value(left, "cut_scene_end"),
+        _segment_boundary_value(right, "cut_scene_start"),
+        _segment_boundary_value(left, "nearest_confirmed_cut_sec"),
+        _segment_boundary_value(right, "nearest_confirmed_cut_sec"),
+    ):
+        add(0, sec, "confirmed_cut")
+
+    for sec in (
+        _segment_boundary_value(left, "nearest_provisional_cut_sec"),
+        _segment_boundary_value(right, "nearest_provisional_cut_sec"),
+    ):
+        add(1, sec, "provisional_cut")
+
+    for row in _candidate_vad_rows(left) + _candidate_vad_rows(right):
+        add(2, _as_float(row.get("start"), None), "voice_boundary")
+        add(2, _as_float(row.get("end"), None), "voice_boundary")
+
+    for seg in (left, right):
+        for key in (
+            "audio_energy_boundaries",
+            "audio_gain_boundaries",
+            "audio_silence_boundaries",
+            "_audio_energy_boundaries",
+            "_audio_gain_boundaries",
+            "_audio_silence_boundaries",
+        ):
+            rows = seg.get(key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                add(3, _as_time(row), key)
+
+    return sorted(candidates, key=lambda item: (item[0], item[1], item[2]))
+
+
+def _preferred_gap_boundary(left: dict, right: dict) -> tuple[float, str] | None:
+    candidates = _gap_boundary_candidates(left, right)
+    if not candidates:
+        return None
+    _priority, _distance, sec, source = candidates[0]
+    return float(sec), str(source)
 
 
 def _piecewise_drift_enabled(settings: dict | None = None) -> bool:
@@ -1666,7 +1762,8 @@ def apply_final_gap_settings(
                 nxt = candidate
                 break
 
-        if nxt is not None and _same_timing_scope(cur, nxt):
+        shared_gap_boundary = _preferred_gap_boundary(cur, nxt) if nxt is not None and _same_gap_scope(cur, nxt) else None
+        if nxt is not None and (_same_timing_scope(cur, nxt) or shared_gap_boundary is not None):
             cur_settings = _segment_gap_settings(s, cur)
             cont_thresh = max(0.0, _setting_float(cur_settings, "continuous_threshold", 2.0))
             push_rate = max(0.0, min(1.0, _setting_float(cur_settings, "gap_push_rate", 0.7)))
@@ -1684,7 +1781,25 @@ def apply_final_gap_settings(
                     if float(nxt["end"]) <= float(nxt["start"]):
                         nxt["end"] = float(nxt["start"]) + min_duration
             elif gap > 0.0:
+                boundary_choice = None
                 if gap <= cont_thresh:
+                    boundary_choice = shared_gap_boundary
+                if boundary_choice is not None:
+                    boundary_sec, boundary_source = boundary_choice
+                    boundary_sec = max(float(cur["end"]), min(float(nxt["start"]), float(boundary_sec)))
+                    cur["end"] = boundary_sec
+                    nxt["start"] = max(0.0, boundary_sec)
+                    policy = {
+                        "task": "subtitle_gap_boundary_join",
+                        "action": "join_without_gap",
+                        "source": boundary_source,
+                        "boundary_sec": round(boundary_sec, 3),
+                        "gap_sec": round(gap, 3),
+                        "continuous_threshold_sec": round(cont_thresh, 3),
+                    }
+                    cur["_gap_boundary_policy"] = dict(policy)
+                    nxt["_gap_boundary_policy"] = dict(policy)
+                elif gap <= cont_thresh:
                     cur["end"] = float(cur["end"]) + (gap * push_rate)
                     nxt["start"] = max(0.0, float(nxt["start"]) - (gap * pull_rate))
                 else:
@@ -1740,6 +1855,7 @@ def apply_final_gap_settings(
             min_duration,
             cur_settings,
         )
+        _clamp_to_cut_scene(cur, s, min_duration=min_duration)
         _update_frame_fields(cur, float(cur["start"]), float(cur["end"]))
         cur["_final_gap_settings_applied"] = True
 

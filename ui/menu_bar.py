@@ -161,7 +161,9 @@ class StatusRail(QWidget):
         if processing or "생성" in status_text or "처리" in status_text or "processing" in state:
             return "생성"
         if self._editor_has_segments(editor):
-            return "편집" if bool(getattr(editor, "_is_dirty", False)) else "검토"
+            dirty_flags = getattr(editor, "_dirty_state_from_flags", None)
+            is_dirty = bool(dirty_flags()) if callable(dirty_flags) else bool(getattr(editor, "_is_dirty", False))
+            return "편집" if is_dirty else "검토"
         if "mode_ai" in mode or "mode_auto" in mode:
             return "대기"
         return "대기"

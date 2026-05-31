@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 
+from core.project.project_io import read_project_file, read_project_storage_payload
 from core.roughcut.cut_boundary_placeholder import extract_topicless_placeholders_from_project
 from ui.project.project_panel import ProjectUIMixin
 
@@ -59,16 +60,14 @@ class ProjectCutBoundaryResumeTests(unittest.TestCase):
                     ],
                 },
             )
-            with open(project_path, encoding="utf-8") as handle:
-                project = json.load(handle)
+            project = read_project_file(project_path)
 
             ui = _ProjectUI({"scan_cut_boundary_level": "medium", "cut_boundary_level": "medium"})
             resumed = ui._resume_cut_boundary_prescan_for_open_project(project_path, project, [media])
 
             self.assertTrue(resumed)
             self.assertEqual(ui.backend.calls, [(project_path, [media])])
-            with open(project_path, encoding="utf-8") as handle:
-                saved = json.load(handle)
+            saved = read_project_storage_payload(project_path)
             self.assertNotIn("cut_boundary_prescan_done", saved["analysis"])
             self.assertNotIn("cut_boundary_cache_path", saved["analysis"])
             self.assertNotIn("cut_boundary_cache_type", saved["analysis"])
@@ -86,8 +85,7 @@ class ProjectCutBoundaryResumeTests(unittest.TestCase):
                     "cut_boundary_prescan_done": True,
                 },
             )
-            with open(project_path, encoding="utf-8") as handle:
-                project = json.load(handle)
+            project = read_project_file(project_path)
 
             ui = _ProjectUI({"scan_cut_boundary_level": "medium", "cut_boundary_level": "medium"})
             resumed = ui._resume_cut_boundary_prescan_for_open_project(project_path, project, [media])
@@ -118,8 +116,7 @@ class ProjectCutBoundaryResumeTests(unittest.TestCase):
                     ],
                 },
             )
-            with open(project_path, encoding="utf-8") as handle:
-                project = json.load(handle)
+            project = read_project_file(project_path)
 
             ui = _ProjectUI({"scan_cut_boundary_level": "medium", "cut_boundary_level": "medium"})
             resumed = ui._resume_cut_boundary_prescan_for_open_project(project_path, project, [media])
@@ -158,8 +155,7 @@ class ProjectCutBoundaryResumeTests(unittest.TestCase):
                     ],
                 },
             )
-            with open(project_path, encoding="utf-8") as handle:
-                project = json.load(handle)
+            project = read_project_file(project_path)
 
             ui = _ProjectUI({"scan_cut_boundary_level": "medium", "cut_boundary_level": "medium"})
             resumed = ui._resume_cut_boundary_prescan_for_open_project(project_path, project, [media])

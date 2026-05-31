@@ -14,10 +14,12 @@ import json
 import os
 import tempfile
 import threading
+import time
+from copy import deepcopy
 from typing import Any
 
-from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import QObject, QTimer
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core.engine.subtitle_engine import save_srt
 from core.native_swift_timeline import capture_undo_snapshot_via_swift
@@ -33,7 +35,7 @@ from ui.project.project_session_runtime import attach_project_session
 
 DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC = 300
 DEFAULT_PROJECT_ANALYSIS_REFRESH_DELAY_MS = 12_000
-DEFAULT_DEFERRED_PROJECT_SAVE_DELAY_MS = 1_500
+DEFAULT_DEFERRED_PROJECT_SAVE_DELAY_MS = 4_000
 DEFAULT_DEFERRED_EDITOR_LEARNING_HOLD_MS = 600_000
 
 
@@ -135,6 +137,101 @@ def backup_subtitle_file_copy(subtitle_path: str) -> str:
     backup_path = os.path.join(backup_dir, f"{base}_{stamp}{ext or '.srt'}")
     shutil.copy2(subtitle_path, backup_path)
     return backup_path
+
+
+def _copy_dict_rows(rows: list[dict] | None = None) -> list[dict[str, Any]]:
+    return [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+
+
+def _write_project_save_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    from core.project.project_manager import save_project
+
+    started_at = time.perf_counter()
+    project_path = str(snapshot.get("project_path") or "")
+    if not project_path:
+        return {
+            "project_path": "",
+            "elapsed_ms": 0.0,
+            "schedule_analysis_refresh": bool(snapshot.get("schedule_analysis_refresh", True)),
+            "saved_segments_signature": str(snapshot.get("saved_segments_signature", "") or ""),
+            "segments": _copy_dict_rows(snapshot.get("segments")),
+            "settings": dict(snapshot.get("settings") or {}),
+        }
+
+    settings = deepcopy(dict(snapshot.get("settings") or {}))
+    stt_runtime = deepcopy(dict(snapshot.get("stt_runtime") or {}))
+    stt_mode_state = None
+    stt_mode_learning = None
+    stt_bundle_info: dict[str, Any] = {}
+    stt_adapter_refs = dict(stt_runtime.get("adapter_refs", {}) or {})
+    if (
+        bool(stt_runtime.get("enabled"))
+        or bool(stt_runtime.get("work_segments"))
+        or bool(stt_runtime.get("final_segments"))
+    ):
+        try:
+            from core.stt_mode.lora_runtime import export_stt_runtime_bundle
+            from core.stt_mode.project_state import build_stt_mode_state, default_stt_mode_learning
+
+            stt_bundle_info = export_stt_runtime_bundle(
+                project_path=project_path,
+                media_path=str(snapshot.get("media_path") or ""),
+                settings=settings,
+                work_segments=_copy_dict_rows(stt_runtime.get("work_segments")),
+                raw_segments=_copy_dict_rows(stt_runtime.get("raw_dictation_segments")),
+                final_segments=_copy_dict_rows(stt_runtime.get("final_segments")),
+                learning_events=_copy_dict_rows(stt_runtime.get("learning_events")),
+            )
+            if stt_bundle_info:
+                stt_adapter_refs = dict(stt_bundle_info.get("adapter_refs", {}) or stt_adapter_refs)
+            stt_mode_state = build_stt_mode_state(
+                media_path=str(snapshot.get("media_path") or ""),
+                primary_fps=snapshot.get("primary_fps"),
+                work_segments=_copy_dict_rows(stt_runtime.get("work_segments")),
+                raw_dictation_segments=_copy_dict_rows(stt_runtime.get("raw_dictation_segments")),
+                rolling_windows=_copy_dict_rows(stt_runtime.get("rolling_windows")),
+                final_segments=_copy_dict_rows(stt_runtime.get("final_segments")),
+                active_work_segment_id=str(stt_runtime.get("active_work_segment_id", "") or ""),
+                adapter_refs=stt_adapter_refs,
+            )
+            stt_mode_learning = default_stt_mode_learning(
+                {
+                    "events": _copy_dict_rows(stt_runtime.get("learning_events")),
+                    "learning_opt_in": True,
+                }
+            )
+        except Exception as exc:
+            get_logger().log(f"⚠️ STT 프로젝트 상태 구성 실패: {exc}")
+
+    save_project(
+        filepath=project_path,
+        media_paths=list(snapshot.get("media_paths") or []),
+        srt_path=str(snapshot.get("srt_path") or ""),
+        segments=_copy_dict_rows(snapshot.get("segments")),
+        middle_segments=_copy_dict_rows(snapshot.get("middle_segments")),
+        roughcut_result=deepcopy(dict(snapshot.get("roughcut_result") or {})),
+        user_settings=settings,
+        workspace=deepcopy(dict(snapshot.get("workspace") or {})),
+        active_work_mode=str(snapshot.get("active_work_mode") or EDITOR_MODE),
+        voice_activity_segments=_copy_dict_rows(snapshot.get("voice_activity_segments")),
+        stt_preview_segments=_copy_dict_rows(snapshot.get("stt_preview_segments")),
+        stt_mode_state=stt_mode_state,
+        stt_mode_learning=stt_mode_learning,
+        provisional_cut_boundaries=_copy_dict_rows(snapshot.get("provisional_cut_boundaries")),
+        persist_analysis_artifacts=bool(snapshot.get("persist_analysis_artifacts", False)),
+        rewrite_stt_reference_tracks=bool(snapshot.get("rewrite_stt_reference_tracks", False)),
+        preliminary_middle_segments=_copy_dict_rows(snapshot.get("preliminary_middle_segments")),
+    )
+    return {
+        "project_path": project_path,
+        "elapsed_ms": (time.perf_counter() - started_at) * 1000.0,
+        "stt_bundle_info": stt_bundle_info,
+        "stt_adapter_refs": stt_adapter_refs,
+        "schedule_analysis_refresh": bool(snapshot.get("schedule_analysis_refresh", True)),
+        "saved_segments_signature": str(snapshot.get("saved_segments_signature", "") or ""),
+        "segments": _copy_dict_rows(snapshot.get("segments")),
+        "settings": settings,
+    }
 
 
 class EditorSaveManagerMixin:
@@ -282,19 +379,56 @@ class EditorSaveManagerMixin:
                 self.sm.start_editing()
                 started_editing = True
             else:
-                self.sm.is_dirty = True
-        else:
-            self._is_dirty = True
-        self._is_dirty = True
+                self._set_shared_dirty_state(True, refresh_status=False)
+        self._set_shared_dirty_state(True, refresh_status=True, broadcast=not started_editing)
         if started_editing and hasattr(self, "_note_editor_foreground_activity"):
             self._note_editor_foreground_activity()
+        self._schedule_native_dirty_snapshot()
+
+    def _dirty_state_from_flags(self) -> bool:
         try:
-            main_w = self.window()
-            if hasattr(main_w, "_refresh_saved_status_label"):
-                main_w._refresh_saved_status_label(is_dirty=True)
+            if bool(getattr(getattr(self, "sm", None), "is_dirty", False)):
+                return True
         except Exception:
             pass
-        self._schedule_native_dirty_snapshot()
+        return bool(getattr(self, "_is_dirty", False))
+
+    def _set_shared_dirty_state(
+        self,
+        is_dirty: bool,
+        *,
+        refresh_status: bool = True,
+        touch_saved_time: bool = False,
+        broadcast: bool = True,
+    ) -> bool:
+        dirty = bool(is_dirty)
+        self._is_dirty = dirty
+        try:
+            sm = getattr(self, "sm", None)
+        except Exception:
+            sm = None
+        if sm is not None:
+            try:
+                current = bool(getattr(sm, "is_dirty", False))
+            except Exception:
+                current = dirty
+            try:
+                sm.is_dirty = dirty
+            except Exception:
+                pass
+            if broadcast and current != dirty and hasattr(sm, "_broadcast"):
+                try:
+                    sm._broadcast()
+                except Exception:
+                    pass
+        if refresh_status:
+            try:
+                main_w = self.window()
+                if hasattr(main_w, "_refresh_saved_status_label"):
+                    main_w._refresh_saved_status_label(is_dirty=dirty, touch_saved_time=touch_saved_time)
+            except Exception:
+                pass
+        return dirty
 
     def _deferred_editor_learning_hold_ms(self, *, trigger: str = "manual_save") -> int:
         try:
@@ -374,6 +508,8 @@ class EditorSaveManagerMixin:
             not pending_path or os.path.abspath(project_path) == os.path.abspath(pending_path)
         ):
             return False
+        if self._has_deferred_project_save_pending():
+            return False
         try:
             current_sig = self._project_file_dirty_signature(project_path)
         except Exception:
@@ -381,21 +517,18 @@ class EditorSaveManagerMixin:
         return bool(current_sig and current_sig != saved_sig)
 
     def _mark_unsaved_project_change_detected(self):
-        self._mark_dirty()
+        self._set_shared_dirty_state(True, refresh_status=True)
 
     def _has_unsaved_changes(self) -> bool:
         saved_sig = getattr(self, "_saved_segments_signature", None)
+        segment_dirty = False
         if saved_sig:
             try:
-                if self._segments_dirty_signature() != saved_sig:
-                    return True
+                segment_dirty = self._segments_dirty_signature() != saved_sig
             except Exception:
-                pass
-        try:
-            if bool(getattr(self.sm, "is_dirty", False)):
-                return True
-        except Exception:
-            if bool(getattr(self, "_is_dirty", False)):
+                segment_dirty = False
+            if segment_dirty:
+                self._set_shared_dirty_state(True, refresh_status=False)
                 return True
         try:
             if self._project_file_has_unsaved_changes():
@@ -403,26 +536,28 @@ class EditorSaveManagerMixin:
                 return True
         except Exception:
             pass
-        return bool(getattr(self, "_is_dirty", False))
+        has_saved_reference = bool(saved_sig)
+        saved_project_path = str(getattr(self, "_saved_project_path", "") or "").strip()
+        saved_project_signature = str(getattr(self, "_saved_project_signature", "") or "").strip()
+        if saved_project_path and saved_project_signature:
+            has_saved_reference = True
+        if has_saved_reference:
+            if self._dirty_state_from_flags():
+                self._set_shared_dirty_state(False, refresh_status=True, touch_saved_time=False)
+            return False
+        return self._dirty_state_from_flags()
 
     def _mark_save_completed(self, touch_saved_time: bool = True) -> bool:
-        self._is_dirty = False
+        self._set_shared_dirty_state(False, refresh_status=False, broadcast=False)
         try:
             if hasattr(self, "sm"):
                 if getattr(self.sm, "is_locked", False):
-                    self.sm.is_dirty = False
-                    if hasattr(self.sm, "_broadcast"):
-                        self.sm._broadcast()
+                    self._set_shared_dirty_state(False, refresh_status=False, broadcast=True)
                 else:
                     self.sm.complete_save()
         except Exception:
             pass
-        try:
-            main_w = self.window()
-            if hasattr(main_w, "_refresh_saved_status_label"):
-                main_w._refresh_saved_status_label(is_dirty=False, touch_saved_time=touch_saved_time)
-        except Exception:
-            pass
+        self._set_shared_dirty_state(False, refresh_status=True, touch_saved_time=touch_saved_time, broadcast=False)
         return True
 
     def _queue_row_for_current_media(self):
@@ -537,10 +672,10 @@ class EditorSaveManagerMixin:
             project_path = str(getattr(main_w, "_current_project_path", "") or "")
             if not project_path or not os.path.exists(project_path):
                 return list(segs or [])
-            from core.project.project_manager import load_project
+            from core.project.project_io import read_project_file
             from core.roughcut import apply_roughcut_order_to_subtitles
 
-            project = load_project(project_path) or {}
+            project = read_project_file(project_path) or {}
             ordered = apply_roughcut_order_to_subtitles(list(segs or []), project.get("roughcut_state", {}) or {})
             if ordered != list(segs or []):
                 get_logger().log("러프컷 편집 순서를 SRT 저장 순서에 반영했습니다.")
@@ -680,7 +815,7 @@ class EditorSaveManagerMixin:
         self,
         *args,
         skip_auto_next=False,
-        write_backup: bool = True,
+        write_backup: bool = False,
         schedule_analysis_refresh: bool = True,
         queue_learning: bool = True,
         allow_project_create: bool = True,
@@ -688,6 +823,7 @@ class EditorSaveManagerMixin:
         force: bool = False,
         cancel_post_generation_roughcut: bool = True,
     ):
+        save_started_at = time.perf_counter()
         cancel_roughcut = getattr(self, "_cancel_post_generation_roughcut_draft", None)
         if bool(cancel_post_generation_roughcut) and callable(cancel_roughcut):
             try:
@@ -744,8 +880,10 @@ class EditorSaveManagerMixin:
         self._last_saved_srt_outputs = []
         try:
             main_w = self.window()
+            srt_started_at = time.perf_counter()
             if not self._persist_editor_srts(segs, autosave=False, write_backup=write_backup):
                 return False
+            srt_elapsed_ms = (time.perf_counter() - srt_started_at) * 1000.0
         except Exception as exc:
             get_logger().log(f"⚠️ 저장 실패: {exc}")
             return False
@@ -769,20 +907,23 @@ class EditorSaveManagerMixin:
             project_save_deferred = False
         if not project_save_deferred:
             try:
+                project_started_at = time.perf_counter()
                 project_path = self._auto_save_project(
                     segs,
                     persist_analysis_artifacts=False,
                     allow_create=allow_project_create,
                 )
+                project_elapsed_ms = (time.perf_counter() - project_started_at) * 1000.0
+                if project_path:
+                    get_logger().log(f"💾 프로젝트 즉시 저장 경로 사용: {project_elapsed_ms:.1f}ms")
             except Exception as exc:
                 get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {exc}")
                 project_path = ""
+        should_auto_export = False
         try:
             should_auto_export = self._should_auto_export_after_editor_save() if auto_export is None else bool(auto_export)
-            if should_auto_export:
-                self._schedule_auto_export_saved_subtitle_videos()
         except Exception as exc:
-            get_logger().log(f"⚠️ 자막영상 자동 출력 실패: {exc}")
+            get_logger().log(f"⚠️ 자막영상 자동 출력 예약 판단 실패: {exc}")
         if project_path:
             self._remember_saved_project_file(project_path)
         if project_path and schedule_analysis_refresh:
@@ -799,34 +940,85 @@ class EditorSaveManagerMixin:
         self._autosave_requires_manual_save = False
         self._sync_queue_saved_state()
         self._restore_editor_time_tags_after_save()
-        if queue_learning:
-            try:
-                from core.personalization.deferred_editor_learning import enqueue_deferred_editor_learning
-
-                hold_ms = self._deferred_editor_learning_hold_ms(trigger="manual_save")
-                pause_lora = getattr(main_w, "_pause_personalization_for_foreground_activity", None)
-                if callable(pause_lora):
-                    try:
-                        pause_lora("manual_save", hold_ms=hold_ms)
-                    except Exception:
-                        pause_lora("manual_save")
-                settings = dict(getattr(self, "settings", {}) or {})
-                saved_outputs = list(getattr(self, "_last_saved_srt_outputs", []) or [])
-                first_subtitle_path = str(saved_outputs[0][0]) if saved_outputs else ""
-                queued = enqueue_deferred_editor_learning(
-                    [dict(seg) for seg in list(segs or []) if not seg.get("is_gap")],
-                    media_path=str(getattr(self, "media_path", "") or ""),
-                    subtitle_path=first_subtitle_path,
-                    project_path=str(getattr(main_w, "_current_project_path", "") or ""),
-                    trigger="manual_save",
-                    settings=settings,
-                    defer_for_ms=hold_ms,
-                )
-                if queued.get("queued"):
-                    get_logger().log("🧠 [LoRA] 저장 자막 학습은 Home-idle 큐로 넘겼습니다.")
-            except Exception as exc:
-                get_logger().log(f"⚠️ 개인화 학습 큐 등록 실패(저장): {exc}")
+        get_logger().log(
+            "💾 빠른 저장 체크포인트 완료: "
+            f"SRT {srt_elapsed_ms:.1f}ms · "
+            f"프로젝트 {'지연 예약' if project_save_deferred else '즉시 반영'} · "
+            f"총 {(time.perf_counter() - save_started_at) * 1000.0:.1f}ms"
+        )
+        self._schedule_post_fast_save_side_effects(
+            segs,
+            auto_export=should_auto_export,
+            queue_learning=bool(queue_learning),
+        )
         return True
+
+    def _schedule_post_fast_save_side_effects(
+        self,
+        segs: list[dict] | None,
+        *,
+        auto_export: bool = False,
+        queue_learning: bool = True,
+    ) -> None:
+        if not auto_export and not queue_learning:
+            return
+        generation = int(getattr(self, "_post_fast_save_generation", 0) or 0) + 1
+        self._post_fast_save_generation = generation
+        segments_snapshot = [dict(seg) for seg in list(segs or []) if isinstance(seg, dict)]
+        saved_outputs_snapshot = list(getattr(self, "_last_saved_srt_outputs", []) or [])
+
+        def run_post_save_work() -> None:
+            if int(getattr(self, "_post_fast_save_generation", 0) or 0) != generation:
+                return
+            if auto_export:
+                try:
+                    self._schedule_auto_export_saved_subtitle_videos()
+                except Exception as exc:
+                    get_logger().log(f"⚠️ 자막영상 자동 출력 실패: {exc}")
+            if queue_learning:
+                self._enqueue_deferred_editor_learning_after_save(
+                    segments_snapshot,
+                    saved_outputs=saved_outputs_snapshot,
+                )
+
+        QTimer.singleShot(0, run_post_save_work)
+
+    def _enqueue_deferred_editor_learning_after_save(
+        self,
+        segs: list[dict],
+        *,
+        saved_outputs: list | None = None,
+    ) -> None:
+        try:
+            from core.personalization.deferred_editor_learning import enqueue_deferred_editor_learning
+
+            try:
+                main_w = self.window()
+            except Exception:
+                main_w = None
+            hold_ms = self._deferred_editor_learning_hold_ms(trigger="manual_save")
+            pause_lora = getattr(main_w, "_pause_personalization_for_foreground_activity", None)
+            if callable(pause_lora):
+                try:
+                    pause_lora("manual_save", hold_ms=hold_ms)
+                except Exception:
+                    pause_lora("manual_save")
+            settings = dict(getattr(self, "settings", {}) or {})
+            saved_outputs = list(saved_outputs or [])
+            first_subtitle_path = str(saved_outputs[0][0]) if saved_outputs else ""
+            queued = enqueue_deferred_editor_learning(
+                [dict(seg) for seg in list(segs or []) if not seg.get("is_gap")],
+                media_path=str(getattr(self, "media_path", "") or ""),
+                subtitle_path=first_subtitle_path,
+                project_path=str(getattr(main_w, "_current_project_path", "") or ""),
+                trigger="manual_save",
+                settings=settings,
+                defer_for_ms=hold_ms,
+            )
+            if queued.get("queued"):
+                get_logger().log("🧠 [LoRA] 저장 자막 학습은 Home-idle 큐로 넘겼습니다.")
+        except Exception as exc:
+            get_logger().log(f"⚠️ 개인화 학습 큐 등록 실패(저장): {exc}")
 
     def _on_save_for_exit(self) -> bool:
         saved = bool(
@@ -1062,6 +1254,18 @@ class EditorSaveManagerMixin:
         if not bool(getattr(self, "_deferred_project_save_pending", False)):
             return True
         if bool(getattr(self, "_deferred_project_save_running", False)):
+            running_generation = int(getattr(self, "_deferred_project_save_running_generation", 0) or current_generation)
+            if force:
+                if not self._wait_for_deferred_project_save_worker(running_generation):
+                    return False
+                latest_generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
+                if (
+                    bool(getattr(self, "_deferred_project_save_pending", False))
+                    and latest_generation
+                    and latest_generation != running_generation
+                ):
+                    return bool(self._run_deferred_project_save(latest_generation, force=True))
+                return True
             QTimer.singleShot(1_000, lambda gen=current_generation: self._run_deferred_project_save(gen, force=force))
             return False
         if not force:
@@ -1079,44 +1283,85 @@ class EditorSaveManagerMixin:
 
         segs = [dict(seg) for seg in list(getattr(self, "_deferred_project_save_segments", []) or [])]
         options = dict(getattr(self, "_deferred_project_save_options", {}) or {})
-        self._deferred_project_save_pending = False
-        self._deferred_project_save_running = True
-        project_path = ""
+        if not isinstance(self, QObject):
+            self._deferred_project_save_pending = False
+            self._deferred_project_save_running = True
+            project_path = ""
+            started_at = time.perf_counter()
+            try:
+                project_path = self._auto_save_project(
+                    segs,
+                    persist_analysis_artifacts=bool(options.get("persist_analysis_artifacts", False)),
+                    rewrite_stt_reference_tracks=bool(options.get("rewrite_stt_reference_tracks", False)),
+                    allow_create=bool(options.get("allow_create", True)),
+                )
+            except Exception as exc:
+                get_logger().log(f"⚠️ 프로젝트 지연 저장 실패: {exc}")
+                self._deferred_project_save_pending = True
+                QTimer.singleShot(5_000, lambda gen=current_generation: self._run_deferred_project_save(gen))
+                return False
+            finally:
+                self._deferred_project_save_running = False
+                self._deferred_project_save_running_generation = 0
+
+            if project_path:
+                self._remember_saved_project_file(project_path)
+                if bool(options.get("schedule_analysis_refresh", True)):
+                    try:
+                        self._schedule_project_analysis_artifacts_refresh(
+                            project_path,
+                            segs,
+                            dict(getattr(self, "settings", {}) or {}),
+                            saved_segments_signature=str(options.get("saved_segments_signature", "") or ""),
+                        )
+                    except Exception as exc:
+                        get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 예약 실패: {exc}")
+                self._set_deferred_project_save_status("에디터 | 프로젝트 저장 완료")
+                get_logger().log(
+                    f"📦 프로젝트 지연 저장 완료: {os.path.basename(project_path)} "
+                    f"({(time.perf_counter() - started_at) * 1000.0:.1f}ms)"
+                )
+            else:
+                self._set_deferred_project_save_status("에디터 | SRT 저장 완료")
+            self._restore_editor_time_tags_after_save()
+
+            latest_generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
+            if bool(getattr(self, "_deferred_project_save_pending", False)) and latest_generation != int(generation or 0):
+                QTimer.singleShot(0, lambda gen=latest_generation: self._run_deferred_project_save(gen))
+            return True
+        snapshot_started_at = time.perf_counter()
         try:
-            project_path = self._auto_save_project(
+            snapshot = self._capture_project_save_snapshot(
                 segs,
                 persist_analysis_artifacts=bool(options.get("persist_analysis_artifacts", False)),
                 rewrite_stt_reference_tracks=bool(options.get("rewrite_stt_reference_tracks", False)),
                 allow_create=bool(options.get("allow_create", True)),
+                schedule_analysis_refresh=bool(options.get("schedule_analysis_refresh", True)),
+                saved_segments_signature=str(options.get("saved_segments_signature", "") or ""),
             )
         except Exception as exc:
-            get_logger().log(f"⚠️ 프로젝트 지연 저장 실패: {exc}")
+            get_logger().log(f"⚠️ 프로젝트 지연 저장 스냅샷 실패: {exc}")
             self._deferred_project_save_pending = True
             QTimer.singleShot(5_000, lambda gen=current_generation: self._run_deferred_project_save(gen))
             return False
-        finally:
+        if not snapshot:
+            self._deferred_project_save_pending = False
             self._deferred_project_save_running = False
-
-        if project_path:
-            self._remember_saved_project_file(project_path)
-            if bool(options.get("schedule_analysis_refresh", True)):
-                try:
-                    self._schedule_project_analysis_artifacts_refresh(
-                        project_path,
-                        segs,
-                        dict(getattr(self, "settings", {}) or {}),
-                        saved_segments_signature=str(options.get("saved_segments_signature", "") or ""),
-                    )
-                except Exception as exc:
-                    get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 예약 실패: {exc}")
-            self._set_deferred_project_save_status("에디터 | 프로젝트 저장 완료")
-        else:
+            self._deferred_project_save_running_generation = 0
             self._set_deferred_project_save_status("에디터 | SRT 저장 완료")
-        self._restore_editor_time_tags_after_save()
-
-        latest_generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
-        if bool(getattr(self, "_deferred_project_save_pending", False)) and latest_generation != int(generation or 0):
-            QTimer.singleShot(0, lambda gen=latest_generation: self._run_deferred_project_save(gen))
+            self._restore_editor_time_tags_after_save()
+            return True
+        self._deferred_project_save_pending = False
+        self._deferred_project_save_running = True
+        self._deferred_project_save_running_generation = current_generation
+        self._start_deferred_project_save_worker(
+            current_generation,
+            snapshot,
+            snapshot_elapsed_ms=(time.perf_counter() - snapshot_started_at) * 1000.0,
+        )
+        if force:
+            return bool(self._wait_for_deferred_project_save_worker(current_generation))
+        QTimer.singleShot(0, lambda gen=current_generation: self._poll_deferred_project_save_worker(gen))
         return True
 
     def _flush_deferred_project_save(self, *, reason: str = "manual") -> bool:
@@ -1126,36 +1371,38 @@ class EditorSaveManagerMixin:
         get_logger().log(f"💾 프로젝트 지연 저장 즉시 반영: {reason}")
         return bool(self._run_deferred_project_save(generation, force=True))
 
-    def _auto_save_project(
+    def _capture_project_save_snapshot(
         self,
-        segs: list = None,
+        segs: list | None = None,
         *,
         persist_analysis_artifacts: bool = False,
         rewrite_stt_reference_tracks: bool = False,
         allow_create: bool = True,
-    ) -> str:
-        from core.project.project_manager import save_project, create_project
+        schedule_analysis_refresh: bool = True,
+        saved_segments_signature: str = "",
+    ) -> dict[str, Any]:
+        from core.project.project_manager import create_project
 
-        media_path = getattr(self, "media_path", None)
+        media_path = str(getattr(self, "media_path", "") or "")
         if not media_path:
-            return ""
+            return {}
         if segs is None:
             try:
                 segs = self._get_current_segments()
             except Exception:
                 segs = []
+        seg_rows = _copy_dict_rows(segs)
         main_w = self.window()
-        project_path = getattr(main_w, "_current_project_path", None)
+        project_path = str(getattr(main_w, "_current_project_path", "") or "")
         if not project_path:
             if not allow_create:
-                return ""
+                return {}
             base_name = os.path.splitext(os.path.basename(media_path))[0]
             project_path = create_project(
                 name=base_name,
                 media_paths=[media_path],
                 srt_path=get_srt_path(media_path),
                 user_settings=dict(getattr(self, "settings", {}) or {}),
-                # 수동 저장의 자동 프로젝트 생성은 저장만 해야 하며 러프컷 LLM prefill을 시작하면 안 된다.
                 prefill_analysis_artifacts=False,
             )
             attach_project_session(
@@ -1168,88 +1415,218 @@ class EditorSaveManagerMixin:
             )
             get_logger().log(f"📝 프로젝트 자동 생성: {os.path.basename(project_path)}")
 
-        workspace = {}
+        workspace: dict[str, Any] = {}
         if hasattr(self, "video_player"):
             workspace["last_playhead"] = getattr(self.video_player, "current_time", 0.0)
         if hasattr(self, "text_edit"):
             workspace["last_cursor_block"] = self.text_edit.textCursor().blockNumber()
         if hasattr(self, "splitter"):
-            workspace["splitter_sizes"] = self.splitter.sizes()
+            workspace["splitter_sizes"] = list(self.splitter.sizes())
         try:
-            workspace["terminal_visible"] = main_w._log_visible
+            workspace["terminal_visible"] = bool(getattr(main_w, "_log_visible", False))
         except Exception:
             pass
         workspace["dashboard_mode"] = getattr(main_w, "_dashboard_mode", "dashboard") or "dashboard"
         workspace["project_panel_visible"] = bool(getattr(main_w, "_project_panel_visible", True))
-        media_paths = list(getattr(main_w, "_multiclip_files", []) or []) or [media_path]
-        workspace["selected_segment_line"] = workspace.get("last_cursor_block", 0)
+        workspace["selected_segment_line"] = int(workspace.get("last_cursor_block", 0) or 0)
         try:
             workspace["edit_lock"] = bool(self.timeline.lock_chk.isChecked())
         except Exception:
             workspace["edit_lock"] = False
-        workspace["active_clip_idx"] = int(getattr(self.timeline.canvas, "_active_clip_idx", getattr(main_w, "_active_clip_idx", 0)) or 0)
+        try:
+            active_clip_idx = int(
+                getattr(
+                    self.timeline.canvas,
+                    "_active_clip_idx",
+                    getattr(main_w, "_active_clip_idx", 0),
+                )
+                or 0
+            )
+        except Exception:
+            active_clip_idx = int(getattr(main_w, "_active_clip_idx", 0) or 0)
+        workspace["active_clip_idx"] = active_clip_idx
         workspace["active_work_mode"] = normalize_work_mode(getattr(main_w, "_current_work_mode", EDITOR_MODE))
-        aux_state = collect_editor_project_aux_state(self)
-        stt_preview_segments = aux_state["stt_preview_segments"]
-        voice_activity_segments = aux_state["voice_activity_segments"]
-        provisional_cut_boundaries = aux_state["provisional_cut_boundaries"]
-        middle_segments = aux_state["middle_segments"]
-        preliminary_middle_segments = aux_state["preliminary_middle_segments"]
-        roughcut_result = aux_state["roughcut_result"]
-        stt_mode_state = None
-        stt_mode_learning = None
-        if getattr(self, "_stt_mode_enabled", False) or getattr(self, "_stt_work_segments", None):
-            try:
-                from core.stt_mode.lora_runtime import export_stt_runtime_bundle
-                from core.stt_mode.project_state import build_stt_mode_state, default_stt_mode_learning
 
-                stt_bundle = export_stt_runtime_bundle(
-                    project_path=project_path,
-                    media_path=media_path,
-                    settings=dict(getattr(self, "settings", {}) or {}),
-                    work_segments=list(getattr(self, "_stt_work_segments", []) or []),
-                    raw_segments=list(getattr(self, "_stt_raw_dictation_segments", []) or []),
-                    final_segments=list(getattr(self, "_stt_final_segments", []) or []),
-                    learning_events=list(getattr(self, "_stt_learning_events", []) or []),
-                )
-                if stt_bundle:
-                    self._stt_lora_bundle_info = dict(stt_bundle)
-                    self._stt_adapter_refs = dict(stt_bundle.get("adapter_refs", {}) or {})
-                stt_mode_state = build_stt_mode_state(
-                    media_path=media_path,
-                    work_segments=list(getattr(self, "_stt_work_segments", []) or []),
-                    raw_dictation_segments=list(getattr(self, "_stt_raw_dictation_segments", []) or []),
-                    rolling_windows=list(getattr(self, "_stt_rolling_windows", []) or []),
-                    final_segments=list(getattr(self, "_stt_final_segments", []) or []),
-                    active_work_segment_id=str(getattr(self, "_stt_state_detail", {}).get("segment_id", "") or ""),
-                    primary_fps=getattr(getattr(self, "timeline", None), "fps", 30.0),
-                    adapter_refs=dict(getattr(self, "_stt_adapter_refs", {}) or {}),
-                )
-                stt_mode_learning = default_stt_mode_learning(
-                    {"events": list(getattr(self, "_stt_learning_events", []) or []), "learning_opt_in": True}
-                )
+        aux_state = collect_editor_project_aux_state(self)
+        settings_snapshot = deepcopy(dict(getattr(self, "settings", {}) or {}))
+        media_paths = list(getattr(main_w, "_multiclip_files", []) or []) or [media_path]
+        stt_runtime = {
+            "enabled": bool(getattr(self, "_stt_mode_enabled", False) or getattr(self, "_stt_work_segments", None)),
+            "work_segments": _copy_dict_rows(getattr(self, "_stt_work_segments", None)),
+            "raw_dictation_segments": _copy_dict_rows(getattr(self, "_stt_raw_dictation_segments", None)),
+            "rolling_windows": _copy_dict_rows(getattr(self, "_stt_rolling_windows", None)),
+            "final_segments": _copy_dict_rows(getattr(self, "_stt_final_segments", None)),
+            "learning_events": _copy_dict_rows(getattr(self, "_stt_learning_events", None)),
+            "active_work_segment_id": str(getattr(self, "_stt_state_detail", {}).get("segment_id", "") or ""),
+            "adapter_refs": dict(getattr(self, "_stt_adapter_refs", {}) or {}),
+        }
+        return {
+            "project_path": project_path,
+            "media_path": media_path,
+            "media_paths": [str(path) for path in list(media_paths or []) if path],
+            "srt_path": get_srt_path(media_path),
+            "segments": seg_rows,
+            "middle_segments": _copy_dict_rows(aux_state.get("middle_segments")),
+            "roughcut_result": deepcopy(dict(aux_state.get("roughcut_result") or {})),
+            "settings": settings_snapshot,
+            "workspace": deepcopy(workspace),
+            "active_work_mode": str(workspace.get("active_work_mode") or EDITOR_MODE),
+            "voice_activity_segments": _copy_dict_rows(aux_state.get("voice_activity_segments")),
+            "stt_preview_segments": _copy_dict_rows(aux_state.get("stt_preview_segments")),
+            "stt_runtime": deepcopy(stt_runtime),
+            "provisional_cut_boundaries": _copy_dict_rows(aux_state.get("provisional_cut_boundaries")),
+            "persist_analysis_artifacts": bool(persist_analysis_artifacts),
+            "rewrite_stt_reference_tracks": bool(rewrite_stt_reference_tracks),
+            "preliminary_middle_segments": _copy_dict_rows(aux_state.get("preliminary_middle_segments")),
+            "schedule_analysis_refresh": bool(schedule_analysis_refresh),
+            "saved_segments_signature": str(saved_segments_signature or ""),
+            "primary_fps": getattr(getattr(self, "timeline", None), "fps", 30.0),
+        }
+
+    def _start_deferred_project_save_worker(
+        self,
+        generation: int,
+        snapshot: dict[str, Any],
+        *,
+        snapshot_elapsed_ms: float = 0.0,
+    ) -> dict[str, Any]:
+        state = {
+            "generation": int(generation or 0),
+            "snapshot_elapsed_ms": float(snapshot_elapsed_ms or 0.0),
+            "started_at": time.perf_counter(),
+            "done_event": threading.Event(),
+            "result": None,
+            "error": None,
+            "finalized": False,
+        }
+
+        def _worker() -> None:
+            try:
+                state["result"] = _write_project_save_snapshot(snapshot)
             except Exception as exc:
-                get_logger().log(f"⚠️ STT 프로젝트 상태 구성 실패: {exc}")
-        save_project(
-            filepath=project_path,
-            media_paths=media_paths,
-            srt_path=get_srt_path(media_path),
-            segments=segs,
-            middle_segments=middle_segments,
-            roughcut_result=roughcut_result,
-            user_settings=dict(getattr(self, "settings", {}) or {}),
-            workspace=workspace,
-            active_work_mode=workspace["active_work_mode"],
-            voice_activity_segments=voice_activity_segments,
-            stt_preview_segments=stt_preview_segments,
-            stt_mode_state=stt_mode_state,
-            stt_mode_learning=stt_mode_learning,
-            provisional_cut_boundaries=provisional_cut_boundaries,
+                state["error"] = exc
+            finally:
+                state["done_event"].set()
+
+        state["thread"] = threading.Thread(
+            target=_worker,
+            daemon=True,
+            name=f"editor-project-save-{int(generation or 0)}",
+        )
+        self._deferred_project_save_worker_state = state
+        state["thread"].start()
+        return state
+
+    def _poll_deferred_project_save_worker(self, generation: int) -> None:
+        state = getattr(self, "_deferred_project_save_worker_state", None)
+        if not isinstance(state, dict):
+            return
+        if int(state.get("generation", 0) or 0) != int(generation or 0):
+            return
+        done_event = state.get("done_event")
+        if hasattr(done_event, "is_set") and not done_event.is_set():
+            QTimer.singleShot(50, lambda gen=generation: self._poll_deferred_project_save_worker(gen))
+            return
+        self._finalize_deferred_project_save_worker(generation)
+
+    def _wait_for_deferred_project_save_worker(self, generation: int) -> bool:
+        state = getattr(self, "_deferred_project_save_worker_state", None)
+        if not isinstance(state, dict):
+            return False
+        if int(state.get("generation", 0) or 0) != int(generation or 0):
+            return False
+        done_event = state.get("done_event")
+        app = QApplication.instance()
+        while hasattr(done_event, "wait") and not done_event.wait(0.05):
+            if app is not None:
+                try:
+                    app.processEvents()
+                except Exception:
+                    pass
+        return bool(self._finalize_deferred_project_save_worker(generation))
+
+    def _finalize_deferred_project_save_worker(self, generation: int) -> bool:
+        state = getattr(self, "_deferred_project_save_worker_state", None)
+        if not isinstance(state, dict):
+            return False
+        if int(state.get("generation", 0) or 0) != int(generation or 0):
+            return False
+        if bool(state.get("finalized", False)):
+            return not bool(state.get("error"))
+        done_event = state.get("done_event")
+        if hasattr(done_event, "is_set") and not done_event.is_set():
+            return False
+        state["finalized"] = True
+        self._deferred_project_save_worker_state = None
+        self._deferred_project_save_running = False
+        self._deferred_project_save_running_generation = 0
+
+        error = state.get("error")
+        if error is not None:
+            get_logger().log(f"⚠️ 프로젝트 지연 저장 실패: {error}")
+            self._deferred_project_save_pending = True
+            QTimer.singleShot(5_000, lambda gen=int(getattr(self, "_deferred_project_save_generation", 0) or 0): self._run_deferred_project_save(gen))
+            return False
+
+        result = dict(state.get("result") or {})
+        project_path = str(result.get("project_path") or "")
+        if result.get("stt_bundle_info"):
+            self._stt_lora_bundle_info = dict(result.get("stt_bundle_info") or {})
+        if result.get("stt_adapter_refs"):
+            self._stt_adapter_refs = dict(result.get("stt_adapter_refs") or {})
+        if project_path:
+            self._remember_saved_project_file(project_path)
+            if bool(result.get("schedule_analysis_refresh", True)):
+                try:
+                    self._schedule_project_analysis_artifacts_refresh(
+                        project_path,
+                        _copy_dict_rows(result.get("segments")),
+                        dict(result.get("settings") or {}),
+                        saved_segments_signature=str(result.get("saved_segments_signature", "") or ""),
+                    )
+                except Exception as exc:
+                    get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 예약 실패: {exc}")
+            self._set_deferred_project_save_status("에디터 | 프로젝트 저장 완료")
+            get_logger().log(
+                f"📦 프로젝트 지연 저장 완료: {os.path.basename(project_path)} "
+                f"(스냅샷 {float(state.get('snapshot_elapsed_ms', 0.0) or 0.0):.1f}ms · "
+                f"worker {float(result.get('elapsed_ms', 0.0) or 0.0):.1f}ms)"
+            )
+        else:
+            self._set_deferred_project_save_status("에디터 | SRT 저장 완료")
+        self._restore_editor_time_tags_after_save()
+
+        latest_generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
+        if bool(getattr(self, "_deferred_project_save_pending", False)) and latest_generation != int(generation or 0):
+            QTimer.singleShot(0, lambda gen=latest_generation: self._run_deferred_project_save(gen))
+        return True
+
+    def _auto_save_project(
+        self,
+        segs: list = None,
+        *,
+        persist_analysis_artifacts: bool = False,
+        rewrite_stt_reference_tracks: bool = False,
+        allow_create: bool = True,
+    ) -> str:
+        snapshot = self._capture_project_save_snapshot(
+            segs,
             persist_analysis_artifacts=bool(persist_analysis_artifacts),
             rewrite_stt_reference_tracks=bool(rewrite_stt_reference_tracks),
-            preliminary_middle_segments=preliminary_middle_segments,
+            allow_create=bool(allow_create),
+            schedule_analysis_refresh=False,
+            saved_segments_signature="",
         )
-        get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
+        if not snapshot:
+            return ""
+        result = _write_project_save_snapshot(snapshot)
+        project_path = str(result.get("project_path") or "")
+        if result.get("stt_bundle_info"):
+            self._stt_lora_bundle_info = dict(result.get("stt_bundle_info") or {})
+        if result.get("stt_adapter_refs"):
+            self._stt_adapter_refs = dict(result.get("stt_adapter_refs") or {})
+        if project_path:
+            get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
         self._restore_editor_time_tags_after_save()
         return project_path
 
@@ -1267,7 +1644,8 @@ class EditorSaveManagerMixin:
         try:
             is_dirty = self._has_unsaved_changes()
         except Exception:
-            is_dirty = bool(getattr(self, "_is_dirty", False))
+            dirty_flags = getattr(self, "_dirty_state_from_flags", None)
+            is_dirty = bool(dirty_flags()) if callable(dirty_flags) else bool(getattr(self, "_is_dirty", False))
         if not is_dirty:
             return True
         reply = self._show_confirm_dialog(title, "저장되지 않은 변경사항이 있습니다.\n저장하시겠습니까?")

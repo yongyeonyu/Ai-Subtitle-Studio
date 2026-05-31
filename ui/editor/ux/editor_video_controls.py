@@ -132,6 +132,8 @@ class EditorVideoControlsMixin:
         QTimer.singleShot(max(0, int(delay_ms)), _run_probe)
 
     def _load_video(self, path: str, *, load_waveform: bool = True, defer_media_probe: bool = False):
+        if bool(getattr(self, "_editor_widget_closing", False)):
+            return
         segs = self._get_current_segments()
         is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
         if is_multiclip and hasattr(self, '_build_local_segments_for_clip'):

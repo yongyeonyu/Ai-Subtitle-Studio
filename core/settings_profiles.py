@@ -209,7 +209,7 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "macos_memory_cache_prune_enabled": True,
     "project_external_srt_storage_enabled": True,
     "subtitle_cut_boundary_guard_enabled": True,
-    "subtitle_cut_boundary_allow_high_confidence_crossing": True,
+    "subtitle_cut_boundary_allow_high_confidence_crossing": False,
     "subtitle_cut_boundary_high_confidence_score": 96.0,
     "prefetch_ahead": 3,
     "io_workers": 6,

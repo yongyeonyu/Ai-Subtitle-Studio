@@ -1062,11 +1062,15 @@ class EditorActionsMixin:
     # ---------------------------------------------------------
     def _show_export_dialog(self, output_mode: str | None = None, initial_tab: str | None = None):
         is_dirty = False
+        dirty_checker = getattr(self, "_has_unsaved_changes", None)
+        dirty_flags = getattr(self, "_dirty_state_from_flags", None)
         try:
-            if hasattr(self, "sm"):
-                is_dirty = self._has_unsaved_changes()
+            if callable(dirty_checker):
+                is_dirty = bool(dirty_checker())
+            elif callable(dirty_flags):
+                is_dirty = bool(dirty_flags())
         except Exception:
-            pass
+            is_dirty = bool(dirty_flags()) if callable(dirty_flags) else False
 
         if is_dirty:
             reply = self._show_confirm_dialog(
@@ -1079,7 +1083,12 @@ class EditorActionsMixin:
                 if not self._on_save(skip_auto_next=True):
                     return
                 try:
-                    is_dirty = self._has_unsaved_changes()
+                    if callable(dirty_checker):
+                        is_dirty = bool(dirty_checker())
+                    elif callable(dirty_flags):
+                        is_dirty = bool(dirty_flags())
+                    else:
+                        is_dirty = False
                 except Exception:
                     is_dirty = False
 

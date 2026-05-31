@@ -233,6 +233,8 @@ def _friendly_log_entry(raw_line: str) -> tuple[str, str]:
         detail = ""
         if "VAD lattice" in text:
             detail = "음성 경계"
+        elif "전체 자막" in text and any(token in text for token in ("맞춤법", "띄어쓰기", "단어 교정")):
+            detail = "전구간 교정"
         elif "Whisper" in text:
             detail = "부분 재인식"
         elif "자막자석" in text:

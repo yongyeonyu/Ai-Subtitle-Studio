@@ -264,15 +264,23 @@ class EditorWidget(
         self._last_segment_cache_block_count = 0
         self._subtitle_context_window_index_cache = {}
         self._subtitle_context_index_epoch = 0
+        self._initial_segments_saved_marked = False
+        self._initial_segments_saved_signature = ""
+        self._editor_widget_closing = False
 
         self._is_initial_load = True if segments else False
         self._initial_open_view_mode = "window" if segments else "fit"
         if segments:
-            self.apply_loaded_canvas_state(
+            loaded_segments = self.apply_loaded_canvas_state(
                 segments,
                 preserve_view=False,
                 mark_dirty=False,
             )
+            try:
+                if hasattr(self, "_segments_dirty_signature"):
+                    self._initial_segments_saved_signature = self._segments_dirty_signature(loaded_segments)
+            except Exception:
+                self._initial_segments_saved_signature = ""
             self._schedule_initial_open_layout((0, 160, 360))
             QTimer.singleShot(350, self._mark_initial_segments_saved)
 
@@ -460,17 +468,30 @@ class EditorWidget(
         timer.start(max(0, int(delay_ms)))
 
     def _mark_initial_segments_saved(self):
+        if bool(getattr(self, "_editor_widget_closing", False)):
+            return
+        if bool(getattr(self, "_initial_segments_saved_marked", False)):
+            return
         if getattr(self, "_segment_queue", None):
             QTimer.singleShot(150, self._mark_initial_segments_saved)
             return
         if not hasattr(self, "_remember_saved_segments"):
             return
         try:
+            expected_signature = str(getattr(self, "_initial_segments_saved_signature", "") or "")
+            if expected_signature and hasattr(self, "_segments_dirty_signature"):
+                current_signature = self._segments_dirty_signature(self._get_current_segments())
+                if current_signature != expected_signature:
+                    return
+        except Exception:
+            pass
+        try:
             self._remember_saved_segments(self._get_current_segments())
             if hasattr(self, "_remember_saved_project_file"):
                 self._remember_saved_project_file()
             if hasattr(self, "sm") and self.sm.state != SubtitleStateManager.ST_PROC:
                 self.sm.complete_save()
+            self._initial_segments_saved_marked = True
         except Exception:
             pass
 
@@ -1834,6 +1855,20 @@ class EditorWidget(
                 self.timeline.sig_inline_text_changed.disconnect(self._on_inline_text_changed)
         except (TypeError, RuntimeError):
             pass
+
+    def closeEvent(self, event):
+        self._editor_widget_closing = True
+        try:
+            flusher = getattr(self, "_flush_deferred_project_save", None)
+            if callable(flusher):
+                flusher(reason="widget_close")
+        except Exception:
+            pass
+        try:
+            self._cleanup()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     def _toggle_focus(self):
         if self.text_edit.hasFocus():

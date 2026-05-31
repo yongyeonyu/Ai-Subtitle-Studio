@@ -93,7 +93,7 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertAlmostEqual(adjusted[0]["end"], 1.2, places=3)
         self.assertAlmostEqual(adjusted[1]["start"], 2.0, places=3)
 
-    def test_final_gap_settings_do_not_pull_across_confirmed_cut_scene(self):
+    def test_final_gap_settings_close_short_gap_to_confirmed_cut_scene_boundary(self):
         segments = [
             {
                 "start": 0.0,
@@ -124,11 +124,44 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
             force=True,
         )
 
-        self.assertLessEqual(adjusted[0]["end"], 3.0)
-        self.assertAlmostEqual(adjusted[1]["start"], 3.2, places=3)
-        self.assertEqual(adjusted[0]["_cut_boundary_guard_policy"]["action"], "clamped_to_cut_scene")
+        self.assertAlmostEqual(adjusted[0]["end"], 3.0, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 3.0, places=3)
+        self.assertEqual(adjusted[0]["_gap_boundary_policy"]["source"], "confirmed_cut")
 
     def test_final_gap_settings_allows_high_confidence_cut_crossing_exception(self):
+        segments = [
+            {
+                "start": 2.0,
+                "end": 3.2,
+                "text": "강한 근거 자막",
+                "cut_scene_index": 0,
+                "cut_scene_start": 0.0,
+                "cut_scene_end": 3.0,
+                "_lora_generation_profile": {"top_score": 98.0},
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "single_subtitle_end": 0.0,
+                "sub_min_duration": 0.2,
+                "subtitle_cut_boundary_allow_high_confidence_crossing": True,
+                "subtitle_cut_boundary_high_confidence_score": 96.0,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[0]["end"], 3.2, places=3)
+        self.assertEqual(
+            adjusted[0]["_cut_boundary_guard_policy"]["action"],
+            "allowed_high_confidence_crossing",
+        )
+        policy = adjusted[0]["_cut_boundary_guard_policy"]
+        self.assertTrue(policy["hard_cut_crossing_exception"])
+        self.assertGreaterEqual(policy["evidence"]["combined_confidence"], policy["evidence"]["threshold"])
+
+    def test_final_gap_settings_high_confidence_cut_crossing_is_disabled_by_default(self):
         segments = [
             {
                 "start": 2.0,
@@ -151,14 +184,144 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
             force=True,
         )
 
-        self.assertAlmostEqual(adjusted[0]["end"], 3.2, places=3)
-        self.assertEqual(
-            adjusted[0]["_cut_boundary_guard_policy"]["action"],
+        self.assertAlmostEqual(adjusted[0]["end"], 3.0, places=3)
+        self.assertNotEqual(
+            adjusted[0].get("_cut_boundary_guard_policy", {}).get("action"),
             "allowed_high_confidence_crossing",
         )
-        policy = adjusted[0]["_cut_boundary_guard_policy"]
-        self.assertTrue(policy["hard_cut_crossing_exception"])
-        self.assertGreaterEqual(policy["evidence"]["combined_confidence"], policy["evidence"]["threshold"])
+
+    def test_final_gap_settings_close_short_gap_on_confirmed_cut_boundary(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "A",
+                "cut_scene_index": 0,
+                "cut_scene_start": 0.0,
+                "cut_scene_end": 2.0,
+            },
+            {
+                "start": 2.6,
+                "end": 3.1,
+                "text": "B",
+                "cut_scene_index": 1,
+                "cut_scene_start": 2.0,
+                "cut_scene_end": 4.0,
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 2.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.2,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[0]["end"], 2.0, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 2.0, places=3)
+        self.assertEqual(adjusted[0]["_gap_boundary_policy"]["source"], "confirmed_cut")
+
+    def test_final_gap_settings_close_short_gap_on_voice_boundary(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "A",
+                "voice_activity_segments": [{"start": 0.18, "end": 1.72}],
+            },
+            {
+                "start": 2.2,
+                "end": 3.0,
+                "text": "B",
+                "voice_activity_segments": [{"start": 1.72, "end": 2.62}],
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 2.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.2,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[0]["end"], 1.72, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 1.72, places=3)
+        self.assertEqual(adjusted[0]["_gap_boundary_policy"]["source"], "voice_boundary")
+
+    def test_final_gap_settings_close_short_gap_on_provisional_boundary_metadata(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "A",
+                "nearest_provisional_cut_sec": 1.55,
+            },
+            {
+                "start": 2.1,
+                "end": 3.0,
+                "text": "B",
+                "nearest_provisional_cut_sec": 1.55,
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 2.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.2,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[0]["end"], 1.55, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 1.55, places=3)
+        self.assertEqual(adjusted[0]["_gap_boundary_policy"]["source"], "provisional_cut")
+
+    def test_final_gap_settings_anchor_window_cannot_reopen_confirmed_cut_crossing(self):
+        segments = [
+            {
+                "start": 2.0,
+                "end": 3.2,
+                "text": "경계 고정",
+                "cut_scene_index": 0,
+                "cut_scene_start": 0.0,
+                "cut_scene_end": 3.0,
+                "words": [
+                    {"word": "경계", "start": 2.08, "end": 2.35},
+                    {"word": "고정", "start": 2.52, "end": 3.15},
+                ],
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "single_subtitle_end": 0.0,
+                "sub_min_duration": 0.2,
+                "subtitle_timing_anchor_max_end_lead_sec": 0.12,
+                "subtitle_timing_anchor_max_end_lag_sec": 0.18,
+            },
+            force=True,
+        )
+
+        self.assertLessEqual(adjusted[0]["end"], 3.0)
+        self.assertNotEqual(
+            adjusted[0].get("_cut_boundary_guard_policy", {}).get("action"),
+            "allowed_high_confidence_crossing",
+        )
 
     def test_final_gap_settings_are_idempotent_when_already_applied(self):
         segments = [
@@ -1512,6 +1675,36 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
 
         self.assertIn('<font color="', color_content)
         self.assertIn("- 아이스로 드릴까요?", color_content)
+
+    def test_save_srt_fast_path_skips_backup_folder_when_backup_disabled(self):
+        from core.engine.srt_writer import save_srt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "fast_save.srt")
+            save_srt(
+                [{"start": 0.0, "end": 1.0, "text": "빠른 저장"}],
+                path,
+                apply_offset=False,
+                write_backup=False,
+            )
+
+            self.assertTrue(os.path.exists(path))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "자막백업")))
+
+    def test_save_srt_unchanged_content_does_not_create_duplicate_backup(self):
+        from core.engine.srt_writer import save_srt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "backup_once.srt")
+            segs = [{"start": 0.0, "end": 1.0, "text": "백업 한번"}]
+            save_srt(segs, path, apply_offset=False, write_backup=True)
+            backup_dir = os.path.join(tmp, "자막백업")
+            first_backups = sorted(os.listdir(backup_dir))
+
+            save_srt(segs, path, apply_offset=False, write_backup=True)
+            second_backups = sorted(os.listdir(backup_dir))
+
+            self.assertEqual(first_backups, second_backups)
 
     def test_project_text_asset_srt_strips_periods(self):
         from core.project.project_assets import write_srt_track

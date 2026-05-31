@@ -527,6 +527,56 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(loaded["project_name"], "테스트")
         self.assertEqual(loaded["analysis"]["stt_candidate_tracks"]["STT2"][0]["text"], "안녕 하세요")
 
+    def test_project_io_writes_binary_envelope_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.aissproj"
+            payload = {
+                "project_name": "binary-fast",
+                "editor_state": {
+                    "rendering": {
+                        "subtitle_canvas": {
+                            "segments": [
+                                {
+                                    "id": f"seg-{idx}",
+                                    "start": idx * 1.0,
+                                    "end": idx * 1.0 + 0.5,
+                                    "text": "반복 저장 성능 확인 " * 4,
+                                }
+                                for idx in range(400)
+                            ]
+                        }
+                    }
+                },
+            }
+
+            write_project_file(str(path), payload)
+            raw = path.read_bytes()
+            stored = project_io.read_project_storage_payload(str(path))
+            pretty_json = json.dumps(
+                project_io._project_payload_for_disk(payload),
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8")
+
+        self.assertTrue(raw.startswith(project_io._PROJECT_BINARY_MAGIC))
+        self.assertFalse(raw.lstrip().startswith(b"{"))
+        self.assertLess(len(raw), int(len(pretty_json) * 0.75))
+        self.assertEqual(stored["project_name"], "binary-fast")
+        self.assertEqual(
+            stored["editor_state"]["rendering"]["subtitle_canvas"]["segments"][3]["text"],
+            "반복 저장 성능 확인 " * 4,
+        )
+
+    def test_project_io_reads_legacy_json_project_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy.aissproj"
+            path.write_text(json.dumps({"project_name": "legacy-json"}, ensure_ascii=False), encoding="utf-8")
+            clear_project_file_cache(str(path))
+
+            loaded = read_project_file(str(path))
+
+        self.assertEqual(loaded["project_name"], "legacy-json")
+
     def test_project_io_reuses_memory_cache_for_heavy_project_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"
@@ -1014,8 +1064,7 @@ class ProjectContextTests(unittest.TestCase):
                 roughcut_result=roughcut_result,
                 roughcut_state=roughcut_state,
             )
-            with open(path, encoding="utf-8") as handle:
-                raw = json.load(handle)
+            raw = project_io.read_project_storage_payload(str(path))
             loaded = load_project(str(path))
 
         self.assertEqual(raw["storage_schema"], PROJECT_STORAGE_SCHEMA)
@@ -1320,6 +1369,184 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(loaded["video"]["width"], 1920)
         self.assertEqual(loaded["video"]["height"], 1080)
 
+    def test_save_project_reuses_existing_status_payload_without_recomputing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"fake")
+            project = {
+                "app": "AI Subtitle Studio",
+                "version": "test",
+                "phase": "PHASE2",
+                "timeline": {
+                    "total_duration": 2.0,
+                    "tracks": [
+                        {
+                            "clips": [
+                                {
+                                    "id": "clip_a",
+                                    "source_path": str(media),
+                                    "timeline_start": 0.0,
+                                    "timeline_end": 2.0,
+                                    "order": 0,
+                                }
+                            ]
+                        }
+                    ],
+                },
+                "media": [{"order": 0, "path": str(media)}],
+                "video": {
+                    "schema": PROJECT_VIDEO_SCHEMA,
+                    "primary_path": str(media),
+                    "media_kind": "video",
+                    "duration_sec": 2.0,
+                    "primary_fps": 30.0,
+                    "frame_duration": 1.0 / 30.0,
+                    "total_frames": 60,
+                    "width": 1920,
+                    "height": 1080,
+                    "resolution": "1920x1080",
+                    "clip_count": 1,
+                    "clips": [
+                        {
+                            "id": "clip_a",
+                            "order": 0,
+                            "path": str(media),
+                            "type": "video",
+                            "duration_sec": 2.0,
+                            "fps": 30.0,
+                            "frame_count": 60,
+                            "width": 1920,
+                            "height": 1080,
+                            "timeline_start_frame": 0,
+                            "timeline_end_frame": 60,
+                            "source_start_frame": 0,
+                            "source_end_frame": 60,
+                        }
+                    ],
+                },
+                "subtitles": {"segments": []},
+                "workspace": {},
+                "user_settings": {},
+            }
+            write_project_file(str(path), project)
+
+            seg = {
+                "id": "seg_1",
+                "start": 0.0,
+                "end": 1.0,
+                "text": "상태 재사용",
+                "speaker": "00",
+                "start_frame": 0,
+                "end_frame": 30,
+                "timeline_start_frame": 0,
+                "timeline_end_frame": 30,
+                "frame_rate": 30.0,
+                "subtitle_review_state": "confirmed",
+                "subtitle_status_color": "#34C759",
+                "subtitle_status_schema": "subtitle_status.v1",
+            }
+
+            with patch("core.project.project_manager.subtitle_status_payload", side_effect=AssertionError("save_project should reuse existing status payload")), \
+                 patch("core.project.project_context.subtitle_status_payload", side_effect=AssertionError("build_editor_state should reuse existing status payload")), \
+                 patch("core.project.project_context.recheck_threshold", side_effect=AssertionError("build_editor_state should not reload threshold when payload already exists")):
+                save_project(
+                    str(path),
+                    segments=[seg],
+                    persist_analysis_artifacts=False,
+                    rewrite_stt_reference_tracks=False,
+                )
+
+            loaded = load_project(str(path))
+            editor_segment = project_segments_to_editor(loaded)[0]
+            self.assertEqual(editor_segment["subtitle_review_state"], "confirmed")
+            self.assertEqual(editor_segment["subtitle_status_schema"], "subtitle_status.v1")
+
+    def test_save_project_uses_effective_settings_threshold_for_missing_status_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"fake")
+            project = {
+                "app": "AI Subtitle Studio",
+                "version": "test",
+                "phase": "PHASE2",
+                "timeline": {
+                    "total_duration": 2.0,
+                    "tracks": [
+                        {
+                            "clips": [
+                                {
+                                    "id": "clip_a",
+                                    "source_path": str(media),
+                                    "timeline_start": 0.0,
+                                    "timeline_end": 2.0,
+                                    "order": 0,
+                                }
+                            ]
+                        }
+                    ],
+                },
+                "media": [{"order": 0, "path": str(media)}],
+                "video": {
+                    "schema": PROJECT_VIDEO_SCHEMA,
+                    "primary_path": str(media),
+                    "media_kind": "video",
+                    "duration_sec": 2.0,
+                    "primary_fps": 30.0,
+                    "frame_duration": 1.0 / 30.0,
+                    "total_frames": 60,
+                    "width": 1920,
+                    "height": 1080,
+                    "resolution": "1920x1080",
+                    "clip_count": 1,
+                    "clips": [
+                        {
+                            "id": "clip_a",
+                            "order": 0,
+                            "path": str(media),
+                            "type": "video",
+                            "duration_sec": 2.0,
+                            "fps": 30.0,
+                            "frame_count": 60,
+                            "width": 1920,
+                            "height": 1080,
+                            "timeline_start_frame": 0,
+                            "timeline_end_frame": 60,
+                            "source_start_frame": 0,
+                            "source_end_frame": 60,
+                        }
+                    ],
+                },
+                "subtitles": {"segments": []},
+                "workspace": {},
+                "user_settings": {},
+            }
+            write_project_file(str(path), project)
+
+            seg = {
+                "id": "seg_1",
+                "start": 0.0,
+                "end": 1.0,
+                "text": "임계값 1회 계산",
+                "speaker": "00",
+                "start_frame": 0,
+                "end_frame": 30,
+                "timeline_start_frame": 0,
+                "timeline_end_frame": 30,
+                "frame_rate": 30.0,
+                "stt_score": 72.0,
+            }
+
+            with patch("core.project.project_context.recheck_threshold", side_effect=AssertionError("save path should use effective settings threshold without reloading runtime settings")):
+                save_project(
+                    str(path),
+                    segments=[seg],
+                    user_settings={"stt_low_score_recheck_threshold": 61.0},
+                    persist_analysis_artifacts=False,
+                    rewrite_stt_reference_tracks=False,
+                )
+
     def test_saved_project_writes_video_header_first_and_drops_legacy_runtime_duplicates(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"
@@ -1350,7 +1577,7 @@ class ProjectContextTests(unittest.TestCase):
                     segments=[{"start": 0.0, "end": 0.5, "text": "헤더", "speaker": "00"}],
                 )
 
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = project_io.read_project_storage_payload(str(path))
 
         self.assertEqual(list(raw.keys())[:3], ["video", "app", "version"])
         self.assertNotIn("media", raw)
@@ -1751,9 +1978,9 @@ class ProjectContextTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("core.project.project_manager.recheck_threshold", return_value=60.0) as threshold_mock, patch(
+            with patch(
                 "core.project.project_context.recheck_threshold",
-                return_value=60.0,
+                side_effect=AssertionError("save_project should resolve the threshold from effective settings"),
             ):
                 save_project(
                     str(path),
@@ -1762,11 +1989,10 @@ class ProjectContextTests(unittest.TestCase):
                         {"start": 1.0, "end": 2.0, "text": "둘째 줄", "speaker": "00", "stt_score": 79},
                         {"start": 2.0, "end": 3.0, "text": "셋째 줄", "speaker": "00", "stt_score": 58},
                     ],
+                    user_settings={"stt_low_score_recheck_threshold": 60.0},
                     persist_analysis_artifacts=False,
                     rewrite_stt_reference_tracks=False,
                 )
-
-        threshold_mock.assert_called_once()
 
     def test_project_save_and_phase1b_enrich_preserve_stt1_stt2_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1922,7 +2148,7 @@ class ProjectContextTests(unittest.TestCase):
                 ],
             )
 
-            first_payload = json.loads(path.read_text(encoding="utf-8"))
+            first_payload = project_io.read_project_storage_payload(str(path))
             stt1_path = path.parent / first_payload["asset_storage"]["tracks"]["stt_stt1"]["path"]
             stt2_path = path.parent / first_payload["asset_storage"]["tracks"]["stt_stt2"]["path"]
             before_stt1 = stt1_path.read_text(encoding="utf-8")
@@ -2319,7 +2545,7 @@ class ProjectContextTests(unittest.TestCase):
                     ],
                 )
 
-            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            raw_payload = project_io.read_project_storage_payload(str(path))
             final_srt = path.parent / raw_payload["subtitles"]["srt_path"]
             stt1_srt = path.parent / raw_payload["asset_storage"]["tracks"]["stt_stt1"]["path"]
             stt2_srt = path.parent / raw_payload["asset_storage"]["tracks"]["stt_stt2"]["path"]
@@ -2337,7 +2563,7 @@ class ProjectContextTests(unittest.TestCase):
             self.assertTrue(stt1_srt.exists())
             self.assertTrue(stt2_srt.exists())
             self.assertIn("최종 자막", final_srt.read_text(encoding="utf-8"))
-            self.assertNotIn("후보 하나", path.read_text(encoding="utf-8"))
+            self.assertNotIn("후보 하나", json.dumps(raw_payload, ensure_ascii=False))
             self.assertEqual((final_meta["start_frame"], final_meta["end_frame"]), (0, 24))
             self.assertEqual((stt1_meta["start_frame"], stt1_meta["end_frame"]), (0, 24))
             self.assertEqual(
@@ -2770,7 +2996,7 @@ class ProjectContextTests(unittest.TestCase):
             }
 
             write_project_file(str(path), project)
-            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            raw_payload = project_io.read_project_storage_payload(str(path))
 
         self.assertEqual(project["editor_state"]["rendering"]["subtitle_canvas"]["segments"][0]["text"], "런타임 자막")
         self.assertEqual(project["editor_state"]["stt"]["preview_segments"][0]["text"], "런타임 후보")
@@ -2810,7 +3036,7 @@ class ProjectContextTests(unittest.TestCase):
                 stt_tracks={},
             )
             write_project_file(str(path), project)
-            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            raw_payload = project_io.read_project_storage_payload(str(path))
             payload = read_project_file(str(path))
 
         self.assertEqual(raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["segments"], [])
@@ -2910,7 +3136,7 @@ class ProjectContextTests(unittest.TestCase):
                 save_project(str(path), media_paths=[str(media)], segments=[])
 
             repaired = load_project(str(path), hydrate_text_assets=False)
-            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            raw_payload = project_io.read_project_storage_payload(str(path))
 
         self.assertEqual(raw_payload["subtitles"]["storage"], PROJECT_EXTERNAL_STORAGE)
         self.assertIn("asset_storage", raw_payload)
@@ -2962,7 +3188,7 @@ class ProjectContextTests(unittest.TestCase):
                 )
 
             clear_project_file_cache(str(path))
-            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            raw_payload = project_io.read_project_storage_payload(str(path))
             loaded = load_project(str(path), hydrate_text_assets=False)
 
         self.assertEqual(raw_payload["subtitles"]["storage"], "editor_state.rendering.subtitle_canvas")

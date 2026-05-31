@@ -5,6 +5,7 @@ SRT 저장 / 화자 컬러 SRT / 자막백업 생성.
 """
 import json
 import os
+import tempfile
 from datetime import datetime
 
 from core.engine.subtitle_segments import infer_save_fps, prepare_save_reopen_segments
@@ -22,6 +23,45 @@ def _normalize_saved_subtitle_text(text: str) -> str:
 
 def _infer_save_fps(segments: list[dict], fps: float | int | str | None = None) -> float | None:
     return infer_save_fps(segments, fps)
+
+
+def _write_text_atomic(path: str, content: str) -> None:
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=directory,
+            prefix=f".{os.path.basename(path)}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = handle.name
+            handle.write(content)
+            handle.flush()
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path:
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
+def _write_text_atomic_if_changed(path: str, content: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            if handle.read() == content:
+                return False
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    _write_text_atomic(path, content)
+    return True
 
 
 def save_srt(
@@ -112,7 +152,8 @@ def save_srt(
     backup_dir = os.path.join(target_dir, "자막백업")
 
     os.makedirs(target_dir, exist_ok=True)
-    os.makedirs(backup_dir, exist_ok=True)
+    if write_backup:
+        os.makedirs(backup_dir, exist_ok=True)
 
     plain_srt_path = os.path.join(target_dir, f"{base_name}.srt")
     color_srt_path = os.path.join(target_dir, f"{base_name}_화자.srt")
@@ -120,32 +161,36 @@ def save_srt(
     plain_content = "\n".join(lines_plain)
     color_content = "\n".join(lines_color)
 
-    with open(plain_srt_path, "w", encoding="utf-8") as f:
-        f.write(plain_content)
+    plain_changed = _write_text_atomic_if_changed(plain_srt_path, plain_content)
+    color_changed = False
 
     if generate_color_srt:
-        with open(color_srt_path, "w", encoding="utf-8") as f:
-            f.write(color_content)
+        color_changed = _write_text_atomic_if_changed(color_srt_path, color_content)
 
     now = datetime.now()
     date_str = now.strftime("%Y%m%d")
     time_str = now.strftime("%H%M%S")
 
     if write_backup:
-        backup_plain = os.path.join(backup_dir, f"{base_name}_{date_str}_{time_str}.srt")
-        with open(backup_plain, "w", encoding="utf-8") as f:
-            f.write(plain_content)
+        if plain_changed:
+            backup_plain = os.path.join(backup_dir, f"{base_name}_{date_str}_{time_str}.srt")
+            _write_text_atomic(backup_plain, plain_content)
 
-        if generate_color_srt:
+        if generate_color_srt and color_changed:
             backup_color = os.path.join(backup_dir, f"{base_name}_화자_{date_str}_{time_str}.srt")
-            with open(backup_color, "w", encoding="utf-8") as f:
-                f.write(color_content)
+            _write_text_atomic(backup_color, color_content)
 
-        log_msg = f"✅ 자막 저장 및 자동 백업 완료: {time_str}"
+        if plain_changed or color_changed:
+            log_msg = f"✅ 자막 저장 및 자동 백업 완료: {time_str}"
+        else:
+            log_msg = f"✅ 자막 저장 완료: 변경 없음 ({time_str})"
         if not generate_color_srt:
             log_msg += " (단일 화자 감지: 화자 분리 파일 생략)"
     else:
-        log_msg = f"✅ 자막 빠른 저장 완료: {time_str}"
+        if plain_changed or color_changed:
+            log_msg = f"✅ 자막 빠른 저장 완료: {time_str}"
+        else:
+            log_msg = f"✅ 자막 빠른 저장 완료: 변경 없음 ({time_str})"
         if not generate_color_srt:
             log_msg += " (단일 화자 감지: 화자 분리 파일 생략)"
     get_logger().log(log_msg)

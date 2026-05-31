@@ -55,11 +55,12 @@ class FileOpsMixin:
         editor = getattr(self, "_editor_widget", None)
         if editor is None:
             return True
+        dirty_flags = getattr(editor, "_dirty_state_from_flags", None)
         helper = getattr(editor, "_confirm_close_before_exit", None)
         if callable(helper):
-            before_dirty = bool(getattr(editor, "_is_dirty", False))
+            before_dirty = bool(dirty_flags()) if callable(dirty_flags) else bool(getattr(editor, "_is_dirty", False))
             ok = bool(helper("종료 확인"))
-            after_dirty = bool(getattr(editor, "_is_dirty", False))
+            after_dirty = bool(dirty_flags()) if callable(dirty_flags) else bool(getattr(editor, "_is_dirty", False))
             if ok and before_dirty and not after_dirty:
                 self._editor_exit_save_completed = True
             elif ok and before_dirty and after_dirty:
@@ -69,12 +70,14 @@ class FileOpsMixin:
             dirty_checker = getattr(editor, "_has_unsaved_changes", None)
             if callable(dirty_checker):
                 is_dirty = bool(dirty_checker())
+            elif callable(dirty_flags):
+                is_dirty = bool(dirty_flags())
             elif hasattr(editor, "sm"):
                 is_dirty = bool(getattr(editor.sm, "is_dirty", False))
             else:
                 is_dirty = bool(getattr(editor, "_is_dirty", False))
         except Exception:
-            is_dirty = bool(getattr(editor, "_is_dirty", False))
+            is_dirty = bool(dirty_flags()) if callable(dirty_flags) else bool(getattr(editor, "_is_dirty", False))
         if not is_dirty:
             return True
 

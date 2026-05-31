@@ -14,6 +14,7 @@ from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QWidget
 
 from core.runtime import config
+from core.project.project_io import read_project_storage_payload
 from core.state_manager import SubtitleStateManager
 from core.work_mode import EDITOR_MODE
 from ui.editor.editor_actions import EditorActionsMixin
@@ -636,8 +637,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             self.assertIsNone(backend._cut_boundary_pipeline_cache)
             self.assertEqual(len(backend._cut_boundary_provisional_rows), 1)
 
-            with open(project_path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
+            saved = read_project_storage_payload(project_path)
             saved_analysis = saved.get("analysis", {})
             self.assertEqual(len(saved_analysis.get("cut_boundaries", [])), 1)
             self.assertEqual(saved_analysis["cut_boundaries"][0]["timeline_sec"], 10.0)
@@ -2141,8 +2141,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertEqual(window._roughcut_widget._selected_candidate_id, "")
                 self.assertTrue(window._roughcut_widget.refreshed)
                 self.assertTrue(window._roughcut_widget.empty)
-                with open(project_path, "r", encoding="utf-8") as f:
-                    saved_project = json.load(f)
+                saved_project = read_project_storage_payload(project_path)
                 self.assertEqual(saved_project.get("roughcut_state"), {})
                 self.assertNotIn("segments", saved_project.get("subtitles", {}))
                 self.assertEqual(saved_project.get("subtitles", {}).get("storage"), "editor_state.rendering.subtitle_canvas")
@@ -2213,8 +2212,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                     window._prepare_cut_boundary_prescan_for_restart(backend, [media_path])
 
                 self.assertEqual(backend.calls, [(project_path, [media_path])])
-                with open(project_path, "r", encoding="utf-8") as f:
-                    saved = json.load(f)
+                saved = read_project_storage_payload(project_path)
                 self.assertEqual(saved["user_settings"]["stt_quality_preset"], "balanced")
                 self.assertEqual(saved["user_settings"]["cut_boundary_level"], "low")
                 self.assertNotIn("cut_boundary_prescan_done", saved["analysis"])

@@ -77,17 +77,18 @@ class EditorSegmentsRuntimeCacheMixin:
                 self.sm.start_editing()
                 started_editing = True
             else:
-                self.sm.is_dirty = True
+                setter = getattr(self, "_set_shared_dirty_state", None)
+                if callable(setter):
+                    setter(True, refresh_status=False)
+                else:
+                    self.sm.is_dirty = True
+        setter = getattr(self, "_set_shared_dirty_state", None)
+        if callable(setter):
+            setter(True, refresh_status=True, broadcast=not started_editing)
         else:
             self._is_dirty = True
         if started_editing and hasattr(self, "_note_editor_foreground_activity"):
             self._note_editor_foreground_activity()
-        try:
-            main_w = self.window()
-            if hasattr(main_w, "_refresh_saved_status_label"):
-                main_w._refresh_saved_status_label(is_dirty=True)
-        except Exception:
-            pass
 
     def _note_editor_foreground_activity(self):
         self._last_editor_foreground_activity_at = time.monotonic()

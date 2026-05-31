@@ -177,7 +177,7 @@
     "macos_memory_cache_prune_enabled": true,
     "project_external_srt_storage_enabled": true,
     "subtitle_cut_boundary_guard_enabled": true,
-    "subtitle_cut_boundary_allow_high_confidence_crossing": true,
+    "subtitle_cut_boundary_allow_high_confidence_crossing": false,
     "subtitle_cut_boundary_high_confidence_score": 96.0,
     "prefetch_ahead": 3,
     "io_workers": 10,

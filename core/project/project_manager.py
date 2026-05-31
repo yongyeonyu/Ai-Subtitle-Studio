@@ -26,6 +26,7 @@ from core.cut_boundary import (
     sync_project_cut_boundaries,
 )
 from core.project.project_context import (
+    SUBTITLE_STATUS_PAYLOAD_KEYS,
     STT_SEGMENT_METADATA_KEYS,
     build_editor_state,
     project_media_files,
@@ -68,7 +69,7 @@ from core.roughcut import (
     merge_editor_roughcut_draft_state,
     run_editor_roughcut_llm_draft,
 )
-from core.project.subtitle_status import recheck_threshold, subtitle_status_payload
+from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 from core.project.project_srt import parse_srt_to_segments
 from core.project.project_model_settings import (
@@ -621,6 +622,7 @@ def _store_project_editor_state(
     cut_boundaries: list[dict] | None = None,
     provisional_cut_boundaries: list[dict] | None = None,
     primary_fps: float | None = None,
+    status_threshold: float | None = None,
 ) -> dict:
     normalized_media_files = [str(path) for path in list(media_files or []) if path]
     project["editor_state"] = build_editor_state(
@@ -633,6 +635,7 @@ def _store_project_editor_state(
         cut_boundaries=cut_boundaries,
         provisional_cut_boundaries=provisional_cut_boundaries,
         primary_fps=primary_fps,
+        status_threshold=status_threshold,
     )
     return project["editor_state"]
 
@@ -672,6 +675,7 @@ def _store_editor_state_after_save(
     primary_fps: float | None,
     cut_boundaries: list[dict] | None,
     provisional_cut_boundaries: list[dict] | None,
+    status_threshold: float | None = None,
 ) -> None:
     write_inputs = _save_editor_state_write_inputs(
         voice_activity_segments=voice_activity_segments,
@@ -694,7 +698,16 @@ def _store_editor_state_after_save(
         cut_boundaries=cut_boundaries,
         provisional_cut_boundaries=provisional_cut_boundaries,
         primary_fps=primary_fps,
+        status_threshold=status_threshold,
     )
+
+
+def _segment_has_saved_status(seg: dict | None) -> bool:
+    if not isinstance(seg, dict):
+        return False
+    state = str(seg.get("subtitle_review_state", "") or "").strip()
+    schema = str(seg.get("subtitle_status_schema", "") or "").strip()
+    return bool(state and schema)
 
 
 def _store_project_recovery_checkpoint(
@@ -1013,6 +1026,29 @@ def _external_text_storage_enabled(project: dict, user_settings: dict | None = N
     if isinstance(settings, dict) and "project_external_srt_storage_enabled" in settings:
         return bool(settings.get("project_external_srt_storage_enabled"))
     return True
+
+
+def _status_threshold_from_settings(
+    settings: dict | None,
+    *,
+    has_segments: bool,
+) -> float | None:
+    if not has_segments:
+        return None
+    default_value = config.DEFAULT_ADV_SETTINGS.get("stt_low_score_recheck_threshold", 60)
+    if not isinstance(settings, dict):
+        try:
+            return float(default_value or 60)
+        except (TypeError, ValueError):
+            return 60.0
+    value = settings.get("stt_low_score_recheck_threshold", default_value)
+    try:
+        return float(value or default_value or 60)
+    except (TypeError, ValueError):
+        try:
+            return float(default_value or 60)
+        except (TypeError, ValueError):
+            return 60.0
 
 
 def _project_stt_candidate_tracks(project: dict) -> dict[str, list[dict]]:
@@ -1393,6 +1429,10 @@ def save_project(
         else project_stt_preview_segments(project)
     )
     project["_hot_open_stt_preview_segments_cache"] = copy_project_rows(effective_stt_preview_segments)
+    status_threshold = _status_threshold_from_settings(
+        effective_user_settings,
+        has_segments=bool(segments),
+    )
     new_segs = None
     if segments is not None:
         from core.cut_boundary import magnetize_segments_to_cut_boundaries
@@ -1416,8 +1456,6 @@ def save_project(
         ):
             existing_subtitle_segments = project_segments_to_editor(project)
             existing_by_id, existing_by_time = _existing_segment_matchers(existing_subtitle_segments)
-        status_threshold = recheck_threshold() if segments else None
-
         for i, seg in enumerate(segments):
             if seg.get("start_frame", seg.get("timeline_start_frame")) is not None:
                 t_start = frame_to_sec(seg.get("start_frame", seg.get("timeline_start_frame")), primary_fps)
@@ -1464,15 +1502,19 @@ def save_project(
             for key in STT_SEGMENT_METADATA_KEYS:
                 if key in seg:
                     new_seg[key] = seg.get(key)
+            for key in SUBTITLE_STATUS_PAYLOAD_KEYS:
+                if key in seg:
+                    new_seg[key] = seg.get(key)
             existing_seg = existing_by_id.get(str(seg.get("id", "") or ""))
             if existing_seg is None:
                 existing_seg = existing_by_time.get(_segment_lookup_key(new_seg))
             _copy_missing_stt_metadata(new_seg, existing_seg)
-            new_seg.update({
-                key: value
-                for key, value in subtitle_status_payload(new_seg, threshold=status_threshold).items()
-                if value not in (None, "")
-            })
+            if not _segment_has_saved_status(new_seg):
+                new_seg.update({
+                    key: value
+                    for key, value in subtitle_status_payload(new_seg, threshold=status_threshold).items()
+                    if value not in (None, "")
+                })
             for key in (
                 "start_frame",
                 "end_frame",
@@ -1524,6 +1566,7 @@ def save_project(
         primary_fps=primary_fps,
         cut_boundaries=existing_cut_boundaries,
         provisional_cut_boundaries=existing_provisional_cut_boundaries,
+        status_threshold=status_threshold,
     )
 
     # ── 사용자 설정 ──

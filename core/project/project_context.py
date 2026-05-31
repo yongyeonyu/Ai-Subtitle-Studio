@@ -150,16 +150,22 @@ def sanitize_workspace_state(workspace: dict[str, Any] | None) -> dict[str, Any]
         if str(key) not in NON_PERSISTED_WORKSPACE_KEYS
     }
 
+
+def _segment_has_project_status_payload(seg: dict[str, Any] | None) -> bool:
+    if not isinstance(seg, dict):
+        return False
+    state = str(seg.get("subtitle_review_state", "") or "").strip()
+    schema = str(seg.get("subtitle_status_schema", "") or "").strip()
+    return bool(state and schema)
+
+
 def _project_segment_status_payload(seg: dict[str, Any], *, threshold: float | None = None) -> dict[str, Any]:
-    if isinstance(seg, dict) and all(key in seg for key in SUBTITLE_STATUS_PAYLOAD_KEYS):
-        state = str(seg.get("subtitle_review_state", "") or "").strip()
-        schema = str(seg.get("subtitle_status_schema", "") or "").strip()
-        if state and schema:
-            return {
-                key: seg.get(key)
-                for key in SUBTITLE_STATUS_PAYLOAD_KEYS
-                if seg.get(key) not in (None, "")
-            }
+    if _segment_has_project_status_payload(seg):
+        return {
+            key: seg.get(key)
+            for key in SUBTITLE_STATUS_PAYLOAD_KEYS
+            if key in seg and seg.get(key) not in (None, "")
+        }
     return {
         key: value
         for key, value in subtitle_status_payload(seg, threshold=threshold).items()
@@ -990,11 +996,16 @@ def build_editor_state(
     cut_boundaries: list[dict[str, Any]] | None = None,
     provisional_cut_boundaries: list[dict[str, Any]] | None = None,
     primary_fps: float | None = None,
+    status_threshold: float | None = None,
 ) -> dict[str, Any]:
     mode = "multiclip" if mode == "multiclip" or len(media_files) > 1 else "single"
     fps = normalize_fps(primary_fps or 30.0)
     normalized_media_files = [os.path.abspath(path) for path in media_files if path]
-    normalized_segments = _normalize_editor_segments(segments, primary_fps=fps)
+    normalized_segments = _normalize_editor_segments(
+        segments,
+        primary_fps=fps,
+        status_threshold=status_threshold,
+    )
     normalized_gap_segments = _normalize_gap_segments(segments, primary_fps=fps)
     segment_signature_value = segment_signature(normalized_segments)
     boundaries = [_normalize_boundary(item, idx) for idx, item in enumerate(clip_boundaries or [])]
@@ -1458,9 +1469,14 @@ def _segments_from_subtitle_canvas_vector(vector_canvas: dict[str, Any]) -> list
     return out
 
 
-def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: float = 30.0) -> list[dict[str, Any]]:
+def _normalize_editor_segments(
+    segments: list[dict[str, Any]],
+    *,
+    primary_fps: float = 30.0,
+    status_threshold: float | None = None,
+) -> list[dict[str, Any]]:
     fps = normalize_fps(primary_fps or 30.0)
-    status_threshold = recheck_threshold() if segments else None
+    resolved_status_threshold = status_threshold
     out = []
     for idx, seg in enumerate(segments or []):
         if seg.get("is_gap"):
@@ -1522,7 +1538,9 @@ def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: f
             if key in seg:
                 item[key] = seg.get(key)
         _restore_original_candidate_timing(item, seg, default_fps=fps)
-        item.update(_project_segment_status_payload(item, threshold=status_threshold))
+        if not _segment_has_project_status_payload(item) and resolved_status_threshold is None:
+            resolved_status_threshold = recheck_threshold()
+        item.update(_project_segment_status_payload(item, threshold=resolved_status_threshold))
         out.append(item)
     return out
 

@@ -66,9 +66,9 @@ def _build_prompt(action: str, batch: list[dict[str, Any]]) -> str:
     ]
     if action == "spellcheck":
         task = (
-            "Korean subtitle proofreading. Correct only spacing, spelling, and obvious typos. "
-            "Do not translate, summarize, rewrite style, add explanations, change names, change numbers, "
-            "or change meaning. Keep spoken subtitle tone."
+            "Korean subtitle proofreading. Correct spacing, spelling, obvious typos, and clearly wrong "
+            "word-form or word-split mistakes without changing meaning. Do not translate, summarize, rewrite style, "
+            "add explanations, change names, change numbers, or change meaning. Keep spoken subtitle tone."
         )
     elif action == "translate_en":
         task = (

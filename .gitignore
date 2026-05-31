@@ -49,6 +49,7 @@ models/
 _backup_*/
 _backup_mac_migration/
 create_all*.py
+# Codex local scratch / temporary working memory (never commit)
 .codex_work/
 
 # ── IDE ──

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.project.project_context import build_editor_state
+from core.project.project_io import read_project_storage_payload
 from core.project.project_manager import load_project, save_project
 from core.project.recovery_state import (
     RECOVERY_CONTROLS_SCHEMA,
@@ -75,7 +76,7 @@ class RecoveryStateTests(unittest.TestCase):
                     segments=[{"start": 0.0, "end": 1.0, "text": "복구"}],
                     user_settings={"accuracy_graph_persist_enabled": False, "stt_lattice_persist_enabled": False},
                 )
-            saved = json.loads(project_path.read_text(encoding="utf-8"))
+            saved = read_project_storage_payload(str(project_path))
             recovery = saved["analysis"]["recovery_state"]
 
             self.assertEqual(recovery["schema"], RECOVERY_STATE_SCHEMA)

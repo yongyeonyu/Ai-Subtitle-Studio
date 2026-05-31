@@ -1,7 +1,5 @@
-import json
-
 from core.project.project_context import build_editor_state, project_segments_to_editor
-from core.project.project_io import write_project_file
+from core.project.project_io import read_project_storage_payload, write_project_file
 from core.project.project_manager import load_project, save_project
 from core.stt_mode.project_state import attach_stt_mode_state, build_stt_mode_state, project_stt_mode_state
 
@@ -55,4 +53,4 @@ def test_save_project_updates_stt_mode_state_without_breaking_editor_segments(tm
 
     assert project_stt_mode_state(loaded)["final_segments"][0]["text"] == "최종"
     assert project_segments_to_editor(loaded)[0]["text"] == "최종"
-    assert json.loads(project_path.read_text(encoding="utf-8"))["stt_mode_state"]["schema"]
+    assert read_project_storage_payload(str(project_path))["stt_mode_state"]["schema"]

@@ -811,6 +811,36 @@ class WordResegmenterTests(unittest.TestCase):
 
         self.assertLessEqual(result[0]["end"], result[1]["start"])
 
+    def test_refine_segment_edges_with_context_can_prefer_precision_vad_start(self):
+        result = refine_segment_edges_with_context(
+            [
+                {
+                    "start": 1.30,
+                    "end": 2.11,
+                    "text": "정확한 시작",
+                    "words": [
+                        {"word": "정확한", "start": 1.15, "end": 1.45},
+                        {"word": "시작", "start": 1.50, "end": 2.00},
+                    ],
+                }
+            ],
+            vad_segments=[
+                {
+                    "start": 0.98,
+                    "end": 2.03,
+                    "precision_lattice": True,
+                    "source_count": 4,
+                    "vad_sources": ["measured_audio:silero", "measured_audio:ten_vad"],
+                }
+            ],
+            max_vad_shift_sec=0.25,
+            max_start_shift_sec=0.40,
+            prefer_precision_vad_start=True,
+        )
+
+        self.assertAlmostEqual(result[0]["start"], 0.96)
+        self.assertAlmostEqual(result[0]["end"], 2.08)
+
     def test_llm_split_preserves_matched_word_timestamps(self):
         segment = {
             "start": 0.0,

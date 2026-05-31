@@ -478,6 +478,12 @@ class HomeSidebarMixin(HomeSidebarModelMenuMixin):
                 return bool(dirty_checker())
             except Exception:
                 pass
+        dirty_flags = getattr(editor, "_dirty_state_from_flags", None)
+        if callable(dirty_flags):
+            try:
+                return bool(dirty_flags())
+            except Exception:
+                pass
         state_manager = getattr(editor, "sm", None)
         if state_manager is not None:
             return bool(getattr(state_manager, "is_dirty", False))

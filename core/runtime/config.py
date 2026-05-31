@@ -368,7 +368,7 @@ DEFAULT_ADV_SETTINGS = {
     "subtitle_bundle_provisional_cut_min_sec": 120,
     "subtitle_bundle_boundary_snap_window_sec": 1.0,
     "subtitle_cut_boundary_guard_enabled": True,
-    "subtitle_cut_boundary_allow_high_confidence_crossing": True,
+    "subtitle_cut_boundary_allow_high_confidence_crossing": False,
     "subtitle_cut_boundary_high_confidence_score": 96.0,
     "vad_pre_split_enabled": False,
     "review_vad_before_stt_enabled": True,

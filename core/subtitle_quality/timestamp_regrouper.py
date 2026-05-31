@@ -372,6 +372,8 @@ def refine_segment_edges_with_context(
     trailing_pad_sec: float = 0.05,
     max_word_shift_sec: float = 0.12,
     max_vad_shift_sec: float = 0.10,
+    max_start_shift_sec: float | None = None,
+    prefer_precision_vad_start: bool = False,
 ) -> list[dict[str, Any]]:
     """Final timing polish using word edges, nearby VAD, and frame snapping.
 
@@ -388,6 +390,7 @@ def refine_segment_edges_with_context(
     trailing_pad = max(0.0, float(trailing_pad_sec or 0.0))
     max_word_shift = max(0.0, float(max_word_shift_sec or 0.0))
     max_vad_shift = max(0.0, float(max_vad_shift_sec or 0.0))
+    max_start_shift = max(max_word_shift, max_vad_shift, max(0.0, float(max_start_shift_sec or 0.0)))
 
     refined: list[dict[str, Any]] = []
     ordered = sorted((dict(item) for item in segments), key=lambda item: _as_float(item.get("start")))
@@ -409,12 +412,19 @@ def refine_segment_edges_with_context(
         if refs:
             first = refs[0]
             last = refs[-1]
-            if abs(_as_float(first.get("start")) - word_start) <= max_vad_shift:
-                target_start = min(target_start, max(0.0, _as_float(first.get("start")) - leading_pad))
+            first_start = _as_float(first.get("start"))
+            precision_lattice_start = (
+                prefer_precision_vad_start
+                and bool(first.get("precision_lattice"))
+                and int(first.get("source_count", 0) or 0) >= 2
+            )
+            if abs(first_start - word_start) <= max_vad_shift or precision_lattice_start:
+                target_start = min(target_start, max(0.0, first_start - leading_pad))
             if abs(_as_float(last.get("end")) - word_end) <= max_vad_shift:
                 target_end = max(target_end, _as_float(last.get("end")) + trailing_pad)
 
-        if abs(target_start - start) <= max_word_shift:
+        start_shift_limit = max_start_shift if prefer_precision_vad_start else max_word_shift
+        if abs(target_start - start) <= start_shift_limit:
             start = max(0.0, target_start)
         if abs(target_end - end) <= max(max_word_shift, max_vad_shift):
             end = max(start + 0.05, target_end)

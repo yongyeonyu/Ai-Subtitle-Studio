@@ -110,14 +110,21 @@ Read these first when continuing work:
 
 1. `AGENTS.md`
 2. `ACTION_ITEMS.md`
-3. `File_structure.txt`
-4. `CODEMAP.md` if present
-5. Latest `RELEASE_v*.md`
-6. `README.md`
-7. `test_case.md`
-8. `test_result.md`
-9. `waste_action_item.md`
-10. `lesson_n_learned.md`
+3. `check_list.md` if present
+4. `File_structure.txt`
+5. `docs/README.md`
+6. `docs/PROJECT_STATE.md`
+7. `docs/FEATURE_REGISTRY.md`
+8. `docs/ARCHITECTURE.md`
+9. `docs/VALIDATION.md`
+10. `docs/HANDOFF.md`
+11. `CODEMAP.md` if present
+12. Latest `RELEASE_v*.md`
+13. `README.md`
+14. `test_case.md`
+15. `test_result.md`
+16. `waste_action_item.md`
+17. `lesson_n_learned.md`
 
 When validating the current release baseline, also read:
 
@@ -135,6 +142,12 @@ Do not recreate those files unless the owner explicitly asks.
 
 - `AGENTS.md`: this bootstrap, operating-rule, and new-chat continuation file.
 - `ACTION_ITEMS.md`: single source of truth for active ideas, action/native work, execution order, QA gates, rollback rules, and parked candidates.
+- `docs/README.md`: docs entrypoint and AI navigation order.
+- `docs/PROJECT_STATE.md`: current product state and high-level guardrails snapshot.
+- `docs/FEATURE_REGISTRY.md`: feature owner map and safe validation entrypoints.
+- `docs/ARCHITECTURE.md`: repo structure and boundary map.
+- `docs/VALIDATION.md`: standard validation commands and completion bar.
+- `docs/HANDOFF.md`: rolling next-session handoff; update before finishing meaningful work.
 - `waste_action_item.md`: rejected or ineffective experiments. Check it before proposing or repeating optimization ideas.
 - `lesson_n_learned.md`: repeat-prevention lessons for bad diagnoses, ineffective optimizations, and risky shortcuts.
 - `README.md`: product overview and current user-facing workflow.
@@ -218,6 +231,7 @@ QA gate for that item:
 ## Operating Rules
 
 - Reply to the owner in Korean.
+- If a change alters ownership, architecture, validation, or next-session continuity, update the matching `docs/*.md` file in the same task.
 - Keep repository docs in English unless the filename/content is intentionally Korean or user-facing Korean text.
 - Preserve dirty worktree changes you did not make. Never revert unrelated files.
 - Do not commit, push, tag, release, package, notarize, upload, or build DMG unless the owner explicitly asks.

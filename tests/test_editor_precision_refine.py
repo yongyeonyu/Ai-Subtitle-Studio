@@ -2,7 +2,11 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from ui.editor.editor_precision_refine import EditorPrecisionRefineMixin, _precision_clip_boundaries
+from ui.editor.editor_precision_refine import (
+    EditorPrecisionRefineMixin,
+    _precision_clip_boundaries,
+    _precision_resolve_spellcheck_llm,
+)
 from ui.log.terminal_log_widget import _friendly_log_entry
 
 
@@ -205,12 +209,17 @@ class EditorPrecisionRefineTests(unittest.TestCase):
             }
         ]
 
-        with mock.patch("ui.editor.editor_precision_refine.run_subtitle_quality_pipeline", return_value=quality_result) as quality, \
+        with mock.patch(
+            "ui.editor.editor_precision_refine._run_precision_full_text_correction",
+            return_value=([dict(seg) for seg in editor.segments], {"changed_count": 1, "provider": "ollama", "model": "exaone"}),
+        ) as spellcheck, \
+             mock.patch("ui.editor.editor_precision_refine.run_subtitle_quality_pipeline", return_value=quality_result) as quality, \
              mock.patch("ui.editor.editor_precision_refine.refine_segment_edges_with_context", return_value=timed) as timing, \
              mock.patch("ui.editor.editor_precision_refine.run_selective_precision_whisper", return_value=SimpleNamespace(segments=tuple(timed), report={"target_count": 0, "accepted_count": 0})) as whisper, \
              mock.patch("ui.editor.editor_precision_refine.apply_netflix_subtitle_magnet", return_value=(magneted, {"closed_pairs": 1})) as magnet:
             editor._run_precision_subtitle_refinement()
 
+        spellcheck.assert_called_once()
         quality.assert_called_once()
         timing.assert_called_once()
         whisper.assert_called_once()
@@ -241,6 +250,10 @@ class EditorPrecisionRefineTests(unittest.TestCase):
         quality_result = SimpleNamespace(segments=tuple(editor.segments), summary=SimpleNamespace(overall_score=90.0))
 
         with mock.patch("ui.editor.editor_precision_refine.build_precision_vad_lattice_for_media", return_value=SimpleNamespace(segments=(), audio_paths={}, report={})) as lattice, \
+             mock.patch(
+                 "ui.editor.editor_precision_refine._run_precision_full_text_correction",
+                 return_value=([dict(seg) for seg in editor.segments], {"changed_count": 0, "provider": "ollama", "model": "exaone"}),
+             ) as spellcheck, \
              mock.patch("ui.editor.editor_precision_refine.run_subtitle_quality_pipeline", return_value=quality_result) as quality, \
              mock.patch("ui.editor.editor_precision_refine.refine_segment_edges_with_context", side_effect=lambda segments, **_kwargs: list(segments)), \
              mock.patch("ui.editor.editor_precision_refine.run_selective_precision_whisper", side_effect=lambda segments, **_kwargs: SimpleNamespace(segments=tuple(segments), report={"target_count": 0, "accepted_count": 0})), \
@@ -248,6 +261,7 @@ class EditorPrecisionRefineTests(unittest.TestCase):
             editor._run_precision_subtitle_refinement()
 
         lattice.assert_called_once()
+        spellcheck.assert_called_once()
         quality.assert_called_once()
         self.assertEqual(quality.call_args.kwargs["context"]["clip_boundaries"], [])
         self.assertEqual(editor.applied_kwargs["boundary_times"], [0.5, {"timeline_sec": 2.5}])
@@ -281,6 +295,10 @@ class EditorPrecisionRefineTests(unittest.TestCase):
 
         with mock.patch("ui.editor.editor_precision_refine.get_logger", return_value=fake_logger), \
              mock.patch("ui.editor.editor_precision_refine.build_precision_vad_lattice_for_media", return_value=SimpleNamespace(segments=(), audio_paths={}, source_counts={}, report={})) as lattice, \
+             mock.patch(
+                 "ui.editor.editor_precision_refine._run_precision_full_text_correction",
+                 return_value=([dict(seg) for seg in editor.segments], {"changed_count": 1, "provider": "ollama", "model": "exaone"}),
+             ) as spellcheck, \
              mock.patch("ui.editor.editor_precision_refine.run_subtitle_quality_pipeline", return_value=quality_result), \
              mock.patch("ui.editor.editor_precision_refine.refine_segment_edges_with_context", side_effect=lambda segments, **_kwargs: list(segments)), \
              mock.patch("ui.editor.editor_precision_refine.run_selective_precision_whisper", side_effect=lambda segments, **_kwargs: SimpleNamespace(segments=tuple(segments), report={"target_count": 0, "accepted_count": 0})), \
@@ -288,22 +306,60 @@ class EditorPrecisionRefineTests(unittest.TestCase):
             editor._run_precision_subtitle_refinement()
 
         lattice.assert_called_once()
+        spellcheck.assert_called_once()
         messages = [message for message, _level, _stage in fake_logger.logs]
         self.assertTrue(any("시작:" in message for message in messages))
         self.assertTrue(any("VAD lattice 분석 시작" in message for message in messages))
+        self.assertTrue(any("전체 자막 맞춤법/띄어쓰기/단어 교정 시작" in message for message in messages))
+        self.assertTrue(any("정밀 작업 완료" in message for message in messages))
         self.assertTrue(any("선택 정밀 Whisper 완료" in message for message in messages))
         self.assertTrue(any("완료:" in message for message in messages))
         self.assertTrue(all(stage == "precision" for _message, _level, stage in fake_logger.logs))
         debug_messages = [message for message, stage in fake_logger.debug if stage == "precision"]
         self.assertTrue(any("run start" in message for message in debug_messages))
         self.assertTrue(any("vad lattice input" in message for message in debug_messages))
+        self.assertTrue(any("full text correction done" in message for message in debug_messages))
         self.assertTrue(any("run complete" in message for message in debug_messages))
 
     def test_precision_log_lines_render_as_terminal_progress(self):
-        category, summary = _friendly_log_entry("🔎 [정밀 자막] VAD lattice 분석 시작: 기존 VAD 2개")
+        category, summary = _friendly_log_entry("🔎 [정밀 자막] 전체 자막 맞춤법/띄어쓰기/단어 교정 시작")
 
         self.assertEqual(category, "precision")
-        self.assertEqual(summary, "진행: 정밀 · 음성 경계")
+        self.assertEqual(summary, "진행: 정밀 · 전구간 교정")
+
+    def test_precision_resolve_spellcheck_llm_prefers_selected_then_roughcut(self):
+        self.assertEqual(
+            _precision_resolve_spellcheck_llm({"selected_llm_provider": "ollama", "selected_model": "exaone"}),
+            ("ollama", "exaone"),
+        )
+        self.assertEqual(
+            _precision_resolve_spellcheck_llm(
+                {
+                    "selected_llm_provider": "none",
+                    "selected_model": "사용 안함",
+                    "roughcut_llm_provider": "openai",
+                    "roughcut_llm_model": "gpt-test",
+                }
+            ),
+            ("openai", "gpt-test"),
+        )
+        self.assertIsNone(_precision_resolve_spellcheck_llm({"selected_llm_provider": "none", "selected_model": "사용 안함"}))
+
+    def test_precision_refine_passes_precision_vad_start_bias_to_timing(self):
+        editor = _Editor()
+        editor.segments = [{"line": 0, "start": 1.2, "end": 2.0, "text": "정밀 확인"}]
+        quality_result = SimpleNamespace(segments=tuple(editor.segments), summary=SimpleNamespace(overall_score=90.0))
+
+        with mock.patch("ui.editor.editor_precision_refine._run_precision_full_text_correction", return_value=([dict(seg) for seg in editor.segments], {"changed_count": 0, "provider": "ollama", "model": "exaone"})), \
+             mock.patch("ui.editor.editor_precision_refine.run_subtitle_quality_pipeline", return_value=quality_result), \
+             mock.patch("ui.editor.editor_precision_refine.refine_segment_edges_with_context", side_effect=lambda segments, **_kwargs: list(segments)) as timing, \
+             mock.patch("ui.editor.editor_precision_refine.run_selective_precision_whisper", side_effect=lambda segments, **_kwargs: SimpleNamespace(segments=tuple(segments), report={"target_count": 0, "accepted_count": 0})), \
+             mock.patch("ui.editor.editor_precision_refine.apply_netflix_subtitle_magnet", side_effect=lambda segments, **_kwargs: (list(segments), {"closed_pairs": 0})):
+            editor._run_precision_subtitle_refinement()
+
+        self.assertTrue(timing.called)
+        self.assertTrue(timing.call_args.kwargs["prefer_precision_vad_start"])
+        self.assertAlmostEqual(timing.call_args.kwargs["max_start_shift_sec"], 0.36)
 
 
 if __name__ == "__main__":

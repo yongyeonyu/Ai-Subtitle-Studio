@@ -295,7 +295,11 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                         ed._segment_queue.clear()
                     ed._cached_segs = []
                     ed._active_seg_start = 0.0
-                    ed._is_dirty = False
+                    shared_dirty = getattr(ed, "_set_shared_dirty_state", None)
+                    if callable(shared_dirty):
+                        shared_dirty(False, refresh_status=False, broadcast=True)
+                    else:
+                        ed._is_dirty = False
                 except Exception as ex:
                     get_logger().log(f"    └ ⚠️ 에디터 초기화 중 오류: {ex}")
 

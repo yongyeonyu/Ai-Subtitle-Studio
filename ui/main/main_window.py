@@ -1204,7 +1204,11 @@ class MainWindow(
             editor._active_seg_start = 0.0
             editor._completion_handled = False
             editor._roughcut_draft_pending = False
-            editor._is_dirty = False
+            shared_dirty = getattr(editor, "_set_shared_dirty_state", None)
+            if callable(shared_dirty):
+                shared_dirty(False, refresh_status=False, broadcast=True)
+            else:
+                editor._is_dirty = False
             for attr in ("_partial_insert_pos", "_pending_roughcut_draft", "_last_draft_segments_signature"):
                 if hasattr(editor, attr):
                     try:

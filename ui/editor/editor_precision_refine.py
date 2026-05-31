@@ -10,6 +10,7 @@ from typing import Any
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox
 
+from core.engine.subtitle_post_llm import run_subtitle_post_llm_action
 from core.runtime.logger import get_logger
 from core.subtitle_quality.precision_vad_lattice import build_precision_vad_lattice_for_media
 from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
@@ -111,6 +112,65 @@ def _precision_debug_value(value: Any) -> str:
     return str(value)
 
 
+def _precision_normalize_llm_route(provider: Any, model: Any) -> tuple[str, str] | None:
+    provider_key = str(provider or "ollama").strip().lower()
+    model_name = str(model or "").strip()
+    if provider_key in {"", "inherit"}:
+        provider_key = "ollama"
+    if provider_key == "none" or not model_name or "사용 안함" in model_name:
+        return None
+    return provider_key, model_name
+
+
+def _precision_resolve_spellcheck_llm(settings: dict[str, Any] | None) -> tuple[str, str] | None:
+    current = dict(settings or {})
+    selected = _precision_normalize_llm_route(
+        current.get("selected_llm_provider", "ollama"),
+        current.get("selected_model", ""),
+    )
+    if selected is not None:
+        return selected
+    roughcut_provider = current.get("roughcut_llm_provider", current.get("selected_llm_provider", "ollama"))
+    roughcut_model = current.get("roughcut_llm_model", "")
+    if str(roughcut_provider or "").strip().lower() == "inherit":
+        roughcut_provider = current.get("selected_llm_provider", "ollama")
+    if str(roughcut_model or "").strip() in {"", "inherit"}:
+        roughcut_model = current.get("selected_model", "")
+    return _precision_normalize_llm_route(roughcut_provider, roughcut_model)
+
+
+def _run_precision_full_text_correction(
+    segments: list[dict[str, Any]],
+    *,
+    settings: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    resolved = _precision_resolve_spellcheck_llm(settings)
+    if resolved is None:
+        raise RuntimeError("정밀 작업에 사용할 자막 LLM이 설정되어 있지 않습니다.")
+    provider, model = resolved
+    current = dict(settings or {})
+    batch_size = max(1, int(current.get("precision_spellcheck_batch_size", 60) or 60))
+    timeout = max(30, int(current.get("precision_spellcheck_timeout_sec", 240) or 240))
+    corrected, changed = run_subtitle_post_llm_action(
+        "spellcheck",
+        segments,
+        provider=provider,
+        model=model,
+        batch_size=batch_size,
+        timeout=timeout,
+    )
+    return (
+        [dict(seg) for seg in list(corrected or []) if isinstance(seg, dict)],
+        {
+            "provider": provider,
+            "model": model,
+            "batch_size": batch_size,
+            "timeout": timeout,
+            "changed_count": int(changed or 0),
+        },
+    )
+
+
 def _precision_log(message: str, *, level: str = "INFO") -> None:
     try:
         get_logger().log(f"🔎 [정밀 자막] {message}", level=level, stage="precision")
@@ -182,7 +242,7 @@ def _precision_compute_refinement_job(job: dict[str, Any], *, status_callback=No
     video_processor = job.get("video_processor")
     settings = dict(job.get("settings") or {})
 
-    _precision_log(f"시작: 자막 {len(before)}개 · media={_precision_media_label(media_path)}")
+    _precision_log(f"시작: 정밀 작업 실행 · 자막 {len(before)}개 · media={_precision_media_label(media_path)}")
     _precision_debug(
         "run start",
         media_path=media_path,
@@ -227,10 +287,20 @@ def _precision_compute_refinement_job(job: dict[str, Any], *, status_callback=No
         report=dict(lattice_result.report or {}),
     )
 
+    _precision_status(status_callback, "정밀 전체 텍스트 교정 중...")
+    _precision_log("전체 자막 맞춤법/띄어쓰기/단어 교정 시작")
+    spellchecked, spellcheck_report = _run_precision_full_text_correction(before, settings=settings)
+    _precision_log(
+        "전체 자막 맞춤법/띄어쓰기/단어 교정 완료: "
+        f"변경 {int(spellcheck_report.get('changed_count', 0) or 0)}개 · "
+        f"provider={spellcheck_report.get('provider', '-')} · model={spellcheck_report.get('model', '-')}"
+    )
+    _precision_debug("full text correction done", report=spellcheck_report)
+
     _precision_status(status_callback, "정밀 자막 품질/타이밍 보정 중...")
     _precision_log("맞춤법/띄어쓰기/품질 보정 시작")
     quality_result = run_subtitle_quality_pipeline(
-        before,
+        spellchecked,
         vad_segments=vad_segments,
         settings=settings,
         auto_correct=True,
@@ -252,7 +322,9 @@ def _precision_compute_refinement_job(job: dict[str, Any], *, status_callback=No
         vad_segments=vad_segments,
         frame_rate=fps,
         max_word_shift_sec=0.18,
-        max_vad_shift_sec=0.14,
+        max_vad_shift_sec=0.18,
+        max_start_shift_sec=0.36,
+        prefer_precision_vad_start=True,
     )
     _precision_log(f"타이밍 재정렬 완료: 자막 {len(timed)}개")
     _precision_debug("timing refine done", timed_count=len(timed), fps=fps, vad_count=len(vad_segments))
@@ -307,6 +379,7 @@ def _precision_compute_refinement_job(job: dict[str, Any], *, status_callback=No
         "provisional_count": len(provisional_boundaries),
         "clip_boundary_count": len(clip_boundaries),
         "precision_vad_lattice": dict(lattice_result.report or {}),
+        "precision_spellcheck": spellcheck_report,
         "selective_precision_whisper": whisper_report,
         "magnet": dict(magnet_report or {}),
         "quality_summary": quality_summary,
@@ -316,6 +389,7 @@ def _precision_compute_refinement_job(job: dict[str, Any], *, status_callback=No
         "완료: "
         f"rows={len(before)} changed={changed} vad={len(vad_segments)} "
         f"boundaries={len(boundary_times)} provisional={len(provisional_boundaries)} "
+        f"spellcheck={int(spellcheck_report.get('changed_count', 0) or 0)} "
         f"precision_whisper={int(whisper_report.get('accepted_count', 0) or 0)}/"
         f"{int(whisper_report.get('target_count', 0) or 0)} "
         f"magnet_closed={int((magnet_report or {}).get('closed_pairs', 0) or 0)}"
@@ -327,6 +401,7 @@ def _precision_compute_refinement_job(job: dict[str, Any], *, status_callback=No
         vad_count=len(vad_segments),
         boundary_count=len(boundary_times),
         provisional_count=len(provisional_boundaries),
+        spellcheck_report=spellcheck_report,
         whisper_report=whisper_report,
         magnet_report=dict(magnet_report or {}),
     )
@@ -405,6 +480,7 @@ class EditorPrecisionRefineMixin:
         _precision_log(
             f"시작 예약: 자막 {len(queued_segments)}개 · media={_precision_media_label(getattr(self, 'media_path', ''))}"
         )
+        _precision_log(f"시작 확인: 정밀 작업 실행 준비 완료 · 자막 {len(queued_segments)}개")
         _precision_debug(
             "start scheduled",
             media_path=str(getattr(self, "media_path", "") or ""),
@@ -664,6 +740,9 @@ class EditorPrecisionRefineMixin:
             _precision_log("UI 반영 시작: 정밀 자막 결과 적용")
             self._apply_precision_refine_result(dict(result or {}))
             _precision_log("UI 반영 완료: 정밀 자막 결과 적용")
+            applied = dict(result or {})
+            changed = int(applied.get("changed_count", 0) or 0)
+            _precision_log(f"정밀 작업 완료: 에디터 반영 완료 · 변경 {changed}개")
         except Exception as exc:
             apply_error = exc
             _precision_log(f"UI 반영 실패: {type(exc).__name__}: {exc}", level="ERROR")
@@ -685,6 +764,7 @@ class EditorPrecisionRefineMixin:
             return
         data = dict(payload or {}) if isinstance(payload, dict) else {"message": str(payload or "")}
         message = str(data.get("message") or "정밀 자막 작업을 완료하지 못했습니다.")
+        _precision_log(f"정밀 작업 실패: {message}", level="ERROR")
         if hasattr(self, "status_lbl"):
             self.status_lbl.setText("정밀 자막 작업 실패")
         show_message(
@@ -720,7 +800,10 @@ class EditorPrecisionRefineMixin:
                 ),
             )
             final_count = len(list(result.get("final_segments") or []))
+            _precision_log("UI 반영 시작: 정밀 자막 결과 적용")
             self._apply_precision_refine_result(result)
+            _precision_log("UI 반영 완료: 정밀 자막 결과 적용")
+            _precision_log(f"정밀 작업 완료: 에디터 반영 완료 · 변경 {int(result.get('changed_count', 0) or 0)}개")
         except Exception as exc:
             _precision_log_failure(
                 exc,

@@ -1,13 +1,17 @@
 import os
 import tempfile
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QApplication
 
+from ui.editor.editor_actions import EditorActionsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.editor_save_manager import EditorSaveManagerMixin
 from ui.editor.editor_pipeline import EditorPipelineMixin
@@ -67,6 +71,24 @@ class _PendingProjectRefreshEditor(EditorSaveManagerMixin):
         self._saved_segments_signature = self._segments_dirty_signature([])
         self._project_analysis_refresh_pending = True
         self._project_analysis_refresh_pending_path = project_path
+        self.sm = SimpleNamespace(is_dirty=False)
+        self._is_dirty = False
+
+    def _get_current_segments(self):
+        return []
+
+    def window(self):
+        return SimpleNamespace(_current_project_path=self._current_project_path)
+
+
+class _PendingDeferredProjectSaveEditor(EditorSaveManagerMixin):
+    def __init__(self, project_path):
+        self._current_project_path = project_path
+        self._saved_project_path = project_path
+        self._saved_project_signature = self._project_file_dirty_signature(project_path)
+        self._deferred_project_save_pending = True
+        self._deferred_project_save_running = False
+        self._saved_segments_signature = self._segments_dirty_signature([])
         self.sm = SimpleNamespace(is_dirty=False)
         self._is_dirty = False
 
@@ -143,6 +165,45 @@ class _DeferredProjectSaveEditor(EditorSaveManagerMixin):
         return list(segs or [])
 
 
+class _QObjectDeferredProjectSaveEditor(QObject, EditorSaveManagerMixin):
+    def __init__(self, project_path: str):
+        super().__init__()
+        self.media_path = "/tmp/deferred-source.mp4"
+        self.video_fps = 30.0
+        self.settings = {"roughcut_llm_enabled": True}
+        self._saved_segments_signature = "saved-signature"
+        self._autosave_requires_manual_save = True
+        self._window = SimpleNamespace(
+            _current_project_path=project_path,
+            _refresh_saved_status_label=Mock(),
+            _multiclip_files=[],
+            _log_visible=True,
+            _dashboard_mode="dashboard",
+            _project_panel_visible=True,
+            _current_work_mode="editor",
+        )
+        self._segments = [{"start": 0.0, "end": 1.0, "text": "빠른 저장", "speaker": "00"}]
+        self.video_player = SimpleNamespace(current_time=12.34)
+        self.text_edit = SimpleNamespace(
+            textCursor=lambda: SimpleNamespace(blockNumber=lambda: 7),
+        )
+        self.splitter = SimpleNamespace(sizes=lambda: [640, 360])
+        self.timeline = SimpleNamespace(
+            fps=30.0,
+            lock_chk=SimpleNamespace(isChecked=Mock(return_value=False)),
+            canvas=SimpleNamespace(_active_clip_idx=2),
+        )
+        self._remember_saved_project_file = Mock()
+        self._restore_editor_time_tags_after_save = Mock()
+        self._schedule_project_analysis_artifacts_refresh = Mock()
+
+    def _get_current_segments(self):
+        return [dict(seg) for seg in self._segments]
+
+    def window(self):
+        return self._window
+
+
 class _SourceSrtSaveEditor(EditorSaveManagerMixin):
     def __init__(self):
         self.media_path = "/tmp/media.mp4"
@@ -173,6 +234,26 @@ class _AutoProjectCreateSaveEditor(EditorSaveManagerMixin):
             _dashboard_mode="dashboard",
             _project_panel_visible=True,
         )
+
+    def window(self):
+        return self._window
+
+
+class _ExportDirtySyncEditor(EditorSaveManagerMixin, EditorActionsMixin):
+    def __init__(self):
+        self.video_name = "sample.mp4"
+        self._segments = [{"start": 0.0, "end": 1.0, "text": "저장된 자막", "speaker": "00"}]
+        self._saved_segments_signature = self._segments_dirty_signature(self._segments)
+        self._saved_project_path = ""
+        self._saved_project_signature = ""
+        self._is_dirty = True
+        self.sm = SimpleNamespace(is_dirty=True)
+        self._window = SimpleNamespace(_refresh_saved_status_label=Mock())
+        self._on_save = Mock(return_value=True)
+        self._show_confirm_dialog = Mock(return_value=None)
+
+    def _get_current_segments(self):
+        return [dict(seg) for seg in self._segments]
 
     def window(self):
         return self._window
@@ -430,6 +511,44 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertTrue(editor._deferred_project_save_pending)
         self.assertEqual(editor._deferred_project_save_segments[0]["text"], "빠른 저장")
 
+    def test_manual_save_uses_fast_srt_checkpoint_without_backup_by_default(self):
+        editor = _DeferredProjectSaveEditor()
+
+        result = EditorSaveManagerMixin._on_save(
+            editor,
+            skip_auto_next=True,
+            schedule_analysis_refresh=False,
+            queue_learning=False,
+            auto_export=False,
+        )
+
+        self.assertTrue(result)
+        self.assertFalse(editor._persist_editor_srts.call_args.kwargs["write_backup"])
+
+    def test_manual_save_defers_post_save_side_effects_until_checkpoint_finishes(self):
+        editor = _DeferredProjectSaveEditor()
+        editor._schedule_auto_export_saved_subtitle_videos = Mock()
+        editor._enqueue_deferred_editor_learning_after_save = Mock()
+        callbacks = []
+
+        with patch("ui.editor.editor_save_manager.QTimer.singleShot", side_effect=lambda _delay, cb: callbacks.append(cb)):
+            result = EditorSaveManagerMixin._on_save(
+                editor,
+                skip_auto_next=True,
+                schedule_analysis_refresh=False,
+                queue_learning=True,
+                auto_export=True,
+            )
+
+        self.assertTrue(result)
+        editor._schedule_auto_export_saved_subtitle_videos.assert_not_called()
+        editor._enqueue_deferred_editor_learning_after_save.assert_not_called()
+
+        callbacks[-1]()
+
+        editor._schedule_auto_export_saved_subtitle_videos.assert_called_once()
+        editor._enqueue_deferred_editor_learning_after_save.assert_called_once()
+
     def test_manual_save_restores_time_tags_after_srt_persist(self):
         editor = _DeferredProjectSaveEditor()
         editor._restore_editor_time_tags_after_save = Mock()
@@ -458,6 +577,46 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertTrue(result)
         editor._restore_editor_time_tags_after_save.assert_called_once()
 
+    def test_qobject_deferred_project_save_captures_ui_snapshot_and_writes_on_worker(self):
+        editor = _QObjectDeferredProjectSaveEditor("/tmp/worker-project.aissproj")
+        worker_threads = []
+        captured_snapshots = []
+
+        def _fake_write(snapshot):
+            worker_threads.append(threading.current_thread().name)
+            captured_snapshots.append(dict(snapshot))
+            time.sleep(0.02)
+            return {
+                "project_path": "/tmp/worker-project.aissproj",
+                "elapsed_ms": 12.5,
+                "schedule_analysis_refresh": False,
+                "saved_segments_signature": "saved-signature",
+                "segments": list(snapshot.get("segments") or []),
+                "settings": dict(snapshot.get("settings") or {}),
+            }
+
+        editor._schedule_deferred_project_save(
+            editor._get_current_segments(),
+            schedule_analysis_refresh=False,
+        )
+
+        with patch("ui.editor.editor_save_manager._write_project_save_snapshot", side_effect=_fake_write):
+            result = editor._run_deferred_project_save(editor._deferred_project_save_generation, force=True)
+
+        self.assertTrue(result)
+        self.assertFalse(editor._deferred_project_save_pending)
+        self.assertFalse(editor._deferred_project_save_running)
+        self.assertEqual(len(captured_snapshots), 1)
+        self.assertTrue(worker_threads[0].startswith("editor-project-save-"))
+        self.assertNotEqual(worker_threads[0], threading.current_thread().name)
+        self.assertEqual(captured_snapshots[0]["workspace"]["last_cursor_block"], 7)
+        self.assertEqual(captured_snapshots[0]["workspace"]["active_clip_idx"], 2)
+        self.assertEqual(captured_snapshots[0]["workspace"]["splitter_sizes"], [640, 360])
+        self.assertEqual(captured_snapshots[0]["workspace"]["last_playhead"], 12.34)
+        editor._remember_saved_project_file.assert_called_once_with("/tmp/worker-project.aissproj")
+        editor._restore_editor_time_tags_after_save.assert_called_once()
+        editor._schedule_project_analysis_artifacts_refresh.assert_not_called()
+
     def test_close_flushes_deferred_project_save_without_prompt_when_clean(self):
         editor = _DeferredProjectSaveEditor()
         editor._schedule_deferred_project_save(
@@ -484,6 +643,23 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(save_mock.call_args.args[1], "/tmp/opened.assets/subtitles/final.srt")
         self.assertEqual(editor._last_saved_srt_outputs, [("/tmp/opened.assets/subtitles/final.srt", "/tmp/media.mp4")])
+
+    def test_segments_for_srt_output_reads_lightweight_project_payload_only(self):
+        editor = _DeferredProjectSaveEditor()
+        segs = [{"start": 0.0, "end": 1.0, "text": "순서 유지"}]
+
+        with patch(
+            "core.project.project_io.read_project_file",
+            return_value={"roughcut_state": {}},
+        ) as read_project_file, patch("core.project.project_manager.load_project") as load_project, patch(
+            "ui.editor.editor_save_manager.os.path.exists",
+            return_value=True,
+        ):
+            result = EditorSaveManagerMixin._segments_for_srt_output(editor, segs)
+
+        self.assertEqual(result, segs)
+        read_project_file.assert_called_once_with("/tmp/deferred-project.aissproj")
+        load_project.assert_not_called()
 
     def test_manual_save_auto_project_create_does_not_prefill_roughcut_analysis(self):
         editor = _AutoProjectCreateSaveEditor()
@@ -589,6 +765,32 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
             self.assertFalse(editor._project_file_has_unsaved_changes())
             self.assertFalse(editor._has_unsaved_changes())
+
+    def test_pending_deferred_project_save_does_not_mark_clean_editor_dirty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "project.json")
+            with open(project_path, "w", encoding="utf-8") as handle:
+                handle.write("{\"version\":1}")
+            editor = _PendingDeferredProjectSaveEditor(project_path)
+
+            with open(project_path, "w", encoding="utf-8") as handle:
+                handle.write("{\"version\":2}")
+
+            self.assertFalse(editor._project_file_has_unsaved_changes())
+            self.assertFalse(editor._has_unsaved_changes())
+
+    def test_export_dialog_does_not_prompt_when_only_stale_dirty_flags_remain(self):
+        editor = _ExportDirtySyncEditor()
+
+        with patch("ui.dialogs.export_dialog.ExportDialog") as dialog_cls:
+            dialog = dialog_cls.return_value
+            editor._show_export_dialog()
+
+        editor._show_confirm_dialog.assert_not_called()
+        editor._on_save.assert_not_called()
+        dialog.exec.assert_called_once()
+        self.assertFalse(editor.sm.is_dirty)
+        self.assertFalse(editor._is_dirty)
 
     def test_generation_idle_cleanup_clears_busy_surfaces_and_prefetch_cache(self):
         state_manager = SimpleNamespace(is_locked=True, state="ST_PROC", complete_ai=Mock())
