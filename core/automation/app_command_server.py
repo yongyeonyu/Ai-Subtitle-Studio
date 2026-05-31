@@ -106,6 +106,42 @@ def _compact_roughcut_state(value: Any) -> dict[str, Any]:
     return compact
 
 
+def _compact_roughcut_runtime(value: Any) -> dict[str, Any]:
+    data = dict(value or {}) if isinstance(value, dict) else {}
+    compact: dict[str, Any] = {}
+    for key in (
+        "has_result",
+        "selected_candidate_id",
+        "candidate_count",
+        "selected_chapter_id",
+        "selected_segment_id",
+        "selected_chapter_title",
+        "candidate_state",
+        "filter_value",
+        "filter_summary",
+        "selection_summary",
+        "order_summary",
+        "sequence_preview_active",
+        "visible_row_count",
+        "total_row_count",
+        "video_host_attached",
+        "video_placeholder_visible",
+        "player_menu_visible",
+    ):
+        if key in data:
+            compact[key] = data.get(key)
+    candidate_ids = list(data.get("candidate_ids") or [])
+    if candidate_ids:
+        compact["candidate_ids"] = [str(item or "") for item in candidate_ids[:6]]
+    visible_ids = list(data.get("visible_chapter_ids") or [])
+    if visible_ids:
+        compact["visible_chapter_ids"] = [str(item or "") for item in visible_ids[:12]]
+    visible_segments = list(data.get("visible_segment_ids") or [])
+    if visible_segments:
+        compact["visible_segment_ids"] = [str(item or "") for item in visible_segments[:8]]
+    return compact
+
+
 def _compact_status_data(value: Any, *, encoded_bytes: int, send_fallback: bool = False) -> dict[str, Any]:
     data = dict(value or {}) if isinstance(value, dict) else {}
     queue = dict(data.get("queue_runtime") or {}) if isinstance(data.get("queue_runtime"), dict) else {}
@@ -123,6 +159,7 @@ def _compact_status_data(value: Any, *, encoded_bytes: int, send_fallback: bool 
         "last_stage_key": str(data.get("last_stage_key", "") or ""),
         "subtitle_count": data.get("subtitle_count"),
         "roughcut_state": _compact_roughcut_state(data.get("roughcut_state")),
+        "roughcut_runtime": _compact_roughcut_runtime(data.get("roughcut_runtime")),
         "runtime_timestamp": data.get("runtime_timestamp"),
         "editor_runtime": _compact_editor_runtime(data.get("editor_runtime")),
         "editor_aux_counts": dict(data.get("editor_aux_counts") or {}) if isinstance(data.get("editor_aux_counts"), dict) else {},
@@ -210,7 +247,10 @@ class LocalAppCommandServer:
 
     def start(self) -> None:
         with self._lock:
-            if self._thread is not None:
+            if self._closed:
+                return
+            thread = self._thread
+            if thread is not None and thread.is_alive():
                 return
             self._thread = threading.Thread(
                 target=self._serve,

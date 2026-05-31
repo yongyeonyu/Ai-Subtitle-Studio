@@ -92,6 +92,23 @@ class RoughcutExportMixin:
         self.preview_summary_lbl.setText(f"SRT 저장: {path}")
         self.render_status_lbl.setText("SRT 저장")
 
+    def export_roughcut_srt_to_path(self, path: str):
+        if not self._ensure_result():
+            raise ValueError("roughcut_srt_missing")
+        result = self._result_with_user_edits(self._result)
+        retimed = retime_subtitles_for_edl(self._editor_segments(), result.edl_segments, chapters=result.chapters)
+        target = Path(path or "")
+        if not str(target):
+            target = self._default_output_path("_roughcut.srt")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        save_retimed_srt(target, retimed)
+        self.preview_summary_lbl.setText(f"SRT 저장: {target}")
+        self.render_status_lbl.setText("SRT 저장")
+        return {
+            "path": str(target),
+            "subtitle_count": len(list(retimed or [])),
+        }
+
     def _save_render_plan(self):
         plan = self._build_render_plan_for_ui()
         if plan is None:

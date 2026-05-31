@@ -834,6 +834,42 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertTrue(opened)
         self.assertEqual(calls[0]["kwargs"]["source_srt_path"], str(srt_path))
 
+    def test_open_project_file_auto_opens_roughcut_for_saved_roughcut_projects(self):
+        window = _ProjectOpenWindow(_ProjectOpenEditor())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_path = root / "roughcut.aissproj"
+            media_path = root / "sample.mp4"
+            media_path.write_bytes(b"video")
+            project = {
+                "_project_file_path": str(project_path),
+                "project_name": "roughcut-open",
+                "workspace": {"active_work_mode": "roughcut"},
+                "timeline": {"tracks": [{"clips": [{"source_path": str(media_path)}]}]},
+                "editor_state": {},
+                "analysis": {},
+                "roughcut_state": {
+                    "selected_candidate_id": "candidate_a",
+                    "candidates": [{"candidate_id": "candidate_a", "source_signature": "sig"}],
+                },
+            }
+            opened_modes = []
+
+            window._load_local_settings = lambda: {}
+            window._sorted_project_media = lambda _project: [str(media_path)]
+            window._open_project_segments_in_editor = lambda *_args, **_kwargs: True
+            window._open_roughcut_helper = lambda: opened_modes.append("roughcut")
+
+            with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+                with patch("ui.project.project_panel.load_project", return_value=project):
+                    with patch("ui.project.project_panel.restore_project_model_settings", return_value=({}, {})):
+                        with patch("ui.project.project_panel.attach_project_session"):
+                            with patch("ui.project.project_panel.project_segments_to_editor", return_value=[{"text": "SRT"}]):
+                                opened = window._open_project_file(str(project_path))
+
+        self.assertTrue(opened)
+        self.assertEqual(opened_modes, ["roughcut"])
+
     def test_subtitle_only_open_helper_uses_same_editor_bootstrap_without_project_state(self):
         editor = _ProjectOpenEditor()
         window = _ProjectOpenWindow(editor)

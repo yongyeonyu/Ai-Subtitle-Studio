@@ -120,3 +120,75 @@ Rules:
   - `tests/test_subtitle_text_edit_keys.py`
   - `tests/test_sidebar_terminal_layout.py`
   - 이후 source app에서 Macau/X5 실앱 스모크
+
+### 2026-05-31 - Roughcut Editor Entry Slice
+
+- `덱스` 1차 판단:
+  - 러프컷 에디터 첫 조각은 `LLM context/chunk`보다 `editor -> roughcut save/reload state` 경계가 더 가치가 큼
+  - 이유:
+    - `tests/test_editor_roughcut_draft.py` 기준 chunk/context/orchestration 테스트는 이미 두꺼움
+    - 반면 실제 `ui/roughcut/roughcut_state.py::_load_project_roughcut_state()` 경계는 현재 자막의 `source_signature`와 후보 선택 일치 여부가 직접적으로 덜 고정돼 있었음
+- 새로 고정한 검증:
+  - `tests/test_roughcut_candidates.py`
+    - 현재 `source_signature`와 일치하는 후보가 있으면 그 후보를 선택해 복원
+    - 일치 후보가 없으면 후보 목록은 유지하되 복원은 하지 않고 `user_edits` stale 상태를 비움
+  - 추가 묶음 검증:
+    - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_candidates.py tests/test_project_context.py -k 'roughcut_state or roughcut or editor_save_order'`
+- 다음 추천 조각:
+  - `ui/roughcut/roughcut_state.py`
+  - `core/project/project_manager.py`
+  - `core/project/project_roughcut_store.py`
+  - 여기서 roughcut candidate/state가 editor/roughcut/work_mode 전환 사이에서 언제 overwrite/restore되는지 owner-surface로 다시 좁혀 보기
+
+### 2026-05-31 - Roughcut Save/Reopen Roundtrip Slice
+
+- `덱스` 판단:
+  - 러프컷 기능을 `완성`에 가깝게 보려면 UI 가시성보다 `.aissproj` 저장본 round-trip에서 후보/필터/선택 챕터가 살아남는 증빙이 더 중요함
+  - 기존 구조는 `ui/roughcut/roughcut_state.py`에서 project file을 읽어 복원하는 경로가 있었지만, compact frame payload가 process cache를 통해 다시 들어올 때 `core/roughcut/models.py::roughcut_result_from_dict()`가 frame-only `chapters/segments`를 그대로 dataclass에 넣다가 reopen 복원에서 깨질 수 있었음
+- 이번에 닫은 구멍:
+  - `core/roughcut/models.py`
+    - `roughcut_result_from_dict()`가 `start/end` 없는 frame-only chapter/segment payload도 복원할 수 있게 보강
+  - `tests/test_roughcut_candidates.py`
+    - 실제 `.aissproj` 저장 후 다시 widget `refresh_from_editor(analyze_if_missing=False)`까지 가는 round-trip 복원 테스트 추가
+  - `tests/test_project_segment_reload.py`
+    - `active_work_mode=roughcut` + `roughcut_state`가 있는 프로젝트를 열면 roughcut 화면 helper가 자동으로 실행되는지 검증 추가
+- 검증 결과:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_candidates.py -k "roundtrip or load_project_roughcut_state or apply_candidate_payload or payload_keeps"` -> `5 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "roughcut or open_project_file"` -> `3 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py tests/test_editor_roughcut_draft.py tests/test_roughcut_models_v2.py tests/test_roughcut_contract.py tests/test_roughcut_engine1.py tests/test_roughcut_major_boundary.py` -> `128 passed`
+- 다음 추천 조각:
+  - source app 실앱에서 `roughcut candidate 전환 -> safety filter 변경 -> chapter 선택 -> 저장 -> 재열기 -> 자동 roughcut 진입`까지 한 번 남겨 실제 체감과 reopen 안정성을 증빙
+
+### 2026-05-31 - Roughcut Automation Proof Slice
+
+- `덱스` 판단:
+  - round-trip 단위 테스트만으로는 `러프컷 기능 완성`이라고 보기 부족하고, source-app QA가 같은 흐름을 명령 시퀀스로 반복할 수 있어야 다음 실앱 proof가 쉬워짐
+  - 가장 작은 owner surface는 새 project-load 로직이 아니라 기존 `_open_roughcut_helper()`를 자동화 명령으로 노출하는 것
+- 이번에 추가한 경로:
+  - `tools/appctl.py`
+    - `open-roughcut` CLI 명령 추가
+  - `ui/main/app_command_bridge_handlers.py`
+    - `open-roughcut` -> `_open_roughcut_helper()` 연결
+  - `tools/qa_suite_runner.py`
+    - `roughcut_reopen_macau` 시나리오 추가
+    - step-level `expect_data` 지원 추가로 `status.data.current_work_mode == roughcut` 같은 좁은 assertion 가능
+  - `tests/test_app_command_bridge.py`
+    - `open-roughcut`이 work mode를 roughcut으로 전환하는지 검증
+  - `tests/test_qa_suite_runner.py`
+    - `major` 시나리오 목록에 `roughcut_reopen_macau` 포함 검증
+    - `expect_data` mismatch가 step failure로 잡히는지 검증
+- 검증 결과:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "open_roughcut or start_current_roughcut or status_command_reports_current_runtime_snapshot"` -> `3 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_qa_suite_runner.py` -> `18 passed`
+- 후속 좁은 보강:
+  - source-app `major` profile이 시나리오별 restart 직후 `status` probe만 믿다가 readiness timeout으로 흔들리던 경로를 `ping` fallback readiness로 보강
+  - `tests/test_qa_suite_runner.py::test_ensure_app_ready_accepts_ping_when_status_is_deferred` 추가
+- 실증 결과:
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py major` -> `failed_count=0`
+  - artifact: `output/manual_verification/latest/qa_suite_major_20260531_232544`
+  - `roughcut_reopen_macau/summary.json`
+    - `open_project` -> `start-current-roughcut` -> `open-roughcut` -> `status_roughcut_opened` -> `save_project` -> `reopen_project` -> `status_after_reopen` 전부 통과
+    - reopen 전후 `current_work_mode == roughcut` 확인
+- 다음 추천 조각:
+  - 자동화 증빙은 확보됐으므로,
+  - 같은 fixture로 `candidate 전환 -> safety filter 변경 -> chapter 선택 -> 저장 -> 재열기 -> 자동 roughcut 진입` 수동 smoke와 artifact를 묶어 남기기

@@ -362,17 +362,43 @@ def _tuple_fields(data: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any
     return out
 
 
+def _restore_time_range_fields(data: dict[str, Any]) -> dict[str, Any]:
+    out = dict(data)
+    frame_range = out.get("frame_range") if isinstance(out.get("frame_range"), dict) else {}
+    fps = _coerce_float(
+        out.get("timeline_frame_rate")
+        or out.get("frame_rate")
+        or out.get("source_frame_rate")
+        or frame_range.get("timeline_frame_rate"),
+        30.0,
+    )
+    fps = fps if fps > 0.0 else 30.0
+    start_frame = out.get("start_frame", out.get("timeline_start_frame", frame_range.get("start")))
+    end_frame = out.get("end_frame", out.get("timeline_end_frame", frame_range.get("end")))
+    if out.get("start") is None:
+        if start_frame is not None:
+            out["start"] = _coerce_float(start_frame) / fps
+        elif out.get("timeline_start") is not None:
+            out["start"] = _coerce_float(out.get("timeline_start"))
+    if out.get("end") is None:
+        if end_frame is not None:
+            out["end"] = _coerce_float(end_frame) / fps
+        elif out.get("timeline_end") is not None:
+            out["end"] = _coerce_float(out.get("timeline_end"), _coerce_float(out.get("start")))
+    return out
+
+
 def _minor_group_from_dict(data: dict[str, Any]) -> RoughCutMinorGroup:
     return RoughCutMinorGroup(
         **_dataclass_kwargs(
             RoughCutMinorGroup,
-            _tuple_fields(data, ("subtitle_ids", "chapter_ids", "tags")),
+            _restore_time_range_fields(_tuple_fields(data, ("subtitle_ids", "chapter_ids", "tags"))),
         )
     )
 
 
 def _segment_from_dict(data: dict[str, Any]) -> RoughCutSegment:
-    item = _tuple_fields(data, ("subtitle_ids", "timeline_event_ids", "tags", "dependencies"))
+    item = _restore_time_range_fields(_tuple_fields(data, ("subtitle_ids", "timeline_event_ids", "tags", "dependencies")))
     raw_groups = item.get("minor_groups", ()) or ()
     item["minor_groups"] = tuple(
         _minor_group_from_dict(group)
@@ -386,7 +412,7 @@ def roughcut_result_from_dict(data: dict[str, Any] | None) -> RoughCutResult:
     """Restore a RoughCutResult saved inside project roughcut_state."""
     data = data or {}
     chapters = tuple(
-        ChapterMetadata(**_dataclass_kwargs(ChapterMetadata, _tuple_fields(item, ("tags", "segment_ids"))))
+        ChapterMetadata(**_dataclass_kwargs(ChapterMetadata, _restore_time_range_fields(_tuple_fields(item, ("tags", "segment_ids")))))
         for item in data.get("chapters", []) or []
         if isinstance(item, dict)
     )

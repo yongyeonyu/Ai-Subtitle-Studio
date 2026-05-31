@@ -91,6 +91,8 @@ class RoughcutStateMixin:
         state = data.get("roughcut_state", {}) or {}
         self._roughcut_candidates = self._normalize_roughcut_candidates(state)
         self._selected_candidate_id = str(state.get("selected_candidate_id") or "")
+        self._segment_order = list(state.get("segment_order") or [])
+        self._chapter_order = list(state.get("chapter_order") or [])
         candidate = self._selected_candidate_for_signature(signature)
         self._refresh_candidate_combo()
         if candidate is not None:
@@ -134,6 +136,8 @@ class RoughcutStateMixin:
             "settings": self._roughcut_settings_payload(),
             "candidates": candidates,
             "selected_candidate_id": self._selected_candidate_id,
+            "segment_order": list(getattr(self, "_segment_order", []) or []),
+            "chapter_order": list(getattr(self, "_chapter_order", []) or []),
             "candidate_count": len(candidates),
         })
         self._roughcut_candidates = candidates
@@ -170,6 +174,11 @@ class RoughcutStateMixin:
             if candidate.get("source_signature") == signature:
                 self._selected_candidate_id = str(candidate.get("candidate_id") or "")
                 return candidate
+        # Saved roughcut projects can reopen with an editor signature that no longer
+        # exactly matches the candidate source snapshot. In that case, prefer the
+        # explicitly selected candidate instead of collapsing back to placeholder UI.
+        if selected is not None:
+            return selected
         return None
 
     def _candidate_by_id(self, candidate_id: str) -> dict | None:
@@ -218,6 +227,10 @@ class RoughcutStateMixin:
             "media_files": self._project_media_files(),
             "clip_boundaries": self._clip_boundaries(),
             "subtitle_segment_count": len(self._editor_segments()),
+            "selected_chapter_id": self._current_selected_chapter_id(),
+            "safety_filter": self._current_safety_filter_value(),
+            "segment_order": list(getattr(self, "_segment_order", []) or []),
+            "chapter_order": list(getattr(self, "_chapter_order", []) or []),
             "user_edits": self._user_edits,
             "segments": [asdict(segment) for segment in result.segments],
             "chapters": [asdict(chapter) for chapter in result.chapters],
@@ -298,12 +311,18 @@ class RoughcutStateMixin:
     def _apply_candidate_payload(self, candidate: dict, persist: bool = True) -> None:
         self._selected_candidate_id = str(candidate.get("candidate_id") or "")
         self._source_signature = str(candidate.get("source_signature") or self._source_signature)
+        if hasattr(self, "_set_reorder_summary_label"):
+            self._set_reorder_summary_label("재정렬 없음", active=False)
         edits = candidate.get("user_edits", {})
         self._user_edits = {
             str(key): dict(value)
             for key, value in edits.items()
             if isinstance(value, dict)
         } if isinstance(edits, dict) else {}
+        self._restored_selected_chapter_id = str(candidate.get("selected_chapter_id") or "")
+        self._restored_safety_filter = str(candidate.get("safety_filter") or "전체")
+        self._segment_order = list(candidate.get("segment_order") or [])
+        self._chapter_order = list(candidate.get("chapter_order") or [])
         restored = roughcut_result_from_dict(candidate)
         if restored.chapters and restored.edl_segments:
             self._result = restored
@@ -314,6 +333,7 @@ class RoughcutStateMixin:
                 self.style_panel.set_style(style)
         if hasattr(self, "source_lbl"):
             self.source_lbl.setText(str(candidate.get("source_media") or self._media_label()))
+        self._sync_candidate_state_label(candidate)
         if persist:
             self._populate_result()
             self.render_status_lbl.setText("후보 선택")
@@ -323,27 +343,31 @@ class RoughcutStateMixin:
 
     def _refresh_candidate_combo(self) -> None:
         combo = getattr(self, "candidate_combo", None)
-        if combo is None:
-            return
         self._refreshing_candidate_combo = True
-        combo.blockSignals(True)
-        combo.clear()
+        if combo is not None:
+            combo.blockSignals(True)
+            combo.clear()
         candidates = list(getattr(self, "_roughcut_candidates", []) or [])
-        if not candidates:
-            combo.addItem("후보 없음", "")
-        else:
-            current_sig = str(getattr(self, "_source_signature", "") or "")
-            for index, candidate in enumerate(candidates, start=1):
-                name = str(candidate.get("name") or f"후보 {index}")
-                suffix = "현재" if candidate.get("source_signature") == current_sig else "이전 자막"
-                combo.addItem(f"{name} · {suffix}", str(candidate.get("candidate_id") or ""))
-            selected = str(getattr(self, "_selected_candidate_id", "") or "")
-            if selected:
-                idx = combo.findData(selected)
-                if idx >= 0:
-                    combo.setCurrentIndex(idx)
-        combo.blockSignals(False)
+        if combo is not None:
+            if not candidates:
+                combo.addItem("후보 없음", "")
+            else:
+                current_sig = self._current_editor_signature()
+                for index, candidate in enumerate(candidates, start=1):
+                    name = str(candidate.get("name") or f"후보 {index}")
+                    suffix = "현재" if candidate.get("source_signature") == current_sig else "저장된 자막"
+                    combo.addItem(f"{name} · {suffix}", str(candidate.get("candidate_id") or ""))
+                selected = str(getattr(self, "_selected_candidate_id", "") or "")
+                if selected:
+                    idx = combo.findData(selected)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
         self._refreshing_candidate_combo = False
+        refresh_frames = getattr(self, "_refresh_candidate_preview_frames", None)
+        if callable(refresh_frames):
+            refresh_frames()
+        self._sync_candidate_state_label()
 
     def _on_candidate_combo_changed(self, index: int) -> None:
         if getattr(self, "_refreshing_candidate_combo", False):
@@ -352,11 +376,60 @@ class RoughcutStateMixin:
         if combo is None or index < 0:
             return
         candidate_id = str(combo.itemData(index) or "")
-        if not candidate_id or candidate_id == getattr(self, "_selected_candidate_id", ""):
+        if not candidate_id:
+            self._sync_candidate_state_label(None)
+            return
+        if candidate_id == getattr(self, "_selected_candidate_id", ""):
+            self._sync_candidate_state_label(self._candidate_by_id(candidate_id))
             return
         candidate = self._candidate_by_id(candidate_id)
         if candidate is not None:
             self._apply_candidate_payload(candidate, persist=True)
+
+    def _sync_candidate_state_label(self, candidate: dict | None = None) -> None:
+        if not hasattr(self, "_set_candidate_state_label"):
+            return
+        if candidate is None:
+            selected = str(getattr(self, "_selected_candidate_id", "") or "")
+            if selected:
+                candidate = self._candidate_by_id(selected)
+            if candidate is None:
+                candidates = list(getattr(self, "_roughcut_candidates", []) or [])
+                candidate = candidates[0] if candidates else None
+        if not isinstance(candidate, dict):
+            self._set_candidate_state_label("none")
+            return
+        current_sig = self._current_editor_signature()
+        candidate_sig = str(candidate.get("source_signature") or "")
+        self._set_candidate_state_label("current" if candidate_sig and candidate_sig == current_sig else "stale")
+
+    def _current_editor_signature(self) -> str:
+        try:
+            current_sig = segment_signature(self._editor_segments())
+        except Exception:
+            current_sig = ""
+        return str(current_sig or getattr(self, "_source_signature", "") or "")
+
+    def _current_selected_chapter_id(self) -> str:
+        major_panel = getattr(self, "major_panel", None)
+        selected = str(getattr(major_panel, "_selected_chapter_id", "") or "")
+        if selected:
+            return selected
+        restored = str(getattr(self, "_restored_selected_chapter_id", "") or "")
+        if restored:
+            return restored
+        row = int(getattr(self, "_preview_row", -1))
+        if row >= 0 and hasattr(self, "_chapter_for_row"):
+            chapter = self._chapter_for_row(row)
+            if chapter is not None:
+                return str(getattr(chapter, "chapter_id", "") or "")
+        return ""
+
+    def _current_safety_filter_value(self) -> str:
+        combo = getattr(self, "safety_filter_combo", None)
+        if combo is None:
+            return "전체"
+        return str(combo.currentText() or "전체")
 
     def _media_path(self) -> str:
         editor = self._active_editor()
@@ -426,30 +499,31 @@ class RoughcutStateMixin:
 
     def _result_with_user_edits(self, result=None):
         result = result or self._result
-        if result is None or not self._user_edits:
+        if result is None:
             return result
+        ordered_segments, ordered_chapters = self._apply_segment_order(result.segments, result.chapters)
+        ordered_chapters = self._apply_chapter_order(ordered_chapters)
         chapters = []
-        for chapter in result.chapters:
+        for chapter in ordered_chapters:
             edit = self._user_edits.get(chapter.chapter_id, {})
             title = str(edit.get("title") or chapter.title)
             tags_text = str(edit.get("tags") or "")
             tags = tuple(part.strip() for part in tags_text.split(",") if part.strip()) if tags_text else chapter.tags
             chapters.append(replace(chapter, title=title, tags=tags))
+        chapter_index = {chapter.chapter_id: index for index, chapter in enumerate(chapters)}
         decisions = []
         for decision in result.edit_decisions:
             edit = self._user_edits.get(decision.segment_id, {})
-            if not edit:
-                decisions.append(decision)
-                continue
-            action = str(edit.get("action") or decision.action)
-            source_start = self._edit_float(edit.get("trim_start"), decision.source_start)
-            source_end = self._edit_float(edit.get("trim_end"), decision.source_end)
+            action = str(edit.get("action") or decision.action) if edit else decision.action
+            source_start = self._edit_float(edit.get("trim_start"), decision.source_start) if edit else decision.source_start
+            source_end = self._edit_float(edit.get("trim_end"), decision.source_end) if edit else decision.source_end
             if source_start is not None and source_end is not None and source_end <= source_start:
                 source_end = source_start + 0.05
             reason = str(decision.reason or "")
-            edit_reason = str(edit.get("reason") or "")
+            edit_reason = str(edit.get("reason") or "") if edit else ""
             if edit_reason and edit_reason not in reason:
                 reason = f"{reason}; {edit_reason}" if reason else edit_reason
+            target_index = chapter_index.get(decision.segment_id, decision.output_order if decision.output_order is not None else len(chapter_index))
             decisions.append(
                 replace(
                     decision,
@@ -457,6 +531,7 @@ class RoughcutStateMixin:
                     source_start=source_start,
                     source_end=source_end,
                     reason=reason,
+                    output_order=int(target_index),
                 )
             )
         base_edl = build_edl_segments(self._media_path(), decisions, chapters)
@@ -464,11 +539,65 @@ class RoughcutStateMixin:
         guide = build_markdown_guide(chapters, decisions, mapped_edl)
         return replace(
             result,
+            segments=tuple(ordered_segments),
             chapters=tuple(chapters),
             edit_decisions=tuple(decisions),
             edl_segments=tuple(mapped_edl),
             guide_markdown=guide,
         )
+
+    def _apply_segment_order(self, segments, chapters):
+        ordered_segments = list(segments or ())
+        ordered_chapters = list(chapters or ())
+        order = [str(segment_id) for segment_id in list(getattr(self, "_segment_order", []) or []) if str(segment_id or "")]
+        if not order:
+            self._segment_order = [self._segment_key(segment, index) for index, segment in enumerate(ordered_segments)]
+            return tuple(ordered_segments), tuple(ordered_chapters)
+        segment_lookup = {
+            self._segment_key(segment, index): segment
+            for index, segment in enumerate(ordered_segments)
+        }
+        ordered_segments = [segment_lookup[segment_id] for segment_id in order if segment_id in segment_lookup]
+        ordered_segments.extend(
+            segment
+            for key, segment in segment_lookup.items()
+            if key not in order
+        )
+        major_sequence = [str(getattr(segment, "major_id", "") or self._segment_key(segment, index)) for index, segment in enumerate(ordered_segments)]
+        chapter_buckets: dict[str, list] = {}
+        for chapter in chapters or ():
+            bucket_key = str(getattr(chapter, "major_id", "") or "")
+            chapter_buckets.setdefault(bucket_key, []).append(chapter)
+        reordered: list = []
+        for bucket_key in major_sequence:
+            reordered.extend(chapter_buckets.pop(bucket_key, []))
+        for remaining in chapter_buckets.values():
+            reordered.extend(remaining)
+        self._segment_order = [self._segment_key(segment, index) for index, segment in enumerate(ordered_segments)]
+        return tuple(ordered_segments), tuple(reordered)
+
+    def _apply_chapter_order(self, chapters):
+        ordered_chapters = list(chapters or ())
+        order = [str(chapter_id) for chapter_id in list(getattr(self, "_chapter_order", []) or []) if str(chapter_id or "")]
+        if not order:
+            self._chapter_order = [str(getattr(chapter, "chapter_id", "") or "") for chapter in ordered_chapters if str(getattr(chapter, "chapter_id", "") or "")]
+            return tuple(ordered_chapters)
+        chapter_lookup = {
+            str(getattr(chapter, "chapter_id", "") or ""): chapter
+            for chapter in ordered_chapters
+            if str(getattr(chapter, "chapter_id", "") or "")
+        }
+        reordered = [chapter_lookup[chapter_id] for chapter_id in order if chapter_id in chapter_lookup]
+        reordered.extend(
+            chapter
+            for chapter_id, chapter in chapter_lookup.items()
+            if chapter_id not in order
+        )
+        self._chapter_order = [str(getattr(chapter, "chapter_id", "") or "") for chapter in reordered if str(getattr(chapter, "chapter_id", "") or "")]
+        return tuple(reordered)
+
+    def _segment_key(self, segment, index: int) -> str:
+        return str(getattr(segment, "segment_id", "") or getattr(segment, "major_id", "") or f"segment_{index:04d}")
 
     def _edit_float(self, value, fallback):
         try:
@@ -788,10 +917,14 @@ class RoughcutStateMixin:
         if force_reanalyze:
             self._selected_candidate_id = ""
             self._user_edits = {}
+            self._segment_order = []
+            self._chapter_order = []
         stored = self._load_project_roughcut_state(self._source_signature)
         if force_reanalyze:
             self._selected_candidate_id = ""
             self._user_edits = {}
+            self._segment_order = []
+            self._chapter_order = []
         if stored is None and not force_reanalyze:
             topicless_result = self._topicless_placeholder_result_from_project()
             if topicless_result is not None:

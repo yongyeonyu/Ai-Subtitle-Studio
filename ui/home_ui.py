@@ -1327,6 +1327,10 @@ class HomeUIMixin(HomeSidebarMixin):
             pass
 
     def _open_editor_screen(self):
+        roughcut = getattr(self, "_roughcut_widget", None)
+        release_video = getattr(roughcut, "release_editor_video_frame", None) if roughcut is not None else None
+        if callable(release_video):
+            release_video()
         editor = self._active_editor()
         if editor is None:
             self._current_work_mode = EDITOR_MODE
@@ -1392,7 +1396,14 @@ class HomeUIMixin(HomeSidebarMixin):
         restore_editor = getattr(editor, "leave_home_compact_mode", None) if editor is not None else None
         if callable(restore_editor):
             restore_editor()
-        if hasattr(self, "_set_roughcut_bottom_widget"):
+        attach_video = getattr(page, "attach_editor_video_frame", None)
+        if callable(attach_video) and editor is not None:
+            attach_video(editor)
+        if bool(getattr(page, "uses_integrated_bottom_frame", False)):
+            collapse_bottom = getattr(self, "_collapse_bottom_queue_panel", None)
+            if callable(collapse_bottom):
+                collapse_bottom()
+        elif hasattr(self, "_set_roughcut_bottom_widget"):
             self._set_roughcut_bottom_widget(getattr(page, "bottom_panel", None))
         elif hasattr(self, "_show_bottom_roughcut_table"):
             self._show_bottom_roughcut_table()

@@ -24,34 +24,48 @@ class RoughcutDetailMixin:
 
     def _build_detail_panel(self) -> QWidget:
         panel = QFrame()
-        panel.setStyleSheet("QFrame { background: #151C20; border: 1px solid #2D3942; border-radius: 6px; }")
+        panel.setStyleSheet("QFrame { background: #12191D; border: 1px solid #243038; border-radius: 8px; }")
         panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         lay = QVBoxLayout(panel)
-        lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(4)
+        lay.setContentsMargins(8, 7, 8, 7)
+        lay.setSpacing(5)
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
         self.detail_chapter_lbl = self._detail_value_label("챕터", "-")
         self.detail_subtitle_lbl = self._detail_value_label("사용 자막", "-")
-        self.detail_story_lbl = self._detail_value_label("Story", "-")
-        self.detail_risk_lbl = self._detail_value_label("위험도", "-")
         self.detail_output_lbl = self._detail_value_label("출력", "-")
-        for item in (
-            self.detail_chapter_lbl,
-            self.detail_subtitle_lbl,
-            self.detail_story_lbl,
-            self.detail_risk_lbl,
-            self.detail_output_lbl,
-        ):
+        for item in (self.detail_chapter_lbl, self.detail_subtitle_lbl, self.detail_output_lbl):
             row.addWidget(item, stretch=1)
         lay.addLayout(row)
 
+        meta_row = QHBoxLayout()
+        meta_row.setContentsMargins(0, 0, 0, 0)
+        meta_row.setSpacing(6)
+        self.detail_story_lbl = self._detail_value_label("Story", "-")
+        self.detail_risk_lbl = self._detail_value_label("위험도", "-")
+        meta_row.addWidget(self.detail_story_lbl, stretch=2)
+        meta_row.addWidget(self.detail_risk_lbl, stretch=1)
+        lay.addLayout(meta_row)
+
         self.detail_reason_lbl = QLabel("상세: 선택 챕터의 컷 근거와 story role 정보가 표시됩니다.")
         self.detail_reason_lbl.setWordWrap(True)
-        self.detail_reason_lbl.setStyleSheet(label_style("muted", 10))
+        self.detail_reason_lbl.setStyleSheet(label_style("muted", 9))
+        self.detail_reason_lbl.setMaximumHeight(34)
         lay.addWidget(self.detail_reason_lbl)
+
+        state_row = QHBoxLayout()
+        state_row.setContentsMargins(0, 0, 0, 0)
+        state_row.setSpacing(6)
+        self.detail_edit_state_lbl = QLabel("수정 상태: 자동 초안")
+        self.detail_edit_state_lbl.setStyleSheet(self._edit_state_style(active=False))
+        self.detail_delta_lbl = QLabel("Δ In +0.00s / Δ Out +0.00s")
+        self.detail_delta_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.detail_delta_lbl.setStyleSheet(self._trim_delta_style(active=False))
+        state_row.addWidget(self.detail_edit_state_lbl, stretch=1)
+        state_row.addWidget(self.detail_delta_lbl, stretch=0)
+        lay.addLayout(state_row)
 
         edit_row = QHBoxLayout()
         edit_row.setContentsMargins(0, 0, 0, 0)
@@ -69,6 +83,8 @@ class RoughcutDetailMixin:
 
         self.cut_trim_start_spin = self._trim_spinbox()
         self.cut_trim_end_spin = self._trim_spinbox()
+        self.cut_trim_start_spin.valueChanged.connect(self._update_trim_delta_label)
+        self.cut_trim_end_spin.valueChanged.connect(self._update_trim_delta_label)
         for label_text, spinbox in (("In", self.cut_trim_start_spin), ("Out", self.cut_trim_end_spin)):
             lbl = QLabel(label_text)
             lbl.setStyleSheet(label_style("muted", 9, bold=True))
@@ -81,6 +97,12 @@ class RoughcutDetailMixin:
         self.btn_apply_cut_edit.setFixedHeight(30)
         self.btn_apply_cut_edit.clicked.connect(self._apply_cut_edit)
         edit_row.addWidget(self.btn_apply_cut_edit)
+        self.btn_revert_user_edit = QPushButton("원복")
+        self.btn_revert_user_edit.setIcon(line_icon("restart", COLORS["muted"], 15))
+        self.btn_revert_user_edit.setStyleSheet(button_style("toolbar", font_size="10px", padding="5px 9px"))
+        self.btn_revert_user_edit.setFixedHeight(30)
+        self.btn_revert_user_edit.clicked.connect(self._revert_user_edit)
+        edit_row.addWidget(self.btn_revert_user_edit)
         edit_row.addStretch(1)
         lay.addLayout(edit_row)
         self._set_cut_edit_controls_enabled(False)
@@ -89,10 +111,10 @@ class RoughcutDetailMixin:
     def _detail_value_label(self, title: str, value: str) -> QLabel:
         label = QLabel(f"{title}: {value}")
         label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        label.setMinimumWidth(110)
+        label.setMinimumWidth(98)
         label.setStyleSheet(
-            "QLabel { background: #10161A; color: #DCE3EA; border: 1px solid #2D3942; "
-            "border-radius: 5px; padding: 4px 6px; font-size: 10px; font-weight: 700; }"
+            "QLabel { background: #0F1518; color: #DCE3EA; border: 1px solid #243038; "
+            "border-radius: 6px; padding: 4px 6px; font-size: 9px; font-weight: 700; }"
         )
         return label
 
@@ -104,6 +126,10 @@ class RoughcutDetailMixin:
         self.detail_output_lbl.setText("출력: -")
         self.detail_reason_lbl.setText("상세: 선택 챕터의 컷 근거와 story role 정보가 표시됩니다.")
         self.detail_risk_lbl.setStyleSheet(self._detail_status_style(COLORS["muted"]))
+        self.detail_edit_state_lbl.setText("수정 상태: 자동 초안")
+        self.detail_edit_state_lbl.setStyleSheet(self._edit_state_style(active=False))
+        self.detail_delta_lbl.setText("Δ In +0.00s / Δ Out +0.00s")
+        self.detail_delta_lbl.setStyleSheet(self._trim_delta_style(active=False))
         self._set_cut_edit_controls_enabled(False)
 
     def _update_detail_panel(self, row: int, chapter, decision=None, edl_segment=None) -> None:
@@ -141,6 +167,7 @@ class RoughcutDetailMixin:
         self.detail_reason_lbl.setText(
             f"상세: 원본 {time_range} / 판단 {action} / Trim {trim} / {safety_detail}"
         )
+        self._update_edit_state_label(chapter.chapter_id)
         self._sync_cut_edit_controls(chapter, decision, edl_segment)
 
     def _subtitle_range_for_chapter(self, chapter) -> str:
@@ -181,9 +208,27 @@ class RoughcutDetailMixin:
 
     def _detail_status_style(self, color: str) -> str:
         return (
-            "QLabel { background: #10161A; "
+            "QLabel { background: #0F1518; "
             f"color: {color}; border: 1px solid #2D3942; "
-            "border-radius: 5px; padding: 4px 6px; font-size: 10px; font-weight: 800; }"
+            "border-radius: 6px; padding: 4px 6px; font-size: 9px; font-weight: 800; }"
+        )
+
+    def _trim_delta_style(self, active: bool) -> str:
+        color = COLORS["accent"] if active else COLORS["muted"]
+        border = COLORS["accent"] if active else "#2D3942"
+        return (
+            "QLabel { background: #0F1518; "
+            f"color: {color}; border: 1px solid {border}; "
+            "border-radius: 6px; padding: 4px 6px; font-size: 9px; font-weight: 700; }"
+        )
+
+    def _edit_state_style(self, active: bool) -> str:
+        color = COLORS["warning"] if active else COLORS["muted"]
+        border = COLORS["warning_border"] if active else "#2D3942"
+        return (
+            "QLabel { background: #0F1518; "
+            f"color: {color}; border: 1px solid {border}; "
+            "border-radius: 6px; padding: 4px 6px; font-size: 9px; font-weight: 700; }"
         )
 
     def _format_safety_reason(self, reason: str) -> str:
@@ -236,8 +281,8 @@ class RoughcutDetailMixin:
 
     def _detail_input_style(self) -> str:
         return (
-            "QComboBox, QDoubleSpinBox { background: #10161A; color: #F5F7FA; "
-            "border: 1px solid #2D3942; border-radius: 5px; padding: 3px 6px; "
+            "QComboBox, QDoubleSpinBox { background: #0F1518; color: #F5F7FA; "
+            "border: 1px solid #243038; border-radius: 6px; padding: 3px 6px; "
             "font-size: 10px; font-weight: 700; }"
             "QComboBox::drop-down { border: none; width: 18px; }"
         )
@@ -260,6 +305,8 @@ class RoughcutDetailMixin:
             self.btn_apply_cut_edit,
         ):
             widget.setEnabled(bool(enabled))
+        if hasattr(self, "btn_revert_user_edit"):
+            self.btn_revert_user_edit.setEnabled(bool(enabled and self._current_preview_has_user_edit()))
 
     def _sync_cut_edit_controls(self, chapter, decision=None, edl_segment=None) -> None:
         self._updating_cut_controls = True
@@ -285,6 +332,59 @@ class RoughcutDetailMixin:
             self._set_cut_edit_controls_enabled(True)
         finally:
             self._updating_cut_controls = False
+        self._update_trim_delta_label()
+
+    def _update_trim_delta_label(self, *_args) -> None:
+        label = getattr(self, "detail_delta_lbl", None)
+        if label is None:
+            return
+        row = int(getattr(self, "_preview_row", -1))
+        chapter = self._chapter_for_row(row)
+        if chapter is None:
+            label.setText("Δ In +0.00s / Δ Out +0.00s")
+            label.setStyleSheet(self._trim_delta_style(active=False))
+            return
+        base_start = float(getattr(chapter, "start", 0.0) or 0.0)
+        base_end = float(getattr(chapter, "end", base_start) or base_start)
+        trim_start = float(self.cut_trim_start_spin.value())
+        trim_end = float(self.cut_trim_end_spin.value())
+        delta_in = trim_start - base_start
+        delta_out = trim_end - base_end
+        active = abs(delta_in) >= 0.005 or abs(delta_out) >= 0.005
+        label.setText(f"Δ In {delta_in:+.2f}s / Δ Out {delta_out:+.2f}s")
+        label.setStyleSheet(self._trim_delta_style(active=active))
+
+    def _update_edit_state_label(self, chapter_id: str) -> None:
+        label = getattr(self, "detail_edit_state_lbl", None)
+        if label is None:
+            return
+        edit = self._user_edits.get(str(chapter_id or ""), {})
+        if not isinstance(edit, dict) or not edit:
+            label.setText("수정 상태: 자동 초안")
+            label.setStyleSheet(self._edit_state_style(active=False))
+            if hasattr(self, "btn_revert_user_edit"):
+                self.btn_revert_user_edit.setEnabled(False)
+            return
+        parts = []
+        if str(edit.get("title") or "").strip():
+            parts.append("제목")
+        if str(edit.get("tags") or "").strip():
+            parts.append("태그")
+        if any(key in edit for key in ("action", "trim_start", "trim_end")):
+            parts.append("컷 조정")
+        summary = " / ".join(parts) if parts else "수동 편집"
+        label.setText(f"수정 상태: 사용자 수정됨 · {summary}")
+        label.setStyleSheet(self._edit_state_style(active=True))
+        if hasattr(self, "btn_revert_user_edit"):
+            self.btn_revert_user_edit.setEnabled(True)
+
+    def _current_preview_has_user_edit(self) -> bool:
+        row = int(getattr(self, "_preview_row", -1))
+        chapter = self._chapter_for_row(row)
+        if chapter is None:
+            return False
+        edit = self._user_edits.get(str(chapter.chapter_id or ""), {})
+        return bool(isinstance(edit, dict) and edit)
 
     def _apply_cut_edit(self) -> None:
         if getattr(self, "_updating_cut_controls", False):
@@ -304,6 +404,24 @@ class RoughcutDetailMixin:
         edit["trim_end"] = round(trim_end, 3)
         edit["status"] = "사용자 수정됨"
         edit["reason"] = "user_manual_cut_edit"
+        result = self._result_with_user_edits(self._result)
+        if result is not None:
+            self._result = result
+        self._populate_result()
+        if row >= 0 and row < self.table.rowCount():
+            self.table.selectRow(row)
+            self._preview_row_data(row)
+        self._persist_roughcut_state()
+
+    def _revert_user_edit(self) -> None:
+        row = int(getattr(self, "_preview_row", -1))
+        chapter = self._chapter_for_row(row)
+        if chapter is None:
+            return
+        chapter_id = str(chapter.chapter_id or "")
+        if not chapter_id or chapter_id not in self._user_edits:
+            return
+        self._user_edits.pop(chapter_id, None)
         result = self._result_with_user_edits(self._result)
         if result is not None:
             self._result = result

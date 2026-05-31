@@ -329,6 +329,21 @@ def _handle_open_command(
     logger,
     helpers: SimpleNamespace,
 ) -> dict[str, Any] | None:
+    if command == "open-roughcut":
+        opener = getattr(owner, "_open_roughcut_helper", None)
+        if not callable(opener):
+            return fail("roughcut_open_unavailable")
+        logger.log("🤖 자동화 명령 수신: open-roughcut")
+        try:
+            opener()
+        except Exception as exc:
+            return fail("roughcut_open_failed", message=str(exc))
+        helpers.bring_to_front(owner)
+        return ok(
+            message="roughcut_opened",
+            data={"current_work_mode": str(getattr(owner, "_current_work_mode", "") or "")},
+        )
+
     if command in {"open-project", "open-srt", "open-media"}:
         path = helpers.normalize_path(command_payload.get("path"))
         if not helpers.existing_file(path):
@@ -372,6 +387,138 @@ def _handle_open_command(
         helpers.bring_to_front(owner)
         return ok(message="media_opened", data={"path": path})
     return None
+
+
+def _handle_roughcut_command(
+    owner: Any,
+    command_payload: dict[str, Any],
+    command: str,
+    *,
+    ok,
+    fail,
+    logger,
+    helpers: SimpleNamespace,
+) -> dict[str, Any] | None:
+    if command not in {
+        "roughcut-select-candidate",
+        "roughcut-select-chapter",
+        "roughcut-move-segment",
+        "roughcut-play-sequence",
+        "roughcut-move-chapter",
+        "roughcut-set-safety-filter",
+        "roughcut-export-srt",
+    }:
+        return None
+    page = getattr(owner, "_roughcut_widget", None)
+    if page is None:
+        return fail("roughcut_widget_missing")
+
+    options = dict(command_payload.get("options") or {})
+    if command == "roughcut-select-candidate":
+        selector = getattr(page, "automation_select_candidate", None)
+        if not callable(selector):
+            return fail("roughcut_automation_unavailable")
+        try:
+            data = dict(
+                selector(
+                    candidate_id=str(options.get("candidate_id", "") or command_payload.get("path", "") or ""),
+                    index=helpers.command_option_int(options, "index"),
+                )
+                or {}
+            )
+        except ValueError as exc:
+            return fail(str(exc))
+        helpers.bring_to_front(owner)
+        return ok(message="roughcut_candidate_selected", data=data)
+
+    if command == "roughcut-select-chapter":
+        selector = getattr(page, "automation_select_chapter", None)
+        if not callable(selector):
+            return fail("roughcut_automation_unavailable")
+        try:
+            data = dict(
+                selector(
+                    chapter_id=str(options.get("chapter_id", "") or command_payload.get("path", "") or ""),
+                    row=helpers.command_option_int(options, "row"),
+                    autoplay=helpers.command_option_bool(options, "autoplay", default=False),
+                )
+                or {}
+            )
+        except ValueError as exc:
+            return fail(str(exc))
+        helpers.bring_to_front(owner)
+        return ok(message="roughcut_chapter_selected", data=data)
+
+    if command == "roughcut-move-chapter":
+        mover = getattr(page, "automation_move_selected_chapter", None)
+        if not callable(mover):
+            return fail("roughcut_automation_unavailable")
+        direction = str(options.get("direction", "") or "").strip().lower()
+        delta = helpers.command_option_int(options, "delta")
+        if delta is None:
+            delta = -1 if direction == "up" else 1 if direction == "down" else None
+        if delta is None:
+            return fail("roughcut_move_delta_missing")
+        try:
+            data = dict(mover(int(delta)) or {})
+        except ValueError as exc:
+            return fail(str(exc))
+        helpers.bring_to_front(owner)
+        return ok(message="roughcut_chapter_moved", data=data)
+
+    if command == "roughcut-move-segment":
+        mover = getattr(page, "automation_move_selected_segment", None)
+        if not callable(mover):
+            return fail("roughcut_automation_unavailable")
+        direction = str(options.get("direction", "") or "").strip().lower()
+        delta = helpers.command_option_int(options, "delta")
+        if delta is None:
+            delta = -1 if direction == "up" else 1 if direction == "down" else None
+        if delta is None:
+            return fail("roughcut_move_delta_missing")
+        try:
+            data = dict(mover(int(delta)) or {})
+        except ValueError as exc:
+            return fail(str(exc))
+        helpers.bring_to_front(owner)
+        return ok(message="roughcut_segment_moved", data=data)
+
+    if command == "roughcut-play-sequence":
+        starter = getattr(page, "automation_start_preview_sequence", None)
+        if not callable(starter):
+            return fail("roughcut_automation_unavailable")
+        try:
+            data = dict(starter() or {})
+        except ValueError as exc:
+            return fail(str(exc))
+        helpers.bring_to_front(owner)
+        return ok(message="roughcut_sequence_started", data=data)
+
+    if command == "roughcut-set-safety-filter":
+        setter = getattr(page, "automation_set_safety_filter", None)
+        if not callable(setter):
+            return fail("roughcut_automation_unavailable")
+        value = str(options.get("value", "") or command_payload.get("path", "") or "")
+        try:
+            data = dict(setter(value) or {})
+        except ValueError as exc:
+            return fail(str(exc))
+        helpers.bring_to_front(owner)
+        return ok(message="roughcut_filter_updated", data=data)
+
+    exporter = getattr(page, "export_roughcut_srt_to_path", None)
+    if not callable(exporter):
+        return fail("roughcut_srt_export_unavailable")
+    target = helpers.normalize_path(command_payload.get("path"))
+    try:
+        data = dict(exporter(target) or {})
+    except ValueError as exc:
+        return fail(str(exc))
+    output = helpers.file_result(str(data.get("path", "") or target))
+    if not output.get("exists"):
+        return fail("roughcut_srt_export_missing", data={"output": output})
+    helpers.bring_to_front(owner)
+    return ok(message="roughcut_srt_exported", data={"output": output, **data})
 
 
 def _handle_queue_command(
@@ -813,6 +960,7 @@ def handle_command(
         _handle_editor_edit_command,
         _handle_snapshot_dialog_command,
         _handle_open_command,
+        _handle_roughcut_command,
         _handle_queue_command,
         _handle_save_export_command,
         _handle_mode_personalization_command,

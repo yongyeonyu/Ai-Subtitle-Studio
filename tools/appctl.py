@@ -41,6 +41,25 @@ def _parser() -> argparse.ArgumentParser:
     capture_dictionary_snapshot = sub.add_parser("capture-dictionary-snapshot")
     capture_dictionary_snapshot.add_argument("path", nargs="?")
     sub.add_parser("show-home")
+    sub.add_parser("open-roughcut")
+    roughcut_select_candidate = sub.add_parser("roughcut-select-candidate")
+    roughcut_select_candidate.add_argument("--candidate-id", default="")
+    roughcut_select_candidate.add_argument("--index", type=int, default=None)
+    roughcut_select = sub.add_parser("roughcut-select-chapter")
+    roughcut_select.add_argument("--chapter-id", default="")
+    roughcut_select.add_argument("--row", type=int, default=None)
+    roughcut_select.add_argument("--autoplay", action="store_true")
+    roughcut_move_segment = sub.add_parser("roughcut-move-segment")
+    roughcut_move_segment.add_argument("--direction", choices=["up", "down"], default="")
+    roughcut_move_segment.add_argument("--delta", type=int, default=None)
+    sub.add_parser("roughcut-play-sequence")
+    roughcut_move = sub.add_parser("roughcut-move-chapter")
+    roughcut_move.add_argument("--direction", choices=["up", "down"], default="")
+    roughcut_move.add_argument("--delta", type=int, default=None)
+    roughcut_filter = sub.add_parser("roughcut-set-safety-filter")
+    roughcut_filter.add_argument("value")
+    roughcut_export_srt = sub.add_parser("roughcut-export-srt")
+    roughcut_export_srt.add_argument("path", nargs="?")
     sub.add_parser("open-dictionary")
     sub.add_parser("open-settings")
     sub.add_parser("open-speaker-settings")
@@ -169,9 +188,11 @@ def _payload_from_args(args: argparse.Namespace) -> dict:
         "capture-dictionary-snapshot",
         "capture-active-dialog",
         "export-subtitles",
+        "roughcut-export-srt",
     }:
         return build_command_payload(command, path=args.path)
     if command in {
+        "open-roughcut",
         "open-dictionary",
         "open-settings",
         "open-speaker-settings",
@@ -182,6 +203,43 @@ def _payload_from_args(args: argparse.Namespace) -> dict:
         return build_command_payload(command)
     if command == "guided-subtitle-run":
         return build_command_payload(command, path=args.path, options={"snapshot_dir": str(args.snapshot_dir or "")})
+    if command == "roughcut-select-chapter":
+        return build_command_payload(
+            command,
+            options={
+                "chapter_id": str(args.chapter_id or ""),
+                "row": args.row,
+                "autoplay": bool(args.autoplay),
+            },
+        )
+    if command == "roughcut-select-candidate":
+        return build_command_payload(
+            command,
+            options={
+                "candidate_id": str(args.candidate_id or ""),
+                "index": args.index,
+            },
+        )
+    if command == "roughcut-move-segment":
+        return build_command_payload(
+            command,
+            options={
+                "direction": str(args.direction or ""),
+                "delta": args.delta,
+            },
+        )
+    if command == "roughcut-play-sequence":
+        return build_command_payload(command)
+    if command == "roughcut-move-chapter":
+        return build_command_payload(
+            command,
+            options={
+                "direction": str(args.direction or ""),
+                "delta": args.delta,
+            },
+        )
+    if command == "roughcut-set-safety-filter":
+        return build_command_payload(command, options={"value": str(args.value or "")})
     if command == "queue-files":
         return build_command_payload(command, paths=list(args.paths or []))
     if command == "editor-set-playhead":

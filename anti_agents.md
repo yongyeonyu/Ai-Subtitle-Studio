@@ -42,7 +42,10 @@ If the task is release-adjacent, also read the latest `RELEASE_v*.md`.
 - When `덱스` names one or more specific files for review, treat that as a focused review order. Keep the response file-scoped, findings-first, and concrete enough that `덱스` can accept, reject, or stage the feedback immediately.
 - If work is piling up in the steering queue, or if `덱스` explicitly or implicitly routes a bounded support task to you, treat that as valid delegation and execute it in a narrow, review-friendly way.
 - As a default expectation, many non-trivial owner tasks given to `덱스` may arrive here as a parallel support slice. Be ready to take narrow work such as targeted review, shortlist building, validation prep, handoff drafting, or candidate scouting without needing the owner to restate the delegation separately each time.
+- Strengthened default: if `덱스` is working on a larger task, assume simple and bounded support work should come here first rather than stay on the Codex side. Expect chores such as narrow search, file reading, doc sync, shortlist building, lightweight cleanup prep, status summaries, and validation prep to be routed here by default.
+- When `덱스` checks whether `잼민이` is idle, answer with a short current-state summary and immediately be ready for the next simple delegated slice.
 - When you finish a delegated task for `덱스`, stop and hand it back immediately in a review-ready shape instead of rolling into extra work. Assume `덱스` will inspect the result before approving any next batch.
+- Exception for explicit queue work: if `덱스` gives you an ordered `잼민이` queue in `ACTION_ITEMS.md` or in one message, and every item is clearly simple and draft/review/doc/prep-only, you may keep consuming the queue top-to-bottom without idling between items. Still begin each item result with `DEX_REVIEW_READY`, keep the output narrow, and stop immediately if the owner or `덱스` says to stop.
 
 ## Task Modes
 
@@ -168,6 +171,7 @@ When the owner gives a focused task, follow this shape:
 - Do not claim hidden shared memory or automatic state transfer. Use repository docs and explicit handoff instead.
 - Use `idea.md` as the shared discussion scratchpad for optimization or refactoring ideas that still need Codex review before execution. Keep `ACTION_ITEMS.md` as the approved execution queue.
 - `덱스` may delegate work to you proactively when the steering queue is crowded. Typical auto-delegation candidates are:
+- `덱스` should prefer delegating the following simple support work here before doing it alone on the Codex side:
   - file reading and status summarization
   - targeted code review on named files
   - validation command collection

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import signal
@@ -153,6 +154,53 @@ def _macau_project_for_suite(output_root: Path) -> Path:
             },
         )
         return MACAU_PROJECT
+
+
+def _macau_multicandidate_project_for_suite(output_root: Path) -> Path:
+    base_project = _macau_project_for_suite(output_root)
+    if not base_project.is_file():
+        return base_project
+
+    fixture_dir = output_root / "_suite_fixtures"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    fixture_project = fixture_dir / f"{base_project.stem}_multicandidate.aissproj"
+
+    try:
+        from core.project.project_io import read_project_file, write_project_file
+
+        project = read_project_file(str(base_project))
+        roughcut_state = dict(project.get("roughcut_state", {}) or {})
+        candidates = [dict(item) for item in list(roughcut_state.get("candidates") or []) if isinstance(item, dict)]
+        if not candidates:
+            return base_project
+        current = copy.deepcopy(candidates[0])
+        alt = copy.deepcopy(current)
+        alt["candidate_id"] = "suite_multicandidate_previous"
+        alt["name"] = "이전 후보 1"
+        alt["source_signature"] = f"{str(current.get('source_signature') or '')}-previous"
+        alt["selected_chapter_id"] = str((alt.get("chapter_order") or [alt.get("selected_chapter_id") or ""])[0] or "")
+        segment_order = [str(item or "") for item in list(alt.get("segment_order") or []) if str(item or "")]
+        if len(segment_order) >= 3:
+            segment_order[1], segment_order[2] = segment_order[2], segment_order[1]
+            alt["segment_order"] = segment_order
+        candidates = [current, alt]
+        roughcut_state["candidates"] = candidates
+        roughcut_state["candidate_count"] = len(candidates)
+        roughcut_state["selected_candidate_id"] = str(current.get("candidate_id") or "")
+        project["roughcut_state"] = roughcut_state
+        write_project_file(str(fixture_project), project)
+        return fixture_project if fixture_project.is_file() else base_project
+    except Exception as exc:
+        _write_json(
+            fixture_dir / "macau_multicandidate_fixture_error.json",
+            {
+                "ok": False,
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "base_project": str(base_project),
+            },
+        )
+        return base_project
 
 
 def _full_media(
@@ -308,6 +356,215 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
             )
         )
 
+        roughcut_dir = output_root / "roughcut_reopen_macau"
+        scenarios.append(
+            _app_sequence(
+                "roughcut_reopen_macau",
+                roughcut_dir,
+                description="Roughcut candidate open/save/reopen smoke on Macau project.",
+                steps=[
+                    _step("open_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
+                    _step("start_roughcut", "start-current-roughcut", timeout=45.0, delay_sec=1.0),
+                    _step("open_roughcut", "open-roughcut", timeout=45.0, delay_sec=1.0),
+                    {
+                        **_step("status_roughcut_opened", "status", timeout=30.0),
+                        "expect_data": {
+                            "current_work_mode": "roughcut",
+                        },
+                    },
+                    _step(
+                        "capture_roughcut_opened",
+                        "capture-snapshot",
+                        str(roughcut_dir / "snapshots" / "roughcut_opened.png"),
+                        wait_for_path=str(roughcut_dir / "snapshots" / "roughcut_opened.png"),
+                    ),
+                    _step("save_project", "save-project", timeout=60.0, delay_sec=1.0),
+                    _step("reopen_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
+                    {
+                        **_step("status_after_reopen", "status", timeout=30.0),
+                        "expect_data": {
+                            "current_work_mode": "roughcut",
+                        },
+                    },
+                    _step(
+                        "capture_roughcut_reopened",
+                        "capture-snapshot",
+                        str(roughcut_dir / "snapshots" / "roughcut_reopened.png"),
+                        wait_for_path=str(roughcut_dir / "snapshots" / "roughcut_reopened.png"),
+                    ),
+                ],
+            )
+        )
+
+        roughcut_interaction_dir = output_root / "roughcut_interaction_macau"
+        scenarios.append(
+            _app_sequence(
+                "roughcut_interaction_macau",
+                roughcut_interaction_dir,
+                description="Roughcut interaction smoke for chapter selection, ordered preview, and roughcut SRT export on Macau project.",
+                steps=[
+                    _step("open_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
+                    _step("start_roughcut", "start-current-roughcut", timeout=45.0, delay_sec=1.0),
+                    _step("open_roughcut", "open-roughcut", timeout=45.0, delay_sec=1.0),
+                    _step("select_first_row", "roughcut-select-chapter", "--row", "0", timeout=30.0, delay_sec=0.3),
+                    {
+                        **_step("play_sequence", "roughcut-play-sequence", timeout=30.0, delay_sec=0.5),
+                        "expect_data": {
+                            "sequence_preview_active": True,
+                        },
+                    },
+                    {
+                        **_step("status_after_sequence", "status", timeout=30.0),
+                        "expect_data": {
+                            "current_work_mode": "roughcut",
+                            "roughcut_runtime.sequence_preview_active": True,
+                        },
+                    },
+                    _step(
+                        "roughcut_export_srt",
+                        "roughcut-export-srt",
+                        str(roughcut_interaction_dir / "exports" / "roughcut_interaction_export.srt"),
+                        timeout=60.0,
+                        delay_sec=0.5,
+                        wait_for_path=str(roughcut_interaction_dir / "exports" / "roughcut_interaction_export.srt"),
+                    ),
+                    _step(
+                        "capture_interaction",
+                        "capture-snapshot",
+                        str(roughcut_interaction_dir / "snapshots" / "roughcut_interaction.png"),
+                        wait_for_path=str(roughcut_interaction_dir / "snapshots" / "roughcut_interaction.png"),
+                    ),
+                ],
+            )
+        )
+
+        multi_candidate_project = _macau_multicandidate_project_for_suite(output_root)
+        roughcut_candidate_dir = output_root / "roughcut_candidate_macau"
+        scenarios.append(
+            _app_sequence(
+                "roughcut_candidate_macau",
+                roughcut_candidate_dir,
+                description="Roughcut multi-candidate selection smoke on Macau project copy.",
+                steps=[
+                    _step("open_project", "open-project", str(multi_candidate_project), timeout=60.0, delay_sec=3.0),
+                    _step("open_roughcut", "open-roughcut", timeout=45.0, delay_sec=1.0),
+                    _step("open_roughcut_refresh", "open-roughcut", timeout=45.0, delay_sec=1.0),
+                    {
+                        **_step("status_candidate_ready", "status", timeout=30.0),
+                        "expect_data": {
+                            "current_work_mode": "roughcut",
+                            "roughcut_runtime.candidate_count": 2,
+                        },
+                    },
+                    {
+                        **_step("select_candidate_second", "roughcut-select-candidate", "--index", "1", timeout=30.0, delay_sec=0.5),
+                        "expect_data": {
+                            "selected_candidate_id": "suite_multicandidate_previous",
+                            "candidate_count": 2,
+                            "candidate_state": "저장된 자막 기준",
+                        },
+                    },
+                    {
+                        **_step("status_candidate_selected", "status", timeout=30.0),
+                        "expect_data": {
+                            "current_work_mode": "roughcut",
+                            "roughcut_runtime.selected_candidate_id": "suite_multicandidate_previous",
+                            "roughcut_runtime.candidate_count": 2,
+                            "roughcut_runtime.candidate_state": "저장된 자막 기준",
+                        },
+                    },
+                    _step(
+                        "capture_candidate_selected",
+                        "capture-snapshot",
+                        str(roughcut_candidate_dir / "snapshots" / "roughcut_candidate_selected.png"),
+                        wait_for_path=str(roughcut_candidate_dir / "snapshots" / "roughcut_candidate_selected.png"),
+                    ),
+                ],
+            )
+        )
+
+        roughcut_release_dir = output_root / "roughcut_release_audit_macau"
+        scenarios.append(
+            _app_sequence(
+                "roughcut_release_audit_macau",
+                roughcut_release_dir,
+                description="Release-style roughcut audit for candidate selection, preview, reorder, save/reopen, and export on Macau project copy.",
+                steps=[
+                    _step("open_project", "open-project", str(multi_candidate_project), timeout=60.0, delay_sec=3.0),
+                    _step("open_roughcut", "open-roughcut", timeout=45.0, delay_sec=1.0),
+                    {
+                        **_step("status_ready", "status", timeout=30.0),
+                        "expect_data": {
+                            "current_work_mode": "roughcut",
+                            "roughcut_runtime.candidate_count": 2,
+                            "roughcut_runtime.visible_row_count": 45,
+                        },
+                    },
+                    {
+                        **_step(
+                            "select_candidate_draft",
+                            "roughcut-select-candidate",
+                            "--candidate-id",
+                            "editor_post_generation_roughcut_draft",
+                            timeout=30.0,
+                            delay_sec=0.5,
+                        ),
+                        "expect_data": {
+                            "selected_candidate_id": "editor_post_generation_roughcut_draft",
+                            "candidate_count": 2,
+                        },
+                    },
+                    {
+                        **_step(
+                            "thumbnail_preview_proxy",
+                            "roughcut-select-chapter",
+                            "--chapter-id",
+                            "B_0015",
+                            "--autoplay",
+                            timeout=30.0,
+                            delay_sec=0.5,
+                        ),
+                        "expect_data": {
+                            "selected_chapter_id": "B_0015",
+                            "selected_segment_id": "B",
+                        },
+                    },
+                    {
+                        **_step("move_chapter_down", "roughcut-move-chapter", "--direction", "down", timeout=30.0, delay_sec=0.5),
+                        "expect_data": {
+                            "selected_chapter_id": "B_0015",
+                            "reorder_summary": "챕터 재정렬 · B_0016 > B_0015 > B_0017 > B_0018",
+                        },
+                    },
+                    _step("save_project", "save-project", timeout=60.0, delay_sec=1.0),
+                    _step("reopen_project", "open-project", str(multi_candidate_project), timeout=60.0, delay_sec=3.0),
+                    {
+                        **_step("status_after_reopen", "status", timeout=30.0),
+                        "expect_data": {
+                            "current_work_mode": "roughcut",
+                            "roughcut_runtime.selected_candidate_id": "editor_post_generation_roughcut_draft",
+                            "roughcut_runtime.candidate_count": 2,
+                            "roughcut_runtime.visible_row_count": 45,
+                        },
+                    },
+                    _step(
+                        "roughcut_export_srt",
+                        "roughcut-export-srt",
+                        str(roughcut_release_dir / "exports" / "roughcut_release_audit_export.srt"),
+                        timeout=60.0,
+                        delay_sec=0.5,
+                        wait_for_path=str(roughcut_release_dir / "exports" / "roughcut_release_audit_export.srt"),
+                    ),
+                    _step(
+                        "capture_release_audit",
+                        "capture-snapshot",
+                        str(roughcut_release_dir / "snapshots" / "roughcut_release_audit.png"),
+                        wait_for_path=str(roughcut_release_dir / "snapshots" / "roughcut_release_audit.png"),
+                    ),
+                ],
+            )
+        )
+
     if normalized == "full":
         scenarios.append(
             _full_media(
@@ -354,6 +611,32 @@ def _parse_json(stdout: str) -> dict[str, Any]:
             if isinstance(parsed, dict):
                 return dict(parsed)
         return {"ok": False, "error": "invalid_json", "message": text[-300:], "data": {}}
+
+
+def _lookup_nested_value(payload: dict[str, Any], dotted_path: str) -> tuple[bool, Any]:
+    current: Any = payload
+    for part in [segment for segment in str(dotted_path or "").split(".") if segment]:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        return False, None
+    return True, current
+
+
+def _apply_step_expectations(step: dict[str, Any], payload: dict[str, Any]) -> tuple[bool, str]:
+    expected_message = str(step.get("expect_message", "") or "")
+    if expected_message and str(payload.get("message", "") or "") != expected_message:
+        return False, f"expected_message:{expected_message}"
+
+    expected_data = dict(step.get("expect_data") or {})
+    data = dict(payload.get("data") or {})
+    for dotted_path, expected_value in expected_data.items():
+        found, actual_value = _lookup_nested_value(data, str(dotted_path or ""))
+        if not found:
+            return False, f"expected_data_missing:{dotted_path}"
+        if actual_value != expected_value:
+            return False, f"expected_data_mismatch:{dotted_path}"
+    return True, ""
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -460,6 +743,31 @@ def _app_status(python_bin: Path, *, output_dir: Path, timeout_sec: float = 3.0)
     )
 
 
+def _app_ping(python_bin: Path, *, output_dir: Path, timeout_sec: float = 1.5) -> tuple[int, dict[str, Any]]:
+    logs_dir = output_dir / "_suite_logs"
+    return _run_subprocess(
+        [
+            str(python_bin),
+            str(ROOT / "tools" / "appctl.py"),
+            "--timeout",
+            str(timeout_sec),
+            "ping",
+        ],
+        cwd=ROOT,
+        stdout_path=logs_dir / "app_ping.stdout",
+        stderr_path=logs_dir / "app_ping.stderr",
+    )
+
+
+def _ready_status_from_ping(payload: dict[str, Any]) -> dict[str, Any]:
+    ready_payload = dict(payload or {})
+    data = dict(ready_payload.get("data") or {}) if isinstance(ready_payload.get("data"), dict) else {}
+    data["readiness_probe"] = "ping"
+    data["status_deferred"] = True
+    ready_payload["data"] = data
+    return ready_payload
+
+
 def _segment_playhead_candidate(segment: dict[str, Any]) -> float | None:
     data = dict(segment or {})
     try:
@@ -564,6 +872,13 @@ def _ensure_app_ready(python_bin: Path, *, output_dir: Path, startup_wait_sec: f
             "started_app": False,
             "status": initial_payload,
         }
+    initial_ping_code, initial_ping_payload = _app_ping(python_bin, output_dir=output_dir, timeout_sec=1.0)
+    if initial_ping_code == 0 and bool(initial_ping_payload.get("ok")):
+        return {
+            "ok": True,
+            "started_app": False,
+            "status": _ready_status_from_ping(initial_ping_payload),
+        }
 
     logs_dir = output_dir / "_suite_logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -582,8 +897,24 @@ def _ensure_app_ready(python_bin: Path, *, output_dir: Path, startup_wait_sec: f
     latest_payload = dict(initial_payload)
     while time.monotonic() < deadline:
         time.sleep(1.0)
+        ping_code, ping_payload = _app_ping(python_bin, output_dir=output_dir, timeout_sec=1.0)
+        if ping_code == 0 and bool(ping_payload.get("ok")):
+            code, payload = _app_status(python_bin, output_dir=output_dir, timeout_sec=2.0)
+            if code == 0 and bool(payload.get("ok")):
+                return {
+                    "ok": True,
+                    "started_app": True,
+                    "pid": int(proc.pid or 0),
+                    "status": payload,
+                }
+            return {
+                "ok": True,
+                "started_app": True,
+                "pid": int(proc.pid or 0),
+                "status": _ready_status_from_ping(ping_payload),
+            }
         code, payload = _app_status(python_bin, output_dir=output_dir, timeout_sec=2.0)
-        latest_payload = dict(payload)
+        latest_payload = dict(payload or ping_payload)
         if code == 0 and bool(payload.get("ok")):
             return {
                 "ok": True,
@@ -710,6 +1041,12 @@ def _run_app_sequence(spec: dict[str, Any], python_bin: Path) -> dict[str, Any]:
             "error": str(payload.get("error", "") or ""),
             "data": dict(payload.get("data") or {}),
         }
+        expectations_ok, expectation_error = _apply_step_expectations(step, payload)
+        if step_result["ok"] and not expectations_ok:
+            step_result["ok"] = False
+            step_result["error"] = expectation_error
+            if not step_result["message"]:
+                step_result["message"] = expectation_error
         results.append(step_result)
         if not step_result["ok"] and not failed_step:
             failed_step = name

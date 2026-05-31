@@ -680,6 +680,11 @@ class EditorWidget(
         self.external_menu_host.setFixedHeight(0)
         self.external_menu_host.hide()
         root.addWidget(self.external_menu_host)
+        self._external_video_placeholder = QWidget()
+        self._external_video_placeholder.setObjectName("EditorExternalVideoPlaceholder")
+        self._external_video_placeholder.setStyleSheet("QWidget#EditorExternalVideoPlaceholder { background: #0A0F12; border: none; }")
+        self._external_video_placeholder.hide()
+        self._video_frame_detached = False
         self._video_width_locking = False
         QTimer.singleShot(0, self._position_video_expand_button)
         QTimer.singleShot(150, self._position_video_expand_button)
@@ -820,6 +825,75 @@ class EditorWidget(
         host.setFixedHeight(0)
         host.hide()
         return widget
+
+    def detach_video_frame_for_external_host(self):
+        splitter = getattr(self, "splitter", None)
+        frame = getattr(self, "video_frame", None)
+        placeholder = getattr(self, "_external_video_placeholder", None)
+        if splitter is None or frame is None or placeholder is None:
+            return None
+        if bool(getattr(self, "_video_frame_detached", False)):
+            return frame
+        try:
+            index = splitter.indexOf(frame)
+        except Exception:
+            index = 1
+        index = 1 if index < 0 else index
+        placeholder.setMinimumWidth(max(1, int(frame.minimumWidth() or 1)))
+        placeholder.setMinimumHeight(max(1, int(frame.minimumHeight() or 1)))
+        placeholder.show()
+        try:
+            splitter.replaceWidget(index, placeholder)
+        except Exception:
+            try:
+                frame.setParent(None)
+            except Exception:
+                pass
+            splitter.insertWidget(index, placeholder)
+        self._video_frame_detached = True
+        return frame
+
+    def restore_video_frame_from_external_host(self, frame=None):
+        splitter = getattr(self, "splitter", None)
+        frame = frame or getattr(self, "video_frame", None)
+        placeholder = getattr(self, "_external_video_placeholder", None)
+        if splitter is None or frame is None:
+            return
+        if not bool(getattr(self, "_video_frame_detached", False)) and frame.parentWidget() is splitter:
+            return
+        try:
+            index = splitter.indexOf(placeholder)
+        except Exception:
+            index = 1
+        index = 1 if index < 0 else index
+        try:
+            splitter.replaceWidget(index, frame)
+        except Exception:
+            try:
+                frame.setParent(None)
+            except Exception:
+                pass
+            splitter.insertWidget(index, frame)
+        if placeholder is not None:
+            try:
+                placeholder.hide()
+                placeholder.setParent(None)
+                self._external_video_placeholder = QWidget()
+                self._external_video_placeholder.setObjectName("EditorExternalVideoPlaceholder")
+                self._external_video_placeholder.setStyleSheet("QWidget#EditorExternalVideoPlaceholder { background: #0A0F12; border: none; }")
+                self._external_video_placeholder.hide()
+            except Exception:
+                pass
+        self._video_frame_detached = False
+        try:
+            frame.show()
+            frame.updateGeometry()
+        except Exception:
+            pass
+        restore_video = getattr(getattr(self, "video_player", None), "restore_after_navigation", None)
+        if callable(restore_video):
+            restore_video()
+        self._apply_fixed_video_preview_width()
 
     def _widget_is_inside_editor_panel(self, widget) -> bool:
         panel = getattr(self, "_editor_wrap", None)

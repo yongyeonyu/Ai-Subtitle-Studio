@@ -412,7 +412,9 @@ class _DummyOwner:
         )
         self._sig_external_app_command = SimpleNamespace(emit=lambda payload, state=None: None)
         self._editor_widget = _DummyEditor()
+        self._roughcut_widget = _DummyRoughcutWidget()
         self.last_open_args = None
+        self.roughcut_open_calls = 0
 
     def show_home(self, allow_home_idle_learning: bool = False):
         self.home_calls += 1
@@ -420,6 +422,10 @@ class _DummyOwner:
     def _open_project_file(self, path: str) -> bool:
         self.opened_project = path
         return True
+
+    def _open_roughcut_helper(self):
+        self.roughcut_open_calls += 1
+        self._current_work_mode = "roughcut"
 
     def _start_queue_mode(self, files, folder=None, source="queue"):
         self.queue_calls.append((list(files), folder, source))
@@ -514,6 +520,114 @@ class _DummyOwner:
     def _resume_personalization_idle_jobs(self):
         self.personalization_actions.append("resume")
         return {"resumed": True}
+
+
+class _DummyRoughcutWidget:
+    def __init__(self):
+        self.selected_candidate_id = "candidate_current"
+        self.candidate_ids = ["candidate_current", "candidate_prev_1", "candidate_prev_2"]
+        self.selected_chapter_id = "chapter_0001"
+        self.selected_segment_id = "major_A"
+        self.segment_order = ["major_A", "major_B", "major_C"]
+        self.chapter_order = ["chapter_0001", "chapter_0002", "chapter_0003"]
+        self.filter_value = "전체"
+        self.video_host_attached = True
+        self.player_menu_visible = True
+        self.sequence_preview_active = False
+
+    def automation_runtime_snapshot(self):
+        return {
+            "has_result": True,
+            "selected_candidate_id": self.selected_candidate_id,
+            "candidate_count": len(self.candidate_ids),
+            "candidate_ids": list(self.candidate_ids),
+            "selected_chapter_id": self.selected_chapter_id,
+            "selected_segment_id": self.selected_segment_id,
+            "selected_chapter_title": f"title:{self.selected_chapter_id}",
+            "candidate_state": "현재 자막 기준",
+            "filter_value": self.filter_value,
+            "filter_summary": f"표시 {len(self.chapter_order)} / 전체 {len(self.chapter_order)}",
+            "selection_summary": f"선택 {self.selected_chapter_id} · 확정",
+            "order_summary": f"카드 {self.segment_order.index(self.selected_segment_id) + 1}/{len(self.segment_order)} · {' > '.join(self.segment_order[:5])}",
+            "sequence_preview_active": bool(self.sequence_preview_active),
+            "visible_row_count": len(self.chapter_order),
+            "total_row_count": len(self.chapter_order),
+            "visible_chapter_ids": list(self.chapter_order),
+            "visible_segment_ids": list(self.segment_order),
+            "chapter_order": list(self.chapter_order),
+            "segment_order": list(self.segment_order),
+            "chapter_order_state": list(self.chapter_order),
+            "video_host_attached": self.video_host_attached,
+            "video_placeholder_visible": False,
+            "player_menu_visible": self.player_menu_visible,
+        }
+
+    def automation_select_candidate(self, *, candidate_id: str = "", index: int | None = None):
+        if index is not None:
+            if index < 0 or index >= len(self.candidate_ids):
+                raise ValueError("roughcut_candidate_index_out_of_range")
+            self.selected_candidate_id = self.candidate_ids[index]
+        elif candidate_id:
+            if candidate_id not in self.candidate_ids:
+                raise ValueError("roughcut_candidate_not_found")
+            self.selected_candidate_id = candidate_id
+        else:
+            raise ValueError("roughcut_candidate_missing")
+        return self.automation_runtime_snapshot()
+
+    def automation_select_chapter(self, *, chapter_id: str = "", row: int | None = None, autoplay: bool = False):
+        if row is not None:
+            if row < 0 or row >= len(self.chapter_order):
+                raise ValueError("roughcut_row_out_of_range")
+            self.selected_chapter_id = self.chapter_order[row]
+        elif chapter_id:
+            if chapter_id not in self.chapter_order:
+                raise ValueError("roughcut_chapter_not_found")
+            self.selected_chapter_id = chapter_id
+        else:
+            raise ValueError("roughcut_chapter_missing")
+        data = self.automation_runtime_snapshot()
+        data["autoplay"] = bool(autoplay)
+        return data
+
+    def automation_move_selected_chapter(self, delta: int):
+        if self.selected_chapter_id not in self.chapter_order:
+            raise ValueError("roughcut_selection_missing")
+        current = self.chapter_order.index(self.selected_chapter_id)
+        target = max(0, min(len(self.chapter_order) - 1, current + int(delta)))
+        item = self.chapter_order.pop(current)
+        self.chapter_order.insert(target, item)
+        data = self.automation_runtime_snapshot()
+        data["changed"] = target != current
+        data["target_index"] = target
+        return data
+
+    def automation_move_selected_segment(self, delta: int):
+        if self.selected_segment_id not in self.segment_order:
+            raise ValueError("roughcut_segment_selection_missing")
+        current = self.segment_order.index(self.selected_segment_id)
+        target = max(0, min(len(self.segment_order) - 1, current + int(delta)))
+        item = self.segment_order.pop(current)
+        self.segment_order.insert(target, item)
+        data = self.automation_runtime_snapshot()
+        data["changed"] = target != current
+        data["target_index"] = target
+        return data
+
+    def automation_start_preview_sequence(self):
+        self.sequence_preview_active = True
+        return self.automation_runtime_snapshot()
+
+    def automation_set_safety_filter(self, value: str):
+        if value not in {"전체", "ideal", "acceptable", "risky"}:
+            raise ValueError("roughcut_filter_invalid")
+        self.filter_value = value
+        return self.automation_runtime_snapshot()
+
+    def export_roughcut_srt_to_path(self, path: str):
+        target = Path(path or "/tmp/roughcut_export.srt")
+        target.write_text("1\n00:00:00,000 --> 00:00:01,000\n테스트\n", encoding="utf-8")
+        return {"path": str(target), "subtitle_count": 1}
 
 
 class _DummyPixmap:
@@ -710,6 +824,90 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(owner._editor_widget.roughcut_manual)
         self.assertTrue(owner._editor_widget.roughcut_force)
 
+    def test_open_roughcut_switches_work_mode(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "open-roughcut"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "roughcut_opened")
+        self.assertEqual(owner.roughcut_open_calls, 1)
+        self.assertEqual(owner._current_work_mode, "roughcut")
+        self.assertEqual(result["data"]["current_work_mode"], "roughcut")
+
+    def test_roughcut_select_chapter_returns_runtime_snapshot(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "roughcut-select-chapter", "options": {"chapter_id": "chapter_0002", "autoplay": True}})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "roughcut_chapter_selected")
+        self.assertEqual(result["data"]["selected_chapter_id"], "chapter_0002")
+        self.assertTrue(result["data"]["autoplay"])
+
+    def test_roughcut_select_candidate_returns_runtime_snapshot(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "roughcut-select-candidate", "options": {"index": 1}})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "roughcut_candidate_selected")
+        self.assertEqual(result["data"]["selected_candidate_id"], "candidate_prev_1")
+        self.assertEqual(result["data"]["candidate_count"], 3)
+
+    def test_roughcut_move_chapter_updates_order(self):
+        owner = _DummyOwner()
+        owner._roughcut_widget.selected_chapter_id = "chapter_0002"
+
+        result = execute_app_command(owner, {"command": "roughcut-move-chapter", "options": {"direction": "down"}})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "roughcut_chapter_moved")
+        self.assertEqual(result["data"]["chapter_order"], ["chapter_0001", "chapter_0003", "chapter_0002"])
+        self.assertEqual(result["data"]["selected_chapter_id"], "chapter_0002")
+
+    def test_roughcut_move_segment_updates_order(self):
+        owner = _DummyOwner()
+        owner._roughcut_widget.selected_segment_id = "major_B"
+
+        result = execute_app_command(owner, {"command": "roughcut-move-segment", "options": {"direction": "down"}})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "roughcut_segment_moved")
+        self.assertEqual(result["data"]["segment_order"], ["major_A", "major_C", "major_B"])
+        self.assertEqual(result["data"]["selected_segment_id"], "major_B")
+        self.assertEqual(result["data"]["order_summary"], "카드 3/3 · major_A > major_C > major_B")
+
+    def test_roughcut_play_sequence_marks_sequence_active(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "roughcut-play-sequence"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "roughcut_sequence_started")
+        self.assertTrue(result["data"]["sequence_preview_active"])
+
+    def test_roughcut_set_safety_filter_updates_runtime(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "roughcut-set-safety-filter", "options": {"value": "risky"}})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "roughcut_filter_updated")
+        self.assertEqual(result["data"]["filter_value"], "risky")
+
+    def test_roughcut_export_srt_writes_output(self):
+        owner = _DummyOwner()
+        with tempfile.TemporaryDirectory() as tmp:
+            export_path = Path(tmp) / "roughcut_export.srt"
+
+            result = execute_app_command(owner, {"command": "roughcut-export-srt", "path": str(export_path)})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "roughcut_srt_exported")
+        self.assertTrue(result["data"]["output"]["exists"])
+        self.assertEqual(result["data"]["subtitle_count"], 1)
+
     def test_open_media_wires_real_pipeline_start_callback(self):
         owner = _DummyOwner()
         with tempfile.TemporaryDirectory() as tmp:
@@ -819,6 +1017,8 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["data"]["last_stage_key"], "subtitle-generation")
         self.assertEqual(result["data"]["subtitle_count"], 2)
         self.assertTrue(result["data"]["roughcut_state"]["running"])
+        self.assertEqual(result["data"]["roughcut_runtime"]["selected_chapter_id"], "chapter_0001")
+        self.assertTrue(result["data"]["roughcut_runtime"]["video_host_attached"])
         self.assertEqual(result["data"]["runtime_timestamp"], 1234.5)
         self.assertEqual(result["data"]["runtime_resource"]["rss_gb"], 1.25)
         self.assertIn("stage_metrics", result["data"])

@@ -629,6 +629,20 @@ def _roughcut_runtime_state(editor: Any) -> dict[str, Any]:
     }
 
 
+def _roughcut_widget_runtime_snapshot(owner: Any) -> dict[str, Any]:
+    widget = getattr(owner, "_roughcut_widget", None)
+    if widget is None:
+        return {}
+    snapshotter = getattr(widget, "automation_runtime_snapshot", None)
+    if not callable(snapshotter):
+        return {}
+    return _bridge_best_effort(
+        "roughcut widget automation state snapshot",
+        lambda: dict(snapshotter() or {}),
+        default={},
+    )
+
+
 def _status_current_generation_fields(owner: Any, data: dict[str, Any] | None) -> dict[str, Any]:
     out = dict(data or {})
     editor = getattr(owner, "_editor_widget", None)
@@ -762,6 +776,7 @@ def _status_snapshot(owner: Any) -> dict[str, Any]:
         "auto_processing_active": bool(getattr(owner, "_auto_processing_active", False)),
         "editor_runtime": _editor_runtime_snapshot(editor),
         "editor_aux_counts": _editor_aux_counts(editor),
+        "roughcut_runtime": _roughcut_widget_runtime_snapshot(owner),
         "editor_stt": editor_stt,
         "guided_snapshot_run": guided_state,
         "queue_runtime": _queue_runtime_snapshot(owner),

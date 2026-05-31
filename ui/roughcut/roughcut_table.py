@@ -28,7 +28,11 @@ class RoughcutTableMixin:
         for label, value in zip(self.metric_labels, values):
             label.setText(str(value))
         if hasattr(self, "major_panel"):
-            self.major_panel.set_result(result)
+            self.major_panel.set_result(
+                result,
+                editor_segments=self._editor_segments(),
+                thumbnail_lookup=self._thumbnail_lookup_for_result(result),
+            )
         if hasattr(self, "title_panel"):
             self.title_panel.set_suggestions(getattr(result, "title_suggestions", ()) or ())
         if hasattr(self, "log_panel"):
@@ -72,10 +76,25 @@ class RoughcutTableMixin:
         self._updating_table = False
         self.table.resizeRowsToContents()
         self.guide_text.setPlainText(result.guide_markdown)
+        restored_filter = str(getattr(self, "_restored_safety_filter", "전체") or "전체")
+        if hasattr(self, "safety_filter_combo"):
+            index = self.safety_filter_combo.findText(restored_filter)
+            self.safety_filter_combo.setCurrentIndex(index if index >= 0 else 0)
         self._apply_safety_filter()
+        restored_chapter_id = str(getattr(self, "_restored_selected_chapter_id", "") or "")
+        if restored_chapter_id and self._select_chapter_id_in_table(restored_chapter_id):
+            self._restored_selected_chapter_id = ""
+            self._restored_safety_filter = "전체"
+            if hasattr(self, "_set_reorder_summary_label") and not str(getattr(self, "_recent_reorder_summary", "") or ""):
+                self._set_reorder_summary_label("재정렬 없음", active=False)
+            return
         if result.chapters:
             self.table.selectRow(0)
             self._preview_row_data(0)
+        self._restored_selected_chapter_id = ""
+        self._restored_safety_filter = "전체"
+        if hasattr(self, "_set_reorder_summary_label") and not str(getattr(self, "_recent_reorder_summary", "") or ""):
+            self._set_reorder_summary_label("재정렬 없음", active=False)
 
     def _table_item(self, text: str, editable: bool = False) -> QTableWidgetItem:
         item = QTableWidgetItem(text)
@@ -118,6 +137,10 @@ class RoughcutTableMixin:
             label.setText("-")
         self.source_lbl.setText("대기 중")
         self._row_chapter_ids = []
+        if hasattr(self, "_segment_order"):
+            self._segment_order = []
+        if hasattr(self, "_chapter_order"):
+            self._chapter_order = []
         self.table.setRowCount(0)
         self._updating_table = False
         self.guide_text.setPlainText("러프컷 분석 결과 없음")
@@ -143,6 +166,16 @@ class RoughcutTableMixin:
         self._set_detail_empty()
         if hasattr(self, "safety_filter_combo"):
             self.safety_filter_combo.setCurrentText("전체")
+        self._set_filter_summary_label(0, 0)
+        self._set_candidate_state_label("none")
+        self._set_selection_summary_label("선택 대기", active=False)
+        if hasattr(self, "_set_player_order_summary_label"):
+            self._set_player_order_summary_label("순서 대기")
+        if hasattr(self, "_set_reorder_summary_label"):
+            self._set_reorder_summary_label("재정렬 없음", active=False)
+        refresh_frames = getattr(self, "_refresh_candidate_preview_frames", None)
+        if callable(refresh_frames):
+            refresh_frames()
 
     def _activate_editor(self):
         owner = self.owner
@@ -186,6 +219,19 @@ class RoughcutTableMixin:
         selected = self.table.selectedItems()
         if selected:
             self._preview_row_data(selected[0].row())
+
+    def _select_chapter_id_in_table(self, chapter_id: str, autoplay: bool = False) -> bool:
+        chapter_id = str(chapter_id or "")
+        if not chapter_id or chapter_id not in self._row_chapter_ids:
+            return False
+        row = self._row_chapter_ids.index(chapter_id)
+        if self.table.isRowHidden(row):
+            return False
+        self.table.selectRow(row)
+        self._preview_row_data(row)
+        if autoplay:
+            self._play_preview(row, muted=False)
+        return True
 
     def _chapter_for_row(self, row: int):
         if self._result is None or row < 0 or row >= len(self._row_chapter_ids):
@@ -250,6 +296,10 @@ class RoughcutTableMixin:
         self.preview_source_lbl.setText(f"Clip: {self._source_label_for_edl(edl_segment)}")
         self.preview_safety_lbl.setStyleSheet(self._safety_badge_style(safety))
         self.preview_reason_lbl.setText(f"{self._format_safety_reason(reason)}{output}")
+        status = edit.get("status") or self._status_for(chapter, decision)
+        self._set_selection_summary_label(f"선택 {chapter.chapter_id} · {status}", active=True)
+        if hasattr(self, "_set_player_order_summary_label"):
+            self._set_player_order_summary_label(self._current_order_summary())
         self._update_detail_panel(row, chapter, decision, edl_segment)
         if hasattr(self, "major_panel"):
             self.major_panel.set_selected_chapter(chapter.chapter_id)
@@ -266,12 +316,14 @@ class RoughcutTableMixin:
 
     def _apply_safety_filter(self) -> None:
         if self._result is None or not hasattr(self, "table"):
+            self._set_filter_summary_label(0, 0)
             return
         selected = "전체"
         if hasattr(self, "safety_filter_combo"):
             selected = self.safety_filter_combo.currentText() or "전체"
         decisions = {decision.segment_id: decision for decision in self._result.edit_decisions}
         first_visible = -1
+        visible_count = 0
         for row, chapter_id in enumerate(self._row_chapter_ids):
             decision = decisions.get(chapter_id)
             safety = decision.safety if decision is not None else ""
@@ -279,10 +331,13 @@ class RoughcutTableMixin:
             self.table.setRowHidden(row, hidden)
             if not hidden and first_visible < 0:
                 first_visible = row
+            if not hidden:
+                visible_count += 1
         current_row = self.table.currentRow()
         if first_visible >= 0 and (current_row < 0 or self.table.isRowHidden(current_row)):
             self.table.selectRow(first_visible)
             self._preview_row_data(first_visible)
+        self._set_filter_summary_label(visible_count, len(self._row_chapter_ids))
 
     def _safety_badge_style(self, safety: str) -> str:
         color = "#DCE3EA"

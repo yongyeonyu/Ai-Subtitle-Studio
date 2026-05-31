@@ -88,6 +88,26 @@ Execution order:
 6. Build a compact latest-verification index for Macau, X5, and Tinyping artifacts so release readiness is auditable.
 7. Validate the chosen slice with source-app or official QA evidence before widening scope.
 
+#### Jammini Delegation Queue
+
+These are explicit `잼민이` queue items for the current active execution item. They are intentionally limited to simple, bounded, draft/review/doc/prep-only support work so `잼민이` can keep moving without waiting between each small item.
+
+| Queue ID | Status | Owner | Scope | Required Output |
+| --- | --- | --- | --- | --- |
+| JQ-01 | completed | `잼민이` | Map the owner-file path for `project open -> roughcut auto-open -> roughcut state restore -> save/reopen` across `ui/project/project_panel.py`, `ui/editor/editor_project_open_native.py`, `ui/roughcut/roughcut_state.py`, `core/roughcut/models.py`, `tests/test_project_segment_reload.py`, `tests/test_roughcut_candidates.py` | `DEX_REVIEW_READY` packet with file-role map and the most fragile handoff points |
+| JQ-02 | completed | `잼민이` | Write a source-app smoke checklist for `candidate 전환 -> safety filter 변경 -> chapter 선택 -> 저장 -> 재열기 -> roughcut 자동 진입` | `DEX_REVIEW_READY` packet with an ordered real-app checklist and pass/fail observations to capture |
+| JQ-03 | completed | `잼민이` | Review `core/roughcut/models.py`, `ui/roughcut/roughcut_state.py`, and the new round-trip tests for hidden restore edge cases only | `DEX_REVIEW_READY` findings-first review, limited to restore/cache/compact-payload risks |
+| JQ-04 | completed | `잼민이` | Prepare the narrow validation command bundle and artifact naming pattern for the next roughcut real-app proof under `output/manual_verification/latest/` | `DEX_REVIEW_READY` packet with exact commands, artifact folder suggestion, and minimal evidence checklist |
+| JQ-05 | completed | `잼민이` | Draft the next doc-sync delta that should be applied after roughcut source-app proof lands, limited to `docs/HANDOFF.md`, `idea.md`, and `test_result.md` touch points | `DEX_REVIEW_READY` packet with only the proposed doc deltas, no code patch |
+| JQ-06 | completed | `잼민이` | Build a no-patch shortlist of unused/simple cleanup candidates in roughcut owner files (`ui/roughcut/*`, related tests) that are safe to inspect later | `DEX_REVIEW_READY` packet separating harmless cleanup from anything that could alter restore/save semantics |
+
+Queue rules:
+
+- Consume this queue top-to-bottom only while each item stays simple and draft/review/doc/prep-only.
+- Do not make code changes from this queue unless `덱스` or the owner explicitly upgrades one item into an implementation task.
+- Begin every queue result with `DEX_REVIEW_READY` and include the `Queue ID`.
+- Stop the whole queue immediately if the owner says `잼민이 멈춰` or `잼민이 하던 일 모두 취소`.
+
 Acceptance gates:
 
 - No subtitle quality policy, STT2, LoRA, LLM, VAD, timing, or UI/UX default changes without explicit owner approval.

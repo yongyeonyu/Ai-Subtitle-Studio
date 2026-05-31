@@ -62,6 +62,36 @@ class RoughcutPreviewMixin:
         player.media_player.play()
         self._preview_timer.start()
 
+    def _start_ordered_preview_sequence(self):
+        visible_rows = self._visible_preview_rows()
+        if not visible_rows:
+            return False
+        current_row = self._preview_row if self._preview_row in visible_rows else self.table.currentRow()
+        if current_row not in visible_rows:
+            current_row = visible_rows[0]
+        self._sequence_preview_rows = list(visible_rows)
+        self._sequence_preview_index = self._sequence_preview_rows.index(current_row)
+        self._sequence_preview_active = True
+        self.table.selectRow(current_row)
+        self._preview_row_data(current_row)
+        self._play_preview(current_row, muted=False)
+        return True
+
+    def _advance_ordered_preview_sequence(self):
+        rows = list(getattr(self, "_sequence_preview_rows", []) or [])
+        current_index = int(getattr(self, "_sequence_preview_index", -1))
+        if not rows or current_index < 0:
+            return False
+        next_index = current_index + 1
+        if next_index >= len(rows):
+            return False
+        next_row = rows[next_index]
+        self._sequence_preview_index = next_index
+        self.table.selectRow(next_row)
+        self._preview_row_data(next_row)
+        self._play_preview(next_row, muted=False)
+        return True
+
     def _preview_tick(self):
         player = self._video_player()
         if player is None or not hasattr(player, "media_player"):
@@ -75,6 +105,9 @@ class RoughcutPreviewMixin:
             self._play_preview(self._preview_row, muted=True, hover=True)
             return
         if self._preview_deadline_ms <= 0 or current >= self._preview_end:
+            if bool(getattr(self, "_sequence_preview_active", False)):
+                if self._advance_ordered_preview_sequence():
+                    return
             if self._preview_should_loop():
                 self._play_preview(self._preview_row, muted=False, hover=False)
                 return
@@ -98,6 +131,9 @@ class RoughcutPreviewMixin:
         self._restore_volume = None
 
     def _stop_preview(self):
+        self._sequence_preview_active = False
+        self._sequence_preview_rows = []
+        self._sequence_preview_index = -1
         self._preview_timer.stop()
         player = self._video_player()
         if player is not None and hasattr(player, "media_player"):

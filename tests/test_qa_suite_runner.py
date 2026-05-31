@@ -20,8 +20,39 @@ class QASuiteRunnerTests(unittest.TestCase):
                 "video_menu_macau",
                 "save_export_macau",
                 "menu_stt_lora_macau",
+                "roughcut_reopen_macau",
+                "roughcut_interaction_macau",
+                "roughcut_candidate_macau",
+                "roughcut_release_audit_macau",
             ],
         )
+
+    def test_build_scenarios_major_includes_release_style_roughcut_audit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(qa_suite_runner, "MACAU_MEDIA", Path(tmp) / "missing.mp4"):
+                scenarios = qa_suite_runner.build_scenarios("major", Path(tmp))
+
+        spec = next(item for item in scenarios if item["id"] == "roughcut_release_audit_macau")
+        self.assertEqual(spec["type"], "app_sequence")
+        step_names = [step["name"] for step in spec["steps"]]
+        self.assertEqual(
+            step_names,
+            [
+                "open_project",
+                "open_roughcut",
+                "status_ready",
+                "select_candidate_draft",
+                "thumbnail_preview_proxy",
+                "move_chapter_down",
+                "save_project",
+                "reopen_project",
+                "status_after_reopen",
+                "roughcut_export_srt",
+                "capture_release_audit",
+            ],
+        )
+        export_step = next(step for step in spec["steps"] if step["name"] == "roughcut_export_srt")
+        self.assertIn("roughcut_release_audit_export.srt", export_step["command"][-1])
 
     def test_build_scenarios_full_adds_x5_rolling_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -173,6 +204,28 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertEqual(result["mode"], "restart_app_per_scenario")
         restart_app.assert_called_once()
 
+    def test_ensure_app_ready_accepts_ping_when_status_is_deferred(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "suite"
+            fake_proc = type("P", (), {"pid": 4321})()
+            with patch("tools.qa_suite_runner._app_status", side_effect=[(1, {"ok": False, "error": "app_unreachable"}), (1, {"ok": False, "error": "app_unreachable"})]), patch(
+                "tools.qa_suite_runner._app_ping",
+                side_effect=[(1, {"ok": False, "error": "app_unreachable"}), (0, {"ok": True, "message": "pong", "data": {"current_work_mode": "editor"}})],
+            ), patch(
+                "tools.qa_suite_runner.subprocess.Popen",
+                return_value=fake_proc,
+            ), patch("tools.qa_suite_runner.time.sleep", return_value=None), patch(
+                "tools.qa_suite_runner.time.monotonic",
+                side_effect=[0.0, 0.0],
+            ):
+                result = qa_suite_runner._ensure_app_ready(qa_suite_runner.DEFAULT_PYTHON, output_dir=output_dir)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["started_app"])
+        self.assertEqual(result["pid"], 4321)
+        self.assertEqual(result["status"]["data"]["readiness_probe"], "ping")
+        self.assertTrue(result["status"]["data"]["status_deferred"])
+
     def test_app_launch_command_can_force_source_app(self):
         with patch.dict("os.environ", {"AI_SUBTITLE_STUDIO_QA_USE_SOURCE": "1"}):
             command = qa_suite_runner._app_launch_command(qa_suite_runner.DEFAULT_PYTHON)
@@ -208,6 +261,33 @@ class QASuiteRunnerTests(unittest.TestCase):
         argv = run_subprocess.call_args.args[0]
         self.assertIn("--no-sync-video", argv)
         self.assertLess(argv.index("--center"), argv.index("--no-sync-video"))
+
+    def test_run_app_sequence_rejects_expect_data_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "roughcut_reopen_macau"
+            spec = {
+                "id": "roughcut_reopen_macau",
+                "type": "app_sequence",
+                "description": "",
+                "output_dir": output_dir,
+                "steps": [
+                    {
+                        "name": "status_after_reopen",
+                        "command": ["status"],
+                        "timeout": 30.0,
+                        "expect_data": {"current_work_mode": "roughcut"},
+                    }
+                ],
+            }
+            with patch(
+                "tools.qa_suite_runner._run_subprocess",
+                return_value=(0, {"ok": True, "message": "status", "data": {"current_work_mode": "editor"}}),
+            ):
+                result = qa_suite_runner._run_app_sequence(spec, qa_suite_runner.DEFAULT_PYTHON)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failed_step"], "status_after_reopen")
+        self.assertEqual(result["steps"][0]["error"], "expected_data_mismatch:current_work_mode")
 
     def test_run_full_media_rejects_verifier_empty_subtitle_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

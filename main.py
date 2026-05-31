@@ -370,6 +370,14 @@ def main():
         _instance_command_server.set_handler(
             lambda payload: win.dispatch_external_app_command(payload, timeout_sec=15.0)
         )
+        # UDP app-command thread can die after a transient recv error while the
+        # bound port remains open. Periodically ensure the listener thread is
+        # present so appctl/status automation can recover without a full restart.
+        instance_server_keepalive = QTimer(win)
+        instance_server_keepalive.setInterval(2000)
+        instance_server_keepalive.timeout.connect(_instance_command_server.start)
+        instance_server_keepalive.start()
+        win._instance_command_server_keepalive = instance_server_keepalive
     def _shutdown_runtime_in_order():
         global _QT_APP_SHUTTING_DOWN
         _QT_APP_SHUTTING_DOWN = True

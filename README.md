@@ -207,6 +207,7 @@ Use the documents below as the current navigation set for this repository:
 | `test_case.md` | Validation expectations and fixture guidance. |
 | `test_result.md` | Latest recorded validation outcomes. |
 | `anti_agents.md` | Antigravity and `잼민이` delegation rules. |
+| `cooperation.md` | Cross-project Codex x Antigravity cooperation contract and prompt templates. |
 | `idea.md` | Shared scratchpad for ideas that still need `덱스` review before execution. |
 
 Recommended read order for a fresh continuation:

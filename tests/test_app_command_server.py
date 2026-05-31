@@ -199,6 +199,14 @@ class LocalAppCommandServerTests(unittest.TestCase):
                     "last_stage_key": "subtitle-generation",
                     "subtitle_count": 413,
                     "roughcut_state": {"status": "queued", "pending": True, "running": True, "debug": "x" * 600},
+                    "roughcut_runtime": {
+                        "selected_candidate_id": "candidate_current",
+                        "candidate_count": 3,
+                        "selected_chapter_id": "A_0000",
+                        "selected_segment_id": "A",
+                        "sequence_preview_active": True,
+                        "order_summary": "카드 1/4 · A > C > B > D",
+                    },
                     "runtime_timestamp": 1234.5,
                     "runtime_resource": {"pressure_stage": "warning", "rss_gb": 0.42},
                     "recent_logs": medium_logs,
@@ -222,6 +230,9 @@ class LocalAppCommandServerTests(unittest.TestCase):
         self.assertEqual(result["data"]["subtitle_count"], 413)
         self.assertEqual(result["data"]["roughcut_state"]["status"], "queued")
         self.assertNotIn("debug", result["data"]["roughcut_state"])
+        self.assertEqual(result["data"]["roughcut_runtime"]["selected_candidate_id"], "candidate_current")
+        self.assertEqual(result["data"]["roughcut_runtime"]["candidate_count"], 3)
+        self.assertTrue(result["data"]["roughcut_runtime"]["sequence_preview_active"])
         self.assertEqual(result["data"]["runtime_timestamp"], 1234.5)
         self.assertLess(len(encode_command_result(result)), 8192)
 
@@ -311,6 +322,22 @@ class LocalAppCommandServerTests(unittest.TestCase):
         self.assertTrue(result["data"]["status_response_send_fallback"])
         self.assertTrue(result["data"]["status_response_truncated"])
         self.assertLess(len(encode_command_result(result)), 4096)
+
+    def test_start_recreates_dead_server_thread(self):
+        fake_socket = mock.Mock()
+        first_thread = mock.Mock()
+        first_thread.is_alive.return_value = False
+        second_thread = mock.Mock()
+        second_thread.is_alive.return_value = True
+
+        with mock.patch("core.automation.app_command_server.threading.Thread", side_effect=[first_thread, second_thread]) as thread_ctor:
+            server = LocalAppCommandServer(fake_socket)
+            server.start()
+            server.start()
+
+        self.assertEqual(thread_ctor.call_count, 2)
+        first_thread.start.assert_called_once()
+        second_thread.start.assert_called_once()
 
 
 if __name__ == "__main__":
