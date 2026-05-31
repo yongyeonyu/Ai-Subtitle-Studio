@@ -36,9 +36,11 @@
 - 편집기/타임라인 UX 안정화
 - 프로젝트 저장/재열기/렌더링 회귀 방지
 - 러프컷 초안 생성과 PHASE2 편집 흐름 보강
-- macOS 네이티브 보조 모듈과 Python UI 경로 공존 유지
+- 기존 Python/PyQt6 source app 유지와 실제 앱 검증 중심 진행
 
 `core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.15.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름은 계획이 아니라 이미 진행 중인 작업 축으로 보입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
+
+현재 운영 방향상 `native/` 디렉터리와 관련 실험 흔적은 저장소 참고 자료로 남아 있을 수 있지만, active roadmap은 아닙니다. owner가 다시 명시하지 않는 한 새 native migration 전개를 기본 작업으로 취급하지 않습니다.
 
 ## Known constraints
 

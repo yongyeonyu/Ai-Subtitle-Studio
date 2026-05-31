@@ -86,9 +86,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.00.15-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_15_RELEASED
-Last-Updated: 2026-05-27
+Document-Version: 04.00.15-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_0_15
+Last-Updated: 2026-05-31
 Updated-By: Codex
 Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 -->
@@ -102,6 +102,7 @@ Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
+- Current product direction: continue the existing Python/PyQt6 source app. Do not reopen native migration planning unless the owner explicitly asks.
 - Release note retention: keep `RELEASE_v04.00.07.md` and newer only. Older release notes and `check_list.md` were intentionally deleted.
 
 ## Bootstrap Order

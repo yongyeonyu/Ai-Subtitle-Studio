@@ -210,8 +210,8 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 | --- | --- |
 | App version in code | `04.00.15` |
 | Latest release checkpoint | `v04.00.15` |
-| Handoff document version | `04.00.15-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_15_RELEASED` |
+| Handoff document version | `04.00.15-source-app` |
+| Active phase | `SOURCE_APP_CONTINUATION_V4_0_15` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |

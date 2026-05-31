@@ -1,14 +1,14 @@
 <!--
-Document-Version: 04.00.15-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_15_RELEASED
-Last-Updated: 2026-05-27
+Document-Version: 04.00.15-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_0_15
+Last-Updated: 2026-05-31
 Updated-By: Codex
-Purpose: Consolidated active execution queue. Former `idea_item.md` and `NATIVE_LIB_PLAN.md` content lives here.
+Purpose: Consolidated active execution queue for the current source-app line.
 -->
 # ACTION_ITEMS.md - Active Execution Queue
 
 This file is now the single source of truth for active performance ideas,
-action items, native migration candidates, execution order, QA gates, and
+action items, execution order, QA gates, and
 rollback rules.
 
 Former sources merged into this file:
@@ -25,15 +25,14 @@ Those standalone files were intentionally removed after consolidation.
 - 모델 축소, STT2 생략, LLM 생략, 품질 게이트 완화는 기본 최적화 후보가 아니다.
 - Apple Silicon에서는 Apple Neural Engine, 즉 `ANE` 기준으로 표현한다. Core ML이 ANE/GPU/CPU 배치를 결정하고, Metal/MLX/whisper.cpp는 주로 GPU/CPU 경로로 검증한다.
 - PyTorch MPS는 과거 `metal gpu stream` crash 근거가 있으므로 production default가 아니라 격리 실험 후보로만 둔다.
-- native 승격은 Swift/C++가 Python과 parity를 갖고 real fixture에서 같거나 빠를 때만 한다.
-- live Qt widget, mutable editor state, subprocess orchestration, model-worker ownership, UI callback은 native로 통째 이전하지 않는다.
+- owner 명시 재지시가 있기 전까지 native migration, Swift 재작성, 별도 네이티브 앱 전환은 active queue에 올리지 않는다.
 - 자막 에디터 상호작용 표면은 2D-only이다. 자막 본문 편집, 자막 세그먼트 편집/생성/삭제, 플레이헤드 이동, 컷 경계, 다이아몬드, waveform/minimap 렌더링에 3D view, QML SceneGraph, OpenGL/Metal-backed UI surface를 새 default로 도입하지 않는다.
-- 전체 앱 shell, 메뉴, 팝업, 다이얼로그의 새 UI 기본값은 `Qt Widgets`로 고정한다. QML은 새 UI default에서 제외하고, Metal은 UI renderer가 아니라 native compute 후보로만 검토한다.
+- 전체 앱 shell, 메뉴, 팝업, 다이얼로그의 기본값은 계속 `Qt Widgets` source app으로 유지한다. QML은 새 UI default에서 제외한다.
 - 아이디어 발굴 또는 실행 전 `waste_action_item.md`와 `lesson_n_learned.md`를 먼저 읽고, 폐기된 아이디어를 새 근거 없이 반복하지 않는다.
 - 실패/무효 후보는 `waste_action_item.md`에 hypothesis, change, metrics, quality, artifact, rejection reason을 남긴다.
 - 반복하면 안 되는 진단/실험/운영 실수는 `lesson_n_learned.md`에 남긴다.
 - owner 파일, 검증 절차, 구조 경계, 다음 세션 인수인계에 영향을 주는 변경은 같은 작업 안에서 관련 `docs/*.md`와 `docs/HANDOFF.md`까지 함께 갱신한다.
-- 정상 완료된 idea/action/native item은 이 파일에서 삭제한다. 완료 이력은 필요할 때만 `test_result.md`, release note, `output/manual_verification/latest/`, `waste_action_item.md`, 또는 `lesson_n_learned.md`에 남긴다.
+- 정상 완료된 idea/action item은 이 파일에서 삭제한다. 완료 이력은 필요할 때만 `test_result.md`, release note, `output/manual_verification/latest/`, `waste_action_item.md`, 또는 `lesson_n_learned.md`에 남긴다.
 
 ## Active Execution Queue
 
@@ -103,13 +102,11 @@ Rollback:
 - Revert completion/readiness orchestration before touching subtitle-generation algorithms.
 - Do not skip cleanup entirely; defer or stage it only when evidence shows editor responsiveness improves without memory-pressure harm.
 
-## Native Migration Rules
+## Migration Status
 
-- Native migration follows the same active queue above; do not maintain a separate native queue.
-- Native candidates graduate only when Swift/C++ parity is proven against Python behavior and real fixtures show equal or better performance.
-- Do not migrate live Qt widget ownership, mutable editor state, subprocess orchestration, model-worker lifetime, or UI callback surfaces wholesale into native code.
-- Prefer native compute helpers for bounded hot paths with stable inputs and outputs.
-- Completed native-library items must be removed from this file instead of kept as checked history.
+- Native migration is not an active direction for this repository.
+- Keep the current Python/PyQt6 source app as the working product line.
+- Revisit migration only if the owner explicitly reopens it with a new scope and acceptance gate.
 
 ## Parked Candidates
 
@@ -118,7 +115,6 @@ gate and rollback branch.
 
 - Playhead-only dirty-rect repaint: 현재 single-owner 2D full-canvas repaint가 잔상을 막는다. Macau visual smoke로 잔상 없음이 증명될 때만 별도 실험.
 - App command/snapshot acknowledgement cleanup: `guided-subtitle-run`과 `capture-snapshot`이 실제 작업은 시작/저장했는데 CLI 응답은 timeout 또는 queued로 남는 관찰이 있었다. 성능 핵심 경로는 아니므로 active item 뒤에, artifact 신뢰도 개선으로만 다룬다.
-- Larger real-index Swift/native policy helper: corrected 500-doc synthetic에서 parity는 통과했지만 speedup이 `< 1.0`이다. 큰 payload에서 새 speedup 근거가 나오기 전까지 Python 유지.
 
 ## Waste And Lessons
 
@@ -130,8 +126,8 @@ gate and rollback branch.
 
 ```yaml
 app_version: "04.00.15"
-document_version: "04.00.15-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_15_RELEASED"
+document_version: "04.00.15-source-app"
+phase: "SOURCE_APP_CONTINUATION_V4_0_15"
 queue_source_of_truth: "ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed; optimize generation time only with behavior-preserving changes."
