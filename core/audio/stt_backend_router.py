@@ -3,6 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.audio.apple_speech_native import (
+    APPLE_SPEECH_STT_BACKEND,
+    apple_speech_benchmark_only,
+    apple_speech_challenger_enabled,
+    apple_speech_model,
+    apple_speech_support,
+)
 from core.optimization.backend_policy import normalize_backend_policy, profile_backend, profile_model
 from core.runtime import config
 
@@ -139,6 +146,8 @@ def _model_for_backend(backend: str, model: str) -> str:
 def _infer_backend(model: str) -> str:
     raw = str(model or "").strip()
     lowered = raw.lower()
+    if lowered.startswith(f"{APPLE_SPEECH_STT_BACKEND}:"):
+        return APPLE_SPEECH_STT_BACKEND
     if lowered.startswith("whisperkit-persistent:"):
         return "whisperkit_persistent"
     if lowered.startswith("coreml:"):
@@ -165,6 +174,21 @@ def _infer_backend(model: str) -> str:
     if bool(getattr(config, "IS_WINDOWS", False)):
         return "faster_whisper"
     return "faster_whisper"
+
+
+def select_stt_challenger_backends(model: str, settings: dict[str, Any] | None = None) -> list[SttBackendChoice]:
+    data = dict(settings or {})
+    if not apple_speech_challenger_enabled(data):
+        return []
+    support = apple_speech_support(data)
+    if not support.available:
+        return []
+    reason = (
+        "apple_speech_high_challenger_benchmark_only"
+        if apple_speech_benchmark_only(data)
+        else "apple_speech_high_challenger"
+    )
+    return [SttBackendChoice(APPLE_SPEECH_STT_BACKEND, apple_speech_model(support.locale), reason)]
 
 
 def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> SttBackendChoice:
@@ -272,4 +296,4 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
     return SttBackendChoice(_infer_backend(requested_model), requested_model, "auto_selected_model")
 
 
-__all__ = ["SttBackendChoice", "select_stt_backend"]
+__all__ = ["SttBackendChoice", "select_stt_backend", "select_stt_challenger_backends"]

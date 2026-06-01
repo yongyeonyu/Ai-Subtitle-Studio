@@ -4,8 +4,8 @@ import unittest
 from unittest.mock import patch
 
 from core.audio.audio_extract_backend_router import select_audio_extract_backend
-from core.audio.stt_backend_router import select_stt_backend
-from core.audio.vad_backend_router import select_vad_backend
+from core.audio.stt_backend_router import select_stt_backend, select_stt_challenger_backends
+from core.audio.vad_backend_router import select_vad_backend, select_vad_challenger_backend
 from core.cut_boundary_backend_router import apply_cut_boundary_backend_settings, select_cut_boundary_backend
 from core.optimization.profile_store import load_optimization_profile, save_optimization_profile
 from core.optimization.quality_gate import quality_gate_passed, subtitle_quality_gate
@@ -117,6 +117,51 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
         self.assertEqual(choice.backend, "mlx")
         self.assertEqual(choice.model, "mlx-community/whisper-large-v3-turbo")
         self.assertEqual(choice.reason, "mac_native_mlx_auto_alias")
+
+    def test_high_mode_can_offer_hidden_apple_speech_challenger(self):
+        with patch("core.audio.apple_speech_native.IS_MAC", True), \
+             patch("core.audio.apple_speech_native.native_swift_runtime_enabled", return_value=True), \
+             patch("core.audio.apple_speech_native.request_native_core_task", return_value={
+                 "available": True,
+                 "detector_available": True,
+                 "locale": "ko-KR",
+                 "reason": "runtime_class_available",
+             }):
+            choices = select_stt_challenger_backends(
+                "mlx-community/whisper-large-v3-turbo",
+                {
+                    "stt_apple_speech_challenger_enabled": True,
+                    "stt_apple_speech_vad_coupled_enabled": True,
+                    "stt_apple_speech_locale": "ko-KR",
+                    "stt_apple_speech_benchmark_only": True,
+                },
+            )
+
+        self.assertEqual(len(choices), 1)
+        self.assertEqual(choices[0].backend, "apple_speech")
+        self.assertEqual(choices[0].model, "apple_speech:ko-KR")
+        self.assertEqual(choices[0].reason, "apple_speech_high_challenger_benchmark_only")
+
+    def test_vad_challenger_uses_apple_detector_only_when_probe_confirms_it(self):
+        with patch("core.audio.apple_speech_native.IS_MAC", True), \
+             patch("core.audio.apple_speech_native.native_swift_runtime_enabled", return_value=True), \
+             patch("core.audio.apple_speech_native.request_native_core_task", return_value={
+                 "available": True,
+                 "detector_available": True,
+                 "locale": "ko-KR",
+                 "reason": "runtime_class_available",
+             }):
+            choice = select_vad_challenger_backend(
+                "silero",
+                {
+                    "stt_apple_speech_challenger_enabled": True,
+                    "stt_apple_speech_vad_coupled_enabled": True,
+                },
+            )
+
+        self.assertIsNotNone(choice)
+        self.assertEqual(choice.provider, "apple_speech_detector")
+        self.assertEqual(choice.reason, "apple_speech_coupled_detector")
 
     def test_komixv2_models_route_to_matching_backends(self):
         self.assertEqual(

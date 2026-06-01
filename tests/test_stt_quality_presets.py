@@ -98,6 +98,10 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertAlmostEqual(precise["ten_vad_threshold"], 0.46)
         self.assertEqual(precise["roughcut_llm_model"], "exaone3.5:7.8b")
         self.assertEqual(precise["roughcut_llm_provider"], "ollama")
+        self.assertTrue(precise["stt_apple_speech_challenger_enabled"])
+        self.assertTrue(precise["stt_apple_speech_vad_coupled_enabled"])
+        self.assertEqual(precise["stt_apple_speech_locale"], "ko-KR")
+        self.assertTrue(precise["stt_apple_speech_benchmark_only"])
 
     def test_korean_aliases_normalize(self):
         self.assertEqual(normalize_stt_quality_key("빠름"), "fast")

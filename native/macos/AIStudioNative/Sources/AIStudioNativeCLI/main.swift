@@ -164,6 +164,8 @@ func run() throws {
                     }
                 case "input_activity_snapshot":
                     response = InputActivity.snapshot(payload: payload)
+                case "apple_speech_support":
+                    response = AppleSpeechSupportNative.probe(payload: payload)
                 case "vad_flags_to_segments":
                     response = VADSegmentsNative.flagsToSegments(payload: payload)
                 case "runtime_eta_predict":

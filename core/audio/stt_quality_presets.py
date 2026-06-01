@@ -117,6 +117,12 @@ def _ffmpeg_silero_relaxed_audio_mapping() -> dict:
 def _high_runtime_detail_mapping() -> dict:
     return {
         "audio_preset_auto_benchmark_locked": True,
+        # Apple Speech challenger stays hidden inside High mode until fixture
+        # scores prove it beats the current WhisperKit/MLX route.
+        "stt_apple_speech_challenger_enabled": True,
+        "stt_apple_speech_vad_coupled_enabled": True,
+        "stt_apple_speech_locale": "ko-KR",
+        "stt_apple_speech_benchmark_only": True,
         # 변경 금지: High 품질 경로는 X5 기준 자막 점수보다 낮아지면 안 된다.
         # 청크별 ClearVoice 라우팅은 오디오 self-score가 높아도 STT1 문장 분할을
         # 거칠게 만들어 2026-05-24 X5 benchmark를 87.402 -> 80.507로 떨어뜨렸다.

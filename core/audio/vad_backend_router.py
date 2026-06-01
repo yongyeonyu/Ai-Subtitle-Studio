@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.audio.apple_speech_native import APPLE_SPEECH_VAD_BACKEND, apple_speech_support, apple_speech_vad_coupled_enabled
 from core.optimization.backend_policy import normalize_backend_policy, profile_backend
 
 
@@ -39,4 +40,14 @@ def select_vad_backend(requested: str, settings: dict[str, Any] | None = None) -
     return VadBackendChoice(provider, "selected_provider")
 
 
-__all__ = ["VadBackendChoice", "normalize_vad_provider", "select_vad_backend"]
+def select_vad_challenger_backend(requested: str, settings: dict[str, Any] | None = None) -> VadBackendChoice | None:
+    data = dict(settings or {})
+    if not apple_speech_vad_coupled_enabled(data):
+        return None
+    support = apple_speech_support(data)
+    if not (support.available and support.detector_available):
+        return None
+    return VadBackendChoice(APPLE_SPEECH_VAD_BACKEND, "apple_speech_coupled_detector")
+
+
+__all__ = ["VadBackendChoice", "normalize_vad_provider", "select_vad_backend", "select_vad_challenger_backend"]

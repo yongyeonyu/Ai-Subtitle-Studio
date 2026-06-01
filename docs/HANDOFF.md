@@ -33,6 +33,46 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-01 Addendum - Apple Speech Hidden Challenger Slice
+
+### Scope
+
+- Apple 제공 `SpeechTranscriber` / `SpeechDetector`를 새 `STT3` UI 옵션으로 노출하지 않고, 기존 High 경로 안의 hidden challenger backend로 넣기 위한 첫 슬라이스를 추가했습니다.
+- 이번 슬라이스는 실제 batch transcription 전면 교체가 아니라 `support probe + hidden routing plan + High preset gate`까지를 닫는 범위입니다.
+- 의도는 WhisperKit/MLX 기본 경로를 유지한 채, fixture score가 더 좋을 때만 Apple route를 승격할 수 있게 owner 경계를 먼저 만드는 것입니다.
+
+### Files touched in this slice
+
+- `core/audio/apple_speech_native.py`
+- `core/audio/stt_backend_router.py`
+- `core/audio/vad_backend_router.py`
+- `core/audio/stt_quality_presets.py`
+- `core/audio/audio_preset_data.py`
+- `core/mode_manager.py`
+- `core/runtime/config.py`
+- `core/settings_profiles.py`
+- `native/macos/AIStudioNative/Sources/AIStudioCore/AppleSpeechSupport.swift`
+- `native/macos/AIStudioNative/Sources/AIStudioNativeCLI/main.swift`
+- `tests/test_apple_speech_native.py`
+- `tests/test_runtime_optimization_profile.py`
+- `tests/test_stt_quality_presets.py`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/audio/apple_speech_native.py core/audio/stt_backend_router.py core/audio/vad_backend_router.py core/audio/stt_quality_presets.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_apple_speech_native.py tests/test_runtime_optimization_profile.py tests/test_stt_quality_presets.py`
+- `git diff --check`
+
+### Remaining risk
+
+- 아직 실제 `SpeechTranscriber` batch transcription execution path는 media processor에 연결하지 않았습니다. 현재는 support probe와 challenger plan만 들어간 상태입니다.
+- `SpeechDetector`도 독립 글로벌 VAD replacement가 아니라 Apple STT challenger에 결합된 보조 detector로만 계획되어 있습니다.
+- 다음 단계에서 실제 fixture benchmark를 붙일 때는 current WhisperKit/MLX 결과와 같은 scoring schema로 비교해야 하며, 점수 승리 전에는 High 기본 route를 바꾸면 안 됩니다.
+
+### Recommended next step
+
+- `core/audio/media_processor_transcribe_run.py` 쪽에 Apple challenger benchmark hook을 추가하고, Macau/X5 fixture에서 WhisperKit/MLX vs Apple 결과를 같은 `candidate_ranker`/quality gate 기준으로 비교합니다.
+
 ## Current handoff snapshot
 
 - Date: `2026-05-31`
