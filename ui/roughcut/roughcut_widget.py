@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
+from PyQt6.QtGui import QAction
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -19,6 +21,7 @@ from PyQt6.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -88,6 +91,7 @@ class RoughcutWidget(
         self._preview_timer.timeout.connect(self._preview_tick)
         self._candidate_preview_buttons: list[QPushButton] = []
         self._candidate_preview_empty_lbl = None
+        self._candidate_preview_filter = "all"
         self.setStyleSheet(f"background: {COLORS['bg']}; color: {COLORS['text']};")
         self._build_ui()
 
@@ -142,6 +146,7 @@ class RoughcutWidget(
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
+        self.safety_filter_combo = self._build_safety_filter_combo()
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.setChildrenCollapsible(False)
@@ -206,15 +211,12 @@ class RoughcutWidget(
             "QTextEdit { background: #11181C; color: #DCE3EA; border: 1px solid #2D3942; "
             "border-radius: 7px; padding: 10px; font-size: 11px; }"
         )
-        self.bottom_tabs.tabs.addTab(self.guide_text, "가이드")
         self.log_panel = RoughcutLogPanel()
         self.title_panel = RoughcutTitlePanel()
         self.style_panel = RoughcutStylePanel()
         self.title_panel.refreshRequested.connect(self._refresh_title_suggestions)
         self.style_panel.styleSaved.connect(self._save_roughcut_export_style)
         self.bottom_tabs.tabs.addTab(self.log_panel, "로그")
-        self.bottom_tabs.tabs.addTab(self.title_panel, "제목")
-        self.bottom_tabs.tabs.addTab(self.style_panel, "스타일")
         side_lay.addWidget(self.bottom_tabs, stretch=5)
         main_splitter.addWidget(side)
         main_splitter.setStretchFactor(0, 6)
@@ -235,8 +237,28 @@ class RoughcutWidget(
         hint = QLabel("후보는 최대 3개만 좁고 긴 세로 기둥으로 옆에 배치하고, 각 기둥 안에 roughcut 세그먼트를 위에서 아래로 넣습니다.")
         hint.setWordWrap(True)
         hint.setStyleSheet(label_style("muted", 9))
-        lay.addWidget(title)
-        lay.addWidget(hint)
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(6)
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(2)
+        title_box.addWidget(title)
+        title_box.addWidget(hint)
+        top_row.addLayout(title_box, stretch=1)
+        self.candidate_preview_filter_combo = QComboBox()
+        self.candidate_preview_filter_combo.addItem("전체 후보", "all")
+        self.candidate_preview_filter_combo.addItem("LLM 결과만", "llm")
+        self.candidate_preview_filter_combo.setFixedHeight(30)
+        self.candidate_preview_filter_combo.setMinimumWidth(108)
+        self.candidate_preview_filter_combo.setStyleSheet(
+            "QComboBox { background: #10161A; color: #F5F7FA; border: 1px solid #2D3942; "
+            "border-radius: 6px; padding: 4px 8px; font-size: 10px; font-weight: 700; }"
+            "QComboBox::drop-down { border: none; width: 18px; }"
+        )
+        self.candidate_preview_filter_combo.currentIndexChanged.connect(self._on_candidate_preview_filter_changed)
+        top_row.addWidget(self.candidate_preview_filter_combo, stretch=0, alignment=Qt.AlignmentFlag.AlignTop)
+        lay.addLayout(top_row)
 
         self.candidate_preview_btn_group = QButtonGroup(frame)
         self.candidate_preview_btn_group.setExclusive(True)
@@ -270,6 +292,7 @@ class RoughcutWidget(
         current_sig = self._current_editor_signature() if hasattr(self, "_current_editor_signature") else ""
         is_current = str(candidate.get("source_signature") or "") == current_sig and bool(current_sig)
         suffix = "현재 자막" if is_current else "저장된 자막"
+        origin_label = self._candidate_origin_chip_text(candidate)
         segments = list(candidate.get("segments") or [])
         segment_lines: list[str] = []
         for segment in segments[:4]:
@@ -280,9 +303,27 @@ class RoughcutWidget(
             segment_lines.append(f"{major_id} · {title}")
         if not segment_lines:
             segment_lines.append("세그먼트 없음")
-        head = f"{name} · {suffix}"
+        head = f"{name} · {origin_label} · {suffix}"
         body = "\n".join(segment_lines)
         return head, body
+
+    def _filtered_candidate_preview_candidates(self) -> list[dict]:
+        candidates = list(getattr(self, "_roughcut_candidates", []) or [])
+        mode = str(getattr(self, "_candidate_preview_filter", "all") or "all")
+        if mode == "llm":
+            candidates = [candidate for candidate in candidates if self._candidate_origin(candidate) == "llm"]
+        return candidates
+
+    def _candidate_origin_chip_text(self, candidate: dict) -> str:
+        origin = self._candidate_origin(candidate) if hasattr(self, "_candidate_origin") else "local"
+        return {"llm": "실제 LLM", "local": "로컬 초안", "placeholder": "임시 상태"}.get(origin, "로컬 초안")
+
+    def _on_candidate_preview_filter_changed(self, index: int) -> None:
+        combo = getattr(self, "candidate_preview_filter_combo", None)
+        if combo is None or index < 0:
+            return
+        self._candidate_preview_filter = str(combo.itemData(index) or "all")
+        self._refresh_candidate_preview_frames()
 
     def _refresh_candidate_preview_frames(self) -> None:
         layout = getattr(self, "candidate_preview_layout", None)
@@ -299,9 +340,10 @@ class RoughcutWidget(
             if widget is not None:
                 widget.deleteLater()
         self._candidate_preview_buttons = []
-        candidates = list(getattr(self, "_roughcut_candidates", []) or [])[:3]
+        candidates = self._filtered_candidate_preview_candidates()[:3]
         if not candidates:
-            empty = QLabel("후보 없음")
+            empty_message = "실제 LLM 결과 없음" if str(getattr(self, "_candidate_preview_filter", "all") or "all") == "llm" else "후보 없음"
+            empty = QLabel(empty_message)
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(label_style("muted", 10, bold=True))
             layout.addWidget(empty)
@@ -344,7 +386,7 @@ class RoughcutWidget(
 
             # 상단 헤더 라벨
             suffix = "현재 자막" if is_current else "저장된 자막"
-            header_lbl = QLabel(f"{candidate.get('name') or f'후보 {index}'}\n{suffix}")
+            header_lbl = QLabel(f"{candidate.get('name') or f'후보 {index}'}\n{self._candidate_origin_chip_text(candidate)} · {suffix}")
             header_lbl.setWordWrap(True)
             header_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             header_lbl.setStyleSheet(
@@ -780,9 +822,23 @@ class RoughcutWidget(
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
-        lay.addWidget(self._build_toolbar_row())
-        lay.addWidget(self._build_preview_row())
-        lay.addWidget(self._build_detail_panel())
+        self.selection_status_section = self._build_collapsible_section_group(
+            "현재 상태",
+            "정렬 상태, 필터, 선택 요약은 필요할 때만 펼칩니다.",
+            checked=False,
+        )
+        self.selection_status_section.content_layout.addWidget(self._build_toolbar_row())
+        self.selection_status_group = self.selection_status_section.frame
+        lay.addWidget(self.selection_status_section.frame)
+
+        self.selection_edit_group = self._build_section_group(
+            "선택 카드 편집",
+            "미리보기 재생, 구간 이동, 컷 조정과 수정 상태를 다루는 구역입니다.",
+        )
+        selection_edit_layout = self.selection_edit_group.layout()
+        selection_edit_layout.addWidget(self._build_preview_row())
+        selection_edit_layout.addWidget(self._build_detail_panel())
+        lay.addWidget(self.selection_edit_group)
         return panel
 
     def _build_player_menu_frame(self) -> QWidget:
@@ -792,9 +848,9 @@ class RoughcutWidget(
         lay.setContentsMargins(9, 8, 9, 8)
         lay.setSpacing(6)
 
-        title = QLabel("플레이어 아래 메뉴")
+        title = QLabel("핵심 메뉴")
         title.setStyleSheet(label_style("text", 11, bold=True))
-        hint = QLabel("카드 순서 확인, 분석/검증, SRT/EDL 저장 같은 러프컷 작업 메뉴입니다.")
+        hint = QLabel("상시 노출은 재생과 선택 카드 편집에 두고, 나머지 작업은 접어 둡니다.")
         hint.setWordWrap(True)
         hint.setStyleSheet(label_style("muted", 9))
         lay.addWidget(title)
@@ -834,10 +890,12 @@ class RoughcutWidget(
         summary_lay.addWidget(self.player_reorder_summary_visible_lbl)
         lay.addWidget(summary_box)
 
-        section_actions = QLabel("작업")
-        section_actions.setStyleSheet(label_style("muted", 9, bold=True))
-        lay.addWidget(section_actions)
-
+        self.player_core_section = self._build_collapsible_section_group(
+            "AI 작업",
+            "분석, 검증, 렌더는 자주 누르지 않으므로 접어 둡니다.",
+            checked=False,
+        )
+        self.player_core_group = self.player_core_section.frame
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(6)
@@ -852,32 +910,10 @@ class RoughcutWidget(
         self.btn_side_render.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         for button in (self.btn_side_refresh, self.btn_side_verify, self.btn_side_render):
             action_row.addWidget(button)
-        lay.addLayout(action_row)
+        self.player_core_section.content_layout.addLayout(action_row)
+        lay.addWidget(self.player_core_section.frame)
 
-        section_export = QLabel("내보내기")
-        section_export.setStyleSheet(label_style("muted", 9, bold=True))
-        lay.addWidget(section_export)
-
-        export_row = QHBoxLayout()
-        export_row.setContentsMargins(0, 0, 0, 0)
-        export_row.setSpacing(6)
-        self.btn_side_save_srt = self._panel_button("SRT", "subtitle")
-        self.btn_side_save_srt.clicked.connect(self._save_srt)
-        self.btn_side_save_srt.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_side_save_edl = self._panel_button("EDL", "file")
-        self.btn_side_save_edl.clicked.connect(self._save_edl)
-        self.btn_side_save_edl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_side_save_guide = self._panel_button("가이드", "help")
-        self.btn_side_save_guide.clicked.connect(self._save_guide)
-        self.btn_side_save_guide.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        for button in (self.btn_side_save_srt, self.btn_side_save_edl, self.btn_side_save_guide):
-            export_row.addWidget(button)
-        lay.addLayout(export_row)
-
-        section_playback = QLabel("재생")
-        section_playback.setStyleSheet(label_style("muted", 9, bold=True))
-        lay.addWidget(section_playback)
-
+        self.player_media_group = self._build_section_group("재생", "선택 구간 이동과 순서 재생만 상시로 둡니다.")
         playback_row = QHBoxLayout()
         playback_row.setContentsMargins(0, 0, 0, 0)
         playback_row.setSpacing(6)
@@ -892,7 +928,75 @@ class RoughcutWidget(
         self.btn_side_next.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         for button in (self.btn_side_prev, self.btn_side_play, self.btn_side_next):
             playback_row.addWidget(button)
-        lay.addLayout(playback_row)
+        self.player_media_group.layout().addLayout(playback_row)
+        lay.addWidget(self.player_media_group)
+
+        self.player_filter_group = self._build_collapsible_section_group(
+            "후보 / 필터",
+            "후보 기준과 safety filter는 자주 바뀌지 않아서 접을 수 있게 둡니다.",
+            checked=False,
+        )
+        candidate_info = QLabel("현재 후보 기준과 safety filter를 여기서 조정합니다.")
+        candidate_info.setWordWrap(True)
+        candidate_info.setStyleSheet(label_style("muted", 9))
+        self.player_filter_group.content_layout.addWidget(candidate_info)
+        candidate_badge_row = QHBoxLayout()
+        candidate_badge_row.setContentsMargins(0, 0, 0, 0)
+        candidate_badge_row.setSpacing(6)
+        self.player_candidate_panel_lbl = QLabel("후보 없음")
+        self.player_candidate_panel_lbl.setStyleSheet(self._toolbar_badge_style("#A9B0B7", "#2D3942"))
+        self.player_candidate_panel_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.player_filter_panel_lbl = QLabel("표시 0 / 전체 0")
+        self.player_filter_panel_lbl.setStyleSheet(self._toolbar_badge_style("#A9B0B7", "#2D3942"))
+        self.player_filter_panel_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        candidate_badge_row.addWidget(self.player_candidate_panel_lbl, stretch=1)
+        candidate_badge_row.addWidget(self.player_filter_panel_lbl, stretch=1)
+        self.player_filter_group.content_layout.addLayout(candidate_badge_row)
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(6)
+        filter_label = QLabel("Safety filter")
+        filter_label.setStyleSheet(label_style("muted", 9, bold=True))
+        filter_row.addWidget(filter_label)
+        filter_row.addWidget(self.safety_filter_combo, stretch=1)
+        self.player_filter_group.content_layout.addLayout(filter_row)
+        lay.addWidget(self.player_filter_group.frame)
+
+        self.player_export_section = self._build_collapsible_section_group(
+            "내보내기",
+            "SRT, EDL, 가이드는 마지막 단계라 접어 둡니다.",
+            checked=False,
+        )
+        self.player_export_group = self.player_export_section.frame
+        export_row = QHBoxLayout()
+        export_row.setContentsMargins(0, 0, 0, 0)
+        export_row.setSpacing(6)
+        self.btn_side_save_srt = self._panel_button("SRT", "subtitle")
+        self.btn_side_save_srt.clicked.connect(self._save_srt)
+        self.btn_side_save_edl = self._panel_button("EDL", "file")
+        self.btn_side_save_edl.clicked.connect(self._save_edl)
+        self.btn_side_save_guide = self._panel_button("가이드", "help")
+        self.btn_side_save_guide.clicked.connect(self._save_guide)
+        self.export_menu_btn = QToolButton()
+        self.export_menu_btn.setText("내보내기")
+        self.export_menu_btn.setIcon(line_icon("file", "#FFFFFF", 16))
+        self.export_menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.export_menu_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.export_menu_btn.setStyleSheet(button_style("toolbar", font_size="11px", padding="6px 10px"))
+        self.export_menu_btn.setMinimumHeight(32)
+        export_menu = self.export_menu_btn.menu()
+        if export_menu is None:
+            from PyQt6.QtWidgets import QMenu
+            export_menu = QMenu(self.export_menu_btn)
+            self.export_menu_btn.setMenu(export_menu)
+        export_menu.clear()
+        for label, handler in (("SRT 저장", self._save_srt), ("EDL 저장", self._save_edl), ("가이드 저장", self._save_guide)):
+            action = QAction(label, self.export_menu_btn)
+            action.triggered.connect(handler)
+            export_menu.addAction(action)
+        export_row.addWidget(self.export_menu_btn, stretch=1)
+        self.player_export_section.content_layout.addLayout(export_row)
+        lay.addWidget(self.player_export_section.frame)
 
         # Keep legacy attribute names wired for export/runtime helpers.
         self.btn_render_dry_run = self.btn_side_verify
@@ -903,6 +1007,49 @@ class RoughcutWidget(
         self.btn_render_retry.setEnabled(False)
         self._refresh_player_runtime_summary()
         return frame
+
+    def _build_section_group(self, title: str, hint: str = "") -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet("QFrame { background: #0C1216; border: 1px solid #243038; border-radius: 7px; }")
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(8, 7, 8, 7)
+        lay.setSpacing(5)
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(label_style("text", 10, bold=True))
+        lay.addWidget(title_lbl)
+        if hint:
+            hint_lbl = QLabel(hint)
+            hint_lbl.setWordWrap(True)
+            hint_lbl.setStyleSheet(label_style("muted", 9))
+            lay.addWidget(hint_lbl)
+        return frame
+
+    def _build_collapsible_section_group(self, title: str, hint: str = "", *, checked: bool = False):
+        frame = QFrame()
+        frame.setStyleSheet("QFrame { background: #0C1216; border: 1px solid #243038; border-radius: 7px; }")
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(8, 7, 8, 7)
+        outer.setSpacing(5)
+
+        toggle = QPushButton(title)
+        toggle.setCheckable(True)
+        toggle.setChecked(bool(checked))
+        toggle.setStyleSheet(button_style("toolbar", font_size="10px", padding="5px 8px"))
+        outer.addWidget(toggle)
+
+        content = QWidget()
+        content_lay = QVBoxLayout(content)
+        content_lay.setContentsMargins(0, 0, 0, 0)
+        content_lay.setSpacing(5)
+        if hint:
+            hint_lbl = QLabel(hint)
+            hint_lbl.setWordWrap(True)
+            hint_lbl.setStyleSheet(label_style("muted", 9))
+            content_lay.addWidget(hint_lbl)
+        content.setVisible(bool(checked))
+        toggle.toggled.connect(content.setVisible)
+        outer.addWidget(content)
+        return SimpleNamespace(frame=frame, toggle=toggle, content=content, content_layout=content_lay)
 
     def _build_toolbar_row(self) -> QWidget:
         top = QWidget()
@@ -956,17 +1103,6 @@ class RoughcutWidget(
         for label in ("챕터", "EDL", "하이라이트", "검토", "출력"):
             row2.addWidget(self._metric_chip(label))
 
-        self.safety_filter_combo = QComboBox()
-        self.safety_filter_combo.addItems(["전체", "ideal", "acceptable", "risky"])
-        self.safety_filter_combo.setFixedHeight(32)
-        self.safety_filter_combo.setMinimumWidth(104)
-        self.safety_filter_combo.setStyleSheet(
-            "QComboBox { background: #10161A; color: #F5F7FA; border: 1px solid #2D3942; "
-            "border-radius: 6px; padding: 4px 8px; font-size: 10px; font-weight: 700; }"
-            "QComboBox::drop-down { border: none; width: 18px; }"
-        )
-        self.safety_filter_combo.currentTextChanged.connect(self._apply_safety_filter)
-        row2.addWidget(self.safety_filter_combo)
         self.filter_summary_lbl = self._toolbar_badge("표시 0 / 전체 0")
         row2.addWidget(self.filter_summary_lbl)
         self.selection_summary_lbl = self._toolbar_badge("선택 대기")
@@ -982,6 +1118,19 @@ class RoughcutWidget(
         top_lay.addLayout(row3)
 
         return top
+
+    def _build_safety_filter_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.addItems(["전체", "ideal", "acceptable", "risky"])
+        combo.setFixedHeight(32)
+        combo.setMinimumWidth(104)
+        combo.setStyleSheet(
+            "QComboBox { background: #10161A; color: #F5F7FA; border: 1px solid #2D3942; "
+            "border-radius: 6px; padding: 4px 8px; font-size: 10px; font-weight: 700; }"
+            "QComboBox::drop-down { border: none; width: 18px; }"
+        )
+        combo.currentTextChanged.connect(self._apply_safety_filter)
+        return combo
 
     def _metric_chip(self, title: str) -> QWidget:
         box = QFrame()
@@ -1030,6 +1179,10 @@ class RoughcutWidget(
                 continue
             label.setText(text)
             label.setStyleSheet(self._toolbar_badge_style(color, border))
+        panel_label = getattr(self, "player_candidate_panel_lbl", None)
+        if panel_label is not None:
+            panel_label.setText(text)
+            panel_label.setStyleSheet(self._toolbar_badge_style(color, border))
         self._refresh_player_runtime_summary()
 
     def _set_filter_summary_label(self, visible: int, total: int) -> None:
@@ -1039,6 +1192,9 @@ class RoughcutWidget(
             if label is None:
                 continue
             label.setText(text)
+        panel_label = getattr(self, "player_filter_panel_lbl", None)
+        if panel_label is not None:
+            panel_label.setText(text)
         self._refresh_player_runtime_summary()
 
     def _set_selection_summary_label(self, text: str, active: bool = False) -> None:
@@ -1122,9 +1278,13 @@ class RoughcutWidget(
     def _build_preview_row(self) -> QWidget:
         preview = QWidget()
         preview.setStyleSheet("background: transparent; border: none;")
-        preview_lay = QHBoxLayout(preview)
+        preview_lay = QVBoxLayout(preview)
         preview_lay.setContentsMargins(0, 0, 0, 0)
-        preview_lay.setSpacing(8)
+        preview_lay.setSpacing(6)
+
+        content_row = QHBoxLayout()
+        content_row.setContentsMargins(0, 0, 0, 0)
+        content_row.setSpacing(8)
 
         thumb = QFrame()
         thumb.setFixedSize(78, 44)
@@ -1135,7 +1295,7 @@ class RoughcutWidget(
         self.preview_thumb_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_thumb_lbl.setStyleSheet(label_style("muted", 10, bold=True))
         thumb_lay.addWidget(self.preview_thumb_lbl)
-        preview_lay.addWidget(thumb)
+        content_row.addWidget(thumb)
 
         preview_text_box = QVBoxLayout()
         preview_text_box.setContentsMargins(0, 0, 0, 0)
@@ -1150,7 +1310,7 @@ class RoughcutWidget(
         preview_text_box.addWidget(self.preview_title_lbl)
         preview_text_box.addWidget(self.preview_time_lbl)
         preview_text_box.addWidget(self.preview_summary_lbl)
-        preview_lay.addLayout(preview_text_box, stretch=2)
+        content_row.addLayout(preview_text_box, stretch=2)
 
         detail_box = QVBoxLayout()
         detail_box.setContentsMargins(0, 0, 0, 0)
@@ -1176,15 +1336,21 @@ class RoughcutWidget(
         self.preview_reason_lbl.setWordWrap(True)
         self.preview_reason_lbl.setStyleSheet(label_style("muted", 10))
         detail_box.addWidget(self.preview_reason_lbl)
-        preview_lay.addLayout(detail_box, stretch=2)
+        content_row.addLayout(detail_box, stretch=2)
+
+        preview_lay.addLayout(content_row)
+
+        controls_row = QHBoxLayout()
+        controls_row.setContentsMargins(0, 0, 0, 0)
+        controls_row.setSpacing(6)
 
         self.btn_prev_candidate = self._panel_button("이전", "prev")
         self.btn_prev_candidate.clicked.connect(lambda: self._move_preview_row(-1, autoplay=True))
-        preview_lay.addWidget(self.btn_prev_candidate)
+        controls_row.addWidget(self.btn_prev_candidate)
 
         self.btn_next_candidate = self._panel_button("다음", "next")
         self.btn_next_candidate.clicked.connect(lambda: self._move_preview_row(1, autoplay=True))
-        preview_lay.addWidget(self.btn_next_candidate)
+        controls_row.addWidget(self.btn_next_candidate)
 
         self.btn_preview_loop = self._panel_button("반복", "refresh")
         self.btn_preview_loop.setCheckable(True)
@@ -1193,14 +1359,15 @@ class RoughcutWidget(
             button_style("toolbar", font_size="11px", padding="6px 9px")
             + " QPushButton:checked { background: #1F3A56; border: 1px solid #007AFF; color: #FFFFFF; }"
         )
-        preview_lay.addWidget(self.btn_preview_loop)
+        controls_row.addWidget(self.btn_preview_loop)
 
         self.btn_preview_play = self._panel_button("구간 재생", "play", kind="primary")
         self.btn_preview_play.clicked.connect(lambda: self._play_preview(self._preview_row, muted=False))
-        preview_lay.addWidget(self.btn_preview_play)
+        controls_row.addWidget(self.btn_preview_play, stretch=1)
         self.btn_preview_stop = self._panel_button("정지", "stop")
         self.btn_preview_stop.clicked.connect(self._stop_preview)
-        preview_lay.addWidget(self.btn_preview_stop)
+        controls_row.addWidget(self.btn_preview_stop)
+        preview_lay.addLayout(controls_row)
         return preview
 
     def _panel_button(self, text: str, icon_name: str, *, kind: str = "toolbar") -> QPushButton:

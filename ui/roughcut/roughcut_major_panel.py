@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -33,8 +34,16 @@ class _MajorCardListWidget(QListWidget):
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.setViewMode(QListView.ViewMode.IconMode)
+        self.setFlow(QListView.Flow.LeftToRight)
+        self.setWrapping(False)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setLayoutMode(QListView.LayoutMode.SinglePass)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.setSpacing(6)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setSpacing(10)
         self.setStyleSheet(
             "QListWidget { background: transparent; border: none; outline: none; }"
             "QListWidget::item { background: transparent; border: none; margin: 0px; padding: 0px; }"
@@ -127,10 +136,12 @@ class _DragHandleLabel(QLabel):
     dragRequested = pyqtSignal()
     dragDelta = pyqtSignal(int)
 
-    def __init__(self, tooltip: str, parent=None):
+    def __init__(self, tooltip: str, parent=None, *, axis: str = "vertical"):
         super().__init__("⋮⋮", parent)
         self._press_pos = None
         self._last_pos = None
+        self._axis = "horizontal" if str(axis or "").lower().startswith("h") else "vertical"
+        self._drag_started = False
         self.setToolTip(str(tooltip or "드래그로 순서 변경"))
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFixedWidth(16)
@@ -144,6 +155,7 @@ class _DragHandleLabel(QLabel):
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_pos = event.position().toPoint()
             self._last_pos = self._press_pos
+            self._drag_started = False
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
@@ -157,17 +169,25 @@ class _DragHandleLabel(QLabel):
             and bool(event.buttons() & Qt.MouseButton.LeftButton)
             and (event.position().toPoint() - self._press_pos).manhattanLength() >= QApplication.startDragDistance()
         ):
+            if not self._drag_started:
+                self._drag_started = True
+                self.dragRequested.emit()
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._press_pos is not None and self._last_pos is not None:
-            delta_y = self._last_pos.y() - self._press_pos.y()
-            if abs(delta_y) >= QApplication.startDragDistance():
-                self.dragDelta.emit(int(delta_y))
+        if self._press_pos is not None and self._last_pos is not None and not self._drag_started:
+            delta_value = (
+                self._last_pos.x() - self._press_pos.x()
+                if self._axis == "horizontal"
+                else self._last_pos.y() - self._press_pos.y()
+            )
+            if abs(delta_value) >= QApplication.startDragDistance():
+                self.dragDelta.emit(int(delta_value))
         self._press_pos = None
         self._last_pos = None
+        self._drag_started = False
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         super().mouseReleaseEvent(event)
 
@@ -176,15 +196,18 @@ class _DragStartFrame(QFrame):
     dragRequested = pyqtSignal()
     dragDelta = pyqtSignal(int)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, axis: str = "vertical"):
         super().__init__(parent)
         self._press_pos = None
         self._last_pos = None
+        self._axis = "horizontal" if str(axis or "").lower().startswith("h") else "vertical"
+        self._drag_started = False
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_pos = event.position().toPoint()
             self._last_pos = self._press_pos
+            self._drag_started = False
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
@@ -198,17 +221,25 @@ class _DragStartFrame(QFrame):
             and bool(event.buttons() & Qt.MouseButton.LeftButton)
             and (event.position().toPoint() - self._press_pos).manhattanLength() >= QApplication.startDragDistance()
         ):
+            if not self._drag_started:
+                self._drag_started = True
+                self.dragRequested.emit()
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._press_pos is not None and self._last_pos is not None:
-            delta_y = self._last_pos.y() - self._press_pos.y()
-            if abs(delta_y) >= QApplication.startDragDistance():
-                self.dragDelta.emit(int(delta_y))
+        if self._press_pos is not None and self._last_pos is not None and not self._drag_started:
+            delta_value = (
+                self._last_pos.x() - self._press_pos.x()
+                if self._axis == "horizontal"
+                else self._last_pos.y() - self._press_pos.y()
+            )
+            if abs(delta_value) >= QApplication.startDragDistance():
+                self.dragDelta.emit(int(delta_value))
         self._press_pos = None
         self._last_pos = None
+        self._drag_started = False
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         super().mouseReleaseEvent(event)
 
@@ -248,7 +279,7 @@ class RoughcutMajorPanel(QWidget):
         self.selection_lbl = QLabel("선택 대기")
         self.selection_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.selection_lbl.setStyleSheet(label_style("muted", 10, bold=True))
-        self.hint_lbl = QLabel("카드 세그먼트는 심플하게 보고, 썸네일 클릭 재생과 드래그 앤 드롭으로 바로 정리합니다.")
+        self.hint_lbl = QLabel("위 러프컷 제안을 누르면, 아래에서 해당 제안의 카드 세그먼트를 가로로 정리합니다.")
         self.hint_lbl.setStyleSheet(label_style("muted", 9))
         header_lay.addWidget(self.summary_lbl, 0, 0)
         header_lay.addWidget(self.selection_lbl, 0, 1)
@@ -377,14 +408,17 @@ class RoughcutMajorPanel(QWidget):
         )
 
     def _build_major_card(self, index: int, segment, chapters_by_id: dict) -> QFrame:
-        card = _DragStartFrame()
+        card = _DragStartFrame(axis="horizontal")
         is_topicless_placeholder = self._is_topicless_cut_placeholder(segment)
         segment_id = self._segment_id(segment, index)
-        card.setMinimumHeight(68)
-        card.setMaximumHeight(124)
+        card.setMinimumWidth(288)
+        card.setMaximumWidth(372)
+        card.setMinimumHeight(100)
+        card.setMaximumHeight(188)
         card.setObjectName("roughcutMajorCardSurface")
         card.setCursor(Qt.CursorShape.OpenHandCursor)
         card.setStyleSheet(self._card_style(selected=False, topicless=is_topicless_placeholder))
+        card.dragRequested.connect(lambda sid=segment_id: self.card_list.start_drag_for_segment(sid))
         card.dragDelta.connect(lambda delta, sid=segment_id: self._move_segment_by_drag_delta(sid, delta))
         lay = QVBoxLayout(card)
         lay.setContentsMargins(8, 6, 8, 6)
@@ -410,9 +444,10 @@ class RoughcutMajorPanel(QWidget):
         status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status_lbl.setStyleSheet(self._badge_style(getattr(segment, "status", "")))
         status_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        drag_handle = _DragHandleLabel("카드 드래그로 순서 변경", card)
+        drag_handle = _DragHandleLabel("카드 드래그로 순서 변경", card, axis="horizontal")
         drag_handle.setObjectName("roughcutMajorDragHandle")
         drag_handle.setFixedWidth(22)
+        drag_handle.dragRequested.connect(lambda sid=segment_id: self.card_list.start_drag_for_segment(sid))
         drag_handle.dragDelta.connect(lambda delta, sid=segment_id: self._move_segment_by_drag_delta(sid, delta))
         head.addWidget(title_lbl, stretch=1)
         head.addWidget(chunk_lbl, stretch=0)
@@ -531,6 +566,7 @@ class RoughcutMajorPanel(QWidget):
         row_frame.setObjectName("roughcutMinorRowSurface")
         row_frame.setCursor(Qt.CursorShape.OpenHandCursor)
         row_frame.setStyleSheet("QFrame { background: #0D1418; border: 1px solid #243038; border-radius: 8px; }")
+        row_frame.dragRequested.connect(lambda sid=segment_id, cid=chapter_id: self._start_minor_drag(sid, cid))
         row_frame.dragDelta.connect(lambda delta, sid=segment_id, cid=chapter_id: self._move_chapter_by_drag_delta(sid, cid, delta))
         row_lay = QHBoxLayout(row_frame)
         row_lay.setContentsMargins(4, 3, 4, 3)
@@ -598,6 +634,7 @@ class RoughcutMajorPanel(QWidget):
         drag_handle = _DragHandleLabel("카드 세그먼트 드래그로 순서 변경", row_frame)
         drag_handle.setObjectName("roughcutMinorDragHandle")
         drag_handle.setFixedWidth(22)
+        drag_handle.dragRequested.connect(lambda cid=chapter_id, sid=segment_id: self._start_minor_drag(sid, cid))
         drag_handle.dragDelta.connect(lambda delta, cid=chapter_id, sid=segment_id: self._move_chapter_by_drag_delta(sid, cid, delta))
         row_lay.addWidget(drag_handle, stretch=0)
         self._preview_buttons[chapter_id] = thumb_btn
@@ -678,7 +715,8 @@ class RoughcutMajorPanel(QWidget):
                 visible_rows = 1
         if isinstance(card, QFrame):
             extra_rows = max(0, visible_rows - 1)
-            card.setFixedHeight((106 if expanded else 68) + (extra_rows * (row_height + 4)))
+            card.setFixedWidth(360 if expanded else 304)
+            card.setFixedHeight((126 if expanded else 100) + (extra_rows * (row_height + 4)))
         if isinstance(summary, QLabel):
             summary.setVisible(expanded)
         if isinstance(section_box, QFrame):
@@ -691,7 +729,8 @@ class RoughcutMajorPanel(QWidget):
         item = self._segment_items.get(segment_id)
         if item is not None and isinstance(card, QFrame):
             card.adjustSize()
-            item.setSizeHint(QSize(max(0, card.sizeHint().width()), card.height()))
+            width = max(int(card.width() or 0), int(card.sizeHint().width() or 0))
+            item.setSizeHint(QSize(width, card.height()))
             self.card_list.updateGeometries()
 
     def _apply_thumbnail_button(self, button: QPushButton, chapter_id: str) -> None:

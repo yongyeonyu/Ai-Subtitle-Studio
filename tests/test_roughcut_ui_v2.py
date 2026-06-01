@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QListView, QWidget
 
 from core.roughcut.models import (
     ChapterMetadata,
@@ -69,14 +69,26 @@ class RoughcutUiV2Tests(unittest.TestCase):
             widget._populate_result()
 
             self.assertTrue(hasattr(widget, "roughcut_frame"))
-            self.assertGreaterEqual(widget.bottom_tabs.tabs.count(), 8)
-            self.assertEqual(widget.bottom_tabs.tabs.tabText(0), "챕터")
+            self.assertEqual(widget.bottom_tabs.tabs.count(), 4)
+            self.assertEqual(
+                [widget.bottom_tabs.tabs.tabText(index) for index in range(widget.bottom_tabs.tabs.count())],
+                ["챕터", "자막 세그먼트", "EDL", "로그"],
+            )
             self.assertEqual(widget.table.rowCount(), 1)
             self.assertIn("chapter_0001", widget.major_panel._minor_buttons)
             self.assertEqual(widget.major_panel.summary_lbl.text(), "LLM 카드 1 / 세그먼트 1 / 검토 0")
             self.assertEqual(widget.major_panel.selection_lbl.text(), "선택 chapter_0001")
             self.assertIn("썸네일", widget.major_panel._preview_buttons["chapter_0001"].text())
-            self.assertEqual(widget.player_menu_frame.layout().itemAt(0).widget().text(), "플레이어 아래 메뉴")
+            self.assertEqual(widget.major_panel.card_list.flow(), QListView.Flow.LeftToRight)
+            self.assertEqual(widget.player_menu_frame.layout().itemAt(0).widget().text(), "핵심 메뉴")
+            self.assertEqual(widget.player_core_section.toggle.text(), "AI 작업")
+            self.assertFalse(widget.player_core_section.content.isVisible())
+            self.assertEqual(widget.player_media_group.layout().itemAt(0).widget().text(), "재생")
+            self.assertEqual(widget.player_export_section.toggle.text(), "내보내기")
+            self.assertFalse(widget.player_export_section.content.isVisible())
+            self.assertEqual(widget.export_menu_btn.text(), "내보내기")
+            self.assertEqual(widget.bottom_tabs.section_title_lbl.text(), "보조 참조")
+            self.assertFalse(widget.selection_status_section.content.isVisible())
             self.assertEqual(widget.title_panel._suggestions[0].title, "EV6 외부 디자인 총정리")
             self.assertIn("분석 완료", widget.log_panel.status_lbl.text())
             self.assertIn("chapter_0001", widget.bottom_tabs.edl_text.toPlainText())
@@ -90,6 +102,9 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(widget.detail_edit_state_lbl.text(), "수정 상태: 자동 초안")
             self.assertFalse(widget.btn_revert_user_edit.isEnabled())
             self.assertEqual(widget.detail_delta_lbl.text(), "Δ In +0.00s / Δ Out +0.00s")
+            self.assertEqual(widget.candidate_preview_filter_combo.count(), 2)
+            self.assertEqual(widget.candidate_preview_filter_combo.itemText(0), "전체 후보")
+            self.assertEqual(widget.candidate_preview_filter_combo.itemText(1), "LLM 결과만")
 
             widget.style_panel.set_style({"transition": "fade", "font_size": 50})
             widget._save_roughcut_export_style(widget.style_panel.style_payload())
@@ -297,6 +312,64 @@ class RoughcutUiV2Tests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_drag_surfaces_request_native_major_and_minor_drag_start(self):
+        widget = RoughcutWidget()
+        try:
+            result = RoughCutResult(
+                segments=(
+                    RoughCutSegment(
+                        "major_A",
+                        0.0,
+                        8.0,
+                        title="외부 디자인",
+                        major_id="A",
+                        minor_groups=(
+                            RoughCutMinorGroup("A1", "A", "A1", "첫 장면", 0.0, 4.0, chapter_ids=("chapter_0001",)),
+                        ),
+                    ),
+                ),
+                chapters=(ChapterMetadata("chapter_0001", "첫 장면", 0.0, 4.0, major_id="A", minor_code="A1"),),
+                edit_decisions=(EditDecision("chapter_0001", "keep", source_start=0.0, source_end=4.0),),
+                edl_segments=(EDLSegment("/tmp/source.mp4", "chapter_0001", 0.0, 4.0, 0.0, 4.0),),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+            widget.major_panel.set_result(result, editor_segments=[{"start": 0.0, "end": 2.0, "text": "첫 장면"}])
+
+            major_item = widget.major_panel.card_list.item(0)
+            major_card = widget.major_panel.card_list.itemWidget(major_item)
+            major_surface = major_card if major_card.objectName() == "roughcutMajorCardSurface" else major_card.findChild(QWidget, "roughcutMajorCardSurface")
+            major_handle = major_card.findChild(QLabel, "roughcutMajorDragHandle")
+
+            minor_list = widget.major_panel._minor_lists["major_A"]
+            minor_row = minor_list.itemWidget(minor_list.item(0))
+            minor_surface = minor_row if minor_row.objectName() == "roughcutMinorRowSurface" else minor_row.findChild(QWidget, "roughcutMinorRowSurface")
+            minor_handle = minor_row.findChild(QLabel, "roughcutMinorDragHandle")
+
+            major_calls: list[str] = []
+            minor_calls: list[tuple[str, str]] = []
+            original_major = widget.major_panel.card_list.start_drag_for_segment
+            original_minor = widget.major_panel._start_minor_drag
+            widget.major_panel.card_list.start_drag_for_segment = lambda sid: major_calls.append(sid)
+            widget.major_panel._start_minor_drag = lambda sid, cid: minor_calls.append((sid, cid))
+            try:
+                self.assertIsNotNone(major_surface)
+                self.assertIsNotNone(major_handle)
+                self.assertIsNotNone(minor_surface)
+                self.assertIsNotNone(minor_handle)
+                major_surface.dragRequested.emit()
+                major_handle.dragRequested.emit()
+                minor_surface.dragRequested.emit()
+                minor_handle.dragRequested.emit()
+            finally:
+                widget.major_panel.card_list.start_drag_for_segment = original_major
+                widget.major_panel._start_minor_drag = original_minor
+
+            self.assertEqual(major_calls, ["major_A", "major_A"])
+            self.assertEqual(minor_calls, [("major_A", "chapter_0001"), ("major_A", "chapter_0001")])
+        finally:
+            widget.close()
+
     def test_unselected_major_cards_stay_compact_while_selected_card_expands(self):
         widget = RoughcutWidget()
         try:
@@ -369,7 +442,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
         finally:
             widget.close()
 
-    def test_five_major_cards_keep_compact_height_budget(self):
+    def test_five_major_cards_keep_compact_card_budget(self):
         widget = RoughcutWidget()
         try:
             segments = []
@@ -409,11 +482,16 @@ class RoughcutUiV2Tests(unittest.TestCase):
             widget._populate_result()
 
             heights = []
+            widths = []
             for segment_id in ("major_A", "major_B", "major_C", "major_D", "major_E"):
                 item = widget.major_panel._segment_items[segment_id]
                 heights.append(item.sizeHint().height())
-            self.assertLessEqual(max(heights), 112)
-            self.assertGreaterEqual(min(heights), 60)
+                widths.append(item.sizeHint().width())
+            self.assertEqual(widget.major_panel.card_list.flow(), QListView.Flow.LeftToRight)
+            self.assertLessEqual(max(heights), 140)
+            self.assertGreaterEqual(min(heights), 92)
+            self.assertGreaterEqual(min(widths), 280)
+            self.assertGreater(min(widths), max(heights))
             self.assertEqual(widget.major_panel._segment_cards["major_A"]["minor_list"].maximumHeight(), 36)
         finally:
             widget.close()
@@ -462,7 +540,8 @@ class RoughcutUiV2Tests(unittest.TestCase):
             item = widget.major_panel._segment_items["major_A"]
 
             self.assertGreaterEqual(active["minor_list"].maximumHeight(), 84)
-            self.assertGreaterEqual(item.sizeHint().height(), 160)
+            self.assertGreaterEqual(item.sizeHint().height(), 180)
+            self.assertGreaterEqual(item.sizeHint().width(), 340)
         finally:
             widget.close()
 
@@ -1043,6 +1122,49 @@ class RoughcutUiV2Tests(unittest.TestCase):
                 widget._candidate_preview_buttons[1].setChecked(True)
                 self.assertEqual(widget._selected_candidate_id, "candidate_2")
                 self.assertEqual(widget.candidate_state_lbl.text(), "저장된 자막 기준")
+        finally:
+            widget.close()
+
+    def test_candidate_preview_filter_shows_only_llm_candidates(self):
+        widget = RoughcutWidget()
+        try:
+            widget._source_signature = "sig-current"
+            widget._result = RoughCutResult(
+                segments=(RoughCutSegment("major_A", 0.0, 8.0, title="A 장면", major_id="A"),),
+                chapters=(ChapterMetadata("chapter_0001", "A 장면", 0.0, 4.0, major_id="A", minor_code="A1"),),
+                edit_decisions=(EditDecision("chapter_0001", "keep", safety="ideal", source_start=0.0, source_end=4.0),),
+                edl_segments=(EDLSegment("/tmp/source.mp4", "chapter_0001", 0.0, 4.0, 0.0, 4.0),),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+            llm_candidate = widget._roughcut_state_payload()
+            llm_candidate["candidate_id"] = "editor_post_generation_roughcut_draft"
+            llm_candidate["name"] = "LLM 초안"
+            llm_candidate["candidate_origin"] = "llm"
+
+            local_candidate = dict(llm_candidate)
+            local_candidate["candidate_id"] = "candidate_local"
+            local_candidate["name"] = "로컬 초안"
+            local_candidate["candidate_origin"] = "local"
+
+            placeholder_candidate = dict(llm_candidate)
+            placeholder_candidate["candidate_id"] = "cut_boundary_topicless"
+            placeholder_candidate["name"] = "임시 후보"
+            placeholder_candidate["candidate_origin"] = "placeholder"
+
+            widget._roughcut_candidates = [local_candidate, llm_candidate, placeholder_candidate]
+            widget._selected_candidate_id = "editor_post_generation_roughcut_draft"
+
+            with patch.object(widget, "_current_editor_signature", return_value="sig-current"):
+                widget._refresh_candidate_combo()
+                self.assertEqual(len(widget._candidate_preview_buttons), 3)
+                self.assertIn("실제 LLM", widget._candidate_preview_buttons[1].text())
+
+                widget.candidate_preview_filter_combo.setCurrentIndex(1)
+                self.assertEqual(widget._candidate_preview_filter, "llm")
+                self.assertEqual(len(widget._candidate_preview_buttons), 1)
+                self.assertIn("LLM 초안", widget._candidate_preview_buttons[0].text())
+                self.assertIn("실제 LLM", widget._candidate_preview_buttons[0].text())
         finally:
             widget.close()
 

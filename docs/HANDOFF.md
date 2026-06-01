@@ -1723,3 +1723,168 @@
 
 - release/commit 전이라면 current roughcut state를 한번 더 사람이 눈으로 확인하고 저장합니다.
 - 기능 목표 기준으로는 다음 큰 workstream으로 넘어갈 수 있고, 추가 작업을 한다면 visual polish를 별도 slice로 다루는 편이 안전합니다.
+
+## 2026-06-01 Addendum - Roughcut Menu Grouping Pass
+
+### Scope
+
+- 러프컷 UI에서 우측 플레이어 아래 메뉴와 하단 패널이 평평하게 흩어져 보이던 부분을 `그룹` 중심으로 다시 묶었습니다.
+- Antigravity `잼민이`와 메뉴 그룹핑 초안을 짧게 맞췄고, 실제 반영은 `Core Pipeline / Media Controller / Candidate+Filter / Export` 기준으로 좁게 적용했습니다.
+
+### Jammini meeting outcome
+
+- `Group 1 (Core Pipeline)`과 `Group 2 (Media Controller)`는 플레이어 바로 아래에 바로 노출
+- `Group 3 (Data Filter & Candidate)`는 접을 수 있는 accordion
+- `Group 4 (Export Deliverables)`는 개별 버튼 3개보다 단일 dropdown이 더 적절
+- 추가 제안 중 `preview row` 완전 통합은 이번 슬라이스에서 보류하고, 우선 메뉴 그룹 경계만 먼저 강화
+
+### Code change
+
+- `ui/roughcut/roughcut_widget.py`
+  - 우측 메뉴를 `핵심 작업 / 재생 컨트롤 / 후보·필터 / 내보내기` 4그룹으로 재구성
+  - `SRT / EDL / 가이드` 3버튼을 `QToolButton` dropdown 하나로 묶음
+  - `후보·필터`는 접을 수 있는 section으로 바꾸고 `safety_filter_combo`를 이 그룹 안으로 이동
+  - 하단 control block은 `현재 상태`와 `선택 카드 편집` 2그룹으로 재분리
+- `ui/roughcut/roughcut_bottom_panel.py`
+  - 탭 구역을 `참조 패널`로 명시하고 설명 문구를 추가해, 하단 탭이 보조 참조 메뉴라는 위계를 분명히 함
+- `tests/test_roughcut_ui_v2.py`
+  - 새 그룹 제목과 export dropdown, `참조 패널` title을 확인하는 회귀를 추가
+
+### Validation
+
+- `./venv/bin/python -m py_compile ui/roughcut/roughcut_widget.py ui/roughcut/roughcut_bottom_panel.py tests/test_roughcut_ui_v2.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k 'major_log_and_title_panels_render_without_removing_legacy_table or candidate_preview_frames_limit_to_three_and_apply_selection or candidate_preview_toggle_applies_selection'`
+  - `3 passed`
+- `git diff --check -- ui/roughcut/roughcut_widget.py ui/roughcut/roughcut_bottom_panel.py tests/test_roughcut_ui_v2.py`
+  - passed
+
+### Visual proof
+
+- updated offscreen mockup:
+  - `output/manual_verification/latest/roughcut_menu_grouping_mockup_20260601.png`
+- current grouping visible in the mockup:
+  - right panel
+    - `핵심 작업`
+    - `재생 컨트롤`
+    - `후보 / 필터`
+    - `내보내기`
+  - bottom area
+    - `현재 상태`
+    - `선택 카드 편집`
+    - `참조 패널`
+
+### Remaining risk
+
+- 이번 슬라이스는 grouping 우선이라 `preview row` 자체의 버튼 밀도는 아직 남아 있습니다.
+- source app를 재시작하지 않고 오프스크린으로 먼저 본 상태라, 실제 열린 앱에서 같은 위계가 바로 체감되는지는 다음 실앱 확인이 필요합니다.
+
+### Recommended next step
+
+- source app를 다시 띄울 타이밍이 되면 `roughcut_menu_grouping_mockup_20260601.png` 기준으로 실앱 snapshot을 한 번 더 남깁니다.
+- 다음 visual polish를 더 한다면 `preview row`의 `반복 / 정지 / 구간 재생`을 더 짧은 media strip으로 합치는 쪽이 자연스럽습니다.
+
+## 2026-06-01 Addendum - Proposal Top, Horizontal Cards Bottom
+
+### Scope
+
+- 러프컷 화면의 역할을 다시 분리했습니다.
+- 위쪽 세로 후보 기둥은 `러프컷 제안 선택`만 맡고, 아래 메인 카드는 `선택한 제안의 카드 세그먼트 가로 표시`로 고정했습니다.
+
+### Code change
+
+- `ui/roughcut/roughcut_major_panel.py`
+  - lower `major card` list를 세로 스택이 아니라 `LeftToRight` 가로 flow로 전환
+  - major card drag surface/handle은 세로 delta가 아니라 가로 delta로 reorder를 해석
+  - 선택 card는 더 넓게, 비선택 card는 더 좁게 유지해 하단에서 가로 카드 구성이 바로 읽히게 조정
+  - 패널 설명 문구도 `위 제안 선택 -> 아래 가로 카드 정리` 기준으로 갱신
+- `tests/test_roughcut_ui_v2.py`
+  - `major_panel.card_list.flow() == LeftToRight` 회귀 추가
+  - compact/expanded card budget을 가로 카드 기준으로 재검증
+
+### Validation
+
+- `./venv/bin/python -m py_compile ui/roughcut/roughcut_major_panel.py tests/test_roughcut_ui_v2.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k 'major_log_and_title_panels_render_without_removing_legacy_table or unselected_major_cards_stay_compact_while_selected_card_expands or five_major_cards_keep_compact_card_budget or selected_major_card_expands_to_show_multiple_minor_rows or drag_surfaces_emit_major_and_minor_reorder_requests'`
+  - `5 passed`
+- `git diff --check -- ui/roughcut/roughcut_major_panel.py tests/test_roughcut_ui_v2.py`
+  - passed
+
+### Visual proof
+
+- updated offscreen mockup:
+  - `output/manual_verification/latest/roughcut_top_proposals_bottom_horizontal_20260601.png`
+- intended reading order:
+  - top: `LLM 후보` 세로 기둥 선택
+  - bottom: 선택한 후보의 `카드 세그먼트`를 가로 카드로 탐색
+
+### Remaining risk
+
+- 이번 슬라이스는 오프스크린 기준으로 먼저 닫았고, live source app 재시작 후 snapshot은 아직 남아 있습니다.
+- major card native drag/drop는 가로 flow와 수동 drag delta 둘 다 맞춰뒀지만, 실앱에서 hit area 체감은 한 번 더 보는 편이 안전합니다.
+
+## 2026-06-01 Addendum - Reduced Roughcut Menus
+
+### Scope
+
+- roughcut 우측/하단 메뉴가 겹치던 구성을 `상시 노출 최소화` 기준으로 다시 줄였습니다.
+- 회의 결론대로 `후보 선택, 재생, 선택 카드 편집`만 전면에 두고, AI 작업과 내보내기, 보조 참조는 접거나 최소 탭만 남겼습니다.
+
+### Code change
+
+- `ui/roughcut/roughcut_widget.py`
+  - 우측 제목을 `핵심 메뉴`로 정리
+  - `AI 작업`을 기본 접힘 섹션으로 전환
+  - `내보내기`를 기본 접힘 섹션으로 전환
+  - 하단 `현재 상태`를 기본 접힘 섹션으로 전환
+  - `가이드`, `제목`, `스타일` 패널은 계속 내부 상태/저장 경로에는 남기되 기본 탭 노출에서는 제외
+- `ui/roughcut/roughcut_bottom_panel.py`
+  - 섹션명을 `보조 참조`로 변경
+  - 참조 탭을 `자막 세그먼트`, `EDL`만 남기고 축소
+  - `글로벌 세그먼트`, `웨이브폼`, `스토리보드`는 기본 노출에서 제외
+- `tests/test_roughcut_ui_v2.py`
+  - 축소된 탭 개수와 이름
+  - `AI 작업`, `내보내기`, `현재 상태`의 기본 접힘 상태
+  - `핵심 메뉴` 제목을 회귀로 고정
+
+### Validation
+
+- `./venv/bin/python -m py_compile ui/roughcut/roughcut_widget.py ui/roughcut/roughcut_bottom_panel.py tests/test_roughcut_ui_v2.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k 'major_log_and_title_panels_render_without_removing_legacy_table or candidate_preview_frames_limit_to_three_and_apply_selection or candidate_preview_toggle_applies_selection or drag_handles_exist_for_major_and_minor_cards'`
+  - `4 passed`
+- `git diff --check -- ui/roughcut/roughcut_widget.py ui/roughcut/roughcut_bottom_panel.py tests/test_roughcut_ui_v2.py`
+  - passed
+
+### Visual proof
+
+- updated offscreen mockup:
+  - `output/manual_verification/latest/roughcut_menu_reduced_mockup_20260601.png`
+
+### Remaining risk
+
+- 이번 턴은 오프스크린 mockup 기준입니다. live source app 재시작 후 같은 축소 구성이 실제 러프컷 화면에서도 과하게 숨겨지지 않는지 한 번 더 보는 편이 안전합니다.
+
+## 2026-06-01 Addendum - Candidate Origin And LLM-Only Filter
+
+### Scope
+
+- roughcut 후보가 `실제 LLM 초안`, `로컬 초안`, `임시 placeholder` 중 무엇인지 화면에서 바로 구분되게 했습니다.
+- `LLM 결과만` 필터를 후보 영역에 추가해, 실제 LLM으로 생성된 roughcut 초안만 따로 볼 수 있게 했습니다.
+
+### Code change
+
+- `ui/roughcut/roughcut_state.py`
+  - candidate payload에 `candidate_origin`을 저장
+  - `warnings`, `draft_state`, `schema_version`, `candidate_id` 기준으로 `llm / local / placeholder`를 판정
+- `ui/roughcut/roughcut_widget.py`
+  - 후보 영역 상단에 `전체 후보 / LLM 결과만` 필터 추가
+  - 후보 기둥 header와 접근성 텍스트에 `실제 LLM / 로컬 초안 / 임시 상태` origin 배지 노출
+- `tests/test_roughcut_ui_v2.py`
+  - origin 배지와 `LLM 결과만` 필터 회귀 추가
+
+### Validation
+
+- `./venv/bin/python -m py_compile ui/roughcut/roughcut_widget.py ui/roughcut/roughcut_state.py tests/test_roughcut_ui_v2.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k 'candidate_state_and_filter_badges_follow_selection or candidate_preview_frames_limit_to_three_and_apply_selection or candidate_preview_toggle_applies_selection or candidate_preview_filter_shows_only_llm_candidates or major_log_and_title_panels_render_without_removing_legacy_table'`
+  - `5 passed`
+- `git diff --check -- ui/roughcut/roughcut_widget.py ui/roughcut/roughcut_state.py tests/test_roughcut_ui_v2.py`
+  - passed

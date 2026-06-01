@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QLabel, QTabWidget, QTextEdit, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QLabel, QTabWidget, QTextEdit, QVBoxLayout, QWidget
 
 from ui.settings.qml_panel import attach_qml_tab_bar
 from ui.roughcut.roughcut_format import fmt_time
@@ -20,6 +20,21 @@ class RoughcutBottomPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
         root.addWidget(controls)
+
+        self.section_frame = QFrame()
+        self.section_frame.setStyleSheet(
+            "QFrame { background: #10161A; border: 1px solid #2D3942; border-radius: 8px; }"
+        )
+        section_lay = QVBoxLayout(self.section_frame)
+        section_lay.setContentsMargins(9, 8, 9, 8)
+        section_lay.setSpacing(6)
+        self.section_title_lbl = QLabel("보조 참조")
+        self.section_title_lbl.setStyleSheet(label_style("text", 11, bold=True))
+        self.section_hint_lbl = QLabel("편집 중 꼭 필요한 자막 세그먼트와 EDL만 남긴 보조 참조 탭입니다.")
+        self.section_hint_lbl.setWordWrap(True)
+        self.section_hint_lbl.setStyleSheet(label_style("muted", 9))
+        section_lay.addWidget(self.section_title_lbl)
+        section_lay.addWidget(self.section_hint_lbl)
 
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(
@@ -36,12 +51,10 @@ class RoughcutBottomPanel(QWidget):
         self.storyboard_text = self._text_view("스토리보드 없음")
 
         self.tabs.addTab(self.subtitle_text, "자막 세그먼트")
-        self.tabs.addTab(self.global_text, "글로벌 세그먼트")
-        self.tabs.addTab(self.waveform_text, "웨이브폼")
         self.tabs.addTab(self.edl_text, "EDL")
-        self.tabs.addTab(self.storyboard_text, "스토리보드")
-        attach_qml_tab_bar(self, root, self.tabs, scope="roughcut", insert_index=1)
-        root.addWidget(self.tabs, stretch=1)
+        attach_qml_tab_bar(self, section_lay, self.tabs, scope="roughcut", insert_index=2)
+        section_lay.addWidget(self.tabs, stretch=1)
+        root.addWidget(self.section_frame, stretch=1)
 
     def clear(self) -> None:
         self.subtitle_text.setPlainText("자막 세그먼트 없음")

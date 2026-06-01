@@ -20,6 +20,7 @@ from core.project.project_manager import save_project
 from core.settings import load_settings
 from core.video_codec import roughcut_render_mode
 from core.roughcut import (
+    EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
     build_edl_segments,
     build_concat_render_plan,
     build_ffmpeg_subtitle_burnin_command,
@@ -38,6 +39,51 @@ ROUGHCUT_CANDIDATE_SCHEMA = "ai_subtitle_studio.roughcut_candidate.v2"
 
 
 class RoughcutStateMixin:
+    def _candidate_origin_from_result(self, result, candidate_id: str = "") -> str:
+        warnings = tuple(getattr(result, "warnings", ()) or ())
+        schema_version = str(getattr(result, "schema_version", "") or "")
+        draft_state = getattr(result, "draft_state", None)
+        draft_id = str(getattr(draft_state, "draft_id", "") or "")
+        candidate_id = str(candidate_id or "")
+        if (
+            schema_version.startswith("roughcut_result.cut_boundary_placeholder")
+            or "cut_boundary_topicless_placeholder" in warnings
+            or candidate_id == "cut_boundary_topicless"
+        ):
+            return "placeholder"
+        if (
+            any(str(item or "").startswith("roughcut_llm_applied:") for item in warnings)
+            or draft_id == EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID
+            or candidate_id == EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID
+        ):
+            return "llm"
+        return "local"
+
+    def _candidate_origin(self, candidate: dict | None) -> str:
+        if not isinstance(candidate, dict):
+            return "local"
+        origin = str(candidate.get("candidate_origin") or candidate.get("origin") or "").strip().lower()
+        if origin in {"llm", "local", "placeholder"}:
+            return origin
+        warnings = tuple(candidate.get("warnings") or ())
+        schema_version = str(candidate.get("result_schema_version") or candidate.get("schema_version") or "")
+        draft_state = candidate.get("draft_state") if isinstance(candidate.get("draft_state"), dict) else {}
+        draft_id = str(draft_state.get("draft_id") or "")
+        candidate_id = str(candidate.get("candidate_id") or "")
+        if (
+            schema_version.startswith("roughcut_result.cut_boundary_placeholder")
+            or "cut_boundary_topicless_placeholder" in warnings
+            or candidate_id == "cut_boundary_topicless"
+        ):
+            return "placeholder"
+        if (
+            any(str(item or "").startswith("roughcut_llm_applied:") for item in warnings)
+            or draft_id == EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID
+            or candidate_id == EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID
+        ):
+            return "llm"
+        return "local"
+
     def _active_editor(self):
         owner = self.owner
         if owner is None:
@@ -245,6 +291,7 @@ class RoughcutStateMixin:
             "cut_points": [asdict(point) for point in getattr(result, "cut_points", ())],
             "title_suggestions": [asdict(item) for item in getattr(result, "title_suggestions", ())],
             "draft_state": asdict(result.draft_state) if getattr(result, "draft_state", None) is not None else None,
+            "candidate_origin": self._candidate_origin_from_result(result, candidate_id=candidate_id),
             "roughcut_export_style": dict(getattr(self, "_roughcut_export_style", {}) or {}),
             "result_schema_version": getattr(result, "schema_version", "roughcut_result.v1"),
             "warnings": list(result.warnings),
