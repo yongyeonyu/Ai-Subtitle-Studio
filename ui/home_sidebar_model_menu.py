@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QMenu, QPlainText
 
 from core.runtime import config
 from core.settings import load_settings, save_settings
+from core.audio.apple_speech_native import apple_speech_locale, apple_speech_model
 from core.audio.stt_quality_presets import normalize_stt_quality_key, save_stt_quality_user_preset
 from core.mode_manager import selected_mode_from_settings, stt_quality_to_mode
 from core.mode_policy import mode_stt_support_flags
@@ -187,6 +188,20 @@ class HomeSidebarModelMenuMixin:
             models = list(DEFAULT_WHISPER_MODELS)
         except Exception:
             models = [getattr(config, "WHISPER_MODEL", "large-v3")]
+        settings = dict(_runtime_load_settings() or {})
+        apple_model_name = apple_speech_model(apple_speech_locale(settings))
+        if apple_model_name not in models:
+            models.append(apple_model_name)
+        for selected_model in (
+            settings.get("selected_whisper_model", ""),
+            settings.get("selected_whisper_model_secondary", ""),
+        ):
+            if (
+                selected_model
+                and filter_available_whisper_models([selected_model])
+                and selected_model not in models
+            ):
+                models.append(selected_model)
         hf_cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
         if os.path.exists(hf_cache_dir):
             try:

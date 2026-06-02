@@ -93,6 +93,7 @@ WHISPER_MODEL_DISPLAY_NAMES = {
     "mlx-community/whisper-large-v2-mlx": "MLX Whisper Large V2 · 레거시",
     "mlx-community/whisper-medium-mlx": "MLX Whisper Medium · 경량",
     "mlx-community/distil-whisper-large-v3": "MLX Distil Whisper Large V3 · 경량",
+    "apple_speech:ko-KR": "Apple Speech (Experimental)",
 }
 
 EXPERIMENTAL_WHISPER_MODELS = {
@@ -117,6 +118,11 @@ def whisper_model_display_name(model: str, *, include_recommendations: bool = Fa
             if tags:
                 display = f"{display} {' '.join(f'[{tag}]' for tag in tags)}"
         return display
+    if value.lower().startswith("apple_speech:"):
+        locale = value.split(":", 1)[1].strip() if ":" in value else ""
+        if locale:
+            return f"Apple Speech ({locale})"
+        return "Apple Speech (Experimental)"
     lowered = value.lower()
     if lowered.startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:")):
         selector = value.split(":", 1)[1].strip() if ":" in value else "default"
