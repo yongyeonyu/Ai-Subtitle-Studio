@@ -38,7 +38,7 @@
 - 러프컷 초안 생성과 PHASE2 편집 흐름 보강
 - 기존 Python/PyQt6 source app 유지와 실제 앱 검증 중심 진행
 
-`core/roughcut/`, `ui/roughcut/`, `doc/releases/RELEASE_v04.00.15.md`, `doc/ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름은 계획이 아니라 이미 진행 중인 작업 축으로 보입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
+`core/roughcut/`, `ui/roughcut/`, `doc/releases/RELEASE_v04.00.16.md`, `doc/ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름은 계획이 아니라 이미 진행 중인 작업 축으로 보입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
 
 현재 운영 방향상 저장소는 Python/PyQt6 source app을 기준으로 유지합니다. 이전 Xcode/Swift migration 패키지와 실험용 자산은 정리되었으며, owner가 다시 명시하지 않는 한 새 native migration 전개를 기본 작업으로 취급하지 않습니다.
 
@@ -65,9 +65,9 @@
 
 ## Version/release notes
 
-- 현재 코드에서 확인되는 앱 버전 상수는 `04.00.15`입니다. (`core/runtime/config.py`)
-- 릴리스 노트는 `doc/releases/RELEASE_v04.00.07.md`부터 `doc/releases/RELEASE_v04.00.15.md`까지 유지합니다.
-- 최신 릴리스 문서(`doc/releases/RELEASE_v04.00.15.md`)는 새 제품 기능보다 안정화, 소유권 정리, 회귀 방지 성격이 강합니다.
+- 현재 코드에서 확인되는 앱 버전 상수는 `04.00.16`입니다. (`core/runtime/config.py`)
+- 릴리스 노트는 `doc/releases/RELEASE_v04.00.07.md`부터 `doc/releases/RELEASE_v04.00.16.md`까지 유지합니다.
+- 최신 릴리스 문서(`doc/releases/RELEASE_v04.00.16.md`)는 새 제품 기능보다 편집기 자동화 안정화, source-app quick 증빙, 릴리즈 위생 성격이 강합니다.
 - `doc/README.md`와 릴리스 문서 기준 공식 검증 흐름은 `tools/qa_suite_runner.py`와 pytest, `compileall`, `git diff --check`, source-app smoke를 조합하는 방식입니다.
 - DMG/패키징은 저장소에 관련 디렉터리가 있어도 기본 작업이 아니라 요청 시 별도 검증 대상으로 취급해야 합니다.
 

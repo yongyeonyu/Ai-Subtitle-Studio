@@ -42,6 +42,45 @@ def _compact_runtime_resource(value: Any) -> dict[str, Any]:
     }
 
 
+def _compact_widget_geometry(value: Any) -> dict[str, Any]:
+    data = dict(value or {}) if isinstance(value, dict) else {}
+    compact: dict[str, Any] = {}
+    for key in ("x", "y", "width", "height", "right", "bottom", "visible", "enabled"):
+        if key in data:
+            compact[key] = data.get(key)
+    return compact
+
+
+def _compact_geometry_snapshot(value: Any) -> dict[str, Any]:
+    data = dict(value or {}) if isinstance(value, dict) else {}
+    compact: dict[str, Any] = {}
+    for key in (
+        "main_window",
+        "workspace_splitter",
+        "right_workspace",
+        "stack",
+        "editor",
+        "editor_splitter",
+        "text_edit",
+        "video_frame",
+        "video_player",
+        "timeline_frame",
+        "timeline",
+        "timeline_canvas",
+        "timeline_global_canvas",
+        "bottom_work_panel",
+        "global_menu_bar",
+    ):
+        rect = _compact_widget_geometry(data.get(key))
+        if rect:
+            compact[key] = rect
+    for key in ("workspace_splitter_sizes", "editor_splitter_sizes"):
+        values = data.get(key)
+        if isinstance(values, list):
+            compact[key] = [int(item) for item in values[:8] if isinstance(item, (int, float))]
+    return compact
+
+
 def _compact_editor_runtime(value: Any) -> dict[str, Any]:
     data = dict(value or {}) if isinstance(value, dict) else {}
     segment_keys = ("active_segment", "previous_segment", "next_segment")
@@ -94,6 +133,9 @@ def _compact_editor_runtime(value: Any) -> dict[str, Any]:
             "text": str(segment.get("text", "") or "")[:160],
             "is_gap": bool(segment.get("is_gap", False)),
         }
+    geometry = _compact_geometry_snapshot(data.get("geometry"))
+    if geometry:
+        compact["geometry"] = geometry
     return compact
 
 

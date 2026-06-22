@@ -132,17 +132,23 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertTrue(summary_exists)
         self.assertEqual(summary["output_dir"], str(resolved_output_dir))
 
-    def test_macau_project_for_suite_uses_existing_project_without_fixture(self):
+    def test_macau_project_for_suite_copies_existing_project_to_output_fixture(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_path = Path(tmp) / "macau.aissproj"
             project_path.write_text("{}", encoding="utf-8")
+            assets_dir = Path(tmp) / "macau.assets" / "subtitles"
+            assets_dir.mkdir(parents=True)
+            (assets_dir / "final.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n", encoding="utf-8")
+            output_root = Path(tmp) / "suite"
             with patch.object(qa_suite_runner, "MACAU_PROJECT", project_path), patch(
                 "core.project.project_manager.create_project"
             ) as create_project:
-                resolved = qa_suite_runner._macau_project_for_suite(Path(tmp) / "suite")
+                resolved = qa_suite_runner._macau_project_for_suite(output_root)
 
-        self.assertEqual(resolved, project_path)
-        create_project.assert_not_called()
+            self.assertEqual(resolved, output_root / "_suite_fixtures" / project_path.name)
+            self.assertEqual(resolved.read_text(encoding="utf-8"), "{}")
+            self.assertTrue((output_root / "_suite_fixtures" / "macau.assets" / "subtitles" / "final.srt").is_file())
+            create_project.assert_not_called()
 
     def test_macau_project_for_suite_creates_output_fixture_when_default_project_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,6 +268,29 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertIn("--no-sync-video", argv)
         self.assertLess(argv.index("--center"), argv.index("--no-sync-video"))
 
+    def test_resolve_editor_compact_playhead_uses_status_playhead_when_active_is_stale(self):
+        payload = {
+            "ok": True,
+            "data": {
+                "editor_runtime": {
+                    "playhead_sec": 175.766667,
+                    "total_duration": 178.833333,
+                    "active_segment": {"start": 0.0, "end": 1.166667},
+                    "next_segment": {"start": 1.533333, "end": 4.766667},
+                    "previous_segment": {},
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.qa_suite_runner._app_status", return_value=(0, payload)):
+                candidate, details = qa_suite_runner._resolve_editor_compact_playhead(
+                    qa_suite_runner.DEFAULT_PYTHON,
+                    output_dir=Path(tmp),
+                )
+
+        self.assertEqual(candidate, 175.7667)
+        self.assertEqual(details["selected_from"], "status_playhead")
+
     def test_run_app_sequence_rejects_expect_data_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "roughcut_reopen_macau"
@@ -378,6 +407,55 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertEqual(command, ["editor-merge-diamond", "--start-sec", "10.0", "--side", "right"])
         self.assertTrue(details["status_ok"])
         self.assertEqual(details["selected_start"], "10.0")
+
+    def test_editor_compact_diamond_prefers_previous_runtime_pair_over_stale_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "editor_compact_macau"
+            spec = {
+                "id": "editor_compact_macau",
+                "type": "app_sequence",
+                "description": "",
+                "output_dir": output_dir,
+                "steps": [
+                    {
+                        "name": "move_segment_right",
+                        "command": ["editor-move-segment-right", "--line", "1"],
+                        "timeout": 30.0,
+                    },
+                    {
+                        "name": "move_diamond",
+                        "command": ["editor-move-diamond", "--line", "1", "--side", "right"],
+                        "timeout": 30.0,
+                    },
+                ],
+            }
+            previous_runtime = {
+                "diamond_right": {
+                    "side": "right",
+                    "boundary_sec": 13.6,
+                    "left": {"start": 4.733333},
+                    "right": {"start": 13.6},
+                }
+            }
+            subprocess_results = [
+                (0, {"ok": True, "message": "editor_segment_right_moved", "data": {"editor_runtime": previous_runtime}}),
+                (0, {"ok": True, "message": "editor_diamond_moved", "data": {"editor_runtime": {}}}),
+            ]
+            with patch("tools.qa_suite_runner._app_status") as app_status, patch(
+                "tools.qa_suite_runner._run_subprocess",
+                side_effect=subprocess_results,
+            ) as run_subprocess:
+                result = qa_suite_runner._run_app_sequence(spec, qa_suite_runner.DEFAULT_PYTHON)
+
+            resolved = json.loads((output_dir / "logs" / "move_diamond_resolved.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(result["ok"])
+        second_argv = run_subprocess.call_args_list[1].args[0]
+        self.assertNotIn("--start-sec", second_argv)
+        self.assertEqual(second_argv[-2:], ["--side", "closest"])
+        self.assertEqual(resolved["runtime_source"], "previous_step:move_segment_right")
+        self.assertEqual(resolved["selected_start"], "4.733333")
+        app_status.assert_not_called()
 
     def test_resolve_editor_compact_left_diamond_selects_right_segment_start(self):
         payload = {

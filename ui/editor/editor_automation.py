@@ -14,6 +14,85 @@ class EditorAutomationMixin:
         timeline = getattr(self, "timeline", None)
         return getattr(timeline, "canvas", None) if timeline is not None else None
 
+    def _automation_flush_editor_events(self) -> None:
+        invalidator = getattr(self, "_invalidate_segment_cache", None)
+        if callable(invalidator):
+            try:
+                invalidator()
+            except Exception:
+                pass
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            app = QApplication.instance()
+            if app is not None:
+                app.processEvents()
+        except Exception:
+            pass
+
+    def _automation_widget_geometry(self, widget) -> dict[str, Any]:
+        if widget is None:
+            return {}
+        try:
+            rect = widget.geometry()
+        except Exception:
+            return {}
+        data = {
+            "x": int(rect.x()),
+            "y": int(rect.y()),
+            "width": int(rect.width()),
+            "height": int(rect.height()),
+            "right": int(rect.right()),
+            "bottom": int(rect.bottom()),
+        }
+        try:
+            data["visible"] = bool(widget.isVisible())
+        except Exception:
+            pass
+        try:
+            data["enabled"] = bool(widget.isEnabled())
+        except Exception:
+            pass
+        return data
+
+    def _automation_splitter_sizes(self, splitter) -> list[int]:
+        if splitter is None:
+            return []
+        try:
+            return [int(size) for size in list(splitter.sizes() or [])]
+        except Exception:
+            return []
+
+    def _automation_geometry_snapshot(self) -> dict[str, Any]:
+        try:
+            main_w = self.window()
+        except Exception:
+            main_w = None
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        global_canvas = getattr(timeline, "global_canvas", None) if timeline is not None else None
+        editor_splitter = getattr(self, "splitter", None)
+        workspace_splitter = getattr(main_w, "workspace_splitter", None) if main_w is not None else None
+        return {
+            "main_window": self._automation_widget_geometry(main_w),
+            "workspace_splitter": self._automation_widget_geometry(workspace_splitter),
+            "workspace_splitter_sizes": self._automation_splitter_sizes(workspace_splitter),
+            "right_workspace": self._automation_widget_geometry(getattr(main_w, "right_workspace", None) if main_w is not None else None),
+            "stack": self._automation_widget_geometry(getattr(main_w, "stack", None) if main_w is not None else None),
+            "editor": self._automation_widget_geometry(self),
+            "editor_splitter": self._automation_widget_geometry(editor_splitter),
+            "editor_splitter_sizes": self._automation_splitter_sizes(editor_splitter),
+            "text_edit": self._automation_widget_geometry(getattr(self, "text_edit", None)),
+            "video_frame": self._automation_widget_geometry(getattr(self, "video_frame", None)),
+            "video_player": self._automation_widget_geometry(getattr(self, "video_player", None)),
+            "timeline_frame": self._automation_widget_geometry(getattr(self, "timeline_frame", None)),
+            "timeline": self._automation_widget_geometry(timeline),
+            "timeline_canvas": self._automation_widget_geometry(canvas),
+            "timeline_global_canvas": self._automation_widget_geometry(global_canvas),
+            "bottom_work_panel": self._automation_widget_geometry(getattr(main_w, "bottom_work_panel", None) if main_w is not None else None),
+            "global_menu_bar": self._automation_widget_geometry(getattr(main_w, "global_menu_bar", None) if main_w is not None else None),
+        }
+
     def _automation_canvas_line_for_start(self, start_sec: float) -> int | None:
         canvas = self._automation_canvas()
         if canvas is None:
@@ -76,6 +155,13 @@ class EditorAutomationMixin:
             return []
         out: list[dict[str, Any]] = []
         for item in list(rows or []):
+            if isinstance(item, dict):
+                out.append(dict(item))
+        return out
+
+    def _automation_cached_segments(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for item in list(getattr(self, "_cached_segs", []) or []):
             if isinstance(item, dict):
                 out.append(dict(item))
         return out
@@ -461,6 +547,7 @@ class EditorAutomationMixin:
             "video_position_ms": video_position_ms,
             "video_duration_ms": video_duration_ms,
             "active_footer_menu_id": str(getattr(self, "_active_footer_menu_id", "") or ""),
+            "geometry": self._automation_geometry_snapshot(),
         }
 
     def automation_set_playhead(self, sec: float, *, center: bool = False, sync_video: bool = True) -> dict[str, Any]:
@@ -719,11 +806,19 @@ class EditorAutomationMixin:
         }
 
     def automation_move_diamond_to_playhead(self, *, side: str = "closest") -> dict[str, Any]:
-        rows = self._automation_segments(force_rebuild=True)
+        rows = self._automation_cached_segments() or self._automation_segments(force_rebuild=False)
         active = self._automation_active_segment(rows=rows)
+        if active is None:
+            rows = self._automation_segments(force_rebuild=True)
+            active = self._automation_active_segment(rows=rows)
         if active is None:
             raise ValueError("active_segment_missing")
         pair = self._automation_choose_diamond_pair(side=side, rows=rows, active=active)
+        if pair is None:
+            self._automation_flush_editor_events()
+            rows = self._automation_segments(force_rebuild=True)
+            active = self._automation_active_segment(rows=rows)
+            pair = self._automation_choose_diamond_pair(side=side, rows=rows, active=active)
         if pair is None:
             raise ValueError("diamond_pair_missing")
         left = dict(pair.get("left") or {})
@@ -754,11 +849,19 @@ class EditorAutomationMixin:
         }
 
     def automation_merge_diamond(self, *, side: str = "closest") -> dict[str, Any]:
-        rows = self._automation_segments(force_rebuild=True)
+        rows = self._automation_cached_segments() or self._automation_segments(force_rebuild=False)
         active = self._automation_active_segment(rows=rows)
+        if active is None:
+            rows = self._automation_segments(force_rebuild=True)
+            active = self._automation_active_segment(rows=rows)
         if active is None:
             raise ValueError("active_segment_missing")
         pair = self._automation_choose_diamond_pair(side=side, rows=rows, active=active)
+        if pair is None:
+            self._automation_flush_editor_events()
+            rows = self._automation_segments(force_rebuild=True)
+            active = self._automation_active_segment(rows=rows)
+            pair = self._automation_choose_diamond_pair(side=side, rows=rows, active=active)
         if pair is None:
             raise ValueError("diamond_pair_missing")
         left = dict(pair.get("left") or {})
@@ -951,6 +1054,7 @@ class EditorAutomationMixin:
             raise ValueError("inline_edit_unavailable")
         committer()
         setattr(self, "_automation_last_inline_edit_request", None)
+        self._automation_flush_editor_events()
         return {
             "editor_runtime": self.automation_editor_state_snapshot(),
         }

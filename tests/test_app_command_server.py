@@ -194,6 +194,20 @@ class LocalAppCommandServerTests(unittest.TestCase):
                         "playhead_sec": 1450.2,
                         "start_button_text": "시작",
                         "start_button_enabled": True,
+                        "geometry": {
+                            "video_frame": {
+                                "x": 12,
+                                "y": 24,
+                                "width": 640,
+                                "height": 360,
+                                "right": 651,
+                                "bottom": 383,
+                                "visible": True,
+                                "debug": "x" * 2000,
+                            },
+                            "timeline_frame": {"x": 12, "y": 400, "width": 640, "height": 180},
+                            "editor_splitter_sizes": [220, 640],
+                        },
                     },
                     "generation_stage": "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중",
                     "last_stage_key": "subtitle-generation",
@@ -225,6 +239,11 @@ class LocalAppCommandServerTests(unittest.TestCase):
         self.assertEqual(result["data"]["editor_runtime"]["segment_count"], 413)
         self.assertEqual(result["data"]["editor_runtime"]["start_button_text"], "시작")
         self.assertTrue(result["data"]["editor_runtime"]["start_button_enabled"])
+        geometry = result["data"]["editor_runtime"]["geometry"]
+        self.assertEqual(geometry["video_frame"]["width"], 640)
+        self.assertEqual(geometry["timeline_frame"]["y"], 400)
+        self.assertEqual(geometry["editor_splitter_sizes"], [220, 640])
+        self.assertNotIn("debug", geometry["video_frame"])
         self.assertEqual(result["data"]["generation_stage"], "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
         self.assertEqual(result["data"]["last_stage_key"], "subtitle-generation")
         self.assertEqual(result["data"]["subtitle_count"], 413)

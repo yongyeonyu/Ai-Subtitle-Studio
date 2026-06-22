@@ -5,7 +5,7 @@
 ## Project Snapshot
 
 - 제품 라인: macOS Apple Silicon 우선 Python/PyQt6 source app
-- 현재 코드 버전: `04.00.15`
+- 현재 코드 버전: `04.00.16`
 - 현재 기본 방향: 자막 품질 우선, Python/PyQt6 유지, 검증 가능한 범위에서만 가속
 - 최근 정리 원칙: 오래된 세션 로그와 Xcode migration 산출물은 줄이고, 현재 truth surface만 유지
 

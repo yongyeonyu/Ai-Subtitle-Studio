@@ -223,7 +223,7 @@ def _handle_editor_edit_command(
             if selected:
                 data.setdefault("selected", dict(selected))
         except ValueError as exc:
-            return fail(str(exc))
+            return fail(str(exc), data={"editor_runtime": helpers.editor_runtime_snapshot(editor)})
         helpers.bring_to_front(owner)
         return ok(message=message, data=data)
     return None

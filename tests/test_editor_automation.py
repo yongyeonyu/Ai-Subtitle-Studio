@@ -30,6 +30,57 @@ class _FakeInlineEditor:
         return None
 
 
+class _FakeRect:
+    def __init__(self, x, y, width, height):
+        self._x = int(x)
+        self._y = int(y)
+        self._width = int(width)
+        self._height = int(height)
+
+    def x(self):
+        return self._x
+
+    def y(self):
+        return self._y
+
+    def width(self):
+        return self._width
+
+    def height(self):
+        return self._height
+
+    def right(self):
+        return self._x + self._width - 1
+
+    def bottom(self):
+        return self._y + self._height - 1
+
+
+class _FakeWidget:
+    def __init__(self, x=1, y=2, width=30, height=40, *, visible=True, enabled=True):
+        self._rect = _FakeRect(x, y, width, height)
+        self._visible = bool(visible)
+        self._enabled = bool(enabled)
+
+    def geometry(self):
+        return self._rect
+
+    def isVisible(self):
+        return self._visible
+
+    def isEnabled(self):
+        return self._enabled
+
+
+class _FakeSplitter(_FakeWidget):
+    def __init__(self, sizes):
+        super().__init__(width=sum(sizes), height=40)
+        self._sizes = list(sizes)
+
+    def sizes(self):
+        return list(self._sizes)
+
+
 class _FakeCanvas:
     def __init__(self):
         self.total_duration = 4.0
@@ -187,3 +238,17 @@ def test_set_playhead_syncs_active_segment_to_target_time():
     assert editor.timeline.canvas.active_seg_start == 1.0
     assert result["editor_runtime"]["active_segment"]["line"] == 1
     assert result["editor_runtime"]["active_segment"]["text"] == "둘째 줄"
+
+
+def test_geometry_snapshot_serializes_widget_rects_for_source_app_proof():
+    editor = _FakeEditor()
+    editor.video_frame = _FakeWidget(10, 20, 300, 170)
+    editor.timeline_frame = _FakeWidget(10, 200, 300, 120)
+    editor.splitter = _FakeSplitter([180, 300])
+
+    snapshot = editor.automation_editor_state_snapshot()
+
+    assert snapshot["geometry"]["video_frame"]["width"] == 300
+    assert snapshot["geometry"]["video_frame"]["bottom"] == 189
+    assert snapshot["geometry"]["timeline_frame"]["y"] == 200
+    assert snapshot["geometry"]["editor_splitter_sizes"] == [180, 300]

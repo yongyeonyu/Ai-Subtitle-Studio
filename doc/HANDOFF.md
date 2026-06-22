@@ -5,7 +5,7 @@
 ## Current Line
 
 - 제품 라인: Python/PyQt6 source app on macOS Apple Silicon
-- 코드 버전: `04.00.15`
+- 코드 버전: `04.00.16`
 - 실행 큐 단일 원본: `doc/ACTION_ITEMS.md`
 - 문서 루트: `doc/`
 
@@ -86,6 +86,13 @@
 - 확인: `tests/test_stt_recheck_service.py`, `tests/test_subtitle_engine_settings.py`, `tests/test_subtitle_accuracy_pipeline.py` focused set 통과. 추가 X5 cached replay artifact `output/manual_verification/latest/20260622_233750_duplicate_guard_x5_cached/summary.md`도 pass입니다.
 - 주의: 해당 X5 확인은 cached real-X5 artifact replay이며, 원본 `test video/X5_시승기_후반.MP4`가 없어 fresh media benchmark promotion은 아닙니다.
 
+### 10. v04.00.16 editor automation release candidate prepared
+
+- `core/runtime/config.py` reports app version `04.00.16`.
+- `tools/qa_suite_runner.py` now copies the ignored Macau `.aissproj` and sibling `.assets` into the suite output before source-app quick opens it.
+- Editor automation status now carries compact geometry evidence, and diamond move/merge commands prefer the previous successful runtime snapshot before falling back to a fresh compact status read.
+- Project schema version remains `04.00.15` because this release does not change the `.aissproj` storage format.
+
 ## Active Queue
 
 현재 상단 active queue는 `doc/ACTION_ITEMS.md`의 `Post-Generation Editor Readiness And Verification Index`입니다.
@@ -94,7 +101,13 @@
 
 - 생성 완료 직후 `0ms` 이벤트 턴에 cleanup/waveform bundle이 붙던 경로를 짧은 editor-ready grace 뒤로 미뤘습니다. 목적은 생성 완료 후 첫 클릭, 재생, 타임라인 입력이 heavy cleanup보다 먼저 잡히게 하는 것입니다.
 - 확인: `tests/test_editor_autosave_cleanup.py tests/test_editor_roughcut_draft.py` -> `104 passed`; 관련 playback/manual interaction runtime guard 3개도 pass입니다.
-- 아직 실제 source-app Macau/X5 화면에서 full-frame shake geometry capture와 첫 상호작용 proof는 남아 있습니다.
+- source-app quick을 copied Macau fixture로 재실행해 editor compact path, first interactions, diamond move/merge, and geometry capture를 통과시켰습니다.
+  - Artifact: `output/manual_verification/latest/20260623_editor_ready_geometry_source_quick_final9`
+  - Command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/20260623_editor_ready_geometry_source_quick_final9`
+  - Result: pass, `failed_count=0`
+  - Geometry/status evidence: final status keeps compact `geometry`; final `segment_count=35`; `move_diamond` / `merge_diamond` use previous runtime plus `--side closest`.
+- QA runner now copies ignored Macau `.aissproj` and `.assets` into `output/_suite_fixtures` before opening, so quick saves do not keep polluting the root ignored fixture.
+- 아직 실제 source-app fresh post-generation media run, missing original Macau media folder, and original X5 MP4 based proof는 남아 있습니다.
 
 가장 좁은 다음 목표:
 
@@ -108,8 +121,9 @@
 - 최신 full QA baseline:
   - `output/manual_verification/latest/qa_suite_full_20260522_081710`
 - 최신 source-app quick smoke:
-  - `output/manual_verification/latest/qa_suite_quick_20260525_141648`
+  - `output/manual_verification/latest/20260623_editor_ready_geometry_source_quick_final9`
 - 현재 active queue 관련 proof:
+  - `output/manual_verification/latest/20260623_editor_ready_geometry_source_quick_final9`
   - `output/manual_verification/latest/20260527_x5_hot_path_trim_proof/`
   - `output/manual_verification/latest/20260526_225507_high_refresh_source_app_proof/verification_summary.md`
   - `output/manual_verification/latest/20260622_233750_duplicate_guard_x5_cached/summary.md`
@@ -126,6 +140,7 @@
 - 오래된 릴리스 노트에는 당시 검증 명령이 보존될 수 있습니다. 현재 truth surface는 `AGENTS.md`, `doc/README.md`, `doc/ACTION_ITEMS.md`, 실제 코드/테스트 기준으로 봅니다.
 - 로컬 모델/캐시 정리는 개발 환경 상태만 바꾸므로, 필요 모델은 다시 다운로드가 필요할 수 있습니다.
 - 외부 `WhisperKitPersistentWorker`나 `AIStudioNativeCLI`를 따로 쓰는 개인 실험 흐름이 있었다면, 이제는 저장소 번들 경로가 아니라 외부 바이너리 경로 기준으로만 동작합니다.
+- 현재 source-app quick proof는 copied Macau fixture proof입니다. 원본 `/Users/u_mo_c/Downloads/마카오테스트` 폴더와 `test video/X5_시승기_후반.MP4`가 없어 fresh media proof로 과장하지 마세요.
 
 ## Next Recommended Action
 

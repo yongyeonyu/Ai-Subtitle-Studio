@@ -35,6 +35,23 @@ This document is the current verification ledger. Keep detailed logs in `output/
 
 ## Latest Focused Checks
 
+### 2026-06-23 Source-App Editor Geometry Quick
+
+- Scope: source-app editor compact path, first editor interactions, diamond move/merge automation, and geometry capture after the editor-ready grace change.
+- Command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/20260623_editor_ready_geometry_source_quick_final9`
+- Result: pass, `failed_count=0`
+- Artifact: `output/manual_verification/latest/20260623_editor_ready_geometry_source_quick_final9`
+- Evidence:
+  - `editor_compact_macau` pass with isolated `_suite_fixtures/DJI_20260217224203_0075_D.aissproj` instead of saving the root ignored fixture.
+  - `move_diamond_resolved.json`: previous runtime source, command `editor-move-diamond --side closest`.
+  - `merge_diamond_resolved.json`: previous runtime source, command `editor-merge-diamond --side closest`.
+  - `final_status.stdout`: geometry retained in the compact status payload; final `segment_count=35`, `status_response_truncated=true`.
+  - Captured geometry includes `main_window 1710x966`, `video_frame 676x420`, `timeline_frame 1471x496`, `timeline_global_canvas 1451x99`, and splitter sizes `[218, 1477]` / `[790, 676]`.
+- Additional checks:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_automation.py tests/test_qa_suite_runner.py tests/test_app_command_bridge.py tests/test_app_command_server.py`: `107 passed`
+  - `./venv/bin/python -m py_compile ui/editor/editor_automation.py tools/qa_suite_runner.py core/automation/app_command_server.py ui/main/app_command_bridge_handlers.py`: pass
+- Caveat: this proves source-app editor automation and geometry on the copied Macau fixture. The original Macau media folder and original X5 MP4 are still absent, so fresh post-generation media proof and X5 promotion remain separate.
+
 ### 2026-06-23 Post-Generation Editor-Ready Grace
 
 - Change: completion background bundle (`_post_generation_resource_cleanup` + deferred waveform load) now waits for a short editor-ready grace window instead of running on the immediate `0ms` event turn.

@@ -107,9 +107,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.00.15-source-app
-Phase: SOURCE_APP_CONTINUATION_V4_0_15
-Last-Updated: 2026-05-31
+Document-Version: 04.00.16-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_0_16
+Last-Updated: 2026-06-23
 Updated-By: Codex
 Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 -->
@@ -118,8 +118,8 @@ Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.00.15`
-- Latest release checkpoint: `v04.00.15`
+- App version in code: `04.00.16`
+- Latest release checkpoint: `v04.00.16`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -199,16 +199,17 @@ Completed item rule:
   - result: pass, `failed_count=0`
   - scenarios: `editor_compact_macau`, `video_menu_macau`, `save_export_macau`, `menu_stt_lora_macau`, `x5_high_rolling_180s`
 - Latest source-app quick smoke for the current release line:
-  - `output/manual_verification/latest/qa_suite_quick_20260525_141648`
-  - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
+  - `output/manual_verification/latest/20260623_editor_ready_geometry_source_quick_final9`
+  - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/20260623_editor_ready_geometry_source_quick_final9`
   - result: pass, `failed_count=0`
-- Latest local non-release commit:
-  - `0ca501bf` - `fix: stabilize editor timeline and project UI`
+- Recent v04.00.16 pre-release branch baseline:
+  - `4602e641` - `fix: defer post-generation cleanup for editor readiness`
+  - The final release commit/tag may be newer; use `git log -1` when exact head identity matters.
 - Latest focused guard set for the current local editor/timeline patch:
   - command: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest tests/test_editor_autosave_cleanup.py tests/test_editor_srt_open_refresh.py tests/test_main_file_ops_nonfatal.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_renderer_overlay.py tests/test_sidebar_terminal_layout.py tests/test_subtitle_boundary_alignment.py tests/test_timeline_hit_targets.py tests/test_timeline_layout_constants.py tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py -q`
   - result: `709 passed`
   - additional checks: `py_compile` on touched Python modules and `git diff --check` passed before commit.
-  - note: source-app spot verification covered the Macau project editor UI and global minimap bottom line, but no new Macau/X5 promotion artifact has been stored under `output/manual_verification/latest/` yet.
+  - note: source-app quick geometry proof now exists for the copied Macau fixture; fresh original Macau media and original X5 media promotion proof are still pending.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_20260522_081710/x5_high_rolling_180s`
   - `total_elapsed_sec=61.142`
@@ -230,7 +231,7 @@ Completed item rule:
 - Long-flow STT2 rescue and word timestamp precision still have meaningful wall-clock cost; optimize only by reducing waiting, cleanup churn, UI/status hot paths, or safe resource lifetime waste.
 - Do not lower X5 quality gates, skip STT2, skip LLM, downgrade models, or loosen subtitle quality policy as a speed optimization.
 - Tinyping long-flow is manual-only unless the owner explicitly requests it.
-- The latest high-refresh/editor-timeline patch is committed and focused-regression-covered, but it still needs stored real-app Macau/X5 proof before it should be treated as a promoted baseline.
+- The latest source-app quick proof is copied-Macau fixture proof; do not treat it as fresh original Macau media or original X5 media promotion evidence.
 - Always re-check `git status` before widening a follow-up patch.
 
 ## Narrow Next Item

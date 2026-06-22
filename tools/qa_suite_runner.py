@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -109,9 +110,37 @@ def _fallback_macau_srt(fixture_dir: Path) -> Path:
     return path
 
 
+def _copy_project_fixture(base_project: Path, output_root: Path) -> Path:
+    fixture_dir = output_root / "_suite_fixtures"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    fixture_project = fixture_dir / base_project.name
+    try:
+        if base_project.resolve() != fixture_project.resolve():
+            shutil.copy2(base_project, fixture_project)
+            source_assets = base_project.with_name(f"{base_project.stem}.assets")
+            target_assets = fixture_dir / source_assets.name
+            if source_assets.is_dir():
+                if target_assets.exists():
+                    shutil.rmtree(target_assets)
+                shutil.copytree(source_assets, target_assets)
+        return fixture_project if fixture_project.is_file() else base_project
+    except Exception as exc:
+        _write_json(
+            fixture_dir / "macau_fixture_copy_error.json",
+            {
+                "ok": False,
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "base_project": str(base_project),
+                "fixture_project": str(fixture_project),
+            },
+        )
+        return base_project
+
+
 def _macau_project_for_suite(output_root: Path) -> Path:
     if MACAU_PROJECT.is_file():
-        return MACAU_PROJECT
+        return _copy_project_fixture(MACAU_PROJECT, output_root)
 
     media_path = MACAU_MEDIA.expanduser()
     if not media_path.is_file():
@@ -279,10 +308,10 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                 _step("begin_smart_split", "editor-begin-smart-split", "--at-playhead", delay_sec=0.5),
                 _step("set_inline_cursor", "editor-set-inline-cursor", "2"),
                 _step("commit_inline_edit", "editor-commit-inline-edit", delay_sec=0.5),
-                _step("move_segment_left", "editor-move-segment-left", "--line", "1", delay_sec=0.2),
-                _step("move_segment_right", "editor-move-segment-right", "--line", "1", delay_sec=0.2),
                 _step("move_diamond", "editor-move-diamond", "--line", "1", "--side", "right", delay_sec=0.5),
                 _step("merge_diamond", "editor-merge-diamond", "--line", "1", "--side", "right", delay_sec=1.0),
+                _step("move_segment_left", "editor-move-segment-left", "--line", "1", delay_sec=0.2),
+                _step("move_segment_right", "editor-move-segment-right", "--line", "1", delay_sec=0.2),
                 _step("capture_final", "capture-snapshot", str(editor_dir / "snapshots" / "final.png"), wait_for_path=str(editor_dir / "snapshots" / "final.png")),
                 _step("save_project", "save-project", timeout=60.0),
                 _step("final_status", "status", timeout=30.0),
@@ -784,6 +813,17 @@ def _segment_playhead_candidate(segment: dict[str, Any]) -> float | None:
     return round(float(candidate), 4)
 
 
+def _segment_contains_playhead(segment: dict[str, Any], playhead_sec: float) -> bool:
+    data = dict(segment or {})
+    try:
+        start = float(data.get("start"))
+        end = float(data.get("end"))
+        playhead = float(playhead_sec)
+    except Exception:
+        return False
+    return start - 0.05 <= playhead <= end + 0.05
+
+
 def _resolve_editor_compact_playhead(python_bin: Path, *, output_dir: Path) -> tuple[float | None, dict[str, Any]]:
     code, payload = _app_status(python_bin, output_dir=output_dir, timeout_sec=3.0)
     runtime = dict((((payload.get("data") or {}).get("editor_runtime")) or {}))
@@ -794,7 +834,26 @@ def _resolve_editor_compact_playhead(python_bin: Path, *, output_dir: Path) -> t
     ]
     selected_from = ""
     candidate: float | None = None
+    try:
+        status_playhead = float(runtime.get("playhead_sec", 0.0) or 0.0)
+    except Exception:
+        status_playhead = 0.0
+    try:
+        total_duration = float(runtime.get("total_duration", 0.0) or 0.0)
+    except Exception:
+        total_duration = 0.0
+    if status_playhead > 0.0:
+        for source, segment in segments:
+            if _segment_contains_playhead(segment, status_playhead):
+                candidate = _segment_playhead_candidate(segment) or round(status_playhead, 4)
+                selected_from = source
+                break
+        if candidate is None and (total_duration <= 0.0 or status_playhead <= total_duration + 0.1):
+            candidate = round(status_playhead, 4)
+            selected_from = "status_playhead"
     for source, segment in segments:
+        if candidate is not None:
+            break
         candidate = _segment_playhead_candidate(segment)
         if candidate is not None:
             selected_from = source
@@ -808,15 +867,16 @@ def _resolve_editor_compact_playhead(python_bin: Path, *, output_dir: Path) -> t
     return candidate, details
 
 
-def _resolve_editor_compact_diamond_command(
+def _resolve_editor_compact_diamond_command_from_runtime(
     command_name: str,
     requested_side: str,
-    python_bin: Path,
+    runtime: dict[str, Any],
     *,
-    output_dir: Path,
+    status_ok: bool,
+    runtime_source: str,
+    select_by_start: bool = True,
 ) -> tuple[list[str] | None, dict[str, Any]]:
-    code, payload = _app_status(python_bin, output_dir=output_dir, timeout_sec=3.0)
-    runtime = dict((((payload.get("data") or {}).get("editor_runtime")) or {}))
+    runtime = dict(runtime or {})
     preferred_key = "diamond_right" if str(requested_side or "").strip().lower() == "right" else "diamond_left"
     pair = dict(runtime.get(preferred_key) or {})
     selected_key = preferred_key
@@ -827,6 +887,7 @@ def _resolve_editor_compact_diamond_command(
     selected_side = str(pair.get("side") or requested_side or "closest")
     boundary_start = pair.get("boundary_sec", None)
     command: list[str] | None = None
+    selected_start = None
     if pair and boundary_start is not None:
         left = dict(pair.get("left") or {})
         right = dict(pair.get("right") or {})
@@ -845,23 +906,45 @@ def _resolve_editor_compact_diamond_command(
         )
         if selected_start is None:
             selected_start = boundary_start
-        command = [command_name, "--start-sec", str(selected_start), "--side", selected_side]
-    elif code != 0 or not runtime:
+        if select_by_start:
+            command = [command_name, "--start-sec", str(selected_start), "--side", selected_side]
+        else:
+            command = [command_name, "--side", "closest"]
+    elif not runtime:
         # automation-4 hot path: status may be intentionally compact/fallback
         # while the app is busy. Drop stale line selection and let the editor
         # choose the active/nearest diamond instead of failing on old metadata.
         command = [command_name, "--side", "closest"]
     details = {
-        "status_ok": code == 0 and bool(payload.get("ok")),
+        "status_ok": bool(status_ok),
+        "runtime_source": str(runtime_source or ""),
         "requested_side": requested_side,
         "selected_key": selected_key,
         "selected_side": selected_side,
-        "selected_start": command[2] if command and "--start-sec" in command else None,
+        "selected_start": None if selected_start is None else str(selected_start),
         "pair": pair,
         "command": command,
         "editor_runtime": runtime,
     }
     return command, details
+
+
+def _resolve_editor_compact_diamond_command(
+    command_name: str,
+    requested_side: str,
+    python_bin: Path,
+    *,
+    output_dir: Path,
+) -> tuple[list[str] | None, dict[str, Any]]:
+    code, payload = _app_status(python_bin, output_dir=output_dir, timeout_sec=3.0)
+    runtime = dict((((payload.get("data") or {}).get("editor_runtime")) or {}))
+    return _resolve_editor_compact_diamond_command_from_runtime(
+        command_name,
+        requested_side,
+        runtime,
+        status_ok=code == 0 and bool(payload.get("ok")),
+        runtime_source="status",
+    )
 
 
 def _ensure_app_ready(python_bin: Path, *, output_dir: Path, startup_wait_sec: float = 45.0) -> dict[str, Any]:
@@ -1007,12 +1090,33 @@ def _run_app_sequence(spec: dict[str, Any], python_bin: Path) -> dict[str, Any]:
                     requested_side = str(command_items[command_items.index("--side") + 1] or "right")
                 except Exception:
                     requested_side = "right"
-            resolved_command, resolved_details = _resolve_editor_compact_diamond_command(
-                "editor-move-diamond" if name == "move_diamond" else "editor-merge-diamond",
-                requested_side,
-                python_bin,
-                output_dir=output_dir,
-            )
+            command_name = "editor-move-diamond" if name == "move_diamond" else "editor-merge-diamond"
+            previous_step = dict(results[-1]) if results and bool(results[-1].get("ok")) else {}
+            previous_runtime = dict(((previous_step.get("data") or {}).get("editor_runtime")) or {})
+            if previous_runtime:
+                resolved_command, resolved_details = _resolve_editor_compact_diamond_command_from_runtime(
+                    command_name,
+                    requested_side,
+                    previous_runtime,
+                    status_ok=True,
+                    runtime_source=f"previous_step:{previous_step.get('name', '')}",
+                    select_by_start=False,
+                )
+                if not resolved_command and not resolved_details.get("pair"):
+                    resolved_command, resolved_details = _resolve_editor_compact_diamond_command(
+                        command_name,
+                        requested_side,
+                        python_bin,
+                        output_dir=output_dir,
+                    )
+                    resolved_details["previous_runtime_source"] = f"previous_step:{previous_step.get('name', '')}"
+            else:
+                resolved_command, resolved_details = _resolve_editor_compact_diamond_command(
+                    command_name,
+                    requested_side,
+                    python_bin,
+                    output_dir=output_dir,
+                )
             _write_json(logs_dir / f"{name}_resolved.json", resolved_details)
             if resolved_command:
                 command_items = resolved_command
