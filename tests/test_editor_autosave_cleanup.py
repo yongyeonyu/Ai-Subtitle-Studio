@@ -1025,7 +1025,7 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual(calls[:2], ["cleanup", ("waveform", "generation_complete")])
         editor._load_deferred_open_waveform.assert_called_once_with(reason="generation_complete")
 
-    def test_set_process_completed_defers_cleanup_bundle_until_next_event_turn(self):
+    def test_set_process_completed_defers_cleanup_bundle_until_editor_ready_grace(self):
         editor = _CompletionEditor()
         calls = []
         editor._window._post_generation_resource_cleanup = Mock(side_effect=lambda **_kwargs: calls.append("cleanup"))
@@ -1044,6 +1044,13 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertTrue(zero_delay_callbacks)
 
         for callback in zero_delay_callbacks:
+            callback()
+
+        self.assertEqual(calls, [])
+        background_callbacks = [callback for delay, callback in scheduled if delay == 450]
+        self.assertEqual(len(background_callbacks), 1)
+
+        for callback in background_callbacks:
             callback()
 
         self.assertEqual(calls[:2], ["cleanup", ("waveform", "generation_complete")])

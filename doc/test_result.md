@@ -35,6 +35,19 @@ This document is the current verification ledger. Keep detailed logs in `output/
 
 ## Latest Focused Checks
 
+### 2026-06-23 Post-Generation Editor-Ready Grace
+
+- Change: completion background bundle (`_post_generation_resource_cleanup` + deferred waveform load) now waits for a short editor-ready grace window instead of running on the immediate `0ms` event turn.
+- Scope: reduce post-generation interaction lock and first-click/playback contention without changing subtitle quality, UI layout, labels, or roughcut behavior.
+- Command: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_autosave_cleanup.py tests/test_editor_roughcut_draft.py`
+- Result: `104 passed`
+- Additional focused checks:
+  - `tests/test_sidebar_terminal_layout.py::SidebarTerminalLayoutTests::test_prioritize_video_playback_runtime_defers_heavy_release_while_starting_playback`
+  - `tests/test_sidebar_terminal_layout.py::SidebarTerminalLayoutTests::test_prioritize_video_playback_runtime_skips_while_generation_is_still_running`
+  - `tests/test_sidebar_terminal_layout.py::SidebarTerminalLayoutTests::test_prioritize_manual_editor_interaction_runtime_skips_while_generation_is_still_running`
+  - Result: `3 passed`
+- Caveat: this is an offscreen contract lock. Real source-app Macau/X5 geometry and first-interaction proof still need capture.
+
 ### 2026-06-22 Duplicate Subtitle Guard
 
 - Command: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py tests/test_subtitle_engine_settings.py tests/test_subtitle_accuracy_pipeline.py`

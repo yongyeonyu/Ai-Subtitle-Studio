@@ -90,9 +90,15 @@
 
 현재 상단 active queue는 `doc/ACTION_ITEMS.md`의 `Post-Generation Editor Readiness And Verification Index`입니다.
 
+최근 진행:
+
+- 생성 완료 직후 `0ms` 이벤트 턴에 cleanup/waveform bundle이 붙던 경로를 짧은 editor-ready grace 뒤로 미뤘습니다. 목적은 생성 완료 후 첫 클릭, 재생, 타임라인 입력이 heavy cleanup보다 먼저 잡히게 하는 것입니다.
+- 확인: `tests/test_editor_autosave_cleanup.py tests/test_editor_roughcut_draft.py` -> `104 passed`; 관련 playback/manual interaction runtime guard 3개도 pass입니다.
+- 아직 실제 source-app Macau/X5 화면에서 full-frame shake geometry capture와 첫 상호작용 proof는 남아 있습니다.
+
 가장 좁은 다음 목표:
 
-1. 생성 완료 직후 편집기 상호작용 잠김과 전체 프레임 흔들림 원인을 completion-to-idle 경로에서 분리
+1. source-app Macau/X5에서 생성 완료 직후 첫 클릭/재생/타임라인 입력과 full-frame shake geometry를 캡처해 offscreen contract가 실제 화면에서도 맞는지 확인
 2. Macau / X5 기준으로 playback, playhead, footer, overlay, minimap 정렬 증빙 보강
 3. `정밀` 완료 상태의 시각적 distinction 추가 여부를 좁은 범위로 검증
 4. 자막 인식 정확도는 코드 변경 전 `doc/ACTION_ITEMS.md`의 `Subtitle Recognition Accuracy Guardrails`와 `doc/VALIDATION.md`의 quote-back 필드 기준으로만 다음 실험을 엽니다.

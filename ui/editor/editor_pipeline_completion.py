@@ -3,6 +3,9 @@ from __future__ import annotations
 from core.runtime.logger import get_logger
 
 
+_GENERATION_COMPLETE_BACKGROUND_DELAY_MS = 450
+
+
 class EditorPipelineCompletionMixin:
     def _pipeline_single_shot(self, delay_ms: int, callback) -> None:
         from ui.editor import editor_pipeline as editor_pipeline_module
@@ -153,7 +156,7 @@ class EditorPipelineCompletionMixin:
 
     def _schedule_generation_complete_background_work(self, main_w) -> None:
         self._pipeline_single_shot(
-            0,
+            _GENERATION_COMPLETE_BACKGROUND_DELAY_MS,
             lambda main_window=main_w: self._run_generation_complete_background_work(main_window),
         )
 
