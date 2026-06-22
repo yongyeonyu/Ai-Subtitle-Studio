@@ -180,6 +180,13 @@ def score_against_reference(
     local_text_score = (sum(local_text_scores) / max(1, len(local_text_scores))) * 100.0 if local_text_scores else 0.0
     count_score = max(0.0, 100.0 - abs(len(hyp) - len(ref)) / max(1, len(ref)) * 100.0)
     quality_score = text_score * 0.52 + timing_score * 0.22 + overlap_score * 0.12 + local_text_score * 0.08 + count_score * 0.06
+    timing_priority_quality_score = (
+        text_score * 0.44
+        + timing_score * 0.32
+        + overlap_score * 0.12
+        + local_text_score * 0.08
+        + count_score * 0.04
+    )
     return {
         "reference_segments": len(ref),
         "hypothesis_segments": len(hyp),
@@ -198,4 +205,5 @@ def score_against_reference(
         "local_text_score": round(local_text_score, 3),
         "count_score": round(count_score, 3),
         "quality_score": round(quality_score, 3),
+        "timing_priority_quality_score": round(timing_priority_quality_score, 3),
     }

@@ -29,6 +29,31 @@ def _result(title: str) -> RoughCutResult:
     )
 
 
+def _multi_segment_result(count: int = 25) -> RoughCutResult:
+    chapters = []
+    decisions = []
+    edl = []
+    segments = []
+    for index in range(count):
+        start = float(index * 3)
+        end = start + 2.5
+        chapter_id = f"chapter_{index + 1:04d}"
+        segment_id = f"major_{index + 1:04d}"
+        title = f"챕터 {index + 1}"
+        segments.append(RoughCutSegment(segment_id, start, end, title=title, major_id=f"M{index + 1}"))
+        chapters.append(ChapterMetadata(chapter_id, title, start, end, summary=title, major_id=f"M{index + 1}", minor_code="1"))
+        decisions.append(EditDecision(chapter_id, "keep", source_start=start, source_end=end))
+        edl.append(EDLSegment("/tmp/source.mp4", chapter_id, start, end, start, end))
+    return RoughCutResult(
+        segments=tuple(segments),
+        chapters=tuple(chapters),
+        edit_decisions=tuple(decisions),
+        edl_segments=tuple(edl),
+        guide_markdown="# multi",
+        schema_version="roughcut_result.v2",
+    )
+
+
 class RoughcutCandidateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -146,6 +171,82 @@ class RoughcutCandidateTests(unittest.TestCase):
             self.assertEqual(widget._selected_candidate_id, "candidate_old")
             self.assertEqual(len(widget._roughcut_candidates), 1)
             self.assertEqual(widget._result.chapters[0].title, "이전 후보")
+        finally:
+            widget.close()
+
+    def test_refresh_project_restore_defers_thumbnail_generation_and_resave(self):
+        segments = [{"start": 0.0, "end": 3.0, "text": "러프컷 자막", "speaker": "00"}]
+        signature = segment_signature(segments)
+        source_widget = RoughcutWidget()
+        restore_widget = RoughcutWidget()
+        try:
+            source_widget._source_signature = signature
+            source_widget._result = _result("저장 후보")
+            candidate = source_widget._roughcut_state_payload()
+            candidate["source_signature"] = signature
+            state = {
+                "selected_candidate_id": candidate["candidate_id"],
+                "candidates": [candidate],
+            }
+
+            restore_widget._editor_segments = lambda: list(segments)
+            restore_widget._media_path = lambda: "/tmp/source.mp4"
+            restore_widget._project_path = lambda: "/tmp/roughcut-state.aissproj"
+
+            with mock.patch("ui.roughcut.roughcut_state.os.path.exists", return_value=True), \
+                 mock.patch("ui.roughcut.roughcut_state.read_project_file", return_value={"roughcut_state": state}), \
+                 mock.patch("ui.roughcut.roughcut_state.save_project") as save_project, \
+                 mock.patch("ui.roughcut.roughcut_widget.ensure_thumbnail") as ensure_thumbnail:
+                restore_widget.refresh_from_editor(analyze_if_missing=False)
+
+            save_project.assert_not_called()
+            ensure_thumbnail.assert_not_called()
+            self.assertEqual(restore_widget._selected_candidate_id, candidate["candidate_id"])
+            self.assertEqual(restore_widget.render_status_lbl.text(), "후보 복원")
+        finally:
+            source_widget.close()
+            restore_widget.close()
+
+    def test_large_result_defers_major_card_panel_until_structure_page_opens(self):
+        widget = RoughcutWidget()
+        try:
+            result = _multi_segment_result(25)
+            editor_segments = [
+                {"start": chapter.start, "end": chapter.end, "text": chapter.title, "speaker": "00"}
+                for chapter in result.chapters
+            ]
+            widget._result = result
+            widget._editor_segments = lambda: list(editor_segments)
+            widget._media_path = lambda: "/tmp/source.mp4"
+            widget._project_path = lambda: ""
+
+            widget._populate_result()
+
+            self.assertIs(widget._major_panel_deferred_result, result)
+            self.assertEqual(widget.major_panel.card_list.count(), 1)
+
+            widget._switch_workspace_page("structure")
+
+            self.assertIsNone(widget._major_panel_deferred_result)
+            self.assertEqual(widget.major_panel.card_list.count(), 25)
+        finally:
+            widget.close()
+
+    def test_roughcut_persist_is_debounced_until_flush(self):
+        widget = RoughcutWidget()
+        try:
+            widget._result = _result("저장 후보")
+            widget._editor_segments = lambda: [{"start": 0.0, "end": 3.0, "text": "러프컷 자막", "speaker": "00"}]
+            widget._ensure_project_file = lambda _segments: "/tmp/roughcut-state.aissproj"
+
+            with mock.patch("ui.roughcut.roughcut_state.save_project") as save_project_mock:
+                widget._persist_roughcut_state()
+                save_project_mock.assert_not_called()
+                self.assertTrue(widget._roughcut_persist_timer.isActive())
+
+                widget._flush_pending_roughcut_persist()
+
+            save_project_mock.assert_called_once()
         finally:
             widget.close()
 

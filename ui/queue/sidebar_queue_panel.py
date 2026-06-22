@@ -30,6 +30,8 @@ class SidebarQueuePanel(QWidget):
         self._quick = None
         self._header = DEFAULT_QUEUE_HEADER
         self._items = []
+        self._last_focused_active_row = -1
+        self._last_focused_item_count = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -112,6 +114,19 @@ class SidebarQueuePanel(QWidget):
                 root.setProperty("queueItems", self._items)
             return
 
+        previous_scroll_value = 0
+        previous_current_row = -1
+        scrollbar = self._table.verticalScrollBar()
+        if scrollbar is not None:
+            try:
+                previous_scroll_value = int(scrollbar.value())
+            except Exception:
+                previous_scroll_value = 0
+        try:
+            previous_current_row = int(self._table.currentRow())
+        except Exception:
+            previous_current_row = -1
+
         self._header_lbl.setText(self._header)
         self._table.setUpdatesEnabled(False)
         self._table.setRowCount(0)
@@ -151,7 +166,15 @@ class SidebarQueuePanel(QWidget):
                 self._table.setItem(row, col, cell)
             self._table.setRowHeight(row, 68)
         self._table.setUpdatesEnabled(True)
-        if active_row >= 0:
+        should_focus_active = (
+            active_row >= 0
+            and (
+                active_row != int(self._last_focused_active_row)
+                or len(self._items) != int(self._last_focused_item_count)
+                or previous_current_row < 0
+            )
+        )
+        if should_focus_active:
             self._table.setCurrentCell(active_row, 0)
             active_item = self._table.item(active_row, 0)
             if active_item is not None:
@@ -159,6 +182,13 @@ class SidebarQueuePanel(QWidget):
                     active_item,
                     QAbstractItemView.ScrollHint.PositionAtCenter,
                 )
+        elif scrollbar is not None:
+            try:
+                scrollbar.setValue(max(scrollbar.minimum(), min(previous_scroll_value, scrollbar.maximum())))
+            except Exception:
+                pass
+        self._last_focused_active_row = int(active_row)
+        self._last_focused_item_count = len(self._items)
 
     def set_queue_payload(self, payload: dict | None):
         data = dict(payload or {})

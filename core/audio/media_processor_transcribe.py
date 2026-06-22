@@ -88,6 +88,118 @@ def _stt_memory_pressure_stage(settings: dict | None) -> str:
     return current_memory_pressure_stage(settings)
 
 
+def _runtime_process_alive(proc) -> bool:
+    try:
+        return proc is not None and proc.poll() is None
+    except Exception:
+        return False
+
+
+def _processor_stt_runtime_alive(processor) -> bool:
+    return (
+        _runtime_process_alive(getattr(processor, "_whisper_proc", None))
+        or _runtime_process_alive(getattr(processor, "_whisper_runner_proc", None))
+        or _runtime_process_alive(getattr(processor, "_whisperkit_runner_proc", None))
+    )
+
+
+def _preexisting_collect_worker_state(owner) -> dict[str, int]:
+    try:
+        lock = getattr(owner, "_ensemble_child_lock", threading.Lock())
+        with lock:
+            children = list(getattr(owner, "_ensemble_child_processors", []) or [])
+            cache = dict(getattr(owner, "_stt_collect_worker_cache", {}) or {})
+            busy = set(getattr(owner, "_stt_collect_worker_busy", set()) or ())
+    except Exception:
+        children = []
+        cache = {}
+        busy = set()
+    owner_alive = 1 if _processor_stt_runtime_alive(owner) else 0
+    child_alive = sum(1 for child in children if _processor_stt_runtime_alive(child))
+    cached_alive = sum(1 for child in cache.values() if _processor_stt_runtime_alive(child))
+    unique_alive_processors = {id(owner)} if owner_alive else set()
+    for child in children:
+        if _processor_stt_runtime_alive(child):
+            unique_alive_processors.add(id(child))
+    for child in cache.values():
+        if _processor_stt_runtime_alive(child):
+            unique_alive_processors.add(id(child))
+    return {
+        "preexisting_child_processor_count": len(children),
+        "preexisting_cached_worker_count": len(cache),
+        "preexisting_busy_worker_count": len(busy),
+        "preexisting_alive_owner_runtime_count": owner_alive,
+        "preexisting_alive_child_runtime_count": child_alive,
+        "preexisting_alive_cached_worker_count": cached_alive,
+        "preexisting_alive_runtime_total_count": len(unique_alive_processors),
+    }
+
+
+def _compact_resource_snapshot(settings: dict | None) -> dict[str, float | int | str]:
+    """Capture the minimal runtime memory snapshot needed for no-UI artifact diffs."""
+
+    try:
+        from core.performance import current_resource_snapshot
+
+        snapshot = dict(current_resource_snapshot(dict(settings or {})) or {})
+    except Exception:
+        return {}
+    compact: dict[str, float | int | str] = {}
+    if snapshot.get("available_memory_ratio") is not None:
+        compact["available_memory_ratio"] = round(
+            float(snapshot.get("available_memory_ratio", 0.0) or 0.0),
+            4,
+        )
+    if snapshot.get("compressed_memory_ratio") is not None:
+        compact["compressed_memory_ratio"] = round(
+            float(snapshot.get("compressed_memory_ratio", 0.0) or 0.0),
+            4,
+        )
+    if snapshot.get("process_rss_bytes") is not None:
+        compact["process_rss_bytes"] = int(snapshot.get("process_rss_bytes", 0) or 0)
+    pressure_stage = str(snapshot.get("memory_pressure_stage", "") or "").strip()
+    if pressure_stage:
+        compact["memory_pressure_stage"] = pressure_stage
+    return compact
+
+
+def _refresh_native_memory_snapshot_cache_for_collect(settings: dict | None) -> bool:
+    """Optionally force a fresh macOS memory snapshot before collect-stage routing."""
+
+    if not bool((settings or {}).get("stt_collect_force_fresh_native_memory_snapshot", False)):
+        return False
+    try:
+        from core.native_macos_memory import clear_native_memory_snapshot_cache
+
+        clear_native_memory_snapshot_cache()
+        return True
+    except Exception:
+        return False
+
+
+def _single_chunk_collect_dir(chunk_dir: str) -> bool:
+    try:
+        wavs = [
+            name
+            for name in os.listdir(str(chunk_dir or ""))
+            if str(name or "").lower().endswith(".wav")
+        ]
+    except Exception:
+        return False
+    return len(wavs) == 1
+
+
+def _collect_dir_chunk_count(chunk_dir: str) -> int:
+    try:
+        return sum(
+            1
+            for name in os.listdir(str(chunk_dir or ""))
+            if str(name or "").lower().endswith(".wav")
+        )
+    except Exception:
+        return 0
+
+
 def _clean_whisper_word_text(text: str) -> str:
     cleaned = strip_stt_control_tokens(str(text or ""))
     cleaned = re.sub(r"\s+", " ", cleaned, flags=re.UNICODE).strip()
@@ -251,51 +363,97 @@ class VideoProcessorTranscribeMixin(
         if settings_overrides:
             effective_settings.update(dict(settings_overrides))
         reuse_worker = self._stt_persistent_runtime_reuse_enabled(effective_settings)
+        preexisting_worker_state = _preexisting_collect_worker_state(self)
+        native_memory_snapshot_force_refresh = _refresh_native_memory_snapshot_cache_for_collect(
+            effective_settings
+        )
         pressure_stage = _stt_memory_pressure_stage(effective_settings)
         resource_policy = stage_owned_resource_policy(effective_settings, pressure_stage=pressure_stage)
+        resource_snapshot = _compact_resource_snapshot(effective_settings)
         if reuse_worker and not resource_policy.allow_stt_collect_worker_reuse:
             # Stage-owned resource policy keeps STT reuse fast only while macOS
             # has enough memory headroom for persistent WhisperKit/MLX workers.
             reuse_worker = False
+        collect_worker_source = "transient_child_worker"
         cache_key = f"{self.language}|{str(model or '').strip()}"
+        collect_chunk_count = _collect_dir_chunk_count(chunk_dir)
+        normalized_label = str(label or "").strip().upper()
+        owner_runtime_direct = bool(
+            effective_settings.get("stt_collect_owner_runtime_enabled", False)
+        ) and normalized_label == "STT1" and collect_chunk_count == 1
+        if (
+            not owner_runtime_direct
+            and bool(effective_settings.get("stt_selective_secondary_collect_owner_runtime_enabled", False))
+            and normalized_label == "FAST-STT2"
+            and 0 < collect_chunk_count <= 2
+        ):
+            owner_runtime_direct = True
         worker = None
         transient_worker = True
         worker_id = 0
+        previous_fast_mode_overrides = None
 
-        with self._ensemble_child_lock:
-            children = getattr(self, "_ensemble_child_processors", None)
-            if not isinstance(children, list):
-                children = []
-                self._ensemble_child_processors = children
-            if reuse_worker:
-                cache = getattr(self, "_stt_collect_worker_cache", None)
-                if not isinstance(cache, dict):
-                    cache = {}
-                    self._stt_collect_worker_cache = cache
-                busy = getattr(self, "_stt_collect_worker_busy", None)
-                if not isinstance(busy, set):
-                    busy = set()
-                    self._stt_collect_worker_busy = busy
-                cached = cache.get(cache_key)
-                if cached is not None and id(cached) not in busy:
-                    worker = cached
-                    transient_worker = False
-                    if worker not in children:
-                        children.append(worker)
+        if owner_runtime_direct and not reuse_worker:
+            worker = self
+            transient_worker = False
+            collect_worker_source = "owner_runtime_direct"
+            previous_fast_mode_overrides = getattr(self, "_fast_mode_overrides", None)
+        else:
+            owner_runtime_direct = False
+
+        if worker is None:
+            with self._ensemble_child_lock:
+                children = getattr(self, "_ensemble_child_processors", None)
+                if not isinstance(children, list):
+                    children = []
+                    self._ensemble_child_processors = children
+                if reuse_worker:
+                    cache = getattr(self, "_stt_collect_worker_cache", None)
+                    if not isinstance(cache, dict):
+                        cache = {}
+                        self._stt_collect_worker_cache = cache
+                    busy = getattr(self, "_stt_collect_worker_busy", None)
+                    if not isinstance(busy, set):
+                        busy = set()
+                        self._stt_collect_worker_busy = busy
+                    cached = cache.get(cache_key)
+                    if cached is not None and id(cached) not in busy:
+                        worker = cached
+                        transient_worker = False
+                        collect_worker_source = "cached_child_worker_reused"
+                        if worker not in children:
+                            children.append(worker)
+                    else:
+                        worker = type(self)()
+                        if cached is None:
+                            cache[cache_key] = worker
+                            transient_worker = False
+                            collect_worker_source = "cached_child_worker_created"
+                        else:
+                            collect_worker_source = "transient_child_worker"
+                        if worker not in children:
+                            children.append(worker)
+                    worker_id = id(worker)
+                    busy.add(worker_id)
                 else:
                     worker = type(self)()
-                    if cached is None:
-                        cache[cache_key] = worker
-                        transient_worker = False
                     if worker not in children:
                         children.append(worker)
-                worker_id = id(worker)
-                busy.add(worker_id)
-            else:
-                worker = type(self)()
-                children.append(worker)
 
         worker.language = self.language
+        self._last_collect_runtime_info = {
+            "model": str(model or "").strip(),
+            "cache_key": cache_key,
+            "reuse_enabled": bool(reuse_worker),
+            "worker_source": collect_worker_source,
+            "transient_worker": bool(transient_worker),
+            "owner_runtime_direct": bool(owner_runtime_direct),
+            "pressure_stage": str(pressure_stage or ""),
+            "allow_collect_worker_reuse": bool(resource_policy.allow_stt_collect_worker_reuse),
+            "native_memory_snapshot_force_refresh": bool(native_memory_snapshot_force_refresh),
+            "resource_snapshot": resource_snapshot,
+            **preexisting_worker_state,
+        }
         for attr in (
             "hard_cut_boundaries",
             "_cut_boundary_provisional_rows",
@@ -326,7 +484,81 @@ class VideoProcessorTranscribeMixin(
             except RuntimeError as exc:
                 get_logger().log(f"  ⚠️ [{label}] 보조 STT 재검사 실패, 기존 STT 결과를 유지합니다: {exc}")
                 result = []
+            submission_info = dict(getattr(worker, "_last_transcribe_submission_info", {}) or {})
+            stt_benchmark_plan = dict(getattr(worker, "_last_stt_benchmark_plan", {}) or {})
+            if stt_benchmark_plan:
+                self._last_collect_runtime_info.update(
+                    {
+                        "stt_benchmark_plan": {
+                            "requested_model": str(stt_benchmark_plan.get("requested_model") or "").strip(),
+                            "active_backend": str(stt_benchmark_plan.get("active_backend") or "").strip(),
+                            "active_model": str(stt_benchmark_plan.get("active_model") or "").strip(),
+                            "active_reason": str(stt_benchmark_plan.get("active_reason") or "").strip(),
+                            "challengers": [
+                                {
+                                    "backend": str(dict(item).get("backend") or "").strip(),
+                                    "model": str(dict(item).get("model") or "").strip(),
+                                    "reason": str(dict(item).get("reason") or "").strip(),
+                                }
+                                for item in list(stt_benchmark_plan.get("challengers") or [])
+                                if isinstance(item, dict)
+                            ],
+                            "vad_challenger": (
+                                {
+                                    "provider": str(dict(stt_benchmark_plan.get("vad_challenger") or {}).get("provider") or "").strip(),
+                                    "reason": str(dict(stt_benchmark_plan.get("vad_challenger") or {}).get("reason") or "").strip(),
+                                }
+                                if isinstance(stt_benchmark_plan.get("vad_challenger"), dict)
+                                else None
+                            ),
+                        }
+                    }
+                )
+            if submission_info:
+                self._last_collect_runtime_info.update(
+                    {
+                        "duration_first_submission_enabled": bool(
+                            submission_info.get("duration_first_submission_enabled")
+                        ),
+                        "submission_order_indices": [
+                            int(idx) for idx in list(submission_info.get("submission_order_indices") or [])
+                        ],
+                        "submitted_chunk_paths": [
+                            str(path or "").strip()
+                            for path in list(submission_info.get("submitted_chunk_paths") or [])
+                        ],
+                        "submitted_chunk_durations_sec": [
+                            round(float(item or 0.0), 3)
+                            for item in list(submission_info.get("submitted_chunk_durations_sec") or [])
+                        ],
+                        "submitted_chunk_offsets_sec": [
+                            round(float(item or 0.0), 3)
+                            for item in list(submission_info.get("submitted_chunk_offsets_sec") or [])
+                        ],
+                        "completed_chunk_paths": [
+                            str(path or "").strip()
+                            for path in list(submission_info.get("completed_chunk_paths") or [])
+                        ],
+                        "completed_chunk_elapsed_ms": [
+                            round(float(item or 0.0), 3)
+                            for item in list(submission_info.get("completed_chunk_elapsed_ms") or [])
+                        ],
+                        "emitted_chunk_paths": [
+                            str(path or "").strip()
+                            for path in list(submission_info.get("emitted_chunk_paths") or [])
+                        ],
+                        "emitted_chunk_elapsed_ms": [
+                            round(float(item or 0.0), 3)
+                            for item in list(submission_info.get("emitted_chunk_elapsed_ms") or [])
+                        ],
+                    }
+                )
         finally:
+            if owner_runtime_direct:
+                try:
+                    self._fast_mode_overrides = previous_fast_mode_overrides
+                except Exception:
+                    pass
             if reuse_worker:
                 with self._ensemble_child_lock:
                     busy = getattr(self, "_stt_collect_worker_busy", set())
@@ -696,6 +928,31 @@ class VideoProcessorTranscribeMixin(
             f"(STT1: {primary_model.split(chr(47))[-1]}, STT2: {secondary_model.split(chr(47))[-1]})"
         )
         self._notify_stage("⏳ [STT] STT1 우선 인식 중")
+        selective_trace = []
+
+        def _record_selective_phase(
+            phase: str,
+            phase_started: float,
+            *,
+            row_count: int | None = None,
+            model: str = "",
+            extra: dict | None = None,
+        ) -> float:
+            ended = time.perf_counter()
+            payload = {
+                "phase": str(phase or "").strip(),
+                "elapsed_ms": round(max(0.0, ended - phase_started) * 1000.0, 3),
+            }
+            if row_count is not None:
+                payload["row_count"] = int(row_count)
+            if str(model or "").strip():
+                payload["model"] = str(model or "").strip()
+            if isinstance(extra, dict):
+                for key, value in extra.items():
+                    payload[key] = value
+            selective_trace.append(payload)
+            return ended
+
         vad_strict = []
         vad_json = os.path.join(chunk_dir, "vad_strict.json")
         if os.path.exists(vad_json):
@@ -713,6 +970,7 @@ class VideoProcessorTranscribeMixin(
                 "stt_word_timestamp_precision_pass": False,
                 "stt_word_timestamps_precision_enabled": False,
             }
+            phase_started = time.perf_counter()
             primary_segments = self._collect_transcribe_result(
                 chunk_dir,
                 primary_model,
@@ -721,6 +979,16 @@ class VideoProcessorTranscribeMixin(
                 label="STT1",
                 preview_callback=self._ensemble_preview_callback("STT1", preview_callback),
                 settings_overrides=primary_overrides,
+            )
+            _record_selective_phase(
+                "primary_collect",
+                phase_started,
+                row_count=len(primary_segments),
+                model=primary_model,
+                extra={
+                    "collect_runtime_info_found": bool(getattr(self, "_last_collect_runtime_info", None)),
+                    "collect_runtime_info": dict(getattr(self, "_last_collect_runtime_info", {}) or {}),
+                },
             )
             if not primary_segments:
                 get_logger().log("  ⚠️ [STT 선택 앙상블] STT1 결과가 비어 있어 STT2 전체 인식으로 대체합니다.")
@@ -731,6 +999,7 @@ class VideoProcessorTranscribeMixin(
                     "stt_word_timestamp_precision_pass": False,
                     "stt_word_timestamps_precision_enabled": False,
                 }
+                phase_started = time.perf_counter()
                 primary_segments = self._collect_transcribe_result(
                     chunk_dir,
                     secondary_model,
@@ -740,10 +1009,17 @@ class VideoProcessorTranscribeMixin(
                     preview_callback=self._ensemble_preview_callback("STT2", preview_callback),
                     settings_overrides=fallback_overrides,
                 )
+                _record_selective_phase(
+                    "secondary_fallback_collect",
+                    phase_started,
+                    row_count=len(primary_segments),
+                    model=secondary_model,
+                )
                 for seg in primary_segments:
                     seg["stt_selected_source"] = "STT2"
                     seg["stt_ensemble_source"] = "STT2_FALLBACK"
             else:
+                phase_started = time.perf_counter()
                 primary_segments = self._recheck_primary_low_score_with_secondary(
                     chunk_dir,
                     primary_segments,
@@ -753,7 +1029,15 @@ class VideoProcessorTranscribeMixin(
                     target_end_sec=target_end_sec,
                     preview_callback=preview_callback,
                 )
+                _record_selective_phase(
+                    "secondary_low_score_recheck",
+                    phase_started,
+                    row_count=len(primary_segments),
+                    model=secondary_model,
+                    extra=dict(getattr(self, "_last_secondary_low_score_recheck_info", {}) or {}),
+                )
 
+            phase_started = time.perf_counter()
             primary_segments = self._recheck_word_timestamps_for_precision(
                 chunk_dir,
                 primary_segments,
@@ -761,12 +1045,24 @@ class VideoProcessorTranscribeMixin(
                 vad_strict,
                 primary_model,
             )
+            _record_selective_phase(
+                "word_precision_recheck",
+                phase_started,
+                row_count=len(primary_segments),
+                model=primary_model,
+            )
             try:
+                phase_started = time.perf_counter()
                 primary_segments = self._annotate_stt_candidates(
                     primary_segments,
                     source="STT1_SELECTIVE",
                     vad_segments=vad_strict,
                     settings=settings,
+                )
+                _record_selective_phase(
+                    "annotate_final_candidates",
+                    phase_started,
+                    row_count=len(primary_segments),
                 )
             except Exception as exc:
                 get_logger().log(f"  ⚠️ [STT 선택 앙상블] 최종 점수 계산 실패: {exc}")
@@ -779,11 +1075,18 @@ class VideoProcessorTranscribeMixin(
                 from core.subtitle_quality.vad_alignment_checker import adjust_segments_to_vad_boundaries
 
                 self._notify_stage("⏳ [VAD] 선택 앙상블 자막 위치 재계산 중")
+                phase_started = time.perf_counter()
                 primary_segments, adjusted_count = adjust_segments_to_vad_boundaries(
                     primary_segments,
                     vad_strict,
                     max_shift_sec=float(settings.get("vad_post_stt_max_shift_sec", 0.7) or 0.7),
                     edge_pad_sec=float(settings.get("vad_post_stt_edge_pad_sec", 0.04) or 0.04),
+                )
+                _record_selective_phase(
+                    "vad_align",
+                    phase_started,
+                    row_count=len(primary_segments),
+                    extra={"adjusted_count": int(adjusted_count or 0)},
                 )
                 get_logger().log(f"  🎯 [VAD 후처리] 선택 앙상블 자막 위치 {adjusted_count}개 보정")
 
@@ -798,6 +1101,12 @@ class VideoProcessorTranscribeMixin(
             )
             yield primary_segments, 1, 1
         finally:
+            callback = getattr(self, "_benchmark_selective_ensemble_trace_callback", None)
+            if callable(callback):
+                try:
+                    callback([dict(item) for item in selective_trace])
+                except Exception:
+                    pass
             if cleanup_chunk_dir:
                 shutil.rmtree(chunk_dir, ignore_errors=True)
             self._release_after_transcribe_job("STT 선택 앙상블")

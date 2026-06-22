@@ -27,54 +27,77 @@ class RoughcutTableMixin:
         values = [len(result.chapters), len(result.edl_segments), highlights, risky, fmt_time(output_duration)]
         for label, value in zip(self.metric_labels, values):
             label.setText(str(value))
+        editor_segments = self._editor_segments()
         if hasattr(self, "major_panel"):
-            self.major_panel.set_result(
-                result,
-                editor_segments=self._editor_segments(),
-                thumbnail_lookup=self._thumbnail_lookup_for_result(result),
-            )
+            thumbnail_lookup = {}
+            should_populate_major = True
+            checker = getattr(self, "_should_populate_major_panel", None)
+            if callable(checker):
+                should_populate_major = bool(checker(result))
+            if should_populate_major and not bool(getattr(self, "_defer_thumbnail_lookup_once", False)):
+                thumbnail_lookup = self._thumbnail_lookup_for_result(result)
+            self._defer_thumbnail_lookup_once = False
+            if should_populate_major:
+                self.major_panel.set_result(
+                    result,
+                    editor_segments=editor_segments,
+                    thumbnail_lookup=thumbnail_lookup,
+                )
+                marker = getattr(self, "_mark_major_panel_populated", None)
+                if callable(marker):
+                    marker()
+            else:
+                self.major_panel.set_deferred_result(result, editor_segments=editor_segments)
+                marker = getattr(self, "_mark_major_panel_deferred", None)
+                if callable(marker):
+                    marker(result)
         if hasattr(self, "title_panel"):
             self.title_panel.set_suggestions(getattr(result, "title_suggestions", ()) or ())
         if hasattr(self, "log_panel"):
             self.log_panel.set_result(result)
         if hasattr(self, "bottom_tabs"):
-            self.bottom_tabs.set_result(result, self._editor_segments())
+            self.bottom_tabs.set_result(result, editor_segments)
 
         self._updating_table = True
         self._row_chapter_ids = []
-        self.table.setRowCount(len(result.chapters))
-        for row, chapter in enumerate(result.chapters):
-            decision = decisions.get(chapter.chapter_id)
-            segment = edl.get(chapter.chapter_id)
-            self._row_chapter_ids.append(chapter.chapter_id)
-            edit = self._user_edits.get(chapter.chapter_id, {})
-            output = f"{fmt_time(segment.output_start)}-{fmt_time(segment.output_end)}" if segment else "제외"
-            midpoint = (chapter.start + chapter.end) / 2.0
-            status = edit.get("status") or self._status_for(chapter, decision)
-            row_values = [
-                f"{fmt_time(chapter.start)}-{fmt_time(chapter.end)}",
-                f"대표 {fmt_time(midpoint)}",
-                chapter.summary or chapter.title,
-                edit.get("title") or chapter.title or chapter.chapter_id,
-                edit.get("tags") or ", ".join(chapter.tags or (chapter.story_role,)).strip(", "),
-                status,
-                decision.action if decision else "-",
-                decision.safety if decision else "-",
-                output,
-            ]
-            for col, value in enumerate(row_values):
-                item = self._table_item(str(value), editable=col in EDITABLE_COLUMNS)
-                if col in (0, 1, 8):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                elif col in (5, 6, 7):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if col == 5:
-                    self._style_status_item(item, status)
-                elif col == 7 and decision is not None:
-                    self._style_safety_item(item, decision.safety)
-                self.table.setItem(row, col, item)
-        self._updating_table = False
-        self.table.resizeRowsToContents()
+        previous_updates = self.table.updatesEnabled()
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(len(result.chapters))
+            for row, chapter in enumerate(result.chapters):
+                decision = decisions.get(chapter.chapter_id)
+                segment = edl.get(chapter.chapter_id)
+                self._row_chapter_ids.append(chapter.chapter_id)
+                edit = self._user_edits.get(chapter.chapter_id, {})
+                output = f"{fmt_time(segment.output_start)}-{fmt_time(segment.output_end)}" if segment else "제외"
+                midpoint = (chapter.start + chapter.end) / 2.0
+                status = edit.get("status") or self._status_for(chapter, decision)
+                row_values = [
+                    f"{fmt_time(chapter.start)}-{fmt_time(chapter.end)}",
+                    f"대표 {fmt_time(midpoint)}",
+                    chapter.summary or chapter.title,
+                    edit.get("title") or chapter.title or chapter.chapter_id,
+                    edit.get("tags") or ", ".join(chapter.tags or (chapter.story_role,)).strip(", "),
+                    status,
+                    decision.action if decision else "-",
+                    decision.safety if decision else "-",
+                    output,
+                ]
+                for col, value in enumerate(row_values):
+                    item = self._table_item(str(value), editable=col in EDITABLE_COLUMNS)
+                    if col in (0, 1, 8):
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    elif col in (5, 6, 7):
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    if col == 5:
+                        self._style_status_item(item, status)
+                    elif col == 7 and decision is not None:
+                        self._style_safety_item(item, decision.safety)
+                    self.table.setItem(row, col, item)
+            self.table.resizeRowsToContents()
+        finally:
+            self.table.setUpdatesEnabled(previous_updates)
+            self._updating_table = False
         self.guide_text.setPlainText(result.guide_markdown)
         restored_filter = str(getattr(self, "_restored_safety_filter", "전체") or "전체")
         if hasattr(self, "safety_filter_combo"):
@@ -324,15 +347,20 @@ class RoughcutTableMixin:
         decisions = {decision.segment_id: decision for decision in self._result.edit_decisions}
         first_visible = -1
         visible_count = 0
-        for row, chapter_id in enumerate(self._row_chapter_ids):
-            decision = decisions.get(chapter_id)
-            safety = decision.safety if decision is not None else ""
-            hidden = selected != "전체" and safety != selected
-            self.table.setRowHidden(row, hidden)
-            if not hidden and first_visible < 0:
-                first_visible = row
-            if not hidden:
-                visible_count += 1
+        previous_updates = self.table.updatesEnabled()
+        self.table.setUpdatesEnabled(False)
+        try:
+            for row, chapter_id in enumerate(self._row_chapter_ids):
+                decision = decisions.get(chapter_id)
+                safety = decision.safety if decision is not None else ""
+                hidden = selected != "전체" and safety != selected
+                self.table.setRowHidden(row, hidden)
+                if not hidden and first_visible < 0:
+                    first_visible = row
+                if not hidden:
+                    visible_count += 1
+        finally:
+            self.table.setUpdatesEnabled(previous_updates)
         current_row = self.table.currentRow()
         if first_visible >= 0 and (current_row < 0 or self.table.isRowHidden(current_row)):
             self.table.selectRow(first_visible)

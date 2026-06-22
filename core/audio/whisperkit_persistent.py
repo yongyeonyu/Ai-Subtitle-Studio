@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import threading
 import uuid
 
@@ -27,16 +26,6 @@ _SUPPORTED_WHISPERKIT_SELECTORS = {
     "large-v3-v20240930_turbo_632mb",
     "large-v3-v20240930_turbo_632MB",
 }
-DEFAULT_WORKER_RELATIVE_PATH = os.path.join(
-    "experiments",
-    "whisperkit_persistent_worker",
-    ".build",
-    "release",
-    "WhisperKitPersistentWorker",
-)
-DEFAULT_WORKER_PACKAGE_RELATIVE_PATH = os.path.join("experiments", "whisperkit_persistent_worker")
-
-
 def is_whisperkit_persistent_model(model: str) -> bool:
     return bool(config.IS_MAC and str(model or "").strip().lower().startswith(WHISPERKIT_PERSISTENT_PREFIX))
 
@@ -61,35 +50,6 @@ def is_supported_whisperkit_model(model: str) -> bool:
     return whisperkit_selector_is_supported(whisperkit_model_selector(model))
 
 
-def _build_bundled_worker(repo_root: str, bundled: str) -> str:
-    package_dir = os.path.join(repo_root, DEFAULT_WORKER_PACKAGE_RELATIVE_PATH)
-    package_file = os.path.join(package_dir, "Package.swift")
-    if not os.path.exists(package_file) or not shutil.which("swift"):
-        return ""
-    try:
-        get_logger().log("  🛠️ [WhisperKit Native] SwiftPM worker 빌드 중...")
-        result = subprocess.run(
-            ["swift", "build", "-c", "release"],
-            cwd=package_dir,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf-8",
-            errors="replace",
-            timeout=900,
-            **hidden_subprocess_kwargs(strip_qt=True),
-        )
-        if result.returncode == 0 and os.path.exists(bundled):
-            get_logger().log("  ✅ [WhisperKit Native] SwiftPM worker 빌드 완료")
-            return bundled
-        tail = "\n".join((result.stderr or result.stdout or "").splitlines()[-4:])
-        if tail:
-            get_logger().log(f"  ⚠️ [WhisperKit Native] SwiftPM 빌드 실패: {tail}")
-    except Exception as exc:
-        get_logger().log(f"  ⚠️ [WhisperKit Native] SwiftPM 빌드 실패: {exc}")
-    return ""
-
-
 def find_whisperkit_persistent_worker() -> str:
     explicit = os.environ.get("WHISPERKIT_PERSISTENT_WORKER", "").strip()
     if explicit:
@@ -99,13 +59,6 @@ def find_whisperkit_persistent_worker() -> str:
         found = shutil.which(explicit)
         if found:
             return found
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    bundled = os.path.join(repo_root, DEFAULT_WORKER_RELATIVE_PATH)
-    if os.path.exists(bundled):
-        return bundled
-    built = _build_bundled_worker(repo_root, bundled)
-    if built:
-        return built
     return shutil.which("WhisperKitPersistentWorker") or ""
 
 
@@ -293,7 +246,6 @@ def run_whisper(
 
 __all__ = [
     "WHISPERKIT_PERSISTENT_PREFIX",
-    "DEFAULT_WORKER_PACKAGE_RELATIVE_PATH",
     "ensure_worker",
     "find_whisperkit_persistent_worker",
     "is_whisperkit_persistent_model",

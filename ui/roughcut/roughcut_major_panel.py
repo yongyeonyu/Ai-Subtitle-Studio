@@ -2,6 +2,8 @@
 # Phase: PHASE2
 from __future__ import annotations
 
+from bisect import bisect_left
+
 from PyQt6.QtCore import QEvent, pyqtSignal, QSize, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
@@ -263,6 +265,8 @@ class RoughcutMajorPanel(QWidget):
         self._thumbnail_lookup: dict[str, str] = {}
         self._selected_chapter_id = ""
         self._editor_segments: tuple[dict, ...] = ()
+        self._editor_segment_index: tuple[tuple[float, float, str], ...] = ()
+        self._editor_segment_starts: tuple[float, ...] = ()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -303,9 +307,31 @@ class RoughcutMajorPanel(QWidget):
         self._chapter_segment_lookup = {}
         self._thumbnail_lookup = {}
         self._editor_segments = ()
+        self._editor_segment_index = ()
+        self._editor_segment_starts = ()
         self.summary_lbl.setText("LLM 카드 0 / 세그먼트 0 / 검토 0")
         self.selection_lbl.setText("선택 대기")
         self._add_empty_card("중분류 분석 결과 없음")
+
+    def set_deferred_result(self, result, editor_segments=()) -> None:
+        self.card_list.clear()
+        self._minor_buttons = {}
+        self._preview_buttons = {}
+        self._card_frames = {}
+        self._card_topicless = {}
+        self._minor_lists = {}
+        self._segment_items = {}
+        self._segment_cards = {}
+        self._chapter_segment_lookup = {}
+        self._thumbnail_lookup = {}
+        self._set_editor_segments(editor_segments)
+        segments = tuple(getattr(result, "segments", ()) or ())
+        chapters = tuple(getattr(result, "chapters", ()) or ())
+        minor_count = sum(len(tuple(getattr(segment, "minor_groups", ()) or ())) for segment in segments)
+        review_count = sum(1 for chapter in chapters if bool(getattr(chapter, "needs_review", False)))
+        self.summary_lbl.setText(f"LLM 카드 {len(segments)} / 세그먼트 {minor_count} / 검토 {review_count}")
+        self.selection_lbl.setText(f"선택 {self._selected_chapter_id}" if self._selected_chapter_id else "선택 대기")
+        self._add_empty_card("카드 화면을 열면 러프컷 카드를 구성합니다.")
 
     def set_result(self, result, editor_segments=(), thumbnail_lookup=None) -> None:
         self.card_list.clear()
@@ -322,7 +348,7 @@ class RoughcutMajorPanel(QWidget):
             for key, value in dict(thumbnail_lookup or {}).items()
             if str(key or "") and str(value or "")
         }
-        self._editor_segments = tuple(editor_segments or ())
+        self._set_editor_segments(editor_segments)
         segments = tuple(getattr(result, "segments", ()) or ())
         if not segments:
             self.clear()
@@ -355,14 +381,43 @@ class RoughcutMajorPanel(QWidget):
                 self.set_selected_chapter(first)
 
     def set_selected_chapter(self, chapter_id: str) -> None:
+        previous_chapter_id = self._selected_chapter_id
         self._selected_chapter_id = str(chapter_id or "")
-        for key, button in self._minor_buttons.items():
-            button.setStyleSheet(self._minor_button_style(selected=key == self._selected_chapter_id))
+        for key in {previous_chapter_id, self._selected_chapter_id}:
+            if not key:
+                continue
+            button = self._minor_buttons.get(key)
+            if button is not None:
+                button.setStyleSheet(self._minor_button_style(selected=key == self._selected_chapter_id))
         active_card = self._card_frames.get(self._selected_chapter_id)
-        for key, frame in self._card_frames.items():
+        for key in {previous_chapter_id, self._selected_chapter_id}:
+            frame = self._card_frames.get(key)
+            if frame is None:
+                continue
             frame.setStyleSheet(self._card_style(selected=frame is active_card, topicless=self._card_topicless.get(key, False)))
-        self._refresh_card_density()
+        previous_segment_id = self._chapter_segment_lookup.get(previous_chapter_id, "")
+        active_segment_id = self._chapter_segment_lookup.get(self._selected_chapter_id, "")
+        for segment_id in {previous_segment_id, active_segment_id}:
+            if segment_id:
+                self._apply_card_density(segment_id, expanded=segment_id == active_segment_id)
         self.selection_lbl.setText(f"선택 {self._selected_chapter_id}" if self._selected_chapter_id else "선택 대기")
+
+    def _set_editor_segments(self, editor_segments=()) -> None:
+        self._editor_segments = tuple(editor_segments or ())
+        rows: list[tuple[float, float, str]] = []
+        for segment in self._editor_segments:
+            try:
+                start = float(segment.get("start", 0.0) or 0.0)
+                end = float(segment.get("end", start) or start)
+            except Exception:
+                continue
+            text = str(segment.get("text") or "").strip()
+            if end <= start or not text:
+                continue
+            rows.append((start, end, text))
+        rows.sort(key=lambda item: item[0])
+        self._editor_segment_index = tuple(rows)
+        self._editor_segment_starts = tuple(item[0] for item in rows)
 
     def _add_empty_card(self, text: str) -> None:
         frame = QFrame()
@@ -773,14 +828,7 @@ class RoughcutMajorPanel(QWidget):
 
     def _subtitle_snippets(self, start: float, end: float, limit: int = 3) -> list[str]:
         snippets: list[str] = []
-        for segment in self._editor_segments:
-            seg_start = float(segment.get("start", 0.0) or 0.0)
-            seg_end = float(segment.get("end", seg_start) or seg_start)
-            if seg_end <= start or seg_start >= end:
-                continue
-            text = str(segment.get("text") or "").strip()
-            if not text:
-                continue
+        for _seg_start, _seg_end, text in self._overlapping_editor_segments(start, end):
             if len(text) > 42:
                 text = text[:39].rstrip() + "..."
             snippets.append(text)
@@ -790,16 +838,25 @@ class RoughcutMajorPanel(QWidget):
 
     def _subtitle_overlap_count(self, start: float, end: float) -> int:
         count = 0
-        for segment in self._editor_segments:
-            seg_start = float(segment.get("start", 0.0) or 0.0)
-            seg_end = float(segment.get("end", seg_start) or seg_start)
-            if seg_end <= start or seg_start >= end:
-                continue
-            text = str(segment.get("text") or "").strip()
-            if not text:
-                continue
+        for _seg_start, _seg_end, _text in self._overlapping_editor_segments(start, end):
             count += 1
         return count
+
+    def _overlapping_editor_segments(self, start: float, end: float):
+        rows = self._editor_segment_index
+        if not rows or end <= start:
+            return
+        starts = self._editor_segment_starts
+        index = bisect_left(starts, start)
+        while index > 0 and rows[index - 1][1] > start:
+            index -= 1
+        while index < len(rows):
+            seg_start, seg_end, text = rows[index]
+            if seg_start >= end:
+                break
+            if seg_end > start:
+                yield seg_start, seg_end, text
+            index += 1
 
     def _chip_for_segment(self, segment, topicless: bool) -> QLabel:
         label = QLabel(

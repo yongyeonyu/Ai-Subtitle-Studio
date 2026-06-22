@@ -29,7 +29,7 @@ from core.utils import load_rules
 
 MEDIA_EXTENSIONS = {
     ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg",
-    ".mp4", ".mov", ".mkv", ".avi", ".wmv", ".mxf",
+    ".mp4", ".mov", ".mkv", ".avi", ".wmv", ".mxf", ".lrf",
 }
 SUBTITLE_EXTENSIONS = {".srt"}
 OPEN_TO_CLOSE = {"(": ")", "[": "]", "{": "}", "（": "）", "【": "】"}

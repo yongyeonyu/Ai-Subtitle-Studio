@@ -117,6 +117,75 @@ _FINAL_TINY_FRAGMENT_MAX_SEC = 0.18
 _FINAL_TINY_FRAGMENT_MAX_CHARS = 2
 _FINAL_TINY_FRAGMENT_MAX_GAP_SEC = 0.08
 
+
+def _emit_final_cleanup_trace(settings: dict | None, *, stage: str, step: str, rows: list[dict], changed: int) -> None:
+    callback = None
+    if isinstance(settings, dict):
+        callback = settings.get("_benchmark_final_sequence_cleanup_trace")
+    if not callable(callback):
+        return
+    try:
+        callback(
+            {
+                "stage": str(stage or "").strip(),
+                "step": str(step or "").strip(),
+                "segment_count": len(rows or []),
+                "changed": int(changed or 0),
+                "sample_texts": [
+                    str(item.get("text") or "").strip()
+                    for item in list(rows or [])[:5]
+                    if isinstance(item, dict)
+                ],
+                "rows": [dict(item) for item in list(rows or []) if isinstance(item, dict)],
+            }
+        )
+    except Exception:
+        pass
+
+
+def _emit_trim_recent_overlap_decision(
+    settings: dict | None,
+    *,
+    stage: str,
+    row: dict,
+    decision: str,
+    reason: str,
+    prefix_overlap: int,
+    suffix_overlap: int,
+    previous_text: str,
+    trimmed_text: str,
+) -> None:
+    callback = None
+    if isinstance(settings, dict):
+        callback = settings.get("_benchmark_trim_recent_overlap_trace")
+    if not callable(callback):
+        return
+    try:
+        tokens = _subtitle_tokens(str(row.get("text", "") or ""))
+        previous_tokens = _subtitle_tokens(previous_text)
+        split_policy = dict(row.get("_common_split_guard_policy") or {})
+        callback(
+            {
+                "stage": str(stage or "").strip(),
+                "decision": str(decision or "").strip(),
+                "reason": str(reason or "").strip(),
+                "start": float(row.get("start", 0.0) or 0.0),
+                "end": float(row.get("end", row.get("start", 0.0)) or row.get("start", 0.0) or 0.0),
+                "text": str(row.get("text", "") or "").strip(),
+                "trimmed_text": str(trimmed_text or "").strip(),
+                "previous_text": str(previous_text or "").strip(),
+                "prefix_overlap": int(prefix_overlap or 0),
+                "suffix_overlap": int(suffix_overlap or 0),
+                "split_index": split_policy.get("split_index"),
+                "split_count": split_policy.get("split_count"),
+                "has_common_split_policy": bool(split_policy),
+                "token_count": len(tokens),
+                "previous_token_count": len(previous_tokens),
+            }
+        )
+    except Exception:
+        pass
+
 def _sequence_text_for_integrity(segments: list[dict] | None) -> str:
     return " ".join(
         " ".join(_subtitle_text_lines(str(seg.get("text", "") or "")))
@@ -420,7 +489,6 @@ def _merge_likely_oversplit_rows(rows: list[dict], settings: dict | None, *, sta
 
 
 def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage: str) -> tuple[list[dict], int]:
-    del settings
     if not rows:
         return rows, 0
     result: list[dict] = []
@@ -434,6 +502,17 @@ def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage:
             or not result
             or _is_speaker_split_multiline_segment(row)
         ):
+            _emit_trim_recent_overlap_decision(
+                settings,
+                stage=stage,
+                row=row,
+                decision="keep",
+                reason="seed_or_empty",
+                prefix_overlap=0,
+                suffix_overlap=0,
+                previous_text="",
+                trimmed_text=text,
+            )
             result.append(row)
             continue
         recent_rows = [item for item in result[-2:] if isinstance(item, dict)]
@@ -443,6 +522,8 @@ def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage:
             for token in _subtitle_tokens(str(item.get("text", "") or ""))
         ]
         updated_tokens = list(tokens)
+        prefix_overlap = 0
+        suffix_overlap = 0
         if recent_tokens:
             prefix_overlap = _overlap_token_count(recent_tokens, updated_tokens, mode="prefix")
             if prefix_overlap and (prefix_overlap >= 3 or _token_compact_len(updated_tokens[:prefix_overlap]) >= 8):
@@ -454,6 +535,17 @@ def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage:
         if trimmed_text != text:
             changed += 1
         if not trimmed_text:
+            _emit_trim_recent_overlap_decision(
+                settings,
+                stage=stage,
+                row=row,
+                decision="drop",
+                reason="trimmed_to_empty_by_recent_overlap",
+                prefix_overlap=prefix_overlap,
+                suffix_overlap=suffix_overlap,
+                previous_text=str(result[-1].get("text", "") or ""),
+                trimmed_text="",
+            )
             continue
         previous = result[-1]
         gap = _setting_float(row, "start", 0.0) - _setting_float(previous, "end", 0.0)
@@ -469,6 +561,17 @@ def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage:
             and _compatible_speaker_signature(previous, row)
         ):
             changed += 1
+            _emit_trim_recent_overlap_decision(
+                settings,
+                stage=stage,
+                row=row,
+                decision="drop",
+                reason="duplicate_closing_phrase_bridge",
+                prefix_overlap=prefix_overlap,
+                suffix_overlap=suffix_overlap,
+                previous_text=str(previous.get("text", "") or ""),
+                trimmed_text=trimmed_text,
+            )
             continue
         if (
             updated_tokens
@@ -479,6 +582,17 @@ def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage:
             and _compatible_speaker_signature(previous, row)
         ):
             changed += 1
+            _emit_trim_recent_overlap_decision(
+                settings,
+                stage=stage,
+                row=row,
+                decision="drop",
+                reason="low_value_bridge_only",
+                prefix_overlap=prefix_overlap,
+                suffix_overlap=suffix_overlap,
+                previous_text=str(previous.get("text", "") or ""),
+                trimmed_text=trimmed_text,
+            )
             continue
         if (
             _compact_subtitle_text(trimmed_text) == _compact_subtitle_text(str(previous.get("text", "") or ""))
@@ -487,6 +601,17 @@ def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage:
             and _compatible_speaker_signature(previous, row)
         ):
             changed += 1
+            _emit_trim_recent_overlap_decision(
+                settings,
+                stage=stage,
+                row=row,
+                decision="drop",
+                reason="duplicate_previous_row",
+                prefix_overlap=prefix_overlap,
+                suffix_overlap=suffix_overlap,
+                previous_text=str(previous.get("text", "") or ""),
+                trimmed_text=trimmed_text,
+            )
             continue
         row["text"] = trimmed_text
         if trimmed_text != text:
@@ -495,6 +620,29 @@ def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage:
                 "stage": stage,
                 "action": "trim_recent_overlap",
             }
+            _emit_trim_recent_overlap_decision(
+                settings,
+                stage=stage,
+                row=row,
+                decision="trim",
+                reason="recent_overlap_removed",
+                prefix_overlap=prefix_overlap,
+                suffix_overlap=suffix_overlap,
+                previous_text=str(previous.get("text", "") or ""),
+                trimmed_text=trimmed_text,
+            )
+        else:
+            _emit_trim_recent_overlap_decision(
+                settings,
+                stage=stage,
+                row=row,
+                decision="keep",
+                reason="no_recent_overlap_change",
+                prefix_overlap=prefix_overlap,
+                suffix_overlap=suffix_overlap,
+                previous_text=str(previous.get("text", "") or ""),
+                trimmed_text=trimmed_text,
+            )
         result.append(row)
     return result, changed
 
@@ -510,10 +658,15 @@ def _apply_final_sequence_cleanup(
     rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
     if not rows:
         return segments
+    _emit_final_cleanup_trace(settings, stage=stage, step="input", rows=rows, changed=0)
     rows, dropped_tiny = _drop_tiny_tail_fragments(rows, settings, stage=stage)
+    _emit_final_cleanup_trace(settings, stage=stage, step="drop_tiny_tail_fragments", rows=rows, changed=dropped_tiny)
     rows, dropped_shadow = _drop_shadowed_short_rows(rows, settings, stage=stage)
+    _emit_final_cleanup_trace(settings, stage=stage, step="drop_shadowed_short_rows", rows=rows, changed=dropped_shadow)
     rows, merged = _merge_likely_oversplit_rows(rows, settings, stage=stage)
+    _emit_final_cleanup_trace(settings, stage=stage, step="merge_likely_oversplit_rows", rows=rows, changed=merged)
     rows, trimmed = _trim_recent_overlap_rows(rows, settings, stage=stage)
+    _emit_final_cleanup_trace(settings, stage=stage, step="trim_recent_overlap_rows", rows=rows, changed=trimmed)
     if dropped_tiny or dropped_shadow or merged or trimmed:
         get_logger().log(
             "[자막후단보정] "

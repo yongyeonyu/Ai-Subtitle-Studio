@@ -69,7 +69,7 @@ class QmlPopupGuardTests(unittest.TestCase):
             window.close()
             window.deleteLater()
 
-    def test_fallback_context_menu_execs_at_centered_position(self):
+    def test_fallback_context_menu_execs_at_click_anchored_position(self):
         parent = QWidget()
         parent.resize(400, 300)
         expected_pos = QPoint(123, 234)
@@ -113,7 +113,7 @@ class QmlPopupGuardTests(unittest.TestCase):
 
         try:
             with mock.patch.object(qml_popup, "QMenu", _Menu):
-                with mock.patch.object(qml_popup, "_centered_popup_pos", return_value=expected_pos) as centered:
+                with mock.patch.object(qml_popup, "_clamp_popup_pos", return_value=expected_pos) as clamped:
                     chosen = qml_popup._fallback_qmenu(
                         parent,
                         QPoint(700, 500),
@@ -122,9 +122,31 @@ class QmlPopupGuardTests(unittest.TestCase):
 
             self.assertEqual(chosen, "open")
             self.assertEqual(captured["pos"], expected_pos)
-            centered.assert_called_once()
+            clamped.assert_called_once()
         finally:
             parent.deleteLater()
+
+    def test_show_context_menu_quick_path_keeps_click_anchor(self):
+        expected_pos = QPoint(210, 160)
+        dialog_mock = mock.Mock()
+        dialog_mock.selected_id.return_value = "open"
+        loop_mock = mock.Mock()
+        loop_mock.exec.return_value = None
+
+        with mock.patch.object(qml_popup, "_quick_available", return_value=True):
+            with mock.patch.object(qml_popup, "_QuickContextMenuDialog", return_value=dialog_mock):
+                with mock.patch.object(qml_popup, "QEventLoop", return_value=loop_mock):
+                    chosen = qml_popup.show_context_menu(
+                        None,
+                        expected_pos,
+                        [{"id": "open", "label": "열기"}],
+                    )
+
+        self.assertEqual(chosen, "open")
+        dialog_mock.fit_to_screen.assert_called_once()
+        _, kwargs = dialog_mock.fit_to_screen.call_args
+        self.assertEqual(kwargs.get("centered"), False)
+        dialog_mock.show.assert_called_once()
 
 
 if __name__ == "__main__":

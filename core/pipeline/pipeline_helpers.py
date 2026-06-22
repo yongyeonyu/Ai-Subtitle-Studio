@@ -428,6 +428,7 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
     def _save_and_export(self, target_file, queue_index, final_segments, is_auto_mode):
         """SRT 저장 + MOV 렌더링 + 완료 처리"""
         get_logger().log("\n  [STEP 5] 💾 SRT 저장 중...")
+        record_batch_error = getattr(self, "_record_deferred_batch_error", None)
         try:
             from core.engine.subtitle_engine import save_srt
             from core.path_manager import get_srt_path
@@ -464,11 +465,26 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                 )
                 if not render_ok:
                     self._emit_queue_status(queue_index, "❌ 자막영상출력 실패", "", "", "")
+                    if callable(record_batch_error):
+                        record_batch_error(
+                            target_file,
+                            queue_index,
+                            stage="자막영상 출력",
+                            message="투명 자막 영상(MOV) 출력이 실패했습니다.",
+                        )
                     return False
             except Exception as e:
                 get_logger().log(f"❌ MOV 렌더링 오류: {e}")
                 get_logger().log(traceback.format_exc())
                 self._emit_queue_status(queue_index, "❌ 자막영상출력 실패", "", "", "")
+                if callable(record_batch_error):
+                    record_batch_error(
+                        target_file,
+                        queue_index,
+                        stage="자막영상 출력",
+                        message=str(e),
+                        error_type=type(e).__name__,
+                    )
                 return False
 
             try:
@@ -492,6 +508,14 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         except Exception as e:
             get_logger().log(f"❌ 처리 실패: {e}")
             self._emit_queue_status(queue_index, "❌ 저장 실패", "", "", "")
+            if callable(record_batch_error):
+                record_batch_error(
+                    target_file,
+                    queue_index,
+                    stage="저장",
+                    message=str(e),
+                    error_type=type(e).__name__,
+                )
             return False
 
     # ─── 렌더링 ──────────────────────────────────────────

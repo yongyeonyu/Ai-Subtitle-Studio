@@ -391,6 +391,50 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
                 )
                 self.assertTrue(all(seg.get("_final_gap_settings_applied") for seg in adjusted))
 
+    def test_common_split_guard_can_skip_all_singleton_digit_groups(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 3.2,
+                "text": "17.8 11.4",
+                "words": [
+                    {"word": "17.8", "start": 0.0, "end": 1.5},
+                    {"word": "11.4", "start": 1.55, "end": 3.2},
+                ],
+                "_final_gap_settings_applied": True,
+            }
+        ]
+        settings = {
+            "subtitle_mode": "high",
+            "single_subtitle_end": 0.0,
+            "split_length_threshold": 4,
+            "sub_min_duration": 0.2,
+            "sub_max_duration": 6.0,
+            "subtitle_common_split_guard_enabled": True,
+            "subtitle_common_split_target_chars": 1,
+            "subtitle_common_split_hard_max_chars": 2,
+            "subtitle_common_split_hard_max_duration_sec": 1.2,
+            "subtitle_common_split_skip_all_singleton_digit_rows": True,
+            "subtitle_common_split_skip_all_singleton_digit_rows_max_duration_sec": 4.2,
+        }
+
+        skipped = subtitle_engine.apply_final_gap_settings(segments, settings, force=True)
+        split = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {**settings, "subtitle_common_split_skip_all_singleton_digit_rows": False},
+            force=True,
+        )
+
+        self.assertEqual([seg["text"] for seg in skipped], ["17.8 11.4"])
+        self.assertNotEqual(
+            skipped[0].get("_common_split_guard_policy", {}).get("action"),
+            "split",
+        )
+        self.assertEqual([seg["text"] for seg in split], ["17.8", "11.4"])
+        self.assertTrue(
+            all(seg.get("_common_split_guard_policy", {}).get("action") == "split" for seg in split)
+        )
+
     def test_final_sequence_cleanup_merges_safe_filler_and_connective_fragments(self):
         segments = [
             {"start": 0.0, "end": 1.0, "text": "네"},

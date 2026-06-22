@@ -43,7 +43,7 @@ from ui.project.project_session_runtime import (
 
 
 PROJECT_MEDIA_FILTER = (
-    "Media Files (*.mp4 *.mov *.MOV *.MP4 *.m4v *.lrf *.wav *.m4a *.m2a *.mp3 *.aac)"
+    "Media Files (*.mp4 *.mov *.MOV *.MP4 *.m4v *.lrf *.LRF *.wav *.m4a *.m2a *.mp3 *.aac)"
 )
 
 

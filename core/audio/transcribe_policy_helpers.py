@@ -107,9 +107,7 @@ def segment_needs_word_precision(segment: dict, settings: dict | None) -> bool:
         return False
     if any(bool(segment.get(key)) for key in ("editor_selected", "selected", "precision_review", "needs_review")):
         return True
-    score_threshold = setting_float(settings, "stt_word_timestamps_precision_threshold", 72.0)
-    if segment_has_score(segment) and segment_score_100(segment) <= score_threshold:
-        return True
+    settings = settings or {}
     quality = dict(segment.get("quality") or {})
     if str(quality.get("confidence_label") or "").strip().lower() in {"red", "yellow"}:
         return True
@@ -130,7 +128,52 @@ def segment_needs_word_precision(segment: dict, settings: dict | None) -> bool:
             return True
     except Exception:
         pass
-    return bool(segment.get("stt_ensemble_needs_llm_review"))
+    if bool(segment.get("stt_ensemble_needs_llm_review")):
+        return True
+    score_threshold = setting_float(settings, "stt_word_timestamps_precision_threshold", 72.0)
+    if segment_has_score(segment) and segment_score_100(segment) <= score_threshold:
+        score_flags = {str(flag) for flag in (segment.get("stt_score_flags") or ())}
+        if (
+            setting_bool(
+                settings,
+                "stt_whisper_primary_metadata_only_low_score_precision_requires_secondary_signal",
+                False,
+            )
+            and str(settings.get("selected_whisper_model") or "").strip().lower().startswith("whisperkit-persistent:")
+            and score_flags
+            and score_flags.issubset(
+                {"no_speech_prob_missing", "avg_logprob_missing", "word_confidence_missing"}
+            )
+        ):
+            text = str(segment.get("text") or "").strip()
+            if not any(char.isdigit() for char in text):
+                seg_start = float(segment.get("start", 0.0) or 0.0)
+                seg_end = float(segment.get("end", seg_start) or seg_start)
+                duration = max(0.0, seg_end - seg_start)
+                quality = dict(segment.get("quality") or {})
+                try:
+                    vad_score = float(quality.get("vad_alignment_score", 100.0) or 100.0)
+                except Exception:
+                    vad_score = 100.0
+                max_duration = setting_float(
+                    settings,
+                    "stt_whisper_primary_metadata_only_low_score_precision_skip_max_duration_sec",
+                    2.2,
+                )
+                min_vad_score = setting_float(
+                    settings,
+                    "stt_whisper_primary_metadata_only_low_score_precision_skip_min_vad_score",
+                    95.0,
+                )
+                if duration <= max_duration and vad_score >= min_vad_score:
+                    return False
+        if (
+            setting_bool(settings, "stt_apple_primary_low_score_precision_requires_secondary_signal", False)
+            and str(settings.get("selected_whisper_model") or "").strip().lower().startswith("apple_speech:")
+        ):
+            return False
+        return True
+    return False
 
 
 def segment_chunk_path(segment: dict) -> str:

@@ -66,6 +66,7 @@ class _BackendCapture:
 
 class _BackendCaptureCv2(_FakeCv2):
     CAP_AVFOUNDATION = 1200
+    CAP_FFMPEG = 1900
 
     def __init__(self):
         super().__init__()
@@ -284,6 +285,24 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
         self.assertEqual(backend, fake_cv2.CAP_AVFOUNDATION)
         self.assertTrue(cap.isOpened())
         self.assertEqual(fake_cv2.calls, [("/tmp/clip.mp4", fake_cv2.CAP_AVFOUNDATION)])
+
+    def test_cut_cv2_capture_prefers_ffmpeg_for_lrf_when_avfoundation_is_requested(self):
+        fake_cv2 = _BackendCaptureCv2()
+        with patch("core.cut_boundary_auto_scan.sys.platform", "darwin"):
+            backend = cut_boundary_cv2_capture_backend(
+                fake_cv2,
+                {"scan_cut_cv2_video_backend": "avfoundation"},
+                "/tmp/clip.LRF",
+            )
+            cap = open_cut_boundary_video_capture(
+                fake_cv2,
+                "/tmp/clip.LRF",
+                {"scan_cut_cv2_video_backend": "avfoundation"},
+            )
+
+        self.assertEqual(backend, fake_cv2.CAP_FFMPEG)
+        self.assertTrue(cap.isOpened())
+        self.assertEqual(fake_cv2.calls, [("/tmp/clip.LRF", fake_cv2.CAP_FFMPEG)])
 
     def test_cut_cv2_capture_falls_back_for_one_arg_capture(self):
         fake_cv2 = _OneArgCaptureCv2()

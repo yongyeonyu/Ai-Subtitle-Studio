@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable
+import re
+import time
 
 from core.audio import stt_rescue
 from core.native_stt_recheck import (
@@ -31,11 +33,488 @@ def _segment_text(segment: dict[str, Any]) -> str:
     return str(segment.get("text") or "").strip()
 
 
+def _segment_chunk_path(segment: dict[str, Any]) -> str:
+    meta = dict(segment.get("asr_metadata") or {})
+    return str(meta.get("chunk_path") or segment.get("chunk_path") or "")
+
+
 def _segment_score(segment: dict[str, Any], score_fn: Callable[[dict[str, Any]], float]) -> float:
     try:
         return max(0.0, min(100.0, float(score_fn(segment) or 0.0)))
     except Exception:
         return 0.0
+
+
+def _skip_metadata_only_whisper_primary_recheck(
+    primary: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> bool:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_whisper_primary_metadata_only_low_score_recheck_requires_secondary_signal", False)):
+        return False
+    selected_primary_model = str(settings.get("selected_whisper_model") or "").strip().lower()
+    if not selected_primary_model.startswith("whisperkit-persistent:"):
+        return False
+    flags = {str(flag) for flag in (primary.get("stt_score_flags") or ())}
+    if not flags or not flags.issubset({"no_speech_prob_missing", "avg_logprob_missing", "word_confidence_missing"}):
+        return False
+    text = _segment_text(primary)
+    if any(char.isdigit() for char in text):
+        return False
+    start = _as_float(primary.get("start"), 0.0)
+    end = max(start, _as_float(primary.get("end"), start))
+    duration = max(0.0, end - start)
+    max_duration = max(
+        0.1,
+        _as_float(
+            settings.get("stt_whisper_primary_metadata_only_low_score_recheck_skip_max_duration_sec"),
+            2.2,
+        ),
+    )
+    if duration > max_duration:
+        return False
+    quality = dict(primary.get("quality") or {})
+    vad_score = _as_float(
+        quality.get("vad_alignment_score"),
+        100.0,
+    )
+    min_vad_score = max(
+        0.0,
+        min(
+            100.0,
+            _as_float(
+                settings.get("stt_whisper_primary_metadata_only_low_score_recheck_skip_min_vad_score"),
+                95.0,
+            ),
+        ),
+    )
+    return vad_score >= min_vad_score
+
+
+def _skip_low_vad_whisper_primary_recheck(
+    primary: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> bool:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_whisper_primary_low_vad_low_score_recheck_requires_secondary_signal", False)):
+        return False
+    selected_primary_model = str(settings.get("selected_whisper_model") or "").strip().lower()
+    if not selected_primary_model.startswith("whisperkit-persistent:"):
+        return False
+    flags = {str(flag) for flag in (primary.get("stt_score_flags") or ())}
+    if not flags or not flags.issubset({"no_speech_prob_missing", "avg_logprob_missing", "word_confidence_missing"}):
+        return False
+    text = _segment_text(primary)
+    if not text or any(char.isdigit() for char in text):
+        return False
+    start = _as_float(primary.get("start"), 0.0)
+    end = max(start, _as_float(primary.get("end"), start))
+    duration = max(0.0, end - start)
+    max_duration = max(
+        0.1,
+        _as_float(
+            settings.get("stt_whisper_primary_low_vad_low_score_recheck_skip_max_duration_sec"),
+            3.1,
+        ),
+    )
+    if duration > max_duration:
+        return False
+    quality = dict(primary.get("quality") or {})
+    vad_score = _as_float(
+        quality.get("vad_alignment_score"),
+        100.0,
+    )
+    max_vad_score = max(
+        0.0,
+        min(
+            100.0,
+            _as_float(
+                settings.get("stt_whisper_primary_low_vad_low_score_recheck_skip_max_vad_score"),
+                60.0,
+            ),
+        ),
+    )
+    return vad_score <= max_vad_score
+
+
+def _skip_pure_numeric_whisper_primary_recheck(
+    primary: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> bool:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_whisper_primary_pure_numeric_low_score_recheck_requires_secondary_signal", False)):
+        return False
+    selected_primary_model = str(settings.get("selected_whisper_model") or "").strip().lower()
+    if not selected_primary_model.startswith("whisperkit-persistent:"):
+        return False
+    text = _segment_text(primary)
+    if not text or re.fullmatch(r"[0-9]+(?:[.,][0-9]+)?", text) is None:
+        return False
+    flags = {str(flag) for flag in (primary.get("stt_score_flags") or ())}
+    allowed_flags = {"no_speech_prob_missing", "avg_logprob_missing", "word_confidence_missing", "low_language_char_ratio"}
+    if not flags or not flags.issubset(allowed_flags):
+        return False
+    start = _as_float(primary.get("start"), 0.0)
+    end = max(start, _as_float(primary.get("end"), start))
+    duration = max(0.0, end - start)
+    max_duration = max(
+        0.1,
+        _as_float(
+            settings.get("stt_whisper_primary_pure_numeric_low_score_recheck_skip_max_duration_sec"),
+            2.2,
+        ),
+    )
+    if duration > max_duration:
+        return False
+    quality = dict(primary.get("quality") or {})
+    vad_score = _as_float(
+        quality.get("vad_alignment_score"),
+        100.0,
+    )
+    min_vad_score = max(
+        0.0,
+        min(
+            100.0,
+            _as_float(
+                settings.get("stt_whisper_primary_pure_numeric_low_score_recheck_skip_min_vad_score"),
+                95.0,
+            ),
+        ),
+    )
+    return vad_score >= min_vad_score
+
+
+def _skip_short_numeric_phrase_apple_primary_recheck(
+    primary: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> bool:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_apple_primary_short_numeric_phrase_low_score_recheck_requires_secondary_signal", False)):
+        return False
+    selected_primary_model = str(settings.get("selected_whisper_model") or "").strip().lower()
+    if not selected_primary_model.startswith("apple_speech:"):
+        return False
+    text = _segment_text(primary)
+    if not text or not any(char.isdigit() for char in text):
+        return False
+    flags = {str(flag) for flag in (primary.get("stt_score_flags") or ())}
+    allowed_flags = {
+        "no_speech_prob_missing",
+        "avg_logprob_missing",
+        "word_confidence_missing",
+        "low_language_char_ratio",
+        "low_korean_ratio",
+    }
+    if not flags or not flags.issubset(allowed_flags):
+        return False
+    start = _as_float(primary.get("start"), 0.0)
+    end = max(start, _as_float(primary.get("end"), start))
+    duration = max(0.0, end - start)
+    max_duration = max(
+        0.1,
+        _as_float(
+            settings.get("stt_apple_primary_short_numeric_phrase_low_score_recheck_skip_max_duration_sec"),
+            3.2,
+        ),
+    )
+    if duration > max_duration:
+        return False
+    quality = dict(primary.get("quality") or {})
+    vad_score = _as_float(
+        quality.get("vad_alignment_score"),
+        100.0,
+    )
+    min_vad_score = max(
+        0.0,
+        min(
+            100.0,
+            _as_float(
+                settings.get("stt_apple_primary_short_numeric_phrase_low_score_recheck_skip_min_vad_score"),
+                98.0,
+            ),
+        ),
+    )
+    return vad_score >= min_vad_score
+
+
+def _skip_low_korean_numeric_phrase_apple_primary_recheck(
+    primary: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> bool:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_requires_secondary_signal", False)):
+        return False
+    selected_primary_model = str(settings.get("selected_whisper_model") or "").strip().lower()
+    if not selected_primary_model.startswith("apple_speech:"):
+        return False
+    text = _segment_text(primary)
+    if not text or not any(char.isdigit() for char in text):
+        return False
+    flags = {str(flag) for flag in (primary.get("stt_score_flags") or ())}
+    if "low_korean_ratio" not in flags:
+        return False
+    allowed_flags = {
+        "no_speech_prob_missing",
+        "avg_logprob_missing",
+        "word_confidence_missing",
+        "low_language_char_ratio",
+        "low_korean_ratio",
+    }
+    if not flags.issubset(allowed_flags):
+        return False
+    start = _as_float(primary.get("start"), 0.0)
+    end = max(start, _as_float(primary.get("end"), start))
+    duration = max(0.0, end - start)
+    max_duration = max(
+        0.1,
+        _as_float(
+            settings.get("stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_skip_max_duration_sec"),
+            4.0,
+        ),
+    )
+    if duration > max_duration:
+        return False
+    quality = dict(primary.get("quality") or {})
+    vad_score = _as_float(
+        quality.get("vad_alignment_score"),
+        100.0,
+    )
+    min_vad_score = max(
+        0.0,
+        min(
+            100.0,
+            _as_float(
+                settings.get("stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_skip_min_vad_score"),
+                95.0,
+            ),
+        ),
+    )
+    return vad_score >= min_vad_score
+
+
+def _skip_low_vad_apple_primary_recheck(
+    primary: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> bool:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_apple_primary_low_vad_low_score_recheck_requires_secondary_signal", False)):
+        return False
+    selected_primary_model = str(settings.get("selected_whisper_model") or "").strip().lower()
+    if not selected_primary_model.startswith("apple_speech:"):
+        return False
+    text = _segment_text(primary)
+    if not text:
+        return False
+    flags = {str(flag) for flag in (primary.get("stt_score_flags") or ())}
+    if not flags or not flags.issubset({"no_speech_prob_missing", "avg_logprob_missing", "word_confidence_missing"}):
+        return False
+    start = _as_float(primary.get("start"), 0.0)
+    end = max(start, _as_float(primary.get("end"), start))
+    duration = max(0.0, end - start)
+    max_duration = max(
+        0.1,
+        _as_float(
+            settings.get("stt_apple_primary_low_vad_low_score_recheck_skip_max_duration_sec"),
+            4.8,
+        ),
+    )
+    if duration > max_duration:
+        return False
+    quality = dict(primary.get("quality") or {})
+    vad_score = _as_float(
+        quality.get("vad_alignment_score"),
+        100.0,
+    )
+    max_vad_score = max(
+        0.0,
+        min(
+            100.0,
+            _as_float(
+                settings.get("stt_apple_primary_low_vad_low_score_recheck_skip_max_vad_score"),
+                75.0,
+            ),
+        ),
+    )
+    return vad_score <= max_vad_score
+
+
+def _normalized_numeric_text(text: str) -> str:
+    return "".join(ch for ch in str(text or "") if ch.isdigit() or ch in {".", ","}).strip()
+
+
+def _is_pure_numeric_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    normalized = _normalized_numeric_text(raw)
+    return bool(normalized) and normalized == raw
+
+
+def _metadata_only_score_flags(segment: dict[str, Any] | None) -> bool:
+    flags = {str(flag) for flag in ((segment or {}).get("stt_score_flags") or ())}
+    if not flags:
+        return False
+    return flags.issubset({"no_speech_prob_missing", "avg_logprob_missing", "word_confidence_missing", "low_language_char_ratio"})
+
+
+def _postfilter_duplicate_pure_numeric_precision_ranges(
+    selected: list[stt_rescue.SttRecheckRange],
+    settings: dict[str, Any] | None,
+) -> list[stt_rescue.SttRecheckRange]:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_word_timestamps_precision_enabled", True)):
+        return list(selected or [])
+    if not bool(settings.get("stt_whisper_primary_duplicate_pure_numeric_precision_requires_neighbor_signal", False)):
+        return list(selected or [])
+    if not str(settings.get("selected_whisper_model") or "").strip().lower().startswith("whisperkit-persistent:"):
+        return list(selected or [])
+
+    max_gap_sec = max(
+        0.5,
+        min(
+            12.0,
+            _as_float(settings.get("stt_whisper_primary_duplicate_pure_numeric_precision_skip_neighbor_max_gap_sec"), 6.0),
+        ),
+    )
+    out: list[stt_rescue.SttRecheckRange] = []
+    for idx, item in enumerate(list(selected or [])):
+        text = str(item.primary_text or "").strip()
+        if not _is_pure_numeric_text(text):
+            out.append(item)
+            continue
+        if not _metadata_only_score_flags(item.primary):
+            out.append(item)
+            continue
+        duration = max(0.05, float(item.end or 0.0) - float(item.start or 0.0))
+        normalized = _normalized_numeric_text(text)
+        skip_current = False
+        for other_idx, other in enumerate(list(selected or [])):
+            if other_idx == idx:
+                continue
+            other_text = str(other.primary_text or "").strip()
+            if _normalized_numeric_text(other_text) != normalized:
+                continue
+            other_duration = max(0.05, float(other.end or 0.0) - float(other.start or 0.0))
+            if float(other.start or 0.0) < float(item.start or 0.0):
+                continue
+            if float(other.start or 0.0) - float(item.end or 0.0) > max_gap_sec:
+                continue
+            if other_duration <= duration:
+                skip_current = True
+                break
+        if skip_current:
+            continue
+        out.append(item)
+    return out
+
+
+def _skip_long_nondigit_apple_primary_recheck(
+    primary: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> bool:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_apple_primary_long_nondigit_low_score_recheck_requires_secondary_signal", False)):
+        return False
+    selected_primary_model = str(settings.get("selected_whisper_model") or "").strip().lower()
+    if not selected_primary_model.startswith("apple_speech:"):
+        return False
+    text = _segment_text(primary)
+    if not text or any(char.isdigit() for char in text):
+        return False
+    flags = {str(flag) for flag in (primary.get("stt_score_flags") or ())}
+    if "too_long_duration" not in flags:
+        return False
+    allowed_flags = {
+        "no_speech_prob_missing",
+        "avg_logprob_missing",
+        "word_confidence_missing",
+        "too_long_duration",
+    }
+    if not flags.issubset(allowed_flags):
+        return False
+    start = _as_float(primary.get("start"), 0.0)
+    end = max(start, _as_float(primary.get("end"), start))
+    duration = max(0.0, end - start)
+    min_duration = max(
+        0.1,
+        _as_float(
+            settings.get("stt_apple_primary_long_nondigit_low_score_recheck_skip_min_duration_sec"),
+            7.0,
+        ),
+    )
+    if duration < min_duration:
+        return False
+    quality = dict(primary.get("quality") or {})
+    vad_score = _as_float(
+        quality.get("vad_alignment_score"),
+        100.0,
+    )
+    min_vad_score = max(
+        0.0,
+        min(
+            100.0,
+            _as_float(
+                settings.get("stt_apple_primary_long_nondigit_low_score_recheck_skip_min_vad_score"),
+                95.0,
+            ),
+        ),
+    )
+    return vad_score >= min_vad_score
+
+
+def _skip_long_numeric_phrase_apple_primary_recheck(
+    primary: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> bool:
+    settings = dict(settings or {})
+    if not bool(settings.get("stt_apple_primary_long_numeric_phrase_low_score_recheck_requires_secondary_signal", False)):
+        return False
+    selected_primary_model = str(settings.get("selected_whisper_model") or "").strip().lower()
+    if not selected_primary_model.startswith("apple_speech:"):
+        return False
+    text = _segment_text(primary)
+    if not text or not any(char.isdigit() for char in text):
+        return False
+    flags = {str(flag) for flag in (primary.get("stt_score_flags") or ())}
+    if "too_long_duration" not in flags:
+        return False
+    allowed_flags = {
+        "no_speech_prob_missing",
+        "avg_logprob_missing",
+        "word_confidence_missing",
+        "too_long_duration",
+    }
+    if not flags.issubset(allowed_flags):
+        return False
+    start = _as_float(primary.get("start"), 0.0)
+    end = max(start, _as_float(primary.get("end"), start))
+    duration = max(0.0, end - start)
+    min_duration = max(
+        0.1,
+        _as_float(
+            settings.get("stt_apple_primary_long_numeric_phrase_low_score_recheck_skip_min_duration_sec"),
+            6.0,
+        ),
+    )
+    if duration < min_duration:
+        return False
+    quality = dict(primary.get("quality") or {})
+    vad_score = _as_float(
+        quality.get("vad_alignment_score"),
+        100.0,
+    )
+    min_vad_score = max(
+        0.0,
+        min(
+            100.0,
+            _as_float(
+                settings.get("stt_apple_primary_long_numeric_phrase_low_score_recheck_skip_min_vad_score"),
+                95.0,
+            ),
+        ),
+    )
+    return vad_score >= min_vad_score
+
 
 
 def normalize_scored_tracks(
@@ -242,6 +721,18 @@ def primary_low_score_recheck_ranges(
         for idx in indices
         if 0 <= idx < len(valid_primary)
     ]
+    ranges = [
+        item
+        for item in ranges
+        if not _skip_metadata_only_whisper_primary_recheck(item.primary, settings)
+        and not _skip_low_vad_whisper_primary_recheck(item.primary, settings)
+        and not _skip_pure_numeric_whisper_primary_recheck(item.primary, settings)
+        and not _skip_short_numeric_phrase_apple_primary_recheck(item.primary, settings)
+        and not _skip_low_korean_numeric_phrase_apple_primary_recheck(item.primary, settings)
+        and not _skip_low_vad_apple_primary_recheck(item.primary, settings)
+        and not _skip_long_nondigit_apple_primary_recheck(item.primary, settings)
+        and not _skip_long_numeric_phrase_apple_primary_recheck(item.primary, settings)
+    ]
     if apply_budget:
         return stt_rescue.budget_recheck_ranges(ranges, settings)
     ranges.sort(key=lambda item: (item.start, item.end))
@@ -259,8 +750,8 @@ def resolve_precision_model(
     return configured_precision_model or selected_primary_model or str(primary_model or "").strip()
 
 
-def precision_pass_overrides() -> dict[str, Any]:
-    return {
+def precision_pass_overrides(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    overrides = {
         "stt_ensemble_enabled": False,
         "stt_selective_secondary_recheck_enabled": False,
         "stt_candidate_scoring_enabled": True,
@@ -289,10 +780,29 @@ def precision_pass_overrides() -> dict[str, Any]:
         "w_none_temp_max": 0.0,
         "whisper_chunk_overlap_sec": 0.0,
     }
+    source = dict(settings or {})
+    passthrough_keys = (
+        "stt_whisperkit_native_allocator_can_raise_workers",
+        "stt_whisperkit_precision_aggressive_gpu_enabled",
+        "stt_whisperkit_word_timestamp_concurrent_workers",
+        "stt_whisperkit_concurrent_max_workers",
+        "stt_whisperkit_gpu_saturation_max_workers",
+        "stt_word_timestamp_worker_response_timeout_sec",
+        "stt_word_timestamp_worker_straggler_timeout_sec",
+        "stt_word_timestamp_worker_straggler_max_missing_chunks",
+        "stt_word_timestamp_worker_straggler_min_received_ratio",
+        "stt_word_timestamp_straggler_skip_enabled",
+        "stt_duration_first_submission_enabled",
+        "stt_collect_force_fresh_native_memory_snapshot",
+    )
+    for key in passthrough_keys:
+        if key in source:
+            overrides[key] = source[key]
+    return overrides
 
 
-def low_score_recheck_overrides() -> dict[str, Any]:
-    return {
+def low_score_recheck_overrides(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    overrides = {
         "stt_ensemble_enabled": False,
         "stt_candidate_scoring_enabled": True,
         "stt_quality_preset": "precise",
@@ -300,10 +810,29 @@ def low_score_recheck_overrides() -> dict[str, Any]:
         "w_none_temp_max": 0.0,
         "whisper_chunk_overlap_sec": 0.0,
     }
+    source = dict(settings or {})
+    passthrough_keys = (
+        "stt_recheck_worker_response_timeout_sec",
+        "stt_worker_response_timeout_sec",
+        "stt_whisperkit_concurrent_workers",
+        "stt_whisperkit_recheck_concurrent_workers",
+        "stt_whisperkit_concurrent_max_workers",
+        "stt_whisperkit_recheck_concurrent_max_workers",
+        "stt_whisperkit_native_allocator_can_raise_workers",
+        "stt_duration_first_submission_enabled",
+        "stt_recheck_worker_straggler_timeout_sec",
+        "stt_recheck_worker_straggler_max_missing_chunks",
+        "stt_recheck_worker_straggler_min_received_ratio",
+        "stt_recheck_straggler_skip_enabled",
+    )
+    for key in passthrough_keys:
+        if key in source:
+            overrides[key] = source[key]
+    return overrides
 
 
-def selective_secondary_recheck_overrides() -> dict[str, Any]:
-    return {
+def selective_secondary_recheck_overrides(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    overrides = {
         "stt_ensemble_enabled": False,
         "stt_candidate_scoring_enabled": True,
         "stt_quality_preset": "precise",
@@ -318,6 +847,27 @@ def selective_secondary_recheck_overrides() -> dict[str, Any]:
         "w_none_temp_max": 0.0,
         "whisper_chunk_overlap_sec": 0.0,
     }
+    source = dict(settings or {})
+    passthrough_keys = (
+        "stt_recheck_worker_response_timeout_sec",
+        "stt_worker_response_timeout_sec",
+        "stt_whisperkit_concurrent_workers",
+        "stt_whisperkit_recheck_concurrent_workers",
+        "stt_whisperkit_concurrent_max_workers",
+        "stt_whisperkit_recheck_concurrent_max_workers",
+        "stt_whisperkit_native_allocator_can_raise_workers",
+        "stt_duration_first_submission_enabled",
+        "stt_selective_secondary_collect_owner_runtime_enabled",
+        "stt_selective_recheck_min_segment_retention_ratio",
+        "stt_recheck_worker_straggler_timeout_sec",
+        "stt_recheck_worker_straggler_max_missing_chunks",
+        "stt_recheck_worker_straggler_min_received_ratio",
+        "stt_recheck_straggler_skip_enabled",
+    )
+    for key in passthrough_keys:
+        if key in source:
+            overrides[key] = source[key]
+    return overrides
 
 
 def collect_prepared_recheck_clips(
@@ -373,7 +923,13 @@ def collect_and_annotate_segments(
     vad_segments: list[dict[str, Any]] | None,
     peer_segments: list[dict[str, Any]] | None = None,
     is_single: bool = False,
+    trace_callback: Callable[[dict[str, Any]], None] | None = None,
+    prepared_clips: list[dict[str, Any]] | None = None,
+    prepared_clip_rows: list[dict[str, Any]] | None = None,
+    collect_prepared_clips: list[dict[str, Any]] | None = None,
+    collect_clip_rows: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
+    phase_started = time.perf_counter()
     segments = list(
         collect_fn(
             chunk_dir,
@@ -384,9 +940,131 @@ def collect_and_annotate_segments(
         )
         or []
     )
+    collect_elapsed_ms = round((time.perf_counter() - phase_started) * 1000.0, 3)
+    collect_runtime_info = None
+    collect_owner = None
+    try:
+        collect_owner = getattr(collect_fn, "__self__", None) or getattr(collect_fn, "_collect_owner", None)
+        collect_runtime_info = dict(getattr(collect_owner, "_last_collect_runtime_info", {}) or {})
+    except Exception:
+        collect_runtime_info = None
+    prepared_clip_rows_with_collected: list[dict[str, Any]] = []
+    collect_clip_rows_with_collected: list[dict[str, Any]] = []
+    prepared_by_path: dict[str, dict[str, Any]] = {}
+    for clip in list(prepared_clips or []):
+        if not isinstance(clip, dict):
+            continue
+        clip_path = str(clip.get("path") or "").strip()
+        if clip_path:
+            prepared_by_path[clip_path] = clip
+    collect_by_path: dict[str, dict[str, Any]] = {}
+    for clip in list(collect_prepared_clips or prepared_clips or []):
+        if not isinstance(clip, dict):
+            continue
+        clip_path = str(clip.get("path") or "").strip()
+        if clip_path:
+            collect_by_path[clip_path] = clip
+    collected_by_path: dict[str, list[dict[str, Any]]] = {}
+    for seg in list(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        seg_path = _segment_chunk_path(seg).strip()
+        if not seg_path:
+            continue
+        collected_by_path.setdefault(seg_path, []).append(seg)
+    def _overlap_rows(target_start: float, target_end: float) -> list[dict[str, Any]]:
+        matched: list[dict[str, Any]] = []
+        target_duration = max(0.001, target_end - target_start)
+        for seg in list(segments or []):
+            if not isinstance(seg, dict):
+                continue
+            seg_start = _as_float(seg.get("start"), 0.0)
+            seg_end = max(seg_start, _as_float(seg.get("end"), seg_start))
+            overlap = max(0.0, min(target_end, seg_end) - max(target_start, seg_start))
+            span = max(0.001, min(target_duration, seg_end - seg_start))
+            if overlap / span >= _SEGMENT_RANGE_OVERLAP_RATIO:
+                matched.append(seg)
+        return matched
+
+    for row in list(prepared_clip_rows or []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        clip_path = str(item.get("path") or "").strip()
+        if not clip_path:
+            clip_path = str(dict(prepared_by_path.get(str(item.get("path") or "").strip()) or {}).get("path") or "").strip()
+        segs = list(collected_by_path.get(clip_path, []))
+        if not segs:
+            row_start = _as_float(item.get("start"), 0.0)
+            row_end = max(row_start, _as_float(item.get("end"), row_start))
+            segs = _overlap_rows(row_start, row_end)
+        text_segs = [seg for seg in segs if _segment_text(seg)]
+        item["path"] = clip_path
+        item["collected_segment_count"] = len(segs)
+        item["collected_text_segment_count"] = len(text_segs)
+        item["collected_total_duration_sec"] = round(
+            sum(
+                max(
+                    0.0,
+                    _as_float(seg.get("end"), _as_float(seg.get("start"), 0.0)) - _as_float(seg.get("start"), 0.0),
+                )
+                for seg in segs
+            ),
+            3,
+        )
+        item["collected_sample_texts"] = [_segment_text(seg) for seg in text_segs[:2]]
+        prepared_clip_rows_with_collected.append(item)
+    for row in list(collect_clip_rows or []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        clip_path = str(item.get("path") or "").strip()
+        if not clip_path:
+            clip_path = str(dict(collect_by_path.get(str(item.get("path") or "").strip()) or {}).get("path") or "").strip()
+        segs = list(collected_by_path.get(clip_path, []))
+        if not segs:
+            row_start = _as_float(item.get("start"), 0.0)
+            row_end = max(row_start, _as_float(item.get("end"), row_start))
+            segs = _overlap_rows(row_start, row_end)
+        text_segs = [seg for seg in segs if _segment_text(seg)]
+        item["path"] = clip_path
+        item["collected_segment_count"] = len(segs)
+        item["collected_text_segment_count"] = len(text_segs)
+        item["collected_total_duration_sec"] = round(
+            sum(
+                max(
+                    0.0,
+                    _as_float(seg.get("end"), _as_float(seg.get("start"), 0.0)) - _as_float(seg.get("start"), 0.0),
+                )
+                for seg in segs
+            ),
+            3,
+        )
+        item["collected_sample_texts"] = [_segment_text(seg) for seg in text_segs[:2]]
+        collect_clip_rows_with_collected.append(item)
+    if callable(trace_callback):
+        try:
+            payload = {
+                "phase": "collect_segments",
+                "elapsed_ms": collect_elapsed_ms,
+                "collected_segment_count": len(list(segments or [])),
+                "collect_owner_bound": collect_owner is not None,
+                "collect_owner_type": type(collect_owner).__name__ if collect_owner is not None else "",
+                "collect_runtime_info_found": bool(collect_runtime_info),
+            }
+            if prepared_clip_rows_with_collected:
+                payload["prepared_clip_rows"] = prepared_clip_rows_with_collected
+            if collect_clip_rows_with_collected:
+                payload["collect_clip_rows"] = collect_clip_rows_with_collected
+            if collect_runtime_info:
+                payload["collect_runtime_info"] = collect_runtime_info
+            trace_callback(payload)
+        except Exception:
+            pass
     if not segments:
         return [], None
-    return annotate_candidate_segments(
+    phase_started = time.perf_counter()
+    annotated_segments, annotate_error = annotate_candidate_segments(
         segments,
         annotate_fn=annotate_fn,
         source=annotate_source,
@@ -394,6 +1072,20 @@ def collect_and_annotate_segments(
         vad_segments=vad_segments,
         peer_segments=peer_segments,
     )
+    if callable(trace_callback):
+        try:
+            trace_callback(
+                {
+                    "phase": "annotate_segments",
+                    "elapsed_ms": round((time.perf_counter() - phase_started) * 1000.0, 3),
+                    "collected_segment_count": len(list(segments or [])),
+                    "annotated_segment_count": len(list(annotated_segments or [])),
+                    "annotate_error": str(annotate_error or "").strip(),
+                }
+            )
+        except Exception:
+            pass
+    return annotated_segments, annotate_error
 
 
 def _python_uncovered_vad_indices(
@@ -498,6 +1190,8 @@ def missing_voice_candidate_spans(
             continue
         start = max(0.0, _as_float(vad.get("start"), 0.0))
         end = max(start, _as_float(vad.get("end"), start))
+        if max_end is not None and start >= max(0.0, float(max_end)):
+            continue
         if max_end is not None:
             end = min(end, max(0.0, float(max_end)))
         if end - start < min_duration:
@@ -602,6 +1296,12 @@ def missing_voice_recheck_ranges(
         vad = vad_segments[idx]
         start = max(0.0, _as_float(vad.get("start"), 0.0))
         end = max(start, _as_float(vad.get("end"), start))
+        if max_end is not None and start >= max_end:
+            continue
+        if max_end is not None:
+            end = min(end, max_end)
+        if end - start < max(0.2, float(min_duration)):
+            continue
         source_path = str(chunk_path_for_time((start + end) / 2.0) or "")
         if not source_path:
             continue
@@ -733,7 +1433,8 @@ def word_precision_ranges(
             item = ranges_by_index.get(idx)
             if item is not None:
                 selected.append(item)
-        return selected
+        selected.sort(key=lambda item: (item.start, item.end))
+        return _postfilter_duplicate_pure_numeric_precision_ranges(selected, settings)
     prioritized.sort(key=lambda pair: pair[0])
     selected: list[stt_rescue.SttRecheckRange] = []
     selected_sec = 0.0
@@ -746,7 +1447,7 @@ def word_precision_ranges(
         selected.append(item)
         selected_sec += duration
     selected.sort(key=lambda item: (item.start, item.end))
-    return selected
+    return _postfilter_duplicate_pure_numeric_precision_ranges(selected, settings)
 
 
 def _python_overlap_range_components(
@@ -884,8 +1585,31 @@ def selective_secondary_recheck_ranges(
     score_fn: Callable[[dict[str, Any]], float],
     chunk_path_for_time: Callable[[float], str],
 ) -> tuple[list[stt_rescue.SttRecheckRange], int]:
+    plan = selective_secondary_recheck_plan(
+        primary_segments=primary_segments,
+        vad_segments=vad_segments,
+        settings=settings,
+        score_fn=score_fn,
+        chunk_path_for_time=chunk_path_for_time,
+    )
+    return list(plan["ranges"]), int(plan["raw_count"])
+
+
+def _selective_secondary_recheck_sources(
+    *,
+    primary_segments: list[dict[str, Any]],
+    vad_segments: list[dict[str, Any]],
+    settings: dict[str, Any] | None,
+    score_fn: Callable[[dict[str, Any]], float],
+    chunk_path_for_time: Callable[[float], str],
+) -> tuple[
+    list[stt_rescue.SttRecheckRange],
+    list[stt_rescue.SttRecheckRange],
+    list[stt_rescue.SttRecheckRange],
+    list[stt_rescue.SttRecheckRange],
+]:
     settings = dict(settings or {})
-    ranges: list[stt_rescue.SttRecheckRange] = list(
+    low_score: list[stt_rescue.SttRecheckRange] = list(
         primary_low_score_recheck_ranges(
             primary_segments,
             settings,
@@ -893,17 +1617,19 @@ def selective_secondary_recheck_ranges(
             apply_budget=False,
         )
     )
-    ranges.extend(
-        missing_voice_recheck_ranges(
-            primary_segments=primary_segments,
-            vad_segments=vad_segments,
-            settings=settings,
-            existing_count=0,
-            min_duration=max(0.2, _as_float(settings.get("stt_missing_voice_min_duration_sec"), 0.55)),
-            chunk_path_for_time=chunk_path_for_time,
+    missing_voice: list[stt_rescue.SttRecheckRange] = []
+    if bool(settings.get("stt_selective_secondary_recheck_include_missing_voice", True)):
+        missing_voice = list(
+            missing_voice_recheck_ranges(
+                primary_segments=primary_segments,
+                vad_segments=vad_segments,
+                settings=settings,
+                existing_count=0,
+                min_duration=max(0.2, _as_float(settings.get("stt_missing_voice_min_duration_sec"), 0.55)),
+                chunk_path_for_time=chunk_path_for_time,
+            )
         )
-    )
-    ranges.extend(
+    route_hint: list[stt_rescue.SttRecheckRange] = list(
         route_hint_recheck_ranges(
             primary_segments,
             settings,
@@ -911,9 +1637,58 @@ def selective_secondary_recheck_ranges(
             apply_budget=False,
         )
     )
-    collapsed = collapse_duplicate_recheck_ranges(ranges)
-    raw_count = len(collapsed)
-    return stt_rescue.budget_recheck_ranges(collapsed, settings), raw_count
+    merged = collapse_duplicate_recheck_ranges([*low_score, *missing_voice, *route_hint])
+    return low_score, missing_voice, route_hint, merged
+
+
+def selective_secondary_recheck_plan(
+    *,
+    primary_segments: list[dict[str, Any]],
+    vad_segments: list[dict[str, Any]],
+    settings: dict[str, Any] | None,
+    score_fn: Callable[[dict[str, Any]], float],
+    chunk_path_for_time: Callable[[float], str],
+) -> dict[str, Any]:
+    settings = dict(settings or {})
+    low_score, missing_voice, route_hint, merged = _selective_secondary_recheck_sources(
+        primary_segments=primary_segments,
+        vad_segments=vad_segments,
+        settings=settings,
+        score_fn=score_fn,
+        chunk_path_for_time=chunk_path_for_time,
+    )
+    ranges = stt_rescue.budget_recheck_ranges(list(merged), settings)
+    return {
+        "low_score": low_score,
+        "missing_voice": missing_voice,
+        "route_hint": route_hint,
+        "merged": merged,
+        "ranges": ranges,
+        "raw_count": len(merged),
+    }
+
+
+def selective_secondary_recheck_source_counts(
+    *,
+    primary_segments: list[dict[str, Any]],
+    vad_segments: list[dict[str, Any]],
+    settings: dict[str, Any] | None,
+    score_fn: Callable[[dict[str, Any]], float],
+    chunk_path_for_time: Callable[[float], str],
+) -> dict[str, int]:
+    plan = selective_secondary_recheck_plan(
+        primary_segments=primary_segments,
+        vad_segments=vad_segments,
+        settings=settings,
+        score_fn=score_fn,
+        chunk_path_for_time=chunk_path_for_time,
+    )
+    return {
+        "low_score": len(plan["low_score"]),
+        "missing_voice": len(plan["missing_voice"]),
+        "route_hint": len(plan["route_hint"]),
+        "merged": len(plan["merged"]),
+    }
 
 
 @dataclass(frozen=True)
@@ -935,6 +1710,131 @@ class RecheckTrackApplyResult:
     selection: RecheckReplacementBatch
     preview_tracks: dict[str, list[dict[str, Any]]]
     merged_tracks: dict[str, list[dict[str, Any]]] | None
+
+
+def _segment_recheck_range_key(seg: dict[str, Any]) -> tuple[float, float] | None:
+    meta = dict(seg.get("asr_metadata") or {})
+    info = dict(meta.get("stt_low_score_recheck") or {})
+    if "range_start" not in info or "range_end" not in info:
+        return None
+    start = round(_as_float(info.get("range_start"), 0.0), 6)
+    end = round(max(start, _as_float(info.get("range_end"), start)), 6)
+    return (start, end)
+
+
+def _group_applied_segments_by_range(
+    applied_ranges: list[stt_rescue.SttRecheckRange],
+    applied_segments: list[dict[str, Any]],
+) -> list[tuple[stt_rescue.SttRecheckRange, list[dict[str, Any]]]]:
+    grouped: dict[tuple[float, float], list[dict[str, Any]]] = {}
+    for seg in list(applied_segments or []):
+        key = _segment_recheck_range_key(seg)
+        if key is None:
+            continue
+        grouped.setdefault(key, []).append(dict(seg))
+    results: list[tuple[stt_rescue.SttRecheckRange, list[dict[str, Any]]]] = []
+    for item in list(applied_ranges or []):
+        key = (round(float(item.start), 6), round(max(float(item.start), float(item.end)), 6))
+        if key in grouped:
+            results.append((item, grouped[key]))
+    return results
+
+
+def _partial_salvage_recheck_tracks(
+    *,
+    selection: RecheckReplacementBatch,
+    base_tracks: dict[str, list[dict[str, Any]]],
+    track_segment_copies: dict[str, Callable[[list[dict[str, Any]]], list[dict[str, Any]]]] | None,
+    retention_ratios: dict[str, float | None] | None,
+    overlap_ratio: float,
+) -> RecheckTrackApplyResult | None:
+    grouped = _group_applied_segments_by_range(selection.applied_ranges, selection.applied_segments)
+    if len(grouped) <= 1:
+        return None
+
+    constrained_track = next(
+        (name for name, ratio in dict(retention_ratios or {}).items() if ratio is not None and name in (base_tracks or {})),
+        next(iter(base_tracks.keys()), None),
+    )
+
+    def _group_priority(entry: tuple[stt_rescue.SttRecheckRange, list[dict[str, Any]]]) -> tuple[float, float, float]:
+        item, segments = entry
+        preview_count = 0.0
+        if constrained_track is not None:
+            preview = merge_segments_with_replacements(
+                base_segments=list((base_tracks or {}).get(constrained_track, []) or []),
+                applied_ranges=[item],
+                applied_segments=[dict(seg) for seg in segments],
+                overlap_ratio=overlap_ratio,
+            ) or []
+            preview_count = float(len(preview))
+        best_score = max(
+            (
+                max(
+                    0.0,
+                    min(
+                        100.0,
+                        float(
+                            seg.get("stt_score")
+                            or seg.get("score")
+                            or seg.get("confidence")
+                            or seg.get("avg_confidence")
+                            or 0.0
+                        ),
+                    ),
+                )
+                for seg in segments or []
+            ),
+            default=0.0,
+        )
+        return (-preview_count, -best_score, float(item.start))
+
+    ordered = sorted(grouped, key=_group_priority)
+    current_tracks = {name: list(segments or []) for name, segments in dict(base_tracks or {}).items()}
+    accepted: list[tuple[stt_rescue.SttRecheckRange, list[dict[str, Any]]]] = []
+    rejected_ranges: list[stt_rescue.SttRecheckRange] = []
+
+    for item, segments in ordered:
+        candidate_tracks: dict[str, list[dict[str, Any]]] = {}
+        ok = True
+        for track_name, current_segments in current_tracks.items():
+            copy_fn = (track_segment_copies or {}).get(track_name)
+            candidate_segments = copy_fn(segments) if callable(copy_fn) else [dict(seg) for seg in segments]
+            merged = merge_segments_with_replacements(
+                base_segments=current_segments,
+                applied_ranges=[item],
+                applied_segments=candidate_segments,
+                overlap_ratio=overlap_ratio,
+            ) or []
+            retention_ratio = (retention_ratios or {}).get(track_name) if retention_ratios else None
+            if retention_ratio is not None and not _meets_retention_ratio(
+                base_segments=list((base_tracks or {}).get(track_name, []) or []),
+                merged_segments=merged,
+                min_retention_ratio=retention_ratio,
+            ):
+                ok = False
+                break
+            candidate_tracks[track_name] = merged
+        if ok:
+            current_tracks = candidate_tracks
+            accepted.append((item, segments))
+        else:
+            rejected_ranges.append(item)
+
+    if not accepted:
+        return None
+
+    accepted_ranges = [item for item, _segments in accepted]
+    accepted_segments = [dict(seg) for _item, segments in accepted for seg in segments]
+    return RecheckTrackApplyResult(
+        selection=RecheckReplacementBatch(
+            applied_ranges=accepted_ranges,
+            applied_segments=accepted_segments,
+            skipped_ranges=list(selection.skipped_ranges) + rejected_ranges,
+        ),
+        preview_tracks={name: list(segments or []) for name, segments in current_tracks.items()},
+        merged_tracks={name: list(segments or []) for name, segments in current_tracks.items()},
+    )
 
 
 def _python_overlap_segment_groups(
@@ -1042,33 +1942,125 @@ def prepare_and_collect_recheck_segments(
     vad_segments: list[dict[str, Any]] | None,
     peer_segments: list[dict[str, Any]] | None = None,
     is_single: bool = False,
+    trace_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> CollectedRecheckBatch:
+    phase_started = time.perf_counter()
     prepared = collect_prepared_recheck_clips(
         ranges=ranges,
         out_dir=out_dir,
         settings=settings,
         prepare_clip_fn=prepare_clip_fn,
     )
+    prepared_clip_rows: list[dict[str, Any]] = []
+    for clip in prepared or []:
+        start = round(float(clip.get("start", 0.0) or 0.0), 3)
+        end = round(float(clip.get("end", start) or start), 3)
+        duration_sec = round(max(0.0, end - start), 3)
+        item = clip.get("range")
+        prepared_clip_rows.append(
+            {
+                "start": start,
+                "end": end,
+                "duration_sec": duration_sec,
+                "source_chunk_path": str(clip.get("source_path") or "").strip(),
+                "source_chunk_start": round(float(clip.get("source_chunk_start", 0.0) or 0.0), 3),
+                "source_chunk_duration_sec": round(float(clip.get("source_chunk_duration_sec", 0.0) or 0.0), 3),
+                "local_start": round(float(clip.get("local_start", 0.0) or 0.0), 3),
+                "local_end": round(float(clip.get("local_end", 0.0) or 0.0), 3),
+                "padding_sec": round(float(clip.get("padding_sec", 0.0) or 0.0), 3),
+                "primary_text": str(getattr(item, "primary_text", "") or "").strip(),
+                "secondary_text": str(getattr(item, "secondary_text", "") or "").strip(),
+                "best_original_score": round(float(getattr(item, "best_original_score", 0.0) or 0.0), 3),
+                "path": str(clip.get("path") or "").strip(),
+            }
+        )
+    if callable(trace_callback):
+        try:
+            trace_callback(
+                {
+                    "phase": "prepare_clips",
+                    "elapsed_ms": round((time.perf_counter() - phase_started) * 1000.0, 3),
+                    "range_count": len(list(ranges or [])),
+                    "prepared_clip_count": len(list(prepared or [])),
+                    "prepared_total_clip_duration_sec": round(
+                        sum(float(item.get("duration_sec", 0.0) or 0.0) for item in prepared_clip_rows),
+                        3,
+                    ),
+                    "prepared_max_clip_duration_sec": round(
+                        max((float(item.get("duration_sec", 0.0) or 0.0) for item in prepared_clip_rows), default=0.0),
+                        3,
+                    ),
+                    "prepared_clip_rows": prepared_clip_rows,
+                }
+            )
+        except Exception:
+            pass
     if not prepared:
         return CollectedRecheckBatch(prepared_clips=[], collected_segments=[], annotate_error=None)
+    effective_collect_overrides = dict(settings_overrides or {})
+    effective_collect_overrides.update(
+        _precision_collect_submission_hints(
+            prepared_clips=prepared,
+            settings=settings,
+        )
+    )
     collected_segments, annotate_error = collect_and_annotate_segments(
         collect_fn=collect_fn,
         chunk_dir=out_dir,
         model=model,
         label=label,
-        settings_overrides=settings_overrides,
+        settings_overrides=effective_collect_overrides,
         annotate_fn=annotate_fn,
         annotate_source=annotate_source,
         settings=settings,
         vad_segments=vad_segments,
         peer_segments=peer_segments,
         is_single=is_single,
+        trace_callback=trace_callback,
+        prepared_clips=prepared,
+        prepared_clip_rows=prepared_clip_rows,
     )
     return CollectedRecheckBatch(
         prepared_clips=prepared,
         collected_segments=collected_segments,
         annotate_error=annotate_error,
     )
+
+
+def _precision_collect_submission_hints(
+    *,
+    prepared_clips: list[dict[str, Any]] | None,
+    settings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    data = dict(settings or {})
+    hints: dict[str, Any] = {}
+    if bool(data.get("stt_word_timestamp_collect_prioritize_pure_numeric_enabled", False)):
+        max_offsets = max(
+            1,
+            int(float(data.get("stt_word_timestamp_collect_prioritize_pure_numeric_max_offsets", 1) or 1)),
+        )
+        max_duration_sec = max(
+            0.1,
+            float(data.get("stt_word_timestamp_collect_prioritize_pure_numeric_max_duration_sec", 3.0) or 3.0),
+        )
+        offsets: list[tuple[float, float]] = []
+        for clip in list(prepared_clips or []):
+            if not isinstance(clip, dict):
+                continue
+            item = clip.get("range")
+            primary_text = str(getattr(item, "primary_text", "") or "").strip()
+            if not primary_text or re.fullmatch(r"[0-9]+(?:[.,][0-9]+)?", primary_text) is None:
+                continue
+            duration_sec = max(0.0, float(clip.get("end", 0.0) or 0.0) - float(clip.get("start", 0.0) or 0.0))
+            if duration_sec > max_duration_sec:
+                continue
+            offsets.append((float(clip.get("start", 0.0) or 0.0), duration_sec))
+        if offsets:
+            offsets.sort(key=lambda row: (row[1], row[0]))
+            hints["stt_duration_first_submission_prioritize_offsets_sec"] = [
+                round(row[0], 3) for row in offsets[:max_offsets]
+            ]
+    return hints
 
 
 def apply_recheck_selection_to_tracks(
@@ -1122,6 +2114,16 @@ def apply_recheck_selection_to_tracks(
             merged_segments=preview,
             min_retention_ratio=retention_ratio,
         ):
+            if bool((settings or {}).get("stt_selective_recheck_partial_salvage_enabled", False)):
+                salvaged = _partial_salvage_recheck_tracks(
+                    selection=selection,
+                    base_tracks=base_tracks,
+                    track_segment_copies=track_segment_copies,
+                    retention_ratios=retention_ratios,
+                    overlap_ratio=overlap_ratio,
+                )
+                if salvaged is not None:
+                    return salvaged
             return RecheckTrackApplyResult(
                 selection=selection,
                 preview_tracks=preview_tracks,
@@ -1215,6 +2217,24 @@ def _word_precision_edges(
     if end <= start + 0.05:
         return None
     return start, end, words
+
+
+def _mark_word_precision_reject(
+    segment: dict[str, Any],
+    *,
+    reason: str,
+    detail: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    out = dict(segment)
+    meta = dict(out.get("asr_metadata") or {})
+    selective = dict(meta.get("selective_word_timestamps") or {})
+    selective["enabled"] = True
+    selective["reject_reason"] = str(reason or "").strip()
+    if detail:
+        selective["reject_detail"] = dict(detail)
+    meta["selective_word_timestamps"] = selective
+    out["asr_metadata"] = meta
+    return out
 
 
 def _word_precision_split_replacements(
@@ -1382,7 +2402,7 @@ def apply_word_precision_segments(
             if 0 <= idx < len(precision_segments) and precision_segments[idx].get("words")
         ]
         if not candidates:
-            updated.append(seg)
+            updated.append(_mark_word_precision_reject(seg, reason="no_candidate_words"))
             continue
         candidates.sort(
             key=lambda candidate: (
@@ -1410,14 +2430,30 @@ def apply_word_precision_segments(
         else:
             similarity = 1.0 if _segment_text(seg) == _segment_text(chosen) else 0.5
         if similarity < min_similarity:
-            updated.append(seg)
+            updated.append(
+                _mark_word_precision_reject(
+                    seg,
+                    reason="candidate_similarity_below_threshold",
+                    detail={
+                        "similarity": round(similarity, 6),
+                        "min_similarity": round(min_similarity, 6),
+                        "candidate_text": _segment_text(chosen),
+                    },
+                )
+            )
             continue
 
         original_start = _as_float(seg.get("start"), 0.0)
         original_end = max(original_start, _as_float(seg.get("end"), original_start))
         edges = _word_precision_edges(chosen, fallback_start=original_start, fallback_end=original_end)
         if edges is None:
-            updated.append(seg)
+            updated.append(
+                _mark_word_precision_reject(
+                    seg,
+                    reason="candidate_missing_word_edges",
+                    detail={"candidate_text": _segment_text(chosen)},
+                )
+            )
             continue
         new_start, new_end, words = edges
 
@@ -1426,10 +2462,31 @@ def apply_word_precision_segments(
         new_duration = max(0.05, new_end - new_start)
         duration_ratio = new_duration / original_duration
         if edge_shift > max_timing_shift:
-            updated.append(seg)
+            updated.append(
+                _mark_word_precision_reject(
+                    seg,
+                    reason="candidate_edge_shift_exceeded",
+                    detail={
+                        "edge_shift": round(edge_shift, 6),
+                        "max_timing_shift": round(max_timing_shift, 6),
+                        "candidate_text": _segment_text(chosen),
+                    },
+                )
+            )
             continue
         if original_duration >= 0.2 and not (min_duration_ratio <= duration_ratio <= max_duration_ratio):
-            updated.append(seg)
+            updated.append(
+                _mark_word_precision_reject(
+                    seg,
+                    reason="candidate_duration_ratio_out_of_bounds",
+                    detail={
+                        "duration_ratio": round(duration_ratio, 6),
+                        "min_duration_ratio": round(min_duration_ratio, 6),
+                        "max_duration_ratio": round(max_duration_ratio, 6),
+                        "candidate_text": _segment_text(chosen),
+                    },
+                )
+            )
             continue
 
         out = dict(seg)
@@ -1478,6 +2535,8 @@ __all__ = [
     "primary_low_score_recheck_ranges",
     "resolve_precision_model",
     "route_hint_recheck_ranges",
+    "selective_secondary_recheck_plan",
+    "selective_secondary_recheck_source_counts",
     "selective_secondary_recheck_ranges",
     "select_recheck_replacements",
     "selective_secondary_recheck_overrides",

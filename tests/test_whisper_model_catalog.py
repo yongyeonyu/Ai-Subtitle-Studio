@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ui.settings.settings_ai import stt2_whisper_model_candidates
 from ui.settings.settings_common import (
+    APPLE_SPEECH_EXPERIMENTAL_LABEL,
     MAC_WHISPER_MODELS,
     REMOVED_WHISPER_MODELS,
     WINDOWS_WHISPER_MODELS,
@@ -87,6 +88,20 @@ class WhisperModelCatalogTest(unittest.TestCase):
             "KomixV2 MLX · 한국어 특화 [Fast]",
         )
 
+    def test_apple_speech_display_labels_cover_default_and_locale_specific_variants(self):
+        self.assertEqual(
+            whisper_model_display_name("apple_speech:ko-KR"),
+            APPLE_SPEECH_EXPERIMENTAL_LABEL,
+        )
+        self.assertEqual(
+            whisper_model_display_name("apple_speech:ko-KR", include_recommendations=True),
+            APPLE_SPEECH_EXPERIMENTAL_LABEL,
+        )
+        self.assertEqual(
+            whisper_model_display_name("apple_speech:en-US"),
+            "Apple Speech (en-US)",
+        )
+
     def test_unused_models_are_not_in_default_settings(self):
         defaults = json.loads((ROOT / "dataset" / "custom_defaults.json").read_text(encoding="utf-8"))
         models = set(defaults.get("whisper_models", []))
@@ -96,6 +111,13 @@ class WhisperModelCatalogTest(unittest.TestCase):
         registry = json.loads((ROOT / "dataset" / "model_registry.json").read_text(encoding="utf-8"))
         ids = {model.get("id") for model in registry.get("models", [])}
         self.assertFalse(ids & REMOVED_REGISTRY_IDS)
+
+    def test_registry_contains_apple_speech_experimental_stt_entry(self):
+        registry = json.loads((ROOT / "dataset" / "model_registry.json").read_text(encoding="utf-8"))
+        apple = next(model for model in registry.get("models", []) if model.get("id") == "apple-speech-transcriber")
+        self.assertEqual(apple.get("category"), "STT")
+        self.assertTrue(apple.get("experimental"))
+        self.assertEqual(apple.get("binary_check"), "apple_speech_support")
 
 
 if __name__ == "__main__":

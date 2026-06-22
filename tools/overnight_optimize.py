@@ -53,7 +53,7 @@ def _first_media_in(folder: Path) -> Path | None:
     if not folder.exists():
         return None
     for path in sorted(folder.iterdir()):
-        if path.suffix.lower() in {".mp4", ".mov", ".mkv", ".m4v"}:
+        if path.suffix.lower() in {".mp4", ".mov", ".mkv", ".m4v", ".lrf"}:
             return path
     return None
 

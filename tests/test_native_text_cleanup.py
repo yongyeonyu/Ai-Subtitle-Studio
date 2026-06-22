@@ -96,6 +96,30 @@ class NativeTextCleanupTests(unittest.TestCase):
 
         self.assertEqual(result[0]["text"], "왜? 단독 I’ll don't")
 
+    def test_clean_subtitle_text_preserves_decimal_points(self):
+        cleaned = clean_subtitle_text("연비가 17.8입니다. 다음은 11.4예요.", None)
+        self.assertEqual(cleaned, "연비가 17.8입니다 다음은 11.4예요")
+
+    def test_final_policy_preserves_decimal_only_rows(self):
+        result = enforce_final_subtitle_text_policy(
+            [
+                {"start": 0.0, "end": 0.5, "text": "17.8"},
+                {"start": 0.5, "end": 1.0, "text": "11.4에서 또 안 바뀌네."},
+            ],
+            None,
+        )
+
+        self.assertEqual(result[0]["text"], "17.8")
+        self.assertEqual(result[1]["text"], "11.4에서 또 안 바뀌네")
+
+    def test_clean_subtitle_text_does_not_strip_decimal_as_timecode(self):
+        cleaned = clean_subtitle_text("17.8 유지가 되고 있구요.", None)
+        self.assertEqual(cleaned, "17.8 유지가 되고 있구요")
+
+    def test_clean_subtitle_text_still_strips_real_timecode_prefix(self):
+        cleaned = clean_subtitle_text("00:17 안녕하세요.", None)
+        self.assertEqual(cleaned, "안녕하세요")
+
     def test_native_indexed_batch_keeps_matches_introduced_inside_replacement_text(self):
         corrections = {
             "ab": "pqx",

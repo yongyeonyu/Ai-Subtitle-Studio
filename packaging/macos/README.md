@@ -1,14 +1,15 @@
 # macOS App Store Packaging
 
 This branch targets macOS only. The production package should be a signed,
-sandboxed `.app` bundle with the Swift WhisperKit worker and native C++ helpers
-inside the app resources or helper executable locations.
+sandboxed `.app` bundle with the Python/PyQt payload and any compiled native
+helpers that are still part of the source-app line.
 
 Current packaging goals:
 
 - macOS 14 or later, Apple Silicon first.
-- Swift WhisperKit persistent worker built with Xcode/SwiftPM.
 - Python/PyQt runtime bundled inside `AI Subtitle Studio.app`.
+- Optional compiled `.so`/`.dylib` helpers copied into app resources when they
+  exist.
 - Local beta distribution through a signed `.app` inside a `.dmg`.
 - Double-click `.command` wrappers for local build and update testing.
 - App Sandbox enabled with user-selected file read/write access.
@@ -17,13 +18,12 @@ Current packaging goals:
 
 Release checklist:
 
-1. Build the Swift worker with `swift build -c release`.
-2. Build the Python app payload with the chosen bundler.
-3. Copy native helpers into `Contents/Resources/native`.
-4. Apply `AI Subtitle Studio.entitlements`.
-5. Sign every nested binary before signing the outer app bundle.
-6. Run `codesign --verify --deep --strict`.
-7. Run notarization or App Store upload validation.
+1. Build the Python app payload with the chosen bundler.
+2. Copy compiled native helpers into `Contents/Resources/native` when present.
+3. Apply `AI Subtitle Studio.entitlements`.
+4. Sign every nested binary before signing the outer app bundle.
+5. Run `codesign --verify --deep --strict`.
+6. Run notarization or App Store upload validation.
 
 Local beta DMG:
 
@@ -47,14 +47,14 @@ TARGET_APP="$HOME/Applications/AI Subtitle Studio.app" \
 
 Scripts:
 
-- `build_app_bundle.sh`: builds the Swift worker, prepares the `.app` skeleton,
-  builds the Swift native core CLI, copies the Python compatibility payload, and
-  copies native helper binaries.
+- `build_app_bundle.sh`: prepares the `.app` skeleton, copies the Python
+  compatibility payload, and copies compiled native helper binaries when they
+  exist.
 - `sign_app_bundle.sh`: signs nested binaries and the outer app bundle. Use
   `CODESIGN_IDENTITY="Apple Distribution: ..."` for real release signing; the
   default ad-hoc identity is only for local smoke checks.
-- `validate_app_bundle.sh`: validates Info.plist, bundle layout, WhisperKit
-  worker presence, payload presence, and strict code-signing state when signed.
+- `validate_app_bundle.sh`: validates Info.plist, bundle layout, payload
+  presence, and strict code-signing state when signed.
 - `create_dmg.sh`: creates a compressed beta DMG with the app bundle and an
   `/Applications` shortcut.
 - `validate_dmg.sh`: verifies the DMG, mounts it read-only, and validates the

@@ -447,7 +447,15 @@ def main() -> int:
 
     cli = find_native_cli_path()
     if cli is None:
-        print(json.dumps({"ok": False, "error": "AIStudioNativeCLI release binary not found. Run swift build -c release."}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "AIStudioNativeCLI binary not found. The in-repo Swift migration package was removed; provide an external CLI if you still need this benchmark.",
+                },
+                ensure_ascii=False,
+            )
+        )
         return 2
 
     timings, outputs = _bench_llm_deep(args, _policy_fixture(int(args.rounds)))

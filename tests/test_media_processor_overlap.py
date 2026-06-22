@@ -14,7 +14,9 @@ from unittest.mock import patch
 
 from core.runtime import config
 from core.audio.media_processor import VideoProcessor
+from core.audio.stt_backend_router import SttBackendChoice
 from core.audio.stt_quality_presets import apply_stt_quality_preset
+from core.audio import stt_rescue
 
 
 class MediaProcessorOverlapTests(unittest.TestCase):
@@ -77,6 +79,283 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertEqual(first, rows)
         self.assertEqual(second, rows)
         native.assert_called_once()
+
+    def test_build_stt_benchmark_plan_collects_hidden_apple_challenger(self):
+        primary = SttBackendChoice("whisperkit_persistent", "whisperkit-persistent:large-v3-v20240930_turbo_632MB", "native_policy_whisperkit_ready")
+        settings = {
+            "selected_vad": "silero",
+            "stt_apple_speech_challenger_enabled": True,
+            "stt_apple_speech_vad_coupled_enabled": True,
+            "stt_apple_speech_locale": "ko-KR",
+            "stt_apple_speech_benchmark_only": True,
+        }
+
+        with patch("core.audio.apple_speech_native.IS_MAC", True), \
+             patch("core.audio.apple_speech_native.native_swift_runtime_enabled", return_value=True), \
+             patch("core.audio.apple_speech_native.request_native_core_task", return_value={
+                 "available": True,
+                 "detector_available": True,
+                 "locale": "ko-KR",
+                 "reason": "runtime_class_available",
+             }):
+            plan = self.processor._build_stt_benchmark_plan("large-v3-turbo", primary, settings)
+
+        self.assertEqual(plan["active_backend"], "whisperkit_persistent")
+        self.assertEqual(len(plan["challengers"]), 1)
+        self.assertEqual(plan["challengers"][0]["backend"], "apple_speech")
+        self.assertEqual(plan["challengers"][0]["model"], "apple_speech:ko-KR")
+        self.assertEqual(plan["challengers"][0]["reason"], "apple_speech_high_challenger_benchmark_only")
+        self.assertEqual(plan["vad_challenger"]["provider"], "apple_speech_detector")
+
+    def test_build_stt_benchmark_plan_skips_challenger_when_probe_is_unavailable(self):
+        primary = SttBackendChoice("mlx", "mlx-community/whisper-large-v3-turbo", "mac_native_mlx_auto_alias")
+        settings = {
+            "selected_vad": "silero",
+            "stt_apple_speech_challenger_enabled": True,
+            "stt_apple_speech_vad_coupled_enabled": True,
+            "stt_apple_speech_locale": "ko-KR",
+            "stt_apple_speech_benchmark_only": True,
+        }
+
+        with patch("core.audio.apple_speech_native.IS_MAC", True), \
+             patch("core.audio.apple_speech_native.native_swift_runtime_enabled", return_value=True), \
+             patch("core.audio.apple_speech_native.request_native_core_task", return_value={
+                 "available": False,
+                 "detector_available": False,
+                 "locale": "ko-KR",
+                 "reason": "speech_framework_missing_or_unsupported",
+             }):
+            plan = self.processor._build_stt_benchmark_plan("large-v3-turbo", primary, settings)
+
+        self.assertEqual(plan["active_backend"], "mlx")
+        self.assertEqual(plan["challengers"], [])
+        self.assertIsNone(plan["vad_challenger"])
+
+    def test_remember_stt_benchmark_plan_publishes_rows_for_active_and_challenger_paths(self):
+        primary = SttBackendChoice("whisperkit_persistent", "whisperkit-persistent:large-v3-v20240930_turbo_632MB", "native_policy_whisperkit_ready")
+        settings = {
+            "selected_vad": "silero",
+            "stt_apple_speech_challenger_enabled": True,
+            "stt_apple_speech_vad_coupled_enabled": True,
+            "stt_apple_speech_locale": "ko-KR",
+            "stt_apple_speech_benchmark_only": True,
+        }
+
+        with patch("core.audio.apple_speech_native.IS_MAC", True), \
+             patch("core.audio.apple_speech_native.native_swift_runtime_enabled", return_value=True), \
+             patch("core.audio.apple_speech_native.request_native_core_task", return_value={
+                 "available": True,
+                 "detector_available": True,
+                 "locale": "ko-KR",
+                 "reason": "runtime_class_available",
+             }):
+            plan = self.processor._remember_stt_benchmark_plan("large-v3-turbo", primary, settings)
+
+        rows = self.processor._last_stt_benchmark_rows
+        self.assertEqual(plan, self.processor._last_stt_benchmark_plan)
+        self.assertEqual(rows[0]["backend"], "whisperkit_persistent")
+        self.assertFalse(rows[0]["probe_only"])
+        self.assertEqual(rows[1]["backend"], "apple_speech")
+        self.assertTrue(rows[1]["probe_only"])
+        self.assertEqual(rows[2]["task"], "vad")
+        self.assertEqual(rows[2]["backend"], "apple_speech_detector")
+
+    def test_explicit_apple_speech_model_uses_native_route_when_probe_is_available(self):
+        with patch("core.audio.apple_speech_native.apple_speech_support", return_value=SimpleNamespace(
+            available=True,
+            detector_available=True,
+            reason="runtime_class_available",
+            locale="ko-KR",
+        )), patch.object(config, "MLX_FALLBACK_MODEL", "mlx-community/whisper-large-v3-turbo"):
+            backend, model = self.processor._prepare_explicit_apple_speech_backend(
+                "apple_speech:ko-KR",
+                "apple_speech",
+                {"stt_apple_speech_locale": "ko-KR"},
+                log_label="STT1",
+            )
+
+        self.assertEqual(backend, "apple_speech")
+        self.assertEqual(model, "apple_speech:ko-KR")
+
+    def test_transcribe_explicit_apple_speech_skips_mlx_worker_startup(self):
+        with tempfile.TemporaryDirectory() as chunk_dir:
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            self._write_silent_wav(wav_path)
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "apple_speech:ko-KR",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_rescue_whisper_mode": False,
+                "stt_word_timestamps_mode": "off",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": False,
+                "stt_apple_speech_locale": "ko-KR",
+            }
+            self.processor._run_early_stt_preview_burst = lambda *_args, **_kwargs: None
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.apple_speech_native.apple_speech_support", return_value=SimpleNamespace(
+                     available=True,
+                     detector_available=True,
+                     reason="runtime_class_available",
+                     locale="ko-KR",
+                 )), \
+                 patch("core.audio.npu_acceleration.prefer_npu_whisper_model", side_effect=lambda model, *_args, **_kwargs: model), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_cpp.is_whisper_cpp_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisperkit_persistent.is_whisperkit_persistent_model", return_value=False), \
+                 patch("core.audio.whisper_mlx.ensure_worker", side_effect=AssertionError("mlx worker should not start")), \
+                 patch("core.audio.whisper_faster.run_whisper", side_effect=AssertionError("faster-whisper worker should not start")), \
+                 patch("core.audio.apple_speech_native.apple_speech_batch_transcribe", return_value=[
+                     SimpleNamespace(
+                         ok=True,
+                         reason="",
+                         payload={
+                             "backend": "apple_speech",
+                             "segments": [{"start": 0.0, "end": 0.5, "text": "애플", "words": []}],
+                             "text": "애플",
+                         },
+                     )
+                 ]):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False, log_label="Fast-STT2"))
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0][0]["text"], "애플")
+
+    def test_prepare_recheck_clip_can_reduce_precision_pad_for_low_vad_nondigit_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wav_path = os.path.join(tmpdir, "vad_000_0.000.wav")
+            self._write_silent_wav(wav_path, frames=16000 * 30)
+            item = stt_rescue.SttRecheckRange(
+                start=11.6,
+                end=14.6,
+                primary_score=22.0,
+                secondary_score=0.0,
+                primary_text="변화가 없네",
+                secondary_text="",
+                primary={
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 47.733},
+                    "asr_metadata": {"chunk_path": wav_path},
+                },
+                secondary={},
+            )
+            settings = {
+                "stt_word_timestamp_precision_pass": True,
+                "stt_word_timestamp_low_vad_nondigit_collect_padding_enabled": True,
+                "stt_word_timestamp_low_vad_nondigit_collect_padding_sec": 0.0,
+                "stt_word_timestamp_low_vad_nondigit_collect_padding_max_vad_score": 60.0,
+                "stt_word_timestamp_low_vad_nondigit_collect_padding_max_duration_sec": 3.5,
+                "stt_low_score_recheck_padding_sec": 0.2,
+            }
+
+            with patch.object(self.processor, "_ffmpeg_trim_recheck_clip", return_value=True):
+                clip = self.processor._prepare_recheck_clip(item, tmpdir, 0, settings)
+
+        self.assertIsNotNone(clip)
+        self.assertEqual(clip["padding_sec"], 0.0)
+        self.assertAlmostEqual(clip["start"], 11.6)
+        self.assertAlmostEqual(clip["end"], 14.6)
+
+    def test_prepare_recheck_clip_can_reduce_precision_pad_for_short_digit_phrase_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wav_path = os.path.join(tmpdir, "vad_000_0.000.wav")
+            self._write_silent_wav(wav_path, frames=16000 * 30)
+            item = stt_rescue.SttRecheckRange(
+                start=15.88,
+                end=17.74,
+                primary_score=22.0,
+                secondary_score=0.0,
+                primary_text="계속 17.8인데",
+                secondary_text="",
+                primary={
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                    "asr_metadata": {"chunk_path": wav_path},
+                },
+                secondary={},
+            )
+            settings = {
+                "stt_word_timestamp_precision_pass": True,
+                "stt_word_timestamp_short_digit_phrase_collect_padding_enabled": True,
+                "stt_word_timestamp_short_digit_phrase_collect_padding_sec": 0.0,
+                "stt_word_timestamp_short_digit_phrase_collect_padding_min_vad_score": 95.0,
+                "stt_word_timestamp_short_digit_phrase_collect_padding_max_duration_sec": 2.5,
+                "stt_low_score_recheck_padding_sec": 0.2,
+            }
+
+            with patch.object(self.processor, "_ffmpeg_trim_recheck_clip", return_value=True):
+                clip = self.processor._prepare_recheck_clip(item, tmpdir, 0, settings)
+
+        self.assertIsNotNone(clip)
+        self.assertEqual(clip["padding_sec"], 0.0)
+        self.assertAlmostEqual(clip["start"], 15.88)
+        self.assertAlmostEqual(clip["end"], 17.74)
+
+    def test_case1_apple_primary_flag_requests_word_timestamps_for_stt1_only(self):
+        with tempfile.TemporaryDirectory() as chunk_dir:
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            self._write_silent_wav(wav_path)
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "apple_speech:ko-KR",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_rescue_whisper_mode": False,
+                "stt_word_timestamps_mode": "off",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": False,
+                "stt_apple_speech_locale": "ko-KR",
+                "stt_apple_speech_primary_word_timestamps_enabled": True,
+            }
+            self.processor._run_early_stt_preview_burst = lambda *_args, **_kwargs: None
+
+            captured = {}
+
+            def _fake_batch(audio_paths, settings, *, locale=None, word_timestamps=False):
+                captured["word_timestamps"] = word_timestamps
+                return [
+                    SimpleNamespace(
+                        ok=True,
+                        reason="",
+                        payload={
+                            "backend": "apple_speech",
+                            "segments": [{"start": 0.0, "end": 0.5, "text": "애플", "words": []}],
+                            "text": "애플",
+                        },
+                    )
+                ]
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.apple_speech_native.apple_speech_support", return_value=SimpleNamespace(
+                     available=True,
+                     detector_available=True,
+                     reason="runtime_class_available",
+                     locale="ko-KR",
+                 )), \
+                 patch("core.audio.npu_acceleration.prefer_npu_whisper_model", side_effect=lambda model, *_args, **_kwargs: model), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_cpp.is_whisper_cpp_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisperkit_persistent.is_whisperkit_persistent_model", return_value=False), \
+                 patch("core.audio.whisper_mlx.ensure_worker", side_effect=AssertionError("mlx worker should not start")), \
+                 patch("core.audio.whisper_faster.run_whisper", side_effect=AssertionError("faster-whisper worker should not start")), \
+                 patch("core.audio.apple_speech_native.apple_speech_batch_transcribe", side_effect=_fake_batch):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False, log_label="STT1"))
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0][0]["text"], "애플")
+        self.assertTrue(captured["word_timestamps"])
 
     def test_chunk_manifest_cache_invalidates_when_wav_changes_without_directory_mtime(self):
         with tempfile.TemporaryDirectory() as chunk_dir:
@@ -212,6 +491,72 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual([(item.start, item.end) for item in ranges], [(10.0, 15.0), (30.0, 35.0)])
 
+    def test_word_precision_ranges_can_ignore_apple_primary_low_score_without_secondary_signal(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 3.0,
+                "text": "애플 1차 후보",
+                "stt_score": 22,
+                "asr_metadata": {"vad_alignment": {"vad_overlap_ratio": 1.0}},
+            }
+        ]
+
+        ranges = self.processor._word_precision_ranges(
+            segments,
+            {
+                "selected_whisper_model": "apple_speech:ko-KR",
+                "stt_word_timestamps_precision_enabled": True,
+                "stt_word_timestamps_precision_threshold": 70.0,
+                "stt_apple_primary_low_score_precision_requires_secondary_signal": True,
+            },
+        )
+
+        self.assertEqual(ranges, [])
+
+    def test_word_precision_ranges_can_ignore_whisper_primary_metadata_only_low_score_without_secondary_signal(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 2.0,
+                "text": "메타데이터만 없는 후보",
+                "stt_score": 22,
+                "stt_score_flags": [
+                    "no_speech_prob_missing",
+                    "avg_logprob_missing",
+                    "word_confidence_missing",
+                ],
+                "asr_metadata": {"vad_alignment": {"vad_overlap_ratio": 1.0}},
+                "quality": {"vad_alignment_score": 100.0},
+            },
+            {
+                "start": 3.0,
+                "end": 4.5,
+                "text": "17.8",
+                "stt_score": 22,
+                "stt_score_flags": [
+                    "no_speech_prob_missing",
+                    "avg_logprob_missing",
+                    "word_confidence_missing",
+                    "low_language_char_ratio",
+                ],
+                "asr_metadata": {"vad_alignment": {"vad_overlap_ratio": 1.0}},
+            },
+        ]
+
+        ranges = self.processor._word_precision_ranges(
+            segments,
+            {
+                "selected_whisper_model": "whisperkit-persistent:large-v3-v20240930_626MB",
+                "stt_word_timestamps_precision_enabled": True,
+                "stt_word_timestamps_precision_threshold": 70.0,
+                "stt_whisper_primary_metadata_only_low_score_precision_requires_secondary_signal": True,
+            },
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertEqual(ranges[0].primary_text, "17.8")
+
     def test_word_precision_recheck_uses_user_selected_stt1_model(self):
         segments = [{"start": 0.0, "end": 1.0, "text": "저신뢰", "stt_score": 20}]
         settings = {
@@ -265,6 +610,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             )
 
         self.assertEqual(collect.call_args.args[1], "whisperkit-persistent:large-v3-v20240930_turbo_632MB")
+
 
     def test_release_after_transcribe_stops_warm_worker_under_critical_memory(self):
         class _LiveProc:
@@ -1157,6 +1503,108 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertIsNotNone(_Worker.last_kwargs)
         self.assertFalse(_Worker.last_kwargs["_allow_window_rolling"])
 
+    def test_collect_transcribe_result_can_force_fresh_native_memory_snapshot_before_pressure_probe(self):
+        class _Worker(VideoProcessor):
+            def transcribe(self, *args, **kwargs):
+                yield [], 1, 1
+
+            def stop_transcribe(self):
+                return None
+
+        worker = _Worker()
+        worker._load_all_settings = lambda: {
+            "stt_collect_force_fresh_native_memory_snapshot": True,
+        }
+
+        with patch(
+            "core.native_macos_memory.clear_native_memory_snapshot_cache"
+        ) as clear_snapshot_cache, patch(
+            "core.audio.media_processor_transcribe._stt_memory_pressure_stage",
+            return_value="warning",
+        ):
+            result = worker._collect_transcribe_result(
+                "/tmp/does-not-matter",
+                "unit-model",
+                label="STT2",
+            )
+
+        self.assertEqual(result, [])
+        clear_snapshot_cache.assert_called_once()
+        self.assertTrue(worker._last_collect_runtime_info["native_memory_snapshot_force_refresh"])
+
+    def test_collect_transcribe_result_can_use_owner_runtime_for_single_stt1_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = os.path.join(tmp, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 1600)
+
+            class _Worker(VideoProcessor):
+                transcribe_owner_ids = []
+
+                def transcribe(self, *args, **kwargs):
+                    type(self).transcribe_owner_ids.append(id(self))
+                    yield [], 1, 1
+
+                def stop_transcribe(self):
+                    return None
+
+            worker = _Worker()
+            worker._load_all_settings = lambda: {
+                "stt_collect_owner_runtime_enabled": True,
+                "stt_persistent_runtime_reuse_enabled": False,
+            }
+
+            result = worker._collect_transcribe_result(
+                tmp,
+                "unit-model",
+                label="STT1",
+            )
+
+            self.assertEqual(result, [])
+            self.assertEqual(_Worker.transcribe_owner_ids, [id(worker)])
+            self.assertEqual(worker._last_collect_runtime_info["worker_source"], "owner_runtime_direct")
+            self.assertTrue(worker._last_collect_runtime_info["owner_runtime_direct"])
+
+    def test_collect_transcribe_result_can_use_owner_runtime_for_two_chunk_recheck(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for idx in range(2):
+                wav_path = os.path.join(tmp, f"recheck_{idx:03d}.wav")
+                with wave.open(wav_path, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(b"\x00\x00" * 1600)
+
+            class _Worker(VideoProcessor):
+                transcribe_owner_ids = []
+
+                def transcribe(self, *args, **kwargs):
+                    type(self).transcribe_owner_ids.append(id(self))
+                    yield [], 1, 1
+
+                def stop_transcribe(self):
+                    return None
+
+            worker = _Worker()
+            worker._load_all_settings = lambda: {
+                "stt_selective_secondary_collect_owner_runtime_enabled": True,
+                "stt_persistent_runtime_reuse_enabled": False,
+            }
+
+            result = worker._collect_transcribe_result(
+                tmp,
+                "unit-model",
+                label="Fast-STT2",
+            )
+
+            self.assertEqual(result, [])
+            self.assertEqual(_Worker.transcribe_owner_ids, [id(worker)])
+            self.assertEqual(worker._last_collect_runtime_info["worker_source"], "owner_runtime_direct")
+            self.assertTrue(worker._last_collect_runtime_info["owner_runtime_direct"])
+
     def test_ensemble_runs_stt1_and_stt2_on_parallel_threads(self):
         with tempfile.TemporaryDirectory() as tmp:
             wav_path = os.path.join(tmp, "vad_000_0.000.wav")
@@ -1219,6 +1667,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 "stt_low_score_recheck_max_segments": 4,
                 "stt_word_timestamps_precision_enabled": False,
                 "vad_post_stt_align_enabled": False,
+                "stt_rescue_similarity_threshold": 0.0,
             }
 
             def fake_collect(_chunk_dir, _model, *, label, preview_callback=None, **_kwargs):
@@ -1549,6 +1998,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 "stt_word_timestamps_precision_enabled": False,
                 "stt_missing_voice_min_duration_sec": 0.55,
                 "vad_post_stt_align_enabled": False,
+                "stt_rescue_similarity_threshold": 0.0,
             }
 
             def fake_collect(_chunk_dir, _model, *, label, **_kwargs):
@@ -1609,6 +2059,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 "stt_low_score_recheck_max_segments": 4,
                 "stt_word_timestamps_precision_enabled": False,
                 "vad_post_stt_align_enabled": False,
+                "stt_rescue_similarity_threshold": 0.0,
             }
 
             def fake_collect(_chunk_dir, _model, *, label, **_kwargs):
@@ -1824,6 +2275,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             settings = {
                 "stt_low_score_recheck_enabled": True,
                 "stt_low_score_recheck_threshold": 50,
+                "stt_rescue_similarity_threshold": 0.0,
             }
 
             self.processor._prepare_recheck_clip = lambda item, _out_dir, _idx, _settings: {
@@ -2908,6 +3360,23 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual(recheck, 8)
 
+    def test_whisperkit_recheck_can_keep_bounded_concurrency_under_critical_when_explicitly_enabled(self):
+        with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="critical"), \
+             patch("core.native_resource_allocator.native_task_allocation", return_value=None):
+            recheck = self.processor._whisperkit_concurrent_worker_count(
+                {
+                    "stt_rescue_whisper_mode": True,
+                    "stt_word_timestamp_precision_pass": False,
+                    "stt_whisperkit_recheck_concurrent_workers": 2,
+                    "stt_whisperkit_recheck_concurrent_max_workers": 2,
+                    "stt_whisperkit_recheck_allow_critical_concurrency": True,
+                },
+                total_chunks=6,
+                word_timestamps=False,
+            )
+
+        self.assertEqual(recheck, 2)
+
     def test_whisperkit_recheck_native_allocator_can_raise_stt2_slots_to_full_core_max(self):
         with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \
              patch("core.native_resource_allocator.native_task_allocation", return_value={"workers": 10, "compute_units": "all"}) as allocator:
@@ -2997,6 +3466,23 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         )
 
         self.assertEqual(timeout, 0.2)
+
+    def test_stt_worker_silence_timeout_prefers_recheck_budget_for_rescue_pass(self):
+        with patch(
+            "core.native_swift_transcribe_plan.stt_worker_silence_timeout_via_swift",
+            return_value=None,
+        ):
+            timeout = self.processor._stt_worker_silence_timeout_sec(
+                {
+                    "stt_worker_response_timeout_sec": 120.0,
+                    "stt_recheck_worker_response_timeout_sec": 42.0,
+                    "stt_rescue_whisper_mode": True,
+                },
+                log_label="Fast-STT2",
+                word_timestamps=False,
+            )
+
+        self.assertEqual(timeout, 42.0)
 
     def test_read_worker_stdout_line_raises_when_worker_stalls(self):
         from core.audio.media_processor_transcribe import SttWorkerTimeout
@@ -3224,6 +3710,25 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertEqual([os.path.realpath(path) for path in submitted], [os.path.realpath(path) for path in [wav1, wav2, wav0]])
         self.assertEqual([row[0][0]["text"] for row in rows], ["짧은 원본0", "긴 원본1", "중간 원본2"])
         self.assertEqual([round(row[0][0]["start"], 3) for row in rows], [0.0, 1.0, 5.0])
+
+    def test_duration_first_submission_order_applies_prioritize_offsets_after_swift_order(self):
+        items = [
+            {"ov_start_offset": 0.0, "duration": 1.0},
+            {"ov_start_offset": 3.0, "duration": 4.0},
+            {"ov_start_offset": 7.0, "duration": 2.0},
+        ]
+        settings = {
+            "stt_duration_first_submission_prioritize_offsets_sec": [0.0],
+            "stt_duration_first_submission_log_enabled": False,
+        }
+
+        with patch(
+            "core.native_swift_transcribe_plan.duration_first_order_via_swift",
+            return_value=[1, 2, 0],
+        ):
+            order = self.processor._duration_first_submission_order(items, settings)
+
+        self.assertEqual(order, [0, 1, 2])
 
     def test_word_precision_straggler_skips_last_chunk_and_keeps_pipeline_moving(self):
         read_fd, write_fd = os.pipe()

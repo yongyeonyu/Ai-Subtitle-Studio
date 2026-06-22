@@ -254,7 +254,7 @@ class FileOpsMixin:
         paths, _ = self._safe_open_file_names(
             "파일 선택",
             get_last_folder() or os.path.expanduser("~"),
-            "Media/SRT Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.srt)",
+            "Media/SRT Files (*.mp4 *.mov *.MOV *.MP4 *.lrf *.LRF *.wav *.m4a *.m2a *.mp3 *.aac *.srt)",
         )
         if not paths:
             return
@@ -349,7 +349,7 @@ class FileOpsMixin:
         paths, _ = self._safe_open_file_names(
             "파일 선택",
             folder,
-            "Media/SRT Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.srt)",
+            "Media/SRT Files (*.mp4 *.mov *.MOV *.MP4 *.lrf *.LRF *.wav *.m4a *.m2a *.mp3 *.aac *.srt)",
         )
         if not paths:
             return
@@ -431,6 +431,11 @@ class FileOpsMixin:
         if callable(confirm_exit) and not confirm_exit():
             return
         self._quick_exit_requested = True
+        try:
+            self.hide()
+            QApplication.processEvents()
+        except Exception:
+            pass
         exit_delay_ms = 20 if getattr(config, "IS_MAC", False) else 60
         schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
         if callable(schedule_exit):

@@ -41,6 +41,8 @@ _STDERR_NOISE_PATTERNS = (
     b"Color primaries reserved is not supported.",
 )
 _PREV_SYS_EXCEPTHOOK = sys.excepthook
+_PREV_THREAD_EXCEPTHOOK = getattr(threading, "excepthook", None)
+_PREV_UNRAISABLEHOOK = getattr(sys, "unraisablehook", None)
 
 
 def _runtime_exception_log_path() -> str:
@@ -53,11 +55,11 @@ def _runtime_exception_log_path() -> str:
     return os.path.join(folder, "qt_slot_exceptions.log")
 
 
-def _log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
+def _log_uncaught_exception(exc_type, exc_value, exc_traceback, *, source: str = "uncaught Python/Qt exception") -> None:
     try:
         text = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
         with open(_runtime_exception_log_path(), "a", encoding="utf-8") as handle:
-            handle.write("\n--- uncaught Python/Qt exception ---\n")
+            handle.write(f"\n--- {source} ---\n")
             handle.write(text)
             if not text.endswith("\n"):
                 handle.write("\n")
@@ -65,8 +67,25 @@ def _log_uncaught_exception(exc_type, exc_value, exc_traceback) -> None:
         pass
 
 
+def _show_uncaught_exception_popup(exc_type, exc_value, exc_traceback, *, source: str = "ui", thread_name: str = "") -> None:
+    try:
+        from ui.dialogs.runtime_error_popup import show_captured_exception_popup
+
+        show_captured_exception_popup(
+            exc_type,
+            exc_value,
+            exc_traceback,
+            source=source,
+            thread_name=thread_name,
+            log_path=_runtime_exception_log_path(),
+        )
+    except Exception:
+        pass
+
+
 def _safe_excepthook(exc_type, exc_value, exc_traceback) -> None:
     _log_uncaught_exception(exc_type, exc_value, exc_traceback)
+    _show_uncaught_exception_popup(exc_type, exc_value, exc_traceback, source="ui")
     try:
         if _PREV_SYS_EXCEPTHOOK is not None and _PREV_SYS_EXCEPTHOOK is not _safe_excepthook:
             _PREV_SYS_EXCEPTHOOK(exc_type, exc_value, exc_traceback)
@@ -80,6 +99,45 @@ def _safe_excepthook(exc_type, exc_value, exc_traceback) -> None:
 
 
 sys.excepthook = _safe_excepthook
+
+
+def _safe_thread_excepthook(args) -> None:
+    exc_type = getattr(args, "exc_type", RuntimeError)
+    exc_value = getattr(args, "exc_value", RuntimeError("background thread exception"))
+    exc_traceback = getattr(args, "exc_traceback", None)
+    thread_obj = getattr(args, "thread", None)
+    thread_name = getattr(thread_obj, "name", "") if thread_obj is not None else ""
+    _log_uncaught_exception(exc_type, exc_value, exc_traceback, source=f"thread exception:{thread_name or 'worker'}")
+    _show_uncaught_exception_popup(exc_type, exc_value, exc_traceback, source="thread", thread_name=thread_name)
+    try:
+        if _PREV_THREAD_EXCEPTHOOK is not None and _PREV_THREAD_EXCEPTHOOK is not _safe_thread_excepthook:
+            _PREV_THREAD_EXCEPTHOOK(args)
+    except Exception:
+        pass
+
+
+def _safe_unraisablehook(args) -> None:
+    exc_type = getattr(args, "exc_type", RuntimeError)
+    exc_value = getattr(args, "exc_value", None)
+    if exc_value is None:
+        try:
+            exc_value = exc_type(getattr(args, "err_msg", None) or "unraisable exception")
+        except Exception:
+            exc_value = RuntimeError(getattr(args, "err_msg", None) or "unraisable exception")
+    exc_traceback = getattr(args, "exc_traceback", None)
+    _log_uncaught_exception(exc_type, exc_value, exc_traceback, source="unraisable exception")
+    _show_uncaught_exception_popup(exc_type, exc_value, exc_traceback, source="unraisable")
+    try:
+        if _PREV_UNRAISABLEHOOK is not None and _PREV_UNRAISABLEHOOK is not _safe_unraisablehook:
+            _PREV_UNRAISABLEHOOK(args)
+    except Exception:
+        pass
+
+
+if hasattr(threading, "excepthook"):
+    threading.excepthook = _safe_thread_excepthook
+if hasattr(sys, "unraisablehook"):
+    sys.unraisablehook = _safe_unraisablehook
 
 
 def _env_flag_enabled(name: str, default: bool = True) -> bool:
@@ -324,6 +382,12 @@ def main():
     app = QApplication(sys.argv)
     logger.log_perf("app.main", event="qapplication_ready", elapsed_ms=(time.perf_counter() - launch_started) * 1000.0)
     install_qmessagebox_hooks()
+    try:
+        from ui.dialogs.runtime_error_popup import install_runtime_error_popup_bridge
+
+        install_runtime_error_popup_bridge(app)
+    except Exception:
+        pass
     _PREV_QT_MESSAGE_HANDLER = qInstallMessageHandler(_qt_message_handler)
     configure_qt_runtime()
     logger.log_perf("app.main", event="qt_runtime_ready", elapsed_ms=(time.perf_counter() - launch_started) * 1000.0)

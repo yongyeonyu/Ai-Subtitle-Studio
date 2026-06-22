@@ -35,11 +35,15 @@ _HALLUCINATION_PHRASES = (
     "transcription",
     "Thank you for watching",
 )
-_NUMBER_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)*(?:[%％]|[A-Za-z가-힣]+)?")
+_NUMBER_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)*(?:(?:[%％]|[A-Za-z가-힣]+)(?:/[A-Za-z가-힣]+)*)?")
+_NUMBER_TOKEN_PARTS_RE = re.compile(r"^(?P<core>\d+(?:[.,]\d+)*)(?P<suffix>(?:(?:[%％]|[A-Za-z가-힣]+)(?:/[A-Za-z가-힣]+)*)?)$")
+_NUMBER_SUFFIX_TRAILING_PARTICLE_RE = re.compile(
+    r"(으로|에서|부터|까지|이나|인데|이고|이라도|로|은|는|이|가|을|를|와|과|도|에|만|씩|쯤|정도|나)$"
+)
 _LATIN_PROPER_TOKEN_RE = re.compile(
     r"\b(?:[A-Z]{2,}[A-Za-z0-9-]*|[A-Za-z]+[0-9][A-Za-z0-9-]*|[A-Z][a-z]+(?:[A-Z][a-z]+)+)\b"
 )
-_CONTENT_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]+")
+_CONTENT_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣/]+")
 _INTERJECTION_TOKENS = {
     "아",
     "어",
@@ -98,6 +102,47 @@ def _number_tokens(text: Any) -> list[str]:
     return out
 
 
+def _number_token_parts(text: Any) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for token in _NUMBER_TOKEN_RE.findall(str(text or "")):
+        match = _NUMBER_TOKEN_PARTS_RE.match(token.strip())
+        if not match:
+            continue
+        core = normalized_text(str(match.group("core") or ""))
+        suffix = normalized_text(str(match.group("suffix") or ""))
+        if core:
+            out.append((core, suffix))
+    return out
+
+
+def _normalize_number_suffix(suffix: str) -> str:
+    value = normalized_text(str(suffix or ""))
+    if not value:
+        return ""
+    stripped = _NUMBER_SUFFIX_TRAILING_PARTICLE_RE.sub("", value)
+    return stripped or ""
+
+
+def _numbers_match_with_safe_suffix_additions(source_text: Any, candidate_text: Any) -> bool:
+    source_parts = _number_token_parts(source_text)
+    candidate_parts = _number_token_parts(candidate_text)
+    if len(source_parts) != len(candidate_parts):
+        return False
+    for (source_core, source_suffix), (candidate_core, candidate_suffix) in zip(source_parts, candidate_parts):
+        if source_core != candidate_core:
+            return False
+        source_unit = _normalize_number_suffix(source_suffix)
+        candidate_unit = _normalize_number_suffix(candidate_suffix)
+        if source_unit:
+            if candidate_unit != source_unit:
+                return False
+    return True
+
+
+def _numeric_core_tokens(text: Any) -> set[str]:
+    return {core for core, _suffix in _number_token_parts(text) if core}
+
+
 def _profile_brand_tokens(profile: dict[str, Any] | None) -> set[str]:
     keys = {"brand_tokens", "brand_name_tokens", "brand_names", "proper_nouns"}
     return {normalized_text(token) for token in _walk_profile_values(profile or {}, keys) if normalized_text(token)}
@@ -133,10 +178,13 @@ def _normalized_findall_set(pattern: re.Pattern[str], text: Any) -> set[str]:
     return set(_normalized_findall_list(pattern, text))
 
 
-def _token_is_supported_by_source(token: str, source_norm: str, source_tokens: set[str]) -> bool:
+def _token_is_supported_by_source(token: str, source_text: str, source_norm: str, source_tokens: set[str]) -> bool:
     if not token:
         return True
     if token in source_norm:
+        return True
+    token_number_cores = _numeric_core_tokens(token)
+    if token_number_cores and token_number_cores.issubset(_numeric_core_tokens(source_text)):
         return True
     for source_token in source_tokens:
         if len(source_token) >= 2 and (source_token in token or token in source_token):
@@ -163,7 +211,7 @@ def _token_diff_preview(
         for token in candidate_tokens
         if token not in _INTERJECTION_TOKENS
         and token not in profile_brand_tokens
-        and not _token_is_supported_by_source(token, source_norm, source_tokens)
+        and not _token_is_supported_by_source(token, source_text, source_norm, source_tokens)
     )[:limit]
     return missing, added
 
@@ -246,7 +294,7 @@ def llm_source_preservation_violations(
     if _safe_bool(settings.get("llm_verifier_preserve_numbers"), True):
         source_numbers = Counter(_number_tokens(source))
         candidate_numbers = Counter(_number_tokens(candidate))
-        if source_numbers != candidate_numbers:
+        if source_numbers != candidate_numbers and not _numbers_match_with_safe_suffix_additions(source, candidate):
             violations.append(
                 {
                     "type": "number_changed",
@@ -278,7 +326,7 @@ def llm_source_preservation_violations(
             for token in candidate_tokens
             if token not in _INTERJECTION_TOKENS
             and token not in profile_brand_tokens
-            and not _token_is_supported_by_source(token, source_norm, source_tokens)
+            and not _token_is_supported_by_source(token, source, source_norm, source_tokens)
         )
         if added_content:
             violations.append({"type": "added_content_token", "added": added_content[:8]})

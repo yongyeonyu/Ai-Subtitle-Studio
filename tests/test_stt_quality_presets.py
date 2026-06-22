@@ -161,6 +161,19 @@ class STTQualityPresetTests(unittest.TestCase):
             self.assertEqual(applied["selected_whisper_model"], "user-stt1")
             self.assertEqual(applied["selected_whisper_model_secondary"], "user-stt2")
 
+    def test_mode_defaults_do_not_replace_explicit_apple_speech_stt_models(self):
+        settings = {
+            "selected_whisper_model": "apple_speech:en-US",
+            "selected_whisper_model_secondary": "apple_speech:ja-JP",
+        }
+
+        balanced = apply_stt_quality_preset(settings, "balanced")
+        precise = apply_stt_quality_preset(settings, "precise")
+
+        for applied in (balanced, precise):
+            self.assertEqual(applied["selected_whisper_model"], "apple_speech:en-US")
+            self.assertEqual(applied["selected_whisper_model_secondary"], "apple_speech:ja-JP")
+
     def test_saved_mode_stt_models_win_when_switching_to_that_mode(self):
         settings = {
             "selected_whisper_model": "current-stt1",
@@ -180,6 +193,21 @@ class STTQualityPresetTests(unittest.TestCase):
 
         self.assertEqual(applied["selected_whisper_model"], "saved-high-stt1")
         self.assertEqual(applied["selected_whisper_model_secondary"], "saved-high-stt2")
+
+    def test_saved_user_preset_round_trips_explicit_apple_speech_models(self):
+        settings = apply_stt_quality_preset({}, "precise")
+        settings.update(
+            {
+                "selected_whisper_model": "apple_speech:en-US",
+                "selected_whisper_model_secondary": "apple_speech:ja-JP",
+            }
+        )
+
+        saved = save_stt_quality_user_preset(settings, "precise")
+        applied = apply_stt_quality_preset(saved, "precise")
+
+        self.assertEqual(applied["selected_whisper_model"], "apple_speech:en-US")
+        self.assertEqual(applied["selected_whisper_model_secondary"], "apple_speech:ja-JP")
 
     def test_benchmark_runtime_profile_preserves_explicit_model_routes(self):
         settings = {

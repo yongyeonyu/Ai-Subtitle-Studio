@@ -6,6 +6,9 @@ Item {
     id: root
     property string headerText: "큐 리스트 : (0/0) - 0% 완료"
     property var queueItems: []
+    property int lastFocusedActiveIndex: -1
+    property int lastFocusedCount: 0
+    property real preservedContentY: 0
     clip: true
 
     function activeQueueIndex() {
@@ -25,6 +28,11 @@ Item {
         }
     }
 
+    function restorePreservedScroll() {
+        var maxContentY = Math.max(0, list.contentHeight - list.height)
+        list.contentY = Math.max(0, Math.min(root.preservedContentY, maxContentY))
+    }
+
     function keycapOrder(value) {
         var numberValue = parseInt(value, 10)
         var raw = isNaN(numberValue) ? String(value || "") : ("0" + String(numberValue)).slice(-2)
@@ -39,13 +47,30 @@ Item {
         return out || "0\uFE0F\u20E3"
     }
 
-    onQueueItemsChanged: activeFocusTimer.restart()
+    onQueueItemsChanged: {
+        var idx = activeQueueIndex()
+        var count = root.queueItems.length
+        var shouldFocus = idx >= 0 && (idx !== root.lastFocusedActiveIndex || count !== root.lastFocusedCount)
+        root.lastFocusedActiveIndex = idx
+        root.lastFocusedCount = count
+        if (shouldFocus)
+            activeFocusTimer.restart()
+        else
+            restoreScrollTimer.restart()
+    }
 
     Timer {
         id: activeFocusTimer
         interval: 20
         repeat: false
         onTriggered: root.focusActiveQueueItem()
+    }
+
+    Timer {
+        id: restoreScrollTimer
+        interval: 20
+        repeat: false
+        onTriggered: root.restorePreservedScroll()
     }
 
     Rectangle {
@@ -81,6 +106,7 @@ Item {
             spacing: 4
             boundsBehavior: Flickable.StopAtBounds
             rightMargin: queueScroll.visible ? 4 : 0
+            onContentYChanged: root.preservedContentY = contentY
             ScrollBar.vertical: ScrollBar {
                 id: queueScroll
                 policy: list.contentHeight > list.height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff

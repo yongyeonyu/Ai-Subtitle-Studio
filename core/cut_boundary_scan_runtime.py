@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any
 
@@ -97,16 +98,29 @@ def high_cost_visual_scan_skip_meta(
     }
 
 
-def cut_boundary_cv2_capture_backend(cv2_mod, settings: dict | None = None) -> int | None:
+def _cut_boundary_capture_suffix(path) -> str:
+    try:
+        return os.path.splitext(str(path or ""))[1].lower()
+    except Exception:
+        return ""
+
+
+def cut_boundary_cv2_capture_backend(cv2_mod, settings: dict | None = None, path=None) -> int | None:
     """Return the preferred OpenCV capture backend for cut-boundary scans."""
     data = dict(settings or {})
     requested = str(data.get("scan_cut_cv2_video_backend", "auto") or "auto").strip().lower()
+    suffix = _cut_boundary_capture_suffix(path)
     if requested in {"", "0", "false", "off", "none", "default", "opencv", "any"}:
         return None
     if requested in {"ffmpeg", "cap_ffmpeg"}:
         backend = getattr(cv2_mod, "CAP_FFMPEG", None)
         return int(backend) if backend is not None else None
     if requested in {"auto", "avfoundation", "avf", "mac", "macos", "videotoolbox"}:
+        if suffix == ".lrf":
+            backend = getattr(cv2_mod, "CAP_FFMPEG", None)
+            if backend is not None:
+                return int(backend)
+            return None
         if sys.platform != "darwin" and requested == "auto":
             return None
         backend = getattr(cv2_mod, "CAP_AVFOUNDATION", None)
@@ -116,7 +130,7 @@ def cut_boundary_cv2_capture_backend(cv2_mod, settings: dict | None = None) -> i
 
 def open_cut_boundary_video_capture(cv2_mod, path, settings: dict | None = None):
     """Open a VideoCapture with the fastest safe backend, falling back silently."""
-    backend = cut_boundary_cv2_capture_backend(cv2_mod, settings)
+    backend = cut_boundary_cv2_capture_backend(cv2_mod, settings, path)
     if backend is not None:
         try:
             cap = cv2_mod.VideoCapture(str(path), backend)

@@ -105,8 +105,6 @@ class VideoProcessorTranscribePolicyMixin:
         if chunks <= 1:
             return 1
         pressure_stage = _current_stt_memory_pressure_stage(settings)
-        if pressure_stage == "critical":
-            return 1
         data = dict(settings or {})
         normal_pressure = pressure_stage not in {"warning", "critical"}
         recheck_pass = (
@@ -114,6 +112,14 @@ class VideoProcessorTranscribePolicyMixin:
             and not bool(data.get("stt_word_timestamp_precision_pass", False))
             and not word_timestamps
         )
+        if pressure_stage == "critical":
+            if not (
+                recheck_pass
+                and self._setting_bool(data, "stt_whisperkit_recheck_allow_critical_concurrency", False)
+            ):
+                return 1
+            pressure_stage = "warning"
+            normal_pressure = False
         key = (
             "stt_whisperkit_word_timestamp_concurrent_workers"
             if word_timestamps
@@ -287,24 +293,25 @@ class VideoProcessorTranscribePolicyMixin:
     def _duration_first_submission_order(self, items: list[dict], settings: dict | None) -> list[int]:
         if len(items or []) <= 1:
             return list(range(len(items or [])))
+        native_order = None
         try:
             from core.native_swift_transcribe_plan import duration_first_order_via_swift
 
             swift_order = duration_first_order_via_swift(items)
             if swift_order is not None:
-                return swift_order
+                native_order = list(swift_order)
         except Exception:
             pass
 
         starts = [float(item.get("ov_start_offset", idx) or idx) for idx, item in enumerate(items)]
         durations = [max(0.001, float(item.get("duration", 0.001) or 0.001)) for item in items]
-        native_order = None
-        try:
-            from core.native_stt_recheck import duration_desc_order_indices
+        if native_order is None:
+            try:
+                from core.native_stt_recheck import duration_desc_order_indices
 
-            native_order = duration_desc_order_indices(starts=starts, durations=durations)
-        except Exception:
-            native_order = None
+                native_order = duration_desc_order_indices(starts=starts, durations=durations)
+            except Exception:
+                native_order = None
         if native_order is None:
             native_order = sorted(range(len(items)), key=lambda idx: (-durations[idx], starts[idx]))
         seen: set[int] = set()
@@ -317,6 +324,32 @@ class VideoProcessorTranscribePolicyMixin:
         for idx in range(len(items)):
             if idx not in seen:
                 order.append(idx)
+        data = dict(settings or {})
+        prioritize_offsets = {
+            round(float(value or 0.0), 3)
+            for value in list(data.get("stt_duration_first_submission_prioritize_offsets_sec") or [])
+        }
+        defer_offsets = {
+            round(float(value or 0.0), 3)
+            for value in list(data.get("stt_duration_first_submission_defer_offsets_sec") or [])
+        }
+        if prioritize_offsets or defer_offsets:
+            prioritized = [
+                idx
+                for idx in order
+                if round(float(dict(items[idx] or {}).get("ov_start_offset", 0.0) or 0.0), 3) in prioritize_offsets
+            ]
+            deferred = [
+                idx
+                for idx in order
+                if round(float(dict(items[idx] or {}).get("ov_start_offset", 0.0) or 0.0), 3) in defer_offsets
+            ]
+            middle = [
+                idx
+                for idx in order
+                if idx not in prioritized and idx not in deferred
+            ]
+            order = prioritized + middle + deferred
         # Avoid remapping overhead on uniform chunks; chronological order is best for live preview.
         if order == list(range(len(items))) or (max(durations) - min(durations)) < 0.05:
             return list(range(len(items)))
@@ -351,10 +384,17 @@ class VideoProcessorTranscribePolicyMixin:
 
         data = dict(settings or {})
         precision_pass = bool(data.get("stt_word_timestamp_precision_pass", False))
+        rescue_pass = bool(data.get("stt_rescue_whisper_mode", False)) and not precision_pass and not word_timestamps
         label = str(log_label or "").strip()
         if precision_pass or "단어정밀" in label:
             key = "stt_word_timestamp_worker_response_timeout_sec"
             default = 45.0
+        elif rescue_pass:
+            key = "stt_recheck_worker_response_timeout_sec"
+            try:
+                default = float(data.get("stt_worker_response_timeout_sec", 150.0) or 150.0)
+            except (TypeError, ValueError):
+                default = 150.0
         elif word_timestamps:
             key = "stt_worker_word_timestamp_response_timeout_sec"
             default = 90.0

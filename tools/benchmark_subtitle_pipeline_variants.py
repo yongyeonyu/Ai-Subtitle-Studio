@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.audio.media_processor import VideoProcessor  # noqa: E402
+from core.audio.apple_speech_native import apple_speech_model  # noqa: E402
 from core.audio.npu_acceleration import prefer_npu_whisper_model  # noqa: E402
 from core.audio.stt_backend_router import select_stt_backend  # noqa: E402
 from core.audio.stt_candidate_scorer import annotate_stt_candidates, average_stt_score  # noqa: E402
@@ -93,6 +94,173 @@ def benchmark_variants(base_settings: dict[str, Any]) -> list[Variant]:
     subtitle_llm = str(base_settings.get("selected_model") or "사용 안함 (benchmark)").strip()
     if not subtitle_llm:
         subtitle_llm = "사용 안함 (benchmark)"
+    apple_locale = str(base_settings.get("stt_apple_speech_locale") or "ko-KR").strip() or "ko-KR"
+    apple_model = apple_speech_model(apple_locale)
+    whisper_large_model = str(
+        getattr(config, "WHISPERKIT_QUALITY_MODEL", "whisperkit-persistent:large-v3")
+    ).strip() or "whisperkit-persistent:large-v3"
+
+    def _selective_benchmark_stability_overrides(*, aggressive_timing: bool = False) -> dict[str, Any]:
+        overrides = {
+            "stt_low_score_recheck_max_segments": 24,
+            "stt_low_score_recheck_max_audio_sec": 110.0,
+            "stt_worker_response_timeout_sec": 70.0,
+            "stt_whisperkit_concurrent_workers": 3,
+            "stt_whisperkit_recheck_concurrent_workers": 2,
+            "stt_whisperkit_concurrent_max_workers": 3,
+            "stt_whisperkit_recheck_concurrent_max_workers": 2,
+            "stt_whisperkit_native_allocator_can_raise_workers": False,
+            "stt_duration_first_submission_enabled": True,
+            "stt_selective_recheck_min_segment_retention_ratio": 0.90,
+        }
+        if aggressive_timing:
+            overrides.update(
+                {
+                    "stt_word_timestamps_precision_enabled": True,
+                    "stt_word_timestamp_precision_pass": False,
+                    "stt_word_timestamps_mode": "selective",
+                    "stt_word_timestamps_precision_threshold": 72.0,
+                    "stt_word_timestamps_precision_max_segments": 20,
+                    "stt_word_timestamps_precision_max_audio_sec": 80.0,
+                    "stt_word_timestamp_worker_response_timeout_sec": 50.0,
+                    "stt_whisperkit_word_timestamp_concurrent_workers": 3,
+                    "stt_whisperkit_gpu_saturation_max_workers": 3,
+                    "stt_whisperkit_precision_aggressive_gpu_enabled": False,
+                }
+            )
+        return overrides
+
+    def _apple_case_overrides(*, apple_as_stt1: bool, timing_priority: bool) -> dict[str, Any]:
+        overrides = {
+            "selected_whisper_model": apple_model if apple_as_stt1 else whisper_large_model,
+            "selected_whisper_model_secondary": whisper_large_model if apple_as_stt1 else apple_model,
+            "stt_ensemble_enabled": True,
+            "stt_ensemble_parallel_enabled": False,
+            "stt_ensemble_selective_enabled": True,
+            "stt_selective_secondary_recheck_enabled": True,
+            "stt_low_score_recheck_enabled": True,
+            "stt_low_score_recheck_threshold": 78,
+            "stt_low_score_recheck_max_segments": 24,
+            "stt_low_score_recheck_max_audio_sec": 110.0,
+            "stt_recheck_worker_response_timeout_sec": 60.0 if apple_as_stt1 else 70.0,
+            "stt_word_timestamps_mode": "selective",
+            "stt_word_timestamps_precision_enabled": True,
+            "stt_word_timestamp_precision_pass": False,
+            "stt_word_timestamps_precision_threshold": 72.0,
+            "stt_word_timestamps_precision_max_segments": 48,
+            "stt_word_timestamps_precision_max_audio_sec": 110.0,
+            "audio_chunk_routing_enabled": True,
+            "audio_chunk_route_vad_enabled": True,
+            "audio_chunk_route_max_workers": 2,
+            "vad_post_stt_align_enabled": True,
+            "vad_post_stt_edge_pad_sec": 0.04,
+            "subtitle_timing_piecewise_drift_enabled": False,
+            "subtitle_timing_anchor_max_start_lag_sec": 0.06,
+            "subtitle_timing_anchor_max_end_lag_sec": 0.12,
+            "benchmark_ranking_policy": "timing_priority_speed_weighted" if timing_priority else "speed_weighted",
+        }
+        if not apple_as_stt1:
+            overrides.update(
+                {
+                    "stt_whisperkit_precision_aggressive_gpu_enabled": False,
+                    "stt_whisperkit_native_allocator_can_raise_workers": False,
+                    "stt_whisperkit_word_timestamp_concurrent_workers": 3,
+                    "stt_whisperkit_recheck_concurrent_workers": 2,
+                    "stt_word_timestamp_worker_response_timeout_sec": 40.0,
+                    "stt_word_timestamp_worker_straggler_timeout_sec": 8.0,
+                    "stt_word_timestamp_worker_straggler_max_missing_chunks": 2,
+                    "stt_word_timestamp_worker_straggler_min_received_ratio": 0.72,
+                    "stt_low_score_recheck_max_segments": 18,
+                    "stt_low_score_recheck_max_audio_sec": 72.0,
+                    "stt_low_score_recheck_padding_sec": 0.20,
+                }
+            )
+        if timing_priority:
+            precision_max_segments = 44 if apple_as_stt1 else 32
+            precision_max_audio_sec = 96.0 if apple_as_stt1 else 72.0
+            word_timestamp_workers = 4 if apple_as_stt1 else 3
+            recheck_workers = 2 if apple_as_stt1 else 2
+            response_timeout_sec = 60.0 if apple_as_stt1 else 70.0
+            straggler_timeout_sec = 8.0 if apple_as_stt1 else 10.0
+            straggler_min_received_ratio = 0.76 if apple_as_stt1 else 0.70
+            low_score_recheck_max_segments = 20 if apple_as_stt1 else 16
+            low_score_recheck_max_audio_sec = 92.0 if apple_as_stt1 else 70.0
+            overrides.update(
+                {
+                    "stt_recheck_worker_response_timeout_sec": 42.0 if apple_as_stt1 else 55.0,
+                    "stt_whisperkit_recheck_allow_critical_concurrency": True if apple_as_stt1 else False,
+                    "stt_apple_primary_low_score_precision_requires_secondary_signal": True if apple_as_stt1 else False,
+                    "stt_apple_primary_short_numeric_phrase_low_score_recheck_requires_secondary_signal": True if apple_as_stt1 else False,
+                    "stt_apple_primary_short_numeric_phrase_low_score_recheck_skip_max_duration_sec": 3.2,
+                    "stt_apple_primary_short_numeric_phrase_low_score_recheck_skip_min_vad_score": 98.0,
+                    "stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_requires_secondary_signal": True if apple_as_stt1 else False,
+                    "stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_skip_max_duration_sec": 4.0,
+                    "stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_skip_min_vad_score": 95.0,
+                    "stt_apple_primary_low_vad_low_score_recheck_requires_secondary_signal": True if apple_as_stt1 else False,
+                    "stt_apple_primary_low_vad_low_score_recheck_skip_max_duration_sec": 4.8,
+                    "stt_apple_primary_low_vad_low_score_recheck_skip_max_vad_score": 75.0,
+                    "stt_apple_primary_long_nondigit_low_score_recheck_requires_secondary_signal": True if apple_as_stt1 else False,
+                    "stt_apple_primary_long_nondigit_low_score_recheck_skip_min_duration_sec": 7.0,
+                    "stt_apple_primary_long_nondigit_low_score_recheck_skip_min_vad_score": 95.0,
+                    "stt_apple_primary_long_numeric_phrase_low_score_recheck_requires_secondary_signal": True if apple_as_stt1 else False,
+                    "stt_apple_primary_long_numeric_phrase_low_score_recheck_skip_min_duration_sec": 6.0,
+                    "stt_apple_primary_long_numeric_phrase_low_score_recheck_skip_min_vad_score": 95.0,
+                    "stt_whisper_primary_metadata_only_low_score_precision_requires_secondary_signal": False if apple_as_stt1 else True,
+                    "stt_whisper_primary_metadata_only_low_score_precision_skip_max_duration_sec": 2.2,
+                    "stt_whisper_primary_metadata_only_low_score_precision_skip_min_vad_score": 95.0,
+                    "stt_whisper_primary_duplicate_pure_numeric_precision_requires_neighbor_signal": False if apple_as_stt1 else True,
+                    "stt_whisper_primary_duplicate_pure_numeric_precision_skip_neighbor_max_gap_sec": 6.0,
+                    "stt_whisper_primary_metadata_only_low_score_recheck_requires_secondary_signal": False if apple_as_stt1 else True,
+                    "stt_whisper_primary_metadata_only_low_score_recheck_skip_max_duration_sec": 2.2,
+                    "stt_whisper_primary_metadata_only_low_score_recheck_skip_min_vad_score": 95.0,
+                    "stt_whisper_primary_low_vad_low_score_recheck_requires_secondary_signal": False if apple_as_stt1 else True,
+                    "stt_whisper_primary_low_vad_low_score_recheck_skip_max_duration_sec": 3.1,
+                    "stt_whisper_primary_low_vad_low_score_recheck_skip_max_vad_score": 60.0,
+                    "stt_whisper_primary_pure_numeric_low_score_recheck_requires_secondary_signal": False if apple_as_stt1 else True,
+                    "stt_whisper_primary_pure_numeric_low_score_recheck_skip_max_duration_sec": 2.2,
+                    "stt_whisper_primary_pure_numeric_low_score_recheck_skip_min_vad_score": 95.0,
+                    "stt_word_timestamps_precision_threshold": 70.0,
+                    "stt_word_timestamps_precision_max_segments": precision_max_segments,
+                    "stt_word_timestamps_precision_max_audio_sec": precision_max_audio_sec,
+                    "stt_word_timestamp_worker_response_timeout_sec": response_timeout_sec,
+                    "stt_word_timestamp_worker_straggler_timeout_sec": straggler_timeout_sec,
+                    "stt_word_timestamp_worker_straggler_max_missing_chunks": 2,
+                    "stt_word_timestamp_worker_straggler_min_received_ratio": straggler_min_received_ratio,
+                    "stt_whisperkit_word_timestamp_concurrent_workers": word_timestamp_workers,
+                    "stt_whisperkit_recheck_concurrent_workers": recheck_workers,
+                    "stt_whisperkit_recheck_concurrent_max_workers": recheck_workers,
+                    "stt_whisperkit_native_allocator_can_raise_workers": False if apple_as_stt1 else False,
+                    "stt_low_score_recheck_max_segments": low_score_recheck_max_segments,
+                    "stt_low_score_recheck_max_audio_sec": low_score_recheck_max_audio_sec,
+                    "stt_low_score_recheck_padding_sec": 0.20,
+                    "stt_word_timestamp_collect_prioritize_pure_numeric_enabled": False if apple_as_stt1 else True,
+                    "stt_word_timestamp_collect_prioritize_pure_numeric_max_offsets": 1,
+                    "stt_word_timestamp_collect_prioritize_pure_numeric_max_duration_sec": 3.0,
+                    "vad_post_stt_edge_pad_sec": 0.03,
+                    "subtitle_timing_piecewise_drift_enabled": True,
+                    "subtitle_timing_piecewise_drift_trigger_sec": 0.045,
+                    "subtitle_timing_piecewise_drift_max_shift_sec": 0.08,
+                    "subtitle_timing_piecewise_drift_min_run_segments": 3,
+                    "subtitle_timing_piecewise_drift_anchor_spread_sec": 0.055,
+                    "subtitle_timing_anchor_max_start_lag_sec": 0.04,
+                    "subtitle_timing_anchor_max_end_lag_sec": 0.10,
+                    "audio_chunk_route_preview_min_confidence": 0.76,
+                    "audio_chunk_route_secondary_recheck_threshold": 0.68,
+                }
+            )
+            if apple_as_stt1:
+                overrides.update(
+                    {
+                        "subtitle_no_llm_raw_stt_lock_preserve_common_split_rows": True,
+                        "split_length_threshold": 10,
+                        "subtitle_common_split_target_chars": 10,
+                        "subtitle_common_split_hard_max_chars": 16,
+                        "subtitle_common_split_hard_max_duration_sec": 2.6,
+                        "subtitle_common_split_skip_all_singleton_digit_rows": True,
+                        "subtitle_common_split_skip_all_singleton_digit_rows_max_duration_sec": 4.2,
+                    }
+                )
+        return overrides
     return [
         Variant(
             name="stt_original_parallel_full_no_llm",
@@ -134,6 +302,7 @@ def benchmark_variants(base_settings: dict[str, Any]) -> list[Variant]:
             method="selective_ensemble",
             run_llm=False,
             overrides={
+                **_selective_benchmark_stability_overrides(),
                 "stt_ensemble_enabled": True,
                 "stt_ensemble_parallel_enabled": False,
                 "stt_ensemble_selective_enabled": True,
@@ -148,10 +317,82 @@ def benchmark_variants(base_settings: dict[str, Any]) -> list[Variant]:
             run_llm=False,
             overrides={
                 **_stt_swap_overrides(base_settings),
+                **_selective_benchmark_stability_overrides(),
                 "stt_ensemble_enabled": True,
                 "stt_ensemble_parallel_enabled": False,
                 "stt_ensemble_selective_enabled": True,
                 "stt_selective_secondary_recheck_enabled": True,
+            },
+        ),
+        Variant(
+            name="apple_case1_high_selective",
+            phase="apple_stt_case",
+            description="case1: Apple STT를 STT1에 두고, 현재 High의 large Whisper 경로를 STT2 selective rescue로 둡니다.",
+            method="selective_ensemble",
+            run_llm=False,
+            overrides=_apple_case_overrides(apple_as_stt1=True, timing_priority=False),
+        ),
+        Variant(
+            name="apple_case1_high_selective_timing_priority",
+            phase="apple_stt_case",
+            description="case1 timing-priority: Apple STT1 + Whisper large STT2 경로에 단어 타임태그/드리프트 보정을 더 강하게 적용합니다.",
+            method="selective_ensemble",
+            run_llm=False,
+            overrides=_apple_case_overrides(apple_as_stt1=True, timing_priority=True),
+        ),
+        Variant(
+            name="apple_case2_high_selective",
+            phase="apple_stt_case",
+            description="case2: 현재 High의 large Whisper 경로를 STT1에 두고, Apple STT를 STT2 selective rescue로 둡니다.",
+            method="selective_ensemble",
+            run_llm=False,
+            overrides=_apple_case_overrides(apple_as_stt1=False, timing_priority=False),
+        ),
+        Variant(
+            name="apple_case2_high_selective_timing_priority",
+            phase="apple_stt_case",
+            description="case2 timing-priority: Whisper large STT1 + Apple STT2 경로에 timing 우선 보정과 selective recheck를 더 강하게 적용하고 word precision collect 직전 native memory snapshot cache를 새로 고칩니다.",
+            method="selective_ensemble",
+            run_llm=False,
+            overrides={
+                **_apple_case_overrides(apple_as_stt1=False, timing_priority=True),
+                "stt_collect_force_fresh_native_memory_snapshot": True,
+                "stt_collect_owner_runtime_enabled": True,
+                "stt_selective_secondary_collect_owner_runtime_enabled": True,
+            },
+        ),
+        Variant(
+            name="apple_case2_high_selective_timing_priority_low_vad_nondigit_collect_pad0",
+            phase="apple_stt_case",
+            description="case2 timing-priority low-vad nondigit collect-pad0: current case2 timing preset을 유지하되, low-VAD metadata-only nondigit word-precision clip에만 local collect padding을 0초로 줄여 precision tail을 재검증합니다.",
+            method="selective_ensemble",
+            run_llm=False,
+            overrides={
+                **_apple_case_overrides(apple_as_stt1=False, timing_priority=True),
+                "stt_collect_force_fresh_native_memory_snapshot": True,
+                "stt_collect_owner_runtime_enabled": True,
+                "stt_selective_secondary_collect_owner_runtime_enabled": True,
+                "stt_word_timestamp_low_vad_nondigit_collect_padding_enabled": True,
+                "stt_word_timestamp_low_vad_nondigit_collect_padding_sec": 0.0,
+                "stt_word_timestamp_low_vad_nondigit_collect_padding_max_vad_score": 60.0,
+                "stt_word_timestamp_low_vad_nondigit_collect_padding_max_duration_sec": 3.5,
+            },
+        ),
+        Variant(
+            name="apple_case2_high_selective_timing_priority_short_digit_phrase_collect_pad0",
+            phase="apple_stt_case",
+            description="case2 timing-priority short-digit collect-pad0: current case2 timing preset을 유지하되, high-VAD short digit phrase word-precision clip에만 local collect padding을 0초로 줄여 cluster_1 collect tail을 재검증합니다.",
+            method="selective_ensemble",
+            run_llm=False,
+            overrides={
+                **_apple_case_overrides(apple_as_stt1=False, timing_priority=True),
+                "stt_collect_force_fresh_native_memory_snapshot": True,
+                "stt_collect_owner_runtime_enabled": True,
+                "stt_selective_secondary_collect_owner_runtime_enabled": True,
+                "stt_word_timestamp_short_digit_phrase_collect_padding_enabled": True,
+                "stt_word_timestamp_short_digit_phrase_collect_padding_sec": 0.0,
+                "stt_word_timestamp_short_digit_phrase_collect_padding_min_vad_score": 95.0,
+                "stt_word_timestamp_short_digit_phrase_collect_padding_max_duration_sec": 2.5,
             },
         ),
         Variant(
@@ -1163,14 +1404,765 @@ def _primary_model(settings: dict[str, Any]) -> str:
     return str(routed or requested)
 
 
-def _run_postprocess(rows: list[dict[str, Any]], vad: list[dict[str, Any]], settings: dict[str, Any], *, run_llm: bool) -> list[dict[str, Any]]:
+def _stage_trace_callback(trace: list[dict[str, Any]], runtime_trace: list[dict[str, Any]]):
+    first_callback_at: float | None = None
+    previous_callback_at: float | None = None
+
+    def _callback(payload: dict[str, Any]) -> None:
+        nonlocal first_callback_at, previous_callback_at
+        if not isinstance(payload, dict):
+            return
+        now = time.perf_counter()
+        if first_callback_at is None:
+            first_callback_at = now
+        since_first_ms = round(max(0.0, now - first_callback_at) * 1000.0, 3)
+        since_previous_ms = round(
+            max(0.0, now - previous_callback_at) * 1000.0,
+            3,
+        ) if previous_callback_at is not None else None
+        previous_callback_at = now
+        segments = [dict(item) for item in list(payload.get("segments") or []) if isinstance(item, dict)]
+        rows: list[dict[str, Any]] = []
+        for item in segments:
+            split_policy = dict(item.get("_common_split_guard_policy") or {})
+            raw_lock_policy = dict(item.get("_stt_no_llm_raw_candidate_policy") or {})
+            raw_text = str(item.get("_stt_no_llm_raw_text") or raw_lock_policy.get("raw_text") or "").strip()
+            words = item.get("words")
+            word_text = ""
+            if isinstance(words, list):
+                word_text = " ".join(
+                    str(word.get("word", word.get("text", "")) or "").strip()
+                    for word in words
+                    if isinstance(word, dict) and str(word.get("word", word.get("text", "")) or "").strip()
+                ).strip()
+            rows.append(
+                {
+                    "start": round(float(item.get("start", 0.0) or 0.0), 3),
+                    "end": round(float(item.get("end", 0.0) or 0.0), 3),
+                    "duration_sec": round(
+                        max(0.0, float(item.get("end", 0.0) or 0.0) - float(item.get("start", 0.0) or 0.0)),
+                        3,
+                    ),
+                    "text": str(item.get("text") or "").strip(),
+                    "split_index": split_policy.get("split_index"),
+                    "split_count": split_policy.get("split_count"),
+                    "source_start": split_policy.get("source_start"),
+                    "source_end": split_policy.get("source_end"),
+                    "selected_source": str(
+                        item.get("stt_selected_source")
+                        or item.get("stt_ensemble_source")
+                        or ""
+                    ).strip(),
+                    "has_common_split_policy": bool(split_policy),
+                    "raw_lock_reason": str(raw_lock_policy.get("reason") or "").strip(),
+                    "restored_after_postprocess": bool(raw_lock_policy.get("restored_after_postprocess")),
+                    "raw_text": raw_text,
+                    "word_text": word_text,
+                }
+            )
+        trace.append(
+            {
+                "stage": str(payload.get("stage") or "").strip(),
+                "stage_label": str(payload.get("stage_label") or "").strip(),
+                "segment_count": len(segments),
+                "sample_texts": [str(item.get("text") or "").strip() for item in segments[:5]],
+                "first_start": round(float(segments[0].get("start", 0.0) or 0.0), 3) if segments else None,
+                "last_end": round(float(segments[-1].get("end", 0.0) or 0.0), 3) if segments else None,
+                "rows": rows,
+            }
+        )
+        runtime_trace.append(
+            {
+                "stage": str(payload.get("stage") or "").strip(),
+                "stage_label": str(payload.get("stage_label") or "").strip(),
+                "segment_count": len(segments),
+                "since_first_ms": since_first_ms,
+                "since_previous_ms": since_previous_ms,
+            }
+        )
+
+    return _callback
+
+
+def _final_cleanup_trace_callback(trace: list[dict[str, Any]]):
+    def _callback(payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        rows: list[dict[str, Any]] = []
+        for item in list(payload.get("rows") or []):
+            if not isinstance(item, dict):
+                continue
+            split_policy = dict(item.get("_common_split_guard_policy") or {})
+            cleanup_policy = dict(item.get("_final_sequence_cleanup_policy") or {})
+            rows.append(
+                {
+                    "start": round(float(item.get("start", 0.0) or 0.0), 3),
+                    "end": round(float(item.get("end", 0.0) or 0.0), 3),
+                    "duration_sec": round(
+                        max(
+                            0.0,
+                            float(item.get("end", 0.0) or 0.0) - float(item.get("start", 0.0) or 0.0),
+                        ),
+                        3,
+                    ),
+                    "text": str(item.get("text") or "").strip(),
+                    "split_index": split_policy.get("split_index"),
+                    "split_count": split_policy.get("split_count"),
+                    "source_start": split_policy.get("source_start"),
+                    "source_end": split_policy.get("source_end"),
+                    "selected_source": str(
+                        item.get("stt_selected_source")
+                        or item.get("stt_ensemble_source")
+                        or ""
+                    ).strip(),
+                    "cleanup_action": str(cleanup_policy.get("action") or "").strip(),
+                }
+            )
+        trace.append(
+            {
+                "stage": str(payload.get("stage") or "").strip(),
+                "step": str(payload.get("step") or "").strip(),
+                "segment_count": int(payload.get("segment_count") or 0),
+                "changed": int(payload.get("changed") or 0),
+                "sample_texts": [str(text).strip() for text in list(payload.get("sample_texts") or [])[:5]],
+                "rows": rows,
+            }
+        )
+
+    return _callback
+
+
+def _trim_recent_overlap_trace_callback(trace: list[dict[str, Any]]):
+    def _callback(payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        trace.append(
+            {
+                "stage": str(payload.get("stage") or "").strip(),
+                "decision": str(payload.get("decision") or "").strip(),
+                "reason": str(payload.get("reason") or "").strip(),
+                "start": round(float(payload.get("start", 0.0) or 0.0), 3),
+                "end": round(float(payload.get("end", 0.0) or 0.0), 3),
+                "duration_sec": round(
+                    max(0.0, float(payload.get("end", 0.0) or 0.0) - float(payload.get("start", 0.0) or 0.0)),
+                    3,
+                ),
+                "text": str(payload.get("text") or "").strip(),
+                "trimmed_text": str(payload.get("trimmed_text") or "").strip(),
+                "previous_text": str(payload.get("previous_text") or "").strip(),
+                "prefix_overlap": int(payload.get("prefix_overlap") or 0),
+                "suffix_overlap": int(payload.get("suffix_overlap") or 0),
+                "split_index": payload.get("split_index"),
+                "split_count": payload.get("split_count"),
+                "has_common_split_policy": bool(payload.get("has_common_split_policy")),
+                "token_count": int(payload.get("token_count") or 0),
+                "previous_token_count": int(payload.get("previous_token_count") or 0),
+            }
+        )
+
+    return _callback
+
+
+def _no_llm_raw_restore_trace_callback(trace: list[dict[str, Any]]):
+    def _callback(payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        trace.append(
+            {
+                "step": str(payload.get("step") or "").strip(),
+                "decision": str(payload.get("decision") or "").strip(),
+                "reason": str(payload.get("reason") or "").strip(),
+                "start": round(float(payload.get("start", 0.0) or 0.0), 3),
+                "end": round(float(payload.get("end", 0.0) or 0.0), 3),
+                "duration_sec": round(
+                    max(0.0, float(payload.get("end", 0.0) or 0.0) - float(payload.get("start", 0.0) or 0.0)),
+                    3,
+                ),
+                "text": str(payload.get("text") or "").strip(),
+                "split_index": payload.get("split_index"),
+                "split_count": payload.get("split_count"),
+                "has_common_split_policy": bool(payload.get("has_common_split_policy")),
+                "raw_lock_reason": str(payload.get("raw_lock_reason") or "").strip(),
+                "restored_after_postprocess": bool(payload.get("restored_after_postprocess")),
+                "raw_text": str(payload.get("raw_text") or "").strip(),
+                "word_text": str(payload.get("word_text") or "").strip(),
+                "selected_source": str(payload.get("selected_source") or "").strip(),
+                "anchor_text": str(payload.get("anchor_text") or "").strip(),
+                "similarity": payload.get("similarity"),
+            }
+        )
+
+    return _callback
+
+
+def _selective_ensemble_runtime_trace_callback(trace: list[dict[str, Any]]):
+    def _compact_collect_runtime_info(raw: Any) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        payload = {
+            "model": str(raw.get("model") or "").strip(),
+            "cache_key": str(raw.get("cache_key") or "").strip(),
+            "reuse_enabled": bool(raw.get("reuse_enabled")),
+            "worker_source": str(raw.get("worker_source") or "").strip(),
+            "transient_worker": bool(raw.get("transient_worker")),
+            "native_memory_snapshot_force_refresh": bool(raw.get("native_memory_snapshot_force_refresh")),
+            "preexisting_child_processor_count": int(raw.get("preexisting_child_processor_count", 0) or 0),
+            "preexisting_cached_worker_count": int(raw.get("preexisting_cached_worker_count", 0) or 0),
+            "preexisting_busy_worker_count": int(raw.get("preexisting_busy_worker_count", 0) or 0),
+            "preexisting_alive_owner_runtime_count": int(raw.get("preexisting_alive_owner_runtime_count", 0) or 0),
+            "preexisting_alive_child_runtime_count": int(raw.get("preexisting_alive_child_runtime_count", 0) or 0),
+            "preexisting_alive_cached_worker_count": int(raw.get("preexisting_alive_cached_worker_count", 0) or 0),
+            "preexisting_alive_runtime_total_count": int(raw.get("preexisting_alive_runtime_total_count", 0) or 0),
+            "pressure_stage": str(raw.get("pressure_stage") or "").strip(),
+            "allow_collect_worker_reuse": bool(raw.get("allow_collect_worker_reuse")),
+            "duration_first_submission_enabled": bool(raw.get("duration_first_submission_enabled")),
+            "submission_order_indices": [int(idx) for idx in list(raw.get("submission_order_indices") or [])],
+            "submitted_chunk_paths": [str(path or "").strip() for path in list(raw.get("submitted_chunk_paths") or [])],
+            "submitted_chunk_durations_sec": [
+                round(float(value or 0.0), 3) for value in list(raw.get("submitted_chunk_durations_sec") or [])
+            ],
+            "submitted_chunk_offsets_sec": [
+                round(float(value or 0.0), 3) for value in list(raw.get("submitted_chunk_offsets_sec") or [])
+            ],
+            "completed_chunk_paths": [str(path or "").strip() for path in list(raw.get("completed_chunk_paths") or [])],
+            "completed_chunk_elapsed_ms": [
+                round(float(value or 0.0), 3) for value in list(raw.get("completed_chunk_elapsed_ms") or [])
+            ],
+            "emitted_chunk_paths": [str(path or "").strip() for path in list(raw.get("emitted_chunk_paths") or [])],
+            "emitted_chunk_elapsed_ms": [
+                round(float(value or 0.0), 3) for value in list(raw.get("emitted_chunk_elapsed_ms") or [])
+            ],
+        }
+        stt_benchmark_plan = raw.get("stt_benchmark_plan")
+        if isinstance(stt_benchmark_plan, dict):
+            payload["stt_benchmark_plan"] = {
+                "requested_model": str(stt_benchmark_plan.get("requested_model") or "").strip(),
+                "active_backend": str(stt_benchmark_plan.get("active_backend") or "").strip(),
+                "active_model": str(stt_benchmark_plan.get("active_model") or "").strip(),
+                "active_reason": str(stt_benchmark_plan.get("active_reason") or "").strip(),
+                "challengers": [
+                    {
+                        "backend": str(dict(item).get("backend") or "").strip(),
+                        "model": str(dict(item).get("model") or "").strip(),
+                        "reason": str(dict(item).get("reason") or "").strip(),
+                    }
+                    for item in list(stt_benchmark_plan.get("challengers") or [])
+                    if isinstance(item, dict)
+                ],
+                "vad_challenger": (
+                    {
+                        "provider": str(dict(stt_benchmark_plan.get("vad_challenger") or {}).get("provider") or "").strip(),
+                        "reason": str(dict(stt_benchmark_plan.get("vad_challenger") or {}).get("reason") or "").strip(),
+                    }
+                    if isinstance(stt_benchmark_plan.get("vad_challenger"), dict)
+                    else None
+                ),
+            }
+        resource_snapshot = raw.get("resource_snapshot")
+        if isinstance(resource_snapshot, dict):
+            payload["resource_snapshot"] = {
+                "available_memory_ratio": round(float(resource_snapshot.get("available_memory_ratio", 0.0) or 0.0), 4)
+                if resource_snapshot.get("available_memory_ratio") is not None
+                else None,
+                "compressed_memory_ratio": round(float(resource_snapshot.get("compressed_memory_ratio", 0.0) or 0.0), 4)
+                if resource_snapshot.get("compressed_memory_ratio") is not None
+                else None,
+                "process_rss_bytes": int(resource_snapshot.get("process_rss_bytes", 0) or 0)
+                if resource_snapshot.get("process_rss_bytes") is not None
+                else None,
+                "memory_pressure_stage": str(resource_snapshot.get("memory_pressure_stage") or "").strip(),
+            }
+        return payload
+
+    def _callback(payload: list[dict[str, Any]] | dict[str, Any]) -> None:
+        if isinstance(payload, dict):
+            items = [payload]
+        elif isinstance(payload, list):
+            items = [dict(item) for item in payload if isinstance(item, dict)]
+        else:
+            return
+        trace.clear()
+        for item in items:
+            trace.append(
+                {
+                    "phase": str(item.get("phase") or "").strip(),
+                    "elapsed_ms": round(float(item.get("elapsed_ms", 0.0) or 0.0), 3),
+                    "row_count": int(item.get("row_count", 0) or 0) if item.get("row_count") is not None else None,
+                    "model": str(item.get("model") or "").strip(),
+                    "adjusted_count": int(item.get("adjusted_count", 0) or 0)
+                    if item.get("adjusted_count") is not None
+                    else None,
+                    "collect_runtime_info_found": bool(item.get("collect_runtime_info_found")),
+                    "collect_runtime_info": _compact_collect_runtime_info(item.get("collect_runtime_info")),
+                    "recheck_plan_source_counts": {
+                        "low_score": int(dict(item.get("recheck_plan_source_counts") or {}).get("low_score", 0) or 0),
+                        "missing_voice": int(dict(item.get("recheck_plan_source_counts") or {}).get("missing_voice", 0) or 0),
+                        "route_hint": int(dict(item.get("recheck_plan_source_counts") or {}).get("route_hint", 0) or 0),
+                        "merged": int(dict(item.get("recheck_plan_source_counts") or {}).get("merged", 0) or 0),
+                    }
+                    if isinstance(item.get("recheck_plan_source_counts"), dict)
+                    else None,
+                    "raw_range_count": int(item.get("raw_range_count", 0) or 0)
+                    if item.get("raw_range_count") is not None
+                    else None,
+                    "range_count": int(item.get("range_count", 0) or 0)
+                    if item.get("range_count") is not None
+                    else None,
+                    "prepared_clip_count": int(item.get("prepared_clip_count", 0) or 0)
+                    if item.get("prepared_clip_count") is not None
+                    else None,
+                    "collected_segment_count": int(item.get("collected_segment_count", 0) or 0)
+                    if item.get("collected_segment_count") is not None
+                    else None,
+                    "applied_range_count": int(item.get("applied_range_count", 0) or 0)
+                    if item.get("applied_range_count") is not None
+                    else None,
+                    "skipped_range_count": int(item.get("skipped_range_count", 0) or 0)
+                    if item.get("skipped_range_count") is not None
+                    else None,
+                    "applied_segment_count": int(item.get("applied_segment_count", 0) or 0)
+                    if item.get("applied_segment_count") is not None
+                    else None,
+                    "retained_primary_segment_count": int(item.get("retained_primary_segment_count", 0) or 0)
+                    if item.get("retained_primary_segment_count") is not None
+                    else None,
+                    "annotate_error": str(item.get("annotate_error") or "").strip(),
+                }
+            )
+
+    return _callback
+
+
+def _word_precision_runtime_trace_callback(trace: list[dict[str, Any]]):
+    def _callback(payload: list[dict[str, Any]] | dict[str, Any]) -> None:
+        if isinstance(payload, dict):
+            items = [payload]
+        elif isinstance(payload, list):
+            items = [dict(item) for item in payload if isinstance(item, dict)]
+        else:
+            return
+        trace.clear()
+        for item in items:
+            trace.append(
+                {
+                    "phase": str(item.get("phase") or "").strip(),
+                    "elapsed_ms": round(float(item.get("elapsed_ms", 0.0) or 0.0), 3),
+                    "segment_count": int(item.get("segment_count", 0) or 0)
+                    if item.get("segment_count") is not None
+                    else None,
+                    "range_count": int(item.get("range_count", 0) or 0)
+                    if item.get("range_count") is not None
+                    else None,
+                    "prepared_clip_count": int(item.get("prepared_clip_count", 0) or 0)
+                    if item.get("prepared_clip_count") is not None
+                    else None,
+                    "prepared_total_clip_duration_sec": round(float(item.get("prepared_total_clip_duration_sec", 0.0) or 0.0), 3)
+                    if item.get("prepared_total_clip_duration_sec") is not None
+                    else None,
+                    "prepared_max_clip_duration_sec": round(float(item.get("prepared_max_clip_duration_sec", 0.0) or 0.0), 3)
+                    if item.get("prepared_max_clip_duration_sec") is not None
+                    else None,
+                    "prepared_clip_rows": [
+                        {
+                            "path": str((clip or {}).get("path") or "").strip(),
+                            "start": round(float((clip or {}).get("start", 0.0) or 0.0), 3),
+                            "end": round(float((clip or {}).get("end", 0.0) or 0.0), 3),
+                            "duration_sec": round(float((clip or {}).get("duration_sec", 0.0) or 0.0), 3),
+                            "source_chunk_path": str((clip or {}).get("source_chunk_path") or "").strip(),
+                            "source_chunk_start": round(float((clip or {}).get("source_chunk_start", 0.0) or 0.0), 3)
+                            if (clip or {}).get("source_chunk_start") is not None
+                            else None,
+                            "source_chunk_duration_sec": round(
+                                float((clip or {}).get("source_chunk_duration_sec", 0.0) or 0.0),
+                                3,
+                            )
+                            if (clip or {}).get("source_chunk_duration_sec") is not None
+                            else None,
+                            "local_start": round(float((clip or {}).get("local_start", 0.0) or 0.0), 3)
+                            if (clip or {}).get("local_start") is not None
+                            else None,
+                            "local_end": round(float((clip or {}).get("local_end", 0.0) or 0.0), 3)
+                            if (clip or {}).get("local_end") is not None
+                            else None,
+                            "padding_sec": round(float((clip or {}).get("padding_sec", 0.0) or 0.0), 3)
+                            if (clip or {}).get("padding_sec") is not None
+                            else None,
+                            "primary_text": str((clip or {}).get("primary_text") or "").strip(),
+                            "secondary_text": str((clip or {}).get("secondary_text") or "").strip(),
+                            "best_original_score": round(float((clip or {}).get("best_original_score", 0.0) or 0.0), 3),
+                            "collected_segment_count": int((clip or {}).get("collected_segment_count", 0) or 0)
+                            if (clip or {}).get("collected_segment_count") is not None
+                            else None,
+                            "collected_text_segment_count": int((clip or {}).get("collected_text_segment_count", 0) or 0)
+                            if (clip or {}).get("collected_text_segment_count") is not None
+                            else None,
+                            "collected_total_duration_sec": round(
+                                float((clip or {}).get("collected_total_duration_sec", 0.0) or 0.0),
+                                3,
+                            )
+                            if (clip or {}).get("collected_total_duration_sec") is not None
+                            else None,
+                            "collected_sample_texts": [
+                                str(text or "").strip()
+                                for text in list((clip or {}).get("collected_sample_texts") or [])
+                            ],
+                        }
+                        for clip in list(item.get("prepared_clip_rows") or [])
+                        if isinstance(clip, dict)
+                    ],
+                    "collected_segment_count": int(item.get("collected_segment_count", 0) or 0)
+                    if item.get("collected_segment_count") is not None
+                    else None,
+                    "collect_owner_bound": bool(item.get("collect_owner_bound")),
+                    "collect_owner_type": str(item.get("collect_owner_type") or "").strip(),
+                    "collect_runtime_info_found": bool(item.get("collect_runtime_info_found")),
+                    "collect_runtime_info": (
+                        {
+                            "model": str(dict(item.get("collect_runtime_info") or {}).get("model") or "").strip(),
+                            "cache_key": str(dict(item.get("collect_runtime_info") or {}).get("cache_key") or "").strip(),
+                            "reuse_enabled": bool(dict(item.get("collect_runtime_info") or {}).get("reuse_enabled")),
+                            "worker_source": str(dict(item.get("collect_runtime_info") or {}).get("worker_source") or "").strip(),
+                            "transient_worker": bool(dict(item.get("collect_runtime_info") or {}).get("transient_worker")),
+                            "native_memory_snapshot_force_refresh": bool(
+                                dict(item.get("collect_runtime_info") or {}).get(
+                                    "native_memory_snapshot_force_refresh"
+                                )
+                            ),
+                            "preexisting_child_processor_count": int(
+                                dict(item.get("collect_runtime_info") or {}).get(
+                                    "preexisting_child_processor_count",
+                                    0,
+                                )
+                                or 0
+                            ),
+                            "preexisting_cached_worker_count": int(
+                                dict(item.get("collect_runtime_info") or {}).get(
+                                    "preexisting_cached_worker_count",
+                                    0,
+                                )
+                                or 0
+                            ),
+                            "preexisting_busy_worker_count": int(
+                                dict(item.get("collect_runtime_info") or {}).get(
+                                    "preexisting_busy_worker_count",
+                                    0,
+                                )
+                                or 0
+                            ),
+                            "preexisting_alive_owner_runtime_count": int(
+                                dict(item.get("collect_runtime_info") or {}).get(
+                                    "preexisting_alive_owner_runtime_count",
+                                    0,
+                                )
+                                or 0
+                            ),
+                            "preexisting_alive_child_runtime_count": int(
+                                dict(item.get("collect_runtime_info") or {}).get(
+                                    "preexisting_alive_child_runtime_count",
+                                    0,
+                                )
+                                or 0
+                            ),
+                            "preexisting_alive_cached_worker_count": int(
+                                dict(item.get("collect_runtime_info") or {}).get(
+                                    "preexisting_alive_cached_worker_count",
+                                    0,
+                                )
+                                or 0
+                            ),
+                            "preexisting_alive_runtime_total_count": int(
+                                dict(item.get("collect_runtime_info") or {}).get(
+                                    "preexisting_alive_runtime_total_count",
+                                    0,
+                                )
+                                or 0
+                            ),
+                        "pressure_stage": str(dict(item.get("collect_runtime_info") or {}).get("pressure_stage") or "").strip(),
+                        "allow_collect_worker_reuse": bool(
+                            dict(item.get("collect_runtime_info") or {}).get("allow_collect_worker_reuse")
+                        ),
+                        "resource_snapshot": (
+                            {
+                                "available_memory_ratio": round(
+                                    float(
+                                        dict(
+                                            dict(item.get("collect_runtime_info") or {}).get("resource_snapshot") or {}
+                                        ).get("available_memory_ratio", 0.0)
+                                        or 0.0
+                                    ),
+                                    4,
+                                )
+                                if dict(
+                                    dict(item.get("collect_runtime_info") or {}).get("resource_snapshot") or {}
+                                ).get("available_memory_ratio")
+                                is not None
+                                else None,
+                                "compressed_memory_ratio": round(
+                                    float(
+                                        dict(
+                                            dict(item.get("collect_runtime_info") or {}).get("resource_snapshot") or {}
+                                        ).get("compressed_memory_ratio", 0.0)
+                                        or 0.0
+                                    ),
+                                    4,
+                                )
+                                if dict(
+                                    dict(item.get("collect_runtime_info") or {}).get("resource_snapshot") or {}
+                                ).get("compressed_memory_ratio")
+                                is not None
+                                else None,
+                                "process_rss_bytes": int(
+                                    dict(
+                                        dict(item.get("collect_runtime_info") or {}).get("resource_snapshot") or {}
+                                    ).get("process_rss_bytes", 0)
+                                    or 0
+                                )
+                                if dict(
+                                    dict(item.get("collect_runtime_info") or {}).get("resource_snapshot") or {}
+                                ).get("process_rss_bytes")
+                                is not None
+                                else None,
+                                "memory_pressure_stage": str(
+                                    dict(
+                                        dict(item.get("collect_runtime_info") or {}).get("resource_snapshot") or {}
+                                    ).get("memory_pressure_stage")
+                                    or ""
+                                ).strip(),
+                            }
+                            if isinstance(dict(item.get("collect_runtime_info") or {}).get("resource_snapshot"), dict)
+                            else None
+                        ),
+                        "duration_first_submission_enabled": bool(
+                            dict(item.get("collect_runtime_info") or {}).get("duration_first_submission_enabled")
+                        ),
+                            "submission_order_indices": [
+                                int(idx)
+                                for idx in list(dict(item.get("collect_runtime_info") or {}).get("submission_order_indices") or [])
+                            ],
+                            "submitted_chunk_paths": [
+                                str(path or "").strip()
+                                for path in list(dict(item.get("collect_runtime_info") or {}).get("submitted_chunk_paths") or [])
+                            ],
+                            "submitted_chunk_durations_sec": [
+                                round(float(value or 0.0), 3)
+                                for value in list(dict(item.get("collect_runtime_info") or {}).get("submitted_chunk_durations_sec") or [])
+                            ],
+                            "submitted_chunk_offsets_sec": [
+                                round(float(value or 0.0), 3)
+                                for value in list(dict(item.get("collect_runtime_info") or {}).get("submitted_chunk_offsets_sec") or [])
+                            ],
+                            "completed_chunk_paths": [
+                                str(path or "").strip()
+                                for path in list(dict(item.get("collect_runtime_info") or {}).get("completed_chunk_paths") or [])
+                            ],
+                            "completed_chunk_elapsed_ms": [
+                                round(float(value or 0.0), 3)
+                                for value in list(dict(item.get("collect_runtime_info") or {}).get("completed_chunk_elapsed_ms") or [])
+                            ],
+                            "emitted_chunk_paths": [
+                                str(path or "").strip()
+                                for path in list(dict(item.get("collect_runtime_info") or {}).get("emitted_chunk_paths") or [])
+                            ],
+                            "emitted_chunk_elapsed_ms": [
+                                round(float(value or 0.0), 3)
+                                for value in list(dict(item.get("collect_runtime_info") or {}).get("emitted_chunk_elapsed_ms") or [])
+                            ],
+                            "stt_benchmark_plan": (
+                                {
+                                    "requested_model": str(
+                                        dict(dict(item.get("collect_runtime_info") or {}).get("stt_benchmark_plan") or {}).get(
+                                            "requested_model"
+                                        )
+                                        or ""
+                                    ).strip(),
+                                    "active_backend": str(
+                                        dict(dict(item.get("collect_runtime_info") or {}).get("stt_benchmark_plan") or {}).get(
+                                            "active_backend"
+                                        )
+                                        or ""
+                                    ).strip(),
+                                    "active_model": str(
+                                        dict(dict(item.get("collect_runtime_info") or {}).get("stt_benchmark_plan") or {}).get(
+                                            "active_model"
+                                        )
+                                        or ""
+                                    ).strip(),
+                                    "active_reason": str(
+                                        dict(dict(item.get("collect_runtime_info") or {}).get("stt_benchmark_plan") or {}).get(
+                                            "active_reason"
+                                        )
+                                        or ""
+                                    ).strip(),
+                                    "challengers": [
+                                        {
+                                            "backend": str(dict(ch).get("backend") or "").strip(),
+                                            "model": str(dict(ch).get("model") or "").strip(),
+                                            "reason": str(dict(ch).get("reason") or "").strip(),
+                                        }
+                                        for ch in list(
+                                            dict(
+                                                dict(item.get("collect_runtime_info") or {}).get(
+                                                    "stt_benchmark_plan"
+                                                )
+                                                or {}
+                                            ).get("challengers")
+                                            or []
+                                        )
+                                        if isinstance(ch, dict)
+                                    ],
+                                    "vad_challenger": (
+                                        {
+                                            "provider": str(
+                                                dict(
+                                                    dict(
+                                                        dict(item.get("collect_runtime_info") or {}).get(
+                                                            "stt_benchmark_plan"
+                                                        )
+                                                        or {}
+                                                    ).get("vad_challenger")
+                                                    or {}
+                                                ).get("provider")
+                                                or ""
+                                            ).strip(),
+                                            "reason": str(
+                                                dict(
+                                                    dict(
+                                                        dict(item.get("collect_runtime_info") or {}).get(
+                                                            "stt_benchmark_plan"
+                                                        )
+                                                        or {}
+                                                    ).get("vad_challenger")
+                                                    or {}
+                                                ).get("reason")
+                                                or ""
+                                            ).strip(),
+                                        }
+                                        if isinstance(
+                                            dict(
+                                                dict(item.get("collect_runtime_info") or {}).get("stt_benchmark_plan")
+                                                or {}
+                                            ).get("vad_challenger"),
+                                            dict,
+                                        )
+                                        else None
+                                    ),
+                                }
+                                if isinstance(
+                                    dict(item.get("collect_runtime_info") or {}).get("stt_benchmark_plan"),
+                                    dict,
+                                )
+                                else None
+                            ),
+                        }
+                        if isinstance(item.get("collect_runtime_info"), dict)
+                        else None
+                    ),
+                    "collect_clip_rows": [
+                        {
+                            "path": str((clip or {}).get("path") or "").strip(),
+                            "start": round(float((clip or {}).get("start", 0.0) or 0.0), 3),
+                            "end": round(float((clip or {}).get("end", 0.0) or 0.0), 3),
+                            "duration_sec": round(float((clip or {}).get("duration_sec", 0.0) or 0.0), 3),
+                            "source_chunk_path": str((clip or {}).get("source_chunk_path") or "").strip(),
+                            "source_chunk_start": round(float((clip or {}).get("source_chunk_start", 0.0) or 0.0), 3)
+                            if (clip or {}).get("source_chunk_start") is not None
+                            else None,
+                            "source_chunk_duration_sec": round(
+                                float((clip or {}).get("source_chunk_duration_sec", 0.0) or 0.0),
+                                3,
+                            )
+                            if (clip or {}).get("source_chunk_duration_sec") is not None
+                            else None,
+                            "local_start": round(float((clip or {}).get("local_start", 0.0) or 0.0), 3)
+                            if (clip or {}).get("local_start") is not None
+                            else None,
+                            "local_end": round(float((clip or {}).get("local_end", 0.0) or 0.0), 3)
+                            if (clip or {}).get("local_end") is not None
+                            else None,
+                            "padding_sec": round(float((clip or {}).get("padding_sec", 0.0) or 0.0), 3)
+                            if (clip or {}).get("padding_sec") is not None
+                            else None,
+                            "primary_text": str((clip or {}).get("primary_text") or "").strip(),
+                            "merged_clip_count": int((clip or {}).get("merged_clip_count", 0) or 0)
+                            if (clip or {}).get("merged_clip_count") is not None
+                            else None,
+                            "collected_segment_count": int((clip or {}).get("collected_segment_count", 0) or 0)
+                            if (clip or {}).get("collected_segment_count") is not None
+                            else None,
+                            "collected_text_segment_count": int((clip or {}).get("collected_text_segment_count", 0) or 0)
+                            if (clip or {}).get("collected_text_segment_count") is not None
+                            else None,
+                            "collected_total_duration_sec": round(
+                                float((clip or {}).get("collected_total_duration_sec", 0.0) or 0.0),
+                                3,
+                            )
+                            if (clip or {}).get("collected_total_duration_sec") is not None
+                            else None,
+                            "collected_sample_texts": [
+                                str(text or "").strip()
+                                for text in list((clip or {}).get("collected_sample_texts") or [])
+                            ],
+                        }
+                        for clip in list(item.get("collect_clip_rows") or [])
+                        if isinstance(clip, dict)
+                    ],
+                    "applied_count": int(item.get("applied_count", 0) or 0)
+                    if item.get("applied_count") is not None
+                    else None,
+                    "result_segment_count": int(item.get("result_segment_count", 0) or 0)
+                    if item.get("result_segment_count") is not None
+                    else None,
+                    "annotate_error": str(item.get("annotate_error") or "").strip(),
+                }
+            )
+
+    return _callback
+
+
+def _run_postprocess(
+    rows: list[dict[str, Any]],
+    vad: list[dict[str, Any]],
+    settings: dict[str, Any],
+    *,
+    run_llm: bool,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     model = str(settings.get("selected_model") or "").strip()
     if not run_llm:
         model = "사용 안함 (benchmark no-llm)"
         settings = {**settings, "selected_model": model}
-    with patched_subtitle_settings(settings, model):
-        optimized = subtitle_engine.optimize_segments([dict(row) for row in rows], vad_segments=vad)
-    return _apply_benchmark_speaker_postprocess(optimized, settings)
+    stage_trace: list[dict[str, Any]] = []
+    stage_runtime_trace: list[dict[str, Any]] = []
+    final_cleanup_trace: list[dict[str, Any]] = []
+    trim_recent_overlap_trace: list[dict[str, Any]] = []
+    no_llm_raw_restore_trace: list[dict[str, Any]] = []
+    runtime_settings = {
+        **settings,
+        "_benchmark_include_preview_metadata": True,
+        "_benchmark_final_sequence_cleanup_trace": _final_cleanup_trace_callback(final_cleanup_trace),
+        "_benchmark_trim_recent_overlap_trace": _trim_recent_overlap_trace_callback(trim_recent_overlap_trace),
+        "_benchmark_no_llm_raw_restore_trace": _no_llm_raw_restore_trace_callback(no_llm_raw_restore_trace),
+    }
+    with patched_subtitle_settings(runtime_settings, model):
+        optimized = subtitle_engine.optimize_segments(
+            [dict(row) for row in rows],
+            vad_segments=vad,
+            stage_segments_callback=_stage_trace_callback(stage_trace, stage_runtime_trace),
+        )
+    return (
+        _apply_benchmark_speaker_postprocess(optimized, settings),
+        stage_trace,
+        stage_runtime_trace,
+        final_cleanup_trace,
+        trim_recent_overlap_trace,
+        no_llm_raw_restore_trace,
+    )
 
 
 class _BenchmarkSpeakerRuntime(PipelineHelpersMixin):
@@ -1280,6 +2272,24 @@ def _run_variant(
     base_settings: dict[str, Any],
     reference: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    def _record_major_runtime_phase(
+        trace: list[dict[str, Any]],
+        phase: str,
+        phase_started: float,
+        run_started: float,
+        **extra: Any,
+    ) -> float:
+        ended = time.perf_counter()
+        payload = {
+            "phase": str(phase or "").strip(),
+            "elapsed_ms": round((ended - phase_started) * 1000.0, 3),
+            "since_start_ms": round((ended - run_started) * 1000.0, 3),
+        }
+        for key, value in extra.items():
+            payload[key] = value
+        trace.append(payload)
+        return ended
+
     settings = {**base_settings, **variant.overrides}
     chunk_dir = _copy_chunk_dir(chunk_source, work_dir / variant.name / "chunks")
     vad = _load_vad(chunk_dir)
@@ -1289,12 +2299,33 @@ def _run_variant(
     error = ""
     raw_rows: list[dict[str, Any]] = []
     final_rows: list[dict[str, Any]] = []
+    stage_trace: list[dict[str, Any]] = []
+    stage_runtime_trace: list[dict[str, Any]] = []
+    final_cleanup_trace: list[dict[str, Any]] = []
+    trim_recent_overlap_trace: list[dict[str, Any]] = []
+    no_llm_raw_restore_trace: list[dict[str, Any]] = []
+    major_runtime_trace: list[dict[str, Any]] = []
+    selective_ensemble_runtime_trace: list[dict[str, Any]] = []
+    word_precision_runtime_trace: list[dict[str, Any]] = []
+    processor._benchmark_selective_ensemble_trace_callback = _selective_ensemble_runtime_trace_callback(
+        selective_ensemble_runtime_trace
+    )
+    processor._benchmark_word_precision_trace_callback = _word_precision_runtime_trace_callback(
+        word_precision_runtime_trace
+    )
     try:
         if variant.method == "cached_raw":
+            phase_started = time.perf_counter()
             raw_rows = _load_cached_raw_segments(settings)
+            _record_major_runtime_phase(major_runtime_trace, "load_cached_raw", phase_started, started, row_count=len(raw_rows))
+            phase_started = time.perf_counter()
             raw_rows = annotate_stt_candidates(raw_rows, source="cached", vad_segments=vad, settings=settings)
-            final_rows = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            _record_major_runtime_phase(major_runtime_trace, "annotate_candidates", phase_started, started, row_count=len(raw_rows))
+            phase_started = time.perf_counter()
+            final_rows, stage_trace, stage_runtime_trace, final_cleanup_trace, trim_recent_overlap_trace, no_llm_raw_restore_trace = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            _record_major_runtime_phase(major_runtime_trace, "final_postprocess", phase_started, started, row_count=len(final_rows))
         elif variant.method == "stt1_only":
+            phase_started = time.perf_counter()
             raw_rows = _collect_transcribe(
                 processor.transcribe(
                     str(chunk_dir),
@@ -1304,9 +2335,15 @@ def _run_variant(
                     log_label="Bench-STT1",
                 )
             )
+            _record_major_runtime_phase(major_runtime_trace, "primary_transcribe", phase_started, started, row_count=len(raw_rows))
+            phase_started = time.perf_counter()
             raw_rows = annotate_stt_candidates(raw_rows, source="STT1", vad_segments=vad, settings=settings)
-            final_rows = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            _record_major_runtime_phase(major_runtime_trace, "annotate_candidates", phase_started, started, row_count=len(raw_rows))
+            phase_started = time.perf_counter()
+            final_rows, stage_trace, stage_runtime_trace, final_cleanup_trace, trim_recent_overlap_trace, no_llm_raw_restore_trace = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            _record_major_runtime_phase(major_runtime_trace, "final_postprocess", phase_started, started, row_count=len(final_rows))
         elif variant.method == "stt1_word_precision":
+            phase_started = time.perf_counter()
             raw_rows = _collect_transcribe(
                 processor.transcribe(
                     str(chunk_dir),
@@ -1316,9 +2353,15 @@ def _run_variant(
                     log_label="Bench-STT1",
                 )
             )
+            _record_major_runtime_phase(major_runtime_trace, "primary_transcribe", phase_started, started, row_count=len(raw_rows))
+            phase_started = time.perf_counter()
             scored = annotate_stt_candidates(raw_rows, source="STT1", vad_segments=vad, settings=settings)
-            lora_deep_rows = _run_postprocess(scored, vad, settings, run_llm=False)
+            _record_major_runtime_phase(major_runtime_trace, "annotate_candidates", phase_started, started, row_count=len(scored))
+            phase_started = time.perf_counter()
+            lora_deep_rows, _stage_trace_unused, _stage_runtime_unused, _cleanup_trace_unused, _trim_trace_unused, _restore_trace_unused = _run_postprocess(scored, vad, settings, run_llm=False)
+            _record_major_runtime_phase(major_runtime_trace, "prepass_postprocess_no_llm", phase_started, started, row_count=len(lora_deep_rows))
             _bind_processor_settings(processor, settings)
+            phase_started = time.perf_counter()
             precision_rows = processor._recheck_word_timestamps_for_precision(
                 str(chunk_dir),
                 lora_deep_rows,
@@ -1326,9 +2369,13 @@ def _run_variant(
                 vad,
                 _primary_model(settings),
             )
+            _record_major_runtime_phase(major_runtime_trace, "word_precision_recheck", phase_started, started, row_count=len(precision_rows))
             raw_rows = precision_rows
-            final_rows = _run_postprocess(precision_rows, vad, settings, run_llm=variant.run_llm)
+            phase_started = time.perf_counter()
+            final_rows, stage_trace, stage_runtime_trace, final_cleanup_trace, trim_recent_overlap_trace, no_llm_raw_restore_trace = _run_postprocess(precision_rows, vad, settings, run_llm=variant.run_llm)
+            _record_major_runtime_phase(major_runtime_trace, "final_postprocess", phase_started, started, row_count=len(final_rows))
         elif variant.method in {"parallel_ensemble", "selective_ensemble"}:
+            phase_started = time.perf_counter()
             raw_rows = _collect_transcribe(
                 processor.transcribe_ensemble(
                     str(chunk_dir),
@@ -1336,8 +2383,12 @@ def _run_variant(
                     cleanup_chunk_dir=False,
                 )
             )
-            final_rows = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            _record_major_runtime_phase(major_runtime_trace, "ensemble_transcribe", phase_started, started, row_count=len(raw_rows))
+            phase_started = time.perf_counter()
+            final_rows, stage_trace, stage_runtime_trace, final_cleanup_trace, trim_recent_overlap_trace, no_llm_raw_restore_trace = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            _record_major_runtime_phase(major_runtime_trace, "final_postprocess", phase_started, started, row_count=len(final_rows))
         elif variant.method == "proposed_lora_deep_gate":
+            phase_started = time.perf_counter()
             raw_rows = _collect_transcribe(
                 processor.transcribe(
                     str(chunk_dir),
@@ -1347,9 +2398,15 @@ def _run_variant(
                     log_label="Bench-STT1",
                 )
             )
+            _record_major_runtime_phase(major_runtime_trace, "primary_transcribe", phase_started, started, row_count=len(raw_rows))
+            phase_started = time.perf_counter()
             scored = annotate_stt_candidates(raw_rows, source="STT1", vad_segments=vad, settings=settings)
-            lora_deep_rows = _run_postprocess(scored, vad, settings, run_llm=False)
+            _record_major_runtime_phase(major_runtime_trace, "annotate_candidates", phase_started, started, row_count=len(scored))
+            phase_started = time.perf_counter()
+            lora_deep_rows, _stage_trace_unused, _stage_runtime_unused, _cleanup_trace_unused, _trim_trace_unused, _restore_trace_unused = _run_postprocess(scored, vad, settings, run_llm=False)
+            _record_major_runtime_phase(major_runtime_trace, "prepass_postprocess_no_llm", phase_started, started, row_count=len(lora_deep_rows))
             _bind_processor_settings(processor, settings)
+            phase_started = time.perf_counter()
             rechecked = processor._recheck_primary_low_score_with_secondary(
                 str(chunk_dir),
                 lora_deep_rows,
@@ -1357,6 +2414,8 @@ def _run_variant(
                 vad,
                 _primary_model(settings),
             )
+            _record_major_runtime_phase(major_runtime_trace, "low_score_recheck_secondary", phase_started, started, row_count=len(rechecked))
+            phase_started = time.perf_counter()
             rechecked = processor._recheck_word_timestamps_for_precision(
                 str(chunk_dir),
                 rechecked,
@@ -1364,17 +2423,34 @@ def _run_variant(
                 vad,
                 _primary_model(settings),
             )
+            _record_major_runtime_phase(major_runtime_trace, "word_precision_recheck", phase_started, started, row_count=len(rechecked))
             raw_rows = rechecked
-            final_rows = _run_postprocess(rechecked, vad, settings, run_llm=variant.run_llm)
+            phase_started = time.perf_counter()
+            final_rows, stage_trace, stage_runtime_trace, final_cleanup_trace, trim_recent_overlap_trace, no_llm_raw_restore_trace = _run_postprocess(rechecked, vad, settings, run_llm=variant.run_llm)
+            _record_major_runtime_phase(major_runtime_trace, "final_postprocess", phase_started, started, row_count=len(final_rows))
         else:
             raise RuntimeError(f"unsupported variant method: {variant.method}")
     except Exception as exc:
         error = str(exc)
     finally:
+        try:
+            processor._benchmark_selective_ensemble_trace_callback = None
+        except Exception:
+            pass
+        try:
+            processor._benchmark_word_precision_trace_callback = None
+        except Exception:
+            pass
+        phase_started = time.perf_counter()
         processor.release_runtime_models()
+        _record_major_runtime_phase(major_runtime_trace, "release_runtime_models", phase_started, started)
     elapsed = time.perf_counter() - started
+    phase_started = time.perf_counter()
     score = score_against_reference(final_rows, reference) if final_rows else {}
+    _record_major_runtime_phase(major_runtime_trace, "score_against_reference", phase_started, started, row_count=len(final_rows))
+    phase_started = time.perf_counter()
     readability = score_readability(final_rows, settings) if final_rows else {}
+    _record_major_runtime_phase(major_runtime_trace, "score_readability", phase_started, started, row_count=len(final_rows))
     if score:
         score["avg_cps"] = round(_avg_cps(final_rows), 3)
         score["segment_count_delta"] = int(len(final_rows) - len(reference))
@@ -1463,6 +2539,38 @@ def _run_variant(
         json.dumps(_slim_segments_for_artifact(raw_rows), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    (work_dir / variant.name / "stage_trace.json").write_text(
+        json.dumps(stage_trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (work_dir / variant.name / "stage_runtime_trace.json").write_text(
+        json.dumps(stage_runtime_trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (work_dir / variant.name / "major_runtime_trace.json").write_text(
+        json.dumps(major_runtime_trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (work_dir / variant.name / "selective_ensemble_runtime_trace.json").write_text(
+        json.dumps(selective_ensemble_runtime_trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (work_dir / variant.name / "word_precision_runtime_trace.json").write_text(
+        json.dumps(word_precision_runtime_trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (work_dir / variant.name / "final_cleanup_trace.json").write_text(
+        json.dumps(final_cleanup_trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (work_dir / variant.name / "trim_recent_overlap_trace.json").write_text(
+        json.dumps(trim_recent_overlap_trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (work_dir / variant.name / "no_llm_raw_restore_trace.json").write_text(
+        json.dumps(no_llm_raw_restore_trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return row
 
 
@@ -1479,13 +2587,21 @@ def _rank_rows(
     for row in rows:
         item = dict(row)
         quality = float(dict(row.get("quality") or {}).get("quality_score", 0.0) or 0.0)
+        timing_priority_quality = float(
+            dict(row.get("quality") or {}).get("timing_priority_quality_score", quality) or quality
+        )
         readability = float(dict(row.get("readability") or {}).get("readability_score", 0.0) or 0.0)
         elapsed = float(row.get("elapsed_sec", 0.0) or 0.0)
         speed_score = 0.0 if elapsed <= 0.0 or fastest <= 0.0 else min(100.0, fastest / elapsed * 100.0)
         item["speed_score"] = round(speed_score, 3)
         item["quality_speed_score"] = round(quality * 0.82 + speed_score * 0.18, 3)
+        item["timing_priority_speed_score"] = round(timing_priority_quality * 0.86 + speed_score * 0.14, 3)
         item["readability_speed_score"] = round(readability * 0.82 + speed_score * 0.18, 3)
-        if objective_key == "readability":
+        if ranking_key == "timing_priority_speed_weighted":
+            item["primary_score_name"] = "timing_priority_quality"
+            item["primary_score"] = round(timing_priority_quality, 3)
+            item["primary_speed_score"] = item["timing_priority_speed_score"]
+        elif objective_key == "readability":
             item["primary_score_name"] = "readability"
             item["primary_score"] = round(readability, 3)
             item["primary_speed_score"] = item["readability_speed_score"]
@@ -1514,6 +2630,22 @@ def _rank_rows(
     for rank, row in enumerate(ranked, start=1):
         row["rank"] = rank
     return ranked
+
+
+def _resolve_ranking_policy(requested_policy: str, suite: str, variants: list[Variant]) -> str:
+    requested_key = str(requested_policy or "auto").strip().lower()
+    if requested_key != "auto":
+        return requested_key
+    hinted = {
+        str(dict(variant.overrides or {}).get("benchmark_ranking_policy") or "").strip().lower()
+        for variant in list(variants or [])
+    }
+    hinted.discard("")
+    if len(hinted) == 1:
+        return next(iter(hinted))
+    if str(suite or "").startswith("mode") or str(suite or "") == "modes":
+        return "primary_first"
+    return "speed_weighted"
 
 
 def _write_markdown(payload: dict[str, Any], output_path: Path) -> None:
@@ -1581,7 +2713,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--ranking-policy",
-        choices=["auto", "speed_weighted", "primary_first"],
+        choices=["auto", "speed_weighted", "primary_first", "timing_priority_speed_weighted"],
         default="auto",
         help="Ranking rule. Auto uses quality/readability-first for mode suites and speed-weighted ranking elsewhere.",
     )
@@ -1620,7 +2752,7 @@ def main() -> int:
 
     start_sec = max(0.0, float(args.start_sec))
     end_sec = start_sec + max(1.0, float(args.duration_sec))
-    created = datetime.now().strftime("%Y%m%d_%H%M%S")
+    created = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{os.getpid()}"
     work_dir = ROOT / ".codex_work" / "benchmarks" / "subtitle_pipeline_variants" / created
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1692,7 +2824,8 @@ def main() -> int:
         chunk_source = Path(chunk_dir_text)
         if not chunk_source.exists():
             raise RuntimeError(f"audio chunk extraction failed for {seed_name}: {chunk_source}")
-        seed_chunk_source = _copy_chunk_dir(chunk_source, work_dir / "_seed_chunks" / seed_name)
+        seed_dir_name = f"{seed_name}_{os.getpid()}"
+        seed_chunk_source = _copy_chunk_dir(chunk_source, work_dir / "_seed_chunks" / seed_dir_name)
         cached = {
             "profile": profile_name,
             "description": profile_description,
@@ -1786,9 +2919,7 @@ def main() -> int:
                     reference=reference_rows,
                 )
             )
-    ranking_policy = str(args.ranking_policy or "auto").strip().lower()
-    if ranking_policy == "auto":
-        ranking_policy = "primary_first" if str(args.suite or "").startswith("mode") or str(args.suite or "") == "modes" else "speed_weighted"
+    ranking_policy = _resolve_ranking_policy(str(args.ranking_policy or "auto"), str(args.suite or ""), variants)
     results = _enforce_swift_assembly_quality_floor(results, work_dir)
     ranked = _rank_rows(results, objective=str(args.objective or "reference"), ranking_policy=ranking_policy)
     payload = {

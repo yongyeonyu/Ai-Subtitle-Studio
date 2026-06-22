@@ -13,6 +13,7 @@ import shutil
 from copy import deepcopy
 from pathlib import Path
 
+from core.audio.apple_speech_native import apple_speech_support
 from core.runtime import config
 from core.llm.secure_keys import get_api_key
 from core.runtime.logger import get_logger
@@ -101,6 +102,9 @@ class ModelManager:
 
             binary = rnnoise_binary()
             return Path(binary).exists() or shutil.which(binary) is not None
+        if model.get("binary_check") == "apple_speech_support":
+            locale = str(model.get("locale") or "ko-KR").strip() or "ko-KR"
+            return bool(apple_speech_support({"stt_apple_speech_locale": locale}, locale=locale).available)
 
         import_names = model.get("import_names")
         if import_names is None:

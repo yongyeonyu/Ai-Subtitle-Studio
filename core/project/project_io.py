@@ -183,7 +183,10 @@ def _unpack_project_payload(data: bytes) -> dict[str, Any]:
         if payload_codec == "msgpack":
             if msgpack is None:
                 return {}
-            payload = msgpack.unpackb(raw, raw=False, strict_map_key=False)
+            try:
+                payload = msgpack.unpackb(raw, raw=False, strict_map_key=False)
+            except UnicodeDecodeError:
+                payload = msgpack.unpackb(raw, raw=False, strict_map_key=False, unicode_errors='replace')
         else:
             payload = loads_json(raw)
         return payload if isinstance(payload, dict) else {}

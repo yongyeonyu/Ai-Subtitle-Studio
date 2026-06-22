@@ -20,24 +20,8 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 78
 fi
 
-command -v xcodebuild >/dev/null
-command -v swift >/dev/null
-
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/native"
-
-swift build -c release --package-path "$ROOT_DIR/experiments/whisperkit_persistent_worker"
-swift build -c release --package-path "$ROOT_DIR/native/macos/AIStudioNative"
-
-WORKER="$ROOT_DIR/experiments/whisperkit_persistent_worker/.build/release/WhisperKitPersistentWorker"
-if [[ -x "$WORKER" ]]; then
-  cp "$WORKER" "$RESOURCES_DIR/WhisperKitPersistentWorker"
-fi
-
-NATIVE_CLI="$ROOT_DIR/native/macos/AIStudioNative/.build/release/AIStudioNativeCLI"
-if [[ -x "$NATIVE_CLI" ]]; then
-  cp "$NATIVE_CLI" "$RESOURCES_DIR/native/AIStudioNativeCLI"
-fi
 
 find "$ROOT_DIR/core" -maxdepth 1 -type f \( -name "*.so" -o -name "*.dylib" \) -exec cp {} "$RESOURCES_DIR/native/" \;
 
@@ -70,8 +54,6 @@ ignore_names = {
     "test video",
     "dataset/video_preview_cache",
     "dataset/lora_personalization",
-    "experiments/whisperkit_persistent_worker/.build",
-    "native/macos/AIStudioNative/.build",
 }
 
 def ignored(dir_path: str, names: list[str]) -> set[str]:
@@ -121,7 +103,6 @@ set -euo pipefail
 CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 APP_PAYLOAD="$RESOURCES_DIR/app"
-export WHISPERKIT_PERSISTENT_WORKER="$RESOURCES_DIR/WhisperKitPersistentWorker"
 export AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES="$RESOURCES_DIR"
 export PYTHONDONTWRITEBYTECODE=1
 export PATH="/opt/homebrew/bin:/opt/homebrew/opt/python@3.11/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"

@@ -217,9 +217,9 @@ class FolderDialog(QDialog):
 
     def _set_placeholder_thumbnail(self, item, file_path: str):
         ext = os.path.splitext(file_path)[1].lower()
-        item.setText(self.thumb_col, "🎞" if ext in {".mp4", ".mov"} else "♪")
+        item.setText(self.thumb_col, "🎞" if ext in {".mp4", ".mov", ".lrf"} else "♪")
         self._file_items[file_path] = item
-        if ext in {".mp4", ".mov"}:
+        if ext in {".mp4", ".mov", ".lrf"}:
             self._request_thumbnail(file_path)
 
     def _request_thumbnail(self, file_path: str):

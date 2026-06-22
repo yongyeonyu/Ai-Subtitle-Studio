@@ -15,6 +15,7 @@ from core.runtime import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
     DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS,
+    APPLE_SPEECH_EXPERIMENTAL_LABEL,
     _fetch_models, _create_bottom_buttons, filter_available_whisper_models,
     is_experimental_whisper_model, whisper_model_display_name,
 )
@@ -23,6 +24,7 @@ from ui.style import COLORS, label_style, settings_button_style, settings_dialog
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
 from core.audio import audio_presets as _audio_presets
+from core.audio.apple_speech_native import apple_speech_locale, apple_speech_model, apple_speech_support
 from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
 from core.personalization.runtime_personalization import personalization_settings_override_for_media
 from core.audio.stt_quality_presets import (
@@ -381,19 +383,45 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 and selected_model not in w_models
             ):
                 w_models.append(selected_model)
+        apple_locale = apple_speech_locale(settings)
+        apple_model_name = apple_speech_model(apple_locale)
+        apple_support = apple_speech_support(settings, locale=apple_locale)
+        apple_available = bool(apple_support.available)
         stt1_models = list(dict.fromkeys(w_models))
         stt2_models = list(dict.fromkeys(w_models))
+        if apple_model_name not in stt1_models:
+            stt1_models.append(apple_model_name)
+        if apple_model_name not in stt2_models:
+            stt2_models.append(apple_model_name)
 
         self.combo_whisper.setUpdatesEnabled(False)
         self.combo_whisper.blockSignals(True)
         for model_name in stt1_models:
-            label = whisper_model_display_name(model_name, include_recommendations=True)
+            if model_name == apple_model_name:
+                label = APPLE_SPEECH_EXPERIMENTAL_LABEL
+            else:
+                label = whisper_model_display_name(model_name, include_recommendations=True)
             if is_experimental_whisper_model(model_name):
                 label = f"{label} (실험)"
             self.combo_whisper.addItem(label, model_name)
         self._fit_model_combo(self.combo_whisper)
         for i in range(self.combo_whisper.count()):
-            self._set_combo_item_tooltip(self.combo_whisper, i, str(self.combo_whisper.itemData(i) or ""))
+            item_model = str(self.combo_whisper.itemData(i) or "")
+            tooltip = item_model
+            if item_model == apple_model_name:
+                if apple_available:
+                    tooltip = (
+                        f"{APPLE_SPEECH_EXPERIMENTAL_LABEL}\n"
+                        "선택 가능한 실험 모델로 표시됩니다.\n"
+                        "현재 probe 상태에서는 Apple native transcribe route를 직접 사용합니다."
+                    )
+                else:
+                    tooltip = (
+                        f"{APPLE_SPEECH_EXPERIMENTAL_LABEL}\n"
+                        f"현재 native probe 상태: {apple_support.reason}\n"
+                        "선택은 가능하지만 현재 환경에서는 안전한 MLX fallback으로 실행됩니다."
+                    )
+            self._set_combo_item_tooltip(self.combo_whisper, i, tooltip)
         if not self._set_combo_by_data_value(self.combo_whisper, curr_w) and self.combo_whisper.count() > 0:
             self.combo_whisper.setCurrentIndex(0)
         self.combo_whisper.blockSignals(False)
@@ -402,13 +430,31 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_whisper_secondary.setUpdatesEnabled(False)
         self.combo_whisper_secondary.blockSignals(True)
         for model_name in stt2_models:
-            label = whisper_model_display_name(model_name, include_recommendations=True)
+            if model_name == apple_model_name:
+                label = APPLE_SPEECH_EXPERIMENTAL_LABEL
+            else:
+                label = whisper_model_display_name(model_name, include_recommendations=True)
             if is_experimental_whisper_model(model_name):
                 label = f"{label} (실험)"
             self.combo_whisper_secondary.addItem(label, model_name)
         self._fit_model_combo(self.combo_whisper_secondary)
         for i in range(self.combo_whisper_secondary.count()):
-            self._set_combo_item_tooltip(self.combo_whisper_secondary, i, str(self.combo_whisper_secondary.itemData(i) or ""))
+            item_model = str(self.combo_whisper_secondary.itemData(i) or "")
+            tooltip = item_model
+            if item_model == apple_model_name:
+                if apple_available:
+                    tooltip = (
+                        f"{APPLE_SPEECH_EXPERIMENTAL_LABEL}\n"
+                        "선택 가능한 실험 모델로 표시됩니다.\n"
+                        "현재 probe 상태에서는 Apple native transcribe route를 직접 사용합니다."
+                    )
+                else:
+                    tooltip = (
+                        f"{APPLE_SPEECH_EXPERIMENTAL_LABEL}\n"
+                        f"현재 native probe 상태: {apple_support.reason}\n"
+                        "선택은 가능하지만 현재 환경에서는 안전한 MLX fallback으로 실행됩니다."
+                    )
+            self._set_combo_item_tooltip(self.combo_whisper_secondary, i, tooltip)
         if not self._set_combo_by_data_value(self.combo_whisper_secondary, curr_w2) and self.combo_whisper_secondary.count() > 0:
             self.combo_whisper_secondary.setCurrentIndex(0)
         self.combo_whisper_secondary.blockSignals(False)
@@ -422,6 +468,15 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         stt_form.addRow("STT1 음성 모델:", self.combo_whisper)
         stt_form.addRow("STT2 음성 모델:", self.combo_whisper_secondary)
         stt_card_layout.addLayout(stt_form)
+        apple_note = QLabel(
+            f"{APPLE_SPEECH_EXPERIMENTAL_LABEL}: selectable UI model, native Apple transcribe route available"
+            if apple_available
+            else f"{APPLE_SPEECH_EXPERIMENTAL_LABEL}: selectable, MLX fallback active until Apple route is available ({apple_support.reason})"
+        )
+        apple_note.setObjectName("AiAppleSpeechStatus")
+        apple_note.setWordWrap(True)
+        apple_note.setStyleSheet(label_style("muted", 11))
+        stt_card_layout.addWidget(apple_note)
         form.addRow(stt_card)
 
     def _build_audio_vad_section(self, form: QFormLayout, settings: dict):
@@ -538,6 +593,12 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
     def _set_combo_item_tooltip(self, combo: QComboBox, index: int, text: str):
         if index >= 0:
             combo.setItemData(index, text, Qt.ItemDataRole.ToolTipRole)
+
+    def _set_combo_item_enabled(self, combo: QComboBox, index: int, enabled: bool):
+        model = combo.model()
+        item = getattr(model, "item", lambda *_args, **_kwargs: None)(index)
+        if item is not None:
+            item.setEnabled(bool(enabled))
 
     def _is_paid_item(self, item: dict) -> bool:
         details = dict(item.get("details", {}) or {})

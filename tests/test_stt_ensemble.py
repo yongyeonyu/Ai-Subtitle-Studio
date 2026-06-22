@@ -859,6 +859,95 @@ class STTEnsembleTests(unittest.TestCase):
 
         self.assertEqual(restored[0]["text"], "카페 메뉴 확인하고 주문하자")
 
+    def test_no_llm_raw_lock_preserves_merged_row_text(self):
+        restored = subtitle_engine._restore_no_llm_raw_stt_text(
+            [
+                {
+                    "start": 0.0,
+                    "end": 3.38,
+                    "text": "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요",
+                    "_stt_no_llm_raw_text": "지금 에코프로를 놓은 상태고",
+                    "_stt_no_llm_raw_candidate_policy": {
+                        "task": "stt_no_llm_raw_text_lock",
+                        "reason": "subtitle_llm_disabled",
+                        "raw_text": "지금 에코프로를 놓은 상태고",
+                    },
+                    "_final_sequence_cleanup_policy": {
+                        "task": "final_sequence_cleanup",
+                        "stage": "llm_final",
+                        "action": "merge",
+                    },
+                }
+            ],
+            None,
+            {},
+        )
+
+        self.assertEqual(restored[0]["text"], "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요")
+
+    def test_no_llm_raw_lock_preserves_safe_correction_dictionary_output(self):
+        with patch(
+            "core.engine.subtitle_stt_candidate_selection.get_local_dataset_corrections",
+            return_value={"80으로": "80km/h로"},
+        ):
+            restored = subtitle_engine._restore_no_llm_raw_stt_text(
+                [
+                    {
+                        "start": 3.34,
+                        "end": 5.68,
+                        "text": "80km/h로 크루즈 컨트롤 걸었고요",
+                        "_stt_no_llm_raw_text": "80으로 크루즈 컨트롤 걸었고요",
+                        "_stt_no_llm_raw_candidate_policy": {
+                            "task": "stt_no_llm_raw_text_lock",
+                            "reason": "subtitle_llm_disabled",
+                            "raw_text": "80으로 크루즈 컨트롤 걸었고요",
+                        },
+                    }
+                ],
+                None,
+                {},
+            )
+
+        self.assertEqual(restored[0]["text"], "80km/h로 크루즈 컨트롤 걸었고요")
+
+    def test_no_llm_raw_lock_can_preserve_common_split_rows_for_case1(self):
+        source = [
+            {
+                "start": 0.0,
+                "end": 7.806,
+                "text": "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요",
+                "stt_candidates": [
+                    {
+                        "source": "STT1",
+                        "text": "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요",
+                        "start": 0.0,
+                        "end": 7.806,
+                        "score": 0.84,
+                    }
+                ],
+            }
+        ]
+
+        restored = subtitle_engine._restore_no_llm_raw_stt_text(
+            [
+                {
+                    "start": 0.0,
+                    "end": 2.243,
+                    "text": "지금 에코프로를 놓은 상태고",
+                    "_common_split_guard_policy": {
+                        "task": "common_subtitle_split_guard",
+                        "action": "split",
+                        "split_count": 4,
+                        "split_index": 0,
+                    },
+                }
+            ],
+            source,
+            {"subtitle_no_llm_raw_stt_lock_preserve_common_split_rows": True},
+        )
+
+        self.assertEqual(restored[0]["text"], "지금 에코프로를 놓은 상태고")
+
     def test_no_llm_optimize_does_not_run_output_selector_or_use_non_stt_text(self):
         segments = [
             {

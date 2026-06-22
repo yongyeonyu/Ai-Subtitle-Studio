@@ -1,0 +1,68 @@
+# Verification Results
+
+This document is the current verification ledger. Keep detailed logs in `output/manual_verification/latest/` or release notes, not here.
+
+## Current Baselines
+
+### Full QA Baseline
+
+- Artifact: `output/manual_verification/latest/qa_suite_full_20260522_081710`
+- Command: `./venv/bin/python tools/qa_suite_runner.py full`
+- Result: pass, `failed_count=0`
+- Scenarios: `editor_compact_macau`, `video_menu_macau`, `save_export_macau`, `menu_stt_lora_macau`, `x5_high_rolling_180s`
+
+### Source-App Quick Smoke
+
+- Artifact: `output/manual_verification/latest/qa_suite_quick_20260525_141648`
+- Command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
+- Result: pass, `failed_count=0`
+
+### X5 Post-STT Hot-Path Proof
+
+- Artifact: `output/manual_verification/latest/20260527_x5_hot_path_trim_proof/`
+- Result: `ok=true`
+- `pipeline_elapsed_sec=66.576`
+- `total_elapsed_sec=71.285`
+- `peak_rss_bytes=1776435200`
+- `raw/final=49/56`
+- Pressure transition: `critical -> warning`
+
+### High-Refresh Editor/Timeline Proof
+
+- Artifact: `output/manual_verification/latest/20260526_225507_high_refresh_source_app_proof/verification_summary.md`
+- Scope: source-app editor/timeline visual proof for the high-refresh path.
+- Caveat: keep Macau/X5 real-app proof separate from simulator/offscreen confidence.
+
+## Latest Focused Checks
+
+### 2026-06-22 Subtitle Accuracy Regression Lock
+
+- Command: `./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py tests/test_benchmark_mode_profiles.py`
+- Result: `108 passed, 1 skipped, 3 subtests passed`
+- Scope: all-singleton digit common-split guard regression and benchmark profile behavior.
+- Caveat: this is a regression lock, not accepted benchmark artifact promotion.
+
+### 2026-06-22 Jammini Route Recovery Check
+
+- Command: `tools/jammini_watchdog.sh --conversation-id auto --once --dry-run --dispatch-cooldown-sec 0`
+- Result: project-matching Antigravity conversation selected, `STATE_UNCHANGED=yes`
+- Scope: dry-run route selection and watchdog state safety.
+- Caveat: dry-run proves routing selection, not worker execution quality.
+
+### 2026-06-22 Documentation Cleanup
+
+- Scope: compact development docs, remove merged scratch/decision/reference docs, keep guarded reference maps.
+- Result: pass.
+- Completed checks:
+  - `find doc -maxdepth 4 -type f | sort`
+  - `for f in doc/idea.md doc/DECISIONS/server_mode_benchmarking.md doc/reference/CODEMAP.md doc/reference/File_structure.txt; do test ! -e "$f" || exit 1; done`: pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_generation_domain_map.py`: `4 passed`
+  - `git diff --check -- AGENTS.md doc tools/cooperation_bootstrap.sh`: pass
+  - trailing-whitespace scan for `AGENTS.md` and `doc/`: pass
+
+## Update Rules
+
+- Add only current verification summaries here.
+- Store long logs, screenshots, JSON, and generated media under `output/manual_verification/latest/`.
+- Keep release history in `doc/releases/`.
+- Do not use this file as an active task queue. Use `doc/ACTION_ITEMS.md`.

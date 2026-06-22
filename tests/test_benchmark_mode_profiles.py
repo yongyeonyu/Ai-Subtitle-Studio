@@ -15,10 +15,14 @@ from tools.benchmark_subtitle_pipeline_variants import (
     _native_segments_summary_for_variant,
     _native_stt_segments_summary_for_variant,
     _rank_rows,
+    _resolve_ranking_policy,
     _run_postprocess,
+    _selective_ensemble_runtime_trace_callback,
+    _word_precision_runtime_trace_callback,
     _base_benchmark_settings,
     _chunk_extraction_signature,
     _variant_chunk_settings,
+    benchmark_variants,
     benchmark_mode_lora_deep_profiles,
     benchmark_mode_lora_packaging_profiles,
     benchmark_mode_lora_selective_profiles,
@@ -29,6 +33,378 @@ from tools.benchmark_subtitle_pipeline_variants import (
 
 
 class BenchmarkModeProfilesTests(unittest.TestCase):
+    def test_selective_runtime_trace_callback_preserves_collect_and_recheck_info(self):
+        trace: list[dict] = []
+        callback = _selective_ensemble_runtime_trace_callback(trace)
+
+        callback(
+            [
+                {
+                    "phase": "primary_collect",
+                    "elapsed_ms": 101.5,
+                    "row_count": 15,
+                    "model": "whisperkit-persistent:large-v3",
+                    "collect_runtime_info_found": True,
+                    "collect_runtime_info": {
+                        "model": "whisperkit-persistent:large-v3",
+                        "cache_key": "ko|whisperkit-persistent:large-v3",
+                        "reuse_enabled": False,
+                        "worker_source": "transient_child_worker",
+                        "transient_worker": True,
+                        "native_memory_snapshot_force_refresh": True,
+                        "preexisting_child_processor_count": 0,
+                        "preexisting_cached_worker_count": 0,
+                        "preexisting_busy_worker_count": 0,
+                        "preexisting_alive_owner_runtime_count": 0,
+                        "preexisting_alive_child_runtime_count": 0,
+                        "preexisting_alive_cached_worker_count": 0,
+                        "preexisting_alive_runtime_total_count": 0,
+                        "pressure_stage": "critical",
+                        "allow_collect_worker_reuse": False,
+                        "stt_benchmark_plan": {
+                            "requested_model": "mlx-community/whisper-large-v3",
+                            "active_backend": "whisperkit_persistent",
+                            "active_model": "whisperkit-persistent:large-v3",
+                            "active_reason": "autotuned_backend",
+                            "challengers": [
+                                {
+                                    "backend": "apple_speech",
+                                    "model": "apple_speech:ko-KR",
+                                    "reason": "apple_speech_high_challenger_benchmark_only",
+                                }
+                            ],
+                            "vad_challenger": {
+                                "provider": "silero",
+                                "reason": "benchmark_probe",
+                            },
+                        },
+                        "resource_snapshot": {
+                            "available_memory_ratio": 0.1433,
+                            "compressed_memory_ratio": 0.4059,
+                            "process_rss_bytes": 116457472,
+                            "memory_pressure_stage": "critical",
+                        },
+                        "duration_first_submission_enabled": True,
+                        "submission_order_indices": [2, 0, 1],
+                        "submitted_chunk_paths": ["/tmp/a.wav", "/tmp/b.wav", "/tmp/c.wav"],
+                        "submitted_chunk_durations_sec": [3.0, 2.0, 1.0],
+                        "submitted_chunk_offsets_sec": [20.0, 0.0, 10.0],
+                        "completed_chunk_paths": ["/tmp/b.wav", "/tmp/c.wav", "/tmp/a.wav"],
+                        "completed_chunk_elapsed_ms": [5000.0, 7000.0, 9000.0],
+                        "emitted_chunk_paths": ["/tmp/b.wav", "/tmp/c.wav", "/tmp/a.wav"],
+                        "emitted_chunk_elapsed_ms": [5200.0, 7200.0, 9200.0],
+                    },
+                },
+                {
+                    "phase": "secondary_low_score_recheck",
+                    "elapsed_ms": 12.0,
+                    "row_count": 15,
+                    "model": "apple_speech:ko-KR",
+                    "recheck_plan_source_counts": {
+                        "low_score": 2,
+                        "missing_voice": 0,
+                        "route_hint": 1,
+                        "merged": 3,
+                    },
+                    "raw_range_count": 4,
+                    "range_count": 3,
+                    "prepared_clip_count": 3,
+                    "collected_segment_count": 2,
+                    "applied_range_count": 1,
+                    "skipped_range_count": 2,
+                    "applied_segment_count": 1,
+                    "retained_primary_segment_count": 15,
+                    "annotate_error": "",
+                    "collect_runtime_info_found": True,
+                    "collect_runtime_info": {
+                        "model": "apple_speech:ko-KR",
+                        "cache_key": "ko|apple_speech:ko-KR",
+                        "reuse_enabled": False,
+                        "worker_source": "transient_child_worker",
+                        "transient_worker": True,
+                        "native_memory_snapshot_force_refresh": False,
+                        "preexisting_child_processor_count": 0,
+                        "preexisting_cached_worker_count": 0,
+                        "preexisting_busy_worker_count": 0,
+                        "preexisting_alive_owner_runtime_count": 0,
+                        "preexisting_alive_child_runtime_count": 0,
+                        "preexisting_alive_cached_worker_count": 0,
+                        "preexisting_alive_runtime_total_count": 0,
+                        "pressure_stage": "critical",
+                        "allow_collect_worker_reuse": False,
+                        "duration_first_submission_enabled": True,
+                        "submission_order_indices": [0, 1],
+                        "submitted_chunk_paths": ["/tmp/r1.wav", "/tmp/r2.wav"],
+                        "submitted_chunk_durations_sec": [2.0, 1.5],
+                        "submitted_chunk_offsets_sec": [15.0, 22.0],
+                        "completed_chunk_paths": ["/tmp/r1.wav", "/tmp/r2.wav"],
+                        "completed_chunk_elapsed_ms": [2100.0, 3100.0],
+                        "emitted_chunk_paths": ["/tmp/r1.wav", "/tmp/r2.wav"],
+                        "emitted_chunk_elapsed_ms": [2300.0, 3300.0],
+                    },
+                },
+            ]
+        )
+
+        self.assertEqual(trace[0]["phase"], "primary_collect")
+        self.assertTrue(trace[0]["collect_runtime_info_found"])
+        self.assertEqual(trace[0]["collect_runtime_info"]["worker_source"], "transient_child_worker")
+        self.assertTrue(trace[0]["collect_runtime_info"]["native_memory_snapshot_force_refresh"])
+        self.assertEqual(
+            trace[0]["collect_runtime_info"]["stt_benchmark_plan"]["active_backend"],
+            "whisperkit_persistent",
+        )
+        self.assertEqual(
+            trace[0]["collect_runtime_info"]["stt_benchmark_plan"]["challengers"][0]["backend"],
+            "apple_speech",
+        )
+        self.assertEqual(trace[0]["collect_runtime_info"]["submission_order_indices"], [2, 0, 1])
+        self.assertEqual(
+            trace[0]["collect_runtime_info"]["resource_snapshot"]["compressed_memory_ratio"],
+            0.4059,
+        )
+        self.assertEqual(trace[1]["phase"], "secondary_low_score_recheck")
+        self.assertEqual(trace[1]["recheck_plan_source_counts"]["route_hint"], 1)
+        self.assertEqual(trace[1]["raw_range_count"], 4)
+        self.assertEqual(trace[1]["applied_range_count"], 1)
+        self.assertEqual(trace[1]["collect_runtime_info"]["submitted_chunk_paths"], ["/tmp/r1.wav", "/tmp/r2.wav"])
+
+    def test_word_precision_runtime_trace_callback_preserves_collect_runtime_info(self):
+        trace: list[dict] = []
+        callback = _word_precision_runtime_trace_callback(trace)
+
+        callback(
+            [
+                {
+                    "phase": "collect_segments",
+                    "elapsed_ms": 12.5,
+                    "collected_segment_count": 3,
+                    "collect_owner_bound": True,
+                    "collect_owner_type": "VideoProcessor",
+                    "collect_runtime_info_found": True,
+                    "collect_runtime_info": {
+                        "model": "whisperkit-persistent:large-v3",
+                        "cache_key": "ko|whisperkit-persistent:large-v3",
+                        "reuse_enabled": True,
+                        "worker_source": "cached_child_worker_reused",
+                        "transient_worker": False,
+                        "native_memory_snapshot_force_refresh": True,
+                        "preexisting_child_processor_count": 2,
+                        "preexisting_cached_worker_count": 1,
+                        "preexisting_busy_worker_count": 0,
+                        "preexisting_alive_owner_runtime_count": 1,
+                        "preexisting_alive_child_runtime_count": 1,
+                        "preexisting_alive_cached_worker_count": 1,
+                        "preexisting_alive_runtime_total_count": 2,
+                        "pressure_stage": "warning",
+                        "allow_collect_worker_reuse": True,
+                        "stt_benchmark_plan": {
+                            "requested_model": "mlx-community/whisper-large-v3",
+                            "active_backend": "whisperkit_persistent",
+                            "active_model": "whisperkit-persistent:large-v3",
+                            "active_reason": "autotuned_backend",
+                            "challengers": [],
+                            "vad_challenger": None,
+                        },
+                        "resource_snapshot": {
+                            "available_memory_ratio": 0.4123,
+                            "compressed_memory_ratio": 0.0876,
+                            "process_rss_bytes": 123456789,
+                            "memory_pressure_stage": "warning",
+                        },
+                        "duration_first_submission_enabled": True,
+                        "submission_order_indices": [1, 0],
+                        "submitted_chunk_paths": ["/tmp/clip_b.wav", "/tmp/clip_a.wav"],
+                        "submitted_chunk_durations_sec": [1.5, 2.0],
+                        "submitted_chunk_offsets_sec": [3.0, 10.0],
+                        "completed_chunk_paths": ["/tmp/clip_b.wav", "/tmp/clip_a.wav"],
+                        "completed_chunk_elapsed_ms": [8.4, 11.0],
+                        "emitted_chunk_paths": ["/tmp/clip_a.wav", "/tmp/clip_b.wav"],
+                        "emitted_chunk_elapsed_ms": [11.2, 11.4],
+                    },
+                    "prepared_clip_rows": [
+                        {
+                            "path": "/tmp/clip_a.wav",
+                            "start": 10.0,
+                            "end": 12.0,
+                            "duration_sec": 2.0,
+                            "source_chunk_path": "/tmp/vad_001_10.000.wav",
+                            "source_chunk_start": 10.0,
+                            "source_chunk_duration_sec": 6.0,
+                            "local_start": 0.2,
+                            "local_end": 2.2,
+                            "padding_sec": 0.2,
+                            "primary_text": "17.8",
+                            "secondary_text": "",
+                            "best_original_score": 61.0,
+                            "collected_segment_count": 2,
+                            "collected_text_segment_count": 1,
+                            "collected_total_duration_sec": 1.4,
+                            "collected_sample_texts": ["17.8"],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(trace[0]["phase"], "collect_segments")
+        self.assertTrue(trace[0]["collect_owner_bound"])
+        self.assertEqual(trace[0]["collect_owner_type"], "VideoProcessor")
+        self.assertTrue(trace[0]["collect_runtime_info_found"])
+        self.assertEqual(trace[0]["collect_runtime_info"]["worker_source"], "cached_child_worker_reused")
+        self.assertTrue(trace[0]["collect_runtime_info"]["native_memory_snapshot_force_refresh"])
+        self.assertEqual(
+            trace[0]["collect_runtime_info"]["stt_benchmark_plan"]["active_model"],
+            "whisperkit-persistent:large-v3",
+        )
+        self.assertEqual(trace[0]["collect_runtime_info"]["preexisting_child_processor_count"], 2)
+        self.assertEqual(trace[0]["collect_runtime_info"]["preexisting_cached_worker_count"], 1)
+        self.assertEqual(trace[0]["collect_runtime_info"]["preexisting_alive_runtime_total_count"], 2)
+        self.assertEqual(
+            trace[0]["collect_runtime_info"]["resource_snapshot"],
+            {
+                "available_memory_ratio": 0.4123,
+                "compressed_memory_ratio": 0.0876,
+                "process_rss_bytes": 123456789,
+                "memory_pressure_stage": "warning",
+            },
+        )
+        self.assertTrue(trace[0]["collect_runtime_info"]["duration_first_submission_enabled"])
+        self.assertEqual(trace[0]["collect_runtime_info"]["submission_order_indices"], [1, 0])
+        self.assertEqual(trace[0]["collect_runtime_info"]["completed_chunk_paths"], ["/tmp/clip_b.wav", "/tmp/clip_a.wav"])
+        self.assertEqual(trace[0]["collect_runtime_info"]["completed_chunk_elapsed_ms"], [8.4, 11.0])
+        self.assertEqual(trace[0]["collect_runtime_info"]["emitted_chunk_paths"], ["/tmp/clip_a.wav", "/tmp/clip_b.wav"])
+        self.assertEqual(trace[0]["collect_runtime_info"]["emitted_chunk_elapsed_ms"], [11.2, 11.4])
+        self.assertEqual(trace[0]["prepared_clip_rows"][0]["path"], "/tmp/clip_a.wav")
+        self.assertEqual(trace[0]["prepared_clip_rows"][0]["collected_segment_count"], 2)
+        self.assertEqual(trace[0]["prepared_clip_rows"][0]["collected_sample_texts"], ["17.8"])
+        self.assertEqual(trace[0]["prepared_clip_rows"][0]["source_chunk_start"], 10.0)
+        self.assertEqual(trace[0]["prepared_clip_rows"][0]["padding_sec"], 0.2)
+
+    def test_benchmark_variants_include_apple_case1_case2_selective_routes(self):
+        variants = benchmark_variants(_base_benchmark_settings("current"))
+        by_name = {variant.name: variant for variant in variants}
+
+        self.assertIn("stt_original_selective_no_llm", by_name)
+        self.assertIn("stt_swapped_selective_no_llm", by_name)
+        self.assertIn("apple_case1_high_selective", by_name)
+        self.assertIn("apple_case1_high_selective_timing_priority", by_name)
+        self.assertIn("apple_case2_high_selective", by_name)
+        self.assertIn("apple_case2_high_selective_timing_priority", by_name)
+        self.assertIn("apple_case2_high_selective_timing_priority_low_vad_nondigit_collect_pad0", by_name)
+        self.assertIn("apple_case2_high_selective_timing_priority_short_digit_phrase_collect_pad0", by_name)
+
+        original_selective = by_name["stt_original_selective_no_llm"]
+        swapped_selective = by_name["stt_swapped_selective_no_llm"]
+        case1 = by_name["apple_case1_high_selective"]
+        case1_timing = by_name["apple_case1_high_selective_timing_priority"]
+        case2 = by_name["apple_case2_high_selective"]
+        case2_timing = by_name["apple_case2_high_selective_timing_priority"]
+        case2_timing_low_vad_nondigit_collect_pad0 = by_name["apple_case2_high_selective_timing_priority_low_vad_nondigit_collect_pad0"]
+        case2_timing_short_digit_phrase_collect_pad0 = by_name["apple_case2_high_selective_timing_priority_short_digit_phrase_collect_pad0"]
+
+        self.assertEqual(original_selective.overrides.get("stt_low_score_recheck_max_segments"), 24)
+        self.assertAlmostEqual(original_selective.overrides.get("stt_low_score_recheck_max_audio_sec"), 110.0)
+        self.assertEqual(original_selective.overrides.get("stt_worker_response_timeout_sec"), 70.0)
+        self.assertEqual(original_selective.overrides.get("stt_whisperkit_concurrent_workers"), 3)
+        self.assertEqual(original_selective.overrides.get("stt_whisperkit_recheck_concurrent_workers"), 2)
+        self.assertFalse(bool(original_selective.overrides.get("stt_whisperkit_native_allocator_can_raise_workers")))
+        self.assertEqual(swapped_selective.overrides.get("stt_whisperkit_concurrent_max_workers"), 3)
+
+        self.assertEqual(case1.phase, "apple_stt_case")
+        self.assertEqual(case1.method, "selective_ensemble")
+        self.assertEqual(case1.overrides.get("selected_whisper_model"), "apple_speech:ko-KR")
+        self.assertTrue(str(case1.overrides.get("selected_whisper_model_secondary", "")).startswith("whisperkit-persistent:"))
+        self.assertTrue(bool(case1.overrides.get("stt_ensemble_selective_enabled")))
+        self.assertEqual(case1.overrides.get("benchmark_ranking_policy"), "speed_weighted")
+        self.assertEqual(case1.overrides.get("stt_recheck_worker_response_timeout_sec"), 60.0)
+
+        self.assertEqual(case2.overrides.get("selected_whisper_model_secondary"), "apple_speech:ko-KR")
+        self.assertTrue(bool(case2.overrides.get("stt_ensemble_selective_enabled")))
+        self.assertEqual(case2.overrides.get("benchmark_ranking_policy"), "speed_weighted")
+        self.assertEqual(case2.overrides.get("stt_recheck_worker_response_timeout_sec"), 70.0)
+        self.assertFalse(bool(case2.overrides.get("stt_whisperkit_precision_aggressive_gpu_enabled")))
+        self.assertFalse(bool(case2.overrides.get("stt_whisperkit_native_allocator_can_raise_workers")))
+        self.assertEqual(case2.overrides.get("stt_whisperkit_word_timestamp_concurrent_workers"), 3)
+        self.assertEqual(case2.overrides.get("stt_whisperkit_recheck_concurrent_workers"), 2)
+        self.assertEqual(case2.overrides.get("stt_low_score_recheck_max_segments"), 18)
+        self.assertEqual(case2.overrides.get("stt_low_score_recheck_padding_sec"), 0.20)
+
+        self.assertEqual(case1_timing.overrides.get("benchmark_ranking_policy"), "timing_priority_speed_weighted")
+        self.assertTrue(bool(case1_timing.overrides.get("subtitle_timing_piecewise_drift_enabled")))
+        self.assertLess(case1_timing.overrides.get("stt_word_timestamps_precision_threshold"), case1.overrides.get("stt_word_timestamps_precision_threshold"))
+        self.assertEqual(case1_timing.overrides.get("stt_whisperkit_word_timestamp_concurrent_workers"), 4)
+        self.assertEqual(case1_timing.overrides.get("stt_whisperkit_recheck_concurrent_workers"), 2)
+        self.assertEqual(case1_timing.overrides.get("stt_whisperkit_recheck_concurrent_max_workers"), 2)
+        self.assertFalse(bool(case1_timing.overrides.get("stt_whisperkit_native_allocator_can_raise_workers")))
+        self.assertEqual(case1_timing.overrides.get("stt_recheck_worker_response_timeout_sec"), 42.0)
+        self.assertTrue(bool(case1_timing.overrides.get("stt_whisperkit_recheck_allow_critical_concurrency")))
+        self.assertTrue(bool(case1_timing.overrides.get("stt_apple_primary_low_score_precision_requires_secondary_signal")))
+        self.assertTrue(bool(case1_timing.overrides.get("stt_apple_primary_short_numeric_phrase_low_score_recheck_requires_secondary_signal")))
+        self.assertEqual(case1_timing.overrides.get("stt_apple_primary_short_numeric_phrase_low_score_recheck_skip_max_duration_sec"), 3.2)
+        self.assertEqual(case1_timing.overrides.get("stt_apple_primary_short_numeric_phrase_low_score_recheck_skip_min_vad_score"), 98.0)
+        self.assertTrue(bool(case1_timing.overrides.get("stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_requires_secondary_signal")))
+        self.assertEqual(case1_timing.overrides.get("stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_skip_max_duration_sec"), 4.0)
+        self.assertEqual(case1_timing.overrides.get("stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_skip_min_vad_score"), 95.0)
+        self.assertTrue(bool(case1_timing.overrides.get("stt_apple_primary_low_vad_low_score_recheck_requires_secondary_signal")))
+        self.assertEqual(case1_timing.overrides.get("stt_apple_primary_low_vad_low_score_recheck_skip_max_duration_sec"), 4.8)
+        self.assertEqual(case1_timing.overrides.get("stt_apple_primary_low_vad_low_score_recheck_skip_max_vad_score"), 75.0)
+        self.assertTrue(bool(case1_timing.overrides.get("stt_apple_primary_long_numeric_phrase_low_score_recheck_requires_secondary_signal")))
+        self.assertEqual(case1_timing.overrides.get("stt_apple_primary_long_numeric_phrase_low_score_recheck_skip_min_duration_sec"), 6.0)
+        self.assertEqual(case1_timing.overrides.get("stt_apple_primary_long_numeric_phrase_low_score_recheck_skip_min_vad_score"), 95.0)
+        self.assertEqual(case1_timing.overrides.get("stt_word_timestamp_worker_response_timeout_sec"), 60.0)
+        self.assertTrue(bool(case1_timing.overrides.get("subtitle_no_llm_raw_stt_lock_preserve_common_split_rows")))
+        self.assertEqual(case1_timing.overrides.get("split_length_threshold"), 10)
+        self.assertEqual(case1_timing.overrides.get("subtitle_common_split_target_chars"), 10)
+        self.assertEqual(case1_timing.overrides.get("subtitle_common_split_hard_max_chars"), 16)
+        self.assertTrue(bool(case1_timing.overrides.get("subtitle_common_split_skip_all_singleton_digit_rows")))
+        self.assertEqual(case1_timing.overrides.get("subtitle_common_split_skip_all_singleton_digit_rows_max_duration_sec"), 4.2)
+
+        self.assertEqual(case2_timing.overrides.get("benchmark_ranking_policy"), "timing_priority_speed_weighted")
+        self.assertTrue(bool(case2_timing.overrides.get("subtitle_timing_piecewise_drift_enabled")))
+        self.assertEqual(case2_timing.overrides.get("stt_whisperkit_word_timestamp_concurrent_workers"), 3)
+        self.assertEqual(case2_timing.overrides.get("stt_whisperkit_recheck_concurrent_workers"), 2)
+        self.assertEqual(case2_timing.overrides.get("stt_recheck_worker_response_timeout_sec"), 55.0)
+        self.assertFalse(bool(case2_timing.overrides.get("stt_whisperkit_recheck_allow_critical_concurrency")))
+        self.assertFalse(bool(case2_timing.overrides.get("stt_apple_primary_low_score_precision_requires_secondary_signal")))
+        self.assertTrue(bool(case2_timing.overrides.get("stt_whisper_primary_metadata_only_low_score_precision_requires_secondary_signal")))
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_metadata_only_low_score_precision_skip_max_duration_sec"), 2.2)
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_metadata_only_low_score_precision_skip_min_vad_score"), 95.0)
+        self.assertTrue(bool(case2_timing.overrides.get("stt_whisper_primary_duplicate_pure_numeric_precision_requires_neighbor_signal")))
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_duplicate_pure_numeric_precision_skip_neighbor_max_gap_sec"), 6.0)
+        self.assertTrue(bool(case2_timing.overrides.get("stt_whisper_primary_metadata_only_low_score_recheck_requires_secondary_signal")))
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_metadata_only_low_score_recheck_skip_max_duration_sec"), 2.2)
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_metadata_only_low_score_recheck_skip_min_vad_score"), 95.0)
+        self.assertTrue(bool(case2_timing.overrides.get("stt_whisper_primary_low_vad_low_score_recheck_requires_secondary_signal")))
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_low_vad_low_score_recheck_skip_max_duration_sec"), 3.1)
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_low_vad_low_score_recheck_skip_max_vad_score"), 60.0)
+        self.assertTrue(bool(case2_timing.overrides.get("stt_whisper_primary_pure_numeric_low_score_recheck_requires_secondary_signal")))
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_pure_numeric_low_score_recheck_skip_max_duration_sec"), 2.2)
+        self.assertEqual(case2_timing.overrides.get("stt_whisper_primary_pure_numeric_low_score_recheck_skip_min_vad_score"), 95.0)
+        self.assertEqual(case2_timing.overrides.get("stt_low_score_recheck_padding_sec"), 0.20)
+        self.assertTrue(bool(case2_timing.overrides.get("stt_word_timestamp_collect_prioritize_pure_numeric_enabled")))
+        self.assertTrue(bool(case2_timing.overrides.get("stt_collect_force_fresh_native_memory_snapshot")))
+        self.assertTrue(bool(case2_timing.overrides.get("stt_collect_owner_runtime_enabled")))
+        self.assertTrue(bool(case2_timing.overrides.get("stt_selective_secondary_collect_owner_runtime_enabled")))
+        self.assertTrue(bool(case2_timing_low_vad_nondigit_collect_pad0.overrides.get("stt_word_timestamp_low_vad_nondigit_collect_padding_enabled")))
+        self.assertEqual(case2_timing_low_vad_nondigit_collect_pad0.overrides.get("stt_word_timestamp_low_vad_nondigit_collect_padding_sec"), 0.0)
+        self.assertEqual(case2_timing_low_vad_nondigit_collect_pad0.overrides.get("stt_word_timestamp_low_vad_nondigit_collect_padding_max_vad_score"), 60.0)
+        self.assertEqual(case2_timing_low_vad_nondigit_collect_pad0.overrides.get("stt_word_timestamp_low_vad_nondigit_collect_padding_max_duration_sec"), 3.5)
+        self.assertTrue(bool(case2_timing_short_digit_phrase_collect_pad0.overrides.get("stt_word_timestamp_short_digit_phrase_collect_padding_enabled")))
+        self.assertEqual(case2_timing_short_digit_phrase_collect_pad0.overrides.get("stt_word_timestamp_short_digit_phrase_collect_padding_sec"), 0.0)
+        self.assertEqual(case2_timing_short_digit_phrase_collect_pad0.overrides.get("stt_word_timestamp_short_digit_phrase_collect_padding_min_vad_score"), 95.0)
+        self.assertEqual(case2_timing_short_digit_phrase_collect_pad0.overrides.get("stt_word_timestamp_short_digit_phrase_collect_padding_max_duration_sec"), 2.5)
+        self.assertEqual(case2_timing.overrides.get("stt_word_timestamp_collect_prioritize_pure_numeric_max_offsets"), 1)
+        self.assertEqual(case2_timing.overrides.get("stt_word_timestamp_collect_prioritize_pure_numeric_max_duration_sec"), 3.0)
+        self.assertGreater(
+            case1_timing.overrides.get("stt_word_timestamps_precision_max_segments"),
+            case2_timing.overrides.get("stt_word_timestamps_precision_max_segments"),
+        )
+        self.assertGreater(
+            case1_timing.overrides.get("stt_word_timestamps_precision_max_audio_sec"),
+            case2_timing.overrides.get("stt_word_timestamps_precision_max_audio_sec"),
+        )
+
     def test_mode_profiles_map_to_actual_fast_auto_high_paths(self):
         variants = benchmark_mode_profiles(_base_benchmark_settings("current"))
         by_name = {variant.name: variant for variant in variants}
@@ -389,6 +765,8 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(score["worst_match_reference_index"], 0)
         self.assertEqual(score["overlap_score"], 75.0)
         self.assertEqual(score["local_text_score"], 100.0)
+        self.assertIn("timing_priority_quality_score", score)
+        self.assertLessEqual(score["timing_priority_quality_score"], score["quality_score"])
 
     def test_best_mode_quality_gate_rejects_swift_assembled_below_fast_auto_high_floor(self):
         rows = [
@@ -555,7 +933,7 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         settings = _base_benchmark_settings("current")
         settings["speaker_diarization_auto_enabled"] = True
 
-        rows = _run_postprocess(
+        rows, *others = _run_postprocess(
             [{"start": 411.76, "end": 413.74, "text": "- 아이스로 드릴까요? - 네네"}],
             [],
             settings,
@@ -769,6 +1147,54 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
 
         self.assertEqual(ranked[0]["name"], "slower_better")
         self.assertEqual(ranked[0]["ranking_policy"], "primary_first")
+
+    def test_rank_rows_timing_priority_speed_weighted_prefers_better_timing_priority_score(self):
+        ranked = _rank_rows(
+            [
+                {
+                    "name": "faster_lower_timing",
+                    "elapsed_sec": 10.0,
+                    "error": "",
+                    "quality": {"quality_score": 88.0, "timing_priority_quality_score": 86.0},
+                    "readability": {"readability_score": 90.0},
+                },
+                {
+                    "name": "slower_better_timing",
+                    "elapsed_sec": 12.0,
+                    "error": "",
+                    "quality": {"quality_score": 87.0, "timing_priority_quality_score": 90.0},
+                    "readability": {"readability_score": 90.0},
+                },
+            ],
+            objective="reference",
+            ranking_policy="timing_priority_speed_weighted",
+        )
+
+        self.assertEqual(ranked[0]["name"], "slower_better_timing")
+        self.assertEqual(ranked[0]["primary_score_name"], "timing_priority_quality")
+        self.assertEqual(ranked[0]["ranking_policy"], "timing_priority_speed_weighted")
+
+    def test_resolve_ranking_policy_uses_uniform_variant_hint_for_apple_timing_cases(self):
+        variants = [
+            type(
+                "VariantLike",
+                (),
+                {
+                    "overrides": {"benchmark_ranking_policy": "timing_priority_speed_weighted"},
+                },
+            )(),
+            type(
+                "VariantLike",
+                (),
+                {
+                    "overrides": {"benchmark_ranking_policy": "timing_priority_speed_weighted"},
+                },
+            )(),
+        ]
+
+        resolved = _resolve_ranking_policy("auto", "variants", variants)
+
+        self.assertEqual(resolved, "timing_priority_speed_weighted")
 
     def test_reference_text_compaction_keeps_punctuation_but_ignores_parentheses(self):
         self.assertEqual(_compact_text("안녕(하세요)!..~"), "안녕하세요!..~")

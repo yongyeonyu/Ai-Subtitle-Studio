@@ -47,7 +47,7 @@ def install_fps_normalizers(namespace: dict) -> None:
 
     def _cut_boundary_video_paths_from_obj(obj) -> list[str]:
         paths: list[str] = []
-        video_exts = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm")
+        video_exts = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".lrf")
 
         def walk(x):
             if isinstance(x, dict):

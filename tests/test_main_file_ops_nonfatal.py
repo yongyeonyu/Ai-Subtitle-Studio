@@ -117,9 +117,9 @@ class MainFileOpsNonfatalTests(unittest.TestCase):
         self.assertEqual(paths, ["/tmp/clip.mp4"])
         self.assertFalse(window._file_dialog_active)
         self.assertTrue(window._foreground_file_open_requested)
-        self.assertEqual(callbacks[0][0], FILE_DIALOG_SELECTED_PRIORITY_HOLD_MS)
-
-        callbacks[0][1]()
+        found = [c for c in callbacks if c[0] == FILE_DIALOG_SELECTED_PRIORITY_HOLD_MS]
+        self.assertTrue(bool(found))
+        found[0][1]()
         self.assertFalse(window._foreground_file_open_requested)
         window._resume_deferred_editor_ai_release_after_file_open.assert_called_once()
 

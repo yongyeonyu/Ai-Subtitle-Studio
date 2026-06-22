@@ -270,9 +270,118 @@ class SinglePipelineMixin:
             self._active = False
             return False
 
+    def _reset_deferred_batch_errors(self) -> None:
+        self._deferred_batch_errors = []
+
+    def _deferred_batch_error_entries(self) -> list[dict]:
+        return [
+            dict(entry)
+            for entry in list(getattr(self, "_deferred_batch_errors", []) or [])
+            if isinstance(entry, dict)
+        ]
+
+    def _has_deferred_batch_error(self, queue_index: int, target_file) -> bool:
+        normalized_path = str(target_file or "")
+        for entry in self._deferred_batch_error_entries():
+            if int(entry.get("queue_index", -1)) != int(queue_index):
+                continue
+            if str(entry.get("target_file", "") or "") == normalized_path:
+                return True
+        return False
+
+    def _clear_deferred_batch_error(self, queue_index: int, target_file) -> None:
+        normalized_path = str(target_file or "")
+        self._deferred_batch_errors = [
+            dict(entry)
+            for entry in self._deferred_batch_error_entries()
+            if not (
+                int(entry.get("queue_index", -1)) == int(queue_index)
+                and str(entry.get("target_file", "") or "") == normalized_path
+            )
+        ]
+
+    def _record_deferred_batch_error(
+        self,
+        target_file,
+        queue_index: int,
+        *,
+        stage: str,
+        message: str,
+        error_type: str = "",
+    ) -> None:
+        normalized_path = str(target_file or "")
+        compact_message = " ".join(str(message or "").split())
+        if not compact_message:
+            compact_message = "상세 오류 메시지를 가져오지 못했습니다."
+        if len(compact_message) > 180:
+            compact_message = compact_message[:177] + "..."
+        entry = {
+            "queue_index": int(queue_index),
+            "target_file": normalized_path,
+            "file_name": os.path.basename(normalized_path) or normalized_path or f"{int(queue_index) + 1}번 파일",
+            "stage": str(stage or "파일 처리"),
+            "message": compact_message,
+            "error_type": str(error_type or "").strip(),
+        }
+        remaining = [
+            dict(existing)
+            for existing in self._deferred_batch_error_entries()
+            if not (
+                int(existing.get("queue_index", -1)) == int(queue_index)
+                and str(existing.get("target_file", "") or "") == normalized_path
+            )
+        ]
+        remaining.append(entry)
+        remaining.sort(key=lambda item: int(item.get("queue_index", 0)))
+        self._deferred_batch_errors = remaining
+
+    def _show_deferred_batch_error_popup(self, *, total_files: int) -> bool:
+        errors = self._deferred_batch_error_entries()
+        if int(total_files or 0) <= 1 or not errors:
+            return False
+        try:
+            from ui.dialogs.runtime_error_popup import show_runtime_error_popup
+        except Exception:
+            return False
+
+        failed_count = len(errors)
+        success_count = max(0, int(total_files) - failed_count)
+        lines = [
+            "여러 파일 자막 생성 중 일부 파일에서 오류가 발생했지만 가능한 파일은 끝까지 처리했습니다.",
+            "",
+            "처리 결과",
+            f"- 전체 파일: {int(total_files)}개",
+            f"- 완료: {success_count}개",
+            f"- 오류: {failed_count}개",
+            "",
+            "오류 파일",
+        ]
+        preview_limit = 6
+        for index, entry in enumerate(errors[:preview_limit], start=1):
+            stage = str(entry.get("stage", "") or "파일 처리")
+            message = str(entry.get("message", "") or "상세 오류 메시지를 가져오지 못했습니다.")
+            error_type = str(entry.get("error_type", "") or "").strip()
+            detail = f"{stage}: {message}"
+            if error_type:
+                detail = f"{detail} ({error_type})"
+            lines.append(f"{index}. {entry.get('file_name')}")
+            lines.append(f"   - {detail}")
+        if failed_count > preview_limit:
+            lines.append(f"- 나머지 {failed_count - preview_limit}개 오류는 큐 상태와 로그를 확인해 주세요.")
+        lines.extend(
+            [
+                "",
+                "안내",
+                "- 오류가 난 파일만 다시 실행하시면 됩니다.",
+                "- 같은 파일에서 반복되면 방금 표시된 파일명 기준으로 로그를 확인해 주세요.",
+            ]
+        )
+        return show_runtime_error_popup("배치 자막 생성 일부 오류", "\n".join(lines))
+
     def _run_all(self):
         total_files = len(self.files_to_process)
         coordinator = self._pipeline_progress_coordinator()
+        self._reset_deferred_batch_errors()
 
         try:
             for i, target_file in enumerate(self.files_to_process):
@@ -280,17 +389,54 @@ class SinglePipelineMixin:
                     return
 
                 coordinator.emit_queue_item_start(i, total_files)
+                try:
+                    file_ok = self._process_one(target_file, i)
+                except Exception as e:
+                    if _is_deleted_qt_error(e):
+                        self._active = False
+                        return
+                    if str(e) in ("USER_PREV", "USER_EXIT"):
+                        raise
+                    self._record_deferred_batch_error(
+                        target_file,
+                        i,
+                        stage="파일 처리",
+                        message=str(e),
+                        error_type=type(e).__name__,
+                    )
+                    self._pipeline_progress_coordinator().emit_item_error(i)
+                    get_logger().log(f"\n❌ 파일 처리 오류: {target_file} → {e}")
+                    get_logger().log(traceback.format_exc())
+                    continue
 
-                self._process_one(target_file, i)
+                if file_ok is False and not self._has_deferred_batch_error(i, target_file):
+                    self._record_deferred_batch_error(
+                        target_file,
+                        i,
+                        stage="파일 처리",
+                        message="자막 생성 중 오류가 발생했습니다. 큐 상태와 로그를 확인해 주세요.",
+                    )
 
             coordinator.emit_queue_header(total_files, total_files, 100, "")
+            deferred_errors = self._deferred_batch_error_entries()
+            deferred_error_count = len(deferred_errors)
 
             if bool(self._ui_attr("_is_auto_pipeline", False)):
+                notification_message = (
+                    f"🎉 {total_files}개 파일 처리 완료!\n아이패드에서 확인해 보세요, 대표님."
+                )
+                if deferred_error_count:
+                    notification_message = (
+                        f"⚠️ 전체 {total_files}개 중 {deferred_error_count}개 파일에서 오류가 있었습니다.\n"
+                        "오류 팝업 내용을 확인해 주세요."
+                    )
                 self._send_ntfy_notification(
                     title=f"🏆 {config.APP_NAME} 작업 종료",
-                    message=f"🎉 {total_files}개 파일 처리 완료!\n아이패드에서 확인해 보세요, 대표님.",
+                    message=notification_message,
                     tags="checkered_flag,tada",
                 )
+            if deferred_error_count:
+                self._show_deferred_batch_error_popup(total_files=total_files)
 
         except Exception as e:
             if _is_deleted_qt_error(e):
@@ -323,6 +469,7 @@ class SinglePipelineMixin:
         if getattr(self, "_individual_queue_mode", False):
             self._reset_backend_individual_clip_context(invalidate_prefetch=True)
             self._reset_ui_individual_clip_context(clear_project=True)
+        self._clear_deferred_batch_error(queue_index, target_file)
         try:
             self._last_generation_final_media_path = str(target_file or "")
             self._last_generation_final_segments = []
@@ -556,13 +703,19 @@ class SinglePipelineMixin:
             if not res:
                 get_logger().log("❌ 오디오 추출 실패")
                 self._pipeline_progress_coordinator().emit_item_error(queue_index)
+                self._record_deferred_batch_error(
+                    target_file,
+                    queue_index,
+                    stage="오디오 추출",
+                    message="오디오 추출 단계가 실패해 이 파일은 건너뛰었습니다.",
+                )
 
                 if action_session.action_state == "restart":
                     get_logger().log("\n🔄 재시작합니다...")
                     action_session.action_state = "next"
                     continue
 
-                return
+                return False
 
             chunk_dir, vad_segs = res
             self._ui_emit("_sig_set_vad_segments", vad_segs)
@@ -1013,8 +1166,14 @@ class SinglePipelineMixin:
                 get_logger().log(f"  ❌ STT 결과 생성 실패: {err}")
                 self._emit_processing_stage(queue_index, f"❌ [STT] 자막 인식 실패: {err}")
                 self._pipeline_progress_coordinator().emit_item_error(queue_index)
-                self._active = False
-                return
+                self._record_deferred_batch_error(
+                    target_file,
+                    queue_index,
+                    stage="STT/자막 생성",
+                    message=str(err),
+                    error_type=type(err).__name__,
+                )
+                return False
 
             try:
                 empty_stt_is_error = bool(load_settings().get("stt_empty_result_error_enabled", True))
@@ -1027,8 +1186,13 @@ class SinglePipelineMixin:
                 )
                 self._emit_processing_stage(queue_index, "❌ [STT] 자막 결과가 0개입니다")
                 self._pipeline_progress_coordinator().emit_item_error(queue_index)
-                self._active = False
-                return
+                self._record_deferred_batch_error(
+                    target_file,
+                    queue_index,
+                    stage="STT/자막 생성",
+                    message="STT 결과가 비어 있어 이 파일은 완료 처리하지 않았습니다.",
+                )
+                return False
 
             # ✅ STT 완료 → 큐 즉시 업데이트
             if not self._active:
@@ -1104,7 +1268,7 @@ class SinglePipelineMixin:
                 self._active = False
                 return
             self._subtitle_generation_memory_checkpoint(memory_guard, "save_export_start", force=True)
-            self._save_and_export(
+            save_export_ok = self._save_and_export(
                 target_file,
                 queue_index,
                 list(action_session.final_segments or []),
@@ -1116,6 +1280,14 @@ class SinglePipelineMixin:
                 # 핵심: 저장 직후의 강제 정리를 생략해 반복 run에서 불필요한 캐시 churn을 줄인다.
                 force=True,
             )
+            if not save_export_ok:
+                self._record_deferred_batch_error(
+                    target_file,
+                    queue_index,
+                    stage="저장/내보내기",
+                    message="SRT 저장 또는 자막영상 출력 단계가 완료되지 않아 이 파일은 오류로 남겼습니다.",
+                )
+                return False
 
             if action_session.action_state == "restart":
                 self._handle_restart(target_file)
@@ -1136,3 +1308,4 @@ class SinglePipelineMixin:
             except Exception:
                 pass
             raise Exception("USER_EXIT")
+        return True

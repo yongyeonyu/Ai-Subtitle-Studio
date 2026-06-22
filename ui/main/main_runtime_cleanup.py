@@ -276,7 +276,15 @@ class MainRuntimeCleanupMixin:
         return self._schedule_forced_process_exit_if_busy(context="app about-to-quit forced process exit")
 
     def _runtime_busy_forced_exit_delay_ms(self) -> int:
-        return 1800 if getattr(config, "IS_MAC", False) else 2500
+        editor = getattr(self, "_editor_widget", None)
+        try:
+            ai_busy = bool(self._is_editor_ai_busy(editor) or self._is_backend_ai_busy())
+        except Exception:
+            ai_busy = False
+        if ai_busy:
+            return 800 if getattr(config, "IS_MAC", False) else 1200
+        else:
+            return 250 if getattr(config, "IS_MAC", False) else 400
 
     def _schedule_forced_process_exit_if_busy(self, *, context: str = "app close forced process exit") -> bool:
         schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
@@ -286,14 +294,13 @@ class MainRuntimeCleanupMixin:
             should_force = bool(self._has_active_runtime_work_for_exit())
         except Exception:
             should_force = False
-        if not should_force:
-            return False
+        delay_ms = self._runtime_busy_forced_exit_delay_ms() if should_force else (80 if getattr(config, "IS_MAC", False) else 150)
         _run_cleanup_step(
             str(context or "app close forced process exit"),
-            lambda: schedule_exit(delay_ms=self._runtime_busy_forced_exit_delay_ms()),
+            lambda: schedule_exit(delay_ms=delay_ms),
             default=None,
         )
-        return True
+        return should_force
 
     def _restore_normal_cursor(self, *widgets) -> None:
         app = QApplication.instance()

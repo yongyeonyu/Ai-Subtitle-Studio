@@ -53,25 +53,113 @@ def _float_setting(settings: dict[str, Any], key: str, fallback: float) -> float
         return fallback
 
 
+def _float_setting_alias(settings: dict[str, Any], keys: tuple[str, ...], fallback: float) -> float:
+    for key in keys:
+        if key in settings:
+            return _float_setting(settings, key, fallback)
+    return fallback
+
+
 def normalize_memory_pressure_stage(value: Any) -> str:
     stage = str(value or "").strip().lower()
     return stage if stage in {"warning", "critical"} else "normal"
 
 
-def memory_pressure_stage_from_snapshot(
+def _native_pressure_trigger_reason(
+    snapshot: dict[str, Any] | None,
+    settings: dict[str, Any] | None,
+    *,
+    stage: str,
+) -> str:
+    data = dict(snapshot or {})
+    settings = dict(settings or {})
+    available_ratio = _float_setting(data, "available_memory_ratio", 1.0)
+    available_bytes = max(0, int(float(data.get("available_memory_bytes", 0) or 0)))
+    available_gb = float(available_bytes) / float(1024 ** 3)
+    compressed_ratio = _float_setting(data, "compressed_memory_ratio", 0.0)
+    critical_ratio = 0.10
+    warning_ratio = 0.18
+    critical_reserve_bytes = max(
+        0,
+        int(
+            data.get("critical_reserve_bytes")
+            or _float_setting(settings, "macos_memory_critical_reserve_gb", 1.5) * float(1024 ** 3)
+        ),
+    )
+    warning_reserve_bytes = max(
+        0,
+        int(
+            data.get("warning_reserve_bytes")
+            or _float_setting(settings, "macos_memory_warning_reserve_gb", 3.0) * float(1024 ** 3)
+        ),
+    )
+    critical_compressed_ratio = _float_setting_alias(
+        data,
+        ("compressed_critical_ratio",),
+        _float_setting_alias(
+            settings,
+            (
+                "runtime_memory_critical_compressed_ratio",
+                "macos_memory_compressed_critical_ratio",
+                "macos_memory_critical_compressed_ratio",
+            ),
+            0.30,
+        ),
+    )
+    warning_compressed_ratio = _float_setting_alias(
+        data,
+        ("compressed_warning_ratio",),
+        _float_setting_alias(
+            settings,
+            (
+                "runtime_memory_warning_compressed_ratio",
+                "macos_memory_compressed_warning_ratio",
+                "macos_memory_warning_compressed_ratio",
+            ),
+            0.22,
+        ),
+    )
+    if stage == "critical":
+        if compressed_ratio >= critical_compressed_ratio:
+            return "critical_compressed_memory_ratio"
+        if available_ratio <= critical_ratio:
+            return "critical_available_memory_ratio"
+        if available_gb > 0.0 and available_bytes <= critical_reserve_bytes:
+            return "critical_available_memory_reserve_gb"
+        return "critical_native_pressure_stage"
+    if stage == "warning":
+        if compressed_ratio >= warning_compressed_ratio:
+            return "warning_compressed_memory_ratio"
+        if available_ratio <= warning_ratio:
+            return "warning_available_memory_ratio"
+        if available_gb > 0.0 and available_bytes <= warning_reserve_bytes:
+            return "warning_available_memory_reserve_gb"
+        return "warning_native_pressure_stage"
+    return ""
+
+
+def memory_pressure_stage_details_from_snapshot(
     snapshot: dict[str, Any] | None,
     settings: dict[str, Any] | None = None,
-) -> str:
+) -> dict[str, Any]:
     settings = dict(settings or {})
     data = dict(snapshot or {})
     stage = normalize_memory_pressure_stage(data.get("memory_pressure_stage") or data.get("pressure_stage"))
     if stage != "normal":
-        return stage
+        return {
+            "stage": stage,
+            "source": "native_top_level_pressure_stage",
+            "trigger_reason": _native_pressure_trigger_reason(data, settings, stage=stage),
+        }
     native = data.get("native_memory")
     if isinstance(native, dict):
         stage = normalize_memory_pressure_stage(native.get("pressure_stage") or native.get("memory_pressure_stage"))
         if stage != "normal":
-            return stage
+            return {
+                "stage": stage,
+                "source": "native_nested_pressure_stage",
+                "trigger_reason": _native_pressure_trigger_reason(native, settings, stage=stage),
+            }
 
     warning_ratio = _float_setting(
         settings,
@@ -88,32 +176,65 @@ def memory_pressure_stage_from_snapshot(
     warning_compressed_ratio = _float_setting(
         settings,
         "runtime_memory_warning_compressed_ratio",
-        _float_setting(settings, "macos_memory_warning_compressed_ratio", 0.22),
+        _float_setting_alias(
+            settings,
+            ("macos_memory_compressed_warning_ratio", "macos_memory_warning_compressed_ratio"),
+            0.22,
+        ),
     )
     critical_compressed_ratio = _float_setting(
         settings,
         "runtime_memory_critical_compressed_ratio",
-        _float_setting(settings, "macos_memory_critical_compressed_ratio", 0.30),
+        _float_setting_alias(
+            settings,
+            ("macos_memory_compressed_critical_ratio", "macos_memory_critical_compressed_ratio"),
+            0.30,
+        ),
     )
     if warning_ratio <= critical_ratio:
         warning_ratio, critical_ratio = critical_ratio, warning_ratio
     if warning_reserve_gb <= critical_reserve_gb:
         warning_reserve_gb, critical_reserve_gb = critical_reserve_gb, warning_reserve_gb
-    if warning_compressed_ratio <= critical_compressed_ratio:
+    if warning_compressed_ratio >= critical_compressed_ratio:
         warning_compressed_ratio, critical_compressed_ratio = critical_compressed_ratio, warning_compressed_ratio
 
     available_ratio = _float_setting(data, "available_memory_ratio", 1.0)
     available_gb = _float_setting(data, "available_memory_bytes", 0.0) / float(1024 ** 3)
     compressed_ratio = _float_setting(data, "compressed_memory_ratio", 0.0)
     if available_ratio <= critical_ratio or (available_gb > 0.0 and available_gb <= critical_reserve_gb):
-        return "critical"
+        trigger_reason = (
+            "critical_available_memory_ratio"
+            if available_ratio <= critical_ratio
+            else "critical_available_memory_reserve_gb"
+        )
+        return {"stage": "critical", "source": "threshold_critical", "trigger_reason": trigger_reason}
     if compressed_ratio >= critical_compressed_ratio:
-        return "critical"
+        return {
+            "stage": "critical",
+            "source": "threshold_critical",
+            "trigger_reason": "critical_compressed_memory_ratio",
+        }
     if compressed_ratio >= warning_compressed_ratio:
-        return "warning"
+        return {
+            "stage": "warning",
+            "source": "threshold_warning",
+            "trigger_reason": "warning_compressed_memory_ratio",
+        }
     if available_ratio <= warning_ratio or (available_gb > 0.0 and available_gb <= warning_reserve_gb):
-        return "warning"
-    return "normal"
+        trigger_reason = (
+            "warning_available_memory_ratio"
+            if available_ratio <= warning_ratio
+            else "warning_available_memory_reserve_gb"
+        )
+        return {"stage": "warning", "source": "threshold_warning", "trigger_reason": trigger_reason}
+    return {"stage": "normal", "source": "normal", "trigger_reason": ""}
+
+
+def memory_pressure_stage_from_snapshot(
+    snapshot: dict[str, Any] | None,
+    settings: dict[str, Any] | None = None,
+) -> str:
+    return str(memory_pressure_stage_details_from_snapshot(snapshot, settings).get("stage") or "normal")
 
 
 def current_memory_pressure_stage(settings: dict[str, Any] | None = None) -> str:
@@ -199,6 +320,7 @@ __all__ = [
     "AudioRouteWorkerPlan",
     "StageOwnedResourcePolicy",
     "current_memory_pressure_stage",
+    "memory_pressure_stage_details_from_snapshot",
     "memory_pressure_stage_from_snapshot",
     "normalize_memory_pressure_stage",
     "plan_audio_route_workers",

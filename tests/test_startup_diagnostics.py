@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from core.project.project_io import read_project_storage_payload
+
 from core.pipeline.startup_diagnostics import (
     STARTUP_DIAGNOSTIC_SCHEMA,
     build_startup_diagnostic,
@@ -93,8 +95,7 @@ class StartupDiagnosticsTests(unittest.TestCase):
 
             self.assertTrue(persist_startup_diagnostic(project_path, diagnostic))
 
-            with open(project_path, "r", encoding="utf-8") as handle:
-                saved = json.load(handle)
+            saved = read_project_storage_payload(project_path)
             self.assertTrue(saved["analysis"]["old"])
             self.assertEqual(saved["analysis"]["startup_diagnostic"], diagnostic)
             self.assertEqual(saved["editor_state"]["analysis"]["startup_diagnostic"], diagnostic)

@@ -1219,9 +1219,17 @@ def _emit_processing_preview(
     stage: str,
     stage_label: str,
     segments: list[dict] | None,
+    settings: dict | None = None,
 ) -> None:
     if not callable(preview_callback):
         return
+    include_metadata = False
+    if isinstance(settings, dict):
+        value = settings.get("_benchmark_include_preview_metadata", False)
+        if isinstance(value, str):
+            include_metadata = value.strip().lower() not in {"0", "false", "off", "no", "끔"}
+        else:
+            include_metadata = bool(value)
     snapshot: list[dict] = []
     for idx, seg in enumerate(list(segments or [])):
         if not isinstance(seg, dict):
@@ -1253,6 +1261,22 @@ def _emit_processing_preview(
             row["quality"] = dict(seg.get("quality") or {})
         if isinstance(seg.get("stt_candidates"), list):
             row["stt_candidates"] = [dict(item) for item in seg.get("stt_candidates") if isinstance(item, dict)]
+        if include_metadata:
+            split_policy = dict(seg.get("_common_split_guard_policy") or {})
+            if split_policy:
+                row["_common_split_guard_policy"] = split_policy
+            raw_lock_policy = dict(seg.get("_stt_no_llm_raw_candidate_policy") or {})
+            if raw_lock_policy:
+                row["_stt_no_llm_raw_candidate_policy"] = raw_lock_policy
+            raw_text = str(seg.get("_stt_no_llm_raw_text") or "").strip()
+            if raw_text:
+                row["_stt_no_llm_raw_text"] = raw_text
+            words = seg.get("words")
+            if isinstance(words, list):
+                row["words"] = [dict(item) for item in words if isinstance(item, dict)]
+            selected_source = str(seg.get("stt_selected_source") or seg.get("stt_ensemble_source") or "").strip()
+            if selected_source:
+                row["stt_selected_source"] = selected_source
         snapshot.append(row)
     if not snapshot:
         return
@@ -1535,6 +1559,7 @@ def optimize_segments(
             stage="proofread_dictionary",
             stage_label="검사/교정/단어사전 반영",
             segments=optimized,
+            settings=loaded_settings,
         )
 
     else:
@@ -1621,6 +1646,7 @@ def optimize_segments(
                 stage="proofread_dictionary_llm",
                 stage_label="검사/교정/단어사전/LLM 반영",
                 segments=optimized,
+                settings=loaded_settings,
             )
         elif max_workers == 1:
             result_map: dict[int, list] = {}
@@ -1639,6 +1665,7 @@ def optimize_segments(
                 stage="proofread_dictionary_llm",
                 stage_label="검사/교정/단어사전/LLM 반영",
                 segments=optimized,
+                settings=loaded_settings,
             )
         else:
             try:
@@ -1665,6 +1692,7 @@ def optimize_segments(
                     stage="proofread_dictionary_llm",
                     stage_label="검사/교정/단어사전/LLM 반영",
                     segments=optimized,
+                    settings=loaded_settings,
                 )
 
             except Exception as e:
@@ -1677,6 +1705,7 @@ def optimize_segments(
         stage="timing_adjust",
         stage_label="자막 시작/끝 시간 보정",
         segments=optimized,
+        settings=loaded_settings,
     )
     if not optimized and any(seg.get("stt_candidates") for seg in original_segments):
         get_logger().log("[STT앙상블-보호] 후보 병합 결과가 모두 제거되어 원본 앙상블 세그먼트로 최종 자막을 복구합니다.")
@@ -1695,6 +1724,7 @@ def optimize_segments(
             stage="timing_adjust_fallback",
             stage_label="자막 시작/끝 시간 복구",
             segments=optimized,
+            settings=loaded_settings,
         )
 
     optimized = refine_high_contextual_boundaries(
@@ -1710,6 +1740,7 @@ def optimize_segments(
         stage="high_context_boundary",
         stage_label="High 문맥 경계/단어 보정",
         segments=optimized,
+        settings=loaded_settings,
     )
 
     optimized = _smooth_deep_sequence(optimized, loaded_settings)
@@ -1718,6 +1749,7 @@ def optimize_segments(
         stage="deep_split",
         stage_label="분할/묶음 정리",
         segments=optimized,
+        settings=loaded_settings,
     )
     optimized = apply_final_gap_settings(optimized, loaded_settings, force=False)
     _emit_processing_preview(
@@ -1725,23 +1757,53 @@ def optimize_segments(
         stage="final_gap",
         stage_label="자막 간격 정리",
         segments=optimized,
+        settings=loaded_settings,
     )
     optimized = align_stt_candidates_to_subtitle_segments(optimized)
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="align_stt_candidates",
+        stage_label="STT 후보 시간 정렬",
+        segments=optimized,
+        settings=loaded_settings,
+    )
     optimized = _self_review_subtitle_quality(optimized, vad_segments or [], loaded_settings)
     optimized = _annotate_context_consistency(optimized, loaded_settings)
     if llm_disabled_final:
         optimized = _restore_no_llm_raw_stt_text(optimized, original_segments, loaded_settings)
     else:
         optimized = _apply_output_variant_selector(optimized, original_segments, vad_segments or [], loaded_settings, stage="llm")
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="pre_cleanup_review",
+        stage_label="문맥/출력 사전 정리",
+        segments=optimized,
+        settings=loaded_settings,
+    )
     optimized = _enforce_final_subtitle_text_policy(optimized, corrections)
     optimized = _apply_final_sequence_cleanup(optimized, loaded_settings, stage="llm_final")
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="final_sequence_cleanup",
+        stage_label="최종 시퀀스 정리",
+        segments=optimized,
+        settings=loaded_settings,
+    )
     optimized = _restore_final_stt_anchor_drift(optimized, original_segments, loaded_settings, stage="llm_final")
     optimized = _restore_missing_final_stt_anchor_rows(optimized, original_segments, loaded_settings, stage="llm_final")
+    _emit_processing_preview(
+        stage_segments_callback,
+        stage="final_anchor_restore",
+        stage_label="최종 STT 앵커 복구",
+        segments=optimized,
+        settings=loaded_settings,
+    )
     _emit_processing_preview(
         stage_segments_callback,
         stage="context_review",
         stage_label="문맥/출력 보정",
         segments=optimized,
+        settings=loaded_settings,
     )
     optimized = _apply_lora_card_packaging(optimized, loaded_settings, rules, stage="llm")
     _emit_processing_preview(
@@ -1749,6 +1811,7 @@ def optimize_segments(
         stage="packaging",
         stage_label="줄바꿈/카드 포장",
         segments=optimized,
+        settings=loaded_settings,
     )
     optimized = _annotate_auto_review(optimized, loaded_settings)
     optimized = _annotate_stage_confidence(optimized, loaded_settings)
@@ -1769,6 +1832,7 @@ def optimize_segments(
         stage="final_integrity_guard",
         stage_label="최종 자막/STT 원문 무결성 확인",
         segments=optimized,
+        settings=loaded_settings,
     )
     _log_accuracy_metrics(optimized, loaded_settings)
     _record_deep_policy_learning(optimized, loaded_settings)

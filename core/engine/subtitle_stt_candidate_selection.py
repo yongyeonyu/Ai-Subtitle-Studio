@@ -13,7 +13,11 @@ import sys
 
 from core.audio.stt_lattice import select_stt_lattice_text
 from core.engine.subtitle_accuracy_pipeline import llm_gate_decision
-from core.engine.subtitle_final_integrity import _best_stt_anchor_for_final_row, _source_stt_anchor_rows
+from core.engine.subtitle_final_integrity import (
+    _best_stt_anchor_for_final_row,
+    _source_stt_anchor_rows,
+    get_local_dataset_corrections,
+)
 from core.engine.subtitle_llm_runtime import (
     _append_accuracy_decision_for_settings,
     _apply_llm_confidence_gate,
@@ -31,6 +35,7 @@ from core.engine.subtitle_lora_packaging import (
     _find_matching_stt_candidate_for_decision,
     _stt_decision_speaker_fields,
 )
+from core.engine.subtitle_text_policy import clean_subtitle_text
 from core.engine.subtitle_settings import _get_user_settings, _resolve_runtime_llm_model
 from core.engine.subtitle_stt_candidate_helpers import (
     _candidate_span_from_decision,
@@ -841,6 +846,48 @@ def _restore_no_llm_raw_stt_text(
     source_segments: list[dict] | None = None,
     settings: dict | None = None,
 ) -> list[dict]:
+    trace_callback = None
+    if isinstance(settings, dict):
+        trace_callback = settings.get("_benchmark_no_llm_raw_restore_trace")
+
+    def _emit_trace(step: str, row: dict, *, decision: str, reason: str, anchor_text: str = "", similarity: float | None = None) -> None:
+        if not callable(trace_callback):
+            return
+        try:
+            split_policy = dict(row.get("_common_split_guard_policy") or {})
+            raw_policy = dict(row.get("_stt_no_llm_raw_candidate_policy") or {})
+            words = row.get("words")
+            word_text = ""
+            if isinstance(words, list):
+                word_text = " ".join(
+                    str(word.get("word", word.get("text", "")) or "").strip()
+                    for word in words
+                    if isinstance(word, dict) and str(word.get("word", word.get("text", "")) or "").strip()
+                ).strip()
+            payload = {
+                "step": str(step or "").strip(),
+                "decision": str(decision or "").strip(),
+                "reason": str(reason or "").strip(),
+                "start": float(row.get("start", 0.0) or 0.0),
+                "end": float(row.get("end", row.get("start", 0.0)) or row.get("start", 0.0) or 0.0),
+                "text": str(row.get("text", "") or "").strip(),
+                "split_index": split_policy.get("split_index"),
+                "split_count": split_policy.get("split_count"),
+                "has_common_split_policy": bool(split_policy),
+                "raw_lock_reason": str(raw_policy.get("reason") or "").strip(),
+                "restored_after_postprocess": bool(raw_policy.get("restored_after_postprocess")),
+                "raw_text": str(row.get("_stt_no_llm_raw_text") or raw_policy.get("raw_text") or "").strip(),
+                "word_text": word_text,
+                "selected_source": str(row.get("stt_selected_source") or row.get("stt_ensemble_source") or "").strip(),
+                "anchor_text": str(anchor_text or "").strip(),
+            }
+            if similarity is not None:
+                payload["similarity"] = round(float(similarity), 4)
+            trace_callback(payload)
+        except Exception:
+            pass
+
+    corrections = get_local_dataset_corrections()
     rows = []
     for seg in list(segments or []):
         if not isinstance(seg, dict):
@@ -849,6 +896,23 @@ def _restore_no_llm_raw_stt_text(
         policy = dict(row.get("_stt_no_llm_raw_candidate_policy") or {})
         raw_text = str(row.get("_stt_no_llm_raw_text") or policy.get("raw_text") or "").strip()
         if raw_text and str(row.get("text", "") or "").strip() != raw_text:
+            current_text = str(row.get("text", "") or "").strip()
+            cleanup_policy = dict(row.get("_final_sequence_cleanup_policy") or {})
+            if (
+                str(cleanup_policy.get("action") or "").strip().lower() == "merge"
+                and len(_stt_candidate_compact_text(current_text)) > len(_stt_candidate_compact_text(raw_text))
+            ):
+                _emit_trace("raw_restore", row, decision="skip", reason="merge_cleanup_preserved")
+                rows.append(row)
+                continue
+            current_compact = _stt_candidate_compact_text(current_text)
+            raw_compact = _stt_candidate_compact_text(raw_text)
+            corrected_raw_text = clean_subtitle_text(raw_text, corrections if isinstance(corrections, dict) else None)
+            if corrected_raw_text and _stt_candidate_compact_text(corrected_raw_text) == _stt_candidate_compact_text(current_text):
+                _emit_trace("raw_restore", row, decision="skip", reason="already_matches_corrected_raw")
+                rows.append(row)
+                continue
+            split_policy = dict(row.get("_common_split_guard_policy") or {})
             row["text"] = raw_text
             policy.update(
                 {
@@ -858,6 +922,9 @@ def _restore_no_llm_raw_stt_text(
                 }
             )
             row["_stt_no_llm_raw_candidate_policy"] = policy
+            _emit_trace("raw_restore", row, decision="restore", reason="raw_text_mismatch")
+        else:
+            _emit_trace("raw_restore", row, decision="keep", reason="no_raw_restore_needed")
         rows.append(row)
     if not rows or not source_segments:
         return rows
@@ -875,30 +942,48 @@ def _restore_no_llm_raw_stt_text(
         row = dict(raw_row)
         text = str(row.get("text", "") or "").strip()
         if not text or row.get("is_gap"):
+            _emit_trace("anchor_restore", row, decision="skip", reason="empty_or_gap")
             restored_rows.append(row)
             continue
         anchor, meta = _best_stt_anchor_for_final_row(row, anchors, settings or {})
         if not anchor:
+            _emit_trace("anchor_restore", row, decision="skip", reason="no_anchor_match")
             restored_rows.append(row)
             continue
         anchor_text = str(anchor.get("text", "") or "").strip()
         if not anchor_text:
+            _emit_trace("anchor_restore", row, decision="skip", reason="empty_anchor_text")
             restored_rows.append(row)
             continue
         row_compact = _stt_candidate_compact_text(text)
         anchor_compact = _stt_candidate_compact_text(anchor_text)
         if row_compact == anchor_compact or (anchor_compact and anchor_compact in row_compact):
+            _emit_trace("anchor_restore", row, decision="skip", reason="already_matches_anchor", anchor_text=anchor_text)
+            restored_rows.append(row)
+            continue
+        split_policy = dict(row.get("_common_split_guard_policy") or {})
+        if (
+            _setting_bool(settings or {}, "subtitle_no_llm_raw_stt_lock_preserve_common_split_rows", False)
+            and str(split_policy.get("action") or "").strip().lower() == "split"
+            and int(split_policy.get("split_count") or 0) > 1
+            and row_compact
+            and anchor_compact
+            and row_compact in anchor_compact
+        ):
+            _emit_trace("anchor_restore", row, decision="skip", reason="preserve_common_split_row", anchor_text=anchor_text)
             restored_rows.append(row)
             continue
         if row_compact and row_compact in anchor_compact:
             missing_chars = max(0, len(anchor_compact) - len(row_compact))
             allowed_missing = max(4, int(round(len(anchor_compact) * 0.33)))
             if missing_chars <= allowed_missing:
+                _emit_trace("anchor_restore", row, decision="skip", reason="subset_within_missing_budget", anchor_text=anchor_text)
                 restored_rows.append(row)
                 continue
         similarity = _stt_candidate_similarity(text, anchor_text)
         min_similarity = _setting_float(settings or {}, "subtitle_no_llm_raw_stt_lock_min_similarity", 0.82)
         if similarity >= min_similarity:
+            _emit_trace("anchor_restore", row, decision="skip", reason="similar_enough", anchor_text=anchor_text, similarity=similarity)
             restored_rows.append(row)
             continue
         row.update(
@@ -925,6 +1010,7 @@ def _restore_no_llm_raw_stt_text(
             }
         )
         row["_stt_no_llm_raw_candidate_policy"] = policy
+        _emit_trace("anchor_restore", row, decision="restore", reason="postprocess_candidate_drift", anchor_text=anchor_text, similarity=similarity)
         restored_rows.append(row)
         restored_count += 1
     if restored_count:

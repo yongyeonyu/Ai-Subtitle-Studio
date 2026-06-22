@@ -478,7 +478,7 @@ def _fallback_qmenu(parent, global_pos: QPoint, items: list[dict]) -> str | None
     menu.setMaximumSize(bounded)
     if menu.sizeHint().width() > bounded.width():
         menu.setFixedWidth(bounded.width())
-    chosen = menu.exec(_centered_popup_pos(parent, bounded, global_pos))
+    chosen = menu.exec(_clamp_popup_pos(global_pos, bounded, available))
     return action_map.get(chosen)
 
 
@@ -489,7 +489,7 @@ def show_context_menu(parent, global_pos: QPoint, items: list[dict]) -> str | No
     if _quick_available(MENU_QML):
         try:
             dialog = _QuickContextMenuDialog(_widget_parent(parent), normalized)
-            dialog.fit_to_screen(QPoint(global_pos), parent=parent, centered=True)
+            dialog.fit_to_screen(QPoint(global_pos), parent=parent, centered=False)
             loop = QEventLoop()
             dialog.finished.connect(loop.quit)
             dialog.show()

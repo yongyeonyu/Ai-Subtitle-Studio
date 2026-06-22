@@ -825,12 +825,12 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             "pairing": result,
         }
 
-    def _add_learning_files(self):
+    def _add_media_and_srt_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "영상/오디오/SRT 파일 선택",
             "",
-            "Learning Files (*.mp4 *.mov *.mkv *.avi *.wav *.mp3 *.m4a *.aac *.flac *.ogg *.srt);;All Files (*)",
+            "Learning Files (*.mp4 *.mov *.mkv *.avi *.lrf *.LRF *.wav *.mp3 *.m4a *.aac *.flac *.ogg *.srt);;All Files (*)",
         )
         self._stage_inputs([str(path) for path in files if path])
 
@@ -839,7 +839,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             self,
             "비디오/오디오 파일 선택",
             "",
-            "Media Files (*.mp4 *.mov *.mkv *.avi *.wav *.mp3 *.m4a *.aac *.flac *.ogg);;All Files (*)",
+            "Media Files (*.mp4 *.mov *.mkv *.avi *.lrf *.LRF *.wav *.mp3 *.m4a *.aac *.flac *.ogg);;All Files (*)",
         )
         self._stage_inputs([str(path) for path in files if path])
 

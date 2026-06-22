@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTextEdit,
@@ -92,10 +93,35 @@ class RoughcutWidget(
         self._candidate_preview_buttons: list[QPushButton] = []
         self._candidate_preview_empty_lbl = None
         self._candidate_preview_filter = "all"
+        self._defer_thumbnail_lookup_once = False
+        self._refresh_from_editor_pending = False
+        self._major_panel_deferred_result = None
+        self._major_panel_deferred_editor_segments: list[dict] = []
+        self._major_panel_populated_result_id = 0
+        self._roughcut_persist_timer = QTimer(self)
+        self._roughcut_persist_timer.setSingleShot(True)
+        self._roughcut_persist_timer.setInterval(500)
+        self._roughcut_persist_timer.timeout.connect(self._persist_roughcut_state_now)
         self.setStyleSheet(f"background: {COLORS['bg']}; color: {COLORS['text']};")
         self._build_ui()
 
+    def schedule_refresh_from_editor(self, *, force_reanalyze: bool = False, analyze_if_missing: bool = True) -> None:
+        if bool(getattr(self, "_refresh_from_editor_pending", False)):
+            return
+        self._refresh_from_editor_pending = True
+        if hasattr(self, "_set_roughcut_status"):
+            self._set_roughcut_status("복원 준비", 5)
+
+        def _refresh() -> None:
+            self._refresh_from_editor_pending = False
+            self.refresh_from_editor(force_reanalyze=force_reanalyze, analyze_if_missing=analyze_if_missing)
+
+        QTimer.singleShot(0, _refresh)
+
     def compact_for_home_navigation(self) -> None:
+        flush_persist = getattr(self, "_flush_pending_roughcut_persist", None)
+        if callable(flush_persist):
+            flush_persist()
         self.release_editor_video_frame()
         stop_preview = getattr(self, "_stop_preview", None)
         if callable(stop_preview):
@@ -144,9 +170,11 @@ class RoughcutWidget(
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(6, 6, 6, 6)
-        root.setSpacing(6)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
         self.safety_filter_combo = self._build_safety_filter_combo()
+        self._workspace_shell_buttons: dict[str, QPushButton] = {}
+        self._inspector_shell_buttons: dict[str, QPushButton] = {}
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.setChildrenCollapsible(False)
@@ -154,28 +182,61 @@ class RoughcutWidget(
         root.addWidget(main_splitter, stretch=1)
 
         self.roughcut_frame = QFrame()
-        self.roughcut_frame.setStyleSheet(panel_style("surface"))
+        self.roughcut_frame.setStyleSheet(
+            "QFrame { background: #11181E; border: 1px solid #24323A; border-radius: 12px; }"
+        )
         left_lay = QVBoxLayout(self.roughcut_frame)
-        left_lay.setContentsMargins(6, 6, 6, 6)
-        left_lay.setSpacing(6)
+        left_lay.setContentsMargins(10, 10, 10, 10)
+        left_lay.setSpacing(8)
+        self.workspace_stack = QStackedWidget()
+        self.workspace_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
         self.candidate_preview_frame = self._build_candidate_preview_frame()
-        left_lay.addWidget(self.candidate_preview_frame, stretch=0)
         self.major_panel = RoughcutMajorPanel()
         self.major_panel.minorSelected.connect(self._select_chapter_id_from_major_panel)
         self.major_panel.previewRequested.connect(self._preview_chapter_id_from_major_panel)
         self.major_panel.segmentOrderChanged.connect(self._on_major_segment_order_changed)
         self.major_panel.chapterOrderChanged.connect(self._on_major_chapter_order_changed)
         self.table = self._build_table()
-        left_lay.addWidget(self.major_panel, stretch=1)
+        self.workspace_overview_page = self._build_shell_overview_page(
+            "러프컷 캔버스",
+            "대표님이 조립하실 큰 작업 면입니다. 아래 버튼으로 후보, 카드, 챕터를 하나씩 꺼내 보실 수 있습니다.",
+        )
+        self.workspace_candidates_page = self._build_shell_content_page(
+            "후보",
+            "기존 후보 카드와 실제 LLM 초안은 그대로 유지하고, 지금은 이 페이지로만 꺼내 보입니다.",
+            self.candidate_preview_frame,
+        )
+        self.workspace_structure_page = self._build_shell_content_page(
+            "카드 정렬",
+            "메이저 카드/마이너 카드 정렬 기능은 그대로 유지하고 화면만 분리했습니다.",
+            self.major_panel,
+        )
+        self.workspace_chapters_page = self._build_shell_content_page(
+            "챕터 테이블",
+            "기존 테이블 편집 기능은 유지한 채 별도 페이지로 뺐습니다.",
+            self.table,
+        )
+        for page in (
+            self.workspace_overview_page,
+            self.workspace_candidates_page,
+            self.workspace_structure_page,
+            self.workspace_chapters_page,
+        ):
+            self.workspace_stack.addWidget(page)
+        left_lay.addWidget(self.workspace_stack, stretch=1)
         main_splitter.addWidget(self.roughcut_frame)
 
         side = QFrame()
-        side.setStyleSheet(panel_style("surface"))
-        side.setMinimumWidth(396)
-        side.setMaximumWidth(468)
+        side.setStyleSheet(
+            "QFrame { background: #11181E; border: 1px solid #24323A; border-radius: 12px; }"
+        )
+        side.setMinimumWidth(420)
+        side.setMaximumWidth(620)
         side_lay = QVBoxLayout(side)
-        side_lay.setContentsMargins(6, 6, 6, 6)
-        side_lay.setSpacing(6)
+        side_lay.setContentsMargins(10, 10, 10, 10)
+        side_lay.setSpacing(8)
+        self.inspector_stack = QStackedWidget()
+        self.inspector_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
         self.video_bridge_frame = QFrame()
         self.video_bridge_frame.setStyleSheet("QFrame { background: #0A0F12; border: 1px solid #2D3942; border-radius: 8px; }")
         self.video_bridge_layout = QVBoxLayout(self.video_bridge_frame)
@@ -198,13 +259,10 @@ class RoughcutWidget(
         self.video_bridge_layout.addWidget(self.video_bridge_title_lbl)
         self.video_bridge_layout.addWidget(self.video_bridge_hint_lbl)
         self.video_bridge_layout.addWidget(self.video_host, stretch=1)
-        side_lay.addWidget(self.video_bridge_frame, stretch=3)
         self.player_menu_frame = self._build_player_menu_frame()
-        side_lay.addWidget(self.player_menu_frame, stretch=0)
 
         self.bottom_panel = self._build_bottom_panel()
         self.bottom_tabs = RoughcutBottomPanel(self.bottom_panel)
-        self.bottom_tabs.tabs.insertTab(0, self.table, "챕터")
         self.guide_text = QTextEdit()
         self.guide_text.setReadOnly(True)
         self.guide_text.setStyleSheet(
@@ -217,11 +275,56 @@ class RoughcutWidget(
         self.title_panel.refreshRequested.connect(self._refresh_title_suggestions)
         self.style_panel.styleSaved.connect(self._save_roughcut_export_style)
         self.bottom_tabs.tabs.addTab(self.log_panel, "로그")
-        side_lay.addWidget(self.bottom_tabs, stretch=5)
+        player_page = self._build_shell_content_page(
+            "플레이어",
+            "현재 에디터 비디오와 핵심 메뉴를 우측 보조 패널에서 그대로 유지합니다.",
+            self._build_shell_bundle(
+                (self.video_bridge_frame, 3),
+                (self.player_menu_frame, 2),
+            ),
+        )
+        reference_page = self._build_shell_content_page(
+            "참조 / 편집",
+            "선택 카드 편집, 챕터 참조, 자막/EDL/로그 탭을 여기서 계속 사용하실 수 있습니다.",
+            self.bottom_tabs,
+        )
+        guide_page = self._build_shell_content_page(
+            "가이드",
+            "러프컷 가이드와 렌더 로그를 별도 페이지로 분리했습니다.",
+            self.guide_text,
+        )
+        title_page = self._build_shell_content_page(
+            "제목 후보",
+            "러프컷 제목 생성 기능은 그대로 유지합니다.",
+            self.title_panel,
+        )
+        style_page = self._build_shell_content_page(
+            "스타일",
+            "러프컷 export style 저장 기능을 별도 페이지로 옮겼습니다.",
+            self.style_panel,
+        )
+        self.inspector_overview_page = self._build_shell_overview_page(
+            "보조 패널",
+            "플레이어, 편집, 참조, 제목, 스타일은 아래 버튼으로 필요할 때만 꺼내 보실 수 있습니다.",
+        )
+        for page in (
+            self.inspector_overview_page,
+            player_page,
+            reference_page,
+            guide_page,
+            title_page,
+            style_page,
+        ):
+            self.inspector_stack.addWidget(page)
+        side_lay.addWidget(self.inspector_stack, stretch=1)
         main_splitter.addWidget(side)
-        main_splitter.setStretchFactor(0, 6)
-        main_splitter.setStretchFactor(1, 2)
-        main_splitter.setSizes([1640, 420])
+        main_splitter.setStretchFactor(0, 7)
+        main_splitter.setStretchFactor(1, 3)
+        main_splitter.setSizes([1520, 560])
+
+        root.addWidget(self._build_shell_action_bar(), stretch=0)
+        self._switch_workspace_page("overview")
+        self._switch_inspector_page("overview")
 
         self._set_empty_state()
 
@@ -806,6 +909,233 @@ class RoughcutWidget(
         self.title_panel.set_suggestions(suggestions)
         self._persist_roughcut_state()
         self._set_roughcut_status("분석 완료", 100)
+
+    def _build_shell_overview_page(self, title: str, hint: str) -> QWidget:
+        page = QFrame()
+        page.setStyleSheet(
+            "QFrame { background: #0F151A; border: 1px solid #1C2830; border-radius: 14px; }"
+        )
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(10)
+
+        title_lbl = QLabel(str(title or ""))
+        title_lbl.setStyleSheet(label_style("text", 12, bold=True))
+        lay.addWidget(title_lbl, stretch=0)
+
+        hint_lbl = QLabel(str(hint or ""))
+        hint_lbl.setWordWrap(True)
+        hint_lbl.setStyleSheet(label_style("muted", 9))
+        lay.addWidget(hint_lbl, stretch=0)
+
+        center = QFrame()
+        center.setStyleSheet(
+            "QFrame { background: #10171D; border: 1px solid #22303A; border-radius: 18px; }"
+        )
+        center_lay = QVBoxLayout(center)
+        center_lay.setContentsMargins(24, 18, 24, 18)
+        center_lay.setSpacing(10)
+        accent = QFrame()
+        accent.setFixedHeight(1)
+        accent.setStyleSheet("background: #243542; border: none;")
+        center_lay.addWidget(accent, stretch=0)
+        center_lay.addStretch(1)
+        footer = QLabel("필요한 도구를 아래 버튼으로 하나씩 조립합니다.")
+        footer.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+        footer.setStyleSheet("color: #31424E; font-size: 10px; font-weight: 700;")
+        center_lay.addWidget(footer, stretch=0)
+        lay.addWidget(center, stretch=1)
+        return page
+
+    def _build_shell_content_page(self, title: str, hint: str, content: QWidget) -> QWidget:
+        page = QFrame()
+        page.setStyleSheet(
+            "QFrame { background: #0F151A; border: 1px solid #1C2830; border-radius: 14px; }"
+        )
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(14, 14, 14, 14)
+        lay.setSpacing(8)
+        title_lbl = QLabel(str(title or ""))
+        title_lbl.setStyleSheet(label_style("text", 12, bold=True))
+        lay.addWidget(title_lbl, stretch=0)
+        if hint:
+            hint_lbl = QLabel(str(hint or ""))
+            hint_lbl.setWordWrap(True)
+            hint_lbl.setStyleSheet(label_style("muted", 9))
+            lay.addWidget(hint_lbl, stretch=0)
+        lay.addWidget(content, stretch=1)
+        return page
+
+    def _build_shell_bundle(self, *items: tuple[QWidget, int]) -> QWidget:
+        container = QWidget()
+        container.setStyleSheet("background: transparent; border: none;")
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        for widget, stretch in items:
+            lay.addWidget(widget, stretch=max(0, int(stretch)))
+        return container
+
+    def _shell_nav_button(self, text: str, icon_name: str, *, checked: bool = False) -> QPushButton:
+        button = QPushButton(str(text or ""))
+        button.setCheckable(True)
+        button.setChecked(bool(checked))
+        button.setIcon(line_icon(icon_name, "#FFFFFF" if checked else COLORS["muted"], 16))
+        button.setStyleSheet(
+            button_style("toolbar", font_size="11px", padding="7px 11px")
+            + (
+                " QPushButton:checked { background: #123349; border: 1px solid #17C6FF; color: #F5F7FA; }"
+            )
+        )
+        button.setMinimumHeight(38)
+        return button
+
+    def _shell_group_frame(self) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame { background: #0E1419; border: 1px solid #1F2B33; border-radius: 16px; }"
+        )
+        return frame
+
+    def _shell_group_layout(self, frame: QFrame) -> QHBoxLayout:
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(8)
+        return lay
+
+    def _build_shell_action_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setStyleSheet("background: transparent; border: none;")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        workspace_group = self._shell_group_frame()
+        workspace_lay = self._shell_group_layout(workspace_group)
+        workspace_map = (
+            ("overview", "캔버스", "eye"),
+            ("candidates", "후보", "subtitle"),
+            ("structure", "카드", "video"),
+            ("chapters", "챕터", "file"),
+        )
+        for key, label, icon in workspace_map:
+            button = self._shell_nav_button(label, icon, checked=(key == "overview"))
+            button.clicked.connect(lambda _checked=False, page_key=key: self._switch_workspace_page(page_key))
+            self._workspace_shell_buttons[key] = button
+            workspace_lay.addWidget(button)
+        lay.addWidget(workspace_group, stretch=4)
+
+        action_group = self._shell_group_frame()
+        action_lay = self._shell_group_layout(action_group)
+        quick_actions = (
+            ("분석", "refresh", self.run_main_action),
+            ("검증", "check", self._dry_run_render_plan),
+            ("렌더", "play", self._execute_render_plan),
+            ("순서 재생", "play", self._start_ordered_preview_sequence),
+        )
+        for label, icon, handler in quick_actions:
+            button = self._panel_button(label, icon, kind="primary" if label in {"분석", "렌더"} else "toolbar")
+            button.clicked.connect(handler)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            action_lay.addWidget(button)
+        lay.addWidget(action_group, stretch=4)
+
+        inspector_group = self._shell_group_frame()
+        inspector_lay = self._shell_group_layout(inspector_group)
+        inspector_map = (
+            ("overview", "보조", "eye"),
+            ("player", "플레이어", "video"),
+            ("reference", "참조", "file"),
+            ("guide", "가이드", "help"),
+            ("title", "제목", "subtitle"),
+            ("style", "스타일", "settings"),
+        )
+        for key, label, icon in inspector_map:
+            button = self._shell_nav_button(label, icon, checked=(key == "overview"))
+            button.clicked.connect(lambda _checked=False, page_key=key: self._switch_inspector_page(page_key))
+            self._inspector_shell_buttons[key] = button
+            inspector_lay.addWidget(button)
+        log_button = self._panel_button("로그", "help")
+        log_button.clicked.connect(self._open_reference_log_page)
+        log_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        inspector_lay.addWidget(log_button)
+        lay.addWidget(inspector_group, stretch=5)
+        return bar
+
+    def _switch_workspace_page(self, key: str) -> None:
+        page_map = {
+            "overview": self.workspace_overview_page,
+            "candidates": self.workspace_candidates_page,
+            "structure": self.workspace_structure_page,
+            "chapters": self.workspace_chapters_page,
+        }
+        page = page_map.get(str(key or ""), self.workspace_overview_page)
+        self.workspace_stack.setCurrentWidget(page)
+        for name, button in list(getattr(self, "_workspace_shell_buttons", {}).items()):
+            button.setChecked(name == str(key or "overview"))
+        if str(key or "") == "structure":
+            self._populate_deferred_major_panel()
+
+    def _should_populate_major_panel(self, result) -> bool:
+        segment_count = len(tuple(getattr(result, "segments", ()) or ()))
+        if segment_count <= 24:
+            return True
+        current = self.workspace_stack.currentWidget() if hasattr(self, "workspace_stack") else None
+        return current is getattr(self, "workspace_structure_page", None)
+
+    def _mark_major_panel_deferred(self, result) -> None:
+        self._major_panel_deferred_result = result
+        self._major_panel_deferred_editor_segments = self._editor_segments()
+        self._major_panel_populated_result_id = 0
+
+    def _mark_major_panel_populated(self) -> None:
+        self._major_panel_deferred_result = None
+        self._major_panel_deferred_editor_segments = []
+        self._major_panel_populated_result_id = id(getattr(self, "_result", None))
+
+    def _populate_deferred_major_panel(self) -> None:
+        result = getattr(self, "_major_panel_deferred_result", None)
+        if result is None:
+            current_result = getattr(self, "_result", None)
+            if current_result is None or self._major_panel_populated_result_id == id(current_result):
+                return
+            result = current_result
+        if getattr(self, "major_panel", None) is None:
+            return
+        self._set_roughcut_status("카드 구성", 65)
+        thumbnail_lookup = {}
+        if not bool(getattr(self, "_defer_thumbnail_lookup_once", False)):
+            thumbnail_lookup = self._thumbnail_lookup_for_result(result)
+        self._defer_thumbnail_lookup_once = False
+        editor_segments = list(getattr(self, "_major_panel_deferred_editor_segments", []) or self._editor_segments())
+        self.major_panel.set_result(result, editor_segments=editor_segments, thumbnail_lookup=thumbnail_lookup)
+        self._mark_major_panel_populated()
+        selected = self._current_selected_chapter_id()
+        if selected:
+            self.major_panel.set_selected_chapter(selected)
+        self._set_roughcut_status("카드 구성 완료", 100)
+
+    def _switch_inspector_page(self, key: str) -> None:
+        page_map = {
+            "overview": self.inspector_overview_page,
+            "player": self.inspector_stack.widget(1),
+            "reference": self.inspector_stack.widget(2),
+            "guide": self.inspector_stack.widget(3),
+            "title": self.inspector_stack.widget(4),
+            "style": self.inspector_stack.widget(5),
+        }
+        page_key = str(key or "overview")
+        page = page_map.get(page_key, self.inspector_overview_page)
+        self.inspector_stack.setCurrentWidget(page)
+        for name, button in list(getattr(self, "_inspector_shell_buttons", {}).items()):
+            button.setChecked(name == page_key)
+
+    def _open_reference_log_page(self) -> None:
+        self._switch_inspector_page("reference")
+        try:
+            self.bottom_tabs.tabs.setCurrentWidget(self.log_panel)
+        except Exception:
+            pass
 
     def _build_bottom_panel(self) -> QWidget:
         panel = QWidget()

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.audio.audio_runtime_services import (
+    memory_pressure_stage_details_from_snapshot,
     memory_pressure_stage_from_snapshot,
     plan_audio_route_workers,
     stage_owned_resource_policy,
@@ -197,6 +198,69 @@ class ActionItemRuntimeServiceTests(unittest.TestCase):
             memory_pressure_stage_from_snapshot({"native_memory": {"pressure_stage": "critical"}}, settings),
             "critical",
         )
+
+    def test_memory_pressure_stage_details_from_snapshot_reports_native_vs_threshold_source(self):
+        settings = {
+            "runtime_memory_warning_ratio": 0.25,
+            "runtime_memory_critical_ratio": 0.10,
+            "macos_memory_compressed_warning_ratio": 0.22,
+            "macos_memory_compressed_critical_ratio": 0.30,
+        }
+
+        native_details = memory_pressure_stage_details_from_snapshot(
+            {
+                "memory_pressure_stage": "critical",
+                "available_memory_ratio": 0.30,
+                "compressed_memory_ratio": 0.35,
+            },
+            settings,
+        )
+        native_warning_details = memory_pressure_stage_details_from_snapshot(
+            {
+                "memory_pressure_stage": "warning",
+                "available_memory_ratio": 0.30,
+                "compressed_memory_ratio": 0.24,
+            },
+            settings,
+        )
+        threshold_details = memory_pressure_stage_details_from_snapshot(
+            {"available_memory_ratio": 0.08, "memory_pressure_stage": ""},
+            settings,
+        )
+        compressed_details = memory_pressure_stage_details_from_snapshot(
+            {"available_memory_ratio": 0.40, "compressed_memory_ratio": 0.35, "memory_pressure_stage": ""},
+            settings,
+        )
+
+        self.assertEqual(native_details["stage"], "critical")
+        self.assertEqual(native_details["source"], "native_top_level_pressure_stage")
+        self.assertEqual(native_details["trigger_reason"], "critical_compressed_memory_ratio")
+        self.assertEqual(native_warning_details["stage"], "warning")
+        self.assertEqual(native_warning_details["source"], "native_top_level_pressure_stage")
+        self.assertEqual(native_warning_details["trigger_reason"], "warning_compressed_memory_ratio")
+        self.assertEqual(threshold_details["stage"], "critical")
+        self.assertEqual(threshold_details["source"], "threshold_critical")
+        self.assertEqual(threshold_details["trigger_reason"], "critical_available_memory_ratio")
+        self.assertEqual(compressed_details["stage"], "critical")
+        self.assertEqual(compressed_details["source"], "threshold_critical")
+        self.assertEqual(compressed_details["trigger_reason"], "critical_compressed_memory_ratio")
+
+    def test_memory_pressure_stage_details_supports_canonical_native_compressed_ratio_keys(self):
+        settings = {
+            "macos_memory_compressed_warning_ratio": 0.25,
+            "macos_memory_compressed_critical_ratio": 0.40,
+        }
+        details = memory_pressure_stage_details_from_snapshot(
+            {
+                "available_memory_ratio": 0.40,
+                "compressed_memory_ratio": 0.35,
+                "memory_pressure_stage": "",
+            },
+            settings,
+        )
+        self.assertEqual(details["stage"], "warning")
+        self.assertEqual(details["source"], "threshold_warning")
+        self.assertEqual(details["trigger_reason"], "warning_compressed_memory_ratio")
 
     def test_project_session_rows_uses_targeted_view_without_full_project_hydration(self):
         class _Session:

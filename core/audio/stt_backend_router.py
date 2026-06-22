@@ -198,6 +198,16 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
     prof_backend = profile_backend("stt", data)
     prof_model = profile_model("stt", data)
 
+    if requested_model.lower().startswith(f"{APPLE_SPEECH_STT_BACKEND}:"):
+        support = apple_speech_support(data, locale=requested_model.split(":", 1)[1].strip() or None)
+        if support.available:
+            return SttBackendChoice(
+                APPLE_SPEECH_STT_BACKEND,
+                apple_speech_model(support.locale),
+                "explicit_apple_speech_model",
+            )
+        requested_model = apple_speech_model(support.locale)
+
     if policy == "disabled":
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "policy_disabled_fallback")
     if requested_model.lower().startswith("whisperkit-persistent:"):

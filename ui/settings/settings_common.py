@@ -96,6 +96,9 @@ WHISPER_MODEL_DISPLAY_NAMES = {
     "apple_speech:ko-KR": "Apple Speech (Experimental)",
 }
 
+APPLE_SPEECH_MODEL_PREFIX = "apple_speech:"
+APPLE_SPEECH_EXPERIMENTAL_LABEL = "Apple Speech (Experimental)"
+
 EXPERIMENTAL_WHISPER_MODELS = {
     "youngouk/whisper-medium-komixv2-mlx",
     "youngouk/ghost613-turbo-korean-4bit-mlx",
@@ -118,11 +121,11 @@ def whisper_model_display_name(model: str, *, include_recommendations: bool = Fa
             if tags:
                 display = f"{display} {' '.join(f'[{tag}]' for tag in tags)}"
         return display
-    if value.lower().startswith("apple_speech:"):
+    if value.lower().startswith(APPLE_SPEECH_MODEL_PREFIX):
         locale = value.split(":", 1)[1].strip() if ":" in value else ""
         if locale:
             return f"Apple Speech ({locale})"
-        return "Apple Speech (Experimental)"
+        return APPLE_SPEECH_EXPERIMENTAL_LABEL
     lowered = value.lower()
     if lowered.startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:")):
         selector = value.split(":", 1)[1].strip() if ":" in value else "default"

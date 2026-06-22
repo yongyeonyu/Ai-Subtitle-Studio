@@ -37,6 +37,24 @@
       "hidden": false
     },
     {
+      "id": "apple-speech-transcriber",
+      "name": "Apple Speech Transcriber (실험)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "binary_check": "apple_speech_support",
+      "locale": "ko-KR",
+      "required": false,
+      "hidden": false,
+      "experimental": true,
+      "details": {
+        "provider": "apple",
+        "format": "native-apple-speech",
+        "billing": "내장/macOS"
+      }
+    },
+    {
       "id": "whisper-large-v3-faster",
       "name": "Whisper Large V3 (CUDA)",
       "category": "STT",

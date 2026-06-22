@@ -85,6 +85,133 @@ from core.audio.media_processor_transcribe import (
 )
 
 class VideoProcessorTranscribeRunMixin:
+    def _prepare_explicit_apple_speech_backend(self, target_model: str, stt_backend_name: str, settings: dict | None = None, *, log_label: str = "STT1") -> tuple[str, str]:
+        backend_name = str(stt_backend_name or "").strip().lower()
+        model_name = str(target_model or "").strip()
+        if backend_name != "apple_speech":
+            return backend_name, model_name
+
+        from core.audio.apple_speech_native import apple_speech_support
+        from core.runtime import config as _cfg
+
+        locale = "ko-KR"
+        if ":" in model_name:
+            locale = str(model_name.split(":", 1)[1] or "").strip() or locale
+        support = apple_speech_support(settings, locale=locale)
+        if support.available:
+            resolved_model = f"apple_speech:{support.locale}"
+            get_logger().log(
+                f"  🍎 [{log_label}] Apple Speech STT experimental route 사용 "
+                f"({support.reason} -> {resolved_model})"
+            )
+            return "apple_speech", resolved_model
+        fallback_model = str(getattr(_cfg, "MLX_FALLBACK_MODEL", "") or "mlx-community/whisper-large-v3-turbo").strip()
+        get_logger().log(
+            f"  ↩️ [{log_label}] Apple Speech STT 모델은 UI에 노출되지만 "
+            f"현재 build에서는 Apple route를 쓸 수 없어 MLX fallback으로 실행합니다 "
+            f"({support.reason} -> {fallback_model})"
+        )
+        return "mlx", fallback_model
+
+    def _build_stt_benchmark_plan(self, requested_model: str, primary_choice, settings: dict | None = None) -> dict:
+        data = dict(settings or {})
+        active_backend = str(getattr(primary_choice, "backend", "") or "").strip().lower()
+        active_model = str(getattr(primary_choice, "model", "") or requested_model or "").strip()
+        active_reason = str(getattr(primary_choice, "reason", "") or "selected_model").strip()
+        plan: dict[str, object] = {
+            "requested_model": str(requested_model or "").strip(),
+            "active_backend": active_backend,
+            "active_model": active_model,
+            "active_reason": active_reason,
+            "challengers": [],
+            "vad_challenger": None,
+        }
+        try:
+            from core.audio.stt_backend_router import select_stt_challenger_backends
+            from core.audio.vad_backend_router import select_vad_challenger_backend
+
+            challengers = []
+            for challenger in select_stt_challenger_backends(requested_model, data):
+                backend = str(getattr(challenger, "backend", "") or "").strip().lower()
+                model = str(getattr(challenger, "model", "") or "").strip()
+                if backend == active_backend and model == active_model:
+                    continue
+                challengers.append(
+                    {
+                        "backend": backend,
+                        "model": model,
+                        "reason": str(getattr(challenger, "reason", "") or "").strip(),
+                    }
+                )
+            plan["challengers"] = challengers
+            vad_choice = select_vad_challenger_backend(str(data.get("selected_vad") or "none"), data)
+            if vad_choice is not None:
+                plan["vad_challenger"] = {
+                    "provider": str(getattr(vad_choice, "provider", "") or "").strip(),
+                    "reason": str(getattr(vad_choice, "reason", "") or "").strip(),
+                }
+        except Exception:
+            pass
+        return plan
+
+    def _remember_stt_benchmark_plan(self, requested_model: str, primary_choice, settings: dict | None = None) -> dict:
+        plan = self._build_stt_benchmark_plan(requested_model, primary_choice, settings)
+        self._last_stt_benchmark_plan = plan
+        self._last_stt_benchmark_rows = self._build_stt_benchmark_rows(plan)
+        challengers = list(plan.get("challengers") or [])
+        if challengers:
+            labels = ", ".join(
+                f"{str(item.get('backend') or '')}:{str(item.get('model') or '').split('/')[-1]}"
+                for item in challengers
+            )
+            get_logger().log(f"  🧪 [STT Benchmark] challenger candidates 준비: {labels}")
+        return plan
+
+    @staticmethod
+    def _build_stt_benchmark_rows(plan: dict | None) -> list[dict]:
+        data = dict(plan or {})
+        rows: list[dict] = []
+        active_backend = str(data.get("active_backend") or "").strip()
+        active_model = str(data.get("active_model") or "").strip()
+        active_reason = str(data.get("active_reason") or "").strip()
+        if active_backend or active_model:
+            rows.append(
+                {
+                    "task": "stt",
+                    "backend": active_backend,
+                    "model": active_model,
+                    "available": True,
+                    "reason": active_reason or "active_backend",
+                    "probe_only": False,
+                }
+            )
+        for challenger in list(data.get("challengers") or []):
+            if not isinstance(challenger, dict):
+                continue
+            rows.append(
+                {
+                    "task": "stt",
+                    "backend": str(challenger.get("backend") or "").strip(),
+                    "model": str(challenger.get("model") or "").strip(),
+                    "available": True,
+                    "reason": str(challenger.get("reason") or "").strip(),
+                    "probe_only": True,
+                }
+            )
+        vad_choice = dict(data.get("vad_challenger") or {})
+        if vad_choice:
+            rows.append(
+                {
+                    "task": "vad",
+                    "backend": str(vad_choice.get("provider") or "").strip(),
+                    "model": "",
+                    "available": True,
+                    "reason": str(vad_choice.get("reason") or "").strip(),
+                    "probe_only": True,
+                }
+            )
+        return rows
+
     def transcribe_ensemble(
         self,
         chunk_dir: str,
@@ -528,19 +655,30 @@ class VideoProcessorTranscribeRunMixin:
             )
         stt_backend_name = ""
         try:
-            from core.audio.stt_backend_router import select_stt_backend
+            from core.audio.stt_backend_router import SttBackendChoice, select_stt_backend
 
             stt_choice = select_stt_backend(target_model, _s)
             stt_backend_name = str(stt_choice.backend or "").strip().lower()
             if stt_choice.model:
                 target_model = stt_choice.model
+            stt_backend_name, target_model = self._prepare_explicit_apple_speech_backend(
+                target_model,
+                stt_backend_name,
+                _s,
+                log_label=log_label,
+            )
             if stt_choice.reason not in {"auto_selected_model", "selected_model"}:
                 get_logger().log(
                     f"  ⚙️ [{log_label}] STT backend={stt_choice.backend} "
                     f"reason={stt_choice.reason}"
                 )
+            self._remember_stt_benchmark_plan(primary_requested_model or target_model, stt_choice, _s)
         except Exception:
-            pass
+            try:
+                fallback_choice = SttBackendChoice("", str(target_model or "").strip(), "router_exception_fallback")
+                self._remember_stt_benchmark_plan(primary_requested_model or target_model, fallback_choice, _s)
+            except Exception:
+                pass
         target_model = prefer_npu_whisper_model(target_model, _s, purpose="stt", log_label=log_label)
         target_model, _used_runtime_fallback = self._resolve_runtime_whisper_model(target_model, log_label=log_label)
         if self._native_batch_refine_requested(
@@ -579,6 +717,12 @@ class VideoProcessorTranscribeRunMixin:
         temperature_values = [round(x * 0.2, 1) for x in range(int(temp_max / 0.2) + 1)]
         temperature_tuple = "(" + ", ".join(str(x) for x in temperature_values) + ",)"
         word_timestamps = self._stt_word_timestamps_for_pass(s)
+        if (
+            stt_backend_name == "apple_speech"
+            and str(log_label or "").strip().upper() == "STT1"
+            and self._setting_bool(s, "stt_apple_speech_primary_word_timestamps_enabled", False)
+        ):
+            word_timestamps = True
         get_logger().log(
             f"  ⚙️ [{log_label}] word_timestamps={'on' if word_timestamps else 'off'} "
             f"(mode={str(s.get('stt_word_timestamps_mode') or 'always')})"
@@ -597,6 +741,14 @@ class VideoProcessorTranscribeRunMixin:
 
         proc = None
         mac_task_id = None
+        prev_end = 0.0
+        had_error = False
+        handled_by_fallback = False
+        processed_count = 0
+        emitted_segment_count = 0
+        self._whisper_proc = proc
+        use_direct_apple_speech = stt_backend_name == "apple_speech"
+
         from core.audio.whisper_coreml import is_coreml_whisper_model
         from core.audio.whisper_cpp import is_whisper_cpp_model
         from core.audio.whisper_transformers import is_transformers_whisper_model
@@ -607,7 +759,53 @@ class VideoProcessorTranscribeRunMixin:
         use_transformers_whisper = is_transformers_whisper_model(target_model)
         use_whisperkit_persistent = is_whisperkit_persistent_model(target_model)
         submitted_q = q
+        submission_order = list(range(total))
+        duration_first_submission_enabled = False
         safe_paths = [x["input_path"] for x in submitted_q]
+        submission_started_at = time.monotonic()
+        self._last_transcribe_submission_info = {
+            "duration_first_submission_enabled": False,
+            "submission_order_indices": [int(idx) for idx in submission_order],
+            "submitted_chunk_paths": [str(item.get("input_path") or "").strip() for item in list(submitted_q or [])],
+            "submitted_chunk_durations_sec": [
+                round(float(item.get("duration", 0.0) or 0.0), 3) for item in list(submitted_q or [])
+            ],
+            "submitted_chunk_offsets_sec": [
+                round(float(item.get("ov_start_offset", 0.0) or 0.0), 3) for item in list(submitted_q or [])
+            ],
+            "completed_chunk_paths": [],
+            "completed_chunk_elapsed_ms": [],
+            "emitted_chunk_paths": [],
+            "emitted_chunk_elapsed_ms": [],
+        }
+
+        def _record_chunk_completion(item: dict | None) -> None:
+            if not isinstance(item, dict):
+                return
+            try:
+                info = getattr(self, "_last_transcribe_submission_info", None)
+                if not isinstance(info, dict):
+                    return
+                info.setdefault("completed_chunk_paths", []).append(str(item.get("input_path") or "").strip())
+                info.setdefault("completed_chunk_elapsed_ms", []).append(
+                    round(max(0.0, time.monotonic() - submission_started_at) * 1000.0, 3)
+                )
+            except Exception:
+                pass
+
+        def _record_chunk_emission(item: dict | None) -> None:
+            if not isinstance(item, dict):
+                return
+            try:
+                info = getattr(self, "_last_transcribe_submission_info", None)
+                if not isinstance(info, dict):
+                    return
+                info.setdefault("emitted_chunk_paths", []).append(str(item.get("input_path") or "").strip())
+                info.setdefault("emitted_chunk_elapsed_ms", []).append(
+                    round(max(0.0, time.monotonic() - submission_started_at) * 1000.0, 3)
+                )
+            except Exception:
+                pass
         if use_whisperkit_persistent:
             from core.audio.whisperkit_persistent import (
                 ensure_worker,
@@ -634,10 +832,30 @@ class VideoProcessorTranscribeRunMixin:
                         proc = self._whisperkit_runner_proc
                         if proc is not None:
                             if self._duration_first_stt_submission_enabled(s, word_timestamps=word_timestamps):
+                                duration_first_submission_enabled = True
                                 submission_order = self._duration_first_submission_order(q, s)
                                 if submission_order != list(range(total)):
                                     submitted_q = [q[idx] for idx in submission_order]
                                     safe_paths = [x["input_path"] for x in submitted_q]
+                            self._last_transcribe_submission_info = {
+                                "duration_first_submission_enabled": bool(duration_first_submission_enabled),
+                                "submission_order_indices": [int(idx) for idx in submission_order],
+                                "submitted_chunk_paths": [
+                                    str(item.get("input_path") or "").strip() for item in list(submitted_q or [])
+                                ],
+                                "submitted_chunk_durations_sec": [
+                                    round(float(item.get("duration", 0.0) or 0.0), 3)
+                                    for item in list(submitted_q or [])
+                                ],
+                                "submitted_chunk_offsets_sec": [
+                                    round(float(item.get("ov_start_offset", 0.0) or 0.0), 3)
+                                    for item in list(submitted_q or [])
+                                ],
+                                "completed_chunk_paths": [],
+                                "completed_chunk_elapsed_ms": [],
+                                "emitted_chunk_paths": [],
+                                "emitted_chunk_elapsed_ms": [],
+                            }
                             whisperkit_workers = self._whisperkit_concurrent_worker_count(
                                 s,
                                 total_chunks=len(safe_paths),
@@ -736,7 +954,7 @@ class VideoProcessorTranscribeRunMixin:
             pass
         elif use_coreml_whisper:
             pass
-        elif _cfg.IS_MAC:
+        elif _cfg.IS_MAC and not use_direct_apple_speech:
             from core.audio.whisper_mlx import ensure_worker, submit_task
 
             with self._whisper_lock:
@@ -750,7 +968,7 @@ class VideoProcessorTranscribeRunMixin:
                     temperature_values=temperature_values,
                     word_timestamps=word_timestamps,
                 )
-        else:
+        elif not use_direct_apple_speech:
             from core.audio.whisper_faster import run_whisper
             proc = run_whisper(
                 chunk_paths=safe_paths,
@@ -764,13 +982,82 @@ class VideoProcessorTranscribeRunMixin:
                 return
 
         self._whisper_proc = proc
-        prev_end = 0.0
-        had_error = False
-        handled_by_fallback = False
-        processed_count = 0
-        emitted_segment_count = 0
-
         try:
+            if use_direct_apple_speech:
+                from core.audio.apple_speech_native import apple_speech_batch_transcribe
+
+                audio_paths = [str(item.get("input_path") or "") for item in q]
+                locale = "ko-KR"
+                if ":" in str(target_model or ""):
+                    locale = str(str(target_model).split(":", 1)[1] or "").strip() or locale
+
+                transcriptions = apple_speech_batch_transcribe(
+                    audio_paths,
+                    s,
+                    locale=locale,
+                    word_timestamps=word_timestamps,
+                )
+
+                for idx, item in enumerate(q):
+                    transcription = transcriptions[idx] if idx < len(transcriptions) else None
+                    if transcription is None or not transcription.ok:
+                        had_error = True
+                        reason = transcription.reason if transcription else "empty_result"
+                        raise RuntimeError(f"apple_speech_transcribe_failed:{reason}")
+                    data = dict(transcription.payload or {})
+                    chunk_segs = self._parse_whisper_payload(
+                        data,
+                        item,
+                        vad_strict,
+                        target_end_sec=target_end_sec,
+                        is_single=is_single
+                    )
+                    chunk_segs = self._apply_audio_route_segment_hints(chunk_segs, item, route_hints)
+                    chunk_segs = self._apply_windowed_chunk_finalize(
+                        chunk_segs,
+                        item,
+                        s,
+                        total_chunks=total,
+                        vad_segments=vad_strict,
+                    )
+                    chunk_segs = self._dedupe_overlapping_segments(
+                        chunk_segs,
+                        previous_end=prev_end,
+                        dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
+                        vad_segments=vad_strict,
+                    )
+                    chunk_segs = self._apply_post_parse_refinements(
+                        chunk_dir,
+                        chunk_segs,
+                        s,
+                        vad_strict,
+                        target_model,
+                        preview_callback=preview_callback,
+                    )
+                    if chunk_segs:
+                        prev_end = chunk_segs[-1]["end"]
+                        if callable(preview_callback):
+                            try:
+                                preview_callback(chunk_segs, log_label)
+                            except Exception:
+                                pass
+                    if progress_by_audio_duration:
+                        processed_audio_sec += float(item.get("duration", 0.0) or 0.0)
+                        progress_sec = min(t_sec, processed_audio_sec)
+                    else:
+                        progress_sec = prev_end
+                    pct = min(100, int((progress_sec / t_sec) * 100))
+                    _record_chunk_completion(item)
+                    _record_chunk_emission(item)
+                    get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
+                    yield chunk_segs, item["idx"] + 1, total
+                    processed_count += 1
+                    emitted_segment_count += len(chunk_segs or [])
+                if processed_count == 0 and total > 0:
+                    had_error = True
+                    raise RuntimeError("apple_speech produced 0 chunks")
+                return
+
             if _cfg.IS_MAC and not use_coreml_whisper and not use_whisper_cpp and not use_transformers_whisper:
                 received = 0
                 next_emit_idx = 0
@@ -902,6 +1189,7 @@ class VideoProcessorTranscribeRunMixin:
                         else:
                             progress_sec = prev_end
                         pct = min(100, int((progress_sec / t_sec) * 100))
+                        _record_chunk_emission(pending_item)
                         get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
                         yield chunk_segs, pending_item["idx"] + 1, total
                         processed_count += 1
@@ -1035,6 +1323,7 @@ class VideoProcessorTranscribeRunMixin:
                     pending_payloads[idx] = (item, payload)
                     received_indices.add(idx)
                     received += 1
+                    _record_chunk_completion(item)
                     wait_started_at = time.monotonic()
                     last_wait_log_at = wait_started_at
 
@@ -1164,9 +1453,33 @@ class VideoProcessorTranscribeRunMixin:
                     else:
                         progress_sec = prev_end
                     pct = min(100, int((progress_sec / t_sec) * 100))
+                    _record_chunk_completion(item)
+                    _record_chunk_emission(item)
                     get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
                     yield chunk_segs, item["idx"] + 1, total
                     processed_count += 1
+
+                    # Dynamic Warmup 스케줄러 기동
+                    if total > 0 and (processed_count / total) >= 0.70 and not getattr(self, "_warmup_triggered", False):
+                        self._warmup_triggered = True
+                        try:
+                            from core.audio.apple_speech_native import apple_speech_challenger_enabled
+                            if apple_speech_challenger_enabled(s):
+                                get_logger().log("  🔥 [Dynamic Warmup] Whisper 진행도 70% 돌파 → Apple STT Challenger 백그라운드 웜업 기동 예약")
+                                import threading
+                                from core.audio.apple_speech_native import apple_speech_support
+                                current_locale = "ko-KR"
+                                if "locale" in locals():
+                                    current_locale = locale
+                                threading.Thread(
+                                    target=apple_speech_support,
+                                    args=(s,),
+                                    kwargs={"locale": current_locale},
+                                    daemon=True
+                                ).start()
+                        except Exception:
+                            pass
+
                     emitted_segment_count += len(chunk_segs or [])
 
                 proc.wait()

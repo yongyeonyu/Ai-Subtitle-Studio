@@ -151,7 +151,32 @@ class RoughcutStateMixin:
         self._user_edits = {}
         return None
 
-    def _persist_roughcut_state(self) -> None:
+    def _persist_roughcut_state(self, *, immediate: bool = False) -> None:
+        if immediate:
+            self._persist_roughcut_state_now()
+            return
+        timer = getattr(self, "_roughcut_persist_timer", None)
+        if timer is None:
+            self._persist_roughcut_state_now()
+            return
+        try:
+            timer.start()
+        except Exception:
+            self._persist_roughcut_state_now()
+
+    def _flush_pending_roughcut_persist(self) -> None:
+        timer = getattr(self, "_roughcut_persist_timer", None)
+        if timer is None:
+            self._persist_roughcut_state_now()
+            return
+        try:
+            if timer.isActive():
+                timer.stop()
+                self._persist_roughcut_state_now()
+        except Exception:
+            self._persist_roughcut_state_now()
+
+    def _persist_roughcut_state_now(self) -> None:
         if self._result is None:
             return
         segments = self._editor_segments()
@@ -989,8 +1014,8 @@ class RoughcutStateMixin:
                 self._set_roughcut_status("후보 복원", 100)
             if hasattr(self, "_append_roughcut_log"):
                 self._append_roughcut_log("저장된 러프컷 후보를 복원했습니다.", "done")
+            self._defer_thumbnail_lookup_once = True
             self._populate_result()
-            self._persist_roughcut_state()
             return
 
         # CUT_BOUNDARY_TOPICLESS_PLACEHOLDER
@@ -1009,7 +1034,8 @@ class RoughcutStateMixin:
                         "done",
                     )
                 self._populate_result()
-                self._persist_roughcut_state()
+                if analyze_if_missing or force_reanalyze:
+                    self._persist_roughcut_state()
                 return
 
         if not analyze_if_missing and not force_reanalyze:

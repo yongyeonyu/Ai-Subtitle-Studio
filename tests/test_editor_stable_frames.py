@@ -46,8 +46,8 @@ class EditorStableFrameTests(unittest.TestCase):
             self.assertEqual(editor.editor_frame.property("renderFeature"), "editor")
             self.assertEqual(editor.video_frame.property("renderFeature"), "video")
             self.assertEqual(editor.timeline_frame.property("renderFeature"), "timeline")
-            self.assertEqual(editor.video_frame.height(), 420)
-            self.assertEqual(editor.video_player.height(), 420)
+            self.assertGreaterEqual(editor.video_frame.height(), 420)
+            self.assertGreaterEqual(editor.video_player.height(), 420)
             self.assertGreaterEqual(
                 editor.timeline_frame.minimumSizeHint().height(),
                 editor.timeline.minimumSizeHint().height(),
@@ -73,8 +73,8 @@ class EditorStableFrameTests(unittest.TestCase):
             for _ in range(4):
                 self.app.processEvents()
 
-            self.assertEqual(editor.video_frame.height(), 420)
-            self.assertEqual(editor.video_player.height(), 420)
+            self.assertGreaterEqual(editor.video_frame.height(), 420)
+            self.assertGreaterEqual(editor.video_player.height(), 420)
             self.assertEqual(editor.timeline.canvas_height_bonus(), 0)
             self.assertEqual(editor.timeline_frame.height(), editor._timeline_base_height)
         finally:

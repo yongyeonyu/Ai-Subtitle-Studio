@@ -204,6 +204,17 @@ class SubtitleAccuracyPipelineTests(unittest.TestCase):
         self.assertFalse(meta["accepted"])
         self.assertEqual(meta["reason"], "source_preservation:number_changed")
 
+    def test_llm_verifier_allows_safe_numeric_unit_suffix_addition(self):
+        chunks, meta = verify_llm_chunks_for_subtitle(
+            "현재 속도는 80으로 안정적으로 유지됩니다",
+            ["현재 속도는 80km/h로 안정적으로 유지됩니다"],
+            {"llm_verifier_min_similarity": 0.5},
+            {"top_score": 93.0},
+        )
+
+        self.assertEqual(chunks, ["현재 속도는 80km/h로 안정적으로 유지됩니다"])
+        self.assertTrue(meta["accepted"])
+
     def test_llm_verifier_rejects_added_proper_nouns(self):
         chunks, meta = verify_llm_chunks_for_subtitle(
             "행사장에 도착했습니다",

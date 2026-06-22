@@ -17,8 +17,9 @@ from core import native_text_cleanup
 from core.runtime.logger import get_logger
 from core.text_utils import strip_subtitle_quote_marks
 
-_TS_BRACKET = re.compile(r"\[\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s*\]\s*")
-_TS_NO_BRACKET = re.compile(r"^\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s+")
+_TS_CORE = r"(?:\d{1,3}:\d{1,2}(?::\d+)?|\d{1,3}\.\d{1,2}\.\d+)"
+_TS_BRACKET = re.compile(rf"\[\s*{_TS_CORE}\s*\]\s*")
+_TS_NO_BRACKET = re.compile(rf"^\s*{_TS_CORE}\s+")
 _WHISPER_CONTROL_TOKEN = re.compile(r"<\|[^|]{1,80}\|>")
 _JUNK_PATTERN = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _CLEAN_CACHE_MAX = 4096
@@ -32,7 +33,9 @@ def strip_stt_control_tokens(text: str) -> str:
 
 
 def strip_forbidden_sentence_periods(text: str) -> str:
-    return str(text or "").replace(".", "")
+    # Keep decimal separators in numeric subtitles such as "17.8" while still
+    # stripping sentence-ending periods from ordinary subtitle text.
+    return re.sub(r"(?<!\d)\.|\.(?!\d)", "", str(text or ""))
 
 
 def strip_forbidden_subtitle_quotes(text: str) -> str:

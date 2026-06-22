@@ -230,6 +230,7 @@ class VideoPlayerSurfaceMixin:
             ".webm",
             ".mts",
             ".m2ts",
+            ".lrf",
         }
 
     def _set_media_source_if_needed(self, player, path: str):

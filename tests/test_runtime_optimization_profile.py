@@ -277,6 +277,25 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
         self.assertEqual(native_choice.model, "youngouk/whisper-medium-komixv2-mlx")
         self.assertEqual(native_choice.reason, "native_policy_selected_mlx_model")
 
+    def test_explicit_apple_speech_model_survives_native_policy_when_probe_is_available(self):
+        with patch("core.audio.stt_backend_router.apple_speech_support", return_value=type("Support", (), {
+            "available": True,
+            "detector_available": True,
+            "reason": "runtime_class_available",
+            "locale": "ko-KR",
+        })()):
+            native_choice = select_stt_backend(
+                "apple_speech:ko-KR",
+                {
+                    "stt_backend_policy": "native",
+                    "runtime_backend_autotune_enabled": False,
+                },
+            )
+
+        self.assertEqual(native_choice.backend, "apple_speech")
+        self.assertEqual(native_choice.model, "apple_speech:ko-KR")
+        self.assertEqual(native_choice.reason, "explicit_apple_speech_model")
+
     def test_profiled_whisperkit_backend_gets_persistent_model_prefix(self):
         with patch("core.audio.stt_backend_router.profile_backend", return_value="whisperkit_persistent"), \
              patch("core.audio.stt_backend_router.profile_model", return_value="large-v3-turbo"):

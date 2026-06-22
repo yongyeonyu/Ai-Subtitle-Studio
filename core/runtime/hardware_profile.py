@@ -128,8 +128,7 @@ def hardware_profile() -> dict[str, Any]:
         "directml": importlib.util.find_spec("torch_directml") is not None,
         "openvino": importlib.util.find_spec("openvino") is not None,
     }
-    worker = PROJECT_ROOT / "experiments" / "whisperkit_persistent_worker" / ".build" / "release" / "WhisperKitPersistentWorker"
-    accelerators["whisperkit_persistent_worker"] = worker.exists() or bool(shutil.which("WhisperKitPersistentWorker"))
+    accelerators["whisperkit_persistent_worker"] = bool(shutil.which("WhisperKitPersistentWorker"))
     if accelerators["cuda_cli"]:
         accelerators["cuda"] = True
     gpu_cores = _apple_gpu_core_count() if is_darwin_arm else 0

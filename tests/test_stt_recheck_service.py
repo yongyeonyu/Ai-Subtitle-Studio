@@ -170,6 +170,23 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertEqual(ranges[0].primary_text, "")
         self.assertTrue(ranges[0].primary["asr_metadata"]["missing_voice_candidate"])
 
+    def test_missing_voice_recheck_ranges_skips_trailing_span_at_target_end(self):
+        ranges = stt_recheck_service.missing_voice_recheck_ranges(
+            primary_segments=[
+                {"start": 0.0, "end": 30.0, "text": "마지막 자막"},
+            ],
+            vad_segments=[
+                {"start": 30.0, "end": 36.352},
+            ],
+            settings={
+                "_stt_recheck_target_end_sec": 30.0,
+            },
+            min_duration=0.55,
+            chunk_path_for_time=lambda _t: "/tmp/chunk.wav",
+        )
+
+        self.assertEqual(ranges, [])
+
     def test_low_score_recheck_ranges_match_expected_pairing(self):
         ranges = stt_recheck_service.low_score_recheck_ranges(
             [
@@ -204,6 +221,399 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertAlmostEqual(ranges[0].end, 1.2)
         self.assertEqual(ranges[0].best_original_score, 42)
 
+    def test_primary_low_score_recheck_ranges_can_ignore_whisper_metadata_only_rows_without_secondary_signal(self):
+        ranges = stt_recheck_service.primary_low_score_recheck_ranges(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.6,
+                    "text": "메타데이터만 없는 후보",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+                {
+                    "start": 2.0,
+                    "end": 3.2,
+                    "text": "17.8",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+            ],
+            {
+                "selected_whisper_model": "whisperkit-persistent:large-v3-v20240930_626MB",
+                "stt_low_score_recheck_threshold": 54,
+                "stt_whisper_primary_metadata_only_low_score_recheck_requires_secondary_signal": True,
+                "stt_whisper_primary_metadata_only_low_score_recheck_skip_max_duration_sec": 2.2,
+                "stt_whisper_primary_metadata_only_low_score_recheck_skip_min_vad_score": 95.0,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertEqual(ranges[0].primary_text, "17.8")
+
+    def test_primary_low_score_recheck_ranges_can_ignore_low_vad_non_digit_rows_without_secondary_signal(self):
+        ranges = stt_recheck_service.primary_low_score_recheck_ranges(
+            [
+                {
+                    "start": 0.0,
+                    "end": 2.8,
+                    "text": "유지가 되고 있고요",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 55.1},
+                },
+                {
+                    "start": 3.0,
+                    "end": 4.8,
+                    "text": "17.8",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 55.1},
+                },
+                {
+                    "start": 5.0,
+                    "end": 8.4,
+                    "text": "변화가 없네",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 47.7},
+                },
+            ],
+            {
+                "selected_whisper_model": "whisperkit-persistent:large-v3-v20240930_626MB",
+                "stt_low_score_recheck_threshold": 54,
+                "stt_whisper_primary_low_vad_low_score_recheck_requires_secondary_signal": True,
+                "stt_whisper_primary_low_vad_low_score_recheck_skip_max_duration_sec": 3.1,
+                "stt_whisper_primary_low_vad_low_score_recheck_skip_max_vad_score": 60.0,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+        )
+
+        self.assertEqual(len(ranges), 2)
+        self.assertEqual([item.primary_text for item in ranges], ["17.8", "변화가 없네"])
+
+    def test_primary_low_score_recheck_ranges_can_ignore_pure_numeric_rows_without_secondary_signal(self):
+        ranges = stt_recheck_service.primary_low_score_recheck_ranges(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.8,
+                    "text": "17.8",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "low_language_char_ratio",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+                {
+                    "start": 2.0,
+                    "end": 3.8,
+                    "text": "계속 17.8인데",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+                {
+                    "start": 4.0,
+                    "end": 6.1,
+                    "text": "11.4",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "low_language_char_ratio",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+            ],
+            {
+                "selected_whisper_model": "whisperkit-persistent:large-v3-v20240930_626MB",
+                "stt_low_score_recheck_threshold": 54,
+                "stt_whisper_primary_pure_numeric_low_score_recheck_requires_secondary_signal": True,
+                "stt_whisper_primary_pure_numeric_low_score_recheck_skip_max_duration_sec": 2.2,
+                "stt_whisper_primary_pure_numeric_low_score_recheck_skip_min_vad_score": 95.0,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertEqual(ranges[0].primary_text, "계속 17.8인데")
+
+    def test_primary_low_score_recheck_ranges_can_ignore_short_numeric_phrase_rows_for_apple_primary(self):
+        ranges = stt_recheck_service.primary_low_score_recheck_ranges(
+            [
+                {
+                    "start": 0.0,
+                    "end": 2.94,
+                    "text": "17.8 유지가 되고 있구요.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 98.978},
+                },
+                {
+                    "start": 3.0,
+                    "end": 6.13,
+                    "text": "17.8 변화가 없네.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+                {
+                    "start": 6.2,
+                    "end": 9.95,
+                    "text": "17.8에서 11.4 점.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "low_language_char_ratio",
+                        "low_korean_ratio",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+            ],
+            {
+                "selected_whisper_model": "apple_speech:ko-KR",
+                "stt_low_score_recheck_threshold": 54,
+                "stt_apple_primary_short_numeric_phrase_low_score_recheck_requires_secondary_signal": True,
+                "stt_apple_primary_short_numeric_phrase_low_score_recheck_skip_max_duration_sec": 3.2,
+                "stt_apple_primary_short_numeric_phrase_low_score_recheck_skip_min_vad_score": 98.0,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertEqual(ranges[0].primary_text, "17.8에서 11.4 점.")
+
+    def test_primary_low_score_recheck_ranges_can_ignore_low_korean_numeric_phrase_rows_for_apple_primary(self):
+        ranges = stt_recheck_service.primary_low_score_recheck_ranges(
+            [
+                {
+                    "start": 0.0,
+                    "end": 3.75,
+                    "text": "17.8에서 11.4 점.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "low_language_char_ratio",
+                        "low_korean_ratio",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+                {
+                    "start": 4.0,
+                    "end": 11.8,
+                    "text": "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "too_long_duration",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+            ],
+            {
+                "selected_whisper_model": "apple_speech:ko-KR",
+                "stt_low_score_recheck_threshold": 54,
+                "stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_requires_secondary_signal": True,
+                "stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_skip_max_duration_sec": 4.0,
+                "stt_apple_primary_low_korean_numeric_phrase_low_score_recheck_skip_min_vad_score": 95.0,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertEqual(ranges[0].primary_text, "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요.")
+
+    def test_primary_low_score_recheck_ranges_can_ignore_low_vad_rows_for_apple_primary(self):
+        ranges = stt_recheck_service.primary_low_score_recheck_ranges(
+            [
+                {
+                    "start": 0.0,
+                    "end": 4.3,
+                    "text": "80으로 크루즈 컨트롤 걸었구요.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 70.279},
+                },
+                {
+                    "start": 4.5,
+                    "end": 12.3,
+                    "text": "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "too_long_duration",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+            ],
+            {
+                "selected_whisper_model": "apple_speech:ko-KR",
+                "stt_low_score_recheck_threshold": 54,
+                "stt_apple_primary_low_vad_low_score_recheck_requires_secondary_signal": True,
+                "stt_apple_primary_low_vad_low_score_recheck_skip_max_duration_sec": 4.8,
+                "stt_apple_primary_low_vad_low_score_recheck_skip_max_vad_score": 75.0,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertEqual(ranges[0].primary_text, "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요.")
+
+    def test_primary_low_score_recheck_ranges_can_ignore_long_numeric_phrase_rows_for_apple_primary(self):
+        ranges = stt_recheck_service.primary_low_score_recheck_ranges(
+            [
+                {
+                    "start": 0.0,
+                    "end": 6.56,
+                    "text": "순간 연비가 계속 17.8 인데 너무 안 바뀌는데.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "too_long_duration",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+                {
+                    "start": 6.6,
+                    "end": 14.4,
+                    "text": "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요.",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "too_long_duration",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0},
+                },
+            ],
+            {
+                "selected_whisper_model": "apple_speech:ko-KR",
+                "stt_low_score_recheck_threshold": 54,
+                "stt_apple_primary_long_numeric_phrase_low_score_recheck_requires_secondary_signal": True,
+                "stt_apple_primary_long_numeric_phrase_low_score_recheck_skip_min_duration_sec": 6.0,
+                "stt_apple_primary_long_numeric_phrase_low_score_recheck_skip_min_vad_score": 95.0,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertEqual(ranges[0].primary_text, "지금 에코프로를 놓은 상태고 크루즈 컨트롤 걸어볼게요.")
+
+
+
+    def test_selective_secondary_recheck_source_counts_can_disable_missing_voice(self):
+        counts = stt_recheck_service.selective_secondary_recheck_source_counts(
+            primary_segments=[
+                {"start": 0.0, "end": 0.8, "text": "저점 후보", "stt_score": 40},
+            ],
+            vad_segments=[
+                {"start": 1.2, "end": 2.1},
+            ],
+            settings={
+                "stt_low_score_recheck_threshold": 54,
+                "stt_selective_secondary_recheck_include_missing_voice": False,
+            },
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+            chunk_path_for_time=lambda _t: "/tmp/fake.wav",
+        )
+
+        self.assertEqual(counts["low_score"], 1)
+        self.assertEqual(counts["missing_voice"], 0)
+
+    def test_selective_secondary_recheck_plan_matches_counts_and_budgeted_ranges(self):
+        settings = {
+            "stt_low_score_recheck_threshold": 54,
+            "stt_selective_secondary_recheck_include_missing_voice": False,
+            "stt_low_score_recheck_max_segments": 1,
+        }
+        primary_segments = [
+            {"start": 0.0, "end": 0.8, "text": "저점 후보", "stt_score": 40},
+            {"start": 1.0, "end": 1.8, "text": "또 다른 저점", "stt_score": 42},
+        ]
+
+        plan = stt_recheck_service.selective_secondary_recheck_plan(
+            primary_segments=primary_segments,
+            vad_segments=[],
+            settings=settings,
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+            chunk_path_for_time=lambda _t: "/tmp/fake.wav",
+        )
+        counts = stt_recheck_service.selective_secondary_recheck_source_counts(
+            primary_segments=primary_segments,
+            vad_segments=[],
+            settings=settings,
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+            chunk_path_for_time=lambda _t: "/tmp/fake.wav",
+        )
+        ranges, raw_count = stt_recheck_service.selective_secondary_recheck_ranges(
+            primary_segments=primary_segments,
+            vad_segments=[],
+            settings=settings,
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+            chunk_path_for_time=lambda _t: "/tmp/fake.wav",
+        )
+
+        self.assertEqual(counts, {"low_score": 2, "missing_voice": 0, "route_hint": 0, "merged": 2})
+        self.assertEqual(raw_count, 2)
+        self.assertEqual(len(plan["ranges"]), len(ranges))
+        self.assertEqual(len(plan["merged"]), counts["merged"])
+        self.assertEqual(len(plan["low_score"]), counts["low_score"])
+
     def test_word_precision_ranges_prioritize_selected_low_score_segments(self):
         ranges = stt_recheck_service.word_precision_ranges(
             [
@@ -235,6 +645,64 @@ class STTRecheckServiceTests(unittest.TestCase):
 
         self.assertEqual(len(ranges), 1)
         self.assertEqual(ranges[0].primary_text, "우선")
+
+    def test_word_precision_ranges_can_drop_earlier_duplicate_pure_numeric_rows_for_whisper_primary(self):
+        ranges = stt_recheck_service.word_precision_ranges(
+            [
+                {
+                    "start": 5.76,
+                    "end": 7.62,
+                    "text": "17.8",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "low_language_char_ratio",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0, "flags": []},
+                },
+                {
+                    "start": 7.64,
+                    "end": 10.42,
+                    "text": "유지가 되고 있고요",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                    ],
+                    "quality": {"vad_alignment_score": 55.108, "flags": []},
+                },
+                {
+                    "start": 10.44,
+                    "end": 11.58,
+                    "text": "17.8",
+                    "stt_score": 22,
+                    "stt_score_flags": [
+                        "no_speech_prob_missing",
+                        "avg_logprob_missing",
+                        "word_confidence_missing",
+                        "low_language_char_ratio",
+                    ],
+                    "quality": {"vad_alignment_score": 100.0, "flags": []},
+                },
+            ],
+            {
+                "selected_whisper_model": "whisperkit-persistent:large-v3-v20240930_626MB",
+                "stt_word_timestamps_precision_enabled": True,
+                "stt_word_timestamps_precision_max_segments": 8,
+                "stt_word_timestamps_precision_max_audio_sec": 30.0,
+                "stt_whisper_primary_duplicate_pure_numeric_precision_requires_neighbor_signal": True,
+                "stt_whisper_primary_duplicate_pure_numeric_precision_skip_neighbor_max_gap_sec": 6.0,
+            },
+            needs_precision_fn=lambda seg, _settings: True,
+            score_fn=lambda seg: seg.get("stt_score", 0.0),
+            has_score_fn=lambda _seg: True,
+        )
+
+        self.assertEqual([item.primary_text for item in ranges], ["유지가 되고 있고요", "17.8"])
+        self.assertAlmostEqual(ranges[-1].start, 10.44)
 
     def test_word_precision_ranges_match_python_fallback_when_native_available(self):
         previous = os.environ.get("AI_SUBTITLE_NATIVE_STT_RECHECK")
@@ -344,12 +812,88 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertEqual(precision["stt_whisperkit_gpu_saturation_max_workers"], 10)
         self.assertEqual(precision["stt_word_timestamp_worker_straggler_max_missing_chunks"], 3)
         self.assertTrue(precision["stt_duration_first_submission_enabled"])
+        self.assertTrue(precision["stt_rescue_whisper_mode"])
         self.assertFalse(low_score["stt_ensemble_enabled"])
         self.assertEqual(low_score["whisper_chunk_overlap_sec"], 0.0)
         self.assertEqual(selective["stt_word_timestamps_mode"], "off")
         self.assertFalse(selective["stt_word_timestamps_precision_enabled"])
         self.assertFalse(selective["stt_persistent_runtime_reuse_enabled"])
         self.assertTrue(selective["stt_duration_first_submission_enabled"])
+
+    def test_precision_overrides_preserve_caller_tuning_keys(self):
+        precision = stt_recheck_service.precision_pass_overrides(
+            {
+                "stt_whisperkit_precision_aggressive_gpu_enabled": False,
+                "stt_whisperkit_native_allocator_can_raise_workers": False,
+                "stt_whisperkit_word_timestamp_concurrent_workers": 3,
+                "stt_word_timestamp_worker_response_timeout_sec": 40.0,
+                "stt_word_timestamp_worker_straggler_min_received_ratio": 0.72,
+                "stt_collect_force_fresh_native_memory_snapshot": True,
+            }
+        )
+
+        self.assertFalse(precision["stt_whisperkit_precision_aggressive_gpu_enabled"])
+        self.assertFalse(precision["stt_whisperkit_native_allocator_can_raise_workers"])
+        self.assertEqual(precision["stt_whisperkit_word_timestamp_concurrent_workers"], 3)
+        self.assertEqual(precision["stt_word_timestamp_worker_response_timeout_sec"], 40.0)
+        self.assertEqual(precision["stt_word_timestamp_worker_straggler_min_received_ratio"], 0.72)
+        self.assertTrue(precision["stt_collect_force_fresh_native_memory_snapshot"])
+
+    def test_low_score_and_selective_overrides_preserve_caller_tuning_keys(self):
+        low_score = stt_recheck_service.low_score_recheck_overrides(
+            {
+                "stt_recheck_worker_response_timeout_sec": 45.0,
+                "stt_worker_response_timeout_sec": 80.0,
+                "stt_whisperkit_concurrent_workers": 2,
+                "stt_whisperkit_recheck_concurrent_workers": 3,
+                "stt_whisperkit_recheck_concurrent_max_workers": 4,
+                "stt_whisperkit_native_allocator_can_raise_workers": False,
+                "stt_selective_secondary_collect_owner_runtime_enabled": True,
+                "stt_recheck_worker_straggler_timeout_sec": 9.0,
+                "stt_recheck_worker_straggler_max_missing_chunks": 2,
+                "stt_recheck_worker_straggler_min_received_ratio": 0.7,
+                "stt_recheck_straggler_skip_enabled": True,
+            }
+        )
+        selective = stt_recheck_service.selective_secondary_recheck_overrides(
+            {
+                "stt_recheck_worker_response_timeout_sec": 35.0,
+                "stt_worker_response_timeout_sec": 70.0,
+                "stt_whisperkit_concurrent_workers": 2,
+                "stt_whisperkit_recheck_concurrent_workers": 3,
+                "stt_whisperkit_recheck_concurrent_max_workers": 4,
+                "stt_whisperkit_native_allocator_can_raise_workers": False,
+                "stt_selective_secondary_collect_owner_runtime_enabled": True,
+                "stt_selective_recheck_min_segment_retention_ratio": 0.95,
+                "stt_recheck_worker_straggler_timeout_sec": 9.0,
+                "stt_recheck_worker_straggler_max_missing_chunks": 2,
+                "stt_recheck_worker_straggler_min_received_ratio": 0.7,
+                "stt_recheck_straggler_skip_enabled": True,
+            }
+        )
+
+        self.assertEqual(low_score["stt_recheck_worker_response_timeout_sec"], 45.0)
+        self.assertEqual(low_score["stt_worker_response_timeout_sec"], 80.0)
+        self.assertEqual(low_score["stt_whisperkit_concurrent_workers"], 2)
+        self.assertEqual(low_score["stt_whisperkit_recheck_concurrent_workers"], 3)
+        self.assertEqual(low_score["stt_whisperkit_recheck_concurrent_max_workers"], 4)
+        self.assertFalse(low_score["stt_whisperkit_native_allocator_can_raise_workers"])
+        self.assertEqual(low_score["stt_recheck_worker_straggler_timeout_sec"], 9.0)
+        self.assertEqual(low_score["stt_recheck_worker_straggler_max_missing_chunks"], 2)
+        self.assertEqual(low_score["stt_recheck_worker_straggler_min_received_ratio"], 0.7)
+        self.assertTrue(low_score["stt_recheck_straggler_skip_enabled"])
+        self.assertEqual(selective["stt_recheck_worker_response_timeout_sec"], 35.0)
+        self.assertEqual(selective["stt_worker_response_timeout_sec"], 70.0)
+        self.assertEqual(selective["stt_whisperkit_concurrent_workers"], 2)
+        self.assertEqual(selective["stt_whisperkit_recheck_concurrent_workers"], 3)
+        self.assertEqual(selective["stt_whisperkit_recheck_concurrent_max_workers"], 4)
+        self.assertFalse(selective["stt_whisperkit_native_allocator_can_raise_workers"])
+        self.assertTrue(selective["stt_selective_secondary_collect_owner_runtime_enabled"])
+        self.assertEqual(selective["stt_selective_recheck_min_segment_retention_ratio"], 0.95)
+        self.assertEqual(selective["stt_recheck_worker_straggler_timeout_sec"], 9.0)
+        self.assertEqual(selective["stt_recheck_worker_straggler_max_missing_chunks"], 2)
+        self.assertEqual(selective["stt_recheck_worker_straggler_min_received_ratio"], 0.7)
+        self.assertTrue(selective["stt_recheck_straggler_skip_enabled"])
 
     def test_precision_overrides_route_supported_mlx_alias_to_whisperkit_native(self):
         with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
@@ -444,6 +988,7 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertEqual(batch.prepared_clips, [{"range": item, "path": "/tmp/clip.wav"}])
         self.assertEqual(batch.collected_segments, [{"text": "주석됨"}])
         self.assertIsNone(batch.annotate_error)
+
 
     def test_prepare_and_collect_recheck_segments_short_circuits_when_prepare_is_empty(self):
         item = stt_rescue.SttRecheckRange(
@@ -786,6 +1331,57 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertEqual(len(result.selection.applied_ranges), 1)
         self.assertIsNone(result.merged_tracks)
         self.assertEqual([seg["text"] for seg in result.preview_tracks["primary"]], ["one"])
+
+    def test_apply_recheck_selection_to_tracks_can_salvage_partial_ranges_under_retention_guard(self):
+        item_a = stt_rescue.SttRecheckRange(
+            start=0.0,
+            end=1.0,
+            primary_score=10.0,
+            secondary_score=0.0,
+            primary_text="a",
+            secondary_text="",
+            primary={},
+            secondary={},
+        )
+        item_b = stt_rescue.SttRecheckRange(
+            start=1.0,
+            end=4.0,
+            primary_score=10.0,
+            secondary_score=0.0,
+            primary_text="bcd",
+            secondary_text="",
+            primary={},
+            secondary={},
+        )
+        result = stt_recheck_service.apply_recheck_selection_to_tracks(
+            prepared_clips=[
+                {"range": item_a, "start": 0.0, "end": 1.0},
+                {"range": item_b, "start": 1.0, "end": 4.0},
+            ],
+            rescue_segments=[
+                {"start": 0.0, "end": 1.0, "text": "one", "stt_score": 95},
+                {"start": 1.0, "end": 4.0, "text": "wide", "stt_score": 95},
+            ],
+            settings={
+                "stt_low_score_recheck_threshold": 50,
+                "stt_selective_recheck_partial_salvage_enabled": True,
+            },
+            replacement_is_better_fn=stt_rescue.replacement_is_better,
+            mark_segments_fn=stt_rescue.mark_rescue_segments,
+            base_tracks={
+                "primary": [
+                    {"start": 0.0, "end": 1.0, "text": "a"},
+                    {"start": 1.0, "end": 2.0, "text": "b"},
+                    {"start": 2.0, "end": 3.0, "text": "c"},
+                    {"start": 3.0, "end": 4.0, "text": "d"},
+                ]
+            },
+            retention_ratios={"primary": 0.9},
+        )
+
+        self.assertIsNotNone(result.merged_tracks)
+        self.assertEqual([seg["text"] for seg in result.merged_tracks["primary"]], ["one", "b", "c", "d"])
+        self.assertEqual([round(item.start, 1) for item in result.selection.applied_ranges], [0.0])
 
     def test_merge_segments_with_replacements_drops_overlapping_segments_and_sorts(self):
         merged = stt_recheck_service.merge_segments_with_replacements(
@@ -1172,7 +1768,16 @@ class STTRecheckServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(applied, 0)
-        self.assertEqual(updated, base)
+        self.assertEqual(updated[0]["text"], "원본")
+        self.assertEqual(
+            updated[0]["asr_metadata"]["selective_word_timestamps"]["reject_reason"],
+            "candidate_similarity_below_threshold",
+        )
+        self.assertEqual(
+            updated[0]["asr_metadata"]["selective_word_timestamps"]["reject_detail"]["candidate_text"],
+            "전혀 다름",
+        )
+
 
 
 if __name__ == "__main__":

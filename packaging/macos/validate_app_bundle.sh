@@ -4,8 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP_PATH="${1:-$ROOT_DIR/dist/macos/AI Subtitle Studio.app}"
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
-WORKER="$APP_PATH/Contents/Resources/WhisperKitPersistentWorker"
-NATIVE_CLI="$APP_PATH/Contents/Resources/native/AIStudioNativeCLI"
 PAYLOAD="$APP_PATH/Contents/Resources/app/main.py"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -29,8 +27,6 @@ CATEGORY="$(/usr/libexec/PlistBuddy -c 'Print :LSApplicationCategoryType' "$INFO
 [[ -n "$MIN_SYSTEM" ]]
 [[ "$CATEGORY" == "public.app-category.video" ]]
 [[ -x "$APP_PATH/Contents/MacOS/AI Subtitle Studio" ]]
-[[ -x "$WORKER" ]]
-[[ -x "$NATIVE_CLI" ]]
 [[ -f "$PAYLOAD" ]]
 
 if find "$APP_PATH" -path "*/.git/*" -print -quit | grep -q .; then

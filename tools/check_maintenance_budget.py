@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PATHS = ("core", "ui", "tools", "native/macos/AIStudioNative/Sources")
+DEFAULT_PATHS = ("core", "ui", "tools", "native")
 EXCLUDED_PARTS = {"venv", "build", "dist", "output", "projects", "__pycache__", ".build"}
 FILE_ALLOWLIST = {
     "core/audio/media_processor.py",

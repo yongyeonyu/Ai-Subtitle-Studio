@@ -1440,6 +1440,28 @@ def _split_word_groups_for_common_guard(words: list[dict], policy: dict) -> list
     return [group for group in groups if group]
 
 
+def _should_skip_common_split_for_all_singleton_digit_groups(
+    seg: dict,
+    groups: list[list[dict]],
+    settings: dict | None,
+) -> bool:
+    if not _setting_bool(settings or {}, "subtitle_common_split_skip_all_singleton_digit_rows", False):
+        return False
+    if len(groups) <= 1:
+        return False
+    if any(len(group) != 1 for group in groups):
+        return False
+    text = str(seg.get("text", "") or "").strip()
+    if not text or not any(char.isdigit() for char in text):
+        return False
+    max_duration = _setting_float(settings or {}, "subtitle_common_split_skip_all_singleton_digit_rows_max_duration_sec", 0.0)
+    if max_duration > 0.0:
+        start, end = _time_bounds(seg)
+        if max(0.0, end - start) > max_duration + 0.001:
+            return False
+    return True
+
+
 def _common_split_row(seg: dict, group: list[dict], policy_meta: dict) -> dict:
     row = dict(seg)
     text = " ".join(_word_text(word) for word in group).strip()
@@ -1515,6 +1537,9 @@ def _apply_common_subtitle_split_guard_native(rows: list[dict], settings: dict) 
         action = str(plan.get("action") or "keep")
         if action == "split":
             groups = list(plan.get("groups") or [])
+            if _should_skip_common_split_for_all_singleton_digit_groups(row, groups, settings):
+                output.append(row)
+                continue
             if len(groups) > 1 and words:
                 start, end = _time_bounds(row)
                 chars = _compact_len(row.get("text", ""))
@@ -1611,6 +1636,9 @@ def _apply_common_subtitle_split_guard(segments: list[dict], settings: dict) -> 
             groups = _split_word_groups_for_common_guard(words, policy)
         else:
             groups = [words]
+        if _should_skip_common_split_for_all_singleton_digit_groups(row, groups, settings):
+            output.append(row)
+            continue
         if len(groups) > 1:
             start, end = _time_bounds(row)
             chars = _compact_len(row.get("text", ""))

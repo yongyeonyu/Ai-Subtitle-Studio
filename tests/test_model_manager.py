@@ -205,6 +205,26 @@ class ModelManagerTest(unittest.TestCase):
         self.assertTrue(discovered["ollama-model::deepseek-r1:8b"]["installed"])
         self.assertTrue(discovered["ollama-model::deepseek-r1:8b"]["discovered"])
 
+    def test_apple_speech_registry_model_uses_native_probe_binary_check(self):
+        registry_path, root = self._registry([
+            {
+                "id": "apple-speech-transcriber",
+                "name": "Apple Speech Transcriber (실험)",
+                "category": "STT",
+                "os": ["mac"],
+                "binary_check": "apple_speech_support",
+                "locale": "ko-KR",
+                "experimental": True,
+            }
+        ])
+        manager = ModelManager(registry_path=registry_path, project_root=root, current_os="mac")
+
+        with patch("core.model_manager.apple_speech_support", return_value=type("Support", (), {"available": True})()):
+            models = manager.available_models()
+
+        self.assertEqual(models[0]["id"], "apple-speech-transcriber")
+        self.assertTrue(models[0]["installed"])
+
 
 if __name__ == "__main__":
     unittest.main()

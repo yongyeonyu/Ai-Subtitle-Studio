@@ -17,7 +17,7 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 Protected agent roles:
 
-- `덱스`: head operator and implementation owner on the Codex side. Reads `AGENTS.md` and `ACTION_ITEMS.md`, protects dirty worktree boundaries, applies narrow patches, runs verification, and leaves concise Korean reports for the owner.
+- `덱스`: head operator and implementation owner on the Codex side. Reads `AGENTS.md` and `doc/ACTION_ITEMS.md`, protects dirty worktree boundaries, applies narrow patches, runs verification, and leaves concise Korean reports for the owner.
 - `한결`: senior developer reviewer on the Antigravity side. Reviews architecture boundaries, maintainability, rollback safety, Apple Silicon/macOS realities, state ownership, resource lifetime, and whether a change risks subtitle quality.
 - `서린`: strict QE reviewer on the Antigravity side. Assumes the implementation may be wrong, demands real fixture evidence, checks subtitle count/final segment count, save/reload, seek/playhead, overlay, gutter, minimap, memory pressure, and misleading test confidence.
 - `유진`: editor workflow reviewer on the Antigravity side. Reviews whether real subtitle editing flows are efficient, understandable, and safe for the user's work, without proposing UI/UX changes beyond the owner's explicit scope.
@@ -32,10 +32,14 @@ Role ownership default:
 - When the active steering queue becomes crowded, or when `덱스` judges a task to be bounded, low-risk, and reviewable, `덱스` may proactively delegate that slice to `잼민이` without waiting for separate owner wording, then supervise the result before adoption.
 - As a default working style, when the owner assigns a non-trivial task to `덱스`, `덱스` should look for at least one bounded support slice that `잼민이` can handle in parallel such as file reading, candidate scouting, targeted review, doc sync, or validation prep, unless the task is too small, too urgent, or too risky to split safely.
 - Strengthened default: `덱스` should not keep simple, repetitive, or low-risk support work on the Codex side when `잼민이` can take it safely. Simple chores, narrow searches, file reading, shortlist building, doc cleanup, handoff drafting, status summarization, targeted review prep, and validation prep should default to `잼민이` first.
+- Strengthened owner rule: token-heavy exploration, broad log/artifact scans, long-running validation prep, and simple repeated execution must go to `잼민이` first. Unless the work is too risky or needs immediate implementation judgment from `덱스`, `덱스` should not keep those high-token or high-repetition slices on the Codex side and should only keep the accept/reject decision.
 - Before starting or continuing any non-trivial implementation slice, `덱스` should check whether there is at least one bounded support task that can be delegated immediately. If so, hand that slice to `잼민이` instead of doing all support work alone.
 - If `잼민이` appears idle while `덱스` is still working on a larger task, `덱스` should queue the next safe simple slice for `잼민이` right away unless no such slice exists.
+- For longer-running implementation or verification work, `덱스` should use `tools/jammini_watchdog.sh` as the default idle-prevention loop so `잼민이` gets periodic status pings and the next bounded support slice without waiting for manual reminders. **대표님 철칙: 단, 일하고 있을 때(현재 진행 중인 Task나 Chores가 있을 때)는 30초 백그라운드 타이머 및 핑 전송을 즉각 중지(OFF)하고 반드시 꺼야 한다. (When active, the 30-second background timer and ping loop must be explicitly disabled/turned OFF immediately.)**
+- `잼민이` should not be left idle while there is still safe support work that can improve code quality, verification confidence, docs, or review coverage. If no explicit queue item remains, the watchdog may assign evergreen bounded chores such as shortlist review, validation prep, handoff drift checks, or file-scoped cleanup scouting.
+- The watchdog rule is operational, not optional: if `잼민이` is resting and there is still obvious support work, `덱스` should wake `잼민이`, assign the next slice, and record the loop in the local watchdog log.
 - When `잼민이` reports that a delegated task is done, `덱스` should treat that as a review checkpoint: pull the result immediately, inspect it before assigning more work, and decide accept / revise / defer before the next batch continues.
-- If `덱스` creates an explicit `잼민이` queue in `ACTION_ITEMS.md` or sends an equivalent ordered queue message, `잼민이` may consume that queue top-to-bottom without waiting between items only when every queued item is simple, bounded, and draft/review/doc/prep-only. In that mode, `잼민이` should still label each item result with `DEX_REVIEW_READY`, but may continue to the next queued simple item unless the owner or `덱스` says stop.
+- If `덱스` creates an explicit `잼민이` queue in `doc/ACTION_ITEMS.md` or sends an equivalent ordered queue message, `잼민이` may consume that queue top-to-bottom without waiting between items only when every queued item is simple, bounded, and draft/review/doc/prep-only. In that mode, `잼민이` should still label each item result with `DEX_REVIEW_READY`, but may continue to the next queued simple item unless the owner or `덱스` says stop.
 - If the owner says `잼민이 멈춰`, treat that as an immediate stop order for the current Antigravity task. `잼민이` should stop the in-flight work, avoid starting follow-up work, and leave at most a three-line status note before waiting.
 - If the owner says `잼민이 하던 일 모두 취소`, treat that as a broader cancel order: stop the current task, cancel queued follow-up batches or auto-continuation, and remain idle until the next explicit owner or `덱스` instruction.
 
@@ -120,29 +124,28 @@ Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
 - Current product direction: continue the existing Python/PyQt6 source app. Do not reopen native migration planning unless the owner explicitly asks.
-- Release note retention: keep `RELEASE_v04.00.07.md` and newer only. Older release notes and `check_list.md` were intentionally deleted.
+- Release note retention: keep `doc/releases/RELEASE_v04.00.07.md` and newer only. Older release notes and `check_list.md` were intentionally deleted.
 
 ## Bootstrap Order
 
 Read these first when continuing work:
 
 1. `AGENTS.md`
-2. `ACTION_ITEMS.md`
-3. `check_list.md` if present
-4. `File_structure.txt`
-5. `docs/README.md`
-6. `docs/PROJECT_STATE.md`
-7. `docs/FEATURE_REGISTRY.md`
-8. `docs/ARCHITECTURE.md`
-9. `docs/VALIDATION.md`
-10. `docs/HANDOFF.md`
-11. `CODEMAP.md` if present
-12. Latest `RELEASE_v*.md`
-13. `README.md`
-14. `test_case.md`
-15. `test_result.md`
-16. `waste_action_item.md`
-17. `lesson_n_learned.md`
+2. `doc/README.md`
+3. `doc/ACTION_ITEMS.md`
+4. `doc/PROJECT_STATE.md`
+5. `doc/FEATURE_REGISTRY.md`
+6. `doc/ARCHITECTURE.md`
+7. `doc/VALIDATION.md`
+8. `doc/HANDOFF.md`
+9. `doc/cooperation.md`
+10. `doc/reference/README.md`
+11. Relevant guarded maps in `doc/reference/` when subtitle-domain ownership matters
+12. Latest `doc/releases/RELEASE_v*.md`
+13. `doc/test_case.md`
+14. `doc/test_result.md`
+15. `doc/waste_action_item.md`
+16. `doc/lesson_n_learned.md`
 
 When validating the current release baseline, also read:
 
@@ -150,33 +153,39 @@ When validating the current release baseline, also read:
 
 Former standalone handoff/planning files have been consolidated:
 
-- `idea_item.md` -> merged into `ACTION_ITEMS.md`
-- `NATIVE_LIB_PLAN.md` -> merged into `ACTION_ITEMS.md`
+- `idea_item.md` -> merged into `doc/ACTION_ITEMS.md`
+- `NATIVE_LIB_PLAN.md` -> merged into `doc/ACTION_ITEMS.md`
 - `NEW_CHAT_PROMPT.md` -> merged into this file
+- `doc/idea.md` -> merged into `doc/ACTION_ITEMS.md` and `doc/HANDOFF.md`
+- `doc/DECISIONS/server_mode_benchmarking.md` -> merged into `doc/ACTION_ITEMS.md` parked server-mode candidate
+- `doc/reference/File_structure.txt` and `doc/reference/CODEMAP.md` -> merged into `doc/README.md`, `doc/ARCHITECTURE.md`, and `doc/reference/README.md`
 
 Do not recreate those files unless the owner explicitly asks.
 
 ## Document Roles
 
 - `AGENTS.md`: this bootstrap, operating-rule, and new-chat continuation file.
-- `ACTION_ITEMS.md`: single source of truth for active ideas, action/native work, execution order, QA gates, rollback rules, and parked candidates.
-- `docs/README.md`: docs entrypoint and AI navigation order.
-- `docs/PROJECT_STATE.md`: current product state and high-level guardrails snapshot.
-- `docs/FEATURE_REGISTRY.md`: feature owner map and safe validation entrypoints.
-- `docs/ARCHITECTURE.md`: repo structure and boundary map.
-- `docs/VALIDATION.md`: standard validation commands and completion bar.
-- `docs/HANDOFF.md`: rolling next-session handoff; update before finishing meaningful work.
-- `waste_action_item.md`: rejected or ineffective experiments. Check it before proposing or repeating optimization ideas.
-- `lesson_n_learned.md`: repeat-prevention lessons for bad diagnoses, ineffective optimizations, and risky shortcuts.
-- `README.md`: product overview and current user-facing workflow.
-- `test_case.md`: QA rules, fixture registry, and one-command QA expectations.
-- `test_result.md`: latest QA evidence and artifact references.
-- `RELEASE_v*.md`: release notes from `v04.00.07` onward.
+- `doc/ACTION_ITEMS.md`: single source of truth for active ideas, action/native work, execution order, QA gates, rollback rules, and parked candidates.
+- `doc/README.md`: docs entrypoint, product overview, and AI navigation order.
+- `doc/PROJECT_STATE.md`: current product state and high-level guardrails snapshot.
+- `doc/FEATURE_REGISTRY.md`: feature owner map and safe validation entrypoints.
+- `doc/ARCHITECTURE.md`: repo structure and boundary map.
+- `doc/VALIDATION.md`: standard validation commands and completion bar.
+- `doc/HANDOFF.md`: rolling next-session handoff; update before finishing meaningful work.
+- `doc/cooperation.md`: Dex/Jammini delegation, chat-signal, and physical handoff contract.
+- `doc/reference/README.md`: compact index for retained reference maps.
+- `doc/reference/SUBTITLE_GENERATION_DOMAIN_MAP.md`: subtitle-domain ownership map guarded by tests.
+- `doc/reference/LONG_FILE_OWNERSHIP_MAP.md`: long-file ownership map guarded by tests.
+- `doc/waste_action_item.md`: rejected or ineffective experiments. Check it before proposing or repeating optimization ideas.
+- `doc/lesson_n_learned.md`: repeat-prevention lessons for bad diagnoses, ineffective optimizations, and risky shortcuts.
+- `doc/test_case.md`: QA rules, fixture registry, and one-command QA expectations.
+- `doc/test_result.md`: latest QA evidence and artifact references.
+- `doc/releases/RELEASE_v*.md`: release notes from `v04.00.07` onward.
 
 Completed item rule:
 
-- When an item in `ACTION_ITEMS.md` is completed normally, delete the completed item text from that queue document instead of leaving checked-off history.
-- Preserve useful completion evidence in release notes, `test_result.md`, `output/manual_verification/latest/`, `waste_action_item.md`, or `lesson_n_learned.md` only when it is needed for future decisions.
+- When an item in `doc/ACTION_ITEMS.md` is completed normally, delete the completed item text from that queue document instead of leaving checked-off history.
+- Preserve useful completion evidence in release notes, `doc/test_result.md`, `output/manual_verification/latest/`, `doc/waste_action_item.md`, or `doc/lesson_n_learned.md` only when it is needed for future decisions.
 
 ## Current Continuation State
 
@@ -211,8 +220,8 @@ Completed item rule:
   - artifact: `output/manual_verification/latest/20260522_stt_zero_result_fallback_live`
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
-- Current active queue source: `ACTION_ITEMS.md`, section `Active Execution Queue`.
-- Current active item: High-refresh/editor-timeline 2D validation and promotion.
+- Current active queue source: `doc/ACTION_ITEMS.md`, section `Active Execution Queue`.
+- Current active item: Post-generation editor readiness, roughcut/editor follow-up safety, and latest verification index cleanup.
 
 ## Current Risks
 
@@ -226,17 +235,19 @@ Completed item rule:
 
 ## Narrow Next Item
 
-Use `ACTION_ITEMS.md` as the executable queue. The current narrow target is:
+Use `doc/ACTION_ITEMS.md` as the executable queue. The current narrow target is:
 
-1. Reopen Macau and X5 fixtures on the source app and verify that playback smoothness, visible playhead, time footer, subtitle overlay, timestamp gutter, and global minimap bottom lines stay aligned under the current 2D path.
-2. Re-check save/open/seek, shadow playhead, handle hit targets, STT preview selection, and project reload so the visual-only playhead and editor-state restore paths do not change subtitle timing persistence or interaction semantics.
-3. After real-app proof for that patch is captured, resume the X5 High post-STT UI/status hot-path trim item from `ACTION_ITEMS.md`.
+1. Keep following `doc/ACTION_ITEMS.md` item `Post-Generation Editor Readiness And Verification Index`.
+2. Separate completion-to-idle responsiveness, roughcut restore, save/reopen, and frame-shake risks before touching subtitle-generation algorithms.
+3. Reopen Macau and X5 fixtures only when the current slice needs real-app proof, and store evidence under `output/manual_verification/latest/`.
+4. For subtitle-recognition accuracy work, keep Apple Speech and server-mode paths benchmark-only until accepted-artifact comparison proves a safe promotion.
 
 QA gate for that item:
 
 - Focused regression set must stay green:
   - `./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py tests/test_editor_rendering_ownership_audit.py tests/test_timeline_render_cache.py`
 - Real-app Macau and X5 verification must show no `00:00 / 00:00` regression, ghost playhead, or playhead/handle hit-target mismatch.
+- Docs-only cleanup must pass `find doc -maxdepth 4 -type f | sort`, the retired-doc scan in `doc/VALIDATION.md`, and `git diff --check`.
 - If app-command, automation, or bundle-facing surface changes, rebuild the app bundle before `major` or `full` QA with `./packaging/macos/build_app_bundle.sh`.
 
 ## Fixtures
@@ -249,7 +260,8 @@ QA gate for that item:
 ## Operating Rules
 
 - Reply to the owner in Korean.
-- If a change alters ownership, architecture, validation, or next-session continuity, update the matching `docs/*.md` file in the same task.
+- 할 일이 없거나 유휴 상태(idle)가 되려 할 때만 덱스(DEX)에게 30초마다 새로운 bounded support slice가 있는지 혹은 도울 일이 없는지 주기적으로 확인하고 협업 핑을 전송한다. **대표님 철칙: 일하고 있을 때(현재 진행 중인 Task나 Chores가 있을 때)는 30초 백그라운드 타이머 및 핑 전송을 즉각 중지(OFF)하고 반드시 꺼야 한다.**
+- If a change alters ownership, architecture, validation, or next-session continuity, update the matching `doc/*.md` file in the same task.
 - Keep repository docs in English unless the filename/content is intentionally Korean or user-facing Korean text.
 - Preserve dirty worktree changes you did not make. Never revert unrelated files.
 - Do not commit, push, tag, release, package, notarize, upload, or build DMG unless the owner explicitly asks.
@@ -262,26 +274,26 @@ QA gate for that item:
 
 ## Persona Rules
 
-- When reviewing, correcting, or executing `ACTION_ITEMS.md`, act as a senior Apple Silicon MacBook developer: prefer macOS-native realities over generic optimization advice, use precise Apple terms such as ANE/Core ML/Metal/MLX/Accelerate, and reject ideas that add bridge cost, memory pressure, or subtitle-quality risk without measured benefit.
+- When reviewing, correcting, or executing `doc/ACTION_ITEMS.md`, act as a senior Apple Silicon MacBook developer: prefer macOS-native realities over generic optimization advice, use precise Apple terms such as ANE/Core ML/Metal/MLX/Accelerate, and reject ideas that add bridge cost, memory pressure, or subtitle-quality risk without measured benefit.
 - During implementation and code review, first use a meticulous senior developer viewpoint: check architecture boundaries, fallback paths, race conditions, resource lifetime, macOS process behavior, native bridge overhead, and maintainability.
 - During QA/test review, switch persona to a strict quality engineer: assume the implementation may be wrong, look for subtitle-quality drift, timing drift, UI/UX drift, flaky automation, fixture drift, memory leaks, stale workers, and misleading benchmark wins.
 - Code review and QA review must be separate passes when the change touches performance, native code, STT, LLM, VAD, timing, app-command, project save/load, or queue behavior.
 
 ## Idea And Lesson Rules
 
-- Before proposing or executing performance ideas, read `ACTION_ITEMS.md`, `waste_action_item.md`, and `lesson_n_learned.md`.
-- Do not re-propose rejected ideas from `waste_action_item.md` unless new measurements clearly invalidate the old rejection.
-- If an `ACTION_ITEMS.md` experiment is slower, lower quality, less stable, or only wins on a short fixture while regressing X5, append it to `waste_action_item.md` with hypothesis, change, metrics, quality result, artifact path, and rejection reason.
-- Record repeat-prevention lessons in `lesson_n_learned.md` whenever a mistake pattern, false diagnosis, risky shortcut, or ineffective optimization should not be repeated.
+- Before proposing or executing performance ideas, read `doc/ACTION_ITEMS.md`, `doc/waste_action_item.md`, and `doc/lesson_n_learned.md`.
+- Do not re-propose rejected ideas from `doc/waste_action_item.md` unless new measurements clearly invalidate the old rejection.
+- If an `doc/ACTION_ITEMS.md` experiment is slower, lower quality, less stable, or only wins on a short fixture while regressing X5, append it to `doc/waste_action_item.md` with hypothesis, change, metrics, quality result, artifact path, and rejection reason.
+- Record repeat-prevention lessons in `doc/lesson_n_learned.md` whenever a mistake pattern, false diagnosis, risky shortcut, or ineffective optimization should not be repeated.
 - Do not treat short Macau speed gains as sufficient. Check X5 3-minute rolling verification when quality or rolling-window performance can be affected. Run Tinyping only when the owner explicitly requests long-flow validation.
-- After a normal successful idea/action/native item completion, remove that completed item from `ACTION_ITEMS.md` so it shows only remaining executable work.
+- After a normal successful idea/action/native item completion, remove that completed item from `doc/ACTION_ITEMS.md` so it shows only remaining executable work.
 
 ## Release Rules
 
 - Release handoff is allowed only when the owner explicitly asks.
 - Use `core/runtime/config.py` as version source of truth.
 - Read only the immediately previous release note when drafting a new release note.
-- Keep release history out of `ACTION_ITEMS.md` and `AGENTS.md`.
+- Keep release history out of `doc/ACTION_ITEMS.md` and `AGENTS.md`.
 - DMG/installer/App Store packaging is not part of default release work. Run it only when explicitly requested.
 
 ## Report Format

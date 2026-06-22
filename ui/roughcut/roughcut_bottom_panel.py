@@ -44,12 +44,14 @@ class RoughcutBottomPanel(QWidget):
             "border-top-left-radius: 7px; border-top-right-radius: 7px; } "
             "QTabBar::tab:selected { background: #151C20; color: #F5F7FA; border-color: #34C759; }"
         )
+        self.chapter_text = self._text_view("챕터 없음")
         self.subtitle_text = self._text_view("자막 세그먼트 없음")
         self.global_text = self._text_view("글로벌 세그먼트 없음")
         self.waveform_text = self._text_view("웨이브폼/세그먼트 바 없음")
         self.edl_text = self._text_view("EDL 없음")
         self.storyboard_text = self._text_view("스토리보드 없음")
 
+        self.tabs.addTab(self.chapter_text, "챕터")
         self.tabs.addTab(self.subtitle_text, "자막 세그먼트")
         self.tabs.addTab(self.edl_text, "EDL")
         attach_qml_tab_bar(self, section_lay, self.tabs, scope="roughcut", insert_index=2)
@@ -57,22 +59,35 @@ class RoughcutBottomPanel(QWidget):
         root.addWidget(self.section_frame, stretch=1)
 
     def clear(self) -> None:
+        self.chapter_text.setPlainText("챕터 없음")
         self.subtitle_text.setPlainText("자막 세그먼트 없음")
         self.global_text.setPlainText("글로벌 세그먼트 없음")
         self.waveform_text.setPlainText("웨이브폼/세그먼트 바 없음")
         self.edl_text.setPlainText("EDL 없음")
         self.storyboard_text.setPlainText("스토리보드 없음")
-        self.tabs.setTabEnabled(4, False)
+        self._set_storyboard_tab_enabled(False)
 
     def set_result(self, result, editor_segments: list[dict] | None = None) -> None:
         editor_segments = list(editor_segments or [])
+        self.chapter_text.setPlainText(self._chapter_lines(result))
         self.subtitle_text.setPlainText(self._subtitle_lines(editor_segments, result))
         self.global_text.setPlainText(self._global_lines(result))
         self.waveform_text.setPlainText(self._waveform_lines(result))
         self.edl_text.setPlainText(self._edl_json(result))
         storyboard = self._storyboard_lines(result)
         self.storyboard_text.setPlainText(storyboard)
-        self.tabs.setTabEnabled(4, bool(storyboard.strip() and storyboard.strip() != "스토리보드 없음"))
+        self._set_storyboard_tab_enabled(bool(storyboard.strip() and storyboard.strip() != "스토리보드 없음"))
+
+    def _chapter_lines(self, result) -> str:
+        chapters = tuple(getattr(result, "chapters", ()) or ())
+        if not chapters:
+            return "챕터 없음"
+        return "\n".join(
+            f"{index:03d}  {fmt_time(chapter.start)}-{fmt_time(chapter.end)}  "
+            f"{getattr(chapter, 'major_id', '-')}/{getattr(chapter, 'minor_code', '-')}"
+            f"  {chapter.title}"
+            for index, chapter in enumerate(chapters, start=1)
+        )
 
     def _text_view(self, placeholder: str) -> QTextEdit:
         text = QTextEdit()
@@ -166,6 +181,11 @@ class RoughcutBottomPanel(QWidget):
                 f"  요약: {getattr(segment, 'summary', '') or '-'}"
             )
         return "\n\n".join(rows) if rows else "스토리보드 없음"
+
+    def _set_storyboard_tab_enabled(self, enabled: bool) -> None:
+        storyboard_index = self.tabs.indexOf(self.storyboard_text)
+        if storyboard_index >= 0:
+            self.tabs.setTabEnabled(storyboard_index, bool(enabled))
 
 
 def compact_label(text: str) -> QLabel:

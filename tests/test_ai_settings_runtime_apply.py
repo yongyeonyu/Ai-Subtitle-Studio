@@ -9,11 +9,13 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
+from PyQt6.QtCore import Qt
 
 from core.llm.codex_provider import DEFAULT_CODEX_LABEL
 from core.audio.stt_quality_presets import VAD_MODE_AUTOMATION_NOTE
 from ui.main.main_window import MainWindow
 from ui.settings.settings_ai import SettingsDialog
+from ui.settings.settings_common import APPLE_SPEECH_EXPERIMENTAL_LABEL
 
 
 class _DummyEditor(QWidget):
@@ -91,6 +93,130 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
         editor.video_player.refresh_audio_output_routing.assert_called_once()
         dialog.close()
         editor.close()
+
+    def test_settings_dialog_shows_apple_speech_experimental_item_when_unavailable(self):
+        editor = _DummyEditor()
+        with patch("ui.settings.settings_ai.apple_speech_support") as support_mock:
+            support_mock.return_value = SimpleNamespace(
+                available=False,
+                detector_available=False,
+                reason="speech_framework_missing_or_unsupported",
+                locale="ko-KR",
+            )
+            dialog = SettingsDialog({}, editor)
+        try:
+            items = [
+                (dialog.combo_whisper.itemText(i), str(dialog.combo_whisper.itemData(i) or ""))
+                for i in range(dialog.combo_whisper.count())
+            ]
+            self.assertTrue(any(data == "apple_speech:ko-KR" for _text, data in items))
+            idx = next(i for i, (_text, data) in enumerate(items) if data == "apple_speech:ko-KR")
+            self.assertIn(APPLE_SPEECH_EXPERIMENTAL_LABEL, dialog.combo_whisper.itemText(idx))
+            self.assertIn(
+                "speech_framework_missing_or_unsupported",
+                str(dialog.combo_whisper.itemData(idx, Qt.ItemDataRole.ToolTipRole) or ""),
+            )
+            model_item = dialog.combo_whisper.model().item(idx)
+            self.assertTrue(model_item.isEnabled())
+            secondary_items = [
+                (dialog.combo_whisper_secondary.itemText(i), str(dialog.combo_whisper_secondary.itemData(i) or ""))
+                for i in range(dialog.combo_whisper_secondary.count())
+            ]
+            secondary_idx = next(i for i, (_text, data) in enumerate(secondary_items) if data == "apple_speech:ko-KR")
+            self.assertIn(APPLE_SPEECH_EXPERIMENTAL_LABEL, dialog.combo_whisper_secondary.itemText(secondary_idx))
+            self.assertIn(
+                "speech_framework_missing_or_unsupported",
+                str(dialog.combo_whisper_secondary.itemData(secondary_idx, Qt.ItemDataRole.ToolTipRole) or ""),
+            )
+            status_labels = [label.text() for label in dialog.findChildren(QLabel)]
+            self.assertTrue(
+                any(
+                    f"{APPLE_SPEECH_EXPERIMENTAL_LABEL}: selectable, MLX fallback active until Apple route is available"
+                    in text
+                    for text in status_labels
+                )
+            )
+        finally:
+            dialog.close()
+            editor.close()
+
+    def test_settings_dialog_marks_apple_speech_available_when_probe_succeeds(self):
+        editor = _DummyEditor()
+        with patch("ui.settings.settings_ai.apple_speech_support") as support_mock:
+            support_mock.return_value = SimpleNamespace(
+                available=True,
+                detector_available=True,
+                reason="runtime_class_available",
+                locale="ko-KR",
+            )
+            dialog = SettingsDialog({}, editor)
+        try:
+            items = [
+                (dialog.combo_whisper.itemText(i), str(dialog.combo_whisper.itemData(i) or ""))
+                for i in range(dialog.combo_whisper.count())
+            ]
+            idx = next(i for i, (_text, data) in enumerate(items) if data == "apple_speech:ko-KR")
+            self.assertIn(APPLE_SPEECH_EXPERIMENTAL_LABEL, dialog.combo_whisper.itemText(idx))
+            self.assertIn(
+                "Apple native transcribe route",
+                str(dialog.combo_whisper.itemData(idx, Qt.ItemDataRole.ToolTipRole) or ""),
+            )
+            model_item = dialog.combo_whisper.model().item(idx)
+            self.assertTrue(model_item.isEnabled())
+            secondary_items = [
+                (dialog.combo_whisper_secondary.itemText(i), str(dialog.combo_whisper_secondary.itemData(i) or ""))
+                for i in range(dialog.combo_whisper_secondary.count())
+            ]
+            secondary_idx = next(i for i, (_text, data) in enumerate(secondary_items) if data == "apple_speech:ko-KR")
+            self.assertIn(APPLE_SPEECH_EXPERIMENTAL_LABEL, dialog.combo_whisper_secondary.itemText(secondary_idx))
+            self.assertIn(
+                "Apple native transcribe route",
+                str(dialog.combo_whisper_secondary.itemData(secondary_idx, Qt.ItemDataRole.ToolTipRole) or ""),
+            )
+            status_labels = [label.text() for label in dialog.findChildren(QLabel)]
+            self.assertTrue(
+                any(
+                    f"{APPLE_SPEECH_EXPERIMENTAL_LABEL}: selectable UI model, native Apple transcribe route available"
+                    in text
+                    for text in status_labels
+                )
+            )
+        finally:
+            dialog.close()
+            editor.close()
+
+    def test_settings_dialog_keeps_current_custom_apple_models_visible(self):
+        editor = _DummyEditor()
+        with patch("ui.settings.settings_ai.apple_speech_support") as support_mock:
+            support_mock.return_value = SimpleNamespace(
+                available=False,
+                detector_available=False,
+                reason="speech_framework_missing_or_unsupported",
+                locale="ko-KR",
+            )
+            dialog = SettingsDialog(
+                {
+                    "selected_whisper_model": "apple_speech:en-US",
+                    "selected_whisper_model_secondary": "apple_speech:ja-JP",
+                },
+                editor,
+            )
+        try:
+            stt1_models = {
+                str(dialog.combo_whisper.itemData(i) or ""): dialog.combo_whisper.itemText(i)
+                for i in range(dialog.combo_whisper.count())
+            }
+            stt2_models = {
+                str(dialog.combo_whisper_secondary.itemData(i) or ""): dialog.combo_whisper_secondary.itemText(i)
+                for i in range(dialog.combo_whisper_secondary.count())
+            }
+            self.assertEqual(stt1_models["apple_speech:en-US"], "Apple Speech (en-US)")
+            self.assertEqual(stt2_models["apple_speech:ja-JP"], "Apple Speech (ja-JP)")
+            self.assertIn("apple_speech:ko-KR", stt1_models)
+            self.assertIn("apple_speech:ko-KR", stt2_models)
+        finally:
+            dialog.close()
+            editor.close()
 
     def test_presets_live_in_sidebar_not_ai_settings_dialog(self):
         window = MainWindow()

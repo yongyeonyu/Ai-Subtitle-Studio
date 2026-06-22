@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -33,11 +34,9 @@ def _candidate_cli_paths() -> list[Path]:
     if bundle_resources:
         paths.append(Path(bundle_resources) / "native" / "AIStudioNativeCLI")
 
-    root = Path(__file__).resolve().parents[1]
-    for base in (root, root.parent):
-        build_root = base / "native" / "macos" / "AIStudioNative" / ".build"
-        paths.append(build_root / "release" / "AIStudioNativeCLI")
-        paths.append(build_root / "debug" / "AIStudioNativeCLI")
+    external = shutil.which("AIStudioNativeCLI")
+    if external:
+        paths.append(Path(external))
     return paths
 
 

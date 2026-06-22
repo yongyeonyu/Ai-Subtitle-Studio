@@ -33,7 +33,7 @@ from core.settings_simplifier import apply_simple_operation_mode
 from ui.project.multiclip_cards import AddCard, ClipCard, ClipContainer
 
 
-MEDIA_FILTER = "Media Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.lrf)"
+MEDIA_FILTER = "Media Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.lrf *.LRF)"
 
 
 class MultiClipEditor(QDialog):

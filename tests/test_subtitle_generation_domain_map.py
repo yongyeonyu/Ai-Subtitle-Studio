@@ -2,8 +2,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAP_PATH = ROOT / "SUBTITLE_GENERATION_DOMAIN_MAP.md"
-LONG_FILE_MAP_PATH = ROOT / "LONG_FILE_OWNERSHIP_MAP.md"
+MAP_PATH = ROOT / "doc/reference/SUBTITLE_GENERATION_DOMAIN_MAP.md"
+LONG_FILE_MAP_PATH = ROOT / "doc/reference/LONG_FILE_OWNERSHIP_MAP.md"
 
 REQUIRED_DOMAINS = {
     "subtitle_cut_boundary",
@@ -74,8 +74,8 @@ REQUIRED_OWNER_PATHS = {
     "tests/test_subtitle_waveform_facade.py",
     "ui/editor/editor_quality_review.py",
     "ui/editor/editor_scan_cut_project.py",
-    "native/macos/AIStudioNative/Sources/AIStudioCore/SubtitleResourcePlan.swift",
-    "native/macos/AIStudioNative/Sources/AIStudioCore/SubtitleSTTSegmentsSummary.swift",
+    "core/native_swift_subtitle_resource.py",
+    "core/native_swift_subtitle_stt_segments.py",
     "ui/editor/editor_subtitle_post_llm.py",
     "ui/editor/ux/timeline_input_shadow.py",
     "ui/editor/ux/timeline_live_cut_detection.py",
@@ -101,10 +101,10 @@ def test_domain_map_covers_current_owner_paths():
 
 
 def test_action_item_points_to_domain_map_progress_artifact():
-    action_items = (ROOT / "ACTION_ITEMS.md").read_text(encoding="utf-8")
+    action_items = (ROOT / "doc/ACTION_ITEMS.md").read_text(encoding="utf-8")
 
-    assert "SUBTITLE_GENERATION_DOMAIN_MAP.md" in action_items
-    assert "LONG_FILE_OWNERSHIP_MAP.md" in action_items
+    assert "reference/SUBTITLE_GENERATION_DOMAIN_MAP.md" in action_items
+    assert "reference/LONG_FILE_OWNERSHIP_MAP.md" in action_items
     assert "tests/test_subtitle_generation_domain_map.py" in action_items
     assert "tests/test_subtitle_segments_facade.py" in action_items
     assert "tests/test_subtitle_stt_segments_facade.py" in action_items

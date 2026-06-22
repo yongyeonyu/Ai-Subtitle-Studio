@@ -1817,6 +1817,11 @@ class MainWindow(
         if callable(confirm_exit) and not confirm_exit():
             event.ignore()
             return
+        try:
+            self.hide()
+            QApplication.processEvents()
+        except Exception:
+            pass
         schedule_forced_exit = getattr(self, "_schedule_forced_process_exit_if_busy", None)
         busy_before_exit = bool(schedule_forced_exit()) if callable(schedule_forced_exit) else False
         try:

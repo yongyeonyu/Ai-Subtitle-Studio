@@ -35,7 +35,7 @@ def backup_existing_srt(target_file_or_srt: str) -> bool:
 
 def find_media_for_srt(srt_path: str) -> str:
     base_path = os.path.splitext(srt_path)[0]
-    media_exts = (".mp4", ".mov", ".MOV", ".MP4", ".wav", ".m4a", ".m2a", ".mp3", ".aac")
+    media_exts = (".mp4", ".mov", ".MOV", ".MP4", ".lrf", ".LRF", ".wav", ".m4a", ".m2a", ".mp3", ".aac")
     return next((base_path + ext for ext in media_exts if os.path.exists(base_path + ext)), "")
 
 

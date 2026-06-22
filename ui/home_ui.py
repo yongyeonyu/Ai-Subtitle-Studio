@@ -1408,7 +1408,11 @@ class HomeUIMixin(HomeSidebarMixin):
         elif hasattr(self, "_show_bottom_roughcut_table"):
             self._show_bottom_roughcut_table()
         self.stack.setCurrentWidget(page)
-        page.refresh_from_editor(analyze_if_missing=False)
+        schedule_refresh = getattr(page, "schedule_refresh_from_editor", None)
+        if callable(schedule_refresh):
+            schedule_refresh(analyze_if_missing=False)
+        else:
+            page.refresh_from_editor(analyze_if_missing=False)
         self._refresh_work_mode_ui()
 
     def _open_shortform_maker(self):
