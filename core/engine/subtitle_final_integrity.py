@@ -113,6 +113,10 @@ _FINAL_DUPLICATE_BRIDGE_TOKENS = {
 _FINAL_CONTINUATION_TAIL_RE = re.compile(
     r"(고|서|데|는데|은데|인데|니까|으니까|지만|면서|으면서|려고|으려고|라서|이라서|해서|이며|이고|하고|며|다가|거나|든지|더니|더라도|도록|듯이)$"
 )
+_FINAL_STANDALONE_MEASUREMENT_RE = re.compile(
+    r"^\d+(?:[.,]\d+)?(?:km/h|[A-Za-z/%％]+|초|분|시간|원|만원|개|명|도|키로|킬로|퍼센트)?$",
+    re.IGNORECASE,
+)
 _FINAL_TINY_FRAGMENT_MAX_SEC = 0.18
 _FINAL_TINY_FRAGMENT_MAX_CHARS = 2
 _FINAL_TINY_FRAGMENT_MAX_GAP_SEC = 0.08
@@ -249,6 +253,11 @@ def _subtitle_tokens(text: str) -> list[str]:
 
 def _token_compact_len(tokens: list[str]) -> int:
     return len(re.sub(r"\s+", "", "".join(tokens)))
+
+
+def _is_standalone_measurement_text(text: str) -> bool:
+    compact = _compact_subtitle_text(text)
+    return bool(compact and _FINAL_STANDALONE_MEASUREMENT_RE.fullmatch(compact))
 
 
 def _collapse_exact_tandem_repeat_tokens(tokens: list[str]) -> list[str]:
@@ -431,6 +440,7 @@ def _drop_shadowed_short_rows(rows: list[dict], settings: dict | None, *, stage:
             compact
             and next_compact
             and len(compact) <= max_chars
+            and not _is_standalone_measurement_text(compact)
             and len(next_compact) >= len(compact) + min_growth
             and next_compact.startswith(compact)
             and gap <= max_gap
@@ -477,6 +487,7 @@ def _merge_likely_oversplit_rows(rows: list[dict], settings: dict | None, *, sta
             or _is_speaker_split_multiline_segment(row)
             or not _same_segment_scope_local(previous, row)
             or not _compatible_speaker_signature(previous, row)
+            or _is_standalone_measurement_text(compact)
         ):
             result.append(row)
             continue

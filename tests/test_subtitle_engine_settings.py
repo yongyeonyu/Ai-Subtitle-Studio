@@ -556,6 +556,22 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
             "collapse_tandem_repeat",
         )
 
+    def test_final_sequence_cleanup_keeps_standalone_measurement_before_expanded_phrase(self):
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            [
+                {"start": 22.26, "end": 25.24, "text": "17.8에서 연비가 안 바뀌는데"},
+                {"start": 25.26, "end": 27.4, "text": "11.4"},
+                {"start": 27.44, "end": 30.02, "text": "11.4에서 또 안 바뀌네"},
+            ],
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual(
+            [seg["text"] for seg in cleaned],
+            ["17.8에서 연비가 안 바뀌는데", "11.4", "11.4에서 또 안 바뀌네"],
+        )
+
     def test_final_sequence_cleanup_normalizes_filler_before_new_closing_phrase(self):
         segments = [
             {"start": 0.0, "end": 1.0, "text": "정리하면"},

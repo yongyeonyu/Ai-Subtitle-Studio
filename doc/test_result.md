@@ -38,12 +38,17 @@ This document is the current verification ledger. Keep detailed logs in `output/
 ### 2026-06-22 Duplicate Subtitle Guard
 
 - Command: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py tests/test_subtitle_engine_settings.py tests/test_subtitle_accuracy_pipeline.py`
-- Result: `169 passed, 1 skipped, 3 subtests passed`
+- Result: `170 passed, 1 skipped, 3 subtests passed`
 - Additional checks:
   - `./venv/bin/python -m py_compile core/audio/stt_recheck_service.py core/engine/subtitle_final_integrity.py core/engine/subtitle_engine.py core/engine/subtitle_accuracy_pipeline.py`: pass
   - `git diff --check`: pass
 - Synthetic repro: close duplicate STT2 recheck rows and output-selector tandem repeats now both return `["안 바뀌어요"]`.
-- Caveat: no new Macau/X5 real-media benchmark artifact was promoted for this follow-up.
+- X5 cached replay artifact: `output/manual_verification/latest/20260622_233750_duplicate_guard_x5_cached/summary.md`
+  - Result: pass; accepted X5 output has `0` tandem repeats, `0` close duplicate pairs, and current final cleanup reapplies without changing the text sequence.
+  - Stress probes from the X5 `안 바뀌어요` row: tandem repeat, adjacent duplicate, and recheck replacement duplicate all collapse to one row.
+- Follow-up guard: standalone measurement rows such as `11.4` are preserved before expanded measurement phrases instead of being shadow-dropped or merged into the previous continuation row.
+- Focused retest: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py::SubtitleEngineSettingsTests::test_final_sequence_cleanup_collapses_exact_tandem_repeat_inside_row tests/test_subtitle_engine_settings.py::SubtitleEngineSettingsTests::test_final_sequence_cleanup_keeps_standalone_measurement_before_expanded_phrase tests/test_stt_recheck_service.py::STTRecheckServiceTests::test_merge_segments_with_replacements_dedupes_close_duplicate_recheck_rows` -> `3 passed`.
+- Caveat: this is a cached real-X5 artifact replay, not a fresh media benchmark promotion; `test video/X5_시승기_후반.MP4` is not present in the current checkout.
 
 ### 2026-06-22 Subtitle Accuracy Regression Lock
 

@@ -81,8 +81,10 @@
 - `core/audio/stt_recheck_service.py`는 근접 동일 replacement row를 병합 전에 한 번 dedupe합니다.
 - `core/engine/subtitle_engine.py`는 source 후보와 최종 선택 결과 모두 후단 보정을 거치게 했습니다.
 - `core/engine/subtitle_final_integrity.py`는 `안 바뀌어요 안 바뀌어요`처럼 같은 토큰 묶음이 정확히 두 번 붙은 한 행 반복을 한 번으로 접습니다.
+- 후속 확인 중 X5 accepted output 재적용에서 `11.4` 같은 단독 측정값 행이 shadow drop 또는 이전 continuation row merge로 흔들릴 수 있어, standalone measurement 행은 보존하도록 막았습니다.
 - `core/engine/subtitle_accuracy_pipeline.py`는 한 행 내부 self-repeat을 context risk로 세고 annotation flag를 남깁니다.
-- 확인: `tests/test_stt_recheck_service.py`, `tests/test_subtitle_engine_settings.py`, `tests/test_subtitle_accuracy_pipeline.py` focused set 통과. 아직 새 Macau/X5 artifact promotion은 없습니다.
+- 확인: `tests/test_stt_recheck_service.py`, `tests/test_subtitle_engine_settings.py`, `tests/test_subtitle_accuracy_pipeline.py` focused set 통과. 추가 X5 cached replay artifact `output/manual_verification/latest/20260622_233750_duplicate_guard_x5_cached/summary.md`도 pass입니다.
+- 주의: 해당 X5 확인은 cached real-X5 artifact replay이며, 원본 `test video/X5_시승기_후반.MP4`가 없어 fresh media benchmark promotion은 아닙니다.
 
 ## Active Queue
 
@@ -104,6 +106,7 @@
 - 현재 active queue 관련 proof:
   - `output/manual_verification/latest/20260527_x5_hot_path_trim_proof/`
   - `output/manual_verification/latest/20260526_225507_high_refresh_source_app_proof/verification_summary.md`
+  - `output/manual_verification/latest/20260622_233750_duplicate_guard_x5_cached/summary.md`
 - 문서 구조 검증 기본:
   - `find doc -maxdepth 4 -type f | sort`
   - `git diff --check -- AGENTS.md doc tools tests ui/help/help_content.py`
