@@ -541,6 +541,21 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
 
         self.assertEqual([seg["text"] for seg in cleaned], ["오늘 리뷰는 여기까지입니다"])
 
+    def test_final_sequence_cleanup_collapses_exact_tandem_repeat_inside_row(self):
+        cleaned = subtitle_engine._apply_final_sequence_cleanup(
+            [
+                {"start": 21.2538, "end": 22.5150, "text": "안 바뀌어요 안 바뀌어요"},
+            ],
+            {"split_length_threshold": 20, "sub_max_cps": 12},
+            stage="test",
+        )
+
+        self.assertEqual([seg["text"] for seg in cleaned], ["안 바뀌어요"])
+        self.assertEqual(
+            cleaned[0].get("_final_sequence_cleanup_policy", {}).get("action"),
+            "collapse_tandem_repeat",
+        )
+
     def test_final_sequence_cleanup_normalizes_filler_before_new_closing_phrase(self):
         segments = [
             {"start": 0.0, "end": 1.0, "text": "정리하면"},
@@ -2228,6 +2243,36 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
             result[0]["_accuracy_decision_graph"]["decisions"][-1]["task"],
             "output_variant_selector",
         )
+
+    def test_output_variant_selector_cleans_tandem_repeat_after_source_micro_merge(self):
+        rows = [
+            {"start": 21.2538, "end": 21.5538, "text": "안 바뀌어요"},
+            {"start": 21.8538, "end": 22.5150, "text": "안 바뀌어요"},
+        ]
+
+        with unittest.mock.patch("core.engine.subtitle_engine._self_review_subtitle_quality", side_effect=lambda rows, *_args, **_kwargs: rows):
+            result = subtitle_engine._apply_output_variant_selector(
+                rows,
+                rows,
+                [],
+                {
+                    "subtitle_output_selector_enabled": True,
+                    "subtitle_context_repair_enabled": True,
+                    "runtime_quality_self_review_enabled": False,
+                    "split_length_threshold": 20,
+                    "sub_max_cps": 12,
+                    "sub_max_duration": 6.0,
+                    "sub_min_duration": 0.2,
+                    "continuous_threshold": 2.0,
+                    "gap_push_rate": 0.7,
+                    "gap_pull_rate": 0.2,
+                    "single_subtitle_end": 0.2,
+                },
+                stage="unit",
+            )
+
+        self.assertEqual([seg["text"] for seg in result], ["안 바뀌어요"])
+        self.assertIn("_output_selector_policy", result[0])
 
     def test_api_models_use_single_worker(self):
         workers, mode = subtitle_engine._effective_llm_workers(

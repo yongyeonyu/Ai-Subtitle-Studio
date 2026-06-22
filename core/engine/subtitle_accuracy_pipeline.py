@@ -165,6 +165,19 @@ def _content_tokens(text: Any) -> set[str]:
     return {token for token in _normalized_findall_list(_CONTENT_TOKEN_RE, text) if len(token) >= 2}
 
 
+def _has_exact_tandem_repeat_text(text: Any) -> bool:
+    tokens = _normalized_findall_list(_CONTENT_TOKEN_RE, text)
+    if len(tokens) < 2 or len(tokens) % 2:
+        return False
+    half = len(tokens) // 2
+    left = tokens[:half]
+    if left != tokens[half:]:
+        return False
+    if len(left) < 2 and compact_len(" ".join(left)) < 4:
+        return False
+    return True
+
+
 def _normalized_findall_list(pattern: re.Pattern[str], text: Any) -> list[str]:
     out: list[str] = []
     for token in pattern.findall(str(text or "")):
@@ -1026,6 +1039,7 @@ def subtitle_context_consistency_metrics(
     hallucination_phrase_segments = 0
     cps_jump_segments = 0
     shadow_duplicate_segments = 0
+    self_repeat_segments = 0
 
     prev_start: float | None = None
     prev_end: float | None = None
@@ -1045,6 +1059,8 @@ def subtitle_context_consistency_metrics(
 
         if not compact:
             empty_segments += 1
+        if _has_exact_tandem_repeat_text(text):
+            self_repeat_segments += 1
         if any(phrase.lower() in text.lower() for phrase in _HALLUCINATION_PHRASES):
             hallucination_phrase_segments += 1
 
@@ -1087,6 +1103,7 @@ def subtitle_context_consistency_metrics(
             + empty_segments * 12.0
             + cps_jump_segments * 5.0
             + shadow_duplicate_segments * 12.0
+            + self_repeat_segments * 14.0
         ) / total
         score = max(0.0, min(100.0, 100.0 - penalty))
 
@@ -1104,6 +1121,7 @@ def subtitle_context_consistency_metrics(
         "empty_segments": empty_segments,
         "cps_jump_segments": cps_jump_segments,
         "shadow_duplicate_segments": shadow_duplicate_segments,
+        "self_repeat_segments": self_repeat_segments,
         "repeat_window_sec": round(repeat_window, 4),
         "near_duplicate_ratio": round(near_duplicate_ratio, 4),
     }
@@ -1151,6 +1169,8 @@ def annotate_subtitle_context_consistency(
 
         if not compact:
             flags.append("empty_text")
+        if _has_exact_tandem_repeat_text(text):
+            flags.append("self_repeat_text")
         if any(phrase.lower() in text.lower() for phrase in _HALLUCINATION_PHRASES):
             flags.append("hallucination_phrase")
         if shadow_info:
@@ -1191,6 +1211,7 @@ def annotate_subtitle_context_consistency(
             penalty += 12.0 if "empty_text" in flags else 0.0
             penalty += 5.0 if "cps_jump" in flags else 0.0
             penalty += 12.0 if "shadow_duplicate_following" in flags else 0.0
+            penalty += 14.0 if "self_repeat_text" in flags else 0.0
             details["previous_segment_index"] = prev_index
             row["_context_consistency_policy"] = _decision(
                 "context_consistency",

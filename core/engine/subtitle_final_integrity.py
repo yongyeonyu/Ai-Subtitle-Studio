@@ -251,6 +251,19 @@ def _token_compact_len(tokens: list[str]) -> int:
     return len(re.sub(r"\s+", "", "".join(tokens)))
 
 
+def _collapse_exact_tandem_repeat_tokens(tokens: list[str]) -> list[str]:
+    if len(tokens) < 2 or len(tokens) % 2:
+        return list(tokens)
+    half = len(tokens) // 2
+    left = list(tokens[:half])
+    right = list(tokens[half:])
+    if left != right:
+        return list(tokens)
+    if len(left) < 2 and _token_compact_len(left) < 4:
+        return list(tokens)
+    return left
+
+
 def _overlap_token_count(left_tokens: list[str], right_tokens: list[str], *, mode: str) -> int:
     max_size = min(len(left_tokens), len(right_tokens), 8)
     for size in range(max_size, 0, -1):
@@ -497,6 +510,17 @@ def _trim_recent_overlap_rows(rows: list[dict], settings: dict | None, *, stage:
         row = dict(raw_row)
         text = " ".join(_subtitle_text_lines(str(row.get("text", "") or "")))
         tokens = _subtitle_tokens(text)
+        collapsed_tokens = _collapse_exact_tandem_repeat_tokens(tokens)
+        if collapsed_tokens != tokens:
+            text = " ".join(collapsed_tokens).strip()
+            tokens = collapsed_tokens
+            row["text"] = text
+            row["_final_sequence_cleanup_policy"] = {
+                "task": "final_sequence_cleanup",
+                "stage": stage,
+                "action": "collapse_tandem_repeat",
+            }
+            changed += 1
         if (
             not tokens
             or not result

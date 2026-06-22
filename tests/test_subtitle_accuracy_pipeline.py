@@ -362,6 +362,17 @@ class SubtitleAccuracyPipelineTests(unittest.TestCase):
         self.assertEqual(metrics["repeated_segments"], 1)
         self.assertEqual(metrics["overlap_segments"], 1)
 
+    def test_context_consistency_penalizes_tandem_repeat_inside_row(self):
+        metrics = subtitle_context_consistency_metrics(
+            [
+                {"start": 0.0, "end": 1.0, "text": "안 바뀌어요 안 바뀌어요"},
+            ],
+            {"subtitle_context_consistency_enabled": True},
+        )
+
+        self.assertLess(metrics["score"], 100.0)
+        self.assertEqual(metrics["self_repeat_segments"], 1)
+
     def test_context_consistency_annotates_risky_segments_for_learning(self):
         annotated = annotate_subtitle_context_consistency(
             [
@@ -376,6 +387,17 @@ class SubtitleAccuracyPipelineTests(unittest.TestCase):
         self.assertEqual(policy["task"], "context_consistency")
         self.assertIn("repeat_previous", policy["flags"])
         self.assertIn("overlap_previous", policy["flags"])
+
+    def test_context_consistency_annotates_tandem_repeat_inside_row(self):
+        annotated = annotate_subtitle_context_consistency(
+            [
+                {"start": 0.0, "end": 1.0, "text": "안 바뀌어요 안 바뀌어요"},
+            ],
+            {"subtitle_context_consistency_enabled": True},
+        )
+
+        policy = annotated[0]["_context_consistency_policy"]
+        self.assertIn("self_repeat_text", policy["flags"])
 
     def test_context_repair_drops_exact_repeats_and_fixes_overlaps(self):
         repaired, decision = repair_subtitle_context_consistency(

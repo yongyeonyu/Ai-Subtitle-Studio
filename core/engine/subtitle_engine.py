@@ -209,6 +209,7 @@ def _source_output_variant(segments: list[dict], vad_segments: list[dict] | None
     source = apply_final_gap_settings(source, settings or {}, force=True)
     source = align_stt_candidates_to_subtitle_segments(source)
     source = _apply_lora_style_micro_merge(source, vad_segments or [], settings or {}, stage="source")
+    source = _apply_final_sequence_cleanup(source, settings or {}, stage="source_variant")
     source = _self_review_subtitle_quality(source, vad_segments or [], settings or {})
     return _annotate_context_consistency(source, settings or {})
 
@@ -242,6 +243,8 @@ def _apply_output_variant_selector(
     decision = _compact_output_selector_decision(decision, stage=stage)
     selected = _apply_lora_style_micro_merge(selected, vad_segments or [], settings, stage=f"{stage}_selected")
     selected = apply_final_gap_settings(selected, settings, force=True)
+    selected = _apply_final_sequence_cleanup(selected, settings, stage=f"{stage}_selected")
+    selected = _annotate_context_consistency(selected, settings)
     selected_index = int(decision.get("selected_index", 0) if decision.get("selected_index") is not None else 0)
     selected_score = decision.get("selected_score")
     if selected_index > 0:

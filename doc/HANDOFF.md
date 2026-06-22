@@ -75,6 +75,15 @@
 - `tools/jammini_watchdog.sh --conversation-id auto`를 추가해 다음부터는 현재 프로젝트 workspace와 매칭되는 Antigravity 대화를 자동으로 선택할 수 있게 했습니다.
 - 이 기능은 로컬 handoff 경로 점검용입니다. Antigravity chat ACK나 worker route 성공 증명은 아닙니다.
 
+### 9. Duplicate subtitle guard added after v04.00.15 release snapshot
+
+- 중복 자막 원인은 주로 STT2 selective recheck replacement 내부의 근접 동일 문장과 output selector source 후보의 micro-merge 후 한 행 반복이 겹친 케이스로 정리했습니다.
+- `core/audio/stt_recheck_service.py`는 근접 동일 replacement row를 병합 전에 한 번 dedupe합니다.
+- `core/engine/subtitle_engine.py`는 source 후보와 최종 선택 결과 모두 후단 보정을 거치게 했습니다.
+- `core/engine/subtitle_final_integrity.py`는 `안 바뀌어요 안 바뀌어요`처럼 같은 토큰 묶음이 정확히 두 번 붙은 한 행 반복을 한 번으로 접습니다.
+- `core/engine/subtitle_accuracy_pipeline.py`는 한 행 내부 self-repeat을 context risk로 세고 annotation flag를 남깁니다.
+- 확인: `tests/test_stt_recheck_service.py`, `tests/test_subtitle_engine_settings.py`, `tests/test_subtitle_accuracy_pipeline.py` focused set 통과. 아직 새 Macau/X5 artifact promotion은 없습니다.
+
 ## Active Queue
 
 현재 상단 active queue는 `doc/ACTION_ITEMS.md`의 `Post-Generation Editor Readiness And Verification Index`입니다.

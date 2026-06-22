@@ -35,6 +35,16 @@ This document is the current verification ledger. Keep detailed logs in `output/
 
 ## Latest Focused Checks
 
+### 2026-06-22 Duplicate Subtitle Guard
+
+- Command: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py tests/test_subtitle_engine_settings.py tests/test_subtitle_accuracy_pipeline.py`
+- Result: `169 passed, 1 skipped, 3 subtests passed`
+- Additional checks:
+  - `./venv/bin/python -m py_compile core/audio/stt_recheck_service.py core/engine/subtitle_final_integrity.py core/engine/subtitle_engine.py core/engine/subtitle_accuracy_pipeline.py`: pass
+  - `git diff --check`: pass
+- Synthetic repro: close duplicate STT2 recheck rows and output-selector tandem repeats now both return `["안 바뀌어요"]`.
+- Caveat: no new Macau/X5 real-media benchmark artifact was promoted for this follow-up.
+
 ### 2026-06-22 Subtitle Accuracy Regression Lock
 
 - Command: `./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py tests/test_benchmark_mode_profiles.py`

@@ -1406,6 +1406,33 @@ class STTRecheckServiceTests(unittest.TestCase):
 
         self.assertEqual([seg["text"] for seg in merged], ["대체", "유지"])
 
+    def test_merge_segments_with_replacements_dedupes_close_duplicate_recheck_rows(self):
+        merged = stt_recheck_service.merge_segments_with_replacements(
+            base_segments=[
+                {"start": 21.1, "end": 22.7, "text": "원본"},
+            ],
+            applied_ranges=[
+                stt_rescue.SttRecheckRange(
+                    start=20.0,
+                    end=23.0,
+                    primary_score=30.0,
+                    secondary_score=90.0,
+                    primary_text="안 바뀌어요",
+                    secondary_text="안 바뀌어요",
+                    primary={},
+                    secondary={},
+                )
+            ],
+            applied_segments=[
+                {"start": 21.2538, "end": 21.5538, "text": "안 바뀌어요"},
+                {"start": 21.8538, "end": 22.5150, "text": "안 바뀌어요"},
+            ],
+        )
+
+        self.assertEqual([seg["text"] for seg in merged], ["안 바뀌어요"])
+        self.assertAlmostEqual(merged[0]["start"], 21.8538)
+        self.assertAlmostEqual(merged[0]["end"], 22.5150)
+
     def test_merge_segments_with_replacements_keeps_uncovered_stt1_text_inside_wide_recheck_range(self):
         merged = stt_recheck_service.merge_segments_with_replacements(
             base_segments=[

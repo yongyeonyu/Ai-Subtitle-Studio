@@ -33,6 +33,10 @@ def _segment_text(segment: dict[str, Any]) -> str:
     return str(segment.get("text") or "").strip()
 
 
+def _compact_recheck_text(text: Any) -> str:
+    return re.sub(r"\s+", "", str(text or "").strip()).lower()
+
+
 def _segment_chunk_path(segment: dict[str, Any]) -> str:
     meta = dict(segment.get("asr_metadata") or {})
     return str(meta.get("chunk_path") or segment.get("chunk_path") or "")
@@ -1922,7 +1926,7 @@ def select_recheck_replacements(
         applied_segments.extend(marked)
     return RecheckReplacementBatch(
         applied_ranges=applied_ranges,
-        applied_segments=applied_segments,
+        applied_segments=_dedupe_recheck_replacement_segments(applied_segments),
         skipped_ranges=skipped_ranges,
     )
 
@@ -2149,6 +2153,58 @@ def _meets_retention_ratio(
     return len(list(merged_segments or [])) >= minimum_kept
 
 
+def _recheck_replacement_preference_key(segment: dict[str, Any]) -> tuple[float, float, int, int]:
+    score = max(
+        _as_float(segment.get("stt_score"), 0.0),
+        _as_float(segment.get("score"), 0.0),
+        _as_float(segment.get("confidence"), 0.0),
+        _as_float(segment.get("confidence_score"), 0.0),
+    )
+    start = _as_float(segment.get("start"), 0.0)
+    end = max(start, _as_float(segment.get("end"), start))
+    metadata_size = len(dict(segment.get("asr_metadata") or {}))
+    return (score, end - start, metadata_size, len(_segment_text(segment)))
+
+
+def _segments_are_close_duplicates(left: dict[str, Any], right: dict[str, Any], *, max_gap_sec: float = 0.45) -> bool:
+    left_text = _compact_recheck_text(_segment_text(left))
+    right_text = _compact_recheck_text(_segment_text(right))
+    if not left_text or left_text != right_text or len(left_text) < 2:
+        return False
+    left_start = _as_float(left.get("start"), 0.0)
+    left_end = max(left_start, _as_float(left.get("end"), left_start))
+    right_start = _as_float(right.get("start"), 0.0)
+    right_end = max(right_start, _as_float(right.get("end"), right_start))
+    return max(left_start, right_start) <= min(left_end, right_end) + float(max_gap_sec)
+
+
+def _dedupe_recheck_replacement_segments(
+    applied_segments: list[dict[str, Any]],
+    *,
+    max_gap_sec: float = 0.45,
+) -> list[dict[str, Any]]:
+    rows = [
+        dict(seg)
+        for seg in list(applied_segments or [])
+        if isinstance(seg, dict) and _segment_text(seg)
+    ]
+    rows.sort(key=lambda seg: (_as_float(seg.get("start"), 0.0), _as_float(seg.get("end"), 0.0)))
+    deduped: list[dict[str, Any]] = []
+    for row in rows:
+        duplicate_index = None
+        for index, existing in enumerate(deduped):
+            if _segments_are_close_duplicates(existing, row, max_gap_sec=max_gap_sec):
+                duplicate_index = index
+                break
+        if duplicate_index is None:
+            deduped.append(row)
+            continue
+        if _recheck_replacement_preference_key(row) > _recheck_replacement_preference_key(deduped[duplicate_index]):
+            deduped[duplicate_index] = row
+    deduped.sort(key=lambda seg: (_as_float(seg.get("start"), 0.0), _as_float(seg.get("end"), 0.0)))
+    return deduped
+
+
 def merge_segments_with_replacements(
     *,
     base_segments: list[dict[str, Any]],
@@ -2161,6 +2217,8 @@ def merge_segments_with_replacements(
         updated = [seg for seg in base_segments or []]
         updated.sort(key=lambda seg: (_as_float(seg.get("start"), 0.0), _as_float(seg.get("end"), 0.0)))
         return updated
+
+    applied_segments = _dedupe_recheck_replacement_segments(applied_segments)
 
     # Regression note: STT2 rescue ranges are padded/wide requests, not a proof
     # that STT2 produced replacement text for the whole span. Dropping STT1 by
