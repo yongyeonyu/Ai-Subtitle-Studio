@@ -4,8 +4,13 @@ from core.cut_boundary import normalize_cut_boundaries
 from core.cut_boundary_audio import (
     AUDIO_GAIN_BOUNDARY_SOURCE,
     AUDIO_GAIN_LINE_COLOR,
+    AUDIO_SPECTRAL_BOUNDARY_SOURCE,
+    AUDIO_SPECTRAL_LINE_COLOR,
+    audio_spectral_flux_from_pcm16le,
     build_audio_gain_boundary_rows,
+    build_audio_spectral_flux_boundary_rows,
     detect_audio_gain_changes,
+    detect_audio_spectral_flux_changes,
 )
 
 
@@ -84,6 +89,49 @@ class CutBoundaryAudioTests(unittest.TestCase):
         self.assertNotIn("provisional_type", rows[0])
         self.assertNotIn("line_color", rows[0])
         self.assertNotIn("line_style", rows[0])
+
+    def test_spectral_flux_rows_capture_frequency_change_as_audio_hint(self):
+        try:
+            import numpy as np
+        except Exception as exc:
+            self.skipTest(f"numpy unavailable: {exc}")
+
+        sample_rate = 4000
+        tones = []
+        for frequency in (220, 1200, 220):
+            t = np.arange(sample_rate, dtype=np.float32) / float(sample_rate)
+            tones.append((np.sin(2.0 * np.pi * frequency * t) * 0.45 * 32767.0).astype("<i2"))
+        pcm = np.concatenate(tones).tobytes()
+
+        flux_levels = audio_spectral_flux_from_pcm16le(
+            pcm,
+            sample_rate=sample_rate,
+            window_sec=0.25,
+        )
+        candidates = detect_audio_spectral_flux_changes(
+            flux_levels,
+            threshold_multiplier=2.0,
+            min_gap_sec=0.4,
+            duration_sec=3.0,
+            edge_guard_sec=0.0,
+        )
+
+        self.assertTrue(any(0.9 <= float(candidate["local_sec"]) <= 1.3 for candidate in candidates))
+        rows = build_audio_spectral_flux_boundary_rows(
+            candidates[:1],
+            clip_offset=10.0,
+            clip_idx=1,
+            fps=30.0,
+            source_path="/tmp/sample.mp4",
+            threshold_multiplier=2.0,
+            window_sec=0.25,
+            sample_rate=sample_rate,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], AUDIO_SPECTRAL_BOUNDARY_SOURCE)
+        self.assertEqual(rows[0]["line_color"], AUDIO_SPECTRAL_LINE_COLOR)
+        self.assertEqual(rows[0]["provisional_type"], "audio_spectral_flux")
+        self.assertGreater(rows[0]["audio_spectral_flux_score"], 1.0)
 
 
 if __name__ == "__main__":

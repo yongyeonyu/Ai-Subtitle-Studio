@@ -10,7 +10,7 @@ from PyQt6.QtCore import QTimer
 from core.path_manager import get_srt_path
 from core.project.project_manager import create_project
 from ui.editor.editor_pipeline_safety import EditorPipelineSafetyMixin
-from ui.project.project_session_runtime import attach_project_session
+from ui.project.project_session_runtime import attach_project_session, set_project_boundary_rows
 
 
 class EditorPipelineStartupMixin(EditorPipelineSafetyMixin):
@@ -304,6 +304,75 @@ class EditorPipelineStartupMixin(EditorPipelineSafetyMixin):
                 clear_multiclip=False,
                 emit_boundary_signal=False,
             )
+
+        seeded_rows = []
+        try:
+            raw_seeded_rows = list(getattr(main_w, "_startup_exact_cut_boundary_seed_rows", []) or [])
+        except Exception:
+            raw_seeded_rows = []
+        try:
+            seeded_source = str(getattr(main_w, "_startup_exact_cut_boundary_seed_source", "") or "")
+        except Exception:
+            seeded_source = ""
+        if raw_seeded_rows and project_path and os.path.exists(project_path):
+            try:
+                from core.cut_boundary import normalize_cut_boundaries, sync_project_cut_boundaries
+                from core.project.project_format import project_primary_fps
+                from core.project.project_io import read_project_file, write_project_file
+
+                project = read_project_file(project_path)
+                primary_fps = float(project_primary_fps(project) or 30.0)
+                seeded_rows = normalize_cut_boundaries(raw_seeded_rows, primary_fps=primary_fps)
+                if seeded_rows:
+                    project["user_settings"] = dict(getattr(self, "settings", {}) or {})
+                    analysis = project.setdefault("analysis", {})
+                    analysis["cut_boundaries"] = [dict(row) for row in seeded_rows]
+                    analysis["cut_boundary_provisional_boundaries"] = []
+                    for key in (
+                        "cut_boundary_prescan_done",
+                        "cut_boundary_cache_path",
+                        "cut_boundary_cache_type",
+                        "cut_boundary_resume_required",
+                        "cut_boundary_resume_reason",
+                    ):
+                        analysis.pop(key, None)
+                    sync_project_cut_boundaries(
+                        project,
+                        settings=project.get("user_settings", {}),
+                        primary_fps=primary_fps,
+                    )
+                    write_project_file(project_path, project)
+                    set_project_boundary_rows(main_w, seeded_rows, emit_boundary_signal=True)
+                    if backend is not None:
+                        try:
+                            setattr(backend, "_force_cut_boundary_rescan_once", False)
+                            setattr(backend, "_cut_boundary_prescan_completed", True)
+                        except Exception:
+                            pass
+                    try:
+                        from core.runtime.logger import get_logger
+
+                        suffix = f" ({os.path.basename(seeded_source)})" if seeded_source else ""
+                        get_logger().log(
+                            f"  🎬 [컷 경계] exact join seed 재사용: {len(seeded_rows)}개{suffix}"
+                        )
+                    except Exception:
+                        pass
+            except Exception as exc:
+                try:
+                    from core.runtime.logger import get_logger
+
+                    get_logger().log(f"  ⚠️ [컷 경계] exact join seed 적용 실패: {exc}")
+                except Exception:
+                    pass
+            finally:
+                try:
+                    main_w._startup_exact_cut_boundary_seed_rows = []
+                    main_w._startup_exact_cut_boundary_seed_source = ""
+                except Exception:
+                    pass
+            if seeded_rows:
+                return
 
         if backend is not None and hasattr(backend, "_auto_scan_cut_boundaries_for_start"):
             self._pipeline_best_effort(

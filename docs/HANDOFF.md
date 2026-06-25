@@ -33,6 +33,432 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-25 Addendum - Pioneer Candidate Fusion And Spectral Audio Hints
+
+### Scope
+
+- The cut-boundary pioneer now absorbs the 1-4 analysis plan as provisional evidence: richer visual jump metrics, packet/scene hints, audio spectral flux hints, and a fusion helper before follower verification.
+- Fusion is still not exact metadata. It only clusters pioneer candidates and marks confidence/decision fields; the follower remains responsible for final confirmation, relocation, or deletion.
+
+### Files touched in this slice
+
+- `core/cut_boundary_candidate_fusion.py`
+- `core/cut_boundary_audio.py`
+- `core/cut_boundary_auto_scan.py`
+- `core/visual_cut_jump.py`
+- `core/settings_profiles.py`
+- `tests/test_cut_boundary_candidate_fusion.py`
+- `tests/test_cut_boundary_audio.py`
+- `tests/test_visual_cut_jump.py`
+- `tests/test_cut_boundary_auto_scan_backend.py`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/cut_boundary_candidate_fusion.py core/cut_boundary_audio.py core/cut_boundary_auto_scan.py core/visual_cut_jump.py core/settings_profiles.py tests/test_cut_boundary_candidate_fusion.py tests/test_cut_boundary_audio.py tests/test_visual_cut_jump.py tests/test_cut_boundary_auto_scan_backend.py`
+- `./venv/bin/python -m pytest tests/test_cut_boundary_candidate_fusion.py tests/test_cut_boundary_audio.py tests/test_visual_cut_jump.py tests/test_cut_boundary_auto_scan_backend.py -q`
+  - `38 passed`
+- `./venv/bin/python -m pytest tests/test_cut_boundary_candidate_fusion.py tests/test_cut_boundary_audio.py tests/test_visual_cut_jump.py tests/test_cut_boundary_auto_scan_backend.py tests/test_cut_boundary_fusion.py tests/test_cut_boundary_middle.py tests/test_cut_boundary_native_plan.py tests/test_subtitle_cut_boundary_facade.py tests/test_runtime_optimization_profile.py -q`
+  - `90 passed`
+
+### Evidence
+
+- artifact root:
+  - `output/manual_verification/latest/20260625_cut_boundary_candidate_fusion_probe/`
+- synthetic fixture:
+  - `synthetic_three_cuts.mp4` has visual color cuts and audio frequency shifts at about 2s and 4s.
+  - `synthetic_summary.json` shows `row_count=2`, `fusion_row_count=2`, and both rows with `fusion_sources=["audio_spectral", "scene"]`, `fusion_confidence="high"`, `fusion_decision="keep"`.
+- X5 fixture check:
+  - the historical MP4 path from `AGENTS.md` was absent in this workspace.
+  - the available `test video/X5_시승기_후반_자막소스.mov` opened and completed the bounded pioneer probe, but produced `row_count=0` for the chosen short settings.
+
+### Remaining risk
+
+- This slice validates the new candidate generation/fusion mechanics and a synthetic hard-cut fixture, not a full real-app X5 rolling QA run.
+- A wider real-media pass should be run before promoting this as a quality baseline, especially to tune false positives from spectral flux on music/noise-heavy source.
+
+## 2026-06-25 Addendum - Exact Join Metadata Priority For Existing SRT Projects
+
+### Scope
+
+- Live recheck showed that a fresh sidecar-only roughcut import already restored `stitched_cut_boundaries`, but a same-stem existing `.aissproj` could shadow the adjacent `*_edl.json` / `*_render_plan.json` and fall back to cut-boundary prescan.
+- The SRT open path now loads exact stitched join sidecars even when a linked project is found, keeps project subtitle metadata restore, and lets the sidecar rows override `_project_boundary_times` plus the startup exact seed.
+- `Start` now applies `_startup_exact_cut_boundary_seed_rows` for both newly created direct-SRT projects and existing linked projects before it can schedule background cut-boundary analysis.
+
+### Files touched in this slice
+
+- `ui/editor/editor_lifecycle.py`
+- `ui/editor/editor_pipeline_startup.py`
+- `tests/test_editor_srt_open_refresh.py`
+- `tests/test_cp03_cp04_status_ui.py`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile ui/editor/editor_lifecycle.py ui/editor/editor_pipeline_startup.py tests/test_editor_srt_open_refresh.py tests/test_cp03_cp04_status_ui.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_srt_open_refresh.py -k 'linked_project_srt_open_prioritizes_exact_join_sidecar_boundaries or unlinked_srt_open_restores_stitched_boundaries_from_render_plan_sidecar'`
+  - `2 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cp03_cp04_status_ui.py -k 'exact_join_seed_for_existing_project or exact_join_seed_for_new_project'`
+  - `2 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_srt_open_refresh.py tests/test_cp03_cp04_status_ui.py tests/test_project_segment_reload.py tests/test_project_cut_boundary_resume.py tests/test_roughcut_engine1.py tests/test_roughcut_ui_v2.py tests/test_roughcut_v2_output_compat.py tests/test_cut_boundary_auto_scan_backend.py`
+  - `264 passed`
+- `git diff --check -- ui/editor/editor_lifecycle.py ui/editor/editor_pipeline_startup.py tests/test_editor_srt_open_refresh.py tests/test_cp03_cp04_status_ui.py docs/HANDOFF.md`
+  - passed
+
+### Evidence
+
+- artifact root:
+  - `output/manual_verification/latest/20260625_095456_roughcut_exact_join_live_recheck/`
+- isolated sidecar import:
+  - `isolated_summary.json` shows `isolated_exact_join_import_edl.json (3개)` restored, exact seed reused, and project `analysis.cut_boundaries` saved at `4.0 / 8.0 / 12.0`.
+- patched existing-project import:
+  - `patched_existing_project/summary.json` shows both `SRT 메타데이터 복원: compare_clip_roughcut.aissproj` and `roughcut stitched cut boundaries 복원: compare_clip_roughcut_edl.json (3개)`.
+  - `Start` logged `exact join seed 재사용: 3개`, saved project `analysis.cut_boundaries` at `4.0 / 8.0 / 12.0`, and had no sidecar-case background prescan lines.
+  - no-sidecar control still logged `백그라운드 자동 분석 시작`.
+
+### Remaining risk
+
+- This proof uses the existing 4-segment X5-derived roughcut fixture. A longer real 선발대 export should still be timed separately if we want wall-clock numbers beyond proving prescan skip.
+- The desktop fix covers same-stem `.aissproj` shadowing. iOS import still needs its own implementation to read the same `stitched_cut_boundaries` contract into `cut_exact` snap candidates.
+
+## 2026-06-23 Addendum - Packet-scout Refine For Roughcut Pioneer Boundaries
+
+### Scope
+
+- `packet scout` provisional 경로가 후보마다 비디오 캡처를 다시 열지 않도록 묶고, 같은 경로에서 strict verifier가 돌려준 정밀 시간을 provisional row에 반영하도록 보강했습니다.
+- 목적은 러프컷 선발대가 이어 붙인 컷 경계를 더 이른 단계에서 더 정확히 잡되, 후보 확정 전 full follower 검증을 기다리지 않아도 되는 방향으로 owner surface를 좁히는 것입니다.
+
+### Files touched in this slice
+
+- `core/cut_boundary_auto_scan.py`
+- `tests/test_cut_boundary_auto_scan_backend.py`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/cut_boundary_auto_scan.py tests/test_cut_boundary_auto_scan_backend.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_cut_boundary_ffmpeg_scene.py tests/test_cut_boundary_fusion.py tests/test_roughcut_major_boundary.py`
+- `git diff --check -- core/cut_boundary_auto_scan.py tests/test_cut_boundary_auto_scan_backend.py`
+
+### Remaining risk
+
+- 아직 Macau/X5 또는 실제 이어붙인 러프컷 샘플에 대한 source-app 실증은 하지 않았습니다. 현재 증빙은 unit-level packet-scout/roughcut guard에 한정됩니다.
+- packet metadata 분포가 매우 특이한 파일에서는 MAD 기반 후보 선택이 여전히 민감할 수 있으므로, 실샘플에서 provisional line 밀도와 follower 정정 결과를 같이 봐야 합니다.
+
+### Recommended next step
+
+- source app 또는 fixture 스크립트에서 실제 이어붙인 러프컷 샘플을 한 번 돌려 `packet scout` provisional line 시점과 follower 최종 확정 시점이 얼마나 가까워졌는지 저장 artifact로 남깁니다.
+
+## 2026-06-23 Addendum - Exact Stitched Join Boundaries In EDL And Render Plan
+
+### Scope
+
+- 이어붙인 roughcut 출력 영상의 join 경계를 다시 영상 분석으로 추정하지 않고, 이미 알고 있는 `EDLSegment.output_*`에서 exact stitched cut boundary row를 직접 만들도록 보강했습니다.
+- 이 경계는 `EDL JSON`, `RenderCommandPlan`, `RenderExecutionResult(dry_run 포함)`에 함께 실리므로, 다음 단계에서 reopen/import 또는 재스캔 생략 경로가 이 데이터를 바로 재사용할 수 있습니다.
+
+### Files touched in this slice
+
+- `core/roughcut/edl_generator.py`
+- `core/roughcut/renderer_skeleton.py`
+- `core/roughcut/render_executor.py`
+- `core/roughcut/__init__.py`
+- `tests/test_roughcut_engine1.py`
+- `tests/test_roughcut_v2_output_compat.py`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/roughcut/edl_generator.py core/roughcut/renderer_skeleton.py core/roughcut/render_executor.py core/roughcut/__init__.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_cut_boundary_ffmpeg_scene.py tests/test_cut_boundary_fusion.py tests/test_roughcut_major_boundary.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py`
+- `git diff --check -- core/roughcut/edl_generator.py core/roughcut/renderer_skeleton.py core/roughcut/render_executor.py core/roughcut/__init__.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py`
+
+### Remaining risk
+
+- 아직 이 exact stitched boundary row를 source-app project reopen 또는 cut-boundary cache preload가 실제로 소비하지는 않습니다. 현재는 artifact/contract 단계까지 연결한 상태입니다.
+- output fps를 모르는 export artifact에서는 time-based exact join을 저장하고, frame 값은 일반 cut-boundary normalizer 기본 fps를 따릅니다. 실제 importer에서 재사용할 때는 output media fps와 함께 normalize하는 편이 더 안전합니다.
+
+### Recommended next step
+
+- rendered roughcut 또는 saved roughcut EDL/render-plan을 다시 열 때 `stitched_cut_boundaries`를 `analysis.cut_boundaries` 또는 startup provisional hint로 주입해, 이어붙인 roughcut 영상에서 선발대 재스캔을 줄이는 reopen path를 붙입니다.
+
+## 2026-06-23 Addendum - Direct SRT Reopen Reuses Roughcut Stitched Boundaries
+
+### Scope
+
+- direct SRT reopen 경로가 인접한 roughcut sidecar(`*_roughcut_render_plan.json`, `*_roughcut_edl.json`, 동일 stem의 `_render_plan.json`/`_edl.json`)에서 `stitched_cut_boundaries`를 읽어 `owner._project_boundary_times`로 복원하는 흐름을 고정했습니다.
+- 목적은 이어붙인 roughcut 산출물을 subtitle-only로 다시 열어도 exact join 경계를 바로 복원해, 선발대가 이미 알고 있는 join을 다시 prescan 하지 않도록 reopen bootstrap을 좁히는 것입니다.
+
+### Files touched in this slice
+
+- `ui/editor/editor_project_open_native.py`
+- `ui/editor/editor_lifecycle.py`
+- `tests/test_editor_srt_open_refresh.py`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile ui/editor/editor_project_open_native.py ui/editor/editor_lifecycle.py tests/test_editor_srt_open_refresh.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_cut_boundary_auto_scan_backend.py`
+- `git diff --check -- ui/editor/editor_project_open_native.py ui/editor/editor_lifecycle.py tests/test_editor_srt_open_refresh.py docs/HANDOFF.md`
+
+### Remaining risk
+
+- 현재 증빙은 unit/integration 수준의 direct SRT reopen bootstrap까지입니다. source-app에서 실제 `*_roughcut.srt` 재열기 후 roughcut draft 또는 start 시 rescanning 로그가 줄어드는지는 아직 실아티팩트로 남기지 않았습니다.
+- media stem fallback sidecar 탐색은 rename된 subtitle-only 파일에서도 도움이 되지만, 같은 폴더에 비슷한 산출물이 많은 경우 잘못된 sidecar를 집을 가능성은 실샘플에서 한 번 더 보는 편이 안전합니다.
+
+### Recommended next step
+
+- source app에서 실제 roughcut export 결과(`*_roughcut.srt` + `*_roughcut_render_plan.json`)를 다시 열고, timeline boundary 표시와 roughcut 재진입 시 cut-boundary prescan 로그/시간이 줄었는지 artifact로 남깁니다.
+
+## 2026-06-23 Addendum - Roughcut Project Reopen Uses Embedded Exact Join Boundaries
+
+### Scope
+
+- roughcut 프로젝트 자체에 저장된 selected candidate `outputs.render_plan/edl.stitched_cut_boundaries`를 `get_boundary_times()` fallback으로 읽어 reopen 시 즉시 runtime boundary로 복원하도록 연결했습니다.
+- project reopen 후 `analysis.cut_boundaries`가 비어 있어도 roughcut_state 안의 exact join이 있으면 그것을 정식 경계로 seed하고, stale prescan/cache/provisional 상태를 지운 뒤 background prescan 재시작을 생략하도록 보강했습니다.
+
+### Files touched in this slice
+
+- `core/project/project_manager.py`
+- `ui/project/project_panel.py`
+- `tests/test_project_segment_reload.py`
+- `tests/test_project_cut_boundary_resume.py`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/project/project_manager.py ui/project/project_panel.py tests/test_project_segment_reload.py tests/test_project_cut_boundary_resume.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py tests/test_project_cut_boundary_resume.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_cut_boundary_auto_scan_backend.py`
+- `git diff --check -- core/project/project_manager.py ui/project/project_panel.py tests/test_project_segment_reload.py tests/test_project_cut_boundary_resume.py docs/HANDOFF.md`
+
+### Remaining risk
+
+- 아직 `start` 직전 새 프로젝트 생성 경로에서는 runtime에만 있는 exact join을 cut-boundary cache fast path로 바로 승격하지 않았습니다. 즉 direct SRT reopen 후 새 프로젝트를 만들며 시작하는 경우는 여전히 별도 prescan 단축 여지가 남아 있습니다.
+- 현재 no-rescan fast path는 project payload 안에 roughcut selected candidate outputs가 들어 있는 reopen 케이스에 집중합니다. sidecar-only 단독 파일 시작 경로는 다음 슬라이스에서 source-app 실증과 함께 보는 편이 안전합니다.
+
+### Recommended next step
+
+- direct SRT reopen에서 가져온 exact join rows를 `start` 직전 project/cache seed로 연결해, 새 프로젝트 생성 후에도 full prescan 대신 cache reuse로 바로 들어가게 할 수 있는지 source-app artifact와 함께 검증합니다.
+
+## 2026-06-23 Addendum - Direct SRT Start Reuses Exact Join Seed Before Prescan
+
+### Scope
+
+- direct SRT reopen에서 sidecar로 복원한 `stitched_cut_boundaries`를 `_startup_exact_cut_boundary_seed_rows`로 따로 보존하고, `Start` 직전 새 프로젝트 생성 경로에서 이 seed를 프로젝트 `analysis.cut_boundaries`와 runtime boundary rows로 다시 심도록 연결했습니다.
+- seed가 성공적으로 적용되면 backend prescan을 시작하지 않고 `_cut_boundary_prescan_completed=True`로 바로 넘기므로, 이어붙인 roughcut 출력의 exact join 경계는 full prescan 없이 바로 STT/roughcut 흐름에 사용됩니다.
+
+### Files touched in this slice
+
+- `ui/editor/editor_lifecycle.py`
+- `ui/editor/editor_pipeline_startup.py`
+- `tests/test_editor_srt_open_refresh.py`
+- `tests/test_cp03_cp04_status_ui.py`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile ui/editor/editor_lifecycle.py ui/editor/editor_pipeline_startup.py tests/test_editor_srt_open_refresh.py tests/test_cp03_cp04_status_ui.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cp03_cp04_status_ui.py tests/test_editor_srt_open_refresh.py tests/test_project_segment_reload.py tests/test_project_cut_boundary_resume.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_cut_boundary_auto_scan_backend.py`
+- `git diff --check -- ui/editor/editor_lifecycle.py ui/editor/editor_pipeline_startup.py tests/test_editor_srt_open_refresh.py tests/test_cp03_cp04_status_ui.py docs/HANDOFF.md`
+
+### Remaining risk
+
+- 현재 fast path는 direct SRT reopen에서 sidecar를 통해 exact join을 이미 읽어 둔 경우에만 작동합니다. sidecar를 아직 읽지 않은 일반 새 파일 시작 경로는 여전히 기존 prescan 경로를 탑니다.
+- source-app 실증은 아직 없습니다. 실제 앱에서 `*_roughcut.srt`를 열고 바로 `Start` 했을 때 prescan 로그가 생략되는지와 체감 시작 시간이 줄어드는지는 artifact로 남겨야 합니다.
+
+### Recommended next step
+
+- source app에서 `*_roughcut.srt` + `*_roughcut_render_plan.json` 조합을 다시 열고 즉시 `Start` 하여, cut-boundary prescan 로그 생략 여부와 startup latency 차이를 artifact로 남깁니다.
+
+## 2026-06-23 Addendum - Source-App Proof For Direct SRT Exact Join Seed Reuse
+
+### Scope
+
+- synthetic roughcut-style fixture(`x5_exact_seed_verify.srt` + sibling `.mov` + `*_roughcut_render_plan.json`)를 source app에서 직접 열고, sidecar exact join 복원과 `Start` 직전 prescan 생략 경로를 실제 앱 자동화로 확인했습니다.
+- 목적은 이번 슬라이스가 unit/integration 수준을 넘어서 live source-app에서도 같은 bootstrap을 타는지 증거를 남기는 것입니다.
+
+### Files touched in this slice
+
+- `output/manual_verification/latest/20260623_roughcut_exact_join_seed_source_app/fixture/x5_exact_seed_verify_roughcut_render_plan.json`
+- `output/manual_verification/latest/20260623_roughcut_exact_join_seed_source_app/verification_summary.md`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- source app bootstrap/readiness:
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python - <<'PY' ... _ensure_app_ready(...)`
+- live source-app automation proof:
+  - `./venv/bin/python tools/appctl.py --timeout 6 open-srt output/manual_verification/latest/20260623_roughcut_exact_join_seed_source_app/fixture/x5_exact_seed_verify.srt`
+  - `./venv/bin/python tools/appctl.py --timeout 6 status`
+  - `./venv/bin/python tools/appctl.py --timeout 8 capture-snapshot output/manual_verification/latest/20260623_roughcut_exact_join_seed_source_app/snapshots/after_open.png`
+  - `./venv/bin/python tools/appctl.py --timeout 6 start-current-pipeline`
+  - `./venv/bin/python tools/appctl.py --timeout 6 status`
+- persisted project payload check:
+  - `./venv/bin/python - <<'PY' ... load_project('projects/x5_exact_seed_verify.aissproj') ...`
+
+### Evidence
+
+- artifact root:
+  - `output/manual_verification/latest/20260623_roughcut_exact_join_seed_source_app/`
+- direct reopen proof:
+  - `commands/status_after_open.json`의 `recent_logs`에 `🎬 roughcut stitched cut boundaries 복원: x5_exact_seed_verify_roughcut_render_plan.json (1개)`가 남아 있습니다.
+- immediate start proof:
+  - live source-app terminal log에서 `🎬 [컷 경계] exact join seed 재사용: 1개 (x5_exact_seed_verify_roughcut_render_plan.json)`를 확인했습니다.
+  - `commands/status_after_start.json`과 `commands/status_after_start_poll2.json`에서 `editor_aux_counts.provisional_cut_boundary_count=0`입니다.
+  - `commands/project_after_start.json`에서 새 프로젝트 `analysis.cut_boundaries`에 `timeline_sec=4.0` exact join row가 저장됐고, `provisional_cut_boundaries`, `cut_boundary_prescan_state`, `cut_boundary_cache`는 비어 있습니다.
+- no-prescan check:
+  - `commands/no_background_prescan_check.txt`에 `NO_BACKGROUND_PRESCAN_LOG_IN_STATUS_ARTIFACTS`
+
+### Remaining risk
+
+- 이번 source-app proof는 synthetic sidecar fixture 한 건입니다. 실제 roughcut export가 만든 `*_roughcut.srt`/`*_roughcut_render_plan.json` 조합으로 같은 흐름을 한 번 더 남기면 더 안전합니다.
+- 현재 증거는 prescan 생략 여부와 exact join persistence에 집중합니다. 체감 startup latency의 전/후 wall-clock 비교는 아직 별도 숫자 artifact로 정리하지 않았습니다.
+
+### Recommended next step
+
+- 실제 roughcut export 산출물을 다시 열어 같은 proof를 한 번 더 남기고, 가능하면 `Start` 클릭 후 editor ready 또는 첫 stage 진입까지의 elapsed를 전/후 비교 숫자로 추가합니다.
+
+## 2026-06-23 Addendum - Roughcut SRT Export Writes Exact-Join Sidecars
+
+### Scope
+
+- `roughcut SRT`를 따로 export할 때 adjacent reopen sidecar가 비어 있던 간극을 줄이기 위해, export 시점에 exact join 정보를 담은 `*_edl.json`과 `*_render_plan.json`을 같은 stem으로 함께 저장하도록 연결했습니다.
+- 목적은 사용자가 roughcut subtitle만 따로 저장해도 direct SRT reopen에서 exact stitched join 경계를 즉시 복원할 수 있게 만드는 것입니다.
+
+### Files touched in this slice
+
+- `ui/roughcut/roughcut_export.py`
+- `tests/test_roughcut_ui_v2.py`
+- `output/manual_verification/latest/20260623_roughcut_export_sidecar_proof/verification_summary.md`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile ui/roughcut/roughcut_export.py tests/test_roughcut_ui_v2.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k 'exported_roughcut_srt_writes_exact_join_sidecars_for_reopen or major_card_reorder_changes_exported_srt_order or chapter_reorder_changes_exported_srt_order'`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py`
+- `git diff --check -- ui/roughcut/roughcut_export.py tests/test_roughcut_ui_v2.py docs/HANDOFF.md`
+
+### Evidence
+
+- artifact root:
+  - `output/manual_verification/latest/20260623_roughcut_export_sidecar_proof/`
+- exported files:
+  - `clip_roughcut.srt`
+  - `clip_roughcut_edl.json`
+  - `clip_roughcut_render_plan.json`
+- proof summary:
+  - `verification_summary.md`
+  - `summary.json`
+- key result:
+  - export return payload에 `render_plan_path`, `edl_path`, `stitched_cut_boundary_count=1`
+  - reopen loader가 `clip_roughcut_edl.json`에서 `timeline_sec=4.0` exact join row를 바로 읽었습니다.
+
+### Remaining risk
+
+- 이번 증빙은 offscreen widget/export integration artifact 기준입니다. 실제 live source-app roughcut 화면에서 버튼으로 export한 결과까지는 아직 별도 snapshot/automation artifact로 남기지 않았습니다.
+- 현재 reopen loader는 먼저 `_edl.json`을 집고, 그다음 `_render_plan.json`을 봅니다. 두 sidecar가 동시에 있을 때의 우선순위는 의도된 상태이지만, 실제 export UX에서 이 우선순위를 바꿔야 할지까지는 아직 결정하지 않았습니다.
+
+### Recommended next step
+
+- live source-app roughcut 화면에서 실제 export 버튼 또는 automation `roughcut-export-srt`로 같은 산출물을 만들고, 그 SRT를 다시 열어 exact join restore + immediate `Start` prescan skip까지 한 번에 이어지는 artifact를 남깁니다.
+
+## 2026-06-23 Addendum - Live Roughcut Export Reopen Chain
+
+### Scope
+
+- saved roughcut project를 live source-app에서 열고 `roughcut-export-srt`로 실제 `*_roughcut.srt`/sidecar를 생성한 뒤, exported roughcut video까지 만든 다음 direct SRT reopen + immediate `Start` 경로를 한 번에 검증했습니다.
+- 목적은 이번 exact join fast path가 synthetic fixture나 offscreen export만이 아니라, 실제 roughcut export 산출물 체인에서도 이어지는지 확인하는 것입니다.
+
+### Files touched in this slice
+
+- `output/manual_verification/latest/20260623_live_roughcut_export_chain/verification_summary.md`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- live app project/roughcut/export path:
+  - `./venv/bin/python tools/appctl.py --timeout 6 open-project /Users/u_mo_c/Downloads/ai_subtitle_studio/projects/codex_live_roughcut_export_chain_20260623.aissproj`
+  - `./venv/bin/python tools/appctl.py --timeout 6 open-roughcut`
+  - `./venv/bin/python tools/appctl.py --timeout 8 roughcut-export-srt output/manual_verification/latest/20260623_live_roughcut_export_chain/exports/live_clip_roughcut.srt`
+- exported render-plan execution:
+  - `./venv/bin/python - <<'PY' ... RenderCommandPlan(...); run_render_plan(plan, dry_run=False) ...`
+- exported SRT reopen/start proof:
+  - `./venv/bin/python tools/appctl.py --timeout 8 open-srt output/manual_verification/latest/20260623_live_roughcut_export_chain/exports/live_clip_roughcut.srt`
+  - `./venv/bin/python tools/appctl.py --timeout 6 status`
+  - `./venv/bin/python tools/appctl.py --timeout 6 start-current-pipeline`
+  - `./venv/bin/python tools/appctl.py --timeout 6 status`
+- persisted project payload check:
+  - `./venv/bin/python - <<'PY' ... load_project('projects/live_clip_roughcut.aissproj') ...`
+
+### Evidence
+
+- artifact root:
+  - `output/manual_verification/latest/20260623_live_roughcut_export_chain/`
+- live project open proof:
+  - live terminal log에 `🎬 [컷 경계] roughcut exact join 복원: 1개`
+- export proof:
+  - `commands/roughcut_export_srt.json`에서 `render_plan_path`, `edl_path`, `stitched_cut_boundary_count=1`
+  - `commands/render_exported_plan.json`에서 실제 `exports/live_clip_roughcut.mov` 생성, `return_codes=[0,0,0]`
+- reopen proof:
+  - `commands/status_after_exported_open.json`의 `recent_logs`에 `🎬 roughcut stitched cut boundaries 복원: live_clip_roughcut_edl.json (1개)`
+  - reopen된 `editor_media_path`는 실제 rendered file `exports/live_clip_roughcut.mov`
+- immediate start proof:
+  - live terminal log와 `commands/status_after_exported_start.json`에 `🎬 [컷 경계] exact join seed 재사용: 1개 (live_clip_roughcut_edl.json)`
+  - `commands/project_after_exported_start.json`에서 새 프로젝트 `analysis.cut_boundaries[0].timeline_sec=4.0`, `provisional_cut_boundaries=null`, `cut_boundary_prescan_state=null`, `cut_boundary_cache=null`
+  - `commands/no_background_prescan_check.txt`에 `NO_BACKGROUND_PRESCAN_LOG_IN_LIVE_EXPORT_CHAIN_STATUS`
+
+### Remaining risk
+
+- 이번 proof는 최소 2-segment live roughcut fixture 기준입니다. 더 긴 실제 선발대 output에서 boundary 개수가 많아질 때도 같은 reopen/start 이득이 유지되는지는 추가 실측이 있으면 더 좋습니다.
+- 현재 비교는 prescan skip 유무와 persistence 중심입니다. startup latency 전/후 wall-clock 비교 숫자는 아직 별도 summary로 정리하지 않았습니다.
+
+### Recommended next step
+
+- boundary가 여러 개인 실제 선발대 roughcut export로 같은 체인을 한 번 더 돌리고, `open-srt ready`와 `start-current-pipeline accepted -> 첫 stage 진입`까지 elapsed를 숫자로 비교해 둡니다.
+
+## 2026-06-23 Addendum - Multi-Boundary Sidecar Vs No-Sidecar Compare
+
+### Scope
+
+- stitched join이 3개인 multi-boundary roughcut export를 실제로 만들고, 같은 rendered roughcut video에 대해 `sidecar 없음`과 `sidecar 있음` direct SRT reopen/start를 live source-app에서 비교했습니다.
+- 목적은 이번 방법의 핵심 이득이 `open 자체`가 아니라 `Start 이후 background cut-boundary prescan 제거`라는 점을 실제 비교로 남기는 것입니다.
+
+### Files touched in this slice
+
+- `output/manual_verification/latest/20260623_live_roughcut_compare_chain/verification_summary.md`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- live export chain:
+  - `./venv/bin/python tools/appctl.py --timeout 8 roughcut-export-srt output/manual_verification/latest/20260623_live_roughcut_compare_chain/exports/compare_clip_roughcut.srt`
+  - exported render plan executed via `run_render_plan(...)`
+- no-sidecar control:
+  - `./venv/bin/python tools/appctl.py --timeout 8 open-srt output/manual_verification/latest/20260623_live_roughcut_compare_chain/exports/nosidecar_case/compare_clip_nosidecar.srt`
+  - `./venv/bin/python tools/appctl.py --timeout 6 start-current-pipeline`
+- sidecar case:
+  - `./venv/bin/python tools/appctl.py --timeout 8 open-srt output/manual_verification/latest/20260623_live_roughcut_compare_chain/exports/compare_clip_roughcut.srt`
+  - `./venv/bin/python tools/appctl.py --timeout 6 start-current-pipeline`
+
+### Evidence
+
+- artifact root:
+  - `output/manual_verification/latest/20260623_live_roughcut_compare_chain/`
+- no-sidecar:
+  - `commands/status_after_nosidecar_open.json`에는 stitched restore 로그가 없습니다.
+  - live terminal에 `🎬 [컷 경계] 백그라운드 자동 분석 시작`
+  - `commands/status_after_nosidecar_start.json`에서 `generation_stage=컷 경계 중분류 세그먼트 확정 중`, `last_stage_key=cut-boundary`
+  - `commands/project_after_nosidecar_start.json`에서 `analysis_cut_boundaries=[]`
+- sidecar:
+  - `commands/status_after_sidecar_open.json`의 `recent_logs`에 `🎬 roughcut stitched cut boundaries 복원: compare_clip_roughcut_edl.json (3개)`
+  - live terminal과 `commands/status_after_sidecar_start.json`에 `🎬 [컷 경계] exact join seed 재사용: 3개 (compare_clip_roughcut_edl.json)`
+  - `commands/project_after_sidecar_start.json`에서 `analysis.cut_boundaries`가 `4.0 / 8.0 / 12.0` exact join row로 바로 저장됨
+
+### Remaining risk
+
+- 이번 비교는 multi-boundary 4-segment fixture 기준입니다. 더 긴 실제 선발대 output에서 worker 수, cache hit, memory pressure가 달라질 때의 wall-clock 차이는 아직 숫자로 요약하지 않았습니다.
+- 즉시 재사용과 prescan skip은 증명됐지만, `open-srt ready` 자체가 항상 더 빨라진다고 주장할 근거는 아직 없습니다. 현재 방법의 핵심 이득은 `Start 이후 분석 단계 제거`입니다.
+
+### Recommended next step
+
+- 실제 더 긴 선발대 output으로 동일 비교를 한 번 더 돌리고, `open-srt ready`, `start accepted`, `첫 STT stage 진입` 또는 `editor usable`까지의 elapsed를 별도 숫자 summary로 추가합니다.
+
 ## 2026-06-01 Addendum - Apple Speech Hidden Challenger Slice
 
 ### Scope

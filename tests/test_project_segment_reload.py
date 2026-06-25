@@ -1296,6 +1296,51 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         self.assertEqual(project["analysis"]["cut_boundaries"][0]["timeline_sec"], 5.0)
 
+    def test_get_boundary_times_falls_back_to_selected_roughcut_stitched_rows(self):
+        project = {
+            "timeline": {
+                "tracks": [
+                    {
+                        "clips": [
+                            {"source_path": "/tmp/a.mp4", "timeline_start": 0.0, "timeline_end": 12.0},
+                            {"source_path": "/tmp/b.mp4", "timeline_start": 12.0, "timeline_end": 24.0},
+                        ]
+                    }
+                ]
+            },
+            "analysis": {
+                "cut_boundaries": [],
+            },
+            "roughcut_state": {
+                "selected_candidate_id": "candidate_a",
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_a",
+                        "outputs": {
+                            "render_plan": {
+                                "stitched_cut_boundaries": [
+                                    {
+                                        "timeline_sec": 4.0,
+                                        "timeline_frame": 120,
+                                        "fps": 30.0,
+                                        "source": "roughcut_concat_join",
+                                        "reason": "roughcut_concat_segment_join",
+                                        "verified": True,
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ],
+            },
+        }
+
+        boundaries = get_boundary_times(project)
+
+        self.assertEqual(len(boundaries), 1)
+        self.assertEqual(boundaries[0]["timeline_sec"], 4.0)
+        self.assertEqual(boundaries[0]["source"], "roughcut_concat_join")
+
     def test_reload_replaces_pending_segments_before_project_restore(self):
         editor = _Editor()
         restored = [{"start": 1.0, "end": 2.0, "text": "restored"}]

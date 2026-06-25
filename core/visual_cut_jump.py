@@ -71,6 +71,96 @@ def _safe_canny(gray, cv2_mod, low: int, high: int):
         return None
 
 
+def _gray_histogram(gray, *, bins: int = 32):
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    try:
+        hist, _edges = np.histogram(gray, bins=max(8, int(bins or 32)), range=(0, 256))
+        total = float(hist.sum())
+        if total <= 0.0:
+            return None
+        return hist.astype("float32") / total
+    except Exception:
+        return None
+
+
+def _perceptual_hash(gray, cv2_mod, *, size: int = 32, bits: int = 8):
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    try:
+        size = max(8, int(size or 32))
+        bits = max(4, min(size, int(bits or 8)))
+        small = cv2_mod.resize(gray, (size, size), interpolation=cv2_mod.INTER_AREA)
+        if hasattr(cv2_mod, "dct"):
+            coeffs = cv2_mod.dct(small.astype("float32"))
+            block = coeffs[:bits, :bits]
+        else:
+            block = small[:bits, :bits].astype("float32")
+        flat = block.flatten()
+        if flat.size <= 1:
+            return None
+        median = float(np.median(flat[1:]))
+        return (flat > median).astype("uint8")
+    except Exception:
+        return None
+
+
+def _hist_delta(prev_hist, next_hist) -> float:
+    try:
+        import numpy as np
+    except Exception:
+        return 0.0
+    if prev_hist is None or next_hist is None:
+        return 0.0
+    try:
+        return float(1.0 - np.minimum(prev_hist, next_hist).sum())
+    except Exception:
+        return 0.0
+
+
+def _hash_delta(prev_hash, next_hash) -> float:
+    try:
+        import numpy as np
+    except Exception:
+        return 0.0
+    if prev_hash is None or next_hash is None:
+        return 0.0
+    try:
+        if prev_hash.shape != next_hash.shape or prev_hash.size <= 0:
+            return 0.0
+        return float(np.count_nonzero(prev_hash != next_hash) / float(prev_hash.size))
+    except Exception:
+        return 0.0
+
+
+def _ssim_lite(prev_gray, next_gray) -> float:
+    try:
+        import numpy as np
+    except Exception:
+        return 1.0
+    try:
+        a = prev_gray.astype("float32")
+        b = next_gray.astype("float32")
+        mean_a = float(a.mean())
+        mean_b = float(b.mean())
+        var_a = float(((a - mean_a) ** 2).mean())
+        var_b = float(((b - mean_b) ** 2).mean())
+        cov = float(((a - mean_a) * (b - mean_b)).mean())
+        c1 = 6.5025
+        c2 = 58.5225
+        numerator = (2.0 * mean_a * mean_b + c1) * (2.0 * cov + c2)
+        denominator = (mean_a * mean_a + mean_b * mean_b + c1) * (var_a + var_b + c2)
+        if denominator <= 0.0:
+            return 1.0
+        return _clamp01(numerator / denominator)
+    except Exception:
+        return 1.0
+
+
 def _should_skip_flow(
     mode: str,
     gray_mean: float,
@@ -148,11 +238,14 @@ def build_visual_cut_sample(
     edge_low = max(8, min(180, _settings_int(settings, "scan_cut_visual_edge_low", 64)))
     edge_high = max(edge_low + 8, min(255, _settings_int(settings, "scan_cut_visual_edge_high", 160)))
     edges = _safe_canny(gray, cv2_mod, edge_low, edge_high)
+    hist_bins = max(8, min(128, _settings_int(settings, "scan_cut_visual_hist_bins", 32)))
 
     return {
         "mode": str(mode or "fast4").lower(),
         "gray": gray,
         "edges": edges,
+        "histogram": _gray_histogram(gray, bins=hist_bins),
+        "phash": _perceptual_hash(gray, cv2_mod),
         "shape": tuple(int(x) for x in gray.shape[:2]),
     }
 
@@ -322,6 +415,9 @@ def score_visual_cut_pair(
         "flow_coherence": 0.0,
         "motion_jump": 0.0,
         "coherence_break": 0.0,
+        "hist_delta": 0.0,
+        "ssim_delta": 0.0,
+        "hash_delta": 0.0,
         "backend": "empty",
         "metrics_backend": "empty",
     }
@@ -375,13 +471,19 @@ def score_visual_cut_pair(
         flow_meta = _flow_metrics(prev_gray, next_gray, cv2_mod, settings=settings, diff_threshold=diff_threshold)
     motion_jump = float(flow_meta.get("motion_jump", 0.0) or 0.0)
     coherence_break = float(flow_meta.get("coherence_break", 0.0) or 0.0)
+    hist_delta = _hist_delta(prev_sample.get("histogram"), next_sample.get("histogram"))
+    ssim_delta = 1.0 - _ssim_lite(prev_gray, next_gray)
+    hash_delta = _hash_delta(prev_sample.get("phash"), next_sample.get("phash"))
 
     score = (
-        gray_mean * 0.52
-        + (pixel_ratio * 100.0) * 0.23
-        + motion_jump * 0.17
+        gray_mean * 0.48
+        + (pixel_ratio * 100.0) * 0.20
+        + motion_jump * 0.15
         + (edge_ratio * 100.0) * 0.04
         + coherence_break * 0.04
+        + (hist_delta * 100.0) * 0.05
+        + (ssim_delta * 100.0) * 0.03
+        + (hash_delta * 100.0) * 0.01
     )
 
     height, width = prev_gray.shape[:2]
@@ -420,6 +522,9 @@ def score_visual_cut_pair(
         "flow_coherence": round(float(flow_meta.get("flow_coherence", 0.0) or 0.0), 4),
         "motion_jump": round(float(motion_jump), 4),
         "coherence_break": round(float(coherence_break), 4),
+        "hist_delta": round(float(hist_delta), 6),
+        "ssim_delta": round(float(ssim_delta), 6),
+        "hash_delta": round(float(hash_delta), 6),
         "backend": str(flow_meta.get("backend", "flow_unavailable") or "flow_unavailable"),
         "metrics_backend": str(flow_meta.get("metrics_backend", "python_fallback") or "python_fallback"),
     }

@@ -19,6 +19,7 @@ class RenderExecutionResult:
     return_codes: tuple[int, ...]
     dry_run: bool = False
     segment_manifest: tuple[dict, ...] = ()
+    stitched_cut_boundaries: tuple[dict, ...] = ()
 
 
 def write_concat_file(plan: RenderCommandPlan) -> Path:
@@ -51,6 +52,7 @@ def run_render_plan(
             return_codes=tuple(0 for _ in commands),
             dry_run=True,
             segment_manifest=tuple(getattr(plan, "segment_manifest", ()) or ()),
+            stitched_cut_boundaries=tuple(getattr(plan, "stitched_cut_boundaries", ()) or ()),
         )
 
     return_codes: list[int] = []
@@ -79,4 +81,5 @@ def run_render_plan(
         return_codes=tuple(return_codes),
         dry_run=False,
         segment_manifest=tuple(getattr(plan, "segment_manifest", ()) or ()),
+        stitched_cut_boundaries=tuple(getattr(plan, "stitched_cut_boundaries", ()) or ()),
     )

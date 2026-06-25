@@ -17,6 +17,7 @@ from core.project.project_manager import (
     add_media_to_project,
     create_project,
     load_project,
+    project_stitched_cut_boundaries,
     restore_project_model_settings,
     save_project,
 )
@@ -211,8 +212,6 @@ class ProjectUIMixin:
         media = [path for path in list(media or []) if path and os.path.exists(path)]
         if not filepath or not os.path.exists(filepath) or not media:
             return False
-        if not self._project_cut_boundary_resume_needed(project):
-            return False
 
         try:
             from core.cut_boundary import cut_boundary_enabled
@@ -226,6 +225,41 @@ class ProjectUIMixin:
         except Exception:
             enabled = True
         if not enabled:
+            return False
+
+        stitched_rows = []
+        try:
+            stitched_rows = list(project_stitched_cut_boundaries(project) or [])
+        except Exception:
+            stitched_rows = []
+        if stitched_rows:
+            try:
+                from core.cut_boundary import sync_project_cut_boundaries
+                from core.project.project_io import read_project_file, write_project_file
+
+                saved = read_project_file(filepath)
+                saved["user_settings"] = dict(settings or {})
+                analysis = saved.setdefault("analysis", {})
+                analysis["cut_boundaries"] = [dict(row) for row in stitched_rows]
+                analysis["cut_boundary_provisional_boundaries"] = []
+                for key in (
+                    "cut_boundary_prescan_done",
+                    "cut_boundary_cache_path",
+                    "cut_boundary_cache_type",
+                    "cut_boundary_resume_required",
+                    "cut_boundary_resume_reason",
+                ):
+                    analysis.pop(key, None)
+                sync_project_cut_boundaries(saved, settings=settings, provisional_boundaries=[])
+                write_project_file(filepath, saved)
+                get_logger().log(
+                    f"🎬 [컷 경계] roughcut exact join 복원: {len(stitched_rows)}개"
+                )
+            except Exception as exc:
+                get_logger().log(f"⚠️ roughcut exact join 컷 경계 복원 실패: {exc}")
+            return False
+
+        if not self._project_cut_boundary_resume_needed(project):
             return False
 
         backend = getattr(self, "backend", None)

@@ -93,6 +93,64 @@ class ProjectCutBoundaryResumeTests(unittest.TestCase):
             self.assertFalse(resumed)
             self.assertEqual(ui.backend.calls, [])
 
+    def test_roughcut_exact_stitched_boundaries_skip_prescan_and_seed_analysis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "sample.json")
+            open(media, "wb").close()
+            self._write_project(
+                project_path,
+                media,
+                {
+                    "cut_boundaries": [],
+                    "cut_boundary_prescan_done": True,
+                    "cut_boundary_cache_path": "/tmp/stale-cache.json",
+                    "cut_boundary_cache_type": "cut_boundaries_only",
+                    "cut_boundary_provisional_boundaries": [
+                        {"timeline_sec": 4.1, "timeline_frame": 123, "fps": 30.0, "status": "provisional"}
+                    ],
+                },
+            )
+            saved = read_project_file(project_path)
+            saved["roughcut_state"] = {
+                "selected_candidate_id": "candidate_a",
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_a",
+                        "outputs": {
+                            "render_plan": {
+                                "stitched_cut_boundaries": [
+                                    {
+                                        "timeline_sec": 4.0,
+                                        "timeline_frame": 120,
+                                        "fps": 30.0,
+                                        "source": "roughcut_concat_join",
+                                        "reason": "roughcut_concat_segment_join",
+                                        "verified": True,
+                                        "hard_cut_allowed": True,
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ],
+            }
+            with open(project_path, "w", encoding="utf-8") as handle:
+                json.dump(saved, handle, ensure_ascii=False)
+
+            project = read_project_file(project_path)
+            ui = _ProjectUI({"scan_cut_boundary_level": "medium", "cut_boundary_level": "medium"})
+            resumed = ui._resume_cut_boundary_prescan_for_open_project(project_path, project, [media])
+
+            self.assertFalse(resumed)
+            self.assertEqual(ui.backend.calls, [])
+            persisted = read_project_storage_payload(project_path)
+            self.assertEqual([row["timeline_sec"] for row in persisted["analysis"]["cut_boundaries"]], [4.0])
+            self.assertEqual(persisted["analysis"]["cut_boundary_provisional_boundaries"], [])
+            self.assertNotIn("cut_boundary_prescan_done", persisted["analysis"])
+            self.assertNotIn("cut_boundary_cache_path", persisted["analysis"])
+            self.assertNotIn("cut_boundary_cache_type", persisted["analysis"])
+
     def test_finalized_topicless_placeholder_only_project_does_not_restart_prescan(self):
         with tempfile.TemporaryDirectory() as tmp:
             media = os.path.join(tmp, "sample.mp4")

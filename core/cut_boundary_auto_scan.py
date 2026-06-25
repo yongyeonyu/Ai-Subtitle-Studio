@@ -10,6 +10,7 @@ import sys
 import time
 
 from core.cut_boundary_audio import detect_audio_gain_boundary_rows
+from core.cut_boundary_candidate_fusion import fuse_cut_boundary_candidate_rows
 from core.cut_boundary_ffmpeg_scene import detect_ffmpeg_scene_boundaries
 from core.cut_boundary_scan_runtime import (
     _setting_bool,
@@ -515,6 +516,15 @@ def build_auto_grid_scan_helpers(deps: dict):
         audio_gain_context_windows = max(1, _settings_int("scan_cut_audio_gain_context_windows", 2))
         audio_gain_timeout_sec = max(1.0, _settings_float("scan_cut_audio_gain_timeout_sec", 45.0))
         audio_gain_max_candidates = max(1, _settings_int("scan_cut_audio_gain_max_candidates", 240))
+        audio_spectral_flux_enabled = _setting_bool(settings.get("scan_cut_audio_spectral_flux_enabled"), True)
+        audio_spectral_flux_window_sec = max(
+            0.10,
+            _settings_float("scan_cut_audio_spectral_flux_window_sec", 0.50),
+        )
+        audio_spectral_flux_multiplier = max(
+            1.0,
+            _settings_float("scan_cut_audio_spectral_flux_threshold_multiplier", 3.0),
+        )
         ffmpeg_scene_threshold = max(
             0.01,
             min(0.95, _settings_float("scan_cut_ffmpeg_scene_threshold", 0.35)),
@@ -540,6 +550,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                     context_windows=audio_gain_context_windows,
                     timeout_sec=audio_gain_timeout_sec,
                     max_candidates=audio_gain_max_candidates,
+                    spectral_flux_enabled=audio_spectral_flux_enabled,
+                    spectral_flux_window_sec=audio_spectral_flux_window_sec,
+                    spectral_flux_threshold_multiplier=audio_spectral_flux_multiplier,
                 )
             except Exception:
                 return []
@@ -776,16 +789,24 @@ def build_auto_grid_scan_helpers(deps: dict):
                 except Exception:
                     pass
 
-        def _pixel_flow_confirm_row(local_sec: float, *, packet_score: float = 0.0, packet_delta: float = 0.0):
+        def _pixel_flow_confirm_row(
+            local_sec: float,
+            *,
+            packet_score: float = 0.0,
+            packet_delta: float = 0.0,
+            cap_local=None,
+        ):
             try:
                 import cv2
-                import numpy as np
             except Exception:
                 return None
-            cap_local = open_cut_boundary_video_capture(cv2, scan_filepath, settings)
+            own_capture = cap_local is None
+            if own_capture:
+                cap_local = open_cut_boundary_video_capture(cv2, scan_filepath, settings)
             if cap_local is None or not cap_local.isOpened():
                 try:
-                    cap_local.release()
+                    if cap_local is not None:
+                        cap_local.release()
                 except Exception:
                     pass
                 return None
@@ -851,16 +872,40 @@ def build_auto_grid_scan_helpers(deps: dict):
                     and (pixel_ratio >= pixel_ratio_threshold or motion_jump >= motion_threshold)
                 ):
                     return None
-                timeline_sec = round(float(clip_offset or 0.0) + float(local_sec), 3)
+                verified = None
+                try:
+                    verified = _auto_grid_v3_manual_verify_strict(
+                        cap_local,
+                        cv2,
+                        fps=fps,
+                        frame_count=frame_count,
+                        coarse_frame=max(0, int(round(float(local_sec) * fps))),
+                        settings=settings,
+                        scan_profile=scan_profile,
+                        sample_positions=sample_positions,
+                    )
+                except Exception:
+                    verified = None
+
+                verified_passed = bool(isinstance(verified, dict) and verified.get("passed"))
+                refined_local_sec = round(
+                    float((verified or {}).get("sec", local_sec) if verified_passed else local_sec),
+                    3,
+                )
+                timeline_sec = round(float(clip_offset or 0.0) + refined_local_sec, 3)
                 timeline_frame = sec_to_frame(timeline_sec, fps)
-                score = max(score, float(packet_score or 0.0))
+                score = max(
+                    score,
+                    float(packet_score or 0.0),
+                    float((verified or {}).get("score", 0.0) if verified_passed else 0.0),
+                )
                 return {
                     "schema": "cut_boundary.v1",
                     "id": f"packet_cut_{int(clip_idx or 0):02d}_{timeline_frame:08d}",
                     "time": timeline_sec,
                     "timeline_sec": timeline_sec,
                     "clip_idx": int(clip_idx or 0),
-                    "clip_local_sec": round(float(local_sec), 3),
+                    "clip_local_sec": refined_local_sec,
                     "coarse_time": round(float(local_sec), 3),
                     "frame": timeline_frame,
                     "timeline_frame": timeline_frame,
@@ -869,16 +914,24 @@ def build_auto_grid_scan_helpers(deps: dict):
                     "timeline_frame_rate": fps,
                     "source": "visual_provisional",
                     "detector": "packet-energy-visual-cut-jump-v2",
-                    "reason": "packet_energy_gray_pixel_edge_flow_scout",
+                    "reason": str(
+                        (verified or {}).get("reason", "packet_energy_gray_pixel_edge_flow_scout")
+                        if verified_passed
+                        else "packet_energy_gray_pixel_edge_flow_scout"
+                    ),
                     "score": round(float(score), 3),
                     "packet_score": round(float(packet_score), 3),
                     "packet_delta": round(float(packet_delta), 3),
                     "pixel_ratio": round(pixel_ratio, 6),
                     "edge_ratio": round(edge_ratio, 6),
-                    "region_hits": int(region_hits),
+                    "region_hits": int((verified or {}).get("regions", region_hits) if verified_passed else region_hits),
                     "motion_jump": round(motion_jump, 3),
                     "flow_residual": round(flow_residual, 3),
                     "flow_mag": round(flow_mag, 3),
+                    "color_score": round(float((verified or {}).get("color_score", 0.0) if verified_passed else 0.0), 3),
+                    "color_regions": int((verified or {}).get("color_regions", 0) if verified_passed else 0),
+                    "dense_flow": dict((verified or {}).get("dense_flow") or {}) if verified_passed else {},
+                    "grid_cells": int((verified or {}).get("grid_cells", 0) if verified_passed else 0),
                     "scan_interval_sec": 1.0,
                     "min_gap_sec": float(min_gap_sec or 1.0),
                     "refine_pending": True,
@@ -890,7 +943,8 @@ def build_auto_grid_scan_helpers(deps: dict):
                 }
             finally:
                 try:
-                    cap_local.release()
+                    if own_capture and cap_local is not None:
+                        cap_local.release()
                 except Exception:
                     pass
 
@@ -981,37 +1035,57 @@ def build_auto_grid_scan_helpers(deps: dict):
                 0.10,
                 float(_settings_float("scan_cut_pioneer_packet_min_gap_sec", min_gap_sec or 0.20)),
             )
-            for score, packet_delta, sec in selected:
-                if sec - last_sec < min_gap:
-                    continue
-                row = _pixel_flow_confirm_row(sec, packet_score=score, packet_delta=packet_delta)
-                if not row:
-                    continue
-                rows_local.append(row)
-                last_sec = sec
-                if callable(found_callback):
-                    try:
-                        found_callback(dict(row), list(rows_local))
-                    except Exception:
-                        pass
-                if callable(progress_callback):
-                    try:
-                        progress_callback({
-                            "clip_idx": clip_idx,
-                            "percent": int(min(100, (sec / max(1.0, duration)) * 100)),
-                            "worker_percent": int(min(100, (sec / max(1.0, duration)) * 100)),
-                            "timestamp": sec,
-                            "duration": duration,
-                            "detected": len(rows_local),
-                            "worker_idx": 0,
-                            "worker_total": 1,
-                            "cut_boundary_backend": "packet_energy_pixel_flow",
-                        })
-                    except Exception:
-                        pass
-                if len(rows_local) >= max_candidates:
-                    break
-            return rows_local
+            cap_local = open_cut_boundary_video_capture(cv2, scan_filepath, settings)
+            if cap_local is not None and not cap_local.isOpened():
+                try:
+                    cap_local.release()
+                except Exception:
+                    pass
+                cap_local = None
+            try:
+                for score, packet_delta, sec in selected:
+                    if sec - last_sec < min_gap:
+                        continue
+                    row = _pixel_flow_confirm_row(
+                        sec,
+                        packet_score=score,
+                        packet_delta=packet_delta,
+                        cap_local=cap_local,
+                    )
+                    if not row:
+                        continue
+                    rows_local.append(row)
+                    candidate_sec = float(row.get("clip_local_sec", sec) or sec)
+                    last_sec = candidate_sec
+                    if callable(found_callback):
+                        try:
+                            found_callback(dict(row), list(rows_local))
+                        except Exception:
+                            pass
+                    if callable(progress_callback):
+                        try:
+                            progress_callback({
+                                "clip_idx": clip_idx,
+                                "percent": int(min(100, (candidate_sec / max(1.0, duration)) * 100)),
+                                "worker_percent": int(min(100, (candidate_sec / max(1.0, duration)) * 100)),
+                                "timestamp": candidate_sec,
+                                "duration": duration,
+                                "detected": len(rows_local),
+                                "worker_idx": 0,
+                                "worker_total": 1,
+                                "cut_boundary_backend": "packet_energy_pixel_flow",
+                            })
+                        except Exception:
+                            pass
+                    if len(rows_local) >= max_candidates:
+                        break
+                return rows_local
+            finally:
+                try:
+                    if cap_local is not None:
+                        cap_local.release()
+                except Exception:
+                    pass
 
         def _emit_provisional_rows(rows):
             if not callable(found_callback):
@@ -1023,6 +1097,35 @@ def build_auto_grid_scan_helpers(deps: dict):
                 except Exception:
                     pass
 
+        def _fuse_pioneer_rows(rows, *, backend_label: str):
+            raw_rows = list(rows or [])
+            if not raw_rows:
+                return []
+            if not _setting_bool(settings.get("scan_cut_pioneer_candidate_fusion_enabled"), True):
+                return normalize_cut_boundaries(raw_rows, primary_fps=fps)
+            fused_rows = fuse_cut_boundary_candidate_rows(
+                raw_rows,
+                fps=fps,
+                window_sec=max(
+                    0.02,
+                    _settings_float(
+                        "scan_cut_pioneer_fusion_window_sec",
+                        _settings_float("cut_boundary_fusion_window_sec", 0.35),
+                    ),
+                ),
+                keep_threshold=max(0.0, min(1.0, _settings_float("cut_boundary_fusion_keep_threshold", 0.68))),
+                verify_threshold=max(0.0, min(1.0, _settings_float("cut_boundary_fusion_verify_threshold", 0.43))),
+                max_candidates=_settings_int("scan_cut_pioneer_fusion_max_candidates", len(raw_rows) or 1),
+            )
+            for row in fused_rows:
+                try:
+                    row.setdefault("cut_boundary_backend", backend_label)
+                    row.setdefault("visual_scan_source_path", str(scan_filepath))
+                    row.setdefault("visual_scan_proxy", bool(scan_filepath != original_filepath))
+                except Exception:
+                    pass
+            return normalize_cut_boundaries(fused_rows, primary_fps=fps)
+
         if ffmpeg_scene_enabled and ffmpeg_scene_replace_opencv:
             scene_rows = list(_scan_ffmpeg_scene_rows() or [])
             if scene_rows:
@@ -1030,7 +1133,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 _emit_provisional_rows(scene_rows)
                 _emit_provisional_rows(audio_rows)
                 combined_rows = [*scene_rows, *audio_rows]
-                normalized = normalize_cut_boundaries(combined_rows, primary_fps=fps)
+                normalized = _fuse_pioneer_rows(combined_rows, backend_label="ffmpeg_scene_prepass")
                 payload = {
                     "clip_idx": int(clip_idx or 0),
                     "worker_total": 1,
@@ -1076,7 +1179,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             if packet_rows is not None:
                 _emit_provisional_rows(audio_rows)
                 combined_rows = [*list(packet_rows or []), *list(audio_rows or [])]
-                normalized = normalize_cut_boundaries(combined_rows, primary_fps=fps)
+                normalized = _fuse_pioneer_rows(combined_rows, backend_label="packet_energy_pixel_flow")
                 if callable(completion_callback):
                     try:
                         completion_callback(
@@ -1115,7 +1218,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             if pipe_rows is not None:
                 _emit_provisional_rows(audio_rows)
                 combined_rows = [*list(pipe_rows or []), *list(audio_rows or [])]
-                normalized = normalize_cut_boundaries(combined_rows, primary_fps=fps)
+                normalized = _fuse_pioneer_rows(combined_rows, backend_label="ffmpeg_pipe_pixel_flow")
                 if callable(completion_callback):
                     try:
                         completion_callback(
@@ -1149,7 +1252,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             _emit_provisional_rows(audio_rows)
             _emit_provisional_rows(scene_rows)
             combined_skip_rows = [*scene_rows, *audio_rows]
-            normalized = normalize_cut_boundaries(combined_skip_rows, primary_fps=fps)
+            normalized = _fuse_pioneer_rows(combined_skip_rows, backend_label=backend_choice.backend)
             payload = {
                 "clip_idx": int(clip_idx or 0),
                 "percent": 100,
@@ -1354,7 +1457,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             _emit_provisional_rows(audio_rows)
             _emit_provisional_rows(scene_rows)
             rows = _scan_range(0, 0, frame_count)
-            normalized = normalize_cut_boundaries([*(rows or []), *scene_rows, *audio_rows], primary_fps=fps)
+            normalized = _fuse_pioneer_rows([*(rows or []), *scene_rows, *audio_rows], backend_label=backend_choice.backend)
             if callable(completion_callback):
                 try:
                     completion_callback(
@@ -1447,7 +1550,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             for row in combined_rows:
                 try:
                     row["refine_pending"] = True
-                    if row.get("source") != "audio_gain_provisional":
+                    if row.get("source") not in {"audio_gain_provisional", "audio_spectral_flux_provisional"}:
                         row["refine_backend"] = "gpu_async" if cuda_available else "async_cpu"
                 except Exception:
                     pass
@@ -1466,7 +1569,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 })
             except Exception:
                 pass
-        return normalize_cut_boundaries(combined_rows or [], primary_fps=fps)
+        return _fuse_pioneer_rows(combined_rows or [], backend_label=backend_choice.backend)
 
 
     def verify_media_cut_boundary_rows(

@@ -9,6 +9,7 @@ from typing import Iterable
 
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args, lossless_video_encode_args, roughcut_render_mode
 
+from .edl_generator import build_stitched_cut_boundaries
 from .models import EDLSegment
 
 
@@ -22,6 +23,7 @@ class RenderCommandPlan:
     render_mode: str = "copy"
     warnings: tuple[str, ...] = ()
     segment_manifest: tuple[dict, ...] = ()
+    stitched_cut_boundaries: tuple[dict, ...] = ()
 
 
 def ffmpeg_available(binary: str = "ffmpeg") -> bool:
@@ -225,6 +227,7 @@ def build_concat_render_plan(
         render_mode=mode,
         warnings=tuple(warnings),
         segment_manifest=tuple(_render_segment_manifest(segments)),
+        stitched_cut_boundaries=tuple(build_stitched_cut_boundaries(segments)),
     )
 
 

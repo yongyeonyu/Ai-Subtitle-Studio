@@ -10,12 +10,15 @@ when available.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from pathlib import Path
 from typing import Callable
 
 from PyQt6.QtCore import QTimer
 
+from core.cut_boundary import normalize_cut_boundaries
 from core.project.project_manager import (
     PROJECTS_DIR,
     is_project_file_path,
@@ -347,6 +350,55 @@ def project_sidecar_candidates_for_srt(srt_path: str, media_path: str | None = N
         pass
 
     return candidates
+
+
+def stitched_cut_boundary_sidecar_candidates_for_srt(srt_path: str, media_path: str | None = None) -> list[str]:
+    """Return roughcut export sidecars that may carry exact stitched joins."""
+    candidates: list[str] = []
+
+    def _add(path: str | None) -> None:
+        if not path:
+            return
+        normalized = normalized_open_path(path)
+        if normalized and normalized not in candidates and os.path.exists(normalized):
+            candidates.append(normalized)
+
+    seen_pairs: set[tuple[str, str]] = set()
+    for raw in (srt_path, media_path):
+        absolute = normalized_open_path(raw)
+        if not absolute:
+            continue
+        folder = os.path.dirname(absolute)
+        stem = os.path.splitext(os.path.basename(absolute))[0]
+        pair = (folder, stem)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        for suffix in ("_edl.json", "_render_plan.json", "_roughcut_edl.json", "_roughcut_render_plan.json"):
+            _add(os.path.join(folder, f"{stem}{suffix}"))
+    return candidates
+
+
+def load_stitched_cut_boundaries_for_srt_open(srt_path: str, media_path: str | None = None) -> tuple[list[dict], str]:
+    """Load exact stitched cut boundaries from adjacent roughcut export artifacts."""
+    for sidecar_path in stitched_cut_boundary_sidecar_candidates_for_srt(srt_path, media_path):
+        try:
+            payload = json.loads(Path(sidecar_path).read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        rows = payload.get("stitched_cut_boundaries") if isinstance(payload, dict) else None
+        if not rows and isinstance(payload, dict):
+            edl_payload = payload.get("edl")
+            if isinstance(edl_payload, dict):
+                rows = edl_payload.get("stitched_cut_boundaries")
+        if not rows and isinstance(payload, dict):
+            render_plan = payload.get("render_plan")
+            if isinstance(render_plan, dict):
+                rows = render_plan.get("stitched_cut_boundaries")
+        normalized = normalize_cut_boundaries(list(rows or []))
+        if normalized:
+            return normalized, sidecar_path
+    return [], ""
 
 
 def project_matches_opened_srt(project: dict, srt_path: str, media_path: str | None = None) -> bool:
@@ -1031,6 +1083,7 @@ def open_project_segments_in_editor(
 
 __all__ = [
     "find_project_for_srt_open",
+    "load_stitched_cut_boundaries_for_srt_open",
     "merge_srt_segments_with_project_metadata",
     "normalized_open_path",
     "schedule_native_editor_post_open_tasks",
@@ -1047,4 +1100,5 @@ __all__ = [
     "schedule_editor_fit_to_view",
     "schedule_opened_editor_runtime_refresh",
     "segment_metadata_match_score",
+    "stitched_cut_boundary_sidecar_candidates_for_srt",
 ]

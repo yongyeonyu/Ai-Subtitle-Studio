@@ -85,11 +85,8 @@ class RoughcutExportMixin:
         if not self._ensure_result():
             self.preview_summary_lbl.setText("저장할 SRT 결과가 없습니다.")
             return
-        result = self._result_with_user_edits(self._result)
-        retimed = retime_subtitles_for_edl(self._editor_segments(), result.edl_segments, chapters=result.chapters)
-        path = self._default_output_path("_roughcut.srt")
-        save_retimed_srt(path, retimed)
-        self.preview_summary_lbl.setText(f"SRT 저장: {path}")
+        export = self.export_roughcut_srt_to_path(str(self._default_output_path("_roughcut.srt")))
+        self.preview_summary_lbl.setText(f"SRT 저장: {export['path']}")
         self.render_status_lbl.setText("SRT 저장")
 
     def export_roughcut_srt_to_path(self, path: str):
@@ -102,11 +99,13 @@ class RoughcutExportMixin:
             target = self._default_output_path("_roughcut.srt")
         target.parent.mkdir(parents=True, exist_ok=True)
         save_retimed_srt(target, retimed)
+        sidecar_data = self._write_exact_join_sidecars_for_exported_srt(target, result)
         self.preview_summary_lbl.setText(f"SRT 저장: {target}")
         self.render_status_lbl.setText("SRT 저장")
         return {
             "path": str(target),
             "subtitle_count": len(list(retimed or [])),
+            **sidecar_data,
         }
 
     def _save_render_plan(self):
@@ -125,18 +124,9 @@ class RoughcutExportMixin:
             self.preview_summary_lbl.setText("저장할 렌더 계획이 없습니다.")
             self.render_status_lbl.setText("계획 없음")
             return None
-        media_path = self._media_path()
-        if not media_path:
-            self.preview_summary_lbl.setText("렌더 계획에는 원본 영상 경로가 필요합니다.")
-            self.render_status_lbl.setText("원본 없음")
-            return None
-        source_suffix = Path(media_path).suffix or ".mp4"
-        output_path = self._default_output_path(f"_roughcut{source_suffix}")
-        temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
         result = self._result_with_user_edits(self._result)
-        render_mode = roughcut_render_mode()
         try:
-            plan = build_concat_render_plan(result.edl_segments, output_path, temp_dir, render_mode=render_mode)
+            plan = self._build_render_plan_for_srt_target(self._default_output_path("_roughcut.srt"), result)
         except Exception as exc:
             self.preview_summary_lbl.setText(f"렌더 계획 생성 실패: {exc}")
             self.render_status_lbl.setText("계획 실패")
@@ -145,12 +135,64 @@ class RoughcutExportMixin:
         self._last_render_plan = plan
         return plan
 
-    def _render_plan_payload(self, plan, result) -> dict:
+    def _render_output_path_for_srt_target(self, target_srt_path: Path, result) -> Path:
+        candidate = Path(target_srt_path or self._default_output_path("_roughcut.srt"))
+        first_source = next(
+            (Path(getattr(segment, "source_path", "") or "") for segment in getattr(result, "edl_segments", ()) if getattr(segment, "source_path", "")),
+            None,
+        )
+        source_suffix = (first_source.suffix if first_source is not None else "") or (Path(self._media_path() or "").suffix) or ".mp4"
+        output_path = candidate.with_suffix(source_suffix)
+        source_paths = {
+            str(Path(getattr(segment, "source_path", "") or "").expanduser())
+            for segment in getattr(result, "edl_segments", ()) or ()
+            if getattr(segment, "source_path", "")
+        }
+        if str(output_path.expanduser()) in source_paths:
+            output_path = candidate.with_name(f"{candidate.stem}_roughcut{source_suffix}")
+        return output_path
+
+    def _build_render_plan_for_srt_target(self, target_srt_path: Path, result):
+        output_path = self._render_output_path_for_srt_target(Path(target_srt_path), result)
+        temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
+        return build_concat_render_plan(
+            result.edl_segments,
+            output_path,
+            temp_dir,
+            render_mode=roughcut_render_mode(),
+        )
+
+    def _write_exact_join_sidecars_for_exported_srt(self, target: Path, result) -> dict:
+        plan = self._build_render_plan_for_srt_target(target, result)
+        render_plan_path = target.with_name(f"{target.stem}_render_plan.json")
+        edl_path = target.with_name(f"{target.stem}_edl.json")
+        render_plan_path.write_text(
+            json.dumps(self._render_plan_payload(plan, result, srt_path=target), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        save_edl_json(
+            edl_path,
+            result.edl_segments,
+            metadata={"source": self._media_path(), "source_srt": str(target)},
+            chapters=result.chapters,
+            major_segments=result.segments,
+        )
+        stitched_rows = list(getattr(plan, "stitched_cut_boundaries", ()) or ())
+        self._append_render_log(f"러프컷 SRT sidecar 저장: {render_plan_path}")
+        self._append_render_log(f"러프컷 EDL sidecar 저장: {edl_path}")
+        return {
+            "render_plan_path": str(render_plan_path),
+            "edl_path": str(edl_path),
+            "stitched_cut_boundary_count": len(stitched_rows),
+        }
+
+    def _render_plan_payload(self, plan, result, *, srt_path: str | Path | None = None) -> dict:
         media_path = self._media_path()
         output_path = Path(getattr(plan, "output_path", "") or self._default_output_path("_roughcut.mp4"))
-        srt_path = self._default_output_path("_roughcut.srt")
+        srt_path = Path(srt_path) if srt_path is not None else self._default_output_path("_roughcut.srt")
         subtitled_path = output_path.with_name(f"{output_path.stem}_subtitled{output_path.suffix or '.mp4'}")
         return {
+            "stitched_cut_boundaries": list(getattr(plan, "stitched_cut_boundaries", ()) or ()),
             "edl": edl_to_dict(
                 result.edl_segments,
                 metadata={"source": media_path},

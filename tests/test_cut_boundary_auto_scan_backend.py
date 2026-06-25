@@ -143,6 +143,7 @@ class _SequentialCaptureCv2(_FakeCv2):
     CAP_PROP_FRAME_HEIGHT = 4
     CAP_PROP_POS_FRAMES = 5
     COLOR_BGR2GRAY = 6
+    INTER_AREA = 7
 
     def __init__(self):
         super().__init__()
@@ -154,6 +155,9 @@ class _SequentialCaptureCv2(_FakeCv2):
         capture = _SequentialCapture(self)
         self.captures.append(capture)
         return capture
+
+    def resize(self, frame, _size, interpolation=None):
+        return frame
 
     def cvtColor(self, frame, _code):
         return frame
@@ -539,7 +543,106 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
                 sample_mask="single",
             )
 
-        self.assertEqual(rows, [scene_row])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], scene_row["source"])
+        self.assertEqual(rows[0]["timeline_sec"], scene_row["timeline_sec"])
+        self.assertEqual(rows[0]["fusion_sources"], ["scene"])
+        self.assertEqual(rows[0]["fusion_detector"], "pioneer-candidate-fusion-v1")
+        self.assertEqual(rows[0]["cut_boundary_backend"], "ffmpeg_scene_prepass")
+
+    def test_packet_scout_reuses_capture_and_applies_strict_refined_time(self):
+        fake_cv2 = _SequentialCaptureCv2()
+        ffprobe_completed = type(
+            "Completed",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "\n".join(
+                    [
+                        "0.25,10,K_",
+                        "1.25,1000,K_",
+                        "2.50,1000,K_",
+                        "3.75,10,K_",
+                    ]
+                ),
+                "stderr": "",
+            },
+        )()
+        strict_calls = []
+
+        def fake_strict(cap, _cv2, *, fps, coarse_frame, **_kwargs):
+            strict_calls.append((cap, coarse_frame))
+            return {
+                "passed": True,
+                "sec": round((float(coarse_frame) / float(fps)) + 0.1, 3),
+                "score": 88.0,
+                "regions": 3,
+                "color_score": 51.0,
+                "color_regions": 2,
+                "dense_flow": {"passed": True},
+                "grid_cells": 5,
+                "reason": "gray_adj_color_avg",
+            }
+
+        helpers = build_auto_grid_scan_helpers(
+            {
+                "normalize_fps": lambda fps: fps,
+                "sec_to_frame": lambda sec, fps: int(round(sec * fps)),
+                "normalize_cut_boundaries": lambda rows, primary_fps=None: list(rows or []),
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "_selected_grid_delta": lambda prev, gray, positions: (0.0, [0.0]),
+                "_cb_level_interval_sec": lambda level: 1.0,
+                "_cb_level_effective_threshold": lambda level, threshold: float(threshold or 0.0),
+                "_cb_level_min_gap_sec": lambda level: 8.0,
+                "_cb_cuda_available": lambda: False,
+                "_auto_downscale_frame_for_compare": lambda frame, cv2, settings=None: frame,
+                "_auto_grid_v3_manual_verify_strict": fake_strict,
+                "_auto_grid_v3_manual_verify_strict_mps": lambda *args, **kwargs: {"passed": False},
+                "_mps_available": lambda: False,
+                "original_detect_media_cut_boundaries": lambda *args, **kwargs: [],
+            }
+        )
+
+        with patch.dict(sys.modules, {"cv2": fake_cv2}), \
+             patch("numpy.median", side_effect=lambda _values: 0.0), \
+             patch("core.cut_boundary_auto_scan.subprocess.run", return_value=ffprobe_completed), \
+             patch("core.cut_boundary_auto_scan.build_visual_cut_sample", side_effect=lambda frame, *_args, **_kwargs: frame), \
+             patch(
+                 "core.cut_boundary_auto_scan.score_visual_cut_pair",
+                 return_value={
+                     "score": 60.0,
+                     "pixel_ratio": 0.30,
+                     "edge_ratio": 0.20,
+                     "region_hits": 2,
+                     "motion_jump": 9.0,
+                     "flow_residual": 12.0,
+                     "flow_mean": 7.0,
+                 },
+             ):
+            rows = helpers["scan_media_cut_boundary_provisionals"](
+                "/fake/video.mp4",
+                sample_step_sec=1.0,
+                settings={
+                    "scan_cut_audio_gain_enabled": False,
+                    "scan_cut_pioneer_workers": 1,
+                    "scan_cut_pioneer_packet_min_gap_sec": 0.40,
+                    "scan_cut_pioneer_packet_delta_threshold": 6.0,
+                    "scan_cut_pioneer_packet_mad_multiplier": 0.0,
+                },
+                settings_preloaded=True,
+                scan_profile={"level": "low"},
+                sample_positions=(0,),
+                sample_mask="single",
+            )
+
+        self.assertEqual([round(row["clip_local_sec"], 3) for row in rows], [1.3, 2.6])
+        self.assertEqual([row["timeline_frame"] for row in rows], [13, 26])
+        self.assertEqual([row["reason"] for row in rows], ["gray_adj_color_avg", "gray_adj_color_avg"])
+        self.assertEqual([row["score"] for row in rows], [88.0, 88.0])
+        self.assertEqual(len(fake_cv2.captures), 2)
+        self.assertEqual([coarse_frame for _cap, coarse_frame in strict_calls], [12, 25])
+        self.assertIs(strict_calls[0][0], fake_cv2.captures[1])
+        self.assertIs(strict_calls[1][0], fake_cv2.captures[1])
 
     def test_dense_flow_rejects_camera_motion_but_keeps_hard_cut(self):
         try:

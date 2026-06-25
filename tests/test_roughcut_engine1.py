@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from core.roughcut.edl_generator import build_edl_segments, edl_to_dict, map_edl_segments_to_clip_sources, save_edl_json
+from core.roughcut.edl_generator import (
+    build_edl_segments,
+    build_stitched_cut_boundaries,
+    edl_to_dict,
+    map_edl_segments_to_clip_sources,
+    save_edl_json,
+)
 from core.roughcut.edit_decision_engine import build_edit_decisions, classify_cut_safety
 from core.roughcut.frame_sampler import build_ffmpeg_frame_command, sample_timestamps
 from core.roughcut.gap_detector import detect_subtitle_gaps
@@ -274,6 +280,22 @@ class RoughCutEngine1Tests(unittest.TestCase):
         self.assertEqual(payload["schema"], "ai_subtitle_studio.roughcut.edl.v1")
         self.assertEqual(payload["metadata"]["제목"], "테스트")
         self.assertEqual(payload["segments"][0]["source_path"], "/tmp/source.mp4")
+
+    def test_stitched_cut_boundaries_follow_output_joins_exactly(self):
+        chapters = [
+            ChapterMetadata("chapter_0001", "소개", 0.0, 4.0, story_role="기"),
+            ChapterMetadata("chapter_0002", "핵심", 5.0, 8.0, story_role="전"),
+        ]
+        edl = build_edl_segments("/tmp/source.mp4", build_edit_decisions(chapters, phrases=[], gaps=[]), chapters)
+
+        rows = build_stitched_cut_boundaries(edl)
+        payload = edl_to_dict(edl, metadata={"project": "demo"})
+
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0]["timeline_sec"], edl[0].output_end)
+        self.assertEqual(rows[0]["segment_before_id"], "chapter_0001")
+        self.assertEqual(rows[0]["segment_after_id"], "chapter_0002")
+        self.assertEqual(payload["stitched_cut_boundaries"][0]["timeline_sec"], rows[0]["timeline_sec"])
 
     def test_markdown_guide_contains_summary_tables_and_review_points(self):
         chapters = [

@@ -19,7 +19,10 @@ from core.personalization.deep_subtitle_policy import score_cut_boundary
 
 AUDIO_GAIN_BOUNDARY_SOURCE = "audio_gain_provisional"
 AUDIO_GAIN_BOUNDARY_DETECTOR = "audio-gain-rms-v1"
+AUDIO_SPECTRAL_BOUNDARY_SOURCE = "audio_spectral_flux_provisional"
+AUDIO_SPECTRAL_BOUNDARY_DETECTOR = "audio-spectral-flux-v1"
 AUDIO_GAIN_LINE_COLOR = "#39FF14"
+AUDIO_SPECTRAL_LINE_COLOR = "#72D6FF"
 
 
 def is_audio_gain_boundary(row: dict | None) -> bool:
@@ -118,17 +121,56 @@ def audio_gain_levels_from_pcm16le(
     return levels
 
 
-def extract_audio_gain_levels(
+def audio_spectral_flux_from_pcm16le(
+    pcm: bytes,
+    *,
+    sample_rate: int = 4000,
+    window_sec: float = 0.50,
+    floor: float = 1e-6,
+) -> list[tuple[float, float]]:
+    """Return ``(window_center_sec, spectral_flux)`` from signed 16-bit PCM."""
+    if not pcm:
+        return []
+    try:
+        import numpy as np
+    except Exception:
+        return []
+    sample_rate = max(1000, int(sample_rate or 4000))
+    window_samples = max(64, int(round(sample_rate * max(0.10, float(window_sec or 0.50)))))
+    try:
+        samples = np.frombuffer(pcm, dtype="<i2").astype("float32")
+    except Exception:
+        return []
+    if samples.size < window_samples * 2:
+        return []
+    usable = int(samples.size // window_samples) * window_samples
+    if usable <= 0:
+        return []
+    windows = samples[:usable].reshape(-1, window_samples)
+    try:
+        window_fn = np.hanning(window_samples).astype("float32")
+        mags = np.abs(np.fft.rfft(windows * window_fn, axis=1)).astype("float32")
+        mags /= np.maximum(np.sum(mags, axis=1, keepdims=True), float(floor))
+        positive_delta = np.maximum(0.0, mags[1:] - mags[:-1])
+        flux = np.sqrt(np.sum(positive_delta * positive_delta, axis=1))
+    except Exception:
+        return []
+    out: list[tuple[float, float]] = []
+    for idx, value in enumerate(flux, start=1):
+        center = (idx * window_samples + (window_samples * 0.5)) / float(sample_rate)
+        out.append((round(center, 3), float(value)))
+    return out
+
+
+def extract_audio_pcm16le(
     filepath: str,
     *,
     sample_rate: int = 4000,
-    window_sec: float = 2.0,
     timeout_sec: float = 45.0,
-) -> list[tuple[float, float]]:
-    """Decode a lightweight mono PCM stream and return RMS windows."""
+) -> bytes:
     path = Path(str(filepath or ""))
     if not path.exists():
-        return []
+        return b""
     sample_rate = max(1000, int(sample_rate or 4000))
     timeout_sec = max(1.0, float(timeout_sec or 45.0))
     cmd = [
@@ -160,11 +202,23 @@ def extract_audio_gain_levels(
             **hidden_subprocess_kwargs(strip_qt=True),
         )
     except Exception:
-        return []
-    if not completed.stdout:
+        return b""
+    return bytes(completed.stdout or b"")
+
+
+def extract_audio_gain_levels(
+    filepath: str,
+    *,
+    sample_rate: int = 4000,
+    window_sec: float = 2.0,
+    timeout_sec: float = 45.0,
+) -> list[tuple[float, float]]:
+    """Decode a lightweight mono PCM stream and return RMS windows."""
+    pcm = extract_audio_pcm16le(filepath, sample_rate=sample_rate, timeout_sec=timeout_sec)
+    if not pcm:
         return []
     return audio_gain_levels_from_pcm16le(
-        completed.stdout,
+        pcm,
         sample_rate=sample_rate,
         window_sec=window_sec,
     )
@@ -226,6 +280,60 @@ def detect_audio_gain_changes(
         }
         if candidates and (boundary_sec - float(candidates[-1]["local_sec"])) < min_gap_sec:
             if score > float(candidates[-1]["score"]):
+                candidates[-1] = candidate
+            continue
+        candidates.append(candidate)
+        if len(candidates) >= max_candidates:
+            break
+    return candidates
+
+
+def detect_audio_spectral_flux_changes(
+    flux_levels: list[tuple[float, float]],
+    *,
+    threshold_multiplier: float = 3.0,
+    min_gap_sec: float = 8.0,
+    duration_sec: float | None = None,
+    edge_guard_sec: float = 1.0,
+    max_candidates: int = 240,
+) -> list[dict]:
+    cleaned: list[tuple[float, float]] = []
+    for sec, flux in flux_levels or []:
+        sec_value = _finite_float(sec)
+        flux_value = _finite_float(flux)
+        if sec_value is None or flux_value is None:
+            continue
+        cleaned.append((sec_value, max(0.0, flux_value)))
+    cleaned.sort(key=lambda item: item[0])
+    if len(cleaned) < 3:
+        return []
+    values = [flux for _sec, flux in cleaned if flux > 0.0]
+    if not values:
+        return []
+    median = sorted(values)[len(values) // 2]
+    deviations = sorted(abs(value - median) for value in values)
+    mad = deviations[len(deviations) // 2] if deviations else 0.0
+    threshold = max(median + (mad * max(1.0, float(threshold_multiplier or 3.0))), median * 2.5, 0.015)
+    min_gap_sec = max(0.0, float(min_gap_sec or 0.0))
+    edge_guard_sec = max(0.0, float(edge_guard_sec or 0.0))
+    duration_value = _finite_float(duration_sec)
+    max_candidates = max(1, int(max_candidates or 240))
+    candidates: list[dict] = []
+    for sec, flux in cleaned:
+        if sec <= edge_guard_sec:
+            continue
+        if duration_value is not None and sec >= max(0.0, duration_value - edge_guard_sec):
+            continue
+        if flux < threshold:
+            continue
+        candidate = {
+            "local_sec": round(sec, 3),
+            "score": round(float(flux / max(threshold, 1e-6)), 3),
+            "spectral_flux": round(float(flux), 6),
+            "spectral_flux_threshold": round(float(threshold), 6),
+        }
+        if candidates and (sec - float(candidates[-1]["local_sec"])) < min_gap_sec:
+            if candidate["score"] > candidates[-1]["score"]:
                 candidates[-1] = candidate
             continue
         candidates.append(candidate)
@@ -297,6 +405,69 @@ def build_audio_gain_boundary_rows(
     return rows
 
 
+def build_audio_spectral_flux_boundary_rows(
+    candidates: list[dict],
+    *,
+    clip_offset: float = 0.0,
+    clip_idx: int = 0,
+    fps: float = 30.0,
+    source_path: str = "",
+    threshold_multiplier: float = 3.0,
+    window_sec: float = 0.50,
+    sample_rate: int = 4000,
+) -> list[dict]:
+    rows: list[dict] = []
+    fps_value = normalize_fps(fps or 30.0)
+    offset = float(clip_offset or 0.0)
+    for idx, candidate in enumerate(candidates or [], start=1):
+        local_sec = _finite_float(candidate.get("local_sec"))
+        if local_sec is None or local_sec <= 0.0:
+            continue
+        timeline_sec = round(offset + local_sec, 3)
+        timeline_frame = sec_to_frame(timeline_sec, fps_value)
+        row = {
+            "schema": "cut_boundary.v1",
+            "id": f"audio_flux_cut_{int(clip_idx or 0):02d}_{timeline_frame:08d}",
+            "time": timeline_sec,
+            "timeline_sec": timeline_sec,
+            "frame": timeline_frame,
+            "timeline_frame": timeline_frame,
+            "fps": fps_value,
+            "frame_rate": fps_value,
+            "timeline_frame_rate": fps_value,
+            "clip_idx": int(clip_idx or 0),
+            "clip_local_sec": round(local_sec, 3),
+            "source_path": str(source_path or ""),
+            "source": AUDIO_SPECTRAL_BOUNDARY_SOURCE,
+            "detector": AUDIO_SPECTRAL_BOUNDARY_DETECTOR,
+            "detector_stage": "audio_pioneer",
+            "reason": "audio_spectral_flux_shift",
+            "status": "provisional",
+            "verified": False,
+            "locked": False,
+            "absolute": True,
+            "refine_pending": True,
+            "refine_backend": "visual_rollback",
+            "provisional_type": "audio_spectral_flux",
+            "line_color": AUDIO_SPECTRAL_LINE_COLOR,
+            "line_style": "dash",
+            "score": float(candidate.get("score", 0.0) or 0.0),
+            "audio_spectral_flux_score": float(candidate.get("score", 0.0) or 0.0),
+            "audio_spectral_flux": float(candidate.get("spectral_flux", 0.0) or 0.0),
+            "audio_spectral_flux_threshold": float(candidate.get("spectral_flux_threshold", 0.0) or 0.0),
+            "audio_spectral_flux_multiplier": float(threshold_multiplier or 0.0),
+            "audio_spectral_flux_window_sec": float(window_sec or 0.0),
+            "audio_spectral_flux_sample_rate": int(sample_rate or 0),
+            "audio_spectral_flux_candidate_index": idx,
+        }
+        deep_score = score_cut_boundary(row, {"scan_cut_audio_gain_threshold_db": 10.0})
+        row["deep_boundary_score"] = deep_score.get("score", 0.0)
+        row["deep_boundary_decision"] = deep_score.get("decision", "")
+        row["deep_boundary_model"] = deep_score.get("model", "")
+        rows.append(row)
+    return rows
+
+
 def detect_audio_gain_boundary_rows(
     filepath: str,
     *,
@@ -311,13 +482,16 @@ def detect_audio_gain_boundary_rows(
     context_windows: int = 2,
     timeout_sec: float = 45.0,
     max_candidates: int = 240,
+    spectral_flux_enabled: bool = True,
+    spectral_flux_window_sec: float = 0.50,
+    spectral_flux_threshold_multiplier: float = 3.0,
 ) -> list[dict]:
-    levels = extract_audio_gain_levels(
+    pcm = extract_audio_pcm16le(
         filepath,
         sample_rate=sample_rate,
-        window_sec=window_sec,
         timeout_sec=timeout_sec,
     )
+    levels = audio_gain_levels_from_pcm16le(pcm, sample_rate=sample_rate, window_sec=window_sec)
     candidates = detect_audio_gain_changes(
         levels,
         threshold_db=threshold_db,
@@ -326,7 +500,7 @@ def detect_audio_gain_boundary_rows(
         duration_sec=duration_sec,
         max_candidates=max_candidates,
     )
-    return build_audio_gain_boundary_rows(
+    rows = build_audio_gain_boundary_rows(
         candidates,
         clip_offset=clip_offset,
         clip_idx=clip_idx,
@@ -336,16 +510,50 @@ def detect_audio_gain_boundary_rows(
         window_sec=window_sec,
         sample_rate=sample_rate,
     )
+    if spectral_flux_enabled:
+        flux_levels = audio_spectral_flux_from_pcm16le(
+            pcm,
+            sample_rate=sample_rate,
+            window_sec=spectral_flux_window_sec,
+        )
+        flux_candidates = detect_audio_spectral_flux_changes(
+            flux_levels,
+            threshold_multiplier=spectral_flux_threshold_multiplier,
+            min_gap_sec=min_gap_sec,
+            duration_sec=duration_sec,
+            max_candidates=max_candidates,
+        )
+        rows.extend(
+            build_audio_spectral_flux_boundary_rows(
+                flux_candidates,
+                clip_offset=clip_offset,
+                clip_idx=clip_idx,
+                fps=fps,
+                source_path=str(filepath or ""),
+                threshold_multiplier=spectral_flux_threshold_multiplier,
+                window_sec=spectral_flux_window_sec,
+                sample_rate=sample_rate,
+            )
+        )
+    rows.sort(key=lambda row: float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0))
+    return rows
 
 
 __all__ = [
     "AUDIO_GAIN_BOUNDARY_DETECTOR",
     "AUDIO_GAIN_BOUNDARY_SOURCE",
     "AUDIO_GAIN_LINE_COLOR",
+    "AUDIO_SPECTRAL_BOUNDARY_DETECTOR",
+    "AUDIO_SPECTRAL_BOUNDARY_SOURCE",
+    "AUDIO_SPECTRAL_LINE_COLOR",
     "audio_gain_levels_from_pcm16le",
+    "audio_spectral_flux_from_pcm16le",
     "build_audio_gain_boundary_rows",
+    "build_audio_spectral_flux_boundary_rows",
     "detect_audio_gain_boundary_rows",
     "detect_audio_gain_changes",
+    "detect_audio_spectral_flux_changes",
     "extract_audio_gain_levels",
+    "extract_audio_pcm16le",
     "is_audio_gain_boundary",
 ]

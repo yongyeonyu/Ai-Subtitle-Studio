@@ -1802,11 +1802,16 @@ def get_boundary_times(project: dict) -> list:
 
     우선순위:
     1. analysis.cut_boundaries 정식 컷 경계
-    2. 멀티클립 클립 경계(하위 호환 fallback)
+    2. roughcut_state 안에 저장된 exact stitched join 경계
+    3. 멀티클립 클립 경계(하위 호환 fallback)
     """
     confirmed = copy_project_rows(project_cut_boundaries(project) or [])
     if confirmed:
         return confirmed
+
+    stitched = copy_project_rows(project_stitched_cut_boundaries(project) or [])
+    if stitched:
+        return stitched
 
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
     boundaries = []
@@ -1817,6 +1822,59 @@ def get_boundary_times(project: dict) -> list:
     if boundaries:
         boundaries.pop()
     return boundaries
+
+
+def _stitched_cut_boundaries_from_payload(
+    payload: dict,
+    *,
+    primary_fps: float,
+) -> list[dict]:
+    if not isinstance(payload, dict):
+        return []
+
+    def _normalized(rows) -> list[dict]:
+        if not isinstance(rows, list) or not rows:
+            return []
+        return normalize_cut_boundaries(rows, primary_fps=primary_fps)
+
+    direct = _normalized(payload.get("stitched_cut_boundaries"))
+    if direct:
+        return direct
+
+    outputs = payload.get("outputs")
+    if isinstance(outputs, dict):
+        for key in ("edl", "render_plan"):
+            block = outputs.get(key)
+            if isinstance(block, dict):
+                rows = _normalized(block.get("stitched_cut_boundaries"))
+                if rows:
+                    return rows
+
+    for key in ("edl", "render_plan"):
+        block = payload.get(key)
+        if isinstance(block, dict):
+            rows = _normalized(block.get("stitched_cut_boundaries"))
+            if rows:
+                return rows
+
+    return []
+
+
+def project_stitched_cut_boundaries(project: dict) -> list[dict]:
+    """Return exact stitched roughcut join boundaries embedded in project payloads."""
+    if not isinstance(project, dict):
+        return []
+
+    primary_fps = normalize_fps(project_primary_fps(project) or 30.0)
+    roughcut_state = project.get("roughcut_state", {}) or {}
+    candidate = selected_roughcut_candidate(roughcut_state if isinstance(roughcut_state, dict) else {})
+
+    for payload in (candidate, roughcut_state):
+        rows = _stitched_cut_boundaries_from_payload(payload, primary_fps=primary_fps)
+        if rows:
+            return rows
+
+    return []
 
 
 # ─────────────────────────────────────────────

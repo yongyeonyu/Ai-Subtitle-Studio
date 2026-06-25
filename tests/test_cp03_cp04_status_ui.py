@@ -793,6 +793,160 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertTrue(backend._force_cut_boundary_rescan_once)
         self.assertFalse(backend._cut_boundary_prescan_completed)
 
+    def test_prepare_cut_boundaries_before_start_reuses_exact_join_seed_for_new_project(self):
+        class _Backend:
+            def __init__(self):
+                self.calls = []
+                self._force_cut_boundary_rescan_once = False
+                self._cut_boundary_prescan_completed = False
+
+            def _auto_scan_cut_boundaries_for_start(self, project_path, files):
+                self.calls.append((project_path, list(files or [])))
+
+        class DummyEditor(EditorPipelineMixin):
+            def __init__(self, main, media_path):
+                self.main = main
+                self.media_path = media_path
+                self.settings = {"example": True}
+
+            def window(self):
+                return self.main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "created.assp")
+            open(media_path, "wb").close()
+
+            backend = _Backend()
+            main = SimpleNamespace(
+                backend=backend,
+                _multiclip_files=[],
+                _current_project_path="",
+                _startup_exact_cut_boundary_seed_rows=[
+                    {
+                        "timeline_sec": 4.0,
+                        "timeline_frame": 120,
+                        "fps": 30.0,
+                        "source": "roughcut_concat_join",
+                        "reason": "roughcut_concat_segment_join",
+                        "verified": True,
+                    }
+                ],
+                _startup_exact_cut_boundary_seed_source="/tmp/clip_roughcut_render_plan.json",
+            )
+            editor = DummyEditor(main, media_path)
+
+            def _fake_create_project(**kwargs):
+                with open(project_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "analysis": {"cut_boundaries": []},
+                            "editor_state": {},
+                            "user_settings": {},
+                            "timeline": {"tracks": [{"clips": []}]},
+                        },
+                        f,
+                        ensure_ascii=False,
+                    )
+                return project_path
+
+            with patch("ui.editor.editor_pipeline_startup.create_project", side_effect=_fake_create_project) as create_mock:
+                editor._prepare_cut_boundaries_before_start()
+
+            self.assertEqual(backend.calls, [])
+            self.assertEqual(main._current_project_path, project_path)
+            self.assertTrue(backend._cut_boundary_prescan_completed)
+            self.assertFalse(backend._force_cut_boundary_rescan_once)
+            self.assertEqual([row["timeline_sec"] for row in main._project_boundary_times], [4.0])
+            self.assertEqual(main._startup_exact_cut_boundary_seed_rows, [])
+            self.assertEqual(main._startup_exact_cut_boundary_seed_source, "")
+            create_mock.assert_called_once_with(
+                name="sample",
+                media_paths=[media_path],
+                srt_path=os.path.join(tmp, "sample.srt"),
+                user_settings={"example": True},
+                prefill_analysis_artifacts=False,
+            )
+            saved = read_project_storage_payload(project_path)
+            self.assertEqual([row["timeline_sec"] for row in saved["analysis"]["cut_boundaries"]], [4.0])
+            self.assertEqual(saved["analysis"]["cut_boundary_provisional_boundaries"], [])
+
+    def test_prepare_cut_boundaries_before_start_reuses_exact_join_seed_for_existing_project(self):
+        class _Backend:
+            def __init__(self):
+                self.calls = []
+                self._force_cut_boundary_rescan_once = False
+                self._cut_boundary_prescan_completed = False
+
+            def _auto_scan_cut_boundaries_for_start(self, project_path, files):
+                self.calls.append((project_path, list(files or [])))
+
+        class DummyEditor(EditorPipelineMixin):
+            def __init__(self, main, media_path):
+                self.main = main
+                self.media_path = media_path
+                self.settings = {"example": True}
+
+            def window(self):
+                return self.main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "sample.assp")
+            open(media_path, "wb").close()
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "analysis": {
+                            "cut_boundaries": [],
+                            "cut_boundary_prescan_done": True,
+                            "cut_boundary_cache_path": "/tmp/stale-cache.json",
+                            "cut_boundary_provisional_boundaries": [
+                                {"timeline_sec": 4.1, "timeline_frame": 123, "fps": 30.0}
+                            ],
+                        },
+                        "editor_state": {},
+                        "user_settings": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
+
+            backend = _Backend()
+            main = SimpleNamespace(
+                backend=backend,
+                _multiclip_files=[],
+                _current_project_path=project_path,
+                _startup_exact_cut_boundary_seed_rows=[
+                    {
+                        "timeline_sec": 4.0,
+                        "timeline_frame": 120,
+                        "fps": 30.0,
+                        "source": "roughcut_concat_join",
+                        "reason": "roughcut_concat_segment_join",
+                        "verified": True,
+                    }
+                ],
+                _startup_exact_cut_boundary_seed_source="/tmp/clip_roughcut_edl.json",
+            )
+            editor = DummyEditor(main, media_path)
+
+            editor._prepare_cut_boundaries_before_start()
+
+            self.assertEqual(backend.calls, [])
+            self.assertEqual(main._current_project_path, project_path)
+            self.assertTrue(backend._cut_boundary_prescan_completed)
+            self.assertFalse(backend._force_cut_boundary_rescan_once)
+            self.assertEqual([row["timeline_sec"] for row in main._project_boundary_times], [4.0])
+            self.assertEqual(main._startup_exact_cut_boundary_seed_rows, [])
+            self.assertEqual(main._startup_exact_cut_boundary_seed_source, "")
+            saved = read_project_storage_payload(project_path)
+            self.assertEqual([row["timeline_sec"] for row in saved["analysis"]["cut_boundaries"]], [4.0])
+            self.assertEqual(saved["analysis"]["cut_boundary_provisional_boundaries"], [])
+            self.assertNotIn("cut_boundary_prescan_done", saved["analysis"])
+            self.assertNotIn("cut_boundary_cache_path", saved["analysis"])
+
     def test_stop_pipeline_clears_pending_editor_work_before_backend_stop(self):
         class _Timer:
             def __init__(self):

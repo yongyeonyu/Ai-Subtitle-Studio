@@ -82,6 +82,11 @@ class RoughcutV2OutputCompatTests(unittest.TestCase):
         self.assertEqual(payload["segments"][0]["metadata"]["major_id"], "A")
         self.assertEqual(payload["segments"][0]["metadata"]["minor_code"], "A1")
         self.assertEqual(payload["segments"][0]["metadata"]["major"]["title"], "외부 리뷰")
+        self.assertEqual([row["timeline_sec"] for row in payload["stitched_cut_boundaries"]], [4.0])
+        self.assertEqual(payload["stitched_cut_boundaries"][0]["segment_before_id"], "chapter_0001")
+        self.assertEqual(payload["stitched_cut_boundaries"][0]["segment_after_id"], "chapter_0002")
+        self.assertEqual(payload["stitched_cut_boundaries"][0]["timeline_before_end"], 4.0)
+        self.assertEqual(payload["stitched_cut_boundaries"][0]["timeline_after_start"], 5.0)
 
     def test_guide_and_retimed_srt_keep_existing_output_with_v2_metadata(self):
         chapters, _majors, decisions, edl = self._v2_fixture()
@@ -108,8 +113,10 @@ class RoughcutV2OutputCompatTests(unittest.TestCase):
 
         self.assertEqual(len(plan.segment_manifest), len(edl))
         self.assertEqual(plan.segment_manifest[0]["chapter_id"], "chapter_0001")
+        self.assertEqual([row["timeline_sec"] for row in plan.stitched_cut_boundaries], [4.0])
         self.assertTrue(result.dry_run)
         self.assertEqual(result.segment_manifest[0]["segment_id"], "chapter_0001")
+        self.assertEqual([row["timeline_sec"] for row in result.stitched_cut_boundaries], [4.0])
 
 
 if __name__ == "__main__":

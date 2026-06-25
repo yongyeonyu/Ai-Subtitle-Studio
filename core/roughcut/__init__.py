@@ -11,7 +11,14 @@ from .gap_detector import TimelineGap, detect_subtitle_gaps, merge_close_gaps
 from .boundary_refiner import BoundaryVerification, refine_major_boundaries, verify_major_boundary
 from .chapter_segmenter import build_chapters
 from .edit_decision_engine import CutSafetyResult, build_edit_decisions, classify_cut_safety, generate_cut_points
-from .edl_generator import build_edl_segments, edl_to_dict, generate_edl, map_edl_segments_to_clip_sources, save_edl_json
+from .edl_generator import (
+    build_edl_segments,
+    build_stitched_cut_boundaries,
+    edl_to_dict,
+    generate_edl,
+    map_edl_segments_to_clip_sources,
+    save_edl_json,
+)
 from .editor_draft import (
     DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT,
     EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
@@ -127,6 +134,7 @@ __all__ = [
     "build_semantic_chunks",
     "build_edit_decisions",
     "build_edl_segments",
+    "build_stitched_cut_boundaries",
     "build_markdown_guide",
     "build_roughcut_prompt",
     "build_title_suggestions",

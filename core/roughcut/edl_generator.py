@@ -7,6 +7,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from core.cut_boundary import normalize_cut_boundaries
+
 from .models import ChapterMetadata, EDLSegment, EditDecision, RoughCutSegment
 
 
@@ -190,6 +192,48 @@ def map_edl_segments_to_clip_sources(
     return mapped
 
 
+def build_stitched_cut_boundaries(
+    edl_segments: Iterable[EDLSegment],
+    *,
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    """Build exact output-join boundaries for a concat-rendered roughcut."""
+    segments = [segment for segment in edl_segments or () if _as_float(segment.output_end, 0.0) > _as_float(segment.output_start, 0.0)]
+    rows: list[dict[str, Any]] = []
+    for index, (previous, current) in enumerate(zip(segments, segments[1:]), start=1):
+        previous_end = _as_float(previous.output_end, 0.0)
+        current_start = _as_float(current.output_start, previous_end)
+        join_sec = current_start if current_start > 0.0 else previous_end
+        if join_sec <= 0.0:
+            continue
+        rows.append(
+            {
+                "time": round(join_sec, 3),
+                "timeline_sec": round(join_sec, 3),
+                "source": "roughcut_concat_join",
+                "detector": "roughcut-edl-join-v1",
+                "reason": "roughcut_concat_segment_join",
+                "status": "confirmed",
+                "verified": True,
+                "boundary_role": "hard_cut",
+                "hard_cut_allowed": True,
+                "output_join_index": index,
+                "join_gap_sec": round(abs(current_start - previous_end), 6),
+                "segment_before_id": str(previous.segment_id or ""),
+                "segment_after_id": str(current.segment_id or ""),
+                "chapter_before_id": str(previous.chapter_id or ""),
+                "chapter_after_id": str(current.chapter_id or ""),
+                "source_before_path": str(previous.source_path or ""),
+                "source_after_path": str(current.source_path or ""),
+                "output_before_end": round(previous_end, 3),
+                "output_after_start": round(current_start, 3),
+                "timeline_before_end": round(_as_float(previous.timeline_end, previous.source_end), 3),
+                "timeline_after_start": round(_as_float(current.timeline_start, current.source_start), 3),
+            }
+        )
+    return normalize_cut_boundaries(rows, primary_fps=primary_fps)
+
+
 def _jsonable(value: Any) -> Any:
     if is_dataclass(value):
         return asdict(value)
@@ -212,11 +256,13 @@ def edl_to_dict(
     duration = segments[-1].output_end if segments else 0.0
     chapter_meta = _chapter_metadata_lookup(chapters)
     major_meta = _major_metadata_lookup(major_segments)
+    stitched_boundaries = build_stitched_cut_boundaries(segments)
     return {
         "schema": "ai_subtitle_studio.roughcut.edl.v1",
         "version": "03.01.32",
         "metadata": _jsonable(_edl_metadata(metadata or {}, chapters, major_segments)),
         "duration": round(duration, 3),
+        "stitched_cut_boundaries": _jsonable(stitched_boundaries),
         "segments": [
             _jsonable(_edl_segment_payload(segment, chapter_meta=chapter_meta, major_meta=major_meta))
             for segment in segments

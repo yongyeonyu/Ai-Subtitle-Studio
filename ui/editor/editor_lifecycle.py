@@ -15,6 +15,7 @@ from core.project.project_manager import load_project
 from ui.editor.editor_save_manager import backup_subtitle_file_copy
 from ui.editor.editor_project_open_native import (
     find_project_for_srt_open as native_find_project_for_srt_open,
+    load_stitched_cut_boundaries_for_srt_open as native_load_stitched_cut_boundaries_for_srt_open,
     merge_srt_segments_with_project_metadata as native_merge_srt_segments_with_project_metadata,
     normalized_open_path as native_normalized_open_path,
     normalized_segment_text as native_normalized_segment_text,
@@ -79,6 +80,9 @@ class EditorLifecycleMixin:
 
     def _find_project_for_srt_open(self, srt_path: str, media_path: str | None = None) -> tuple[str, dict | None]:
         return native_find_project_for_srt_open(srt_path, media_path)
+
+    def _load_stitched_cut_boundaries_for_srt_open(self, srt_path: str, media_path: str | None = None) -> tuple[list[dict], str]:
+        return native_load_stitched_cut_boundaries_for_srt_open(srt_path, media_path)
 
     @staticmethod
     def _normalized_segment_text(text: str | None) -> str:
@@ -212,6 +216,30 @@ class EditorLifecycleMixin:
                 except Exception:
                     pass
         media_path = media_path or srt_path
+        stitched_boundaries, stitched_sidecar_path = self._load_stitched_cut_boundaries_for_srt_open(srt_path, media_path)
+        if stitched_boundaries:
+            try:
+                self._project_boundary_times = list(stitched_boundaries or [])
+            except Exception:
+                pass
+            try:
+                self._startup_exact_cut_boundary_seed_rows = list(stitched_boundaries or [])
+                self._startup_exact_cut_boundary_seed_source = str(stitched_sidecar_path or "")
+            except Exception:
+                pass
+        elif not linked_project:
+            try:
+                self._project_boundary_times = []
+                self._startup_exact_cut_boundary_seed_rows = []
+                self._startup_exact_cut_boundary_seed_source = ""
+            except Exception:
+                pass
+        else:
+            try:
+                self._startup_exact_cut_boundary_seed_rows = []
+                self._startup_exact_cut_boundary_seed_source = ""
+            except Exception:
+                pass
         ok, reason = validate_srt_duration(srt_path, media_path)
         if ok:
             segments = parse_srt(srt_path)
@@ -226,6 +254,14 @@ class EditorLifecycleMixin:
                     )
                 except Exception as exc:
                     get_logger().log(f"⚠️ SRT 프로젝트 메타데이터 복원 실패: {exc}")
+            if stitched_boundaries:
+                try:
+                    get_logger().log(
+                        f"🎬 roughcut stitched cut boundaries 복원: {os.path.basename(stitched_sidecar_path)} "
+                        f"({len(stitched_boundaries)}개)"
+                    )
+                except Exception:
+                    pass
         else:
             QMessageBox.warning(self, "기존 자막 오류", reason)
             backup_existing_srt(srt_path)

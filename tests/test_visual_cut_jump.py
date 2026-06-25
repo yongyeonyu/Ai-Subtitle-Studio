@@ -47,6 +47,9 @@ class VisualCutJumpTests(unittest.TestCase):
 
         self.assertGreater(float(cut_score["score"]), float(motion_score["score"]) * 2.0)
         self.assertGreater(float(cut_score["pixel_ratio"]), float(motion_score["pixel_ratio"]))
+        self.assertGreater(float(cut_score["hist_delta"]), float(motion_score["hist_delta"]))
+        self.assertGreater(float(cut_score["ssim_delta"]), float(motion_score["ssim_delta"]))
+        self.assertGreater(float(cut_score["hash_delta"]), float(motion_score["hash_delta"]))
         self.assertGreaterEqual(int(cut_score["region_hits"]), int(motion_score["region_hits"]))
 
     def test_visual_cut_pair_skips_flow_for_low_change_fast4_pairs(self):
