@@ -14,6 +14,8 @@ from core.project.project_context import (
 )
 from core.project.project_format import project_primary_fps, project_total_duration
 from core.project.project_roughcut_store import selected_roughcut_candidate
+from core.roughcut.models import EDLSegment
+from core.roughcut.renderer_skeleton import RenderCommandPlan, build_concat_render_plan
 
 NLE_SNAPSHOT_SCHEMA = "ai_subtitle_studio.nle_snapshot.v1"
 
@@ -123,6 +125,18 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return _as_float(value, 0.0)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return _as_int(value, 0)
 
 
 def _copy_metadata(row: dict[str, Any], *, drop: set[str]) -> dict[str, Any]:
@@ -442,6 +456,61 @@ def _build_render_plans(selected_candidate: dict[str, Any]) -> tuple[RenderPlan,
     )
 
 
+def _select_render_plan(snapshot: NLESnapshot, plan_id: str = "") -> RenderPlan:
+    for plan in snapshot.render_plans:
+        if not plan_id or plan.plan_id == plan_id:
+            return plan
+    raise ValueError("nle_render_plan_missing")
+
+
+def _edl_segment_from_snapshot_row(row: dict[str, Any], *, index: int) -> EDLSegment:
+    segment_id = str(row.get("segment_id") or row.get("chapter_id") or f"segment_{index + 1:04d}")
+    return EDLSegment(
+        source_path=str(row.get("source_path") or row.get("path") or ""),
+        segment_id=segment_id,
+        source_start=_as_float(row.get("source_start"), 0.0),
+        source_end=_as_float(row.get("source_end"), 0.0),
+        output_start=_as_float(row.get("output_start"), 0.0),
+        output_end=_as_float(row.get("output_end"), 0.0),
+        action=str(row.get("action") or "keep"),
+        chapter_id=str(row.get("chapter_id")) if row.get("chapter_id") not in (None, "") else None,
+        story_role=str(row.get("story_role") or ""),
+        reason=str(row.get("reason") or ""),
+        timeline_start=_optional_float(row.get("timeline_start")),
+        timeline_end=_optional_float(row.get("timeline_end")),
+        clip_index=_optional_int(row.get("clip_index")),
+    )
+
+
+def edl_segments_from_render_plan_snapshot(snapshot: NLESnapshot, *, plan_id: str = "") -> tuple[EDLSegment, ...]:
+    plan = _select_render_plan(snapshot, plan_id=plan_id)
+    return tuple(
+        _edl_segment_from_snapshot_row(row, index=index)
+        for index, row in enumerate(plan.segments)
+        if isinstance(row, dict)
+    )
+
+
+def build_concat_render_plan_from_snapshot(
+    snapshot: NLESnapshot,
+    output_path: str,
+    temp_dir: str,
+    *,
+    plan_id: str = "",
+    ffmpeg_binary: str = "ffmpeg",
+    render_mode: str | None = None,
+) -> RenderCommandPlan:
+    plan = _select_render_plan(snapshot, plan_id=plan_id)
+    mode = render_mode if render_mode is not None else plan.render_mode
+    return build_concat_render_plan(
+        edl_segments_from_render_plan_snapshot(snapshot, plan_id=plan.plan_id),
+        output_path,
+        temp_dir,
+        ffmpeg_binary=ffmpeg_binary,
+        render_mode=mode,
+    )
+
+
 def build_project_nle_snapshot(project: dict[str, Any], *, project_path: str = "") -> NLESnapshot:
     source = deepcopy(project if isinstance(project, dict) else {})
     fps = project_primary_fps(source)
@@ -507,6 +576,8 @@ __all__ = [
     "TimelineMarker",
     "Track",
     "build_project_nle_snapshot",
+    "build_concat_render_plan_from_snapshot",
+    "edl_segments_from_render_plan_snapshot",
     "markers_from_roughcut_sidecar_payload",
     "markers_from_stitched_cut_boundaries",
 ]

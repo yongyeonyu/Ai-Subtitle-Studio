@@ -4,6 +4,11 @@ import unittest
 from pathlib import Path
 import tempfile
 
+from core.project.nle_snapshot import (
+    build_concat_render_plan_from_snapshot,
+    build_project_nle_snapshot,
+    edl_segments_from_render_plan_snapshot,
+)
 from core.roughcut import (
     ChapterMetadata,
     RoughCutMinorGroup,
@@ -117,6 +122,49 @@ class RoughcutV2OutputCompatTests(unittest.TestCase):
         self.assertTrue(result.dry_run)
         self.assertEqual(result.segment_manifest[0]["segment_id"], "chapter_0001")
         self.assertEqual([row["timeline_sec"] for row in result.stitched_cut_boundaries], [4.0])
+
+    def test_nle_snapshot_render_plan_matches_legacy_concat_builder(self):
+        chapters, majors, _decisions, edl = self._v2_fixture()
+        edl_payload = edl_to_dict(edl, metadata={"source": "demo"}, chapters=chapters, major_segments=majors)
+        project = {
+            "project_name": "nle_render_parity",
+            "video": {"duration_sec": edl_payload["duration"], "primary_fps": 30.0},
+            "roughcut_state": {
+                "selected_candidate_id": "roughcut_a",
+                "candidates": [
+                    {
+                        "candidate_id": "roughcut_a",
+                        "name": "roughcut A",
+                        "outputs": {
+                            "edl": edl_payload,
+                            "render_plan": {
+                                "render_mode": "sync_safe",
+                                "stitched_cut_boundaries": edl_payload["stitched_cut_boundaries"],
+                            },
+                        },
+                    }
+                ],
+            },
+        }
+        snapshot = build_project_nle_snapshot(project)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out.mp4"
+            temp_dir = Path(tmp) / "parts"
+            legacy_plan = build_concat_render_plan(edl, output, temp_dir, render_mode="sync_safe")
+            nle_plan = build_concat_render_plan_from_snapshot(
+                snapshot,
+                str(output),
+                str(temp_dir),
+                render_mode="sync_safe",
+            )
+
+        self.assertEqual(edl_segments_from_render_plan_snapshot(snapshot), tuple(edl))
+        self.assertEqual(snapshot.render_plans[0].output_duration, edl_payload["duration"])
+        self.assertEqual(nle_plan.extract_commands, legacy_plan.extract_commands)
+        self.assertEqual(nle_plan.concat_command, legacy_plan.concat_command)
+        self.assertEqual(nle_plan.segment_manifest, legacy_plan.segment_manifest)
+        self.assertEqual(nle_plan.stitched_cut_boundaries, legacy_plan.stitched_cut_boundaries)
 
 
 if __name__ == "__main__":

@@ -117,6 +117,38 @@
 - This slice still does not reroute render/export plan construction through NLE snapshot data.
 - Multi-clip output duration parity and source-app Macau/X5 promotion proof remain later gates.
 
+## 2026-06-26 Addendum - Source-App Internal NLE Render Plan Parity Adapter
+
+### Scope
+
+- Added `build_concat_render_plan_from_snapshot` and `edl_segments_from_render_plan_snapshot` to `core/project/nle_snapshot.py`.
+- The adapter rebuilds the existing roughcut concat `RenderCommandPlan` from `NLESnapshot.render_plans[*].segments`.
+- It does not change `ui/roughcut/roughcut_export.py`, `_render_plan.json`, `_edl.json`, sidecar readers, UI labels, progress messages, subtitle timing, or output files.
+- The parity test proves snapshot-derived EDL segments, extract commands, concat command, segment manifest, stitched exact-join rows, and snapshot output duration match the legacy builder path.
+- Jammini architecture handoff `.agents/sentinel/handoffs/20260626-014600-nle-render-plan-parity.md` was reviewed by Dex as `accept/defer runtime assert`: UI export ownership remains in `ui/roughcut/roughcut_export.py`; production duration asserts are deferred until a runtime routing slice, while this slice uses focused test asserts.
+
+### Files touched in this slice
+
+- `core/project/nle_snapshot.py`
+- `tests/test_roughcut_v2_output_compat.py`
+- `docs/ARCHITECTURE.md`
+- `docs/FEATURE_REGISTRY.md`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/project/nle_snapshot.py tests/test_roughcut_v2_output_compat.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_v2_output_compat.py tests/test_project_nle_snapshot.py`
+  - `10 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py tests/test_project_nle_snapshot.py`
+  - `264 passed, 4 subtests passed`
+- `git diff --check -- .`
+
+### Remaining risk
+
+- Roughcut UI/runtime export still calls the legacy owner path directly; this is intentional until a later routing slice has source-app fixture proof.
+- Source-app Macau/X5 promotion proof remains a later gate.
+
 ## 2026-06-26 Addendum - v04.00.16 Source-App Checkpoint Release
 
 ### Scope
