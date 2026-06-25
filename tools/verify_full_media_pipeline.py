@@ -442,9 +442,10 @@ def verification_failure_reason(payload: dict[str, Any]) -> str:
     except (TypeError, ValueError):
         audio_chunk_wavs = 0
 
-    # QA hot path: a spoken, non-trivial verification slice must not pass with
-    # zero subtitles, otherwise STT early-exit regressions look like speed wins.
-    if target_duration >= 5.0 and (vad_segments > 0 or audio_chunk_wavs > 0):
+    # QA hot path: a non-trivial verification slice must not pass with zero
+    # subtitles, otherwise missing audio streams or STT early-exits look like
+    # speed wins.
+    if target_duration >= 5.0:
         if raw_segments <= 0:
             return "empty_subtitle_output:raw_segments_zero"
         if final_segments <= 0:

@@ -117,6 +117,17 @@ def test_verification_failure_reason_rejects_empty_spoken_slice():
     assert verification_failure_reason(payload) == "empty_subtitle_output:raw_segments_zero"
 
 
+def test_verification_failure_reason_rejects_empty_nontrivial_slice_without_audio_markers():
+    payload = {
+        "media": {"duration_target_sec": 180.0},
+        "audio_chunk_wavs": 0,
+        "vad_segments": 0,
+        "result": {"raw_segments": 0, "final_segments": 0, "error": ""},
+    }
+
+    assert verification_failure_reason(payload) == "empty_subtitle_output:raw_segments_zero"
+
+
 def test_verification_failure_reason_allows_empty_trivial_slice_without_vad():
     payload = {
         "media": {"duration_target_sec": 1.0},

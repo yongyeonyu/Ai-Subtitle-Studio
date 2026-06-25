@@ -178,6 +178,43 @@
 - This is still unit-level file round-trip proof, not Macau/X5 source-app promotion proof.
 - Mutable timing reverse-write and cross-device relink/cache UX are still deferred because this slice does not route save/load writes through the NLE snapshot.
 
+## 2026-06-26 Addendum - QA Runner Fixture Repair And X5 Empty-Output Guard
+
+### Scope
+
+- Repaired the source-app QA runner fixtures used for NLE promotion checks.
+- `editor_compact_macau` now opens a fresh per-run editor fixture under the QA output directory, so a previously mutated base Macau project cannot create zero-length first-segment failures.
+- The roughcut multi-candidate fixture now preserves original external subtitle asset paths when copying the project, including `asset_storage.tracks`, so source-app reopen restores the 34 current Macau subtitle rows instead of falling back to empty editor state.
+- `roughcut_reopen_macau` now verifies saved roughcut open/save/reopen state without forcing a fresh `start-current-roughcut` analysis run.
+- `roughcut_release_audit_macau` expectations were synced to the current Macau roughcut fixture: 35 visible rows and chapter `C_0015`.
+- `tools/verify_full_media_pipeline.py` now fails non-trivial full-media verification when raw/final subtitle counts are zero, even when no VAD/audio chunks were produced. This blocks video-only media from becoming a false green speed win.
+
+### Files touched in this slice
+
+- `tools/qa_suite_runner.py`
+- `tests/test_qa_suite_runner.py`
+- `tools/verify_full_media_pipeline.py`
+- `tests/test_verify_full_media_pipeline.py`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile tools/qa_suite_runner.py tests/test_qa_suite_runner.py tools/verify_full_media_pipeline.py tests/test_verify_full_media_pipeline.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_qa_suite_runner.py tests/test_app_command_bridge.py`
+  - `108 passed`
+- `git diff --check -- tools/qa_suite_runner.py tests/test_qa_suite_runner.py tools/verify_full_media_pipeline.py tests/test_verify_full_media_pipeline.py`
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
+  - artifact: `output/manual_verification/latest/qa_suite_quick_20260626_022343`
+  - result: `failed_count=0`
+- `./venv/bin/python tools/verify_full_media_pipeline.py --media 'test video/X5_시승기_후반_자막소스.mov' --mode high --output-dir output/manual_verification/latest/x5_video_only_empty_guard_20260626 --duration-sec 180`
+  - expected failure: `empty_subtitle_output:raw_segments_zero`
+  - reason: the available fallback `X5_시승기_후반_자막소스.mov` is video-only; it is not valid X5 STT promotion proof.
+
+### Remaining risk
+
+- Full source-app promotion is not complete until an audio-bearing X5 media fixture is restored at the expected path or explicitly supplied through a new approved QA fixture path.
+- `output/manual_verification/latest/qa_suite_full_20260626_022403` had `failed_count=0` before the stricter empty-output guard, but that run is superseded because its X5 leg produced `final_segment_count=0` and `raw_segment_count=0`.
+
 ## 2026-06-26 Addendum - v04.00.16 Source-App Checkpoint Release
 
 ### Scope

@@ -53,6 +53,21 @@ class QASuiteRunnerTests(unittest.TestCase):
         )
         export_step = next(step for step in spec["steps"] if step["name"] == "roughcut_export_srt")
         self.assertIn("roughcut_release_audit_export.srt", export_step["command"][-1])
+        status_step = next(step for step in spec["steps"] if step["name"] == "status_ready")
+        self.assertEqual(status_step["expect_data"]["roughcut_runtime.visible_row_count"], 35)
+        chapter_step = next(step for step in spec["steps"] if step["name"] == "thumbnail_preview_proxy")
+        self.assertEqual(chapter_step["command"], ["roughcut-select-chapter", "--chapter-id", "C_0015", "--autoplay"])
+        self.assertEqual(chapter_step["expect_data"]["selected_segment_id"], "C")
+
+    def test_build_scenarios_roughcut_reopen_uses_saved_state_without_reanalysis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(qa_suite_runner, "MACAU_MEDIA", Path(tmp) / "missing.mp4"):
+                scenarios = qa_suite_runner.build_scenarios("major", Path(tmp))
+
+        spec = next(item for item in scenarios if item["id"] == "roughcut_reopen_macau")
+        commands = [step["command"][0] for step in spec["steps"]]
+        self.assertNotIn("start-current-roughcut", commands)
+        self.assertEqual(commands[:2], ["open-project", "open-roughcut"])
 
     def test_build_scenarios_full_adds_x5_rolling_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -64,6 +79,25 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertEqual(scenarios[-1]["mode"], "high")
         self.assertEqual(scenarios[-1]["duration_sec"], 180.0)
         self.assertIn("X5_", Path(scenarios[-1]["media"]).name)
+
+    def test_build_scenarios_full_uses_existing_x5_fallback_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = root / "missing.mp4"
+            fallback = root / "X5_시승기_후반_자막소스.mov"
+            fallback.write_bytes(b"media")
+            with patch.object(qa_suite_runner, "MACAU_MEDIA", root / "missing_macau.mp4"), patch.object(
+                qa_suite_runner,
+                "X5_MEDIA",
+                missing,
+            ), patch.object(
+                qa_suite_runner,
+                "X5_MEDIA_CANDIDATES",
+                (missing, fallback),
+            ):
+                scenarios = qa_suite_runner.build_scenarios("full", root / "suite")
+
+        self.assertEqual(Path(scenarios[-1]["media"]), fallback)
 
     def test_run_suite_writes_manifest_and_result_files(self):
         def _fake_run_scenario(spec, _python_bin):
@@ -167,13 +201,94 @@ class QASuiteRunnerTests(unittest.TestCase):
                 "core.project.project_manager.create_project",
                 return_value=str(created_project),
             ) as create_project:
-                scenarios = qa_suite_runner.build_scenarios("quick", output_root)
+                resolved = qa_suite_runner._macau_project_for_suite(output_root)
 
-        open_project_step = scenarios[0]["steps"][0]
-        self.assertEqual(open_project_step["command"], ["open-project", str(created_project)])
+        self.assertEqual(resolved, created_project)
         create_project.assert_called_once()
         self.assertFalse(create_project.call_args.kwargs["prefill_analysis_artifacts"])
         self.assertEqual(create_project.call_args.kwargs["srt_path"], str(srt_path))
+
+    def test_macau_editor_project_for_suite_creates_clean_fixture_even_when_default_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            existing_project = root / "projects" / "DJI_20260217224203_0075_D.aissproj"
+            existing_project.parent.mkdir(parents=True)
+            existing_project.write_text("{}", encoding="utf-8")
+            media_path = root / "missing.mp4"
+            output_root = root / "suite"
+            created_project = output_root / "_suite_fixtures" / f"{existing_project.stem}_editor_compact.aissproj"
+
+            with patch.object(qa_suite_runner, "MACAU_PROJECT", existing_project), patch.object(
+                qa_suite_runner,
+                "MACAU_MEDIA",
+                media_path,
+            ), patch.object(
+                qa_suite_runner,
+                "MACAU_SRT_CANDIDATES",
+                (),
+            ), patch(
+                "core.project.project_manager.create_project",
+                return_value=str(created_project),
+            ) as create_project:
+                resolved = qa_suite_runner._macau_editor_project_for_suite(output_root)
+
+        self.assertEqual(resolved, created_project)
+        create_project.assert_called_once()
+        self.assertEqual(create_project.call_args.kwargs["media_paths"], [])
+        self.assertTrue(create_project.call_args.kwargs["srt_path"].endswith("_fallback.srt"))
+        self.assertFalse(create_project.call_args.kwargs["prefill_analysis_artifacts"])
+
+    def test_build_scenarios_quick_uses_editor_fixture_and_line_based_moves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            editor_project = root / "suite" / "_suite_fixtures" / "editor.aissproj"
+            with patch.object(qa_suite_runner, "_macau_project_for_suite", return_value=root / "existing.aissproj"), patch.object(
+                qa_suite_runner,
+                "_macau_editor_project_for_suite",
+                return_value=editor_project,
+            ):
+                scenarios = qa_suite_runner.build_scenarios("quick", root / "suite")
+
+        steps = scenarios[0]["steps"]
+        self.assertEqual(steps[0]["command"], ["open-project", str(editor_project)])
+        self.assertEqual(
+            {step["name"]: step["command"] for step in steps if step["name"].startswith("move_") or step["name"] == "merge_diamond"},
+            {
+                "move_segment_left": ["editor-move-segment-left", "--line", "1"],
+                "move_segment_right": ["editor-move-segment-right", "--line", "1"],
+                "move_diamond": ["editor-move-diamond", "--line", "1", "--side", "right"],
+                "merge_diamond": ["editor-merge-diamond", "--line", "1", "--side", "right"],
+            },
+        )
+
+    def test_absolutize_subtitle_asset_paths_for_fixture_preserves_original_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_path = root / "projects" / "macau.aissproj"
+            srt_path = root / "projects" / "macau.assets" / "subtitles" / "final.srt"
+            srt_path.parent.mkdir(parents=True)
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n", encoding="utf-8")
+            project = {
+                "_project_file_path": str(project_path),
+                "asset_storage": {
+                    "tracks": {
+                        "final": {"path": "macau.assets/subtitles/final.srt"},
+                    }
+                },
+                "subtitles": {
+                    "srt_path": "macau.assets/subtitles/final.srt",
+                    "external_track": {"path": "macau.assets/subtitles/final.srt"},
+                    "external_tracks": {"final": {"path": "macau.assets/subtitles/final.srt"}},
+                },
+            }
+
+            qa_suite_runner._absolutize_subtitle_asset_paths_for_fixture(project)
+
+        subtitles = project["subtitles"]
+        self.assertEqual(subtitles["srt_path"], str(srt_path))
+        self.assertEqual(subtitles["external_track"]["path"], str(srt_path))
+        self.assertEqual(subtitles["external_tracks"]["final"]["path"], str(srt_path))
+        self.assertEqual(project["asset_storage"]["tracks"]["final"]["path"], str(srt_path))
 
     def test_prepare_app_for_scenario_reuses_app_for_quick(self):
         spec = {
@@ -350,6 +465,30 @@ class QASuiteRunnerTests(unittest.TestCase):
 
         self.assertEqual(command, ["editor-move-diamond", "--side", "closest"])
         self.assertFalse(details["status_ok"])
+        self.assertEqual(details["pair"], {})
+
+    def test_resolve_editor_compact_diamond_keeps_original_command_when_status_has_no_pair(self):
+        payload = {
+            "ok": True,
+            "data": {
+                "editor_runtime": {
+                    "active_segment": {"start": 0.3},
+                    "diamond_left": {},
+                    "diamond_right": {},
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.qa_suite_runner._app_status", return_value=(0, payload)):
+                command, details = qa_suite_runner._resolve_editor_compact_diamond_command(
+                    "editor-move-diamond",
+                    "right",
+                    qa_suite_runner.DEFAULT_PYTHON,
+                    output_dir=Path(tmp),
+                )
+
+        self.assertIsNone(command)
+        self.assertTrue(details["status_ok"])
         self.assertEqual(details["pair"], {})
 
     def test_resolve_editor_compact_diamond_uses_boundary_when_status_has_pair(self):

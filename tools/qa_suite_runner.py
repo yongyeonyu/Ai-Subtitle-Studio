@@ -39,6 +39,10 @@ MACAU_SRT_CANDIDATES = (
     Path("/Users/u_mo_c/Downloads/마카오테스트/DJI_20260217224203_0075_D.srt").expanduser(),
 )
 X5_MEDIA = ROOT / "test video" / "X5_시승기_후반.MP4"
+X5_MEDIA_CANDIDATES = (
+    X5_MEDIA,
+    ROOT / "test video" / "X5_시승기_후반_자막소스.mov",
+)
 
 
 def _default_output_dir(profile: str) -> Path:
@@ -156,6 +160,90 @@ def _macau_project_for_suite(output_root: Path) -> Path:
         return MACAU_PROJECT
 
 
+def _macau_editor_project_for_suite(output_root: Path) -> Path:
+    fixture_dir = output_root / "_suite_fixtures"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    fixture_project = fixture_dir / f"{MACAU_PROJECT.stem}_editor_compact.aissproj"
+    media_path = MACAU_MEDIA.expanduser()
+    media_paths = [str(media_path)] if media_path.is_file() else []
+    srt_path = _existing_macau_srt() or _fallback_macau_srt(fixture_dir)
+
+    try:
+        from core.project import project_manager
+
+        previous_projects_dir = project_manager.PROJECTS_DIR
+        project_manager.PROJECTS_DIR = str(fixture_dir)
+        try:
+            created = project_manager.create_project(
+                fixture_project.stem,
+                media_paths=media_paths,
+                srt_path=str(srt_path),
+                user_settings={"project_external_srt_storage_enabled": True},
+                prefill_analysis_artifacts=False,
+            )
+        finally:
+            project_manager.PROJECTS_DIR = previous_projects_dir
+        created_path = Path(created)
+        return created_path if created_path.is_file() else fixture_project
+    except Exception as exc:
+        _write_json(
+            fixture_dir / "macau_editor_fixture_error.json",
+            {
+                "ok": False,
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "media": str(media_path),
+                "srt": str(srt_path),
+                "fallback_project": str(MACAU_PROJECT),
+            },
+        )
+        return _macau_project_for_suite(output_root)
+
+
+def _absolutize_subtitle_asset_paths_for_fixture(project: dict[str, Any]) -> None:
+    try:
+        from core.project.project_assets import resolve_project_asset_path
+    except Exception:
+        return
+
+    subtitles = project.get("subtitles") if isinstance(project.get("subtitles"), dict) else {}
+    if not isinstance(subtitles, dict):
+        return
+
+    def _resolve_existing(path_text: Any) -> str:
+        resolved = resolve_project_asset_path(project, str(path_text or ""))
+        return resolved if resolved and Path(resolved).is_file() else ""
+
+    resolved_srt = _resolve_existing(subtitles.get("srt_path"))
+    if resolved_srt:
+        subtitles["srt_path"] = resolved_srt
+
+    external_track = subtitles.get("external_track")
+    if isinstance(external_track, dict):
+        resolved_track = _resolve_existing(external_track.get("path"))
+        if resolved_track:
+            external_track["path"] = resolved_track
+
+    external_tracks = subtitles.get("external_tracks")
+    if isinstance(external_tracks, dict):
+        for track in external_tracks.values():
+            if not isinstance(track, dict):
+                continue
+            resolved_track = _resolve_existing(track.get("path"))
+            if resolved_track:
+                track["path"] = resolved_track
+
+    asset_storage = project.get("asset_storage") if isinstance(project.get("asset_storage"), dict) else {}
+    tracks = asset_storage.get("tracks") if isinstance(asset_storage.get("tracks"), dict) else {}
+    if isinstance(tracks, dict):
+        for track in tracks.values():
+            if not isinstance(track, dict):
+                continue
+            resolved_track = _resolve_existing(track.get("path"))
+            if resolved_track:
+                track["path"] = resolved_track
+
+
 def _macau_multicandidate_project_for_suite(output_root: Path) -> Path:
     base_project = _macau_project_for_suite(output_root)
     if not base_project.is_file():
@@ -169,6 +257,7 @@ def _macau_multicandidate_project_for_suite(output_root: Path) -> Path:
         from core.project.project_io import read_project_file, write_project_file
 
         project = read_project_file(str(base_project))
+        _absolutize_subtitle_asset_paths_for_fixture(project)
         roughcut_state = dict(project.get("roughcut_state", {}) or {})
         candidates = [dict(item) for item in list(roughcut_state.get("candidates") or []) if isinstance(item, dict)]
         if not candidates:
@@ -201,6 +290,14 @@ def _macau_multicandidate_project_for_suite(output_root: Path) -> Path:
             },
         )
         return base_project
+
+
+def _x5_media_for_suite() -> Path:
+    for candidate in X5_MEDIA_CANDIDATES:
+        path = Path(candidate).expanduser()
+        if path.is_file():
+            return path
+    return Path(X5_MEDIA).expanduser()
 
 
 def _full_media(
@@ -265,6 +362,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
 
     scenarios: list[dict[str, Any]] = []
     macau_project = _macau_project_for_suite(output_root)
+    macau_editor_project = _macau_editor_project_for_suite(output_root)
 
     editor_dir = output_root / "editor_compact_macau"
     scenarios.append(
@@ -273,7 +371,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
             editor_dir,
             description="Compact editor action path on Macau project.",
             steps=[
-                _step("open_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
+                _step("open_project", "open-project", str(macau_editor_project), timeout=60.0, delay_sec=2.0),
                 _step("capture_initial", "capture-snapshot", str(editor_dir / "snapshots" / "initial.png"), wait_for_path=str(editor_dir / "snapshots" / "initial.png")),
                 _step("set_playhead", "editor-set-playhead", "1.5", "--center", delay_sec=1.0),
                 _step("begin_smart_split", "editor-begin-smart-split", "--at-playhead", delay_sec=0.5),
@@ -373,7 +471,6 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                 description="Roughcut candidate open/save/reopen smoke on Macau project.",
                 steps=[
                     _step("open_project", "open-project", str(macau_project), timeout=60.0, delay_sec=2.0),
-                    _step("start_roughcut", "start-current-roughcut", timeout=45.0, delay_sec=1.0),
                     _step("open_roughcut", "open-roughcut", timeout=45.0, delay_sec=1.0),
                     {
                         **_step("status_roughcut_opened", "status", timeout=30.0),
@@ -506,7 +603,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                         "expect_data": {
                             "current_work_mode": "roughcut",
                             "roughcut_runtime.candidate_count": 2,
-                            "roughcut_runtime.visible_row_count": 45,
+                            "roughcut_runtime.visible_row_count": 35,
                         },
                     },
                     {
@@ -528,21 +625,21 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                             "thumbnail_preview_proxy",
                             "roughcut-select-chapter",
                             "--chapter-id",
-                            "B_0015",
+                            "C_0015",
                             "--autoplay",
                             timeout=30.0,
                             delay_sec=0.5,
                         ),
                         "expect_data": {
-                            "selected_chapter_id": "B_0015",
-                            "selected_segment_id": "B",
+                            "selected_chapter_id": "C_0015",
+                            "selected_segment_id": "C",
                         },
                     },
                     {
                         **_step("move_chapter_down", "roughcut-move-chapter", "--direction", "down", timeout=30.0, delay_sec=0.5),
                         "expect_data": {
-                            "selected_chapter_id": "B_0015",
-                            "reorder_summary": "챕터 재정렬 · B_0016 > B_0015 > B_0017 > B_0018",
+                            "selected_chapter_id": "C_0015",
+                            "reorder_summary": "챕터 재정렬 · C_0016 > C_0015 > C_0017 > C_0018",
                         },
                     },
                     _step("save_project", "save-project", timeout=60.0, delay_sec=1.0),
@@ -553,7 +650,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                             "current_work_mode": "roughcut",
                             "roughcut_runtime.selected_candidate_id": "editor_post_generation_roughcut_draft",
                             "roughcut_runtime.candidate_count": 2,
-                            "roughcut_runtime.visible_row_count": 45,
+                            "roughcut_runtime.visible_row_count": 35,
                         },
                     },
                     _step(
@@ -579,7 +676,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
             _full_media(
                 "x5_high_rolling_180s",
                 output_root / "x5_high_rolling_180s",
-                media=str(X5_MEDIA),
+                media=str(_x5_media_for_suite()),
                 mode="high",
                 duration_sec=180.0,
                 description="X5 high-mode 3-minute rolling-window verification.",
