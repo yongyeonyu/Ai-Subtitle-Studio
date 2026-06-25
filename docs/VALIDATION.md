@@ -83,6 +83,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player
 ./venv/bin/python tools/appctl.py status
 ```
 
+roughcut 영상 렌더와 exact-join sidecar smoke가 필요하면 source app에서 roughcut 프로젝트를 연 뒤 아래 순서로 확인합니다.
+
+```bash
+./venv/bin/python tools/appctl.py open-project projects/codex_live_roughcut_export_chain_20260623.aissproj
+./venv/bin/python tools/appctl.py open-roughcut
+./venv/bin/python tools/appctl.py roughcut-export-srt output/manual_verification/latest/<artifact>/exports/app_command_render.srt
+./venv/bin/python tools/appctl.py roughcut-render-video output/manual_verification/latest/<artifact>/exports/app_command_render.mov
+./venv/bin/python tools/appctl.py open-srt output/manual_verification/latest/<artifact>/exports/app_command_render.srt
+```
+
 실제 미디어 기반 smoke 또는 수동 검증은 요청 범위가 클 때만 사용합니다.
 
 ```bash

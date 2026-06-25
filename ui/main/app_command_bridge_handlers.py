@@ -407,6 +407,7 @@ def _handle_roughcut_command(
         "roughcut-move-chapter",
         "roughcut-set-safety-filter",
         "roughcut-export-srt",
+        "roughcut-render-video",
     }:
         return None
     page = getattr(owner, "_roughcut_widget", None)
@@ -505,6 +506,22 @@ def _handle_roughcut_command(
             return fail(str(exc))
         helpers.bring_to_front(owner)
         return ok(message="roughcut_filter_updated", data=data)
+
+    if command == "roughcut-render-video":
+        renderer = getattr(page, "automation_start_render_video_to_path", None)
+        if not callable(renderer):
+            return fail("roughcut_render_unavailable")
+        target = helpers.normalize_path(command_payload.get("path"))
+        try:
+            data = dict(renderer(target) or {})
+        except ValueError as exc:
+            return fail(str(exc))
+        output_path = str(data.get("path", "") or target)
+        data["output"] = helpers.file_result(output_path)
+        data["render_plan"] = helpers.file_result(str(data.get("render_plan_path", "") or ""))
+        data["edl"] = helpers.file_result(str(data.get("edl_path", "") or ""))
+        helpers.bring_to_front(owner)
+        return ok(message="roughcut_render_started", queued=True, data=data)
 
     exporter = getattr(page, "export_roughcut_srt_to_path", None)
     if not callable(exporter):

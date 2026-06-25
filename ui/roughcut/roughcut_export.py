@@ -162,6 +162,32 @@ class RoughcutExportMixin:
             render_mode=roughcut_render_mode(),
         )
 
+    def _build_render_plan_for_video_target(self, target_video_path: Path, result):
+        target = Path(target_video_path)
+        if not target.suffix:
+            first_source = next(
+                (
+                    Path(getattr(segment, "source_path", "") or "")
+                    for segment in getattr(result, "edl_segments", ()) or ()
+                    if getattr(segment, "source_path", "")
+                ),
+                None,
+            )
+            target = target.with_suffix((first_source.suffix if first_source is not None else "") or ".mp4")
+        temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
+        return build_concat_render_plan(
+            result.edl_segments,
+            target,
+            temp_dir,
+            render_mode=roughcut_render_mode(),
+        )
+
+    def _rendered_video_sidecar_paths(self, target: Path) -> tuple[Path, Path]:
+        return (
+            target.with_name(f"{target.stem}_render_plan.json"),
+            target.with_name(f"{target.stem}_edl.json"),
+        )
+
     def _write_exact_join_sidecars_for_exported_srt(self, target: Path, result) -> dict:
         plan = self._build_render_plan_for_srt_target(target, result)
         render_plan_path = target.with_name(f"{target.stem}_render_plan.json")
@@ -187,8 +213,7 @@ class RoughcutExportMixin:
         }
 
     def _write_exact_join_sidecars_for_rendered_video(self, target: Path, plan, result) -> dict:
-        render_plan_path = target.with_name(f"{target.stem}_render_plan.json")
-        edl_path = target.with_name(f"{target.stem}_edl.json")
+        render_plan_path, edl_path = self._rendered_video_sidecar_paths(target)
         srt_path = target.with_suffix(".srt")
         render_plan_path.write_text(
             json.dumps(self._render_plan_payload(plan, result, srt_path=srt_path), ensure_ascii=False, indent=2) + "\n",
@@ -238,6 +263,45 @@ class RoughcutExportMixin:
         plan = self._build_render_plan_for_ui()
         if plan is not None:
             self._start_render_worker(plan, dry_run=False)
+
+    def automation_start_render_video_to_path(self, path: str = "") -> dict:
+        if getattr(self, "_render_thread", None) is not None:
+            raise ValueError("roughcut_render_already_running")
+        if not self._ensure_result():
+            raise ValueError("roughcut_render_missing")
+        result = self._result_with_user_edits(self._result)
+        target_text = str(path or "").strip()
+        if target_text:
+            target = Path(target_text).expanduser()
+            if not target.suffix:
+                first_source = next(
+                    (
+                        Path(getattr(segment, "source_path", "") or "")
+                        for segment in getattr(result, "edl_segments", ()) or ()
+                        if getattr(segment, "source_path", "")
+                    ),
+                    None,
+                )
+                target = target.with_suffix((first_source.suffix if first_source is not None else "") or ".mp4")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            plan = self._build_render_plan_for_video_target(target, result)
+        else:
+            plan = self._build_render_plan_for_ui()
+            if plan is None:
+                raise ValueError("roughcut_render_plan_missing")
+            target = Path(getattr(plan, "output_path", "") or self._default_output_path("_roughcut.mp4"))
+        render_plan_path, edl_path = self._rendered_video_sidecar_paths(target)
+        self._start_render_worker(plan, dry_run=False)
+        stitched_rows = list(getattr(plan, "stitched_cut_boundaries", ()) or ())
+        return {
+            "path": str(target),
+            "render_plan_path": str(render_plan_path),
+            "edl_path": str(edl_path),
+            "stitched_cut_boundary_count": len(stitched_rows),
+            "render_mode": getattr(plan, "render_mode", roughcut_render_mode()),
+            "extract_command_count": len(getattr(plan, "extract_commands", ()) or ()),
+            "concat_command_count": 1,
+        }
 
     def _retry_failed_render(self):
         plan = getattr(self, "_last_failed_render_plan", None)

@@ -60,6 +60,8 @@ def _parser() -> argparse.ArgumentParser:
     roughcut_filter.add_argument("value")
     roughcut_export_srt = sub.add_parser("roughcut-export-srt")
     roughcut_export_srt.add_argument("path", nargs="?")
+    roughcut_render_video = sub.add_parser("roughcut-render-video")
+    roughcut_render_video.add_argument("path", nargs="?")
     sub.add_parser("open-dictionary")
     sub.add_parser("open-settings")
     sub.add_parser("open-speaker-settings")
@@ -189,6 +191,7 @@ def _payload_from_args(args: argparse.Namespace) -> dict:
         "capture-active-dialog",
         "export-subtitles",
         "roughcut-export-srt",
+        "roughcut-render-video",
     }:
         return build_command_payload(command, path=args.path)
     if command in {

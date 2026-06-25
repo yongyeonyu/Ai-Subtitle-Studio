@@ -33,6 +33,50 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-25 Addendum - Roughcut Render App Command Smoke
+
+### Scope
+
+- Added `roughcut-render-video` to `tools/appctl.py` and the app-command bridge.
+- The command starts the existing roughcut render worker and returns expected output, `_render_plan.json`, and `_edl.json` paths with `queued=true`; it does not block the app-command UDP path until ffmpeg finishes.
+- `roughcut-render-video` accepts an optional output video path so source-app smoke can render into `output/manual_verification/latest/` without writing next to fixture media.
+
+### Files touched in this slice
+
+- `tools/appctl.py`
+- `ui/main/app_command_bridge_handlers.py`
+- `ui/roughcut/roughcut_export.py`
+- `tests/test_app_command_bridge.py`
+- `tests/test_roughcut_ui_v2.py`
+- `docs/HANDOFF.md`
+- `docs/VALIDATION.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile tools/appctl.py ui/main/app_command_bridge_handlers.py ui/roughcut/roughcut_export.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest tests/test_app_command_bridge.py::AppCommandBridgeTests::test_roughcut_render_video_queues_expected_outputs tests/test_roughcut_ui_v2.py::RoughcutUiV2Tests::test_automation_render_video_to_path_starts_worker_for_requested_target -q`
+  - `2 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest tests/test_app_command_bridge.py tests/test_roughcut_ui_v2.py -q`
+  - `104 passed`
+- `git diff --check`
+  - passed
+
+### Evidence
+
+- artifact root:
+  - `output/manual_verification/latest/20260625_roughcut_render_app_command_smoke/`
+- source-app smoke:
+  - project: `projects/codex_live_roughcut_export_chain_20260623.aissproj`
+  - command path: `open-project -> open-roughcut -> roughcut-export-srt -> roughcut-render-video -> open-srt`
+  - rendered video: `exports/app_command_render.mov`
+  - sidecars: `exports/app_command_render_render_plan.json`, `exports/app_command_render_edl.json`
+  - `summary.md` shows `render_mode=sync_safe`, `stitched_cut_boundary_count=1`, expected duration `8.0s`, actual duration `8.0s`, and `reopen_exact_join_log_found=True`.
+
+### Remaining risk
+
+- This is a source-app smoke on the existing 2-segment X5-derived roughcut fixture, not a full major QA run.
+- Because the app-command surface changed, rebuild the macOS app bundle before running `major` or `full` QA against a bundled app.
+
 ## 2026-06-25 Addendum - Roughcut Sync-Safe Render Timing
 
 ### Scope

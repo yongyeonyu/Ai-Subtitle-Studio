@@ -534,6 +534,7 @@ class _DummyRoughcutWidget:
         self.video_host_attached = True
         self.player_menu_visible = True
         self.sequence_preview_active = False
+        self.render_video_targets = []
 
     def automation_runtime_snapshot(self):
         return {
@@ -628,6 +629,19 @@ class _DummyRoughcutWidget:
         target = Path(path or "/tmp/roughcut_export.srt")
         target.write_text("1\n00:00:00,000 --> 00:00:01,000\n테스트\n", encoding="utf-8")
         return {"path": str(target), "subtitle_count": 1}
+
+    def automation_start_render_video_to_path(self, path: str = ""):
+        target = Path(path or "/tmp/roughcut_render.mp4")
+        self.render_video_targets.append(str(target))
+        return {
+            "path": str(target),
+            "render_plan_path": str(target.with_name(f"{target.stem}_render_plan.json")),
+            "edl_path": str(target.with_name(f"{target.stem}_edl.json")),
+            "stitched_cut_boundary_count": 1,
+            "render_mode": "sync_safe",
+            "extract_command_count": 2,
+            "concat_command_count": 1,
+        }
 
 
 class _DummyPixmap:
@@ -907,6 +921,24 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["message"], "roughcut_srt_exported")
         self.assertTrue(result["data"]["output"]["exists"])
         self.assertEqual(result["data"]["subtitle_count"], 1)
+
+    def test_roughcut_render_video_queues_expected_outputs(self):
+        owner = _DummyOwner()
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "roughcut_render.mp4"
+
+            result = execute_app_command(owner, {"command": "roughcut-render-video", "path": str(output_path)})
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])
+        self.assertEqual(result["message"], "roughcut_render_started")
+        self.assertEqual(owner._roughcut_widget.render_video_targets, [str(output_path)])
+        self.assertEqual(result["data"]["path"], str(output_path))
+        self.assertEqual(result["data"]["render_mode"], "sync_safe")
+        self.assertEqual(result["data"]["output"]["path"], str(output_path))
+        self.assertFalse(result["data"]["output"]["exists"])
+        self.assertEqual(Path(result["data"]["render_plan_path"]).name, "roughcut_render_render_plan.json")
+        self.assertEqual(Path(result["data"]["edl_path"]).name, "roughcut_render_edl.json")
 
     def test_open_media_wires_real_pipeline_start_callback(self):
         owner = _DummyOwner()

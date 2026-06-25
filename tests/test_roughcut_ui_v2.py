@@ -989,6 +989,59 @@ class RoughcutUiV2Tests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_automation_render_video_to_path_starts_worker_for_requested_target(self):
+        widget = RoughcutWidget()
+        try:
+            widget._active_editor = lambda: SimpleNamespace(media_path="/tmp/source.mov")
+            widget._result = RoughCutResult(
+                segments=(
+                    RoughCutSegment(
+                        "major_A",
+                        0.0,
+                        8.0,
+                        title="첫 장면",
+                        major_id="A",
+                        minor_groups=(
+                            RoughCutMinorGroup("A1", "A", "A1", "첫 장면", 0.0, 4.0, chapter_ids=("chapter_0001",)),
+                            RoughCutMinorGroup("A2", "A", "A2", "둘째 장면", 4.0, 8.0, chapter_ids=("chapter_0002",)),
+                        ),
+                    ),
+                ),
+                chapters=(
+                    ChapterMetadata("chapter_0001", "첫 장면", 0.0, 4.0, major_id="A", minor_code="A1"),
+                    ChapterMetadata("chapter_0002", "둘째 장면", 4.0, 8.0, major_id="A", minor_code="A2"),
+                ),
+                edit_decisions=(
+                    EditDecision("chapter_0001", "keep", source_start=0.0, source_end=4.0),
+                    EditDecision("chapter_0002", "keep", source_start=4.0, source_end=8.0),
+                ),
+                edl_segments=(
+                    EDLSegment("/tmp/source.mov", "chapter_0001", 0.0, 4.0, 0.0, 4.0, chapter_id="chapter_0001"),
+                    EDLSegment("/tmp/source.mov", "chapter_0002", 4.0, 8.0, 4.0, 8.0, chapter_id="chapter_0002"),
+                ),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+            started = []
+
+            def fake_start(plan, dry_run=False):
+                started.append((plan, dry_run))
+
+            widget._start_render_worker = fake_start
+            with tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "automation_render.mov"
+                data = widget.automation_start_render_video_to_path(str(output))
+
+            self.assertEqual(len(started), 1)
+            self.assertFalse(started[0][1])
+            self.assertEqual(started[0][0].output_path, data["path"])
+            self.assertEqual(Path(data["path"]).name, "automation_render.mov")
+            self.assertEqual(Path(data["render_plan_path"]).name, "automation_render_render_plan.json")
+            self.assertEqual(Path(data["edl_path"]).name, "automation_render_edl.json")
+            self.assertEqual(data["stitched_cut_boundary_count"], 1)
+        finally:
+            widget.close()
+
     def test_attach_and_release_editor_video_frame_uses_external_host(self):
         widget = RoughcutWidget()
         frame = QWidget()
