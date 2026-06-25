@@ -33,6 +33,38 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-25 Addendum - Fast Exit Runtime Cleanup Split
+
+### Scope
+
+- The bottom `종료` button now starts app-exit cleanup in `fast_exit` mode so the UI shutdown path does not wait for full navigation cleanup, GPU cache clear, or graceful STT/LLM unload work.
+- The normal app-exit cleanup path remains available for non-fast cleanup. This change only narrows the fast exit path and keeps subtitle generation/STT/LLM quality policy untouched.
+- `WhisperKitPersistentWorker` is now treated as a heavy app child process so it can be terminated by the exit reaper.
+
+### Files touched in this slice
+
+- `ui/main/main_file_ops.py`
+- `ui/main/main_runtime_cleanup.py`
+- `main.py`
+- `core/platform_compat.py`
+- `tests/test_sidebar_terminal_layout.py`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile main.py core/platform_compat.py ui/main/main_file_ops.py ui/main/main_runtime_cleanup.py tests/test_sidebar_terminal_layout.py tests/test_main_file_ops_nonfatal.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_main_file_ops_nonfatal.py tests/test_sidebar_terminal_layout.py -k 'quick_exit or app_exit_cleanup or whisperkit_persistent_worker or about_to_quit_force_exit'`
+  - `8 passed, 105 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_main_file_ops_nonfatal.py tests/test_sidebar_terminal_layout.py tests/test_ollama_provider.py`
+  - `140 passed`
+- `git diff --check`
+  - passed
+
+### Remaining risk
+
+- This slice is unit/offscreen verified. Live source-app click-to-window-disappear timing still needs a manual stopwatch or automation artifact after restart because the currently running app does not hot-load this patch.
+- Do not remove cleanup entirely. Prior cleanup-removal experiments regressed X5 or memory behavior; keep cleanup split/deferment as the safe direction.
+
 ## 2026-06-25 Addendum - Pioneer Candidate Fusion And Spectral Audio Hints
 
 ### Scope

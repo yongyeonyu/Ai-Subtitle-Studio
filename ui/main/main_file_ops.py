@@ -465,11 +465,17 @@ class FileOpsMixin:
         exit_cleanup_timeout = 0.08 if getattr(config, "IS_MAC", False) else 0.15
         try:
             if callable(cleanup_runtime_async):
-                cleanup_runtime_async(timeout_sec=exit_cleanup_timeout)
+                try:
+                    cleanup_runtime_async(timeout_sec=exit_cleanup_timeout, fast_exit=True)
+                except TypeError:
+                    cleanup_runtime_async(timeout_sec=exit_cleanup_timeout)
             else:
                 cleanup_runtime_sync = getattr(self, "_cleanup_runtime_for_app_exit", None)
                 if callable(cleanup_runtime_sync):
-                    cleanup_runtime_sync(timeout_sec=exit_cleanup_timeout)
+                    try:
+                        cleanup_runtime_sync(timeout_sec=exit_cleanup_timeout, fast_exit=True)
+                    except TypeError:
+                        cleanup_runtime_sync(timeout_sec=exit_cleanup_timeout)
         except Exception as exc:
             self._file_ops_log_failure("종료 중 런타임 정리 시작", exc)
 

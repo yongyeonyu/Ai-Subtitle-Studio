@@ -195,6 +195,7 @@ def _is_heavy_app_child_command(command: str) -> bool:
         "ffmpeg", "ffprobe", "rnnoise",
         "whisper_worker.py", "whisper_transformers.py", "whisper_faster.py",
         "whisper_coreml.py", "whisper_mlx.py", "whisper_cpp.py", "whisper-cli",
+        "whisperkitpersistentworker", "whisperkit_persistent_worker",
         "resemble_enhance_runner.py",
         "ollama runner", "ollama_llama_server",
     )
@@ -306,7 +307,7 @@ def cleanup_ollama_runtime_processes(*, timeout_sec: float = 0.4) -> int:
     return stopped or service_stopped
 
 
-def cleanup_app_runtime_processes(*, logger=None, timeout_sec: float = 0.4) -> dict[str, int]:
+def cleanup_app_runtime_processes(*, logger=None, timeout_sec: float = 0.4, fast_exit: bool = False) -> dict[str, int]:
     """Release app-owned heavy runtimes at shutdown."""
     result = {
         "ollama_models": 0,
@@ -314,6 +315,18 @@ def cleanup_app_runtime_processes(*, logger=None, timeout_sec: float = 0.4) -> d
         "child_processes": 0,
         "legacy_preview_ffmpeg": 0,
     }
+    if bool(fast_exit):
+        result["child_processes"] = int(cleanup_app_child_processes(timeout_sec=timeout_sec) or 0)
+        result["legacy_preview_ffmpeg"] = int(cleanup_stale_preview_proxy_processes(timeout_sec=timeout_sec) or 0)
+        result["ollama_processes"] = int(cleanup_ollama_runtime_processes(timeout_sec=0.0) or 0)
+        cleaned_processes = int(result["child_processes"]) + int(result["legacy_preview_ffmpeg"])
+        if cleaned_processes and logger:
+            try:
+                logger.log(f"🧹 앱 종료: 빠른 종료 런타임 프로세스 {cleaned_processes}개 정리 요청")
+            except Exception:
+                pass
+        return result
+
     used_shutdown_helper = False
     def _cleanup_ollama_runtime() -> tuple[bool, int, int]:
         try:

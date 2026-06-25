@@ -3083,7 +3083,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
         try:
             window._has_active_runtime_work_for_exit = lambda: True
             window._pause_all_runtime_work_for_exit = lambda *, context: events.append(("pause", context))
-            window._start_runtime_cleanup_for_app_exit_async = lambda *, timeout_sec: events.append(("cleanup_async", timeout_sec))
+            window._start_runtime_cleanup_for_app_exit_async = (
+                lambda *, timeout_sec, fast_exit=False: events.append(("cleanup_async", timeout_sec, fast_exit))
+            )
             window._backup_before_quick_exit = lambda: events.append(("backup", None))
             window._schedule_forced_process_exit = lambda *, delay_ms: events.append(("schedule", delay_ms))
 
@@ -3092,7 +3094,10 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             expected_timeout = 0.08 if sys.platform == "darwin" else 0.15
             expected_delay = 20 if sys.platform == "darwin" else 60
-            self.assertEqual(events, [("schedule", expected_delay), ("pause", "앱 종료"), ("cleanup_async", expected_timeout)])
+            self.assertEqual(
+                events,
+                [("schedule", expected_delay), ("pause", "앱 종료"), ("cleanup_async", expected_timeout, True)],
+            )
             quit_app.assert_called_once()
         finally:
             window.close()
@@ -3478,6 +3483,46 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.close()
             window.deleteLater()
             self.app.processEvents()
+
+    def test_fast_app_exit_cleanup_skips_navigation_and_gpu_clear(self):
+        window = MainWindow()
+        try:
+            cleanup_calls = []
+            runtime_calls = []
+            clear_cache = mock.Mock()
+            window._cleanup_runtime_for_navigation = lambda **kwargs: cleanup_calls.append(kwargs) or True
+            window._clear_runtime_memory_caches = clear_cache
+            with mock.patch(
+                "core.platform_compat.cleanup_app_runtime_processes",
+                side_effect=lambda **kwargs: runtime_calls.append(kwargs) or {
+                    "ollama_models": 0,
+                    "ollama_processes": 0,
+                    "child_processes": 1,
+                    "legacy_preview_ffmpeg": 0,
+                },
+            ):
+                cleaned = window._cleanup_runtime_for_app_exit(timeout_sec=0.08, fast_exit=True)
+
+            self.assertTrue(cleaned)
+            self.assertEqual(cleanup_calls, [])
+            clear_cache.assert_not_called()
+            self.assertEqual(len(runtime_calls), 1)
+            self.assertEqual(runtime_calls[0]["timeout_sec"], 0.1)
+            self.assertTrue(runtime_calls[0]["fast_exit"])
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_platform_cleanup_marks_whisperkit_persistent_worker_as_heavy_child(self):
+        from core.platform_compat import _is_heavy_app_child_command
+
+        self.assertTrue(
+            _is_heavy_app_child_command(
+                "/Users/u_mo_c/Downloads/ai_subtitle_studio/experiments/"
+                "whisperkit_persistent_worker/.build/release/WhisperKitPersistentWorker"
+            )
+        )
 
     def test_repeated_home_does_not_cleanup_same_idle_editor_twice(self):
         window = MainWindow()

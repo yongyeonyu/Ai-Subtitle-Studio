@@ -964,29 +964,31 @@ class MainRuntimeCleanupMixin:
             self._fast_exit_pause_logged = True
         return stopped_any
 
-    def _cleanup_runtime_for_app_exit(self, *, timeout_sec: float = 0.8) -> bool:
+    def _cleanup_runtime_for_app_exit(self, *, timeout_sec: float = 0.8, fast_exit: bool = False) -> bool:
         """Synchronously unload heavy runtimes before the process is allowed to exit."""
         if getattr(self, "_exit_runtime_cleanup_done", False):
             return False
         self._exit_runtime_cleanup_done = True
         stopped_any = False
-        try:
-            self._skip_external_cleanup_in_navigation = True
-            stopped_any = bool(
-                self._cleanup_runtime_for_navigation(
-                    context="앱 종료",
-                    timeout_sec=max(0.1, float(timeout_sec or 0.8)),
-                    force=True,
-                    stop_active=True,
-                )
-            ) or stopped_any
-        except Exception as exc:
+        fast_exit = bool(fast_exit)
+        if not fast_exit:
             try:
-                get_logger().log(f"⚠️ 앱 종료 런타임 정리 실패: {exc}")
-            except Exception:
-                pass
-        finally:
-            self._skip_external_cleanup_in_navigation = False
+                self._skip_external_cleanup_in_navigation = True
+                stopped_any = bool(
+                    self._cleanup_runtime_for_navigation(
+                        context="앱 종료",
+                        timeout_sec=max(0.1, float(timeout_sec or 0.8)),
+                        force=True,
+                        stop_active=True,
+                    )
+                ) or stopped_any
+            except Exception as exc:
+                try:
+                    get_logger().log(f"⚠️ 앱 종료 런타임 정리 실패: {exc}")
+                except Exception:
+                    pass
+            finally:
+                self._skip_external_cleanup_in_navigation = False
 
         try:
             from core.platform_compat import cleanup_app_runtime_processes
@@ -994,6 +996,7 @@ class MainRuntimeCleanupMixin:
             cleanup_result = cleanup_app_runtime_processes(
                 logger=get_logger(),
                 timeout_sec=max(0.1, float(timeout_sec or 0.8)),
+                fast_exit=fast_exit,
             )
             if any(int(value or 0) > 0 for value in cleanup_result.values()):
                 stopped_any = True
@@ -1003,15 +1006,19 @@ class MainRuntimeCleanupMixin:
             except Exception:
                 pass
 
-        _run_cleanup_step("app exit clear runtime memory caches", lambda: self._clear_runtime_memory_caches(include_gpu=True))
+        if not fast_exit:
+            _run_cleanup_step("app exit clear runtime memory caches", lambda: self._clear_runtime_memory_caches(include_gpu=True))
         if stopped_any:
             try:
-                get_logger().log("🧹 앱 종료: STT/LLM/Ollama/GPU 런타임 메모리 정리 완료")
+                if fast_exit:
+                    get_logger().log("🧹 앱 종료: 빠른 종료 런타임 정리 요청 완료")
+                else:
+                    get_logger().log("🧹 앱 종료: STT/LLM/Ollama/GPU 런타임 메모리 정리 완료")
             except Exception:
                 pass
         return stopped_any
 
-    def _start_runtime_cleanup_for_app_exit_async(self, *, timeout_sec: float = 0.15) -> bool:
+    def _start_runtime_cleanup_for_app_exit_async(self, *, timeout_sec: float = 0.15, fast_exit: bool = False) -> bool:
         """Kick off exit cleanup without blocking the UI shutdown path."""
         if getattr(self, "_exit_runtime_cleanup_done", False):
             return False
@@ -1026,7 +1033,7 @@ class MainRuntimeCleanupMixin:
 
         def _run_cleanup():
             try:
-                self._cleanup_runtime_for_app_exit(timeout_sec=timeout_value)
+                self._cleanup_runtime_for_app_exit(timeout_sec=timeout_value, fast_exit=bool(fast_exit))
             finally:
                 self._exit_runtime_cleanup_thread = None
 

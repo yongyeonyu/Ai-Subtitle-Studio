@@ -389,7 +389,7 @@ def main():
                 pass
         cleanup_runtime = getattr(win, "_start_runtime_cleanup_for_app_exit_async", None)
         if callable(cleanup_runtime):
-            cleanup_runtime(timeout_sec=0.08 if getattr(config, "IS_MAC", False) else 0.15)
+            cleanup_runtime(timeout_sec=0.08 if getattr(config, "IS_MAC", False) else 0.15, fast_exit=True)
             return
         pause_runtime = getattr(win, "_pause_all_runtime_work_for_exit", None)
         if callable(pause_runtime):
