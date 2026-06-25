@@ -33,6 +33,23 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-26 Addendum - Active Queue After NLE Baseline
+
+### Scope
+
+- Removed the completed `Source-App Internal NLE Timeline Architecture Plan` item from `ACTION_ITEMS.md` after the docs/schema/read-only adapter, roughcut marker, render parity, save/reload guard, source-app quick QA, and X5 audio override full QA proof landed.
+- `Post-Generation Editor Readiness And Verification Index` is now the first active execution queue item.
+- The completed NLE baseline remains documented in `docs/ARCHITECTURE.md`, `docs/FEATURE_REGISTRY.md`, this handoff, and the QA artifacts under `output/manual_verification/latest/`.
+
+### Validation run
+
+- `rg -n "Source-App Internal NLE Timeline Architecture Plan|Status: active, top-priority planning|NLE-style plan above|### 2\\." ACTION_ITEMS.md`
+  - no matches
+
+### Next recommended action
+
+- Start the next session from `ACTION_ITEMS.md` item 1 and map the generation-completion/editor-readiness owner path before any UI or timing change.
+
 ## 2026-06-26 Addendum - Source-App Internal NLE Owner Map And Contract
 
 ### Scope

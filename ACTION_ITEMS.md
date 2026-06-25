@@ -36,80 +36,11 @@ Those standalone files were intentionally removed after consolidation.
 
 ## Active Execution Queue
 
-### 1. Source-App Internal NLE Timeline Architecture Plan
-
-Goal: Move the current subtitle-first project, timeline, roughcut, and export ownership toward a Premiere-style NLE internal structure while keeping the existing Python/PyQt6 source app, current UI/UX, and subtitle quality policy unchanged.
-
-Status: active, top-priority planning and adapter sequence
-
-Why this is first:
-
-- Recent roughcut exact-join, render-plan sidecar, save/reopen, cut-boundary seed, and subtitle-sync work all need one auditable time model.
-- A small internal NLE domain layer can make media assets, sequences, tracks, clips, captions, markers, and render plans explicit before more editor-readiness or status-path work piles on top.
-- This is not native migration, Swift rewrite, QML adoption, or a Premiere UI clone. It is a source-app architecture cleanup that should remain invisible to users until explicitly approved otherwise.
-
-Agent-role execution goals:
-
-- `덱스`: define the smallest domain boundary and adapter path first, then land it in behavior-preserving slices with tests.
-- `한결`: review ownership boundaries, rollback shape, schema compatibility, and whether the layer reduces coupling instead of becoming another parallel state store.
-- `서린`: require fixture evidence for save/reload, subtitle count, cut-boundary round trip, render sidecars, seek/playhead, and export timing before promotion.
-- `유진`: ensure the current subtitle editing workflow still feels unchanged; UI lanes/tracks are deferred unless the owner explicitly asks for visible workflow changes.
-
-Scope:
-
-- `core/project/project_format.py`
-- `core/project/project_io.py`
-- `core/project/project_assets.py`
-- `core/project/project_context.py`
-- `core/project/project_roughcut_store.py`
-- `core/roughcut/models.py`
-- `core/roughcut/edl_generator.py`
-- `core/roughcut/render_executor.py`
-- `core/roughcut/renderer_skeleton.py`
-- `core/renderer.py`
-- `ui/editor/editor_widget.py`
-- `ui/editor/editor_save_manager.py`
-- `ui/editor/editor_project_open_native.py`
-- `ui/editor/editor_roughcut_draft.py`
-- `ui/timeline/timeline_canvas.py`
-- `ui/roughcut/roughcut_state.py`
-- `ui/roughcut/roughcut_export.py`
-- `tools/verify_full_media_pipeline.py`
-- `tools/qa_suite_runner.py`
-- `docs/ARCHITECTURE.md`
-- `docs/FEATURE_REGISTRY.md`
-- `docs/HANDOFF.md`
-
-Execution order:
-
-1. Map current ownership and invariants for project payloads, media assets, editor segments, roughcut candidates, cut-boundary seeds, render plans, sidecars, timeline canvas state, and save/reopen behavior. Explicitly separate cut boundary point data from clip boundary span data before proposing code.
-2. Draft the source-app NLE domain contract in docs first: `ProjectAsset`, `Sequence`, `Track`, `Clip`, `CaptionSegment`, `TimelineMarker`, and `RenderPlan`. Define timebase, source time, sequence time, output time, and exact-join metadata in one place.
-3. Add read-only adapters that build an NLE snapshot from the existing project/editor/roughcut state without changing save files, UI state, subtitle timing, STT, LLM, VAD, or render output. Tests must prove the snapshot matches current SRT/project/roughcut data.
-4. Route roughcut exact joins and cut-boundary seeds through sequence markers or edit points while keeping existing `.aissproj`, `_edl.json`, and `_render_plan.json` fields as compatibility sources.
-5. Route render/export plan construction through the NLE snapshot, but require byte/metadata-equivalent sidecars and unchanged output duration for the current roughcut fixture before widening.
-6. Add save/reload round-trip compatibility: legacy projects load into the NLE snapshot, new snapshots still preserve old project fields, and missing-media/relink/proxy/cache metadata remains non-destructive.
-7. Only after the internal model and adapter path are proven, decide whether visible timeline lanes, asset bins, markers, or track controls are worth exposing. Any visible UI/UX work needs a new explicit owner approval and separate acceptance gate.
-
-Acceptance gates:
-
-- No UI/UX labels, layout, colors, shortcuts, popup behavior, or visible workflow changes without explicit owner approval.
-- No subtitle quality policy, STT2, LLM, LoRA, VAD, timing, or model-selection changes.
-- Legacy `.aissproj`, direct SRT open, roughcut sidecars, and rendered roughcut reopen paths must continue to load.
-- Subtitle count, final segment count, first/last subtitle time, save/reload, seek/playhead, overlay, gutter, minimap, and roughcut selected candidate state must match the pre-change baseline.
-- Focused tests must cover project save/load, editor segment reload, roughcut state, sidecar exact-join restore, render-plan creation, and app-command smoke before any source-app proof.
-- Source-app Macau and X5 fixture proof must be stored under `output/manual_verification/latest/` before promoting this architecture as the new baseline.
-
-Rollback:
-
-- Land docs/schema/adapters before replacing owners. Each slice must be reversible without changing subtitle-generation algorithms.
-- Keep old project fields and sidecar readers until source-app proof shows the NLE snapshot fully round-trips legacy and new artifacts.
-- If the layer creates duplicate mutable state or timing drift, stop and revert the adapter slice before routing render/export or editor state through it.
-
-### 2. Post-Generation Editor Readiness And Verification Index
+### 1. Post-Generation Editor Readiness And Verification Index
 
 Goal: Make the editor reliably interactive immediately after subtitle generation completes, keep heavier cleanup/status work from blocking playback or editing, and make latest real-fixture proof easy to audit without changing subtitle quality policy or UI/UX.
 
-Status: active, next after the internal NLE plan's docs/schema/adapter baseline unless the owner directs a hotfix
+Status: active, top priority after the internal NLE docs/schema/adapter baseline
 
 Current baseline:
 
@@ -195,7 +126,7 @@ Rollback:
 
 - Native migration is not an active direction for this repository.
 - Keep the current Python/PyQt6 source app as the working product line.
-- The NLE-style plan above is an internal source-app domain/adapter plan only. It does not reopen native migration, Swift rewrite, QML migration, or a visible Premiere-style UI clone.
+- The completed internal NLE baseline is a source-app domain/adapter layer only. It does not reopen native migration, Swift rewrite, QML migration, or a visible Premiere-style UI clone.
 - Revisit migration only if the owner explicitly reopens it with a new scope and acceptance gate.
 
 ## Parked Candidates
