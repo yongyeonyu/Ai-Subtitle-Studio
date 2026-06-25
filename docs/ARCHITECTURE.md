@@ -89,6 +89,45 @@ UI는 이 결과를 소비하고 편집해야 하며, 알고리즘 정책 자체
 
 러프컷 경계는 `core/roughcut/`과 `ui/roughcut/`입니다. 파일명과 테스트를 보면 러프컷 초안 생성, LLM 기반 섹션/구조화, 편집기 연결이 이미 구현 범위에 들어와 있습니다. 다만 러프컷 데이터가 곧바로 편집기 프로젝트 상태와 연결될 수 있으므로, 두 경계를 동시에 보는 것이 안전합니다.
 
+## Source-app internal NLE timeline contract
+
+현재 `Source-App Internal NLE Timeline Architecture Plan`은 사용자에게 보이는 UI/UX 변경이 아니라, 기존 project/editor/roughcut/export 상태를 읽기 전용 snapshot으로 설명하기 위한 내부 계약입니다. `core/project/nle_snapshot.py`가 이 계약의 첫 read-only adapter입니다. 이 계약은 새 저장 포맷이나 새 mutable timing owner가 아니며, 기존 `.aissproj`, direct SRT open, roughcut sidecar, rendered roughcut reopen 경로를 유지해야 합니다.
+
+### Current owner map
+
+| Area | Current owner | Existing source of truth | NLE snapshot rule |
+| --- | --- | --- | --- |
+| Project payloads | `core/project/project_format.py`, `core/project/project_io.py` | `.aissproj` binary envelope, `timeline`, `subtitles`, `asset_storage`, `editor_state`, `analysis`, `roughcut_state` | Read from hydrated payload only; do not write `nle` fields until a later explicit compatibility gate exists. |
+| Media assets | `core/project/project_format.py`, `core/project/project_context.py`, `core/project/project_assets.py` | `timeline.tracks[0].clips`, runtime `media`, `video.clips`, external subtitle asset refs | Model as `ProjectAsset`; asset identity/path is separate from sequence placement. |
+| Editor segments | `core/project/project_context.py`, `ui/editor/editor_save_manager.py` | `editor_state.rendering.subtitle_canvas`, external SRT tracks, `subtitles`, current editor rows | Model as `CaptionSegment` in sequence time; preserve frame-quantized fields and segment count. |
+| Roughcut candidates | `ui/roughcut/roughcut_state.py`, `core/project/project_roughcut_store.py`, `core/roughcut/models.py` | `roughcut_state.candidates`, selected candidate id, `RoughCutResult` payloads | Model selected candidate as a read-only roughcut sequence view; do not mutate candidate order or selected id. |
+| Cut-boundary seeds | `core/cut_boundary.py`, `core/project/project_context.py`, `ui/roughcut/roughcut_state.py` | `analysis.cut_boundaries`, editor multiclip cut boundary rows, provisional cut boundary rows | Model point evidence as `TimelineMarker`; never treat a cut boundary point as a clip boundary span. |
+| Clip boundary spans | `core/project/project_context.py`, `core/roughcut/edl_generator.py`, `ui/roughcut/roughcut_state.py` | multiclip `boundaries`, `timeline.tracks[0].clips`, EDL clip mapping | Model as `Clip` source/sequence spans; this is separate from cut point markers. |
+| Render plans | `core/roughcut/renderer_skeleton.py`, `core/roughcut/render_executor.py`, `ui/roughcut/roughcut_export.py` | `RenderCommandPlan`, `_render_plan.json`, render result manifest | Model as `RenderPlan`; output duration and sidecar metadata must remain byte/metadata-equivalent before routing changes. |
+| Sidecars | `core/roughcut/edl_generator.py`, `ui/editor/editor_project_open_native.py`, `ui/roughcut/roughcut_export.py` | `_edl.json`, `_render_plan.json`, `stitched_cut_boundaries` | Import only as markers/render-plan evidence; sidecar readers stay compatibility sources. `markers_from_roughcut_sidecar_payload` mirrors current payload shapes without becoming a new runtime reader. |
+| Timeline canvas state | `ui/timeline/timeline_canvas.py`, `ui/timeline/timeline_analysis.py` | live canvas segments, playhead, marker caches, roughcut marker cache | Keep live state outside the domain snapshot; snapshot must not drive paint caches or UI layout. |
+| Save/reopen behavior | `ui/editor/editor_save_manager.py`, `ui/editor/editor_project_open_native.py`, `core/project/project_manager.py` | project save snapshot, project open hydration, direct SRT metadata merge | Snapshot generation must not change save files, reopen order, subtitle timing, or project matching rules. |
+| NLE snapshot adapter | `core/project/nle_snapshot.py` | hydrated project dict plus selected roughcut candidate output evidence | Build frozen read-only dataclasses only; no save/write hook owns this snapshot. |
+
+### Domain object definitions
+
+- `ProjectAsset`: a media or text asset known to the project. It owns stable asset id, path, kind, duration, frame rate, optional dimensions, and missing/relink metadata. It does not own sequence placement.
+- `Sequence`: an ordered read-only timeline view with id, name, timebase, duration, tracks, and source project references. The source-app default sequence mirrors the current project timeline.
+- `Track`: a logical grouping inside a sequence, such as media, captions, markers, or roughcut plan evidence. A track is not a visible UI lane until the owner explicitly approves UI work.
+- `Clip`: a sequence span that references a `ProjectAsset` and records `source_start`, `source_end`, `sequence_start`, `sequence_end`, clip index, and clip boundary span metadata.
+- `CaptionSegment`: a subtitle row in sequence time with text, speaker, frame range, source clip reference when known, and existing metadata copied read-only from project/editor rows.
+- `TimelineMarker`: point evidence on sequence or output time. Cut-boundary points, roughcut exact joins, and provisional markers belong here. Markers do not define media spans.
+- `RenderPlan`: a read-only render/export plan with selected sequence references, EDL segments, output path, output duration, render mode, segment manifest, and exact-join metadata.
+
+### Time model
+
+- `source_time`: local time inside one `ProjectAsset`, used by EDL source ranges and clip-local subtitle metadata.
+- `sequence_time`: project timeline time after clips are placed. Editor segments, clip spans, and timeline canvas rows are interpreted here.
+- `output_time`: rendered/exported result time after EDL decisions are applied. Roughcut `output_start` / `output_end` and `stitched_cut_boundaries.timeline_sec` are interpreted here.
+- `exact_join`: metadata derived from roughcut `stitched_cut_boundaries`. It maps an output-time point to before/after EDL segments and source paths. It is a marker/edit-point candidate, not a replacement for clip boundary spans.
+
+Implementation order must remain docs/schema first, then read-only adapters, then roughcut exact-join marker projection, then render/export routing parity. The initial adapter currently projects existing state into frozen dataclasses and has no save/write hook. Roughcut exact joins can be projected from top-level `stitched_cut_boundaries`, nested `edl.stitched_cut_boundaries`, nested `render_plan.stitched_cut_boundaries`, or selected candidate `outputs`; all are output-time markers, not clip boundary spans. Any duplicate mutable timing state, subtitle count drift, first/last time drift, output duration drift, or sidecar metadata drift stops the slice.
+
 ## Config/settings boundary
 
 설정 경계는 크게 둘입니다.

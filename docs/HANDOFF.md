@@ -33,6 +33,90 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-26 Addendum - Source-App Internal NLE Owner Map And Contract
+
+### Scope
+
+- Added the first NLE architecture slice to `docs/ARCHITECTURE.md`.
+- The new section maps current owners for project payloads, media assets, editor segments, roughcut candidates, cut-boundary seeds, clip boundary spans, render plans, sidecars, timeline canvas state, and save/reopen behavior.
+- The documented contract defines `ProjectAsset`, `Sequence`, `Track`, `Clip`, `CaptionSegment`, `TimelineMarker`, and `RenderPlan`, including `source_time`, `sequence_time`, `output_time`, and roughcut `exact_join` metadata.
+- Added `Source-app internal NLE snapshot` to `docs/FEATURE_REGISTRY.md` as planned/read-only.
+- Jammini support handoff `.agents/sentinel/handoffs/20260626-013110-roughcut-nle-map.md` was reviewed by Dex as `revise/use selectively`: the cut-boundary point vs clip-span risk is accepted, while sidecar/render-plan ownership details were corrected against current code before documenting.
+
+### Guardrails
+
+- This slice is documentation only. It does not change runtime code, save files, UI state, subtitle timing, render output, STT, LLM, LoRA, VAD, or model-selection policy.
+- Cut boundary point evidence is explicitly separate from clip boundary span data.
+- The first code slice should add read-only adapters only, with tests proving legacy `.aissproj`, direct SRT, roughcut sidecar, and rendered roughcut reopen semantics are unchanged.
+
+### Validation run
+
+- `git diff --check -- docs/ARCHITECTURE.md docs/FEATURE_REGISTRY.md docs/HANDOFF.md`
+- `rg -n "Source-app internal NLE|Current owner map|ProjectAsset|exact_join|cut boundary point" docs/ARCHITECTURE.md docs/FEATURE_REGISTRY.md docs/HANDOFF.md`
+
+## 2026-06-26 Addendum - Source-App Internal NLE Read-Only Adapter
+
+### Scope
+
+- Added `core/project/nle_snapshot.py` as the first read-only NLE adapter.
+- The adapter projects the current hydrated project dict into frozen dataclasses: `ProjectAsset`, `Sequence`, `Track`, `Clip`, `CaptionSegment`, `TimelineMarker`, `RenderPlan`, and `NLESnapshot`.
+- It reads existing `timeline`, project media, editor subtitle rows, `analysis.cut_boundaries`, selected `roughcut_state` candidate outputs, EDL `stitched_cut_boundaries`, and render-plan evidence.
+- It does not register any save/write hook and does not alter `.aissproj`, direct SRT open, UI state, subtitle timing, render output, STT, LLM, LoRA, VAD, or model-selection policy.
+
+### Files touched in this slice
+
+- `core/project/nle_snapshot.py`
+- `tests/test_project_nle_snapshot.py`
+- `docs/ARCHITECTURE.md`
+- `docs/FEATURE_REGISTRY.md`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/project/nle_snapshot.py tests/test_project_nle_snapshot.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py`
+  - `3 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py tests/test_project_nle_snapshot.py`
+  - `260 passed`
+- `git diff --check -- core/project/nle_snapshot.py tests/test_project_nle_snapshot.py docs/ARCHITECTURE.md docs/FEATURE_REGISTRY.md docs/HANDOFF.md`
+
+### Remaining risk
+
+- This is a snapshot adapter only. Render/export construction still reads the legacy roughcut plan path.
+- Exact-join markers are projected from existing selected roughcut candidate outputs; direct sidecar-file adapter routing is not yet a new runtime path.
+
+## 2026-06-26 Addendum - Source-App Internal NLE Roughcut Exact-Join Marker Projection
+
+### Scope
+
+- Extended `core/project/nle_snapshot.py` so roughcut exact-join payloads can be projected into output-time `TimelineMarker` rows through `markers_from_roughcut_sidecar_payload`.
+- The helper mirrors the existing compatibility shapes used by sidecar reopen paths: top-level `stitched_cut_boundaries`, nested `edl.stitched_cut_boundaries`, nested `render_plan.stitched_cut_boundaries`, and selected roughcut `outputs`.
+- Existing `_edl.json` / `_render_plan.json` readers and render/export construction were not changed.
+- Exact joins remain marker/edit-point evidence only. They are not `Clip` boundary spans and do not own subtitle timing.
+- Jammini QA handoff `.agents/sentinel/handoffs/20260626-014100-roughcut-sidecar-review.md` was reviewed by Dex as `accept with immediate fix`: the ghost marker risk was valid, so `_build_markers` now reads the selected candidate once and the duplicate guard is covered by `test_selected_candidate_outputs_do_not_duplicate_exact_join_markers`.
+
+### Files touched in this slice
+
+- `core/project/nle_snapshot.py`
+- `tests/test_project_nle_snapshot.py`
+- `docs/ARCHITECTURE.md`
+- `docs/FEATURE_REGISTRY.md`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/project/nle_snapshot.py tests/test_project_nle_snapshot.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py`
+  - `6 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py tests/test_project_nle_snapshot.py`
+  - `263 passed, 4 subtests passed`
+- `git diff --check -- .`
+
+### Remaining risk
+
+- This slice still does not reroute render/export plan construction through NLE snapshot data.
+- Multi-clip output duration parity and source-app Macau/X5 promotion proof remain later gates.
+
 ## 2026-06-26 Addendum - v04.00.16 Source-App Checkpoint Release
 
 ### Scope
