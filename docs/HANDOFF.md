@@ -248,6 +248,37 @@
 - The official repo fixture `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video/X5_시승기_후반.MP4` is still absent.
 - Treat the override run as valid X5 audio STT proof, not as proof that the original MP4/video fixture has been restored.
 
+## 2026-06-26 Addendum - Jammini Route Recovery From Taption
+
+### Scope
+
+- Copied the Taption Jammini communication pattern into this repository as local helpers:
+  - `tools/jammini_delegate.sh`
+  - `tools/jammini_watchdog.sh`
+  - `tools/lib/jammini_conversation_resolver.py`
+- Added `.agents/sentinel/handoff.md` and `.agents/sentinel/handoffs/` as the physical handoff route.
+- Updated `AGENTS.md` and `cooperation.md` so future non-trivial work starts by checking `tools/jammini_watchdog.sh --status` and uses `--handoff-probe` when the chat route looks stuck.
+
+### Validation run
+
+- `bash -n tools/jammini_delegate.sh tools/jammini_watchdog.sh`
+- `./venv/bin/python -m py_compile tools/lib/jammini_conversation_resolver.py`
+- `tools/jammini_watchdog.sh --status`
+  - passed; resolved the current canonical conversation by `active_root`.
+  - no dedicated `Teamwork Multi-Agent Team` conversation was visible at validation time.
+- `tools/jammini_watchdog.sh --queue-status`
+  - passed; kept as a compatibility alias for older handoff notes.
+- `tools/jammini_watchdog.sh --handoff-probe --timeout-seconds 60`
+  - file handoff passed: `.agents/sentinel/handoffs/20260626-024301-watchdog-handoff-probe.md`
+  - first line: `DEX_REVIEW_READY`
+  - marker: `PROBE_ID=20260626-024301`
+  - `handoff_index_visible=yes`
+
+### Remaining risk
+
+- Chat `ACK` / `WORKING` remains diagnostic only. Treat `.agents/sentinel/handoffs/*.md` as the source of truth.
+- If no dedicated Jammini teamwork conversation is open, the helper falls back to the canonical AI Subtitle Studio project conversation; use `--handoff-probe` again after opening the teamwork thread if strict team-thread routing is required.
+
 ## 2026-06-26 Addendum - v04.00.16 Source-App Checkpoint Release
 
 ### Scope

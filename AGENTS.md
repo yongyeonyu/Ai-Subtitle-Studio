@@ -144,6 +144,22 @@ Read these first when continuing work:
 16. `waste_action_item.md`
 17. `lesson_n_learned.md`
 
+## Jammini Communication Check
+
+Before relying on `잼민이` for non-trivial support work, verify the local Antigravity route with the repo-local Taption-derived helpers:
+
+```bash
+tools/jammini_watchdog.sh --status
+tools/jammini_watchdog.sh --handoff-probe
+```
+
+`--queue-status` is kept as an alias for `--status` for older handoff notes. The reliable source of truth is the physical handoff path:
+
+- `.agents/sentinel/handoffs/*.md`
+- `.agents/sentinel/handoff.md`
+
+Chat `ACK` / `WORKING` messages are diagnostic only. Treat a Jammini result as delivered only after `덱스` directly reads the handoff file and classifies it as accept, revise, defer, or reject.
+
 When validating the current release baseline, also read:
 
 - `output/manual_verification/latest/qa_suite_full_20260522_081710/suite_result.md`

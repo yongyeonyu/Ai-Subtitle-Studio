@@ -163,20 +163,22 @@ DEX_REVIEW_READY
 
 ## Shell Helper Pattern
 
-These commands assume the local Antigravity wrapper helpers already exist or will be installed similarly in the target project environment.
+This repository now has Taption-derived local helpers for route resolution and physical handoff proof.
 
 ```bash
-source <(/opt/homebrew/bin/antigravity-send.sh env --shell)
-ag-send-last "DEX_REVIEW_READY ... file-scoped review packet ..."
-ag-review-file ui/roughcut/roughcut_detail.py
-ag-refactor-batch --count 10 "다음 안전 조각만"
-ag-stop
+tools/jammini_watchdog.sh --status
+tools/jammini_watchdog.sh --handoff-probe
+tools/jammini_delegate.sh --bootstrap --dry-run
+tools/jammini_delegate.sh --role 서린 --scope "NLE adapter risk" --request "false confidence와 compatibility risk만 검토"
+tools/jammini_delegate.sh --stop
 ```
 
 Rules:
 
-- prefer one active project conversation instead of many scattered ones
-- use the same conversation until context truly changes
+- prefer the resolved Jammini `Teamwork Multi-Agent Team` conversation when one is visible
+- fall back to the canonical project root only when no teamwork thread is visible
+- treat `.agents/sentinel/handoffs/*.md` as the source of truth
+- use `--handoff-probe` when route health is uncertain
 - keep prompts file-scoped and output-shaped
 - do not ask for implementation when a draft or review packet is enough
 
