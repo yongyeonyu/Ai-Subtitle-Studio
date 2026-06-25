@@ -43,6 +43,7 @@ X5_MEDIA_CANDIDATES = (
     X5_MEDIA,
     ROOT / "test video" / "X5_시승기_후반_자막소스.mov",
 )
+X5_MEDIA_ENV = "AI_SUBTITLE_STUDIO_QA_X5_MEDIA"
 
 
 def _default_output_dir(profile: str) -> Path:
@@ -293,6 +294,9 @@ def _macau_multicandidate_project_for_suite(output_root: Path) -> Path:
 
 
 def _x5_media_for_suite() -> Path:
+    override = str(os.environ.get(X5_MEDIA_ENV, "") or "").strip()
+    if override:
+        return Path(override).expanduser()
     for candidate in X5_MEDIA_CANDIDATES:
         path = Path(candidate).expanduser()
         if path.is_file():

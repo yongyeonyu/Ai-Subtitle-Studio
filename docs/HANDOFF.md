@@ -215,6 +215,39 @@
 - Full source-app promotion is not complete until an audio-bearing X5 media fixture is restored at the expected path or explicitly supplied through a new approved QA fixture path.
 - `output/manual_verification/latest/qa_suite_full_20260626_022403` had `failed_count=0` before the stricter empty-output guard, but that run is superseded because its X5 leg produced `final_segment_count=0` and `raw_segment_count=0`.
 
+## 2026-06-26 Addendum - Explicit X5 Audio Override Full QA Proof
+
+### Scope
+
+- Added `AI_SUBTITLE_STUDIO_QA_X5_MEDIA` as an explicit QA runner override for the X5 full-media scenario.
+- Default X5 fixture behavior is unchanged: the expected repo MP4 remains the first default path, and the video-only `.mov` fallback is still not valid STT proof because the empty-output guard now fails it.
+- The override was used only for a named proof run with an audio-bearing X5 WAV found outside the repo.
+
+### Files touched in this slice
+
+- `tools/qa_suite_runner.py`
+- `tests/test_qa_suite_runner.py`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile tools/qa_suite_runner.py tests/test_qa_suite_runner.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_qa_suite_runner.py tests/test_verify_full_media_pipeline.py tests/test_app_command_bridge.py`
+  - `109 passed`
+- `git diff --check -- tools/qa_suite_runner.py tests/test_qa_suite_runner.py`
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/Users/u_mo_c/Music/Music/Media.localized/Music/Unknown Artist/Unknown Album/X5_시승기_편집중_raw.wav' ./venv/bin/python tools/qa_suite_runner.py full`
+  - artifact: `output/manual_verification/latest/qa_suite_full_20260626_023524`
+  - result: `failed_count=0`
+  - X5 media: `/Users/u_mo_c/Music/Music/Media.localized/Music/Unknown Artist/Unknown Album/X5_시승기_편집중_raw.wav`
+  - X5 counts: `final_segment_count=52`, `raw_segment_count=52`
+  - X5 timing: `total_elapsed_sec=41.282`, `pipeline_elapsed_sec=41.18`
+  - X5 quality: `self_review_overall_score=90.026825`, `completion_avg_quality=89.761`, `llm_rollback_count=0`
+
+### Remaining risk
+
+- The official repo fixture `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video/X5_시승기_후반.MP4` is still absent.
+- Treat the override run as valid X5 audio STT proof, not as proof that the original MP4/video fixture has been restored.
+
 ## 2026-06-26 Addendum - v04.00.16 Source-App Checkpoint Release
 
 ### Scope

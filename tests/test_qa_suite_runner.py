@@ -99,6 +99,19 @@ class QASuiteRunnerTests(unittest.TestCase):
 
         self.assertEqual(Path(scenarios[-1]["media"]), fallback)
 
+    def test_build_scenarios_full_uses_explicit_x5_media_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            override = root / "x5_override.wav"
+            with patch.dict("os.environ", {qa_suite_runner.X5_MEDIA_ENV: str(override)}), patch.object(
+                qa_suite_runner,
+                "MACAU_MEDIA",
+                root / "missing_macau.mp4",
+            ):
+                scenarios = qa_suite_runner.build_scenarios("full", root / "suite")
+
+        self.assertEqual(Path(scenarios[-1]["media"]), override)
+
     def test_run_suite_writes_manifest_and_result_files(self):
         def _fake_run_scenario(spec, _python_bin):
             return {
