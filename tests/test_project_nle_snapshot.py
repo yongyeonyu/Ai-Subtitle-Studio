@@ -9,6 +9,12 @@ from core.project.nle_snapshot import (
     markers_from_stitched_cut_boundaries,
 )
 from core.project.project_context import build_editor_state
+from core.project.project_io import (
+    clear_project_file_cache,
+    read_project_file,
+    read_project_storage_payload,
+    write_project_file,
+)
 
 
 class ProjectNleSnapshotTests(unittest.TestCase):
@@ -319,6 +325,72 @@ class ProjectNleSnapshotTests(unittest.TestCase):
         ]
         self.assertEqual(len(exact_markers), 1)
         self.assertEqual(exact_markers[0].time, 4.0)
+
+    def test_project_file_roundtrip_does_not_persist_snapshot_fields_or_drop_asset_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing_media = root / "missing_source.mov"
+            proxy_path = root / "proxy.mov"
+            project_path = root / "case.aissproj"
+            project = {
+                "project_name": "roundtrip",
+                "timeline": {
+                    "total_duration": 5.0,
+                    "timebase": {"primary_fps": 30.0},
+                    "tracks": [
+                        {
+                            "clips": [
+                                {
+                                    "id": "clip_missing",
+                                    "source_path": str(missing_media),
+                                    "type": "video",
+                                    "source_duration": 5.0,
+                                    "timeline_start": 0.0,
+                                    "timeline_end": 5.0,
+                                    "fps": 30.0,
+                                    "proxy_path": str(proxy_path),
+                                    "cache_key": "cache-001",
+                                    "relink": {"last_known_path": str(missing_media)},
+                                }
+                            ]
+                        }
+                    ],
+                },
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[str(missing_media)],
+                    segments=[{"start": 1.0, "end": 2.0, "text": "roundtrip"}],
+                    primary_fps=30.0,
+                ),
+            }
+            before = build_project_nle_snapshot(project)
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            after = build_project_nle_snapshot(loaded, project_path=str(project_path))
+
+        self.assertNotIn("nle", storage)
+        self.assertNotIn("nle_snapshot", storage)
+        stored_clip = storage["timeline"]["tracks"][0]["clips"][0]
+        self.assertEqual(stored_clip["proxy_path"], str(proxy_path))
+        self.assertEqual(stored_clip["cache_key"], "cache-001")
+        self.assertEqual(stored_clip["relink"]["last_known_path"], str(missing_media))
+        self.assertTrue(before.assets[0].missing)
+        self.assertTrue(after.assets[0].missing)
+        self.assertEqual(before.assets[0].duration, 5.0)
+        self.assertEqual(after.assets[0].duration, 5.0)
+        self.assertEqual(after.assets[0].fps, 30.0)
+        self.assertEqual(before.assets[0].metadata["proxy_path"], str(proxy_path))
+        self.assertEqual(after.assets[0].metadata["proxy_path"], str(proxy_path))
+        self.assertEqual(after.assets[0].metadata["cache_key"], "cache-001")
+        self.assertEqual(after.assets[0].metadata["relink"]["last_known_path"], str(missing_media))
+        self.assertEqual(after.sequences[0].duration, 5.0)
+        self.assertEqual(
+            [(caption.sequence_start, caption.sequence_end, caption.text) for caption in after.sequences[0].captions],
+            [(1.0, 2.0, "roundtrip")],
+        )
 
 
 if __name__ == "__main__":

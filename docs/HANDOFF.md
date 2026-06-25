@@ -149,6 +149,35 @@
 - Roughcut UI/runtime export still calls the legacy owner path directly; this is intentional until a later routing slice has source-app fixture proof.
 - Source-app Macau/X5 promotion proof remains a later gate.
 
+## 2026-06-26 Addendum - Source-App Internal NLE Save/Reload Compatibility Guard
+
+### Scope
+
+- Added a project file round-trip regression test for the read-only NLE snapshot adapter.
+- The test writes a legacy-shaped `.aissproj` through `write_project_file`, reads the exact storage payload, clears the project cache, reloads through `read_project_file`, and rebuilds the NLE snapshot.
+- It verifies no `nle` / `nle_snapshot` field is persisted and that missing media, proxy path, cache key, relink metadata, subtitle count, and subtitle timing survive the round trip.
+- Runtime save/load code, project format, UI state, subtitle timing, render output, STT, LLM, LoRA, VAD, and model-selection policy were not changed.
+- Jammini QE handoff `.agents/sentinel/handoffs/20260626-015100-save-reload-compatibility.md` was reviewed by Dex as `accept with immediate test reinforcement`: snapshot field spillover and missing-media duration/fps collapse are covered by the round-trip test; mutable timing reverse-write and cross-device relink/cache UX remain deferred until a runtime routing slice.
+
+### Files touched in this slice
+
+- `tests/test_project_nle_snapshot.py`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile tests/test_project_nle_snapshot.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py`
+  - `7 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py tests/test_project_nle_snapshot.py`
+  - `265 passed, 4 subtests passed`
+- `git diff --check -- .`
+
+### Remaining risk
+
+- This is still unit-level file round-trip proof, not Macau/X5 source-app promotion proof.
+- Mutable timing reverse-write and cross-device relink/cache UX are still deferred because this slice does not route save/load writes through the NLE snapshot.
+
 ## 2026-06-26 Addendum - v04.00.16 Source-App Checkpoint Release
 
 ### Scope
