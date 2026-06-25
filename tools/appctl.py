@@ -85,6 +85,9 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("editor-clear-shadow-playhead")
     sub.add_parser("editor-zoom-max")
+    editor_timeline_view = sub.add_parser("editor-timeline-view")
+    editor_timeline_view.add_argument("action", choices=["zoom-in", "zoom-out", "fit", "time-window", "max"])
+    sub.add_parser("editor-subtitle-magnet")
 
     editor_playback = sub.add_parser("editor-playback")
     editor_playback.add_argument("action", choices=["play", "pause", "toggle"], nargs="?", default="toggle")
@@ -94,6 +97,26 @@ def _parser() -> argparse.ArgumentParser:
 
     editor_stt_mode = sub.add_parser("editor-stt-mode")
     editor_stt_mode.add_argument("action", choices=["enable", "disable", "toggle"], nargs="?", default="toggle")
+
+    sub.add_parser("global-menu-status")
+    global_menu_action = sub.add_parser("global-menu-action")
+    global_menu_action.add_argument(
+        "action",
+        choices=[
+            "settings",
+            "speaker",
+            "dictionary",
+            "save",
+            "video",
+            "stt",
+            "center_save",
+            "left_설정",
+            "left_화자",
+            "left_사전",
+            "left_비디오",
+            "left_음성",
+        ],
+    )
 
     editor_select_segment = sub.add_parser("editor-select-segment")
     _add_editor_selection_args(editor_select_segment)
@@ -260,12 +283,20 @@ def _payload_from_args(args: argparse.Namespace) -> dict:
         return build_command_payload(command)
     if command == "editor-zoom-max":
         return build_command_payload(command)
+    if command == "editor-timeline-view":
+        return build_command_payload(command, options={"action": str(args.action or "")})
+    if command == "editor-subtitle-magnet":
+        return build_command_payload(command)
     if command == "editor-playback":
         return build_command_payload(command, options={"action": str(args.action or "toggle")})
     if command == "editor-video":
         return build_command_payload(command, options={"action": str(args.action or "toggle")})
     if command == "editor-stt-mode":
         return build_command_payload(command, options={"action": str(args.action or "toggle")})
+    if command == "global-menu-status":
+        return build_command_payload(command)
+    if command == "global-menu-action":
+        return build_command_payload(command, options={"action": str(args.action or "")})
     if command in {
         "editor-select-segment",
         "editor-begin-smart-split",

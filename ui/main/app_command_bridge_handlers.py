@@ -19,6 +19,40 @@ def _file_rows(helpers: SimpleNamespace, outputs: list[tuple[str, str]]) -> list
     ]
 
 
+_GLOBAL_MENU_ACTION_ALIASES = {
+    "settings": "left_설정",
+    "left-settings": "left_설정",
+    "left_설정": "left_설정",
+    "speaker": "left_화자",
+    "left-speaker": "left_화자",
+    "left_화자": "left_화자",
+    "dictionary": "left_사전",
+    "dict": "left_사전",
+    "left-dictionary": "left_사전",
+    "left_사전": "left_사전",
+    "save": "center_save",
+    "center-save": "center_save",
+    "center_save": "center_save",
+    "video": "left_비디오",
+    "left-video": "left_비디오",
+    "left_비디오": "left_비디오",
+    "stt": "left_음성",
+    "voice": "left_음성",
+    "left-voice": "left_음성",
+    "left_음성": "left_음성",
+}
+
+_ALLOWED_GLOBAL_MENU_ACTIONS = frozenset(_GLOBAL_MENU_ACTION_ALIASES.values())
+
+
+def _normalize_global_menu_action(action: str) -> str:
+    normalized = str(action or "").strip()
+    if not normalized:
+        return ""
+    key = normalized.lower().replace(" ", "-")
+    return _GLOBAL_MENU_ACTION_ALIASES.get(key, normalized)
+
+
 def _handle_editor_transport_command(
     owner: Any,
     command_payload: dict[str, Any],
@@ -81,10 +115,31 @@ def _handle_editor_transport_command(
         }[command]
         return ok(message=message, data=data)
 
-    if command in {"editor-playback", "editor-video", "editor-select-segment"}:
+    if command in {"editor-playback", "editor-video", "editor-select-segment", "editor-timeline-view", "editor-subtitle-magnet"}:
         if editor is None:
             return fail("editor_missing")
         options = dict(command_payload.get("options") or {})
+        if command == "editor-subtitle-magnet":
+            runner = getattr(editor, "automation_run_subtitle_magnet", None)
+            if not callable(runner):
+                return fail("editor_automation_unavailable")
+            try:
+                data = dict(runner() or {})
+            except ValueError as exc:
+                return fail(str(exc), data={"editor_runtime": helpers.editor_runtime_snapshot(editor)})
+            helpers.bring_to_front(owner)
+            return ok(message="editor_subtitle_magnet_done", data=data)
+        if command == "editor-timeline-view":
+            runner = getattr(editor, "automation_timeline_view_action", None)
+            if not callable(runner):
+                return fail("editor_automation_unavailable")
+            action = str(options.get("action", "") or "")
+            try:
+                data = dict(runner(action) or {})
+            except ValueError as exc:
+                return fail(str(exc), data={"editor_runtime": helpers.editor_runtime_snapshot(editor)})
+            helpers.bring_to_front(owner)
+            return ok(message=f"editor_timeline_view_{data.get('action', action)}", data=data)
         if command == "editor-playback":
             player = getattr(editor, "automation_set_playback_state", None)
             if not callable(player):
@@ -126,6 +181,42 @@ def _handle_editor_transport_command(
         helpers.bring_to_front(owner)
         return ok(message="editor_segment_selected", data=data)
     return None
+
+
+def _handle_global_menu_command(
+    owner: Any,
+    command_payload: dict[str, Any],
+    command: str,
+    *,
+    ok,
+    fail,
+    logger,
+    helpers: SimpleNamespace,
+) -> dict[str, Any] | None:
+    if command == "global-menu-status":
+        menu = getattr(owner, "global_menu_bar", None)
+        snapshotter = getattr(menu, "automation_action_snapshot", None) if menu is not None else None
+        if not callable(snapshotter):
+            return fail("global_menu_unavailable")
+        return ok(message="global_menu_status", data=dict(snapshotter() or {}))
+    if command != "global-menu-action":
+        return None
+    options = dict(command_payload.get("options") or {})
+    action_id = _normalize_global_menu_action(str(options.get("action") or options.get("action_id") or ""))
+    if not action_id:
+        return fail("global_menu_action_missing")
+    if action_id not in _ALLOWED_GLOBAL_MENU_ACTIONS:
+        return fail("global_menu_action_not_allowed", data={"action_id": action_id})
+    menu = getattr(owner, "global_menu_bar", None)
+    runner = getattr(menu, "automation_trigger_action", None) if menu is not None else None
+    if not callable(runner):
+        return fail("global_menu_unavailable")
+    try:
+        data = dict(runner(action_id) or {})
+    except ValueError as exc:
+        return fail(str(exc), data={"action_id": action_id})
+    helpers.bring_to_front(owner)
+    return ok(message=f"global_menu_action_{data.get('action_id', action_id)}", data=data)
 
 
 def _handle_editor_edit_command(
@@ -974,6 +1065,7 @@ def handle_command(
 ) -> dict[str, Any] | None:
     handlers = (
         _handle_editor_transport_command,
+        _handle_global_menu_command,
         _handle_editor_edit_command,
         _handle_snapshot_dialog_command,
         _handle_open_command,

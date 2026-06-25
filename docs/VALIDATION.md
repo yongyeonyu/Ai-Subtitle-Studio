@@ -83,6 +83,34 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player
 ./venv/bin/python tools/appctl.py status
 ```
 
+편집기 타임라인 확대/축소/맞춤 자동화 smoke가 필요하면 source app에서 프로젝트를 연 뒤 아래 명령을 사용합니다.
+
+```bash
+./venv/bin/python tools/appctl.py editor-timeline-view zoom-in
+./venv/bin/python tools/appctl.py editor-timeline-view zoom-out
+./venv/bin/python tools/appctl.py editor-timeline-view fit
+./venv/bin/python tools/appctl.py editor-timeline-view time-window
+./venv/bin/python tools/appctl.py editor-timeline-view max
+```
+
+자막자석은 실제 자막 타이밍을 바꿀 수 있으므로 기본 quick smoke에는 넣지 말고, 명시 검증 artifact를 만들 때만 아래 명령을 사용합니다.
+
+```bash
+./venv/bin/python tools/appctl.py editor-subtitle-magnet
+```
+
+편집기 하단 전역 메뉴 버튼의 안전한 smoke는 아래처럼 확인합니다. `global-menu-status`는 전체 등록 버튼을 조회하고, `global-menu-action`은 설정/화자/사전/저장/비디오/음성처럼 자동화-safe 버튼만 허용합니다.
+
+```bash
+./venv/bin/python tools/appctl.py global-menu-status
+./venv/bin/python tools/appctl.py global-menu-action settings
+./venv/bin/python tools/appctl.py global-menu-action speaker
+./venv/bin/python tools/appctl.py global-menu-action dictionary
+./venv/bin/python tools/appctl.py global-menu-action save
+./venv/bin/python tools/appctl.py global-menu-action video
+./venv/bin/python tools/appctl.py global-menu-action stt
+```
+
 roughcut 영상 렌더와 exact-join sidecar smoke가 필요하면 source app에서 roughcut 프로젝트를 연 뒤 아래 순서로 확인합니다.
 
 ```bash

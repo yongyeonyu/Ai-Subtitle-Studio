@@ -10,6 +10,7 @@ READ_ONLY_COMMANDS = {
     "ping",
     "status",
     "guided-subtitle-status",
+    "global-menu-status",
     "capture-snapshot",
     "snapshot",
     "capture-dictionary-snapshot",

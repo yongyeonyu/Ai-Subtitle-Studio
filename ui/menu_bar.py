@@ -946,6 +946,53 @@ class GlobalMenuBar(QWidget):
         if button is not None and button.isEnabled():
             QTimer.singleShot(0, button.click)
 
+    def automation_trigger_action(self, action_id: str) -> dict:
+        normalized = str(action_id or "").strip()
+        button = self._quick_action_buttons.get(normalized)
+        if button is None:
+            raise ValueError("global_menu_action_missing")
+        if not button.isEnabled():
+            raise ValueError("global_menu_action_disabled")
+        text = str(button.text() or "")
+        if normalized == "center_save":
+            editor = self._active_editor()
+            save_handler = getattr(editor, "_on_save", None) if editor is not None else None
+            if callable(save_handler):
+                save_handler(skip_auto_next=True, queue_learning=False, auto_export=False)
+            else:
+                button.click()
+        else:
+            button.click()
+        self.refresh()
+        return {
+            "action_id": normalized,
+            "text": text,
+            "enabled": True,
+        }
+
+    def automation_action_snapshot(self) -> dict:
+        actions = []
+        for action_id, button in sorted(getattr(self, "_quick_action_buttons", {}).items()):
+            try:
+                text = str(button.text() or "")
+            except Exception:
+                text = ""
+            try:
+                enabled = bool(button.isEnabled())
+            except Exception:
+                enabled = False
+            actions.append(
+                {
+                    "action_id": str(action_id or ""),
+                    "text": text,
+                    "enabled": enabled,
+                }
+            )
+        return {
+            "action_count": len(actions),
+            "actions": actions,
+        }
+
     def _qml_button_payload(self, btn) -> dict:
         return {
             "id": str(btn.property("qmlActionId") or ""),

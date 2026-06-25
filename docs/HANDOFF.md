@@ -33,6 +33,61 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-25 Addendum - Editor Timeline View App Command Smoke
+
+### Scope
+
+- Added `editor-timeline-view` to `tools/appctl.py` and the app-command bridge.
+- The command drives the existing editor timeline controls for `zoom-in`, `zoom-out`, `fit`, `time-window`, and `max`; it does not change UI labels, layout, shortcuts, or subtitle timing data.
+- Added `editor-subtitle-magnet` as an explicit app-command for subtitle magnet smoke. It is intentionally not part of default quick QA because it can change subtitle timing.
+- Added `global-menu-status` plus `global-menu-action` for safe bottom global menu actions. Unsafe actions such as quit/cache/start/precision are rejected by the bridge.
+- Automation `global-menu-action save` calls the same editor save handler but disables post-save learning/auto-export side effects so the next app-command is not delayed by save follow-up work.
+- `tools/qa_suite_runner.py` quick scenario `editor_compact_macau` now exercises timeline view actions, bottom global menu status/save, and editor playback play/pause after inline edit commit and before segment move/diamond interaction checks.
+
+### Files touched in this slice
+
+- `tools/appctl.py`
+- `tools/automation_command_client.py`
+- `tools/qa_suite_runner.py`
+- `ui/editor/editor_automation.py`
+- `ui/menu_bar.py`
+- `ui/main/app_command_bridge_handlers.py`
+- `tests/test_app_command_bridge.py`
+- `docs/HANDOFF.md`
+- `docs/VALIDATION.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile tools/appctl.py tools/qa_suite_runner.py tools/automation_command_client.py ui/main/app_command_bridge_handlers.py ui/editor/editor_automation.py ui/menu_bar.py tests/test_app_command_bridge.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest tests/test_app_command_bridge.py::AppCommandBridgeTests::test_editor_timeline_view_command_exercises_zoom_and_fit -q`
+  - `1 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest tests/test_app_command_bridge.py tests/test_qa_suite_runner.py -q`
+  - `94 passed`
+- `./venv/bin/python tools/appctl.py editor-timeline-view --help`
+  - `zoom-in`, `zoom-out`, `fit`, `time-window`, `max` listed
+- `./venv/bin/python tools/appctl.py editor-subtitle-magnet --help`
+  - command listed
+- `./venv/bin/python tools/appctl.py global-menu-status --help`
+  - command listed
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
+  - `failed_count=0`
+  - artifact: `output/manual_verification/latest/qa_suite_quick_20260625_233721`
+
+### Source-app evidence
+
+- quick artifact: `output/manual_verification/latest/qa_suite_quick_20260625_233721`
+  - `editor_compact_macau` passed.
+  - New covered steps include `timeline_time_window`, `global_menu_status`, `global_menu_save`, `playback_play`, and `playback_pause`.
+  - Macau project currently opens without real video media in this fixture, so `playback_play` returns `skipped=true`, `skip_reason=playback_source_not_video` instead of blocking the app-command path.
+- subtitle magnet app-command smoke: `output/manual_verification/latest/20260625_subtitle_magnet_app_command_smoke`
+  - `editor-subtitle-magnet` returned `ok=true`, `changed=true`, `before_segment_count=34`, `after_segment_count=34`.
+  - snapshot: `snapshots/after_magnet.png`
+
+### Remaining risk
+
+- The source-app quick proof used the current Macau fixture without playable original media, so it proves command responsiveness and skip diagnostics, not actual video playback.
+- Because the app-command surface changed, rebuild the macOS app bundle before running `major` or `full` QA against a bundled app.
+
 ## 2026-06-25 Addendum - Roughcut Render App Command Smoke
 
 ### Scope

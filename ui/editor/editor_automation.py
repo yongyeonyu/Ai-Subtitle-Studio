@@ -544,6 +544,63 @@ class EditorAutomationMixin:
             "editor_runtime": self.automation_editor_state_snapshot(),
         }
 
+    def automation_timeline_view_action(self, action: str) -> dict[str, Any]:
+        timeline = getattr(self, "timeline", None)
+        if timeline is None:
+            raise ValueError("timeline_unavailable")
+        normalized = str(action or "").strip().lower().replace("_", "-")
+        aliases = {
+            "in": "zoom-in",
+            "zoom-in": "zoom-in",
+            "out": "zoom-out",
+            "zoom-out": "zoom-out",
+            "fit": "fit",
+            "fit-view": "fit",
+            "fit-to-view": "fit",
+            "time-window": "time-window",
+            "window": "time-window",
+            "edit-window": "time-window",
+            "max": "max",
+            "zoom-max": "max",
+        }
+        normalized = aliases.get(normalized, normalized)
+        action_map = {
+            "zoom-in": getattr(timeline, "zoom_in", None),
+            "zoom-out": getattr(timeline, "zoom_out", None),
+            "fit": getattr(timeline, "fit_to_view", None),
+            "time-window": getattr(timeline, "show_ten_second_edit_window", None),
+            "max": getattr(timeline, "zoom_to_max", None),
+        }
+        runner = action_map.get(normalized)
+        if not callable(runner):
+            raise ValueError("timeline_view_action_unavailable")
+        before = self.automation_editor_state_snapshot()
+        runner()
+        after = self.automation_editor_state_snapshot()
+        return {
+            "action": normalized,
+            "previous_timeline_pps": float(before.get("timeline_pps", 0.0) or 0.0),
+            "timeline_pps": float(after.get("timeline_pps", 0.0) or 0.0),
+            "timeline_fit_locked": bool(after.get("timeline_fit_locked", False)),
+            "editor_runtime": after,
+        }
+
+    def automation_run_subtitle_magnet(self) -> dict[str, Any]:
+        runner = getattr(self, "_on_subtitle_magnet_requested", None)
+        if not callable(runner):
+            raise ValueError("subtitle_magnet_unavailable")
+        before = self.automation_editor_state_snapshot()
+        changed = bool(runner())
+        after = self.automation_editor_state_snapshot()
+        return {
+            "changed": changed,
+            "before_segment_count": int(before.get("segment_count", 0) or 0),
+            "after_segment_count": int(after.get("segment_count", 0) or 0),
+            "before_gap_count": int(before.get("gap_count", 0) or 0),
+            "after_gap_count": int(after.get("gap_count", 0) or 0),
+            "editor_runtime": after,
+        }
+
     def automation_set_video_visible(self, action: str) -> dict[str, Any]:
         toggler = getattr(self, "_toggle_video", None)
         if not callable(toggler):
@@ -576,6 +633,21 @@ class EditorAutomationMixin:
         normalized = str(action or "").strip().lower()
         if normalized not in {"play", "pause", "toggle"}:
             raise ValueError("invalid_playback_action")
+        source_path = str(
+            getattr(video_player, "_current_source_path", "")
+            or getattr(video_player, "_pending_media_source_path", "")
+            or getattr(self, "media_path", "")
+            or ""
+        )
+        suffix = source_path.rsplit(".", 1)[-1].lower() if "." in source_path else ""
+        if normalized in {"play", "toggle"} and suffix in {"srt", "ass", "ssa", "vtt", "json"}:
+            runtime = self.automation_editor_state_snapshot()
+            return {
+                "action": normalized,
+                "skipped": True,
+                "skip_reason": "playback_source_not_video",
+                "editor_runtime": runtime,
+            }
         is_playing = False
         try:
             state = media_player.playbackState()
@@ -584,6 +656,19 @@ class EditorAutomationMixin:
                 is_playing = state == playing_state
         except Exception:
             is_playing = False
+        wants_play = normalized == "play" or (normalized == "toggle" and not is_playing)
+        if wants_play:
+            runtime = self.automation_editor_state_snapshot()
+            source_path = str(runtime.get("video_source_path") or runtime.get("video_pending_source_path") or "")
+            suffix = source_path.rsplit(".", 1)[-1].lower() if "." in source_path else ""
+            subtitle_only = suffix in {"srt", "ass", "ssa", "vtt", "json"}
+            if subtitle_only:
+                return {
+                    "action": normalized,
+                    "skipped": True,
+                    "skip_reason": "playback_source_not_video",
+                    "editor_runtime": runtime,
+                }
         if normalized == "toggle":
             ensure_timer = getattr(self, "_ensure_playhead_timer_running", None)
             if callable(ensure_timer):

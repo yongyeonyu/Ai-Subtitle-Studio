@@ -31,6 +31,8 @@ class _DummyEditor:
         self._inline_text = ""
         self._inline_cursor = None
         self._timeline_pps = 12.0
+        self._timeline_fit_locked = False
+        self._time_window_applied = False
         self._playback_center_lock = False
         self._playing = False
         self._video_visible = True
@@ -123,8 +125,9 @@ class _DummyEditor:
             "inline_edit_cursor": self._inline_cursor,
             "split_pending_sec": self._split_pending_sec,
             "timeline_pps": self._timeline_pps,
+            "time_window_applied": self._time_window_applied,
             "timeline_scroll_x": 0.0,
-            "timeline_fit_locked": False,
+            "timeline_fit_locked": self._timeline_fit_locked,
             "playback_center_lock": self._playback_center_lock,
             "video_visible": bool(self._video_visible),
             "active_footer_menu_id": str(self._active_footer_menu_id),
@@ -157,9 +160,52 @@ class _DummyEditor:
 
     def automation_zoom_max(self):
         self._timeline_pps = 500.0
+        self._timeline_fit_locked = False
         return {
             "timeline_pps": self._timeline_pps,
             "editor_runtime": self.automation_editor_state_snapshot(),
+        }
+
+    def automation_timeline_view_action(self, action: str):
+        normalized = str(action or "").strip().lower()
+        previous = self._timeline_pps
+        if normalized == "zoom-in":
+            self._timeline_pps *= 1.25
+            self._timeline_fit_locked = False
+        elif normalized == "zoom-out":
+            self._timeline_pps /= 1.25
+            self._timeline_fit_locked = False
+        elif normalized == "fit":
+            self._timeline_pps = 8.0
+            self._timeline_fit_locked = True
+        elif normalized == "time-window":
+            self._timeline_pps = 64.0
+            self._timeline_fit_locked = False
+            self._time_window_applied = True
+        elif normalized == "max":
+            self._timeline_pps = 500.0
+            self._timeline_fit_locked = False
+        else:
+            raise ValueError("timeline_view_action_unavailable")
+        return {
+            "action": normalized,
+            "previous_timeline_pps": previous,
+            "timeline_pps": self._timeline_pps,
+            "timeline_fit_locked": self._timeline_fit_locked,
+            "editor_runtime": self.automation_editor_state_snapshot(),
+        }
+
+    def automation_run_subtitle_magnet(self):
+        before = self.automation_editor_state_snapshot()
+        self._segments[0]["end"] = self._segments[1]["start"]
+        after = self.automation_editor_state_snapshot()
+        return {
+            "changed": True,
+            "before_segment_count": int(before["segment_count"]),
+            "after_segment_count": int(after["segment_count"]),
+            "before_gap_count": int(before["gap_count"]),
+            "after_gap_count": int(after["gap_count"]),
+            "editor_runtime": after,
         }
 
     def automation_set_playback_state(self, action: str):
@@ -413,6 +459,7 @@ class _DummyOwner:
         self._sig_external_app_command = SimpleNamespace(emit=lambda payload, state=None: None)
         self._editor_widget = _DummyEditor()
         self._roughcut_widget = _DummyRoughcutWidget()
+        self.global_menu_bar = _DummyGlobalMenuBar(self)
         self.last_open_args = None
         self.roughcut_open_calls = 0
 
@@ -520,6 +567,48 @@ class _DummyOwner:
     def _resume_personalization_idle_jobs(self):
         self.personalization_actions.append("resume")
         return {"resumed": True}
+
+
+class _DummyGlobalMenuBar:
+    def __init__(self, owner):
+        self.owner = owner
+        self.actions = []
+        self._actions = {
+            "left_설정": ("설정", True),
+            "left_화자": ("화자", True),
+            "left_사전": ("사전", True),
+            "left_비디오": ("비디오", True),
+            "left_음성": ("음성", True),
+            "center_save": ("저장", True),
+            "right_quit": ("종료", True),
+        }
+
+    def automation_trigger_action(self, action_id: str):
+        normalized = str(action_id or "")
+        if normalized == "center_save":
+            self.owner._editor_widget._on_save(skip_auto_next=True)
+        elif normalized in {"left_설정", "left_화자", "left_사전"}:
+            pass
+        elif normalized == "left_비디오":
+            self.owner._editor_widget.automation_set_video_visible("toggle")
+        elif normalized == "left_음성":
+            self.owner._editor_widget._toggle_stt_mode()
+        else:
+            raise ValueError("global_menu_action_missing")
+        self.actions.append(normalized)
+        return {
+            "action_id": normalized,
+            "text": normalized,
+            "enabled": True,
+            "trigger_count": len(self.actions),
+        }
+
+    def automation_action_snapshot(self):
+        actions = [
+            {"action_id": action_id, "text": text, "enabled": enabled}
+            for action_id, (text, enabled) in sorted(self._actions.items())
+        ]
+        return {"action_count": len(actions), "actions": actions}
 
 
 class _DummyRoughcutWidget:
@@ -1317,6 +1406,66 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["message"], "editor_zoom_max_applied")
         self.assertAlmostEqual(owner._editor_widget._timeline_pps, 500.0)
         self.assertAlmostEqual(result["data"]["editor_runtime"]["timeline_pps"], 500.0)
+
+    def test_editor_timeline_view_command_exercises_zoom_and_fit(self):
+        owner = _DummyOwner()
+
+        zoomed = execute_app_command(owner, {"command": "editor-timeline-view", "options": {"action": "zoom-in"}})
+        fitted = execute_app_command(owner, {"command": "editor-timeline-view", "options": {"action": "fit"}})
+        windowed = execute_app_command(owner, {"command": "editor-timeline-view", "options": {"action": "time-window"}})
+
+        self.assertTrue(zoomed["ok"])
+        self.assertEqual(zoomed["message"], "editor_timeline_view_zoom-in")
+        self.assertGreater(zoomed["data"]["timeline_pps"], zoomed["data"]["previous_timeline_pps"])
+        self.assertTrue(fitted["ok"])
+        self.assertEqual(fitted["message"], "editor_timeline_view_fit")
+        self.assertTrue(fitted["data"]["timeline_fit_locked"])
+        self.assertEqual(fitted["data"]["editor_runtime"]["timeline_pps"], 8.0)
+        self.assertTrue(windowed["ok"])
+        self.assertEqual(windowed["message"], "editor_timeline_view_time-window")
+        self.assertTrue(windowed["data"]["editor_runtime"]["time_window_applied"])
+
+    def test_editor_subtitle_magnet_command_reports_changed_runtime(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "editor-subtitle-magnet"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "editor_subtitle_magnet_done")
+        self.assertTrue(result["data"]["changed"])
+        self.assertEqual(result["data"]["before_segment_count"], result["data"]["after_segment_count"])
+
+    def test_global_menu_action_save_uses_center_save_button_path(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "global-menu-action", "options": {"action": "save"}})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "global_menu_action_center_save")
+        self.assertEqual(result["data"]["action_id"], "center_save")
+        self.assertEqual(owner.global_menu_bar.actions, ["center_save"])
+        self.assertEqual(owner._editor_widget.save_calls, 1)
+
+    def test_global_menu_status_lists_buttons_without_clicking(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "global-menu-status"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "global_menu_status")
+        action_ids = {item["action_id"] for item in result["data"]["actions"]}
+        self.assertIn("center_save", action_ids)
+        self.assertIn("right_quit", action_ids)
+        self.assertEqual(owner.global_menu_bar.actions, [])
+
+    def test_global_menu_action_rejects_unsafe_action(self):
+        owner = _DummyOwner()
+
+        result = execute_app_command(owner, {"command": "global-menu-action", "options": {"action": "right_quit"}})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "global_menu_action_not_allowed")
+        self.assertEqual(owner.global_menu_bar.actions, [])
 
     def test_editor_playback_play_command_marks_center_lock(self):
         owner = _DummyOwner()
