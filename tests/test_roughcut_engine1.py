@@ -391,13 +391,33 @@ class RoughCutEngine1Tests(unittest.TestCase):
 
         self.assertEqual(len(plan.extract_commands), len(edl))
         self.assertEqual(plan.extract_commands[0][0], "ffmpeg")
-        self.assertEqual(plan.render_mode, "copy")
-        self.assertIn("-c", plan.extract_commands[0])
-        self.assertEqual(plan.extract_commands[0][plan.extract_commands[0].index("-c") + 1], "copy")
+        self.assertEqual(plan.render_mode, "sync_safe")
+        self.assertIn("-vf", plan.extract_commands[0])
+        self.assertIn("setpts=PTS-STARTPTS,fps=30", plan.extract_commands[0])
+        self.assertIn("-map", plan.extract_commands[0])
+        self.assertIn("0:a?", plan.extract_commands[0])
+        self.assertIn("-c:v", plan.extract_commands[0])
         self.assertIn("-c", plan.concat_command)
         self.assertEqual(plan.concat_command[plan.concat_command.index("-c") + 1], "copy")
         self.assertIn("roughcut_concat.txt", plan.concat_file_path)
         self.assertEqual(plan.concat_command[-1], "/tmp/out.mp4")
+
+    def test_renderer_skeleton_keeps_stream_copy_as_explicit_unsafe_mode(self):
+        chapter = ChapterMetadata("chapter_0001", "소개", 0.0, 4.0)
+        decision = build_edit_decisions([chapter], phrases=[], gaps=[])[0]
+        edl = build_edl_segments("/tmp/source.mp4", [decision], [chapter])
+        plan = build_concat_render_plan(
+            edl,
+            "/tmp/out.mp4",
+            "/tmp/roughcut_temp",
+            ffmpeg_binary="ffmpeg",
+            render_mode="copy",
+        )
+
+        self.assertEqual(plan.render_mode, "copy")
+        self.assertIn("-c", plan.extract_commands[0])
+        self.assertEqual(plan.extract_commands[0][plan.extract_commands[0].index("-c") + 1], "copy")
+        self.assertNotIn("setpts=PTS-STARTPTS", " ".join(plan.extract_commands[0]))
 
     def test_renderer_skeleton_supports_lossless_mezzanine_mode(self):
         chapter = ChapterMetadata("chapter_0001", "소개", 0.0, 4.0)
@@ -412,6 +432,8 @@ class RoughCutEngine1Tests(unittest.TestCase):
         )
 
         self.assertEqual(plan.render_mode, "lossless")
+        self.assertIn("-vf", plan.extract_commands[0])
+        self.assertIn("setpts=PTS-STARTPTS,fps=30", plan.extract_commands[0])
         self.assertIn("-c:v", plan.extract_commands[0])
         self.assertEqual(plan.extract_commands[0][plan.extract_commands[0].index("-c:v") + 1], "ffv1")
         self.assertIn("-c:a", plan.extract_commands[0])
@@ -530,8 +552,10 @@ class RoughCutEngine1Tests(unittest.TestCase):
 
             self.assertTrue(concat_path.exists())
             self.assertIn("roughcut_part_0001.mp4", concat_path.read_text(encoding="utf-8"))
+            self.assertIn(str(Path(tmp).resolve()), concat_path.read_text(encoding="utf-8"))
             self.assertTrue(result.dry_run)
-            self.assertEqual(result.executed_commands[0][result.executed_commands[0].index("-c") + 1], "copy")
+            self.assertEqual(result.executed_commands[0][result.executed_commands[0].index("-c:v") + 1], "hevc_videotoolbox")
+            self.assertEqual(result.executed_commands[-1][result.executed_commands[-1].index("-c") + 1], "copy")
             self.assertEqual(result.return_codes, (0, 0))
 
 

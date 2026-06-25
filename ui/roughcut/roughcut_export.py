@@ -186,6 +186,30 @@ class RoughcutExportMixin:
             "stitched_cut_boundary_count": len(stitched_rows),
         }
 
+    def _write_exact_join_sidecars_for_rendered_video(self, target: Path, plan, result) -> dict:
+        render_plan_path = target.with_name(f"{target.stem}_render_plan.json")
+        edl_path = target.with_name(f"{target.stem}_edl.json")
+        srt_path = target.with_suffix(".srt")
+        render_plan_path.write_text(
+            json.dumps(self._render_plan_payload(plan, result, srt_path=srt_path), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        save_edl_json(
+            edl_path,
+            result.edl_segments,
+            metadata={"source": self._media_path(), "rendered_video": str(target)},
+            chapters=result.chapters,
+            major_segments=result.segments,
+        )
+        stitched_rows = list(getattr(plan, "stitched_cut_boundaries", ()) or ())
+        self._append_render_log(f"러프컷 영상 sidecar 저장: {render_plan_path}")
+        self._append_render_log(f"러프컷 영상 EDL sidecar 저장: {edl_path}")
+        return {
+            "render_plan_path": str(render_plan_path),
+            "edl_path": str(edl_path),
+            "stitched_cut_boundary_count": len(stitched_rows),
+        }
+
     def _render_plan_payload(self, plan, result, *, srt_path: str | Path | None = None) -> dict:
         media_path = self._media_path()
         output_path = Path(getattr(plan, "output_path", "") or self._default_output_path("_roughcut.mp4"))
@@ -263,6 +287,14 @@ class RoughcutExportMixin:
         self.preview_summary_lbl.setText(f"{status}: {result.output_path}")
         self._append_render_log(f"{status}: {result.output_path}")
         self._append_render_log(f"실행 명령: {len(result.executed_commands)}개 / return codes: {list(result.return_codes)}")
+        if not dry_run:
+            try:
+                plan = getattr(self, "_last_render_plan", None)
+                roughcut_result = self._result_with_user_edits(self._result) if self._result is not None else None
+                if plan is not None and roughcut_result is not None:
+                    self._write_exact_join_sidecars_for_rendered_video(Path(result.output_path), plan, roughcut_result)
+            except Exception as exc:
+                self._append_render_log(f"주의: 러프컷 영상 sidecar 저장 실패: {exc}")
         if hasattr(self, "btn_render_retry"):
             self.btn_render_retry.setEnabled(False)
         self._last_failed_render_plan = None

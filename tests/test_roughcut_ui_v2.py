@@ -930,6 +930,65 @@ class RoughcutUiV2Tests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_rendered_roughcut_video_writes_exact_join_sidecars_for_reopen(self):
+        widget = RoughcutWidget()
+        try:
+            widget._active_editor = lambda: SimpleNamespace(media_path="/tmp/source.mov")
+            widget._result = RoughCutResult(
+                segments=(
+                    RoughCutSegment(
+                        "major_A",
+                        0.0,
+                        8.0,
+                        title="첫 장면",
+                        major_id="A",
+                        minor_groups=(
+                            RoughCutMinorGroup("A1", "A", "A1", "첫 장면", 0.0, 4.0, chapter_ids=("chapter_0001",)),
+                            RoughCutMinorGroup("A2", "A", "A2", "둘째 장면", 4.0, 8.0, chapter_ids=("chapter_0002",)),
+                        ),
+                    ),
+                ),
+                chapters=(
+                    ChapterMetadata("chapter_0001", "첫 장면", 0.0, 4.0, major_id="A", minor_code="A1"),
+                    ChapterMetadata("chapter_0002", "둘째 장면", 4.0, 8.0, major_id="A", minor_code="A2"),
+                ),
+                edit_decisions=(
+                    EditDecision("chapter_0001", "keep", source_start=0.0, source_end=4.0),
+                    EditDecision("chapter_0002", "keep", source_start=4.0, source_end=8.0),
+                ),
+                edl_segments=(
+                    EDLSegment("/tmp/source.mov", "chapter_0001", 0.0, 4.0, 0.0, 4.0, chapter_id="chapter_0001"),
+                    EDLSegment("/tmp/source.mov", "chapter_0002", 4.0, 8.0, 4.0, 8.0, chapter_id="chapter_0002"),
+                ),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+
+            with tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "clip_roughcut.mov"
+                plan = widget._build_render_plan_for_srt_target(output.with_suffix(".srt"), widget._result)
+                sidecars = widget._write_exact_join_sidecars_for_rendered_video(output, plan, widget._result)
+                render_plan_path = Path(sidecars["render_plan_path"])
+                edl_path = Path(sidecars["edl_path"])
+                render_plan_exists = render_plan_path.exists()
+                edl_exists = edl_path.exists()
+                render_payload = json.loads(render_plan_path.read_text(encoding="utf-8"))
+                edl_payload = json.loads(edl_path.read_text(encoding="utf-8"))
+                stitched_rows, stitched_sidecar_path = load_stitched_cut_boundaries_for_srt_open(
+                    str(output.with_suffix(".srt")),
+                    str(output),
+                )
+
+            self.assertEqual(sidecars["stitched_cut_boundary_count"], 1)
+            self.assertTrue(render_plan_exists)
+            self.assertTrue(edl_exists)
+            self.assertEqual(render_payload["stitched_cut_boundaries"][0]["timeline_sec"], 4.0)
+            self.assertEqual(edl_payload["stitched_cut_boundaries"][0]["timeline_sec"], 4.0)
+            self.assertEqual([row["timeline_sec"] for row in stitched_rows], [4.0])
+            self.assertEqual(Path(stitched_sidecar_path).name, "clip_roughcut_edl.json")
+        finally:
+            widget.close()
+
     def test_attach_and_release_editor_video_frame_uses_external_host(self):
         widget = RoughcutWidget()
         frame = QWidget()

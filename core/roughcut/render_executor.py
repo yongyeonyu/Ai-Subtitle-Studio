@@ -29,7 +29,7 @@ def write_concat_file(plan: RenderCommandPlan) -> Path:
     for command in plan.extract_commands:
         if not command:
             continue
-        part_path = str(command[-1]).replace("'", "'\\''")
+        part_path = str(Path(command[-1]).expanduser().resolve(strict=False)).replace("'", "'\\''")
         lines.append(f"file '{part_path}'")
     target.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     return target

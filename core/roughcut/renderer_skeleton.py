@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from core.frame_time import normalize_fps
+from core.media_info import probe_media
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args, lossless_video_encode_args, roughcut_render_mode
 
 from .edl_generator import build_stitched_cut_boundaries
@@ -53,11 +55,69 @@ def _faststart_args(output_path: str | Path) -> tuple[str, ...]:
     return ("-movflags", "+faststart") if suffix in {".mp4", ".m4v", ".mov"} else ()
 
 
+def _format_fps_filter_value(fps: float | None) -> str:
+    value = normalize_fps(fps or 30.0)
+    text = f"{value:.6f}".rstrip("0").rstrip(".")
+    return text or "30"
+
+
+def _probe_source_fps(path: str, cache: dict[str, float]) -> float:
+    key = str(path or "")
+    if key in cache:
+        return cache[key]
+    fps = 30.0
+    if key:
+        try:
+            info = probe_media(key)
+            fps = normalize_fps(float((info or {}).get("fps") or 0.0) or 30.0)
+        except Exception:
+            fps = 30.0
+    cache[key] = fps
+    return fps
+
+
+def _sync_safe_extract_command(
+    segment: EDLSegment,
+    output_path: str | Path,
+    *,
+    ffmpeg_binary: str,
+    render_mode: str,
+    fps: float | None,
+) -> tuple[str, ...]:
+    duration = max(0.0, segment.source_end - segment.source_start)
+    fps_filter = _format_fps_filter_value(fps)
+    if render_mode == "lossless":
+        encode_args = lossless_video_encode_args(output_path)
+    else:
+        encode_args = hevc_encode_args(quality="fast" if render_mode == "preview_hevc" else "balanced")
+    return (
+        ffmpeg_binary,
+        "-y",
+        "-i",
+        segment.source_path,
+        "-ss",
+        f"{segment.source_start:.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-vf",
+        f"setpts=PTS-STARTPTS,fps={fps_filter}",
+        "-af",
+        "asetpts=PTS-STARTPTS",
+        *encode_args,
+        _safe_path(output_path),
+    )
+
+
 def build_ffmpeg_extract_command(
     segment: EDLSegment,
     output_path: str | Path,
     ffmpeg_binary: str = "ffmpeg",
     render_mode: str | None = None,
+    fps: float | None = None,
 ) -> tuple[str, ...]:
     duration = max(0.0, segment.source_end - segment.source_start)
     mode = roughcut_render_mode(render_mode)
@@ -79,19 +139,13 @@ def build_ffmpeg_extract_command(
             "make_zero",
             _safe_path(output_path),
         )
-    if mode == "lossless":
-        return (
-            ffmpeg_binary,
-            "-y",
-            *ffmpeg_hwdecode_args(),
-            "-i",
-            segment.source_path,
-            "-ss",
-            f"{segment.source_start:.3f}",
-            "-t",
-            f"{duration:.3f}",
-            *lossless_video_encode_args(output_path),
-            _safe_path(output_path),
+    if mode in {"sync_safe", "lossless", "preview_hevc"}:
+        return _sync_safe_extract_command(
+            segment,
+            output_path,
+            ffmpeg_binary=ffmpeg_binary,
+            render_mode=mode,
+            fps=fps,
         )
     return (
         ffmpeg_binary,
@@ -119,7 +173,7 @@ def build_ffmpeg_concat_command(
     render_mode: str | None = None,
 ) -> tuple[str, ...]:
     mode = roughcut_render_mode(render_mode)
-    if mode in {"copy", "lossless"}:
+    if mode in {"copy", "sync_safe", "lossless", "preview_hevc"}:
         return (
             ffmpeg_binary,
             "-y",
@@ -204,17 +258,20 @@ def build_concat_render_plan(
         warnings.append(f"{ffmpeg_binary} not found")
 
     extract_commands = []
+    fps_cache: dict[str, float] = {}
     for index, segment in enumerate(segments, start=1):
         suffix = Path(segment.source_path).suffix or ".mp4"
-        if mode == "lossless":
+        if mode in {"sync_safe", "lossless", "preview_hevc"}:
             suffix = Path(output).suffix or ".mkv"
         part_path = temp / f"roughcut_part_{index:04d}{suffix}"
+        source_fps = _probe_source_fps(segment.source_path, fps_cache)
         extract_commands.append(
             build_ffmpeg_extract_command(
                 segment,
                 part_path,
                 ffmpeg_binary=ffmpeg_binary,
                 render_mode=mode,
+                fps=source_fps,
             )
         )
 

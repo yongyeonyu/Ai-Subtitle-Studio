@@ -46,19 +46,23 @@ def hevc_encode_args(*, quality: str = "balanced") -> tuple[str, ...]:
 def roughcut_render_mode(mode: str | None = None) -> str:
     """Return roughcut export mode.
 
+    `sync_safe` decodes kept ranges, resets timestamps, and writes CFR parts so
+    output duration matches the EDL/SRT timeline.
     `copy` keeps original compressed packets when possible. It is the fastest and
     has zero generation loss, but cuts are constrained by codec/container rules.
     `lossless` decodes only the kept ranges and writes a lossless mezzanine.
     `preview_hevc` keeps the previous small-preview HEVC behavior.
     """
-    value = str(mode or os.environ.get("AI_SUBTITLE_ROUGHCUT_RENDER_MODE", "copy") or "copy").strip().lower()
-    if value in {"stream_copy", "stream-copy", "remux", "passthrough"}:
+    value = str(mode or os.environ.get("AI_SUBTITLE_ROUGHCUT_RENDER_MODE", "sync_safe") or "sync_safe").strip().lower()
+    if value in {"sync", "sync-safe", "sync_safe", "safe", "accurate", "precise"}:
+        return "sync_safe"
+    if value in {"copy", "stream_copy", "stream-copy", "remux", "passthrough"}:
         return "copy"
     if value in {"lossless", "ffv1", "x264_lossless", "mezzanine"}:
         return "lossless"
     if value in {"preview", "hevc", "preview_hevc"}:
         return "preview_hevc"
-    return "copy"
+    return "sync_safe"
 
 
 def lossless_video_encode_args(output_path: str | os.PathLike[str] | None = None) -> tuple[str, ...]:

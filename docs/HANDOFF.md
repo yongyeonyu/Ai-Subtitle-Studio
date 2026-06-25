@@ -33,6 +33,51 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-25 Addendum - Roughcut Sync-Safe Render Timing
+
+### Scope
+
+- Roughcut video export no longer defaults to ffmpeg stream-copy trimming. The default render mode is now `sync_safe`, which decodes kept ranges, resets video/audio PTS, forces CFR output at the probed source fps, then concats the normalized parts.
+- Explicit stream copy remains available only when `AI_SUBTITLE_ROUGHCUT_RENDER_MODE=copy` or an equivalent copy alias is set.
+- Roughcut rendered videos now write adjacent `_render_plan.json` and `_edl.json` sidecars, matching the SRT export exact-join sidecar behavior.
+- Concat files now store absolute part paths so relative output roots cannot make ffmpeg resolve part files under a duplicated concat-file directory.
+
+### Files touched in this slice
+
+- `core/video_codec.py`
+- `core/roughcut/renderer_skeleton.py`
+- `core/roughcut/render_executor.py`
+- `ui/roughcut/roughcut_export.py`
+- `tests/test_roughcut_engine1.py`
+- `tests/test_roughcut_ui_v2.py`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/video_codec.py core/roughcut/renderer_skeleton.py core/roughcut/render_executor.py ui/roughcut/roughcut_export.py tests/test_roughcut_engine1.py tests/test_roughcut_ui_v2.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py -k 'renderer_skeleton or render_plan or render_executor'`
+  - `6 passed, 24 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k 'sidecars_for_reopen'`
+  - `2 passed, 32 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py`
+  - `67 passed`
+
+### Evidence
+
+- artifact root:
+  - `output/manual_verification/latest/20260625_roughcut_sync_safe_render_probe/`
+- X5 roughcut probe:
+  - source: `test video/X5_시승기_후반_자막소스.mov`
+  - planned EDL duration: `16.0`
+  - output duration after sync-safe render: `16.000000`
+  - part durations: `4.000000`, `4.000000`, `4.000000`, `4.000000`
+
+### Remaining risk
+
+- This fixes the verified roughcut render drift where stream-copy produced a `22.240000s` MOV from a `16.0s` EDL/SRT plan.
+- The sync-safe default does re-encode kept ranges, so render export is slower than copy mode. Keep copy mode opt-in only for speed tests where timing drift is acceptable.
+- A live app export/reopen smoke is still useful before treating this as release proof: render a roughcut video, confirm adjacent sidecars exist, reopen the SRT/video pair, and confirm exact join seed reuse appears in recent logs.
+
 ## 2026-06-25 Addendum - Fast Exit Runtime Cleanup Split
 
 ### Scope
