@@ -1,5 +1,5 @@
-# Version: 04.00.15
-# Phase: PHASE15_MacNativeV4_0_15Release
+# Version: 04.00.16
+# Phase: SOURCE_APP_CONTINUATION_V4_0_16_RELEASE
 
 
 # === OS / Platform Detection ===
@@ -13,7 +13,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "04.00.15"
+APP_VERSION = "04.00.16"
 MACBOOK_ONLY_APP = True
 SUPPORTED_OS_NAMES = ("Darwin",)
 APP_STORE_TARGET = True

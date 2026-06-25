@@ -103,9 +103,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.00.15-source-app
-Phase: SOURCE_APP_CONTINUATION_V4_0_15
-Last-Updated: 2026-05-31
+Document-Version: 04.00.16-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_0_16
+Last-Updated: 2026-06-26
 Updated-By: Codex
 Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 -->
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.00.15`
-- Latest release checkpoint: `v04.00.15`
+- App version in code: `04.00.16`
+- Latest release checkpoint: `v04.00.16`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -212,7 +212,7 @@ Completed item rule:
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `ACTION_ITEMS.md`, section `Active Execution Queue`.
-- Current active item: High-refresh/editor-timeline 2D validation and promotion.
+- Current active item: Source-App Internal NLE Timeline Architecture Plan.
 
 ## Current Risks
 
@@ -221,23 +221,23 @@ Completed item rule:
 - Long-flow STT2 rescue and word timestamp precision still have meaningful wall-clock cost; optimize only by reducing waiting, cleanup churn, UI/status hot paths, or safe resource lifetime waste.
 - Do not lower X5 quality gates, skip STT2, skip LLM, downgrade models, or loosen subtitle quality policy as a speed optimization.
 - Tinyping long-flow is manual-only unless the owner explicitly requests it.
-- The latest high-refresh/editor-timeline patch is committed and focused-regression-covered, but it still needs stored real-app Macau/X5 proof before it should be treated as a promoted baseline.
+- The internal NLE timeline plan is a source-app domain/adapter plan only. It must not reopen native migration, Swift rewrite, QML migration, or visible Premiere-style UI work without explicit owner approval.
 - Always re-check `git status` before widening a follow-up patch.
 
 ## Narrow Next Item
 
 Use `ACTION_ITEMS.md` as the executable queue. The current narrow target is:
 
-1. Reopen Macau and X5 fixtures on the source app and verify that playback smoothness, visible playhead, time footer, subtitle overlay, timestamp gutter, and global minimap bottom lines stay aligned under the current 2D path.
-2. Re-check save/open/seek, shadow playhead, handle hit targets, STT preview selection, and project reload so the visual-only playhead and editor-state restore paths do not change subtitle timing persistence or interaction semantics.
-3. After real-app proof for that patch is captured, resume the X5 High post-STT UI/status hot-path trim item from `ACTION_ITEMS.md`.
+1. Map current ownership and invariants for project payloads, media assets, editor segments, roughcut candidates, cut-boundary seeds, render plans, sidecars, timeline canvas state, and save/reopen behavior.
+2. Draft the source-app NLE domain contract in docs before runtime changes: `ProjectAsset`, `Sequence`, `Track`, `Clip`, `CaptionSegment`, `TimelineMarker`, and `RenderPlan`.
+3. Add read-only adapters only after the docs/schema boundary is reviewed, and prove that existing SRT/project/roughcut data round-trips unchanged.
 
 QA gate for that item:
 
-- Focused regression set must stay green:
-  - `./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py tests/test_editor_rendering_ownership_audit.py tests/test_timeline_render_cache.py`
-- Real-app Macau and X5 verification must show no `00:00 / 00:00` regression, ghost playhead, or playhead/handle hit-target mismatch.
-- If app-command, automation, or bundle-facing surface changes, rebuild the app bundle before `major` or `full` QA with `./packaging/macos/build_app_bundle.sh`.
+- No UI/UX labels, layout, colors, shortcuts, popup behavior, or visible workflow changes without explicit owner approval.
+- No subtitle quality policy, STT2, LLM, LoRA, VAD, timing, or model-selection changes.
+- Legacy `.aissproj`, direct SRT open, roughcut sidecars, and rendered roughcut reopen paths must continue to load.
+- Source-app Macau and X5 fixture proof must be stored under `output/manual_verification/latest/` before promoting the architecture as the new baseline.
 
 ## Fixtures
 

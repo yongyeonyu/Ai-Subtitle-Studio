@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.15-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_15_RELEASED
-Last-Updated: 2026-05-25
+Document-Version: 04.00.16-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_0_16_RELEASED
+Last-Updated: 2026-06-26
 Updated-By: Codex
 Scope: Shallow actual filesystem map. This file intentionally stays at root depth plus selected first-level entries for high-signal directories.
 Role-Description-Rule: Tree entries must match real paths. Review notes and speculative cleanup notes are not allowed.
@@ -9,9 +9,9 @@ Role-Description-Rule: Tree entries must match real paths. Review notes and spec
 ================================================================================
 AI Subtitle Studio - Shallow Actual File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-25
-Phase: MAC_NATIVE_APPSTORE_V4_0_15_RELEASED
-App Version: 04.00.15
+Last Updated: 2026-06-26
+Phase: SOURCE_APP_CONTINUATION_V4_0_16_RELEASED
+App Version: 04.00.16
 Structure Document: File_structure.txt
 Note: This map is intentionally shallow for token-efficient handoff and navigation.
 ================================================================================
@@ -32,6 +32,7 @@ ai_subtitle_studio/
 ├── RELEASE_v04.00.13.md
 ├── RELEASE_v04.00.14.md
 ├── RELEASE_v04.00.15.md
+├── RELEASE_v04.00.16.md
 ├── assets/
 │   └── icons/
 ├── core/

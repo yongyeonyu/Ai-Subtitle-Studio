@@ -1,5 +1,25 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.00.16 source-app checkpoint release - 2026-06-26
+
+- 실행 모드: release checkpoint metadata/doc sync for roughcut exact-join, sync-safe render, app-command, fast-exit, and internal NLE architecture planning work.
+- 결과: pass
+- 수정/확인 항목:
+  - `core/runtime/config.py` app version updated to `04.00.16`.
+  - `core/project/project_format.py` project schema version updated to `04.00.16`.
+  - `RELEASE_v04.00.16.md`, `README.md`, `AGENTS.md`, `ACTION_ITEMS.md`, `docs/PROJECT_STATE.md`, `docs/HANDOFF.md`, and `File_structure.txt` synced to the new checkpoint.
+  - UI/UX, subtitle quality policy, STT/LLM/VAD/model selection, and timing algorithms were not changed in this closeout slice.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_project_segment_reload.py tests/test_qa_suite_runner.py tests/test_app_command_bridge.py tests/test_roughcut_engine1.py tests/test_roughcut_ui_v2.py` -> `332 passed`
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick` -> pass, `failed_count=0`
+- 산출물:
+  - `RELEASE_v04.00.16.md`
+  - `output/manual_verification/latest/qa_suite_quick_20260626_011235`
+- 참고:
+  - DMG/sign/notarization/App Store upload은 실행하지 않았다. DMG packaging은 명시 요청 시에만 별도 범위로 다룬다.
+  - 기존 `v04.00.16` git tag가 오래된 side-branch checkpoint를 가리켜 이번 mainline closeout에서는 태그를 이동하거나 덮어쓰지 않는다.
+
 ## Runtime resource labels, CLI compatibility, X5 benchmark, full regression - 2026-05-23
 
 - 실행 모드: behavior-preserving `subtitle_resource_manager`/runtime active-label facade extraction + CLI/test compatibility fix + X5 High 180s reference benchmark.

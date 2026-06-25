@@ -33,6 +33,72 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-26 Addendum - v04.00.16 Source-App Checkpoint Release
+
+### Scope
+
+- Bumped the app checkpoint from `04.00.15` to `04.00.16`.
+- Added `RELEASE_v04.00.16.md` for the roughcut exact-join, sync-safe render, app-command, fast-exit, and internal NLE plan checkpoint.
+- Synced release/version references in `README.md`, `AGENTS.md`, `ACTION_ITEMS.md`, `docs/PROJECT_STATE.md`, `File_structure.txt`, and `test_result.md`.
+- Runtime algorithm behavior was not changed in this closeout slice beyond release metadata and project schema version constants.
+
+### Files touched in this slice
+
+- `core/runtime/config.py`
+- `core/project/project_format.py`
+- `RELEASE_v04.00.16.md`
+- `README.md`
+- `AGENTS.md`
+- `ACTION_ITEMS.md`
+- `docs/PROJECT_STATE.md`
+- `docs/HANDOFF.md`
+- `File_structure.txt`
+- `test_result.md`
+
+### Validation run
+
+- `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py`
+  - passed
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_project_segment_reload.py tests/test_qa_suite_runner.py tests/test_app_command_bridge.py tests/test_roughcut_engine1.py tests/test_roughcut_ui_v2.py`
+  - `332 passed`
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
+  - pass, `failed_count=0`
+  - artifact: `output/manual_verification/latest/qa_suite_quick_20260626_011235`
+
+### Remaining risk
+
+- DMG/sign/notarization/App Store upload were not run. DMG packaging remains opt-in only.
+- A pre-existing `v04.00.16` git tag points at an older side-branch checkpoint, so do not move or overwrite it without explicit owner approval.
+- The internal NLE architecture remains a plan; implementation should start with docs/schema and read-only adapters.
+
+## 2026-06-26 Addendum - Source-App Internal NLE Plan Priority
+
+### Scope
+
+- Added a new top-priority `ACTION_ITEMS.md` item: `Source-App Internal NLE Timeline Architecture Plan`.
+- The plan is a behavior-preserving internal architecture sequence for the current Python/PyQt6 source app. It is not native migration, Swift rewrite, QML adoption, or a visible Premiere-style UI clone.
+- Existing `Post-Generation Editor Readiness And Verification Index` remains active, but now follows the NLE plan's docs/schema/adapter baseline unless the owner directs a hotfix.
+
+### Files touched in this slice
+
+- `ACTION_ITEMS.md`
+- `docs/HANDOFF.md`
+
+### Validation run
+
+- `git diff --check -- ACTION_ITEMS.md docs/HANDOFF.md`
+- `rg -n "Source-App Internal NLE|Post-Generation Editor Readiness|Premiere|NLE-style" ACTION_ITEMS.md docs/HANDOFF.md`
+
+### Next recommended action
+
+- Start with `ACTION_ITEMS.md` item 1, execution step 1: map project payloads, media assets, editor segments, roughcut candidates, cut-boundary seeds, render plans, sidecars, timeline canvas state, and save/reopen behavior.
+- Before code changes, draft the internal NLE domain contract in docs with `ProjectAsset`, `Sequence`, `Track`, `Clip`, `CaptionSegment`, `TimelineMarker`, and `RenderPlan`, including source time, sequence time, output time, and exact-join metadata definitions.
+
+### Remaining risk
+
+- This slice is planning/documentation only. No runtime code, bundle, source-app fixture, or QA behavior changed.
+- The first implementation slice must avoid duplicate mutable timing state and must prove legacy project/sidecar round-trip before routing editor or render owners through the new snapshot.
+
 ## 2026-06-25 Addendum - Editor Timeline View App Command Smoke
 
 ### Scope
