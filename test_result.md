@@ -1,5 +1,29 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Slice 3 preview cache / skimming - 2026-06-27
+
+- 실행 모드: source-app preview/skimming cache with nonblocking UI-thread behavior.
+- 결과: pass
+- 저장 위치:
+  - Action source: `NLE_Action.md`
+  - Runtime cache: `core/runtime/preview_frame_cache.py`, `core/runtime/temp_workspace.py`
+  - UI owners: `ui/editor/video_player_surface.py`, `ui/editor/video_player_widget.py`
+  - Guard tests: `tests/test_preview_frame_cache.py`, `tests/test_video_player_widget.py`, `tests/test_timeline_playhead_fit.py`
+  - Jammini prep/review: `.agents/sentinel/handoffs/20260627-014209-nle-slice-3-preview-cache-prep.md`, `.agents/sentinel/handoffs/20260627-014650-nle-slice-3-workflow-review.md`
+- 수정 요약:
+  - Added temp-workspace `Preview/FrameThumbnails` cache and nearest-frame lookup for skimming thumbnails.
+  - Changed paused `preview_seek()` thumbnail handling so cache hits display immediately and cache misses schedule a throttled background worker instead of synchronous UI-thread thumbnail generation.
+  - Added worker flood and stale-paint protection while a preview-frame worker is active.
+  - Removed completed Slice 3 from `NLE_Action.md`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/temp_workspace.py core/runtime/preview_frame_cache.py ui/editor/video_player_widget.py ui/editor/video_player_surface.py tests/test_preview_frame_cache.py tests/test_video_player_widget.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_frame_cache.py tests/test_video_player_widget.py -k "preview_frame_cache or preview_seek or processing_thumbnail"` -> `8 passed, 72 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "scrub_updates_playhead_immediately_and_uses_lightweight_preview_seek or scrub_throttles_video_seek_during_fast_mouse_moves or timing_drag_preview_updates_playhead_and_uses_lightweight_preview_seek or auto_cut_boundary_preview_moves_playhead_without_thumbnail_work"` -> `4 passed, 143 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_preview_proxy.py tests/test_preview_frame_cache.py` -> `6 passed`
+  - `git diff --check -- .` -> pass
+- 자막 품질 영향:
+  - None. Preview/skimming UI responsiveness only; no cut-boundary proof route, subtitle timing, STT2, LLM, LoRA, VAD, model-selection, save-format, release, tag, push, or DMG behavior changed.
+
 ## NLE Slice 2 source-fps cut-boundary scout - 2026-06-27
 
 - 실행 모드: source-app source-fps cut-boundary scout and exact-frame fixture proof.

@@ -54,6 +54,10 @@ def package_workspace_dir(root: str | Path | None = None) -> Path:
     return ensure_temp_workspace(root)["Diagnostics/Packages"]
 
 
+def preview_workspace_dir(root: str | Path | None = None) -> Path:
+    return ensure_temp_workspace(root)["Preview"]
+
+
 def workspace_usage(root: str | Path | None = None) -> dict[str, Any]:
     base = temp_workspace_root(root)
     total_bytes = 0

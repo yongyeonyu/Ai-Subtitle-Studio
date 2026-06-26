@@ -101,6 +101,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
 
 This verifier records whether target frames `2766` and `2677` are newly detected or at least preserved on the exact source-fps frame grid. If `candidate_detected=false`, report that as a remaining false-negative tuning risk even when `frame_preserved=true`.
 
+## Preview frame cache validation
+
+Preview/skimming cache changes should prove temp-workspace cache lookup, nonblocking preview seek behavior, and unchanged timeline scrub routing.
+
+```bash
+./venv/bin/python -m py_compile core/runtime/temp_workspace.py core/runtime/preview_frame_cache.py ui/editor/video_player_widget.py ui/editor/video_player_surface.py tests/test_preview_frame_cache.py tests/test_video_player_widget.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_frame_cache.py tests/test_video_player_widget.py -k "preview_frame_cache or preview_seek or processing_thumbnail"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "scrub_updates_playhead_immediately_and_uses_lightweight_preview_seek or scrub_throttles_video_seek_during_fast_mouse_moves or timing_drag_preview_updates_playhead_and_uses_lightweight_preview_seek or auto_cut_boundary_preview_moves_playhead_without_thumbnail_work"
+```
+
 ## PyQt / offscreen UI validation
 
 PyQt UI 회귀는 화면 서버에 의존하지 않는 경로를 우선 사용합니다.

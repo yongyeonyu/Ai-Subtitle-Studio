@@ -19,8 +19,8 @@ This file is the execution source of truth for four connected workstreams:
 
 Current NLE status:
 
-- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, and save/reopen compatibility guards.
-- Not done yet: NLE as editor/save mutable timing owner, timeline canvas state ownership, and preview cache ownership.
+- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, save/reopen compatibility guards, source-fps scout frame preservation, temp trace workspace, and preview/skimming cache ownership.
+- Not done yet: NLE as editor/save mutable timing owner and timeline canvas state ownership.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
@@ -316,23 +316,6 @@ Output:
 No code changes in the first review pass.
 
 ## Execution Slices
-
-### Slice 3 - Preview Cache / Skimming
-
-Deliverables:
-
-- low-resolution preview cache under temp workspace,
-- nearest-frame lookup for drag/hover/seek,
-- existing preview surface integration,
-- no UI label/layout/color/shortcut/popup changes.
-
-Acceptance:
-
-- dragging/hovering can request nearest cached preview frame,
-- cache miss falls back safely,
-- cache miss does not block the UI thread with synchronous decode,
-- preview cache cannot become cut-boundary proof,
-- playback and generation behavior are unchanged.
 
 ### Slice 4 - NLE Mutable Owner Pilot
 

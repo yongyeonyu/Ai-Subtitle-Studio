@@ -44,6 +44,12 @@ Trace diagnostics live under `core/runtime/` and must stay independent from prod
 
 Trace files are diagnostic evidence only. They must not become subtitle timing, cut-boundary, save-file, or UI state owners. Failure modes such as disk full, permission denied, JSON serialization failure, queue overflow, and shutdown flush failure must stay isolated from `AppLogger`, UI logging, and subtitle generation. Forked child processes must not inherit a parent app trace singleton.
 
+## Preview frame cache boundary
+
+Skimming preview thumbnails live under the temp workspace `Preview/FrameThumbnails` via `core/runtime/preview_frame_cache.py`. This cache is only a UI responsiveness aid for `VideoPlayerWidget.preview_seek()` and related drag/hover/seek flows. Cache hits may update the existing thumbnail surface, while cache misses only schedule background thumbnail preparation; the UI thread must not synchronously decode frames during scrub/skimming.
+
+The preview frame cache is not cut-boundary proof, subtitle timing evidence, save-file state, or a replacement for the existing 720p playback proxy in `core/video_preview_proxy.py`.
+
 ## UI layer
 
 `ui/`는 화면과 상호작용을 담당합니다.

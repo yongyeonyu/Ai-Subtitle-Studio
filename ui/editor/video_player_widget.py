@@ -34,6 +34,7 @@ class VideoPlayerWidget(
     frame_step_requested = pyqtSignal(int)
     scan_cut_requested = pyqtSignal(int)
     initial_thumbnail_ready = pyqtSignal(str, str)
+    preview_thumbnail_ready = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,6 +90,10 @@ class VideoPlayerWidget(
         self._source_info_status_text: str = "영상 정보를 불러오는 중..."
         self._source_preview_label: str = ""
         self._initial_thumbnail_request_key: str = ""
+        self._preview_frame_active_request_key: str = ""
+        self._preview_frame_worker_request_key: str = ""
+        self._preview_frame_worker_active: bool = False
+        self._preview_frame_last_request_at: float = 0.0
         self._proxy_build_proc = None
         self._proxy_build_src: str = ""
         self._proxy_build_dst: str = ""
@@ -118,6 +123,7 @@ class VideoPlayerWidget(
         except Exception:
             pass
         self.initial_thumbnail_ready.connect(self._on_initial_thumbnail_ready)
+        self.preview_thumbnail_ready.connect(self._on_preview_thumbnail_ready)
         self._connect_audio_device_signals()
 
         _pretendard = "/Library/Fonts/Pretendard-Regular.ttf"

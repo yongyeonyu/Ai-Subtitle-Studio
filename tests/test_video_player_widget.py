@@ -1536,12 +1536,82 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
                 with patch.object(widget.media_player, "setPosition") as set_position, \
                      patch.object(widget, "_hide_thumbnail") as hide_thumbnail, \
+                     patch.object(widget, "_show_nearest_preview_frame_at", return_value=True) as show_nearest, \
+                     patch.object(widget, "_schedule_preview_frame_cache_prepare") as schedule_preview, \
                      patch.object(widget, "show_cached_thumbnail_at", return_value=True) as show_thumb:
                     widget.preview_seek(3.0)
 
                 set_position.assert_called_once_with(3000)
                 hide_thumbnail.assert_not_called()
-                show_thumb.assert_called_once_with(f.name, 3.0, width=640)
+                show_nearest.assert_called_once_with(f.name, 3.0, width=320)
+                schedule_preview.assert_not_called()
+                show_thumb.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_initial_paused_preview_seek_miss_schedules_temp_preview_cache_without_sync_thumbnail(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+                widget._current_source_path = f.name
+                widget._rebuild_frame_time_map(duration=10.0, fps=30.0)
+                widget._media_source_loaded = True
+                widget._video_surface_primed = False
+
+                with patch.object(widget.media_player, "setPosition") as set_position, \
+                     patch.object(widget, "_show_nearest_preview_frame_at", return_value=False) as show_nearest, \
+                     patch.object(widget, "_schedule_preview_frame_cache_prepare") as schedule_preview, \
+                     patch.object(widget, "show_cached_thumbnail_at", return_value=True) as show_thumb:
+                    widget.preview_seek(3.0)
+
+                set_position.assert_called_once_with(3000)
+                show_nearest.assert_called_once_with(f.name, 3.0, width=320)
+                schedule_preview.assert_called_once_with(f.name, 3.0, width=320)
+                show_thumb.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_preview_frame_cache_prepare_does_not_spawn_while_worker_active(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._preview_frame_worker_active = True
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch("ui.editor.video_player_surface.threading.Thread") as thread_cls:
+                widget._schedule_preview_frame_cache_prepare(f.name, 3.0, width=320)
+
+            thread_cls.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_preview_frame_cache_worker_active_marks_new_desired_request_without_stale_paint(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._rebuild_frame_time_map(duration=10.0, fps=30.0)
+            widget._media_source_loaded = True
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch("ui.editor.video_player_surface.threading.Thread") as thread_cls:
+                old_key = widget._make_preview_frame_request_key(f.name, 2.0, width=320)
+                new_key = widget._make_preview_frame_request_key(f.name, 3.0, width=320)
+                widget._preview_frame_active_request_key = old_key
+                widget._preview_frame_worker_request_key = old_key
+                widget._preview_frame_worker_active = True
+
+                widget._schedule_preview_frame_cache_prepare(f.name, 3.0, width=320)
+
+                self.assertEqual(widget._preview_frame_active_request_key, new_key)
+                self.assertEqual(widget._preview_frame_worker_request_key, old_key)
+                thread_cls.assert_not_called()
+
+                with patch.object(widget, "_show_thumbnail_from_cache_path") as show_thumb:
+                    widget._on_preview_thumbnail_ready(old_key, "/tmp/stale-preview.jpg")
+
+            show_thumb.assert_not_called()
         finally:
             widget.close()
             widget.deleteLater()
@@ -1558,11 +1628,13 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
                 with patch.object(widget.media_player, "setPosition") as set_position, \
                      patch.object(widget, "_hide_thumbnail") as hide_thumbnail, \
+                     patch.object(widget, "_show_nearest_preview_frame_at", return_value=True) as show_nearest, \
                      patch.object(widget, "show_cached_thumbnail_at", return_value=True) as show_thumb:
                     widget.preview_seek(3.0)
 
                 set_position.assert_called_once_with(3000)
                 hide_thumbnail.assert_called_once()
+                show_nearest.assert_not_called()
                 show_thumb.assert_not_called()
         finally:
             widget.close()

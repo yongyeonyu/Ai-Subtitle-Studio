@@ -17,6 +17,7 @@ from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail, thumbnail_cache_path
 from core.runtime import config
 from core.runtime.logger import get_logger
+from core.runtime.preview_frame_cache import ensure_preview_frame, nearest_cached_preview_frame
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
 from core.video_preview_proxy import existing_preview_proxy_for, preview_proxy_is_valid, preview_proxy_path_for, register_preview_proxy_created
 from ui.editor.video_overlay_widgets import (
@@ -749,6 +750,90 @@ class VideoPlayerSurfaceMixin:
             return None
         return default_threshold
 
+    def _preview_frame_cache_width(self) -> int:
+        return 320
+
+    def _make_preview_frame_request_key(self, path: str, sec: float, *, width: int) -> str:
+        try:
+            frame = self.frame_for_sec(sec)
+        except Exception:
+            frame = 0
+        try:
+            normalized = os.path.normpath(str(path or ""))
+        except Exception:
+            normalized = str(path or "")
+        return f"{normalized}|{int(frame)}|{int(width)}"
+
+    def _show_nearest_preview_frame_at(self, path: str, sec: float, *, width: int = 320) -> bool:
+        try:
+            thumb_path = nearest_cached_preview_frame(
+                path,
+                sec,
+                fps=getattr(self, "frame_rate", 30.0),
+                width=width,
+            )
+        except Exception as exc:
+            self._log_video_surface_nonfatal("nearest_preview_frame", exc)
+            return False
+        return self._show_thumbnail_from_cache_path(thumb_path)
+
+    def _schedule_preview_frame_cache_prepare(self, path: str, sec: float, *, width: int = 320) -> None:
+        if not self._is_video_file(path):
+            return
+        try:
+            snapped = self._normalize_seek_sec(sec)
+        except Exception:
+            snapped = max(0.0, float(sec or 0.0))
+        request_key = self._make_preview_frame_request_key(path, snapped, width=width)
+        self._preview_frame_active_request_key = request_key
+        if request_key == str(getattr(self, "_preview_frame_worker_request_key", "") or ""):
+            return
+        now = time.monotonic()
+        if bool(getattr(self, "_preview_frame_worker_active", False)):
+            return
+        last_request = float(getattr(self, "_preview_frame_last_request_at", 0.0) or 0.0)
+        if now - last_request < 0.18:
+            return
+        self._preview_frame_worker_request_key = request_key
+        self._preview_frame_last_request_at = now
+        self._preview_frame_worker_active = True
+
+        def _worker() -> None:
+            try:
+                result = ensure_preview_frame(
+                    path,
+                    snapped,
+                    fps=getattr(self, "frame_rate", 30.0),
+                    width=width,
+                )
+                if result.status not in ("cached", "created") or not result.path:
+                    return
+                try:
+                    self.preview_thumbnail_ready.emit(request_key, str(result.path))
+                except RuntimeError:
+                    return
+            finally:
+                if str(getattr(self, "_preview_frame_worker_request_key", "") or "") == request_key:
+                    self._preview_frame_worker_request_key = ""
+                self._preview_frame_worker_active = False
+
+        try:
+            threading.Thread(
+                target=_worker,
+                daemon=True,
+                name="video-preview-frame-cache",
+            ).start()
+        except Exception as exc:
+            self._preview_frame_worker_active = False
+            self._log_video_surface_nonfatal("start_preview_frame_worker", exc)
+
+    def _on_preview_thumbnail_ready(self, request_key: str, thumb_path: str) -> None:
+        if str(request_key or "") != str(getattr(self, "_preview_frame_active_request_key", "") or ""):
+            return
+        if not self._paused_seek_should_keep_thumbnail():
+            return
+        self._show_thumbnail_from_cache_path(str(thumb_path or ""))
+
     def _show_unprimed_seek_thumbnail(self, sec: float, *, force: bool = False) -> None:
         if not self._paused_seek_should_keep_thumbnail():
             return
@@ -771,7 +856,10 @@ class VideoPlayerSurfaceMixin:
                 return
         self._last_unprimed_thumbnail_at = now
         self._last_unprimed_thumbnail_sec = sec
-        self.show_cached_thumbnail_at(source_path, sec, width=640)
+        width = self._preview_frame_cache_width()
+        if self._show_nearest_preview_frame_at(source_path, sec, width=width):
+            return
+        self._schedule_preview_frame_cache_prepare(source_path, sec, width=width)
 
     def load_clip_context(self, path, segments=None, seek_sec=0.0, autoplay=False, show_thumbnail=True):
         segments = list(segments or [])

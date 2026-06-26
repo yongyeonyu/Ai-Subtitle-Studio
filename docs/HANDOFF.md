@@ -33,6 +33,31 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-27 Addendum - NLE Slice 3 Preview Cache / Skimming
+
+### Scope
+
+- Completed Slice 3, `Preview Cache / Skimming`, from `NLE_Action.md`.
+- Added `core/runtime/preview_frame_cache.py`, a temp-workspace `Preview/FrameThumbnails` cache for nearest-frame thumbnail lookup and background preparation.
+- `VideoPlayerWidget.preview_seek()` now keeps scrub/skimming thumbnail work nonblocking: cache hit shows the existing thumbnail surface, cache miss schedules a throttled background worker instead of calling synchronous thumbnail generation on the UI thread.
+- Preview cache is not connected to cut-boundary scoring, split/snap, save/load, STT, LLM, VAD, LoRA, model selection, or visible UI labels/layout/colors/menus/popups.
+- Completed Slice 3 was removed from `NLE_Action.md`.
+- Jammini prep `.agents/sentinel/handoffs/20260627-014209-nle-slice-3-preview-cache-prep.md` was accepted.
+- Jammini workflow review `.agents/sentinel/handoffs/20260627-014650-nle-slice-3-workflow-review.md` was classified as `revise 후 accept`: worker flood/stale-paint risk was accepted, then guarded with one-worker/throttle plus current-request matching.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/runtime/temp_workspace.py core/runtime/preview_frame_cache.py ui/editor/video_player_widget.py ui/editor/video_player_surface.py tests/test_preview_frame_cache.py tests/test_video_player_widget.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_frame_cache.py tests/test_video_player_widget.py -k "preview_frame_cache or preview_seek or processing_thumbnail"` -> `8 passed, 72 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "scrub_updates_playhead_immediately_and_uses_lightweight_preview_seek or scrub_throttles_video_seek_during_fast_mouse_moves or timing_drag_preview_updates_playhead_and_uses_lightweight_preview_seek or auto_cut_boundary_preview_moves_playhead_without_thumbnail_work"` -> `4 passed, 143 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_preview_proxy.py tests/test_preview_frame_cache.py` -> `6 passed`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Start Slice 4, `NLE Mutable Owner Pilot`, from `NLE_Action.md`.
+- Keep `NLEProjectState` in-memory only during the pilot and preserve legacy `.aissproj`, direct SRT, roughcut sidecar, and rendered roughcut reopen behavior.
+
 ## 2026-06-27 Addendum - NLE Slice 2 Source-FPS Scout
 
 ### Scope

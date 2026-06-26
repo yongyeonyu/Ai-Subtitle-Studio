@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260627-014650-nle-slice-3-workflow-review.md`
+- `.agents/sentinel/handoffs/20260627-014209-nle-slice-3-preview-cache-prep.md`
 - `.agents/sentinel/handoffs/20260627-013802-nle-slice-2-scout-review.md`
 - `.agents/sentinel/handoffs/20260627-012027-nle-slice-1-trace-review.md`
 - `.agents/sentinel/handoffs/20260627-010819-nle-slice-05-compat-review.md`
