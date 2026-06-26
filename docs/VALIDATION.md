@@ -122,6 +122,20 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py
 ```
 
+## Post-generation editor readiness validation
+
+Post-generation editor readiness changes should prove command responsiveness, subtitle-time-edit interaction recovery, editor shell geometry stability, and any requested bottom-menu affordance.
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py tests/test_sidebar_terminal_layout.py tests/test_global_menu_bar.py tests/test_editor_precision_refine.py -k "post_generation_pending_cleanup_keeps_editor_commands_interactive or subtitle_time_edit_leaves_editor_controls_interactive or post_generation_cleanup_keeps_editor_shell_geometry_stable or precision_button or precision_refine_applies_quality_timing_and_magnet_result"
+```
+
+When the owner asks to limit real-media validation to the NAS HeyDealer first three minutes, use the reference-SRT benchmark path below instead of broad Macau/X5/Tinyping QA.
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts
+```
+
 ## PyQt / offscreen UI validation
 
 PyQt UI 회귀는 화면 서버에 의존하지 않는 경로를 우선 사용합니다.

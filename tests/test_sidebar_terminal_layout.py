@@ -12,6 +12,7 @@ from PyQt6.QtCore import QPoint, Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QCheckBox, QComboBox, QTableWidgetItem, QWidget, QMessageBox, QPushButton, QToolButton
 
 from ui.main.main_window import MainWindow
+from ui.editor.editor_widget import EditorWidget
 from ui.home_ui import SIDEBAR_SETTINGS_LABEL_COMPACT_HEIGHT, SIDEBAR_STATUS_CARD_COMPACT_HEIGHT
 from ui.style import APP_PANEL_GAP, COLORS
 
@@ -2254,6 +2255,88 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertFalse(editor._post_generation_models_released)
             self.assertGreater(float(getattr(window, "_video_playback_runtime_hold_until", 0.0) or 0.0), 0.0)
             schedule_gc.assert_called_once_with(editor=editor, delay_ms=1200)
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_post_generation_cleanup_keeps_editor_shell_geometry_stable(self):
+        def _rect(widget):
+            geom = widget.geometry()
+            return (int(geom.x()), int(geom.y()), int(geom.width()), int(geom.height()))
+
+        def _snapshot(window, editor):
+            return {
+                "main_window": _rect(window),
+                "workspace_splitter": {
+                    "rect": _rect(window.workspace_splitter),
+                    "sizes": list(window.workspace_splitter.sizes()),
+                },
+                "right_workspace": _rect(window.right_workspace),
+                "stack": _rect(window.stack),
+                "editor": _rect(editor),
+                "editor_frame": _rect(editor.editor_frame),
+                "video_frame": _rect(editor.video_frame),
+                "timeline_frame": _rect(editor.timeline_frame),
+                "bottom_work_panel": {
+                    "rect": _rect(window.bottom_work_panel),
+                    "hidden": bool(window.bottom_work_panel.isHidden()),
+                    "minimum_height": int(window.bottom_work_panel.minimumHeight()),
+                    "maximum_height": int(window.bottom_work_panel.maximumHeight()),
+                },
+                "global_menu_bar": _rect(window.global_menu_bar),
+            }
+
+        window = MainWindow()
+        editor = EditorWidget(
+            video_name="sample.mp4",
+            segments=[{"start": 0.0, "end": 1.0, "text": "테스트", "speaker": "00"}],
+            media_path="",
+            parent=window,
+            defer_media_load=True,
+        )
+        scheduled_gc = []
+        try:
+            window.resize(1600, 980)
+            window.stack.addWidget(editor)
+            window.stack.setCurrentWidget(editor)
+            window._editor_widget = editor
+            window._attach_global_menu_to_editor(editor)
+            window.show()
+            self.app.processEvents()
+            self.app.processEvents()
+
+            before = _snapshot(window, editor)
+            editor._is_ai_processing = True
+            editor._live_editor_preview_pending = True
+            editor._live_editor_preview_queue = [{"text": "preview"}]
+            editor._live_editor_preview_segments = [{"text": "preview"}]
+            editor._subtitle_context_window_index_cache = {"0": 0}
+            window._auto_processing_active = True
+
+            with mock.patch.object(
+                window,
+                "_schedule_post_generation_gc",
+                side_effect=lambda **kwargs: scheduled_gc.append(dict(kwargs)),
+            ):
+                result = window._post_generation_resource_cleanup(
+                    reason="subtitle_generation_complete",
+                    editor=editor,
+                )
+            self.app.processEvents()
+            after = _snapshot(window, editor)
+
+            self.assertTrue(result["cleaned"])
+            self.assertEqual(after, before)
+            self.assertEqual(scheduled_gc, [{"editor": editor, "delay_ms": 1200}])
+            self.assertFalse(editor._is_ai_processing)
+            self.assertTrue(editor._subtitle_generation_completed)
+            self.assertEqual(editor._live_editor_preview_queue, [])
+            self.assertEqual(editor._live_editor_preview_segments, [])
+            self.assertEqual(editor._subtitle_context_window_index_cache, {})
         finally:
             window._editor_widget = None
             editor.close()

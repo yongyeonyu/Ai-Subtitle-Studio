@@ -1,5 +1,61 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Post-Generation Editor Readiness And Verification Index Closeout - 2026-06-27
+
+- 실행 모드: source-app post-generation editor readiness closeout with owner-limited NAS HeyDealer 180s proof.
+- 결과: pass
+- 저장 위치:
+  - Active queue cleanup: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+  - Verification index: `output/manual_verification/latest/post_generation_editor_readiness_index_20260627/verification_index.md`
+  - HeyDealer benchmark JSON: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_031030/benchmark_results.json`
+  - HeyDealer benchmark summary: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_031030/benchmark_results.md`
+- 수정 요약:
+  - Added a post-generation pending-cleanup guard proving `status`, playback, edit/commit, timeline fit, and global save commands stay responsive before heavier cleanup finishes.
+  - Added a subtitle-time-edit interaction guard proving zoom in/out, fit, time-window, subtitle magnet, playback, save, footer, and global menu surfaces remain responsive after a time edit.
+  - Added an offscreen editor-shell geometry guard proving post-generation cleanup does not resize `MainWindow`, workspace splitter, editor frame, video frame, timeline frame, bottom work panel, or global menu bar.
+  - Added the requested dimmed neon-green completed state for the bottom `정밀` button after successful precision refinement.
+  - Removed the completed `Post-Generation Editor Readiness And Verification Index` item from `ACTION_ITEMS.md` and compacted `docs/HANDOFF.md` to current rolling state.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py tests/test_sidebar_terminal_layout.py tests/test_global_menu_bar.py tests/test_editor_precision_refine.py -k "post_generation_pending_cleanup_keeps_editor_commands_interactive or subtitle_time_edit_leaves_editor_controls_interactive or post_generation_cleanup_keeps_editor_shell_geometry_stable or precision_button or precision_refine_applies_quality_timing_and_magnet_result"` -> `7 passed, 190 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts` -> pass
+- HeyDealer 180s result:
+  - variant: `mode_high`
+  - elapsed_sec: `65.383`
+  - raw/final: `58/56`
+  - quality_score: `81.335`
+  - text_score: `94.267`
+  - timing_mae_sec: `1.5958`
+  - readability_score: `88.406`
+  - `stable_for_save_reopen=true`
+  - `stable_for_global_canvas=true`
+- 자막 품질 영향:
+  - No subtitle quality policy, STT2, LLM, LoRA, VAD, timing, model-selection, save-format, release, tag, push, packaging, or DMG behavior changed.
+  - Real-media validation was limited to the owner-requested NAS HeyDealer first 180 seconds.
+- 남은 위험:
+  - Macau/X5/Tinyping artifacts in the verification index are historical or manual-only references, not fresh gates for this closeout.
+  - No live screenshot/video proof was captured; UI-frame stability is covered by offscreen geometry assertions.
+
+## Post-Generation Editor Command Readiness Guard - 2026-06-27
+
+- 실행 모드: source-app command-surface regression guard for post-generation editor readiness.
+- 결과: pass
+- 저장 위치:
+  - Active queue: `ACTION_ITEMS.md`
+  - Guard test: `tests/test_app_command_bridge.py`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Added `test_post_generation_pending_cleanup_keeps_editor_commands_interactive`.
+  - The test holds post-generation GC/model-release in a pending state, then verifies `status`, playback, smart-split edit/commit, timeline fit, and global save commands still respond before cleanup completes.
+  - Runtime code was not changed.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "post_generation_pending_cleanup_keeps_editor_commands_interactive"` -> `1 passed, 74 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py tests/test_editor_autosave_cleanup.py tests/test_sidebar_terminal_layout.py -k "post_generation_pending_cleanup_keeps_editor_commands_interactive or status_command_reports_current_runtime_snapshot or editor_playback_play_command_marks_center_lock or editor_timeline_view_command_exercises_zoom_and_fit or global_menu_action_save_uses_center_save_button_path or set_process_completed_defers_cleanup_bundle_until_next_event_turn or generation_idle_cleanup_clears_busy_surfaces_and_prefetch_cache or post_generation_gc_defers_cache_trim_while_playback_runtime_is_reserved or prioritize_video_playback_runtime_defers_heavy_release_while_starting_playback or prioritize_manual_editor_interaction_runtime_defers_heavy_release_while_editing"` -> `10 passed, 218 deselected`
+- 자막 품질 영향:
+  - None. Test-only command readiness guard; no subtitle timing, STT2, LLM, LoRA, VAD, model-selection, save-format, UI/UX, release, tag, push, or DMG behavior changed.
+- 남은 위험:
+  - `ACTION_ITEMS.md` item 1 step 3 still needs a fuller editor interaction-lock regression after timestamp/subtitle editing.
+
 ## NLE Slice 4 mutable owner pilot - 2026-06-27
 
 - 실행 모드: source-app runtime-only NLE mutable owner pilot for project load/save.

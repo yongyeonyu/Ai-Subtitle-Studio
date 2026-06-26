@@ -24,6 +24,7 @@ class _Editor(EditorPrecisionRefineMixin):
         self.video_fps = 30.0
         self.status_lbl = _StatusLabel()
         self._precision_refine_running = False
+        self._precision_refine_completed = False
         self._is_ai_processing = False
         self.sm = SimpleNamespace(state="ST_IDLE")
         self.segments = []
@@ -230,6 +231,7 @@ class EditorPrecisionRefineTests(unittest.TestCase):
         self.assertTrue(editor.dirty)
         self.assertTrue(editor.scheduled)
         self.assertTrue(editor.refreshed)
+        self.assertTrue(editor._precision_refine_completed)
         self.assertEqual(editor._last_precision_refine_report["changed_count"], 1)
         self.assertEqual(editor._last_precision_refine_report["selective_precision_whisper"]["target_count"], 0)
         editor._undo_mgr.push_immediate.assert_called_once_with()

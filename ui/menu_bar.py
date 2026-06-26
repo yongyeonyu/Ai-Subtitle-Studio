@@ -34,6 +34,8 @@ MENU_PANEL_RADIUS = 7
 MENU_LEFT_ACCENT = "#29D7FF"
 MENU_CENTER_ACCENT = "#4AA3FF"
 MENU_RIGHT_ACCENT = "#29D7FF"
+MENU_PRECISION_COMPLETE_ACCENT = "#38FF7A"
+MENU_PRECISION_COMPLETE_ICON = "#B8FFD0"
 
 
 def panel_visual_height_for_profile(profile) -> int:
@@ -455,7 +457,12 @@ class GlobalMenuBar(QWidget):
 
     def _menu_button_style(self, accent: str, *, checked: bool = False, emphasis: str = "toolbar") -> str:
         accent = str(accent or COLORS["accent"])
-        if emphasis == "action":
+        if emphasis == "precision_done":
+            bg = "#102019"
+            hover = "#12301F"
+            pressed = "#0E3B22"
+            text = "#C8FFD8"
+        elif emphasis == "action":
             bg = "#162432" if checked else "#141E27"
             hover = "#1B2C3B"
             pressed = "#10324A"
@@ -611,14 +618,40 @@ class GlobalMenuBar(QWidget):
             self._apply_menu_button_style(self.btn_stt_mode, checked=stt_on)
         if hasattr(self, "btn_precision_refine"):
             precision_enabled = self._precision_refine_available_for_editor(editor)
-            precision_color = MENU_LEFT_ACCENT if precision_enabled else "#66727D"
+            precision_completed = self._precision_refine_completed_for_editor(editor)
+            precision_color = (
+                MENU_PRECISION_COMPLETE_ACCENT
+                if precision_enabled and precision_completed
+                else MENU_LEFT_ACCENT
+                if precision_enabled
+                else "#66727D"
+            )
+            precision_icon_color = (
+                MENU_PRECISION_COMPLETE_ICON
+                if precision_enabled and precision_completed
+                else precision_color
+            )
             self.btn_precision_refine.setText("정밀")
             self.btn_precision_refine.setEnabled(precision_enabled)
-            self.btn_precision_refine.setIcon(line_icon("review", precision_color, 22))
+            self.btn_precision_refine.setIcon(line_icon("review", precision_icon_color, 22))
             self.btn_precision_refine.setToolTip(
-                "정밀 자막 작업" if precision_enabled else "자막 생성 완료 후 사용할 수 있습니다."
+                "정밀 자막 작업 완료"
+                if precision_enabled and precision_completed
+                else "정밀 자막 작업"
+                if precision_enabled
+                else "자막 생성 완료 후 사용할 수 있습니다."
             )
-            self._apply_menu_button_style(self.btn_precision_refine, checked=False)
+            self.btn_precision_refine.setProperty("qmlAccent", precision_color)
+            if precision_enabled and precision_completed:
+                self.btn_precision_refine.setStyleSheet(
+                    self._menu_button_style(
+                        MENU_PRECISION_COMPLETE_ACCENT,
+                        checked=True,
+                        emphasis="precision_done",
+                    )
+                )
+            else:
+                self._apply_menu_button_style(self.btn_precision_refine, checked=False)
         main = self.main_window
         auto_on = bool(getattr(main, "_auto_start_on", True))
         self.btn_auto_start.setText("자동")
@@ -830,6 +863,11 @@ class GlobalMenuBar(QWidget):
             return bool(getattr(canvas, "segments", None))
         except Exception:
             return False
+
+    def _precision_refine_completed_for_editor(self, editor) -> bool:
+        if editor is None:
+            return False
+        return bool(getattr(editor, "_precision_refine_completed", False))
 
     def _run_precision_refine(self):
         editor = self._active_editor()

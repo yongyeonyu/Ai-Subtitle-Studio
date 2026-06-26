@@ -451,6 +451,7 @@ class EditorPrecisionRefineMixin:
                 icon=QMessageBox.Icon.Information,
             )
             return
+        self._precision_refine_completed = False
         self._precision_refine_running = True
         try:
             job = self._precision_refine_job_snapshot()
@@ -731,6 +732,7 @@ class EditorPrecisionRefineMixin:
                 self.status_lbl.setText(f"정밀 자막 작업 완료 · {changed}개 조정 · 수동 저장 필요")
             else:
                 self.status_lbl.setText("정밀 자막 작업 완료 · 조정 없음")
+        self._precision_refine_completed = True
 
     def _on_precision_refine_succeeded(self, token: object, result: object) -> None:
         if getattr(self, "_precision_refine_token", None) is not token:
@@ -765,6 +767,7 @@ class EditorPrecisionRefineMixin:
         data = dict(payload or {}) if isinstance(payload, dict) else {"message": str(payload or "")}
         message = str(data.get("message") or "정밀 자막 작업을 완료하지 못했습니다.")
         _precision_log(f"정밀 작업 실패: {message}", level="ERROR")
+        self._precision_refine_completed = False
         if hasattr(self, "status_lbl"):
             self.status_lbl.setText("정밀 자막 작업 실패")
         show_message(
@@ -778,6 +781,7 @@ class EditorPrecisionRefineMixin:
         started_at = time.perf_counter()
         before_count = 0
         final_count = 0
+        self._precision_refine_completed = False
         try:
             job = self._precision_refine_job_snapshot()
             before_count = len(list(job.get("before") or []))

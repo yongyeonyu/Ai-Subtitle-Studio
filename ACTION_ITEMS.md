@@ -1,7 +1,7 @@
 <!--
 Document-Version: 04.00.18-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_0_18
-Last-Updated: 2026-06-26
+Last-Updated: 2026-06-27
 Updated-By: Codex
 Purpose: Consolidated active execution queue for the current source-app line.
 -->
@@ -36,71 +36,15 @@ Those standalone files were intentionally removed after consolidation.
 
 ## Active Execution Queue
 
-### 1. Post-Generation Editor Readiness And Verification Index
+No active execution queue items are open.
 
-Goal: Make the editor reliably interactive immediately after subtitle generation completes, keep heavier cleanup/status work from blocking playback or editing, and make latest real-fixture proof easy to audit without changing subtitle quality policy or UI/UX.
+The previous `Post-Generation Editor Readiness And Verification Index` item was completed on 2026-06-27 and removed from this queue per the completed-item rule. Completion evidence is recorded in:
 
-Status: active, top priority now that the internal NLE baseline is complete
+- `test_result.md`
+- `docs/HANDOFF.md`
+- `output/manual_verification/latest/post_generation_editor_readiness_index_20260627/verification_index.md`
 
-Current baseline:
-
-- X5 High post-STT UI/status hot-path trim proof is stored at `output/manual_verification/latest/20260527_x5_hot_path_trim_proof/`.
-- High-refresh/editor-timeline source-app proof is stored at `output/manual_verification/latest/20260526_225507_high_refresh_source_app_proof/verification_summary.md`.
-- Related guard set passes:
-  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py tests/test_app_command_bridge.py tests/test_editor_roughcut_draft.py tests/test_editor_autosave_cleanup.py tests/test_verify_full_media_pipeline.py tests/test_qa_suite_runner.py`
-  - Result: `267 passed`
-- X5 hot-path verifier result:
-  - `ok=true`, `pipeline_elapsed_sec=66.576`, `total_elapsed_sec=71.285`, `peak_rss_bytes=1776435200`, `raw/final=49/56`, pressure transitions `critical -> warning`.
-- Diagnostic caveat: `x5_hot_path_golden_regression_0_180.*` is recorded as evidence only, not a release gate. The current golden regression evaluator scores the prior accepted `qa_suite_full_20260523_100114` X5 output similarly low, so its semantics must be fixed before it can block release.
-
-Agent-role execution goals:
-
-- `덱스`: primary owner for completion-to-idle/UI-frame stability bugs. Map the completion-to-idle path first, keep patches narrow, and update proof artifacts.
-- `한결`: separate editor-ready state from cleanup/model-release/layout-rebalance work and preserve rollback boundaries.
-- `서린`: require Macau/X5/Tinyping evidence that distinguishes real regressions from stale artifact, scorer mismatch, or one-frame layout noise.
-- `유진`: protect editing trust signals after generation: visible subtitles, playable preview, stable selection, save/reload consistency, no apparent subtitle loss, and no full-window frame shake.
-
-Scope:
-
-- `ui/editor/editor_pipeline_completion.py`
-- `ui/editor/editor_save_manager.py`
-- `ui/editor/editor_widget.py`
-- `ui/editor/editor_lifecycle.py`
-- `ui/editor/ux/editor_video_controls.py`
-- `ui/editor/ux/timestamp_area.py`
-- `ui/editor/ux/editor_tab_timing.py`
-- `ui/editor/editor_precision_refine.py`
-- `ui/timeline/timeline_widget.py`
-- `ui/menu_bar.py`
-- `ui/main/main_runtime_cleanup.py`
-- `core/runtime/memory_manager.py`
-- `tools/verify_full_media_pipeline.py`
-- `tools/qa_suite_runner.py`
-- `output/manual_verification/latest/`
-
-Execution order:
-
-1. Map current generation completion, autosave, editor idle-ready, roughcut follow-up, and cleanup timing.
-2. Add or verify tests proving playback/edit/status commands can proceed before heavier cleanup completes.
-3. Add a regression check for the reported editor interaction lock: click the subtitle editor/timestamp editing surface, change a subtitle time, commit or cancel the edit, then verify timeline zoom in, zoom out, fit-to-view, time-window, subtitle magnet, playback controls, save, and bottom/global menu buttons still respond.
-4. Add a post-generation UI-frame stability investigation and fix plan for the reported full-frame shake: capture before/during/after geometry for `MainWindow`, workspace splitter, editor frame, video frame, timeline frame, bottom work panel, and global menu bar; identify whether completion cleanup, model release, status/log panel refresh, video/timeline rebalance, or home/sidebar rebuild causes the transient resize; then make completion apply layout changes once, after the editor is idle, without moving the approved timeline/global-canvas border positions.
-5. Add a precision-refine completion affordance: when 정밀 작업 finishes successfully, the bottom `정밀` icon/button must switch to a dimmed neon green completed state so it is visually distinct from available-but-not-run, running, disabled, and failed states.
-6. Build a compact latest-verification index for Macau, X5, and Tinyping artifacts so release readiness is auditable.
-7. Validate the chosen slice with source-app or official QA evidence before widening scope.
-
-Acceptance gates:
-
-- No subtitle quality policy, STT2, LoRA, LLM, VAD, timing, or UI/UX default changes without explicit owner approval.
-- Generation completion returns the editor to a trustworthy interactive state before heavy cleanup can stall playback/editing.
-- Editing a subtitle time from the editor pane must not leave focus capture, modal state, drag/inline-edit lock, cursor override, or disabled toolbar/menu state behind; zoom in/out, fit-to-view, and all timeline/global buttons must remain clickable immediately after the edit.
-- Subtitle generation completion must not visibly shake or resize the whole UI frame. Geometry for the editor/video/timeline/bottom-menu surfaces should remain stable except for intentional progress/status text changes, and any one-shot rebalance must be measured and proven not to move approved borders.
-- 정밀 작업 success state must be visible on the `정밀` button as a dimmed fluorescent green icon/button state, without changing other bottom-menu labels or altering subtitle timing/quality behavior.
-- Verification index points to current artifacts and calls out stale or diagnostic-only evidence separately from release gates.
-
-Rollback:
-
-- Revert completion/readiness orchestration before touching subtitle-generation algorithms.
-- Do not skip cleanup entirely; defer or stage it only when evidence shows editor responsiveness improves without memory-pressure harm.
+Add a new active item only when the owner gives a fresh scope or a verified regression creates a concrete next action.
 
 ## Migration Status
 

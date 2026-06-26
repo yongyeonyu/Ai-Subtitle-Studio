@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtWidgets import QApplication, QWidget
 
-from ui.menu_bar import GlobalMenuBar
+from ui.menu_bar import GlobalMenuBar, MENU_PRECISION_COMPLETE_ACCENT
 
 
 class GlobalMenuBarSubtitleOutputTests(unittest.TestCase):
@@ -54,6 +54,17 @@ class GlobalMenuBarSubtitleOutputTests(unittest.TestCase):
         editor._precision_available = True
         bar.refresh()
         self.assertTrue(bar.btn_precision_refine.isEnabled())
+
+    def test_precision_button_shows_completed_green_state(self):
+        _, editor, bar = self._make_bar()
+        editor._precision_refine_available = lambda: True
+        editor._precision_refine_completed = True
+
+        bar.refresh()
+
+        self.assertTrue(bar.btn_precision_refine.isEnabled())
+        self.assertEqual(bar.btn_precision_refine.property("qmlAccent"), MENU_PRECISION_COMPLETE_ACCENT)
+        self.assertEqual(bar.btn_precision_refine.toolTip(), "정밀 자막 작업 완료")
 
     def test_precision_button_confirms_before_starting_editor_refine(self):
         _, editor, bar = self._make_bar()

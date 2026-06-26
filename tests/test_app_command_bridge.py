@@ -1477,6 +1477,34 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(owner._editor_widget._playing)
         self.assertTrue(result["data"]["editor_runtime"]["playback_center_lock"])
 
+    def test_post_generation_pending_cleanup_keeps_editor_commands_interactive(self):
+        owner = _DummyOwner()
+        owner._post_generation_gc_scheduled = True
+        owner._editor_ai_release_in_progress = True
+        owner._editor_ai_runtime_release_requested_for_editor_mode = True
+        editor = owner._editor_widget
+        editor._subtitle_generation_completed = True
+        editor._post_generation_models_release_requested = True
+        editor._post_generation_models_released = False
+        editor._playhead_sec = 1.5
+
+        status = execute_app_command(owner, {"command": "status"})
+        playback = execute_app_command(owner, {"command": "editor-playback", "options": {"action": "play"}})
+        split = execute_app_command(owner, {"command": "editor-begin-smart-split", "options": {"line": 1}})
+        commit = execute_app_command(owner, {"command": "editor-commit-inline-edit"})
+        timeline = execute_app_command(owner, {"command": "editor-timeline-view", "options": {"action": "fit"}})
+        save = execute_app_command(owner, {"command": "global-menu-action", "options": {"action": "save"}})
+
+        for result in (status, playback, split, commit, timeline, save):
+            self.assertTrue(result["ok"], result)
+        self.assertEqual(status["data"]["editor_state"], "ST_IDLE")
+        self.assertTrue(playback["data"]["editor_runtime"]["playback_center_lock"])
+        self.assertFalse(owner._editor_widget._inline_edit_active)
+        self.assertTrue(timeline["data"]["editor_runtime"]["timeline_fit_locked"])
+        self.assertEqual(owner._editor_widget.save_calls, 1)
+        self.assertTrue(owner._post_generation_gc_scheduled)
+        self.assertTrue(owner._editor_ai_release_in_progress)
+
     def test_editor_video_hide_command_updates_visibility(self):
         owner = _DummyOwner()
 
@@ -1511,6 +1539,40 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["message"], "editor_segment_left_moved")
         self.assertAlmostEqual(owner._editor_widget._segments[1]["start"], 0.4)
         self.assertEqual(result["data"]["selected"]["selected_line"], 1)
+
+    def test_subtitle_time_edit_leaves_editor_controls_interactive(self):
+        owner = _DummyOwner()
+        editor = owner._editor_widget
+        editor._playhead_sec = 0.4
+
+        time_edit = execute_app_command(
+            owner,
+            {"command": "editor-move-segment-left", "options": {"line": 1}},
+        )
+        zoom_in = execute_app_command(owner, {"command": "editor-timeline-view", "options": {"action": "zoom-in"}})
+        zoom_out = execute_app_command(owner, {"command": "editor-timeline-view", "options": {"action": "zoom-out"}})
+        fit = execute_app_command(owner, {"command": "editor-timeline-view", "options": {"action": "fit"}})
+        windowed = execute_app_command(owner, {"command": "editor-timeline-view", "options": {"action": "time-window"}})
+        magnet = execute_app_command(owner, {"command": "editor-subtitle-magnet"})
+        playback = execute_app_command(owner, {"command": "editor-playback", "options": {"action": "play"}})
+        footer = execute_app_command(owner, {"command": "editor-video", "options": {"action": "hide"}})
+        menu_status = execute_app_command(owner, {"command": "global-menu-status"})
+        save = execute_app_command(owner, {"command": "global-menu-action", "options": {"action": "save"}})
+
+        for result in (time_edit, zoom_in, zoom_out, fit, windowed, magnet, playback, footer, menu_status, save):
+            self.assertTrue(result["ok"], result)
+        self.assertAlmostEqual(editor._segments[1]["start"], 0.4)
+        self.assertFalse(editor._inline_edit_active)
+        self.assertEqual(zoom_in["message"], "editor_timeline_view_zoom-in")
+        self.assertEqual(zoom_out["message"], "editor_timeline_view_zoom-out")
+        self.assertTrue(fit["data"]["editor_runtime"]["timeline_fit_locked"])
+        self.assertTrue(windowed["data"]["editor_runtime"]["time_window_applied"])
+        self.assertTrue(magnet["data"]["changed"])
+        self.assertTrue(playback["data"]["editor_runtime"]["playback_center_lock"])
+        self.assertEqual(footer["data"]["editor_runtime"]["active_footer_menu_id"], "")
+        self.assertIn("center_save", {item["action_id"] for item in menu_status["data"]["actions"]})
+        self.assertEqual(owner.global_menu_bar.actions, ["center_save"])
+        self.assertEqual(editor.save_calls, 1)
 
     def test_editor_move_diamond_command_updates_adjacent_boundary(self):
         owner = _DummyOwner()
