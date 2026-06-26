@@ -101,7 +101,7 @@
 
 ### Next Recommended Action
 
-- Pull Jammini and support-agent outputs, classify each as `accept`, `revise`, `defer`, or `reject`, then start Slice 1 only after preserving the current dirty-worktree boundary.
+- Slice 0 is complete and removed from `NLE_Action.md`. Start Slice 0.5 by characterizing legacy `.aissproj`, direct SRT, roughcut sidecar, and rendered roughcut reopen behavior before any mutable NLE write-path work.
 
 ## 2026-06-26 Addendum - Cut Boundary Priority And Source-FPS Pioneer Scout
 

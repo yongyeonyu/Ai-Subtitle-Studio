@@ -317,16 +317,6 @@ No code changes in the first review pass.
 
 ## Execution Slices
 
-### Slice 0 - Action File And Delegation
-
-Deliverables:
-
-- create `NLE_Action.md`,
-- run Jammini status/probe/bootstrap,
-- delegate Jammini review packet,
-- spawn the three support agents,
-- run `git diff --check -- .`.
-
 ### Slice 0.5 - Compatibility Characterization
 
 Deliverables:
