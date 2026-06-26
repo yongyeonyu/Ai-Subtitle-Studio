@@ -1,5 +1,5 @@
-# Version: 04.00.17
-# Phase: SOURCE_APP_CONTINUATION_V4_0_17_RELEASE
+# Version: 04.00.18
+# Phase: SOURCE_APP_CONTINUATION_V4_0_18_RELEASE
 
 
 # === OS / Platform Detection ===
@@ -13,7 +13,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "04.00.17"
+APP_VERSION = "04.00.18"
 MACBOOK_ONLY_APP = True
 SUPPORTED_OS_NAMES = ("Darwin",)
 APP_STORE_TARGET = True
@@ -248,6 +248,8 @@ DEFAULT_ADV_SETTINGS = {
     "scan_cut_pioneer_pipe_enabled": False,
     "scan_cut_pioneer_pipe_hwaccel_enabled": True,
     "scan_cut_pioneer_pipe_fps": 1.0,
+    "scan_cut_pioneer_pipe_source_fps_enabled": False,
+    "scan_cut_pioneer_pipe_source_max_fps": 30.0,
     "scan_cut_pioneer_pipe_width": 320,
     "scan_cut_pioneer_pipe_height": 180,
     "scan_cut_pioneer_pipe_dense_flow_enabled": True,
@@ -350,6 +352,11 @@ DEFAULT_ADV_SETTINGS = {
     "vad_post_stt_max_shift_sec": 0.7,
     "vad_post_stt_edge_pad_sec": 0.04,
     "vad_voice_start_priority_max_stt_lead_sec": 0.12,
+    "vad_stt_timing_consensus_enabled": True,
+    "vad_stt_timing_consensus_start_tolerance_sec": 0.35,
+    "vad_stt_timing_consensus_end_tolerance_sec": 0.45,
+    "vad_stt_timing_consensus_duration_tolerance_sec": 0.45,
+    "vad_stt_timing_consensus_max_vad_gap_sec": 0.65,
     "subtitle_quality_enabled": False,
     "subtitle_quality_auto_check_after_generate": True,
     "subtitle_quality_auto_correct_enabled": True,

@@ -2111,12 +2111,16 @@ class ProjectContextTests(unittest.TestCase):
 
         split = split_segments_by_cut_boundaries(segments, boundaries, primary_fps=24.0)
 
-        self.assertEqual(len(split), 1)
-        self.assertAlmostEqual(split[0]["start"], 3.0)
-        self.assertAlmostEqual(split[0]["end"], 4.0)
-        self.assertEqual(split[0]["cut_local_start"], 0.0)
-        self.assertTrue(split[0]["cut_boundary_fitted"])
-        self.assertEqual(split[0]["stt_candidates"][0]["start"], 3.0)
+        self.assertEqual(len(split), 2)
+        self.assertAlmostEqual(split[0]["start"], 2.0)
+        self.assertAlmostEqual(split[0]["end"], 3.0)
+        self.assertAlmostEqual(split[1]["start"], 3.0)
+        self.assertAlmostEqual(split[1]["end"], 4.0)
+        self.assertEqual(split[1]["cut_local_start"], 0.0)
+        self.assertTrue(split[0]["cut_boundary_forced_split"])
+        self.assertTrue(split[1]["cut_boundary_priority_locked"])
+        self.assertEqual(split[0]["stt_candidates"][0]["end"], 3.0)
+        self.assertEqual(split[1]["stt_candidates"][0]["start"], 3.0)
 
     def test_save_project_can_preserve_existing_stt_reference_assets_without_rewriting(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2379,8 +2383,9 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(len(loaded["editor_state"]["multiclip"]["cut_boundaries"]), 1)
         self.assertEqual(len(loaded["editor_state"]["multiclip"]["cut_boundary_provisional_boundaries"]), 1)
         subtitles = project_segments_to_editor(loaded)
-        self.assertEqual(len(subtitles), 1)
-        self.assertAlmostEqual(subtitles[0]["start"], 3.0, places=6)
+        self.assertEqual(len(subtitles), 2)
+        self.assertAlmostEqual(subtitles[0]["end"], 3.0, places=6)
+        self.assertAlmostEqual(subtitles[1]["start"], 3.0, places=6)
         previews = project_stt_preview_segments(loaded)
         self.assertEqual(len(previews), 1)
         self.assertAlmostEqual(previews[0]["start"], 2.5, places=6)

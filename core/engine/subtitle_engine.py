@@ -96,7 +96,10 @@ from core.native_swift_subtitle_llm_context import (
     evaluate_subtitle_llm_context_gate_via_swift,
 )
 from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
-from core.subtitle_quality.vad_alignment_checker import prioritize_vad_voice_starts
+from core.subtitle_quality.vad_alignment_checker import (
+    apply_vad_stt_timing_consensus,
+    prioritize_vad_voice_starts,
+)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.runtime.logger import get_logger
@@ -317,33 +320,54 @@ def _apply_final_vad_voice_start_priority(
     stage: str,
 ) -> list[dict]:
     settings = dict(settings or {})
-    if not segments or not vad_segments:
+    if not segments:
         return segments
     if not _setting_bool(settings, "vad_post_stt_align_enabled", True):
         return segments
-    if not _setting_bool(settings, "vad_voice_start_priority_enabled", True):
-        return segments
-    default_pull = max(1.25, _setting_float(settings, "vad_post_stt_max_shift_sec", 0.7))
-    max_pull = max(0.0, _setting_float(settings, "vad_voice_start_priority_max_pull_sec", default_pull))
+    adjusted = segments
     default_edge_pad = _setting_float(settings, "vad_post_stt_edge_pad_sec", 0.04)
     edge_pad = max(0.0, _setting_float(settings, "vad_voice_start_priority_edge_pad_sec", default_edge_pad))
     min_overlap = max(0.0, _setting_float(settings, "vad_voice_start_priority_min_overlap_sec", 0.04))
     min_gap = max(0.0, _setting_float(settings, "vad_voice_start_priority_min_gap_sec", 0.02))
-    max_stt_lead = max(0.0, _setting_float(settings, "vad_voice_start_priority_max_stt_lead_sec", 0.12))
-    adjusted, changed = prioritize_vad_voice_starts(
-        segments,
-        vad_segments,
-        max_pull_sec=max_pull,
-        edge_pad_sec=edge_pad,
-        min_overlap_sec=min_overlap,
-        min_gap_sec=min_gap,
-        max_stt_lead_sec=max_stt_lead,
-    )
-    if changed:
-        get_logger().log(
-            f"[VAD-시작우선] {stage}: 최종 자막 시작점 {changed}개를 VAD 음성 시작 기준으로 보정"
+    if vad_segments and _setting_bool(settings, "vad_voice_start_priority_enabled", True):
+        default_pull = max(1.25, _setting_float(settings, "vad_post_stt_max_shift_sec", 0.7))
+        max_pull = max(0.0, _setting_float(settings, "vad_voice_start_priority_max_pull_sec", default_pull))
+        max_stt_lead = max(0.0, _setting_float(settings, "vad_voice_start_priority_max_stt_lead_sec", 0.12))
+        adjusted, changed = prioritize_vad_voice_starts(
+            adjusted,
+            vad_segments,
+            max_pull_sec=max_pull,
+            edge_pad_sec=edge_pad,
+            min_overlap_sec=min_overlap,
+            min_gap_sec=min_gap,
+            max_stt_lead_sec=max_stt_lead,
         )
-        adjusted = align_stt_candidates_to_subtitle_segments(adjusted)
+        if changed:
+            get_logger().log(
+                f"[VAD-시작우선] {stage}: 최종 자막 시작점 {changed}개를 VAD 음성 시작 기준으로 보정"
+            )
+            adjusted = align_stt_candidates_to_subtitle_segments(adjusted)
+    if _setting_bool(settings, "vad_stt_timing_consensus_enabled", True):
+        start_tol = max(0.0, _setting_float(settings, "vad_stt_timing_consensus_start_tolerance_sec", 0.35))
+        end_tol = max(0.0, _setting_float(settings, "vad_stt_timing_consensus_end_tolerance_sec", 0.45))
+        duration_tol = max(0.0, _setting_float(settings, "vad_stt_timing_consensus_duration_tolerance_sec", 0.45))
+        max_gap = max(0.0, _setting_float(settings, "vad_stt_timing_consensus_max_vad_gap_sec", 0.65))
+        adjusted, consensus_changed = apply_vad_stt_timing_consensus(
+            adjusted,
+            vad_segments,
+            start_tolerance_sec=start_tol,
+            end_tolerance_sec=end_tol,
+            duration_tolerance_sec=duration_tol,
+            max_vad_gap_sec=max_gap,
+            edge_pad_sec=edge_pad,
+            min_gap_sec=min_gap,
+        )
+        if consensus_changed:
+            get_logger().log(
+                f"[VAD/STT-컨센서스] {stage}: VAD/STT1/STT2 중 2개 이상이 일치한 자막 "
+                f"{consensus_changed}개를 해당 시간으로 고정"
+            )
+            adjusted = align_stt_candidates_to_subtitle_segments(adjusted)
     return adjusted
 
 

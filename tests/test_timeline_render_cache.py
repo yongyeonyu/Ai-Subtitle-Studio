@@ -17,7 +17,7 @@ from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_constants import CANVAS_H, DIAMOND_Y, RULER_H, SCORE_H, SCORE_TOP, SEG_TOP, STT1_BOT, STT1_TOP, STT2_TOP, STT_PREVIEW_VERTICAL_INSET, SUBTITLE_BOT, SUBTITLE_TOP, WAVE_H
 from ui.timeline.timeline_segment_style import speaker_segment_fill_hex
 from ui.timeline.stt_preview_layout import stt_preview_lane_geometry
-from ui.timeline.paint_passes import build_cut_boundary_work_lane_paint_plan
+from ui.timeline.paint_passes import CUT_BOUNDARY_WORK_LANE_DIM_ALPHA, build_cut_boundary_work_lane_paint_plan
 from ui.timeline.timeline_roughcut_paint import (
     clamp_expanded_roughcut_marker_spans,
     expanded_roughcut_marker_span,
@@ -308,6 +308,7 @@ class TimelineRenderCacheTests(unittest.TestCase):
         self.assertEqual([item.kind for item in plan.lines], ["official", "scan", "scan"])
         self.assertEqual(plan.lines[0].x, 100)
         self.assertEqual(plan.lines[1].x, 99)
+        self.assertTrue(all(item.alpha == CUT_BOUNDARY_WORK_LANE_DIM_ALPHA for item in plan.lines))
         self.assertEqual(list(plan.labels), [])
 
     def test_cut_boundary_work_lane_plan_accepts_streaming_rows_without_truth_testing(self):

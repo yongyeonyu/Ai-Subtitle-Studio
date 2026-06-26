@@ -278,9 +278,7 @@ def split_segments_by_cut_boundaries(
     for seg in segments:
         if not isinstance(seg, dict):
             continue
-        item = _fit_one_segment_to_cut(seg, cut_frames, cuts, primary_fps=effective_fps)
-        if item is not None:
-            out.append(item)
+        out.extend(_split_one_segment_to_cuts(seg, cut_frames, cuts, primary_fps=effective_fps))
     for idx, item in enumerate(out):
         item["line"] = idx
         item["index"] = idx + 1
@@ -729,6 +727,213 @@ def _fit_one_segment_to_cut(
         row["cut_scene_end_frame"] = scene_end_frame
         row["cut_scene_end"] = frame_to_sec(scene_end_frame, primary_fps)
     return row
+
+
+def _split_one_segment_to_cuts(
+    seg: dict[str, Any],
+    cut_frames: list[int],
+    cuts: list[dict[str, Any]],
+    *,
+    primary_fps: float,
+) -> list[dict[str, Any]]:
+    start_frame, end_frame = _segment_frame_bounds(seg, primary_fps)
+    end_frame = max(start_frame, end_frame)
+    if end_frame <= start_frame + 1:
+        item = _fit_one_segment_to_cut(seg, cut_frames, cuts, primary_fps=primary_fps)
+        return [] if item is None else [item]
+
+    inner_cuts = [
+        int(cut)
+        for cut in sorted(set(cut_frames))
+        if int(cut) > start_frame and int(cut) < end_frame
+    ]
+    if not inner_cuts:
+        item = _fit_one_segment_to_cut(seg, cut_frames, cuts, primary_fps=primary_fps)
+        return [] if item is None else [item]
+
+    edge_tolerance_frame = max(1, sec_to_frame(max(0.06, 2.0 / max(float(primary_fps or 30.0), 1.0)), primary_fps))
+    fitted_start_frame = start_frame
+    fitted_end_frame = end_frame
+    split_cuts: list[int] = []
+    edge_snap_frames: list[int] = []
+    for cut_frame in inner_cuts:
+        if cut_frame - fitted_start_frame <= edge_tolerance_frame:
+            fitted_start_frame = cut_frame
+            edge_snap_frames.append(cut_frame)
+            continue
+        if fitted_end_frame - cut_frame <= edge_tolerance_frame:
+            fitted_end_frame = cut_frame
+            edge_snap_frames.append(cut_frame)
+            continue
+        split_cuts.append(cut_frame)
+
+    split_cuts = [
+        cut
+        for cut in split_cuts
+        if cut > fitted_start_frame and cut < fitted_end_frame
+    ]
+    if fitted_end_frame <= fitted_start_frame + 1:
+        return []
+
+    spans: list[tuple[int, int]] = []
+    left = fitted_start_frame
+    for cut in split_cuts:
+        if cut <= left:
+            continue
+        spans.append((left, cut))
+        left = cut
+    spans.append((left, fitted_end_frame))
+    spans = [(s, e) for s, e in spans if e > s]
+    if not spans:
+        return []
+
+    text_parts = _split_text_for_frame_spans(str(seg.get("text", "") or ""), spans)
+    cut_policy = {
+        "task": "subtitle_cut_boundary_priority",
+        "source": "confirmed_visual_cut",
+        "priority": "highest",
+        "split_frames": list(split_cuts),
+        "edge_snap_frames": list(edge_snap_frames),
+    }
+    rows: list[dict[str, Any]] = []
+    for idx, (span_start, span_end) in enumerate(spans):
+        text = text_parts[idx] if idx < len(text_parts) else str(seg.get("text", "") or "")
+        word_text = _text_from_words_for_interval(
+            seg,
+            frame_to_sec(span_start, primary_fps),
+            frame_to_sec(span_end, primary_fps),
+        )
+        if word_text:
+            text = word_text
+        row = _build_cut_aligned_segment(
+            seg,
+            span_start,
+            span_end,
+            cut_frames,
+            cuts,
+            primary_fps=primary_fps,
+            text=text,
+        )
+        row["cut_boundary_fitted"] = True
+        row["cut_boundary_priority_locked"] = True
+        row["_cut_boundary_priority_policy"] = dict(cut_policy)
+        if len(spans) > 1:
+            row["cut_boundary_forced_split"] = True
+            row["cut_boundary_split_index"] = idx
+            row["cut_boundary_split_count"] = len(spans)
+            _assign_cut_split_identity(
+                row,
+                seg,
+                split_index=idx,
+                span_start_frame=span_start,
+                span_end_frame=span_end,
+            )
+        elif edge_snap_frames:
+            row["cut_boundary_edge_snapped"] = True
+        rows.append(row)
+    return rows
+
+
+def _assign_cut_split_identity(
+    row: dict[str, Any],
+    source: dict[str, Any],
+    *,
+    split_index: int,
+    span_start_frame: int,
+    span_end_frame: int,
+) -> None:
+    base_id = str(source.get("id") or "").strip()
+    base_segment_id = str(source.get("segment_id") or "").strip()
+    suffix = f"cut{int(split_index) + 1:02d}_{int(span_start_frame)}_{int(span_end_frame)}"
+    if base_id:
+        row["cut_boundary_source_id"] = base_id
+        row["id"] = f"{base_id}__{suffix}"
+    if base_segment_id:
+        row["cut_boundary_source_segment_id"] = base_segment_id
+        row["segment_id"] = f"{base_segment_id}__{suffix}"
+
+
+def _build_cut_aligned_segment(
+    seg: dict[str, Any],
+    start_frame: int,
+    end_frame: int,
+    cut_frames: list[int],
+    cuts: list[dict[str, Any]],
+    *,
+    primary_fps: float,
+    text: str | None = None,
+) -> dict[str, Any]:
+    row = deepcopy(seg)
+    row["start_frame"] = int(start_frame)
+    row["end_frame"] = int(end_frame)
+    row["timeline_start_frame"] = int(start_frame)
+    row["timeline_end_frame"] = int(end_frame)
+    row["start"] = frame_to_sec(int(start_frame), primary_fps)
+    row["end"] = frame_to_sec(int(end_frame), primary_fps)
+    row["timeline_start"] = row["start"]
+    row["timeline_end"] = row["end"]
+    row["frame_rate"] = primary_fps
+    row["timeline_frame_rate"] = primary_fps
+    row["frame_range"] = {
+        "unit": "frame",
+        "start": row["start_frame"],
+        "end": row["end_frame"],
+        "timeline_frame_rate": primary_fps,
+    }
+    if text is not None:
+        row["text"] = str(text)
+    row["words"] = _clip_timed_items(seg.get("words"), row["start"], row["end"])
+    if "stt_candidates" in row:
+        row["stt_candidates"] = _fit_candidates_to_interval(row.get("stt_candidates"), row["start"], row["end"], primary_fps)
+    _attach_cut_local_fields(row, cut_frames, cuts, primary_fps=primary_fps)
+    return row
+
+
+def _split_text_for_frame_spans(text: str, spans: list[tuple[int, int]]) -> list[str]:
+    raw = str(text or "").strip()
+    if len(spans) <= 1 or not raw:
+        return [raw for _ in spans]
+    remaining = raw
+    remaining_frames = sum(max(1, int(end) - int(start)) for start, end in spans)
+    parts: list[str] = []
+    for idx, (start, end) in enumerate(spans):
+        if idx == len(spans) - 1:
+            parts.append(remaining.strip())
+            break
+        piece_frames = max(1, int(end) - int(start))
+        ratio = piece_frames / max(1, remaining_frames)
+        left, right = _split_text_by_ratio(remaining, ratio)
+        parts.append(left)
+        remaining = right
+        remaining_frames = max(1, remaining_frames - piece_frames)
+    while len(parts) < len(spans):
+        parts.append("")
+    return parts
+
+
+def _split_text_by_ratio(text: str, ratio: float) -> tuple[str, str]:
+    raw = str(text or "").strip()
+    if len(raw) <= 1:
+        return raw, ""
+    ratio = max(0.05, min(0.95, float(ratio or 0.5)))
+    words = raw.split()
+    if len(words) > 1:
+        cut_idx = max(1, min(len(words) - 1, int(round(len(words) * ratio))))
+        return " ".join(words[:cut_idx]).strip(), " ".join(words[cut_idx:]).strip()
+    cut_idx = max(1, min(len(raw) - 1, int(round(len(raw) * ratio))))
+    return raw[:cut_idx].strip(), raw[cut_idx:].strip()
+
+
+def _text_from_words_for_interval(seg: dict[str, Any], start: float, end: float) -> str:
+    words = _clip_timed_items(seg.get("words"), start, end)
+    if not words:
+        return ""
+    tokens = []
+    for item in words:
+        token = str(item.get("word", item.get("text", "")) or "").strip()
+        if token:
+            tokens.append(token)
+    return " ".join(tokens).strip()
 
 
 def _fit_candidates_to_interval(candidates: Any, start: float, end: float, primary_fps: float) -> list[dict[str, Any]]:

@@ -1,5 +1,92 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.00.18 source-app timing/cut-boundary release - 2026-06-27
+
+- 실행 모드: source-app release checkpoint without DMG.
+- 결과: pass
+- 저장 위치:
+  - Release note: `RELEASE_v04.00.18.md`
+  - Quick QA artifact: `output/manual_verification/latest/qa_suite_quick_20260627_005453`
+  - NLE action source: `NLE_Action.md`
+- 수정 요약:
+  - App version updated to `04.00.18`.
+  - Project schema version updated to `04.00.18`.
+  - Added VAD/STT final timing consensus and preserved STT-backed LLM timing lock behavior.
+  - Confirmed visual cuts now force subtitle split/snap at the exact frame, with derived IDs for split rows to prevent duplicate editor/save ownership.
+  - High/precise mode enables the existing ffmpeg pipe pioneer scout with source-fps sampling capped at 30fps.
+  - `AGENTS.md`, `ACTION_ITEMS.md`, `README.md`, `docs/PROJECT_STATE.md`, `docs/HANDOFF.md`, and `RELEASE_v04.00.18.md` synced to the new checkpoint.
+- 검증:
+  - `./venv/bin/python -m py_compile core/cut_boundary.py core/cut_boundary_auto_scan.py core/runtime/config.py core/project/project_format.py core/settings_profiles.py core/audio/stt_quality_presets.py core/subtitle_quality/vad_alignment_checker.py core/engine/subtitle_engine.py ui/timeline/paint_passes.py ui/timeline/timeline_paint.py tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py tests/test_subtitle_boundary_alignment.py tests/test_project_context.py tests/test_subtitle_quality_models.py tests/test_timeline_render_cache.py` -> pass
+  - `./venv/bin/python -m json.tool dataset/custom_defaults.json >/tmp/custom_defaults_check.json` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py -k "vad_voice_start_priority or vad_stt_timing_consensus"` -> `9 passed, 8 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_ensemble.py tests/test_subtitle_boundary_alignment.py tests/test_subtitle_quality_models.py -k "stt_anchor or drift or vad_voice_start_priority or vad_stt_timing_consensus or boundary"` -> `24 passed, 44 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "llm or stt_anchor or slot_order or text_only_lock"` -> `26 passed, 56 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_project_context.py -k "cut_boundary or cut_boundaries or cut_frame_2677"` -> `6 passed, 93 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_render_cache.py -k "cut_boundary_work_lane"` -> `2 passed, 46 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py -k "pipe_fps or source_fps or runtime_modes_apply_stage_policy"` -> `3 passed, 38 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k "split_by_saved_cut_boundaries or shift_cut_boundary_rows"` -> `2 passed, 20 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `13 passed, 4 subtests passed`
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick` -> pass, `failed_count=0`
+  - `git diff --check -- .` -> pass
+- 자막 품질 영향:
+  - Timing policy intentionally changed per owner request: VAD/STT 2-of-3 agreement and confirmed visual cut boundaries have higher final timing priority.
+  - No UI/UX label/layout/color/shortcut/popup, STT2 execution, LLM text policy, LoRA learning policy, model-selection, DMG, App Store, or TestFlight change.
+
+## Cut boundary priority and source-fps pioneer scout - 2026-06-26
+
+- 실행 모드: High-mode cut-boundary accuracy hotfix for missed frame boundary around frame 2677.
+- 결과: pass for focused cut-boundary timing, timeline marker paint-plan, source-fps pioneer scout, and NLE snapshot guards.
+- 원인 후보:
+  - Existing saved-cut split helper fit a crossing subtitle into one cut scene instead of forcing a real subtitle boundary at the cut frame.
+  - High/precise mode kept cut-boundary detection on the medium-level stride family, while the existing ffmpeg pipe visual scout was disabled by default.
+  - Coarse stride can miss a short hard cut completely; rollback/refine only works after a candidate exists.
+- 수정 요약:
+  - Confirmed cuts now force split/snap at the exact frame in `split_segments_by_cut_boundaries()`.
+  - Timeline cut-boundary work-lane lines now carry `alpha=128` and paint as 50% dimmed lines in the middle-category lane.
+  - Precise/High mode enables ffmpeg pipe pioneer scout with source-fps sampling capped at 30fps, preserving Fast/Auto defaults.
+  - NLE status was verified as read-only baseline, not full write-path migration.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/cut_boundary.py core/cut_boundary_auto_scan.py core/runtime/config.py core/settings_profiles.py core/audio/stt_quality_presets.py ui/timeline/paint_passes.py ui/timeline/timeline_paint.py tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py tests/test_subtitle_boundary_alignment.py tests/test_project_context.py tests/test_timeline_render_cache.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_project_context.py -k "cut_boundary or cut_boundaries or cut_frame_2677"` -> `6 passed, 93 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_render_cache.py -k "cut_boundary_work_lane"` -> `2 passed, 46 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py -k "pipe_fps or source_fps or runtime_modes_apply_stage_policy"` -> `3 passed, 38 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_preview_optimizer.py tests/test_gap_simulator.py -k "cut_boundary or magnetize"` -> `4 passed, 7 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k "split_by_saved_cut_boundaries or shift_cut_boundary_rows"` -> `2 passed, 20 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py` -> `9 passed, 4 subtests passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_v2_output_compat.py` -> `4 passed`
+  - `git diff --check -- .` -> pass
+- 잼민이 handoff 판정:
+  - `.agents/sentinel/handoffs/20260626-240300-nle-cut-boundary-support-review.md` -> `accept with correction`; NLE read-only status and coarse-stride risk accepted, NLE reverse-write treated as deferred compatibility gate.
+- 정책 영향:
+  - Cut-boundary timing policy intentionally changed per owner request: confirmed visual cuts now outrank final subtitle segment continuity.
+  - High/precise cut-boundary scouting can spend more time to avoid coarse-stride misses.
+  - No STT2 execution, LLM text policy, LoRA, save/load schema, release/tag/push/DMG behavior changed.
+
+## VAD/STT 2-of-3 timing consensus - 2026-06-26
+
+- 실행 모드: final subtitle timing hotfix for VAD-correct but late final subtitle starts.
+- 결과: pass for focused timing/consensus guard tests.
+- 원인 후보:
+  - VAD가 정확히 음성 시작/끝을 잡아도, 단독 VAD pull은 STT anchor lead guard에 막혀 최종 row가 여전히 늦게 남을 수 있었다.
+  - STT1/STT2/VAD 중 2개가 같은 길이와 경계를 지지하는 경우를 별도 상위 규칙으로 승격하지 않아 final timing이 약한 후보에 끌릴 수 있었다.
+- 수정 요약:
+  - Added `apply_vad_stt_timing_consensus()` as a final timing anchor.
+  - VAD+STT1 or VAD+STT2 agreement uses the VAD span with edge pad.
+  - STT1+STT2 agreement applies even when VAD disagrees or is missing.
+  - Added default internal settings for start/end/duration tolerance and max VAD gap.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/subtitle_quality/vad_alignment_checker.py core/engine/subtitle_engine.py tests/test_subtitle_quality_models.py` -> pass
+  - `./venv/bin/python -m json.tool dataset/custom_defaults.json >/tmp/custom_defaults_check.json` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py -k "vad_voice_start_priority or vad_stt_timing_consensus"` -> `8 passed, 8 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_ensemble.py tests/test_subtitle_boundary_alignment.py tests/test_subtitle_quality_models.py -k "stt_anchor or drift or vad_voice_start_priority or vad_stt_timing_consensus or boundary"` -> `21 passed, 44 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "llm or stt_anchor or slot_order or text_only_lock"` -> `26 passed, 56 deselected`
+  - `git diff --check -- .` -> pass
+- 잼민이 handoff 판정:
+  - `.agents/sentinel/handoffs/20260626-234500-timing-consensus-risk-review.md` -> `revise 후 accept`; VAD missing/STT1+STT2 consensus test was added.
+- 정책 영향:
+  - Subtitle timing policy intentionally changed per owner request: two agreeing sources among VAD/STT1/STT2 now override weaker final timing.
+  - No UI/UX label/layout/color/shortcut/popup text, STT2 execution, model-selection, save/load, release, tag, push, or DMG behavior changed.
+
 ## LLM text-only timing lock and STT slot guard - 2026-06-26
 
 - 실행 모드: final subtitle timing hotfix for `-1` adjacent STT slot drift and long High-mode window drift diagnostics.

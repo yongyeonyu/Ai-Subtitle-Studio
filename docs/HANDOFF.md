@@ -33,6 +33,154 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-27 Addendum - v04.00.18 Release
+
+### Scope
+
+- Promoted the current source-app checkpoint to `v04.00.18`.
+- Release includes VAD/STT timing consensus, confirmed cut-boundary split/snap, derived IDs for forced split rows, source-fps pioneer scout enablement for High/precise mode, and `NLE_Action.md`.
+- `AGENTS.md` was updated with the new version, current quick QA artifact, focused guard set, and the fixed 59.94fps cut-boundary fixture for the next slice.
+- No DMG, App Store/TestFlight, native migration, QML migration, UI/UX label/layout/color/shortcut/popup, STT2 execution, LLM text policy, LoRA policy, or model-selection release work was performed.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/cut_boundary.py core/cut_boundary_auto_scan.py core/runtime/config.py core/project/project_format.py core/settings_profiles.py core/audio/stt_quality_presets.py core/subtitle_quality/vad_alignment_checker.py core/engine/subtitle_engine.py ui/timeline/paint_passes.py ui/timeline/timeline_paint.py tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py tests/test_subtitle_boundary_alignment.py tests/test_project_context.py tests/test_subtitle_quality_models.py tests/test_timeline_render_cache.py` -> pass
+- `./venv/bin/python -m json.tool dataset/custom_defaults.json >/tmp/custom_defaults_check.json` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py -k "vad_voice_start_priority or vad_stt_timing_consensus"` -> `9 passed, 8 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_ensemble.py tests/test_subtitle_boundary_alignment.py tests/test_subtitle_quality_models.py -k "stt_anchor or drift or vad_voice_start_priority or vad_stt_timing_consensus or boundary"` -> `24 passed, 44 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "llm or stt_anchor or slot_order or text_only_lock"` -> `26 passed, 56 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_project_context.py -k "cut_boundary or cut_boundaries or cut_frame_2677"` -> `6 passed, 93 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_render_cache.py -k "cut_boundary_work_lane"` -> `2 passed, 46 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py -k "pipe_fps or source_fps or runtime_modes_apply_stage_policy"` -> `3 passed, 38 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k "split_by_saved_cut_boundaries or shift_cut_boundary_rows"` -> `2 passed, 20 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `13 passed, 4 subtests passed`
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick` -> pass, `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_quick_20260627_005453`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Start the next `NLE_Action.md` slice by proving exact source-fps cut detection around frames `2766` and `2677` on `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`.
+- Preserve subtitle count, first/last time, output duration, sidecar metadata, direct SRT reopen, and legacy `.aissproj` reopen while moving toward mutable NLE ownership.
+
+## 2026-06-27 Addendum - Jammini Communication Checked And Handoff Verification
+
+### Scope
+
+- Verified the physical Sentinel Handoff communication path between Jammini (Antigravity side) and Dex (Codex side).
+- Generated a new watchdog probe file at `.agents/sentinel/handoffs/20260627-005119-watchdog-handoff-probe.md` with `DEX_REVIEW_READY` and `PROBE_ID=20260627-005119`.
+- Prepended the pointer for the new probe file at the top of `.agents/sentinel/handoff.md` without overwriting existing history.
+
+### Validation
+
+- Checked watchdog status using `tools/jammini_watchdog.sh --status`. Resolved active conversation ID matches canonical.
+- Executed `tools/jammini_watchdog.sh --handoff-probe --timeout-seconds 45` successfully.
+- Confirmed `handoff_file_visible=yes` and `handoff_index_visible=yes` output parameters.
+
+### Next Recommended Action
+
+- Dex should safely harvest the latest handoff probe (`20260627-005119-watchdog-handoff-probe.md`) and the NLE action plan review, then proceed with the active execution queue in `ACTION_ITEMS.md`.
+
+## 2026-06-27 Addendum - NLE Action File And Review Agents
+
+### Scope
+
+- Added `NLE_Action.md` as the execution source of truth for the next NLE mutable-owner, cut-boundary accuracy, fast preview/skimming, and temporary trace-log bundle work.
+- Fixed the primary cut-boundary fixture as `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`.
+- Fixture metadata confirmed by `ffprobe`: `3840x2160`, `60000/1001fps`, `27923` frames, `465.849s`.
+- Target cut-boundary frame transitions are `2765 -> 2766` and `2676 -> 2677`.
+
+### Delegation
+
+- Jammini watchdog status/probe passed and bootstrap plus `NLE_Action.md` bounded review packet were sent.
+- Review packet asks Jammini to return a physical `DEX_REVIEW_READY` handoff only; code/document edits are forbidden.
+- Jammini result `.agents/sentinel/handoffs/20260627-004000-nle-action-plan-risk-review.md` was classified as `revise 후 accept`; exact `60000/1001` frame mapping, minimum subtitle duration after forced snap/split, trace per-run isolation, and bounded temp cleanup guards were added to `NLE_Action.md`.
+- Three read-only support agents were spawned:
+  - Agent 1: NLE mutable owner review -> `accept`; `NLE_Action.md` was updated to require in-memory `NLEProjectState` first, no persisted `nle` fields during pilot, and compatibility characterization before write-path work.
+  - Agent 2: cut-boundary plus preview/skimming review -> `accept`; `NLE_Action.md` was updated to require source-fps/60fps fixture proof for the `60000/1001fps` video, centralize visual scoring, keep optical-flow as a motion false-positive veto rather than a sole hard-cut rejector, and prevent preview cache from becoming cut-boundary proof.
+  - Agent 3: trace-log plus QA review -> `accept`; `NLE_Action.md` was updated to forbid whole-file 4K hashing, require `fps_num/fps_den`, isolate trace sink failures from `AppLogger`, keep UDP status responses compact, and add temp/log failure-isolation gates.
+
+### Next Recommended Action
+
+- Pull Jammini and support-agent outputs, classify each as `accept`, `revise`, `defer`, or `reject`, then start Slice 1 only after preserving the current dirty-worktree boundary.
+
+## 2026-06-26 Addendum - Cut Boundary Priority And Source-FPS Pioneer Scout
+
+### Scope
+
+- Raised confirmed cut-boundary priority over final subtitle segment timing.
+- A subtitle segment crossing a confirmed cut boundary now splits at the exact boundary frame instead of being fit into only one side of the cut scene.
+- A subtitle starting one frame before a confirmed cut can be snapped to the cut frame, covering the owner's `2676 -> 2677` boundary case.
+- Timeline cut-boundary work-lane lines now paint at 50% alpha in the middle-category segment lane so an exact frame boundary is visible without changing labels/layout.
+- High/precise mode now enables the existing ffmpeg pipe pioneer scout with source-fps sampling, capped at 30fps, so coarse stride misses can produce candidates for the existing follower verifier.
+
+### NLE status clarification
+
+- The source-app internal NLE baseline is complete as a read-only snapshot/adapter route, not a full runtime/write-path migration.
+- Current NLE coverage remains: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export plan parity route, and save/reopen compatibility guards.
+- Deferred by design: NLE reverse-write/persistence fields, editor mutable timing owner migration, and timeline canvas replatforming.
+
+### Jammini review
+
+- `.agents/sentinel/handoffs/20260626-240300-nle-cut-boundary-support-review.md` -> `accept with correction`.
+- Accepted: NLE is read-only baseline, coarse stride can miss cuts, and cut-boundary cache/snapshot tests are the right guard family.
+- Corrected: NLE reverse-write is deferred by compatibility policy, not a current bug; rollback marker loss remains a risk candidate until a fixture reproduces it.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/cut_boundary.py core/cut_boundary_auto_scan.py core/runtime/config.py core/settings_profiles.py core/audio/stt_quality_presets.py ui/timeline/paint_passes.py ui/timeline/timeline_paint.py tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py tests/test_subtitle_boundary_alignment.py tests/test_project_context.py tests/test_timeline_render_cache.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_project_context.py -k "cut_boundary or cut_boundaries or cut_frame_2677"` -> `6 passed, 93 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_render_cache.py -k "cut_boundary_work_lane"` -> `2 passed, 46 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py -k "pipe_fps or source_fps or runtime_modes_apply_stage_policy"` -> `3 passed, 38 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_preview_optimizer.py tests/test_gap_simulator.py -k "cut_boundary or magnetize"` -> `4 passed, 7 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k "split_by_saved_cut_boundaries or shift_cut_boundary_rows"` -> `2 passed, 20 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py` -> `9 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_v2_output_compat.py` -> `4 passed`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Run the owner's current Cayenne/High fixture around frame 2677 and confirm:
+  - scan/follower rows include a boundary at frame 2677,
+  - timeline shows the dimmed cut line,
+  - the final subtitle segment starts or splits exactly at frame 2677.
+- If source-fps pipe scout is too slow on long 4K footage, benchmark a lower proxy size first before turning the cap below 30fps.
+
+## 2026-06-26 Addendum - VAD/STT 2-of-3 Timing Consensus
+
+### Scope
+
+- Raised VAD timing priority for cases where the waveform/VAD speech span is correct but final subtitle timing drifts late.
+- Added a final timing consensus rule across VAD, STT1, and STT2:
+  - If any two sources have similar start/end/duration, that pair becomes the final timing anchor.
+  - VAD+STT agreement prefers the VAD span with edge pad.
+  - STT1+STT2 agreement still applies when VAD disagrees or is missing.
+- This changes timing only; it does not change subtitle text, STT2 execution, LLM text policy, LoRA, model selection, save/load format, UI labels, layout, colors, shortcuts, menus, or popup behavior.
+
+### Result
+
+- New helper: `core/subtitle_quality/vad_alignment_checker.py::apply_vad_stt_timing_consensus`.
+- New settings:
+  - `vad_stt_timing_consensus_enabled=True`
+  - `vad_stt_timing_consensus_start_tolerance_sec=0.35`
+  - `vad_stt_timing_consensus_end_tolerance_sec=0.45`
+  - `vad_stt_timing_consensus_duration_tolerance_sec=0.45`
+  - `vad_stt_timing_consensus_max_vad_gap_sec=0.65`
+- The existing single-source VAD start-priority lead guard remains for VAD-only pulls, but a VAD+STT consensus can override it as the stronger two-source rule.
+- Jammini support review `20260626-234500-timing-consensus-risk-review.md` was classified as `revise 후 accept`; the VAD-missing/STT1+STT2 case was added.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/subtitle_quality/vad_alignment_checker.py core/engine/subtitle_engine.py tests/test_subtitle_quality_models.py` -> pass
+- `./venv/bin/python -m json.tool dataset/custom_defaults.json >/tmp/custom_defaults_check.json` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py -k "vad_voice_start_priority or vad_stt_timing_consensus"` -> `8 passed, 8 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_ensemble.py tests/test_subtitle_boundary_alignment.py tests/test_subtitle_quality_models.py -k "stt_anchor or drift or vad_voice_start_priority or vad_stt_timing_consensus or boundary"` -> `21 passed, 44 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "llm or stt_anchor or slot_order or text_only_lock"` -> `26 passed, 56 deselected`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Re-run the owner's current High-mode fixture around the 00:21-00:23 region and inspect `asr_metadata.vad_stt_timing_consensus` on corrected rows.
+
 ## 2026-06-26 Addendum - LLM Text-Only Timing Lock And STT Slot Guard
 
 ### Scope

@@ -414,6 +414,247 @@ def prioritize_vad_voice_starts(
     return rows, changed
 
 
+def _span_from_mapping(item: dict[str, Any]) -> tuple[float, float] | None:
+    for start_key, end_key in (
+        ("_stt_original_candidate_start", "_stt_original_candidate_end"),
+        ("original_start", "original_end"),
+        ("start", "end"),
+    ):
+        try:
+            start = float(item.get(start_key))
+            end = float(item.get(end_key))
+        except (TypeError, ValueError):
+            continue
+        if end > start >= 0.0:
+            return start, end
+    return None
+
+
+def _stt_source_base(item: dict[str, Any]) -> str:
+    return str(
+        item.get("source")
+        or item.get("stt_selected_source")
+        or item.get("stt_ensemble_source")
+        or item.get("stt_source")
+        or ""
+    ).strip().upper().split("_", 1)[0]
+
+
+def _stt_spans_by_source(row: dict[str, Any]) -> dict[str, tuple[float, float]]:
+    spans: dict[str, tuple[float, float]] = {}
+    for candidate in list(row.get("stt_candidates") or []):
+        if not isinstance(candidate, dict):
+            continue
+        source = _stt_source_base(candidate)
+        if source not in {"STT1", "STT2"} or source in spans:
+            continue
+        span = _span_from_mapping(candidate)
+        if span is not None:
+            spans[source] = span
+    row_source = _stt_source_base(row)
+    if row_source in {"STT1", "STT2"} and row_source not in spans:
+        span = _span_from_mapping(row)
+        if span is not None:
+            spans[row_source] = span
+    return spans
+
+
+def _span_duration(span: tuple[float, float]) -> float:
+    return max(0.0, float(span[1]) - float(span[0]))
+
+
+def _spans_similar(
+    left: tuple[float, float],
+    right: tuple[float, float],
+    *,
+    start_tolerance_sec: float,
+    end_tolerance_sec: float,
+    duration_tolerance_sec: float,
+) -> bool:
+    return (
+        abs(float(left[0]) - float(right[0])) <= start_tolerance_sec
+        and abs(float(left[1]) - float(right[1])) <= end_tolerance_sec
+        and abs(_span_duration(left) - _span_duration(right)) <= duration_tolerance_sec
+    )
+
+
+def _best_vad_span_for_consensus(
+    row: dict[str, Any],
+    vad: list[dict[str, Any]],
+    stt_spans: dict[str, tuple[float, float]],
+    *,
+    max_gap_sec: float,
+) -> tuple[float, float] | None:
+    anchors = list(stt_spans.values())
+    row_span = _span_from_mapping(row)
+    if row_span is not None:
+        anchors.append(row_span)
+    if not anchors:
+        return None
+    best: tuple[float, tuple[float, float]] | None = None
+    for ref in vad:
+        span = (float(ref["start"]), float(ref["end"]))
+        score = 0.0
+        for anchor in anchors:
+            overlap = max(0.0, min(span[1], anchor[1]) - max(span[0], anchor[0]))
+            gap = 0.0 if overlap > 0.0 else min(abs(span[1] - anchor[0]), abs(anchor[1] - span[0]))
+            if overlap > 0.0:
+                score = max(score, 2.0 + overlap)
+            elif gap <= max_gap_sec:
+                score = max(score, 1.0 - (gap / max(0.001, max_gap_sec)))
+        if score <= 0.0:
+            continue
+        if best is None or score > best[0]:
+            best = (score, span)
+    return None if best is None else best[1]
+
+
+def _consensus_span_from_sources(
+    source_spans: dict[str, tuple[float, float]],
+    *,
+    start_tolerance_sec: float,
+    end_tolerance_sec: float,
+    duration_tolerance_sec: float,
+    edge_pad_sec: float,
+) -> tuple[tuple[float, float], dict[str, Any]] | None:
+    if "VAD" in source_spans and "STT1" in source_spans and "STT2" not in source_spans:
+        vad_span = source_spans["VAD"]
+        stt1_span = source_spans["STT1"]
+        span = (min(vad_span[0], stt1_span[0]), max(vad_span[1], stt1_span[1]))
+        return span, {
+            "matched_sources": ["VAD", "STT1"],
+            "action": "stt1_vad_union_span",
+            "source_spans": {
+                key: [round(value[0], 3), round(value[1], 3)]
+                for key, value in source_spans.items()
+            },
+        }
+    preferred_pairs = (
+        ("VAD", "STT1"),
+        ("VAD", "STT2"),
+        ("STT1", "STT2"),
+    )
+    best: tuple[float, tuple[str, str], tuple[float, float]] | None = None
+    for left_key, right_key in preferred_pairs:
+        left = source_spans.get(left_key)
+        right = source_spans.get(right_key)
+        if left is None or right is None:
+            continue
+        if not _spans_similar(
+            left,
+            right,
+            start_tolerance_sec=start_tolerance_sec,
+            end_tolerance_sec=end_tolerance_sec,
+            duration_tolerance_sec=duration_tolerance_sec,
+        ):
+            continue
+        start_delta = abs(left[0] - right[0])
+        end_delta = abs(left[1] - right[1])
+        duration_delta = abs(_span_duration(left) - _span_duration(right))
+        distance = start_delta + end_delta + duration_delta
+        if "VAD" in {left_key, right_key}:
+            vad_span = source_spans["VAD"]
+            consensus = (max(0.0, vad_span[0] - edge_pad_sec), max(vad_span[0] + 0.05, vad_span[1] + edge_pad_sec))
+            priority_bonus = -1.0
+        else:
+            consensus = ((left[0] + right[0]) / 2.0, (left[1] + right[1]) / 2.0)
+            priority_bonus = 0.0
+        score = distance + priority_bonus
+        if best is None or score < best[0]:
+            best = (score, (left_key, right_key), consensus)
+    if best is None:
+        return None
+    _, pair, span = best
+    return span, {
+        "matched_sources": list(pair),
+        "source_spans": {
+            key: [round(value[0], 3), round(value[1], 3)]
+            for key, value in source_spans.items()
+        },
+    }
+
+
+def apply_vad_stt_timing_consensus(
+    segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    start_tolerance_sec: float = 0.35,
+    end_tolerance_sec: float = 0.45,
+    duration_tolerance_sec: float = 0.45,
+    max_vad_gap_sec: float = 0.65,
+    edge_pad_sec: float = 0.04,
+    min_gap_sec: float = 0.02,
+) -> tuple[list[dict[str, Any]], int]:
+    """Apply a 2-of-3 VAD/STT1/STT2 timing consensus as a final timing anchor."""
+    vad = sorted(normalize_vad_segments(vad_segments), key=lambda item: (item["start"], item["end"]))
+    rows = sorted(
+        [dict(seg) for seg in (segments or []) if isinstance(seg, dict)],
+        key=lambda item: (_as_float(item.get("start")), _as_float(item.get("end"))),
+    )
+    if not rows:
+        return rows, 0
+
+    start_tol = max(0.0, _as_float(start_tolerance_sec, 0.35))
+    end_tol = max(0.0, _as_float(end_tolerance_sec, 0.45))
+    dur_tol = max(0.0, _as_float(duration_tolerance_sec, 0.45))
+    max_gap = max(0.0, _as_float(max_vad_gap_sec, 0.65))
+    pad = max(0.0, _as_float(edge_pad_sec, 0.04))
+    min_gap = max(0.0, _as_float(min_gap_sec, 0.02))
+    changed = 0
+    previous_end: float | None = None
+
+    for row in rows:
+        if row.get("is_gap"):
+            continue
+        row_span = _span_from_mapping(row)
+        if row_span is None:
+            continue
+        source_spans = _stt_spans_by_source(row)
+        vad_span = _best_vad_span_for_consensus(row, vad, source_spans, max_gap_sec=max_gap)
+        if vad_span is not None:
+            source_spans["VAD"] = vad_span
+        if len(source_spans) < 2:
+            previous_end = row_span[1]
+            continue
+        consensus = _consensus_span_from_sources(
+            source_spans,
+            start_tolerance_sec=start_tol,
+            end_tolerance_sec=end_tol,
+            duration_tolerance_sec=dur_tol,
+            edge_pad_sec=pad,
+        )
+        if consensus is None:
+            previous_end = row_span[1]
+            continue
+        (new_start, new_end), policy = consensus
+        if previous_end is not None:
+            new_start = max(new_start, previous_end + min_gap)
+        new_end = max(new_start + 0.05, new_end)
+        if abs(new_start - row_span[0]) <= 0.001 and abs(new_end - row_span[1]) <= 0.001:
+            previous_end = row_span[1]
+            continue
+        row["start"] = round(new_start, 3)
+        row["end"] = round(new_end, 3)
+        row["timeline_start"] = row["start"]
+        meta = dict(row.get("asr_metadata") or {})
+        meta["vad_stt_timing_consensus"] = {
+            "task": "vad_stt_timing_consensus",
+            "from": [round(row_span[0], 3), round(row_span[1], 3)],
+            "to": [row["start"], row["end"]],
+            "start_tolerance_sec": round(start_tol, 3),
+            "end_tolerance_sec": round(end_tol, 3),
+            "duration_tolerance_sec": round(dur_tol, 3),
+            **policy,
+        }
+        row["asr_metadata"] = meta
+        changed += 1
+        previous_end = new_end
+
+    if changed:
+        rows = annotate_segments_vad_alignment(rows, vad)
+    return rows, changed
+
+
 def review_vad_enabled(settings: dict[str, Any] | None) -> bool:
     settings = settings or {}
     return bool(settings.get("review_vad_before_stt_enabled", False))

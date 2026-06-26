@@ -12,6 +12,7 @@ from core.subtitle_quality.hallucination_detector import estimate_hallucination_
 from core.subtitle_quality.vad_alignment_checker import (
     annotate_segment_vad_alignment,
     annotate_segments_vad_alignment,
+    apply_vad_stt_timing_consensus,
     apply_review_vad_settings,
     adjust_segments_to_vad_boundaries,
     prioritize_vad_voice_starts,
@@ -165,6 +166,127 @@ class SubtitleQualityModelsTest(unittest.TestCase):
 
         self.assertEqual(changed, 0)
         self.assertAlmostEqual(adjusted[0]["start"], 10.9, places=3)
+
+    def test_vad_stt_timing_consensus_uses_vad_when_two_of_three_match(self):
+        segments = [
+            {
+                "start": 23.0,
+                "end": 26.4,
+                "text": "안녕하세요 소설가 유모씨입니다",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 21.54, "end": 22.94, "text": "안녕하세요 소설가 유모씨입니다"},
+                    {"source": "STT2", "start": 23.0, "end": 26.4, "text": "안녕하세요 소설가 유모씨입니다"},
+                ],
+            }
+        ]
+        vad = [{"start": 21.5, "end": 22.9}]
+
+        adjusted, changed = apply_vad_stt_timing_consensus(
+            segments,
+            vad,
+            start_tolerance_sec=0.35,
+            end_tolerance_sec=0.45,
+            duration_tolerance_sec=0.45,
+            edge_pad_sec=0.04,
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(adjusted[0]["start"], 21.46, places=3)
+        self.assertAlmostEqual(adjusted[0]["end"], 22.94, places=3)
+        self.assertEqual(
+            adjusted[0]["asr_metadata"]["vad_stt_timing_consensus"]["matched_sources"],
+            ["VAD", "STT1"],
+        )
+
+    def test_vad_stt_timing_consensus_uses_union_when_only_stt1_and_vad_exist(self):
+        segments = [
+            {
+                "start": 23.0,
+                "end": 26.4,
+                "text": "안녕하세요 소설가 유모씨입니다",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 21.54, "end": 22.94, "text": "안녕하세요 소설가 유모씨입니다"},
+                ],
+            }
+        ]
+        vad = [{"start": 21.5, "end": 22.9}]
+
+        adjusted, changed = apply_vad_stt_timing_consensus(segments, vad)
+
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(adjusted[0]["start"], 21.5, places=3)
+        self.assertAlmostEqual(adjusted[0]["end"], 22.94, places=3)
+        self.assertEqual(
+            adjusted[0]["asr_metadata"]["vad_stt_timing_consensus"]["action"],
+            "stt1_vad_union_span",
+        )
+
+    def test_vad_stt_timing_consensus_uses_stt_pair_when_vad_disagrees(self):
+        segments = [
+            {
+                "start": 20.0,
+                "end": 25.0,
+                "text": "오늘은 센터에 방문을 했는데",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 20.02, "end": 22.22, "text": "오늘은 센터에 방문을 했는데"},
+                    {"source": "STT2", "start": 20.08, "end": 22.3, "text": "오늘은 센터에 방문을 했는데"},
+                ],
+            }
+        ]
+        vad = [{"start": 18.0, "end": 18.4}]
+
+        adjusted, changed = apply_vad_stt_timing_consensus(segments, vad)
+
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(adjusted[0]["start"], 20.05, places=3)
+        self.assertAlmostEqual(adjusted[0]["end"], 22.26, places=3)
+        self.assertEqual(
+            adjusted[0]["asr_metadata"]["vad_stt_timing_consensus"]["matched_sources"],
+            ["STT1", "STT2"],
+        )
+
+    def test_vad_stt_timing_consensus_uses_stt_pair_when_vad_is_missing(self):
+        segments = [
+            {
+                "start": 20.0,
+                "end": 25.0,
+                "text": "오늘은 센터에 방문을 했는데",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 20.02, "end": 22.22, "text": "오늘은 센터에 방문을 했는데"},
+                    {"source": "STT2", "start": 20.08, "end": 22.3, "text": "오늘은 센터에 방문을 했는데"},
+                ],
+            }
+        ]
+
+        adjusted, changed = apply_vad_stt_timing_consensus(segments, [])
+
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(adjusted[0]["start"], 20.05, places=3)
+        self.assertAlmostEqual(adjusted[0]["end"], 22.26, places=3)
+        self.assertEqual(
+            adjusted[0]["asr_metadata"]["vad_stt_timing_consensus"]["matched_sources"],
+            ["STT1", "STT2"],
+        )
+
+    def test_vad_stt_timing_consensus_requires_two_similar_sources(self):
+        segments = [
+            {
+                "start": 23.0,
+                "end": 26.0,
+                "text": "불일치",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 20.0, "end": 21.0, "text": "불일치"},
+                    {"source": "STT2", "start": 23.0, "end": 26.0, "text": "불일치"},
+                ],
+            }
+        ]
+        vad = [{"start": 21.8, "end": 22.2}]
+
+        adjusted, changed = apply_vad_stt_timing_consensus(segments, vad)
+
+        self.assertEqual(changed, 0)
+        self.assertAlmostEqual(adjusted[0]["start"], 23.0, places=3)
+        self.assertAlmostEqual(adjusted[0]["end"], 26.0, places=3)
 
     def test_batch_vad_alignment_matches_single_segment_annotations(self):
         segments = [

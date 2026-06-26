@@ -1,5 +1,11 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260627-005119-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260627-005024-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260627-004000-nle-action-plan-risk-review.md`
+- `.agents/sentinel/handoffs/20260627-003652-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-240300-nle-cut-boundary-support-review.md`
+- `.agents/sentinel/handoffs/20260626-234500-timing-consensus-risk-review.md`
 - `.agents/sentinel/handoffs/20260626-221500-timing-lock-support-risk-review.md`
 - `.agents/sentinel/handoffs/20260626-215623-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260626-211503-watchdog-handoff-probe.md`

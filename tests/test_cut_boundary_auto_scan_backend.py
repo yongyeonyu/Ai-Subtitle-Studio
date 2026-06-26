@@ -14,6 +14,7 @@ from core.cut_boundary_auto_scan import (
     cut_follower_verify_backend,
     high_cost_visual_scan_skip_meta,
     open_cut_boundary_video_capture,
+    resolve_pioneer_pipe_fps,
 )
 from core.cut_boundary_auto_verify import build_strict_verify_helpers
 from core.cut_boundary_backend_router import CutBoundaryBackendChoice
@@ -39,6 +40,30 @@ class _ClosedCapture:
 
     def release(self):
         self.released = True
+
+
+class CutBoundaryPioneerPipeFpsTests(unittest.TestCase):
+    def test_source_fps_pipe_uses_frame_rate_when_enabled(self):
+        fps = resolve_pioneer_pipe_fps(
+            {
+                "scan_cut_pioneer_pipe_source_fps_enabled": True,
+                "scan_cut_pioneer_pipe_source_max_fps": 30.0,
+                "scan_cut_pioneer_pipe_fps": 1.0,
+            },
+            source_fps=29.97,
+            fallback_fps=1.0,
+        )
+
+        self.assertAlmostEqual(fps, 29.97, places=3)
+
+    def test_pipe_keeps_legacy_four_fps_cap_when_source_fps_disabled(self):
+        fps = resolve_pioneer_pipe_fps(
+            {"scan_cut_pioneer_pipe_source_fps_enabled": False},
+            source_fps=29.97,
+            fallback_fps=12.0,
+        )
+
+        self.assertEqual(fps, 4.0)
 
 
 class _ClosedCaptureCv2(_FakeCv2):

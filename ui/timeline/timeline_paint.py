@@ -910,6 +910,7 @@ class TimelinePaintMixin:
             p.setFont(QFont(config.FONT, 8, QFont.Weight.Bold))
             for item in plan.lines:
                 color = QColor(item.color)
+                color.setAlpha(max(0, min(255, int(getattr(item, "alpha", 128) or 128))))
                 width = max(1, int(item.width))
                 style_name = str(item.style or "solid")
                 pen_style = Qt.PenStyle.DashLine if style_name == "dash" else (Qt.PenStyle.DotLine if style_name == "dot" else Qt.PenStyle.SolidLine)
@@ -1790,9 +1791,9 @@ class TimelinePaintMixin:
             p.setFont(QFont(config.FONT, 20, QFont.Weight.Bold))
             p.drawText(self._clip_add_rect, Qt.AlignmentFlag.AlignCenter, "+")
 
-        # Cut boundary data remains active for snapping and subtitle timing, but
-        # the dedicated blue UI lines are hidden so the middle-category lane stays
-        # visually clean. Do not clear boundary_times or scan_boundary_times here.
+        # Cut boundary data remains active for snapping and subtitle timing.
+        # The middle-category lane paints the boundary lines at 50% opacity above.
+        # Do not clear boundary_times or scan_boundary_times here.
 
         user_alignment_guides = [
             self._x(float(sec or 0.0))

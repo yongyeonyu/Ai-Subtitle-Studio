@@ -1,6 +1,7 @@
 import unittest
 
 from core.cut_boundary import magnetize_segments_to_cut_boundaries
+from core.cut_boundary import split_segments_by_cut_boundaries
 from core.cut_boundary import snap_late_segment_starts_to_confirmed_cuts
 from core.engine.subtitle_timing import (
     _selected_stt_candidate_span,
@@ -15,6 +16,56 @@ from ui.timeline.timeline_analysis import (
 
 
 class SubtitleBoundaryAlignmentTests(unittest.TestCase):
+    def test_confirmed_cut_frame_2677_forces_subtitle_boundary(self):
+        fps = 30.0
+        rows = split_segments_by_cut_boundaries(
+            [
+                {
+                    "id": "seg-original",
+                    "segment_id": "stt-original",
+                    "start_frame": 2670,
+                    "end_frame": 2690,
+                    "start": 2670 / fps,
+                    "end": 2690 / fps,
+                    "text": "컷 전 컷 후",
+                }
+            ],
+            [{"timeline_frame": 2677, "fps": fps, "status": "confirmed", "source": "visual"}],
+            primary_fps=fps,
+        )
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["end_frame"], 2677)
+        self.assertEqual(rows[1]["start_frame"], 2677)
+        self.assertTrue(rows[0]["cut_boundary_priority_locked"])
+        self.assertTrue(rows[1]["cut_boundary_forced_split"])
+        self.assertEqual(rows[1]["_cut_boundary_priority_policy"]["priority"], "highest")
+        self.assertEqual(len({row["id"] for row in rows}), 2)
+        self.assertEqual(rows[0]["cut_boundary_source_id"], "seg-original")
+        self.assertEqual(rows[1]["cut_boundary_source_segment_id"], "stt-original")
+
+    def test_confirmed_cut_frame_2677_snaps_one_frame_early_start(self):
+        fps = 30.0
+        rows = split_segments_by_cut_boundaries(
+            [
+                {
+                    "start_frame": 2676,
+                    "end_frame": 2700,
+                    "start": 2676 / fps,
+                    "end": 2700 / fps,
+                    "text": "컷 시작 자막",
+                }
+            ],
+            [{"timeline_frame": 2677, "fps": fps, "status": "confirmed", "source": "visual"}],
+            primary_fps=fps,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["start_frame"], 2677)
+        self.assertAlmostEqual(rows[0]["start"], 2677 / fps, places=6)
+        self.assertTrue(rows[0]["cut_boundary_edge_snapped"])
+        self.assertEqual(rows[0]["_cut_boundary_priority_policy"]["edge_snap_frames"], [2677])
+
     def test_confirmed_cut_stays_hard_after_provisional_snap(self):
         rows = magnetize_segments_to_cut_boundaries(
             [{"start": 0.0, "end": 10.0, "text": "긴 자막"}],

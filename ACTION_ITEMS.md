@@ -1,6 +1,6 @@
 <!--
-Document-Version: 04.00.17-source-app
-Phase: SOURCE_APP_CONTINUATION_V4_0_17
+Document-Version: 04.00.18-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_0_18
 Last-Updated: 2026-06-26
 Updated-By: Codex
 Purpose: Consolidated active execution queue for the current source-app line.
@@ -126,9 +126,9 @@ gate and rollback branch.
 ## Metadata
 
 ```yaml
-app_version: "04.00.17"
-document_version: "04.00.17-source-app"
-phase: "SOURCE_APP_CONTINUATION_V4_0_17"
+app_version: "04.00.18"
+document_version: "04.00.18-source-app"
+phase: "SOURCE_APP_CONTINUATION_V4_0_18"
 queue_source_of_truth: "ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed; optimize generation time only with behavior-preserving changes."

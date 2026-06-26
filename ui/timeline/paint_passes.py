@@ -31,6 +31,8 @@ from ui.timeline.timeline_segment_style import (
     stt_candidate_selection_state,
 )
 
+CUT_BOUNDARY_WORK_LANE_DIM_ALPHA = 128
+
 
 def _list_rows(rows: Sequence | Iterable | None) -> list:
     return [] if rows is None else list(rows)
@@ -45,6 +47,7 @@ class CutBoundaryLinePaintItem:
     width: int
     style: str = "solid"
     label: str = ""
+    alpha: int = CUT_BOUNDARY_WORK_LANE_DIM_ALPHA
 
 
 @dataclass(frozen=True)
@@ -254,6 +257,7 @@ def build_cut_boundary_work_lane_paint_plan(
                 color=str(visual.get("color") or "#F5F7FA"),
                 width=max(1, int(visual.get("width", 1) or 1)),
                 style="solid",
+                alpha=CUT_BOUNDARY_WORK_LANE_DIM_ALPHA,
             )
         )
 
@@ -277,6 +281,7 @@ def build_cut_boundary_work_lane_paint_plan(
             width=max(1, int(visual.get("width", 1) or 1)),
             style=str(visual.get("style") or "solid"),
             label=str(scan_boundary_marker_label(item) or ""),
+            alpha=CUT_BOUNDARY_WORK_LANE_DIM_ALPHA,
         )
         lines.append(marker)
         if marker.label and not bool(dense_segment_mode):
@@ -558,6 +563,7 @@ def build_aggregate_vector_subtitle_paint_plan(
 
 __all__ = [
     "AggregateVectorSubtitlePaintPlan",
+    "CUT_BOUNDARY_WORK_LANE_DIM_ALPHA",
     "CutBoundaryLinePaintItem",
     "CutBoundaryWorkLanePaintPlan",
     "GapLanePaintItem",

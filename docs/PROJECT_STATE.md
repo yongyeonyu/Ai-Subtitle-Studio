@@ -38,7 +38,7 @@
 - 러프컷 초안 생성과 PHASE2 편집 흐름 보강
 - 기존 Python/PyQt6 source app 유지와 실제 앱 검증 중심 진행
 
-`core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.17.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름과 source-app internal NLE read-only baseline은 현재 구조 기준선으로 반영되어 있습니다. 현재 활성 작업 축은 post-generation editor readiness와 최신 검증 index 정리입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
+`core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.18.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름과 source-app internal NLE read-only baseline은 현재 구조 기준선으로 반영되어 있습니다. 현재 활성 작업 축은 NLE mutable-owner planning, cut-boundary accuracy, and post-generation editor readiness입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
 
 현재 운영 방향상 `native/` 디렉터리와 관련 실험 흔적은 저장소 참고 자료로 남아 있을 수 있지만, active roadmap은 아닙니다. owner가 다시 명시하지 않는 한 새 native migration 전개를 기본 작업으로 취급하지 않습니다.
 
@@ -65,9 +65,9 @@
 
 ## Version/release notes
 
-- 현재 코드에서 확인되는 앱 버전 상수는 `04.00.17`입니다. (`core/runtime/config.py`)
-- 루트에는 `RELEASE_v04.00.07.md`부터 `RELEASE_v04.00.17.md`까지 릴리스 노트가 존재합니다.
-- 최신 릴리스 문서(`RELEASE_v04.00.17.md`)는 source-app internal NLE read-only baseline 완료와 X5 표준 fixture QA 보강을 묶는 체크포인트 성격이 강합니다.
+- 현재 코드에서 확인되는 앱 버전 상수는 `04.00.18`입니다. (`core/runtime/config.py`)
+- 루트에는 `RELEASE_v04.00.07.md`부터 `RELEASE_v04.00.18.md`까지 릴리스 노트가 존재합니다.
+- 최신 릴리스 문서(`RELEASE_v04.00.18.md`)는 VAD/STT timing consensus, confirmed cut-boundary split/snap, source-fps pioneer scout enablement, and the `NLE_Action.md` execution plan을 묶는 체크포인트 성격이 강합니다.
 - `README.md`와 릴리스 문서 기준 공식 검증 흐름은 `tools/qa_suite_runner.py`와 pytest, `compileall`, `git diff --check`, source-app smoke를 조합하는 방식입니다.
 - DMG/패키징은 저장소에 관련 디렉터리가 있어도 기본 작업이 아니라 요청 시 별도 검증 대상으로 취급해야 합니다.
 

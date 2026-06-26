@@ -33,6 +33,22 @@ from core.platform_compat import ffmpeg_binary, ffprobe_binary, hidden_subproces
 from core.visual_cut_jump import build_visual_cut_sample, score_visual_cut_pair
 
 
+def resolve_pioneer_pipe_fps(settings: dict | None, *, source_fps: float, fallback_fps: float) -> float:
+    data = dict(settings or {})
+    try:
+        source_fps = float(source_fps or 0.0)
+    except Exception:
+        source_fps = 0.0
+    try:
+        fallback_fps = float(fallback_fps or 0.0)
+    except Exception:
+        fallback_fps = 0.0
+    if _setting_bool(data.get("scan_cut_pioneer_pipe_source_fps_enabled"), False) and source_fps > 0.0:
+        max_fps = _setting_float(data.get("scan_cut_pioneer_pipe_source_max_fps"), 30.0)
+        return max(0.2, min(max(1.0, float(max_fps or 30.0)), source_fps))
+    return max(0.2, min(4.0, fallback_fps))
+
+
 def cut_boundary_memory_pressure_stage(settings: dict | None = None) -> str:
     """Compatibility wrapper that preserves the historical test patch hook."""
     return _runtime_cut_boundary_memory_pressure_stage(settings, snapshot_fn=current_resource_snapshot)
@@ -588,9 +604,10 @@ def build_auto_grid_scan_helpers(deps: dict):
 
             width = max(64, min(960, _settings_int("scan_cut_pioneer_pipe_width", 320)))
             height = max(36, min(540, _settings_int("scan_cut_pioneer_pipe_height", 180)))
-            pipe_fps = max(
-                0.2,
-                min(4.0, _settings_float("scan_cut_pioneer_pipe_fps", 1.0 / max(0.25, scan_interval_sec))),
+            pipe_fps = resolve_pioneer_pipe_fps(
+                settings,
+                source_fps=fps,
+                fallback_fps=_settings_float("scan_cut_pioneer_pipe_fps", 1.0 / max(0.25, scan_interval_sec)),
             )
             pipe_step_sec = 1.0 / pipe_fps if pipe_fps > 0.0 else max(1.0, scan_interval_sec)
             score_threshold = max(8.0, _settings_float("scan_cut_pioneer_pipe_score_threshold", 40.0))

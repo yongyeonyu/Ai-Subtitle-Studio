@@ -69,6 +69,9 @@ class ModePolicyTests(unittest.TestCase):
 
         self.assertEqual(high["stt_quality_preset"], "precise")
         self.assertEqual(high["cut_boundary_level"], "medium")
+        self.assertTrue(high["scan_cut_pioneer_pipe_enabled"])
+        self.assertTrue(high["scan_cut_pioneer_pipe_source_fps_enabled"])
+        self.assertEqual(high["scan_cut_pioneer_pipe_source_max_fps"], 30.0)
         self.assertTrue(high["stt_ensemble_enabled"])
         self.assertTrue(high["stt_ensemble_llm_judge_enabled"])
         self.assertTrue(high["stt_ensemble_llm_judge_local_only"])
