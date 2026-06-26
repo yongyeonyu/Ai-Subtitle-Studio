@@ -9,6 +9,15 @@ from core.project.nle_snapshot import (
     markers_from_roughcut_sidecar_payload,
     markers_from_stitched_cut_boundaries,
 )
+from core.project.nle_project_state import (
+    NLEProjectState,
+    NLE_PROJECT_STATE_RUNTIME_KEY,
+    NLE_PROJECT_STATE_SCHEMA,
+    assert_nle_editor_rows_consistent,
+    build_project_nle_state,
+    project_segments_from_nle_state,
+    sync_project_nle_state_from_editor_rows,
+)
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_io import (
     clear_project_file_cache,
@@ -16,6 +25,7 @@ from core.project.project_io import (
     read_project_storage_payload,
     write_project_file,
 )
+from core.project.project_manager import save_project
 from ui.editor.editor_project_open_native import load_stitched_cut_boundaries_for_srt_open
 
 
@@ -464,6 +474,176 @@ class ProjectNleSnapshotTests(unittest.TestCase):
             [(caption.sequence_start, caption.sequence_end, caption.text) for caption in after.sequences[0].captions],
             [(1.0, 2.0, "roundtrip")],
         )
+
+    def test_project_load_hydrates_runtime_nle_project_state_without_persisting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_path = root / "runtime-nle.aissproj"
+            project = {
+                "project_name": "runtime_nle",
+                "timeline": {
+                    "total_duration": 4.0,
+                    "timebase": {"primary_fps": 30.0},
+                    "tracks": [{"clips": []}],
+                },
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[
+                        {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "first", "speaker": "00"},
+                        {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+                    ],
+                    primary_fps=30.0,
+                ),
+            }
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage_before = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            projected_rows = project_segments_from_nle_state(loaded)
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_before)
+        self.assertNotIn("nle", storage_before)
+        self.assertNotIn("nle_snapshot", storage_before)
+        self.assertIsInstance(state, NLEProjectState)
+        self.assertEqual(state.schema, NLE_PROJECT_STATE_SCHEMA)
+        self.assertEqual(state.metadata["hydrated_from"], "legacy_project_payload")
+        self.assertEqual(len(state.captions), 2)
+        self.assertEqual([row.get("text", "") for row in projected_rows], ["first", ""])
+        self.assertTrue(projected_rows[1].get("is_gap"))
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
+        self.assertNotIn("nle", storage_after)
+        self.assertNotIn("nle_snapshot", storage_after)
+
+    def test_save_project_routes_editor_rows_through_runtime_nle_state_without_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_path = root / "save-nle.aissproj"
+            project = {
+                "project_name": "save_nle",
+                "timeline": {
+                    "total_duration": 4.0,
+                    "timebase": {"primary_fps": 30.0},
+                    "tracks": [{"clips": []}],
+                },
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[{"id": "caption_1", "start": 0.0, "end": 1.0, "text": "before", "speaker": "00"}],
+                    primary_fps=30.0,
+                ),
+            }
+            updated_rows = [
+                {
+                    "id": "caption_1",
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "after",
+                    "speaker": "01",
+                    "quality_candidates": [{"candidate_id": "qc1"}],
+                    "frame_range": {"source_frame_rate": 30.0, "clip_local_start": 30, "clip_local_end": 60},
+                },
+                {
+                    "id": "gap_1",
+                    "start": 2.0,
+                    "end": 3.0,
+                    "text": "",
+                    "is_gap": True,
+                },
+            ]
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            state = sync_project_nle_state_from_editor_rows(loaded, updated_rows, project_path=str(project_path))
+            projected = project_segments_from_nle_state(loaded)
+            assert_nle_editor_rows_consistent(updated_rows, projected, primary_fps=30.0)
+
+            save_project(
+                str(project_path),
+                segments=updated_rows,
+                persist_analysis_artifacts=False,
+            )
+            storage = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            reopened = read_project_file(str(project_path))
+            reopened_rows = project_segments_to_editor(reopened)
+
+        self.assertEqual(state.metadata["last_editor_sync_count"], 2)
+        self.assertEqual([(row["start_frame"], row["end_frame"], row.get("text", "")) for row in projected], [(30, 60, "after"), (60, 90, "")])
+        self.assertEqual(projected[0]["quality_candidates"][0]["candidate_id"], "qc1")
+        self.assertEqual(projected[0]["frame_range"]["source_frame_rate"], 30.0)
+        self.assertTrue(projected[1]["is_gap"])
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertNotIn("nle", storage)
+        self.assertNotIn("nle_snapshot", storage)
+        self.assertEqual([(row.get("text", ""), row.get("start_frame"), row.get("end_frame")) for row in reopened_rows], [("after", 30, 60), ("", 60, 90)])
+        self.assertTrue(reopened_rows[1].get("is_gap"))
+        self.assertIsInstance(reopened.get(NLE_PROJECT_STATE_RUNTIME_KEY), NLEProjectState)
+
+    def test_nle_project_state_handles_direct_srt_rows_without_media_or_sidecar(self):
+        project = {
+            "project_name": "direct_srt_only",
+            "video": {"primary_fps": 30.0},
+            "subtitles": {
+                "segments": [
+                    {"id": "srt_1", "start": 0.5, "end": 1.5, "text": "외부 SRT"},
+                ]
+            },
+        }
+
+        state = build_project_nle_state(project)
+        projected = state.editor_rows()
+
+        self.assertEqual(state.schema, NLE_PROJECT_STATE_SCHEMA)
+        self.assertEqual(len(state.captions), 1)
+        self.assertEqual(projected[0]["text"], "외부 SRT")
+        self.assertEqual((projected[0]["start_frame"], projected[0]["end_frame"]), (15, 45))
+        self.assertEqual(len(state.snapshot.assets), 0)
+
+    def test_nle_project_state_preserves_roughcut_exact_join_marker_parity(self):
+        row = {
+            "timeline_sec": 4.0,
+            "source": "roughcut_concat_join",
+            "segment_before_id": "chapter_0001",
+            "segment_after_id": "chapter_0002",
+        }
+        project = {
+            "project_name": "roughcut_nle_state",
+            "video": {"duration_sec": 8.0, "primary_fps": 30.0},
+            "roughcut_state": {
+                "selected_candidate_id": "roughcut_a",
+                "candidates": [
+                    {
+                        "candidate_id": "roughcut_a",
+                        "outputs": {
+                            "edl": {
+                                "duration": 8.0,
+                                "stitched_cut_boundaries": [row],
+                                "segments": [{"output_start": 0.0, "output_end": 8.0}],
+                            },
+                            "render_plan": {"stitched_cut_boundaries": [row]},
+                        },
+                    }
+                ],
+            },
+        }
+
+        state = build_project_nle_state(project)
+        exact_markers = [
+            marker
+            for marker in state.snapshot.sequences[0].markers
+            if marker.kind == "roughcut_exact_join"
+        ]
+
+        self.assertEqual(len(exact_markers), 1)
+        self.assertEqual(exact_markers[0].time, 4.0)
+        self.assertEqual(exact_markers[0].metadata["exact_join"]["segment_before_id"], "chapter_0001")
+        self.assertEqual(exact_markers[0].metadata["exact_join"]["segment_after_id"], "chapter_0002")
 
     def test_compatibility_characterization_locks_legacy_rows_and_nle_projection(self):
         with tempfile.TemporaryDirectory() as tmp:

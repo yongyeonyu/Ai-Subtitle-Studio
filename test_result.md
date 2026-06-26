@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Slice 4 mutable owner pilot - 2026-06-27
+
+- 실행 모드: source-app runtime-only NLE mutable owner pilot for project load/save.
+- 결과: pass
+- 저장 위치:
+  - Action source: `NLE_Action.md`
+  - Runtime owner: `core/project/nle_project_state.py`
+  - Persistence guards: `core/project/project_io.py`, `core/project/project_format.py`, `core/project/project_manager.py`
+  - Guard tests: `tests/test_project_nle_snapshot.py`, `tests/test_project_context.py`, `tests/test_project_segment_reload.py`, `tests/test_editor_srt_open_refresh.py`, `tests/test_roughcut_engine1.py`, `tests/test_roughcut_v2_output_compat.py`, `tests/test_roughcut_ui_v2.py`
+  - Jammini review: `.agents/sentinel/handoffs/20260627-015946-nle-slice-4-mutable-owner-review.md`
+- 수정 요약:
+  - Added runtime-only `NLEProjectState` hydration from legacy project payloads.
+  - Routed `save_project()` editor rows through NLE state before writing the existing legacy project shape.
+  - Added dual-write assertions for row count, frame timing, gap status, and text drift.
+  - Stripped `_nle_project_state`, `nle`, and `nle_snapshot` before `.aissproj` writes.
+  - Preserved explicit save gap rows through the NLE/save projection route.
+  - Removed completed Slice 4 from `NLE_Action.md`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_project_state.py core/project/project_io.py core/project/project_format.py core/project/project_manager.py tests/test_project_nle_snapshot.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "runtime_nle or save_project_routes or direct_srt_rows or roughcut_exact_join_marker_parity or compatibility_characterization or project_file_roundtrip"` -> `6 passed, 8 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py` -> `204 passed, 4 subtests passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py` -> `71 passed`
+  - `git diff --check -- .` -> pass
+- 자막 품질 영향:
+  - None intended. This changes runtime project state ownership and save projection only; no STT2, LLM, LoRA, VAD, model-selection, UI/UX labels/layout/colors/menus/popups, release, tag, push, or DMG behavior changed.
+- 남은 위험:
+  - Timeline canvas state ownership remains future work and requires a new explicit slice before implementation.
+
 ## NLE Slice 3 preview cache / skimming - 2026-06-27
 
 - 실행 모드: source-app preview/skimming cache with nonblocking UI-thread behavior.

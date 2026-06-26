@@ -33,6 +33,31 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-27 Addendum - NLE Slice 4 Mutable Owner Pilot
+
+### Scope
+
+- Completed Slice 4, `NLE Mutable Owner Pilot`, from `NLE_Action.md`.
+- Added `core/project/nle_project_state.py` with runtime-only `NLEProjectState` / `NLECaptionState` hydration from legacy project payloads.
+- `read_project_file()` now attaches `_nle_project_state` in memory, while `project_io`, `project_format`, and `project_manager` strip `_nle_project_state`, `nle`, and `nle_snapshot` before `.aissproj` writes.
+- `save_project()` now syncs editor rows into `NLEProjectState`, projects legacy editor rows back from that state, and asserts row count, frame timing, gap status, and text consistency before writing.
+- Gap rows in explicit save segments now preserve `is_gap` through `save_project()`.
+- Completed Slice 4 was removed from `NLE_Action.md`; no active execution slices remain in that file. Timeline canvas state ownership remains future work and needs a new explicit slice before implementation.
+- Jammini architecture review `.agents/sentinel/handoffs/20260627-015946-nle-slice-4-mutable-owner-review.md` was classified as `revise 후 accept`: disk leak guard, dual-write assert, direct SRT/no-media safety, and roughcut marker parity guards were added.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/project/nle_project_state.py core/project/project_io.py core/project/project_format.py core/project/project_manager.py tests/test_project_nle_snapshot.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "runtime_nle or save_project_routes or direct_srt_rows or roughcut_exact_join_marker_parity or compatibility_characterization or project_file_roundtrip"` -> `6 passed, 8 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py` -> `204 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py` -> `71 passed`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Do not add persisted `nle` or `nle_snapshot` project fields without a new compatibility gate.
+- If continuing NLE work, create a new explicit timeline canvas state ownership slice first; do not infer it from the completed mutable save-owner pilot.
+
 ## 2026-06-27 Addendum - NLE Slice 3 Preview Cache / Skimming
 
 ### Scope

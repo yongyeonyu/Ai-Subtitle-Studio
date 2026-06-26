@@ -111,6 +111,17 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_fram
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "scrub_updates_playhead_immediately_and_uses_lightweight_preview_seek or scrub_throttles_video_seek_during_fast_mouse_moves or timing_drag_preview_updates_playhead_and_uses_lightweight_preview_seek or auto_cut_boundary_preview_moves_playhead_without_thumbnail_work"
 ```
 
+## NLE mutable owner pilot validation
+
+Runtime-only NLE state changes should prove legacy hydration, non-persistence of NLE runtime fields, direct SRT/no-media safety, save/reopen compatibility, and roughcut sidecar/render parity.
+
+```bash
+./venv/bin/python -m py_compile core/project/nle_project_state.py core/project/project_io.py core/project/project_format.py core/project/project_manager.py tests/test_project_nle_snapshot.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "runtime_nle or save_project_routes or direct_srt_rows or roughcut_exact_join_marker_parity or compatibility_characterization or project_file_roundtrip"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py
+```
+
 ## PyQt / offscreen UI validation
 
 PyQt UI 회귀는 화면 서버에 의존하지 않는 경로를 우선 사용합니다.

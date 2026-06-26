@@ -104,6 +104,12 @@ from core.project.project_format import (
     hydrate_project_runtime_views,
     project_primary_fps,
 )
+from core.project.nle_project_state import (
+    NLE_PROJECT_STATE_RUNTIME_KEY,
+    assert_nle_editor_rows_consistent,
+    project_segments_from_nle_state,
+    sync_project_nle_state_from_editor_rows,
+)
 from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import normalize_work_mode
 
@@ -346,6 +352,9 @@ def _build_clip_rows(
 
 
 def _sanitize_project_workspace_fields(project: dict) -> dict:
+    project.pop(NLE_PROJECT_STATE_RUNTIME_KEY, None)
+    project.pop("nle", None)
+    project.pop("nle_snapshot", None)
     project["workspace"] = sanitize_workspace_state(project.get("workspace", {}) or {})
     if project.get("editor_state"):
         editor_workspace = project["editor_state"].get("workspace", {}) or project["workspace"]
@@ -1496,6 +1505,9 @@ def save_project(
                 "original_text": seg.get("original_text", ""),
                 "dictated_text": seg.get("dictated_text", ""),
             }
+            if seg.get("is_gap"):
+                new_seg["is_gap"] = True
+                new_seg["text"] = ""
             for key in ("quality", "quality_history", "quality_candidates", "quality_stale"):
                 if key in seg:
                     new_seg[key] = seg.get(key)
@@ -1536,6 +1548,14 @@ def save_project(
         project["subtitles"]["segment_count"] = len(new_segs)
 
     project_segment_rows = new_segs if new_segs is not None else project_segments_to_editor(project)
+    sync_project_nle_state_from_editor_rows(project, project_segment_rows, project_path=filepath)
+    nle_project_segment_rows = project_segments_from_nle_state(project, project_path=filepath)
+    assert_nle_editor_rows_consistent(
+        project_segment_rows,
+        nle_project_segment_rows,
+        primary_fps=primary_fps,
+    )
+    project_segment_rows = nle_project_segment_rows
     editor_media_files = _ordered_media_paths(project.get("media", []))
     editor_clip_boundaries = _editor_clip_boundaries(clips)
     editor_workspace = _editor_workspace_state(project, workspace)

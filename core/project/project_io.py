@@ -12,6 +12,7 @@ from typing import Any
 
 from core.native_json import dumps_json_bytes, json_default, loads_json
 from core.project.project_format import build_storage_project_payload, hydrate_project_runtime_views
+from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY, attach_project_nle_state
 
 try:
     import msgpack  # type: ignore
@@ -33,6 +34,7 @@ _PROJECT_RUNTIME_KEYS = {
     "_external_stt_tracks_cache",
     "_hot_open_subtitle_segments_cache",
     "_hot_open_stt_preview_segments_cache",
+    NLE_PROJECT_STATE_RUNTIME_KEY,
     "project_path",
 }
 
@@ -83,6 +85,7 @@ def prime_project_file_cache(filepath: str, project: dict[str, Any]) -> None:
 def _attach_project_path(project: dict[str, Any], filepath: str) -> dict[str, Any]:
     if isinstance(project, dict):
         project["_project_file_path"] = _project_cache_key(filepath)
+        attach_project_nle_state(project, project_path=filepath)
     return project
 
 

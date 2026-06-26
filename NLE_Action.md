@@ -19,8 +19,8 @@ This file is the execution source of truth for four connected workstreams:
 
 Current NLE status:
 
-- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, save/reopen compatibility guards, source-fps scout frame preservation, temp trace workspace, and preview/skimming cache ownership.
-- Not done yet: NLE as editor/save mutable timing owner and timeline canvas state ownership.
+- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, save/reopen compatibility guards, source-fps scout frame preservation, temp trace workspace, preview/skimming cache ownership, and the in-memory `NLEProjectState` editor/save owner pilot.
+- Not done yet: timeline canvas state ownership. This file has no remaining active execution slice for that future work.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
@@ -317,22 +317,7 @@ No code changes in the first review pass.
 
 ## Execution Slices
 
-### Slice 4 - NLE Mutable Owner Pilot
-
-Deliverables:
-
-- mutable NLE state loaded from legacy project payload,
-- editor/save projection route from NLE state,
-- compatibility guard tests.
-
-Acceptance:
-
-- `NLEProjectState` remains in-memory only during the pilot and does not persist `nle` or `nle_snapshot` fields,
-- legacy `.aissproj` reopens,
-- direct SRT open/reopen works,
-- roughcut sidecars restore,
-- rendered roughcut reopen works,
-- subtitle count/first-last/output duration/sidecar metadata do not drift.
+No active execution slices remain in this file.
 
 ## Validation Gates
 

@@ -241,6 +241,9 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload.pop("frame_timebase", None)
     payload.pop("media", None)
     payload.pop("project_path", None)
+    payload.pop("_nle_project_state", None)
+    payload.pop("nle", None)
+    payload.pop("nle_snapshot", None)
     editor_state = payload.get("editor_state")
     if isinstance(editor_state, dict):
         editor_state = dict(editor_state)

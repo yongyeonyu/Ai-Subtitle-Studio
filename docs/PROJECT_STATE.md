@@ -38,7 +38,7 @@
 - 러프컷 초안 생성과 PHASE2 편집 흐름 보강
 - 기존 Python/PyQt6 source app 유지와 실제 앱 검증 중심 진행
 
-`core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.18.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름과 source-app internal NLE read-only baseline은 현재 구조 기준선으로 반영되어 있습니다. 현재 활성 작업 축은 NLE mutable-owner planning, cut-boundary accuracy, and post-generation editor readiness입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
+`core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.18.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름과 source-app internal NLE domain baseline은 현재 구조 기준선으로 반영되어 있습니다. NLE는 read-only snapshot baseline 위에 runtime-only mutable save-owner pilot이 추가되었고, persisted NLE project fields are still not approved. 현재 활성 작업 축은 cut-boundary accuracy, post-generation editor readiness, and any future explicit NLE timeline-canvas ownership slice입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
 
 현재 운영 방향상 `native/` 디렉터리와 관련 실험 흔적은 저장소 참고 자료로 남아 있을 수 있지만, active roadmap은 아닙니다. owner가 다시 명시하지 않는 한 새 native migration 전개를 기본 작업으로 취급하지 않습니다.
 

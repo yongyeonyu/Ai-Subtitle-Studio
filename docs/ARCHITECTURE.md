@@ -103,7 +103,7 @@ UI는 이 결과를 소비하고 편집해야 하며, 알고리즘 정책 자체
 
 ## Source-app internal NLE timeline contract
 
-현재 `Source-App Internal NLE Timeline Architecture Plan`은 사용자에게 보이는 UI/UX 변경이 아니라, 기존 project/editor/roughcut/export 상태를 읽기 전용 snapshot으로 설명하기 위한 내부 계약입니다. `core/project/nle_snapshot.py`가 이 계약의 첫 read-only adapter입니다. 이 계약은 새 저장 포맷이나 새 mutable timing owner가 아니며, 기존 `.aissproj`, direct SRT open, roughcut sidecar, rendered roughcut reopen 경로를 유지해야 합니다.
+현재 `Source-App Internal NLE Timeline Architecture Plan`은 사용자에게 보이는 UI/UX 변경이 아니라, 기존 project/editor/roughcut/export 상태를 NLE domain으로 설명하고 검증하기 위한 내부 계약입니다. `core/project/nle_snapshot.py`는 read-only adapter이고, `core/project/nle_project_state.py`는 legacy project load/save 사이에만 붙는 runtime-only mutable owner pilot입니다. 이 계약은 새 저장 포맷이 아니며, 기존 `.aissproj`, direct SRT open, roughcut sidecar, rendered roughcut reopen 경로를 유지해야 합니다.
 
 ### Current owner map
 
@@ -120,6 +120,7 @@ UI는 이 결과를 소비하고 편집해야 하며, 알고리즘 정책 자체
 | Timeline canvas state | `ui/timeline/timeline_canvas.py`, `ui/timeline/timeline_analysis.py` | live canvas segments, playhead, marker caches, roughcut marker cache | Keep live state outside the domain snapshot; snapshot must not drive paint caches or UI layout. |
 | Save/reopen behavior | `ui/editor/editor_save_manager.py`, `ui/editor/editor_project_open_native.py`, `core/project/project_manager.py` | project save snapshot, project open hydration, direct SRT metadata merge | Snapshot generation must not change save files, reopen order, subtitle timing, or project matching rules. |
 | NLE snapshot adapter | `core/project/nle_snapshot.py` | hydrated project dict plus selected roughcut candidate output evidence | Build frozen read-only dataclasses only; no save/write hook owns this snapshot. |
+| NLE mutable state pilot | `core/project/nle_project_state.py`, `core/project/project_io.py`, `core/project/project_manager.py` | runtime `_nle_project_state` attached after legacy project hydration | `NLEProjectState` owns in-memory editor/save row projection during the pilot, asserts no timing/text/gap drift against legacy rows, and is stripped with `nle` / `nle_snapshot` before `.aissproj` writes. |
 
 ### Domain object definitions
 
@@ -130,6 +131,7 @@ UI는 이 결과를 소비하고 편집해야 하며, 알고리즘 정책 자체
 - `CaptionSegment`: a subtitle row in sequence time with text, speaker, frame range, source clip reference when known, and existing metadata copied read-only from project/editor rows.
 - `TimelineMarker`: point evidence on sequence or output time. Cut-boundary points, roughcut exact joins, and provisional markers belong here. Markers do not define media spans.
 - `RenderPlan`: a read-only render/export plan with selected sequence references, EDL segments, output path, output duration, render mode, segment manifest, and exact-join metadata.
+- `NLEProjectState`: a runtime-only mutable project state hydrated from the legacy payload. It can project editor rows back to the existing legacy save shape, but it must not persist as `nle`, `nle_snapshot`, or `_nle_project_state`.
 
 ### Time model
 
@@ -138,7 +140,7 @@ UI는 이 결과를 소비하고 편집해야 하며, 알고리즘 정책 자체
 - `output_time`: rendered/exported result time after EDL decisions are applied. Roughcut `output_start` / `output_end` and `stitched_cut_boundaries.timeline_sec` are interpreted here.
 - `exact_join`: metadata derived from roughcut `stitched_cut_boundaries`. It maps an output-time point to before/after EDL segments and source paths. It is a marker/edit-point candidate, not a replacement for clip boundary spans.
 
-Implementation order must remain docs/schema first, then read-only adapters, then roughcut exact-join marker projection, then render/export routing parity. The initial adapter currently projects existing state into frozen dataclasses and has no save/write hook. Roughcut exact joins can be projected from top-level `stitched_cut_boundaries`, nested `edl.stitched_cut_boundaries`, nested `render_plan.stitched_cut_boundaries`, or selected candidate `outputs`; all are output-time markers, not clip boundary spans. Render/export parity is currently proven by rebuilding the existing concat command plan from `NLESnapshot.render_plans[*].segments` and comparing it with `build_concat_render_plan`; roughcut SRT/video plan construction uses that adapter as a read-only route. This does not change roughcut UI ownership, `_render_plan.json` / `_edl.json` schemas, sidecar readers, save files, or visible UI behavior. Any duplicate mutable timing state, subtitle count drift, first/last time drift, output duration drift, or sidecar metadata drift stops the slice.
+Implementation order remains docs/schema first, then read-only adapters, then roughcut exact-join marker projection, render/export routing parity, and finally runtime-only mutable ownership pilots. Roughcut exact joins can be projected from top-level `stitched_cut_boundaries`, nested `edl.stitched_cut_boundaries`, nested `render_plan.stitched_cut_boundaries`, or selected candidate `outputs`; all are output-time markers, not clip boundary spans. Render/export parity is currently proven by rebuilding the existing concat command plan from `NLESnapshot.render_plans[*].segments` and comparing it with `build_concat_render_plan`; roughcut SRT/video plan construction uses that adapter as a read-only route. `NLEProjectState` now hydrates in memory on project load and `save_project()` routes editor rows through it before writing the legacy shape, with a dual-write assert guarding row count, frame timing, gap status, and text drift. This does not change roughcut UI ownership, `_render_plan.json` / `_edl.json` schemas, sidecar readers, `.aissproj` storage fields, or visible UI behavior. Any duplicate mutable timing state, subtitle count drift, first/last time drift, output duration drift, or sidecar metadata drift stops the slice.
 
 ## Config/settings boundary
 
