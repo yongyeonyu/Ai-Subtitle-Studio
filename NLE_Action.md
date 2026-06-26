@@ -317,22 +317,6 @@ No code changes in the first review pass.
 
 ## Execution Slices
 
-### Slice 2 - Cut Boundary Source-FPS Scout
-
-Deliverables:
-
-- source-fps low-res scout candidate generation,
-- local verifier exact-frame confirmation,
-- target fixture proof for `2766` and `2677`,
-- score metadata trace events.
-
-Acceptance:
-
-- frame `2766` and `2677` candidates are detected or preserved,
-- fixture proof can opt into a `60fps`/source-fps scout cap for the fixed `60000/1001fps` video,
-- final subtitle split/snap respects confirmed cuts,
-- false positives from fast motion are reduced by flow/motion coherence checks.
-
 ### Slice 3 - Preview Cache / Skimming
 
 Deliverables:

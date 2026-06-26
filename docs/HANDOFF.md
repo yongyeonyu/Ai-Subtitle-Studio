@@ -33,6 +33,36 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-27 Addendum - NLE Slice 2 Source-FPS Scout
+
+### Scope
+
+- Completed Slice 2, `Cut Boundary Source-FPS Scout`, from `NLE_Action.md`.
+- `core/cut_boundary_auto_scan.py` now preserves exact source-fps frames before display-second rounding, allows 60000/1001fps pipe scout opt-in via a 60fps cap, attaches `source_fps_num` / `source_fps_den`, and emits bounded score metadata trace events for early and late candidates.
+- Added `tools/verify_cut_boundary_source_fps_scout.py` for fixed-frame fixture proof without whole-file hashing.
+- Fixture proof: `output/manual_verification/latest/nle_slice2_source_fps_scout_20260627/source_fps_scout.json`.
+- Completed Slice 2 was removed from `NLE_Action.md`.
+- Jammini handoff `.agents/sentinel/handoffs/20260627-013802-nle-slice-2-scout-review.md` was classified as `revise 후 partial accept`: trace late-candidate blind spot was fixed; 60fps overhead and target-frame false-negative tuning remain risks.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/cut_boundary_auto_scan.py tools/verify_cut_boundary_source_fps_scout.py tests/test_cut_boundary_auto_scan_backend.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py` -> `34 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py -k "pipe_fps or source_fps or precise_timing or trace_cut_boundary_rows or dense_flow or runtime_modes_apply_stage_policy"` -> `9 passed, 35 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_project_context.py -k "cut_boundary or cut_boundaries or cut_frame_2677"` -> `6 passed, 93 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" --output-dir output/manual_verification/latest/nle_slice2_source_fps_scout_20260627` -> pass, `frame_preserved=true` for `2766` and `2677`, `candidate_detected=false` for both.
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Start Slice 3, `Preview Cache / Skimming`, from `NLE_Action.md`.
+- Keep the preview cache under the temp workspace and do not let preview thumbnails become cut-boundary proof.
+
+### Remaining Risk
+
+- The fixed fixture frames `2766` and `2677` are preserved on the exact 60000/1001fps grid, but the low-res scout did not newly detect them under current score thresholds. Treat automatic detection tuning as still open if the owner expects these frames to be found without preexisting confirmed cut evidence.
+- 60fps source-fps pipe scanning is opt-in proof only; do not enable it broadly for long 4K flows without runtime cost evidence.
+
 ## 2026-06-27 Addendum - NLE Slice 1 Trace Workspace Baseline
 
 ### Scope

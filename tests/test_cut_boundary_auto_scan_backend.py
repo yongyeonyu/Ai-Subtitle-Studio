@@ -6,6 +6,7 @@ from unittest.mock import patch
 from core import native_cut_boundary as native
 from core.cut_boundary_auto_scan import (
     _cut_boundary_pioneer_worker_ranges,
+    _trace_cut_boundary_rows,
     build_auto_grid_scan_helpers,
     cut_boundary_cv2_capture_backend,
     cut_boundary_memory_pressure_stage,
@@ -14,10 +15,13 @@ from core.cut_boundary_auto_scan import (
     cut_follower_verify_backend,
     high_cost_visual_scan_skip_meta,
     open_cut_boundary_video_capture,
+    precise_cut_boundary_timing,
     resolve_pioneer_pipe_fps,
+    source_fps_parts,
 )
 from core.cut_boundary_auto_verify import build_strict_verify_helpers
 from core.cut_boundary_backend_router import CutBoundaryBackendChoice
+from core.frame_time import sec_to_frame
 
 
 class _FakeCv2:
@@ -56,6 +60,21 @@ class CutBoundaryPioneerPipeFpsTests(unittest.TestCase):
 
         self.assertAlmostEqual(fps, 29.97, places=3)
 
+    def test_source_fps_pipe_can_opt_into_sixty_fps_cap_for_5994fps_fixture(self):
+        source_fps = 60000 / 1001
+        fps = resolve_pioneer_pipe_fps(
+            {
+                "scan_cut_pioneer_pipe_source_fps_enabled": True,
+                "scan_cut_pioneer_pipe_source_max_fps": 60.0,
+                "scan_cut_pioneer_pipe_fps": 1.0,
+            },
+            source_fps=source_fps,
+            fallback_fps=1.0,
+        )
+
+        self.assertAlmostEqual(fps, source_fps, places=6)
+        self.assertEqual(source_fps_parts(fps), (60000, 1001))
+
     def test_pipe_keeps_legacy_four_fps_cap_when_source_fps_disabled(self):
         fps = resolve_pioneer_pipe_fps(
             {"scan_cut_pioneer_pipe_source_fps_enabled": False},
@@ -64,6 +83,87 @@ class CutBoundaryPioneerPipeFpsTests(unittest.TestCase):
         )
 
         self.assertEqual(fps, 4.0)
+
+    def test_precise_timing_preserves_frame_2677_before_display_rounding(self):
+        fps = 60000 / 1001
+        exact_sec = 2677 / fps
+
+        self.assertEqual(sec_to_frame(round(exact_sec, 3), fps), 2676)
+        timing = precise_cut_boundary_timing(exact_sec, 0.0, fps, sec_to_frame)
+
+        self.assertEqual(timing["timeline_frame"], 2677)
+        self.assertAlmostEqual(timing["timeline_sec"], exact_sec, places=9)
+
+    def test_trace_cut_boundary_rows_emits_score_metadata(self):
+        class FakeTraceLogger:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event, **fields):
+                self.events.append((event, fields))
+                return True
+
+        fake_logger = FakeTraceLogger()
+        with patch("core.runtime.trace_logger.current_app_trace_logger", return_value=fake_logger):
+            _trace_cut_boundary_rows(
+                [
+                    {
+                        "timeline_frame": 2677,
+                        "timeline_sec": 2677 / (60000 / 1001),
+                        "fps": 60000 / 1001,
+                        "score": 91.5,
+                        "region_hits": 3,
+                        "pixel_ratio": 0.42,
+                        "motion_jump": 8.0,
+                        "flow_residual": 12.0,
+                        "flow_mag": 3.0,
+                        "detector": "ffmpeg-pipe-visual-cut-jump-v2",
+                        "reason": "gray_pixel_edge_flow_scout",
+                        "source": "visual_provisional",
+                    }
+                ],
+                backend_label="ffmpeg_pipe_pixel_flow",
+                fps=60000 / 1001,
+            )
+
+        self.assertEqual(fake_logger.events[0][0], "cut_boundary_candidate_scored")
+        fields = fake_logger.events[0][1]
+        self.assertEqual(fields["stage"], "cut-boundary")
+        self.assertEqual(fields["frame"], 2677)
+        self.assertEqual((fields["fps_num"], fields["fps_den"]), (60000, 1001))
+        self.assertEqual(fields["score"], 91.5)
+        self.assertEqual(fields["backend"], "ffmpeg_pipe_pixel_flow")
+
+    def test_trace_cut_boundary_rows_keeps_late_candidates_bounded(self):
+        class FakeTraceLogger:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event, **fields):
+                self.events.append((event, fields))
+                return True
+
+        fake_logger = FakeTraceLogger()
+        rows = [
+            {
+                "timeline_frame": frame,
+                "timeline_sec": frame / 30.0,
+                "fps": 30.0,
+                "score": float(frame),
+                "detector": "test-detector",
+                "reason": "test",
+            }
+            for frame in range(45)
+        ]
+        with patch("core.runtime.trace_logger.current_app_trace_logger", return_value=fake_logger):
+            _trace_cut_boundary_rows(rows, backend_label="ffmpeg_pipe_pixel_flow", fps=30.0)
+
+        logged_frames = [fields["frame"] for _event, fields in fake_logger.events]
+        self.assertEqual(len(logged_frames), 40)
+        self.assertIn(0, logged_frames)
+        self.assertIn(19, logged_frames)
+        self.assertIn(25, logged_frames)
+        self.assertIn(44, logged_frames)
 
 
 class _ClosedCaptureCv2(_FakeCv2):

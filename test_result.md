@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Slice 2 source-fps cut-boundary scout - 2026-06-27
+
+- 실행 모드: source-app source-fps cut-boundary scout and exact-frame fixture proof.
+- 결과: pass with remaining false-negative risk
+- 저장 위치:
+  - Action source: `NLE_Action.md`
+  - Runtime owner: `core/cut_boundary_auto_scan.py`
+  - Verifier: `tools/verify_cut_boundary_source_fps_scout.py`
+  - Fixture artifact: `output/manual_verification/latest/nle_slice2_source_fps_scout_20260627/source_fps_scout.json`
+  - Jammini review: `.agents/sentinel/handoffs/20260627-013802-nle-slice-2-scout-review.md`
+- 수정 요약:
+  - Preserved exact source-fps frame timing before display-second rounding, preventing 60000/1001fps target frames such as `2677` from falling to `2676`.
+  - Added 60fps/source-fps opt-in proof for the fixed 60000/1001fps fixture.
+  - Added bounded score metadata trace events for early and late cut-boundary candidates.
+  - Added a target-frame verifier and removed completed Slice 2 from `NLE_Action.md`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/cut_boundary_auto_scan.py tools/verify_cut_boundary_source_fps_scout.py tests/test_cut_boundary_auto_scan_backend.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py` -> `34 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_mode_policy.py -k "pipe_fps or source_fps or precise_timing or trace_cut_boundary_rows or dense_flow or runtime_modes_apply_stage_policy"` -> `9 passed, 35 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_project_context.py -k "cut_boundary or cut_boundaries or cut_frame_2677"` -> `6 passed, 93 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" --output-dir output/manual_verification/latest/nle_slice2_source_fps_scout_20260627` -> pass; `frame_preserved=true` for `2766` and `2677`, `candidate_detected=false` for both.
+  - `git diff --check -- .` -> pass
+- 자막 품질 영향:
+  - Confirmed-cut split/snap behavior remains covered by existing tests; no STT2, LLM, LoRA, VAD, model-selection, save-format, UI/UX, release, tag, push, or DMG behavior changed.
+- 남은 위험:
+  - The fixed frames are preserved but not newly detected by the current low-res score threshold. Automatic detection tuning remains open if the owner expects these frames to be found without preexisting confirmed cut evidence.
+
 ## NLE Slice 1 trace workspace baseline - 2026-06-27
 
 - 실행 모드: source-app trace/temp workspace baseline for NLE action diagnostics.

@@ -8,6 +8,7 @@ import math
 import subprocess
 import sys
 import time
+from fractions import Fraction
 
 from core.cut_boundary_audio import detect_audio_gain_boundary_rows
 from core.cut_boundary_candidate_fusion import fuse_cut_boundary_candidate_rows
@@ -47,6 +48,83 @@ def resolve_pioneer_pipe_fps(settings: dict | None, *, source_fps: float, fallba
         max_fps = _setting_float(data.get("scan_cut_pioneer_pipe_source_max_fps"), 30.0)
         return max(0.2, min(max(1.0, float(max_fps or 30.0)), source_fps))
     return max(0.2, min(4.0, fallback_fps))
+
+
+def source_fps_parts(fps: float) -> tuple[int, int]:
+    try:
+        ratio = Fraction(float(fps)).limit_denominator(100000)
+        if ratio.numerator > 0 and ratio.denominator > 0:
+            return int(ratio.numerator), int(ratio.denominator)
+    except Exception:
+        pass
+    return 0, 0
+
+
+def precise_cut_boundary_timing(local_sec: float, clip_offset: float, fps: float, sec_to_frame_fn) -> dict:
+    try:
+        local_raw = max(0.0, float(local_sec or 0.0))
+    except Exception:
+        local_raw = 0.0
+    try:
+        offset_raw = float(clip_offset or 0.0)
+    except Exception:
+        offset_raw = 0.0
+    timeline_raw = max(0.0, offset_raw + local_raw)
+    timeline_frame = int(sec_to_frame_fn(timeline_raw, fps))
+    canonical_timeline_sec = max(0.0, timeline_frame / float(fps or 30.0))
+    return {
+        "clip_local_sec": max(0.0, canonical_timeline_sec - offset_raw),
+        "timeline_sec": canonical_timeline_sec,
+        "timeline_frame": timeline_frame,
+    }
+
+
+def _trace_cut_boundary_rows(rows: list[dict], *, backend_label: str, fps: float) -> None:
+    try:
+        from core.runtime.trace_logger import current_app_trace_logger
+
+        logger = current_app_trace_logger()
+        if logger is None:
+            return
+        fps_num, fps_den = source_fps_parts(float(fps or 0.0))
+        if len(rows) <= 40:
+            sampled_rows = list(rows)
+        else:
+            sampled_rows = [*rows[:20], *rows[-20:]]
+        seen_trace_keys = set()
+        for row in sampled_rows:
+            if not isinstance(row, dict):
+                continue
+            trace_key = (
+                int(row.get("timeline_frame", row.get("frame", 0)) or 0),
+                str(row.get("detector", "") or ""),
+                str(row.get("reason", "") or ""),
+            )
+            if trace_key in seen_trace_keys:
+                continue
+            seen_trace_keys.add(trace_key)
+            logger.log_event(
+                "cut_boundary_candidate_scored",
+                stage="cut-boundary",
+                level="DEBUG",
+                backend=backend_label,
+                frame=int(row.get("timeline_frame", row.get("frame", 0)) or 0),
+                time_sec=float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0),
+                fps=float(row.get("fps", fps) or fps),
+                fps_num=fps_num,
+                fps_den=fps_den,
+                score=float(row.get("score", 0.0) or 0.0),
+                region_hits=int(row.get("region_hits", row.get("regions", 0)) or 0),
+                pixel_ratio=float(row.get("pixel_ratio", 0.0) or 0.0),
+                motion_jump=float(row.get("motion_jump", 0.0) or 0.0),
+                flow_residual=float(row.get("flow_residual", 0.0) or 0.0),
+                flow_mag=float(row.get("flow_mag", row.get("flow_mean", 0.0)) or 0.0),
+                detector=str(row.get("detector", "") or ""),
+                reason=str(row.get("reason", "") or ""),
+                source=str(row.get("source", "") or ""),
+            )
+    except Exception:
+        pass
 
 
 def cut_boundary_memory_pressure_stage(settings: dict | None = None) -> str:
@@ -261,6 +339,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 refined_local_sec = float(verified.get("sec", local_sec) or local_sec)
                 timeline_sec = float(clip_offset or 0.0) + refined_local_sec
                 timeline_frame = sec_to_frame(timeline_sec, fps)
+                fps_num, fps_den = source_fps_parts(fps)
 
                 for old in verified_rows:
                     try:
@@ -281,6 +360,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                         "fps": fps,
                         "frame_rate": fps,
                         "timeline_frame_rate": fps,
+                        "source_fps": fps,
+                        "source_fps_num": fps_num,
+                        "source_fps_den": fps_den,
                         "clip_idx": int(clip_idx or 0),
                         "clip_local_sec": refined_local_sec,
                         "source_path": original_filepath,
@@ -703,21 +785,28 @@ def build_auto_grid_scan_helpers(deps: dict):
                         and (pixel_ratio >= pixel_ratio_threshold or motion_jump >= motion_threshold)
                     )
                     if strong_visual_cut and (t - last_emit_t) >= min_gap:
-                        timeline_sec = round(float(clip_offset or 0.0) + float(t), 3)
-                        timeline_frame = sec_to_frame(timeline_sec, fps)
+                        timing = precise_cut_boundary_timing(float(t), float(clip_offset or 0.0), fps, sec_to_frame)
+                        timeline_sec = timing["timeline_sec"]
+                        timeline_frame = timing["timeline_frame"]
+                        clip_local_sec = timing["clip_local_sec"]
+                        fps_num, fps_den = source_fps_parts(fps)
                         row = {
                             "schema": "cut_boundary.v1",
                             "id": f"pipe_cut_{int(clip_idx or 0):02d}_{timeline_frame:08d}",
                             "time": timeline_sec,
                             "timeline_sec": timeline_sec,
                             "clip_idx": int(clip_idx or 0),
-                            "clip_local_sec": round(float(t), 3),
+                            "clip_local_sec": clip_local_sec,
                             "coarse_time": round(float(t), 3),
                             "frame": timeline_frame,
                             "timeline_frame": timeline_frame,
                             "fps": fps,
                             "frame_rate": fps,
                             "timeline_frame_rate": fps,
+                            "source_fps": fps,
+                            "source_fps_num": fps_num,
+                            "source_fps_den": fps_den,
+                            "pipe_fps": pipe_fps,
                             "source": "visual_provisional",
                             "detector": "ffmpeg-pipe-visual-cut-jump-v2",
                             "reason": "gray_pixel_edge_flow_scout",
@@ -905,12 +994,12 @@ def build_auto_grid_scan_helpers(deps: dict):
                     verified = None
 
                 verified_passed = bool(isinstance(verified, dict) and verified.get("passed"))
-                refined_local_sec = round(
-                    float((verified or {}).get("sec", local_sec) if verified_passed else local_sec),
-                    3,
-                )
-                timeline_sec = round(float(clip_offset or 0.0) + refined_local_sec, 3)
-                timeline_frame = sec_to_frame(timeline_sec, fps)
+                refined_local_sec = float((verified or {}).get("sec", local_sec) if verified_passed else local_sec)
+                timing = precise_cut_boundary_timing(refined_local_sec, float(clip_offset or 0.0), fps, sec_to_frame)
+                timeline_sec = timing["timeline_sec"]
+                timeline_frame = timing["timeline_frame"]
+                refined_local_sec = timing["clip_local_sec"]
+                fps_num, fps_den = source_fps_parts(fps)
                 score = max(
                     score,
                     float(packet_score or 0.0),
@@ -929,6 +1018,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                     "fps": fps,
                     "frame_rate": fps,
                     "timeline_frame_rate": fps,
+                    "source_fps": fps,
+                    "source_fps_num": fps_num,
+                    "source_fps_den": fps_den,
                     "source": "visual_provisional",
                     "detector": "packet-energy-visual-cut-jump-v2",
                     "reason": str(
@@ -1118,8 +1210,15 @@ def build_auto_grid_scan_helpers(deps: dict):
             raw_rows = list(rows or [])
             if not raw_rows:
                 return []
+            fps_num, fps_den = source_fps_parts(fps)
             if not _setting_bool(settings.get("scan_cut_pioneer_candidate_fusion_enabled"), True):
-                return normalize_cut_boundaries(raw_rows, primary_fps=fps)
+                normalized_rows = normalize_cut_boundaries(raw_rows, primary_fps=fps)
+                for row in normalized_rows:
+                    row.setdefault("source_fps", fps)
+                    row.setdefault("source_fps_num", fps_num)
+                    row.setdefault("source_fps_den", fps_den)
+                _trace_cut_boundary_rows(normalized_rows, backend_label=backend_label, fps=fps)
+                return normalized_rows
             fused_rows = fuse_cut_boundary_candidate_rows(
                 raw_rows,
                 fps=fps,
@@ -1139,9 +1238,14 @@ def build_auto_grid_scan_helpers(deps: dict):
                     row.setdefault("cut_boundary_backend", backend_label)
                     row.setdefault("visual_scan_source_path", str(scan_filepath))
                     row.setdefault("visual_scan_proxy", bool(scan_filepath != original_filepath))
+                    row.setdefault("source_fps", fps)
+                    row.setdefault("source_fps_num", fps_num)
+                    row.setdefault("source_fps_den", fps_den)
                 except Exception:
                     pass
-            return normalize_cut_boundaries(fused_rows, primary_fps=fps)
+            normalized_rows = normalize_cut_boundaries(fused_rows, primary_fps=fps)
+            _trace_cut_boundary_rows(normalized_rows, backend_label=backend_label, fps=fps)
+            return normalized_rows
 
         if ffmpeg_scene_enabled and ffmpeg_scene_replace_opencv:
             scene_rows = list(_scan_ffmpeg_scene_rows() or [])
@@ -1805,6 +1909,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 refined_local_sec = float(verified.get("sec", local_sec) or local_sec)
                 timeline_sec = float(clip_offset or 0.0) + refined_local_sec
                 timeline_frame = sec_to_frame(timeline_sec, fps)
+                fps_num, fps_den = source_fps_parts(fps)
                 fixed = dict(row)
                 fixed.update(
                     {
@@ -1817,6 +1922,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                         "fps": fps,
                         "frame_rate": fps,
                         "timeline_frame_rate": fps,
+                        "source_fps": fps,
+                        "source_fps_num": fps_num,
+                        "source_fps_den": fps_den,
                         "clip_idx": int(clip_idx or 0),
                         "clip_local_sec": refined_local_sec,
                         "source_path": original_filepath,

@@ -91,6 +91,16 @@ Trace packages are collected with:
 ./venv/bin/python tools/collect_trace_package.py --run-id <trace-run-id>
 ```
 
+## Cut-boundary source-fps scout validation
+
+For the fixed 60000/1001fps NLE Slice 2 fixture, use the narrow verifier before broad QA:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" --output-dir output/manual_verification/latest/nle_slice2_source_fps_scout_20260627
+```
+
+This verifier records whether target frames `2766` and `2677` are newly detected or at least preserved on the exact source-fps frame grid. If `candidate_detected=false`, report that as a remaining false-negative tuning risk even when `frame_preserved=true`.
+
 ## PyQt / offscreen UI validation
 
 PyQt UI 회귀는 화면 서버에 의존하지 않는 경로를 우선 사용합니다.
