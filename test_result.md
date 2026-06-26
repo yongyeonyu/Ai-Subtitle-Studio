@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.00.17 source-app NLE baseline release - 2026-06-26
+
+- 실행 모드: release checkpoint metadata/doc sync for completed source-app internal NLE read-only baseline, roughcut render/export snapshot routing, and X5 standard fixture QA hardening.
+- 결과: pass
+- 수정/확인 항목:
+  - `core/runtime/config.py` app version updated to `04.00.17`.
+  - `core/project/project_format.py` project schema version updated to `04.00.17`.
+  - `RELEASE_v04.00.17.md`, `README.md`, `AGENTS.md`, `ACTION_ITEMS.md`, `docs/PROJECT_STATE.md`, `docs/HANDOFF.md`, and `docs/VALIDATION.md` synced to the new checkpoint.
+  - UI/UX, subtitle quality policy, STT/LLM/VAD/model selection, and timing algorithms were not changed in this closeout slice.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py ui/roughcut/roughcut_export.py tools/qa_suite_runner.py tests/test_project_nle_snapshot.py tests/test_qa_suite_runner.py tests/test_roughcut_ui_v2.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py` -> `269 passed, 4 subtests passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py tests/test_qa_suite_runner.py` -> `103 passed`
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py full --output-dir output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901` -> pass, `passed_count=9`, `failed_count=0`
+  - `git diff --check -- .` -> pass
+- 산출물:
+  - `RELEASE_v04.00.17.md`
+  - `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901`
+- 참고:
+  - DMG/sign/notarization/App Store upload은 실행하지 않았다. DMG packaging은 명시 요청 시에만 별도 범위로 다룬다.
+  - X5 표준 fixture `test video/X5_시승기_후반.MP4`는 ignored local media로 복원되어 있으며 커밋 대상이 아니다.
+
 ## v04.00.16 source-app checkpoint release - 2026-06-26
 
 - 실행 모드: release checkpoint metadata/doc sync for roughcut exact-join, sync-safe render, app-command, fast-exit, and internal NLE architecture planning work.

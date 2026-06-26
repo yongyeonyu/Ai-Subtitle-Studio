@@ -12,6 +12,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QListView, QWidget
 
+from core.project.nle_snapshot import build_concat_render_plan_from_snapshot
+from core.roughcut import build_concat_render_plan
 from core.roughcut.models import (
     ChapterMetadata,
     EDLSegment,
@@ -21,6 +23,8 @@ from core.roughcut.models import (
     RoughCutSegment,
     RoughCutTitleSuggestion,
 )
+from core.video_codec import roughcut_render_mode
+from ui.main.app_command_bridge import execute_app_command
 from ui.roughcut.roughcut_widget import RoughcutWidget
 from ui.settings.settings_gap import GapSettingsDialog
 from ui.settings.settings_advanced import AdvancedSettingsDialog
@@ -922,6 +926,9 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(export["stitched_cut_boundary_count"], 1)
             self.assertTrue(render_plan_exists)
             self.assertTrue(edl_exists)
+            self.assertEqual(render_payload["edl"]["schema"], "ai_subtitle_studio.roughcut.edl.v1")
+            self.assertIn("subtitle_burnin_command", render_payload)
+            self.assertEqual(render_payload["render_mode"], render_payload["render_plan"]["render_mode"])
             self.assertEqual(render_payload["stitched_cut_boundaries"][0]["timeline_sec"], 4.0)
             self.assertEqual(render_payload["render_plan"]["stitched_cut_boundaries"][0]["timeline_sec"], 4.0)
             self.assertEqual(edl_payload["stitched_cut_boundaries"][0]["timeline_sec"], 4.0)
@@ -982,10 +989,84 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(sidecars["stitched_cut_boundary_count"], 1)
             self.assertTrue(render_plan_exists)
             self.assertTrue(edl_exists)
+            self.assertEqual(render_payload["edl"]["schema"], "ai_subtitle_studio.roughcut.edl.v1")
+            self.assertIn("subtitle_burnin_command", render_payload)
+            self.assertEqual(render_payload["render_mode"], render_payload["render_plan"]["render_mode"])
             self.assertEqual(render_payload["stitched_cut_boundaries"][0]["timeline_sec"], 4.0)
             self.assertEqual(edl_payload["stitched_cut_boundaries"][0]["timeline_sec"], 4.0)
             self.assertEqual([row["timeline_sec"] for row in stitched_rows], [4.0])
             self.assertEqual(Path(stitched_sidecar_path).name, "clip_roughcut_edl.json")
+        finally:
+            widget.close()
+
+    def test_render_plan_builders_route_through_nle_snapshot_adapter_with_legacy_parity(self):
+        widget = RoughcutWidget()
+        try:
+            widget._active_editor = lambda: SimpleNamespace(media_path="/tmp/source.mov")
+            result = RoughCutResult(
+                segments=(
+                    RoughCutSegment(
+                        "major_A",
+                        0.0,
+                        8.0,
+                        title="첫 장면",
+                        major_id="A",
+                        minor_groups=(
+                            RoughCutMinorGroup("A1", "A", "A1", "첫 장면", 0.0, 4.0, chapter_ids=("chapter_0001",)),
+                            RoughCutMinorGroup("A2", "A", "A2", "둘째 장면", 4.0, 8.0, chapter_ids=("chapter_0002",)),
+                        ),
+                    ),
+                ),
+                chapters=(
+                    ChapterMetadata("chapter_0001", "첫 장면", 0.0, 4.0, major_id="A", minor_code="A1"),
+                    ChapterMetadata("chapter_0002", "둘째 장면", 4.0, 8.0, major_id="A", minor_code="A2"),
+                ),
+                edit_decisions=(
+                    EditDecision("chapter_0001", "keep", source_start=0.0, source_end=4.0),
+                    EditDecision("chapter_0002", "keep", source_start=4.0, source_end=8.0),
+                ),
+                edl_segments=(
+                    EDLSegment("/tmp/source.mov", "chapter_0001", 0.0, 4.0, 0.0, 4.0, chapter_id="chapter_0001"),
+                    EDLSegment("/tmp/source.mov", "chapter_0002", 4.0, 8.0, 4.0, 8.0, chapter_id="chapter_0002"),
+                ),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+
+            with tempfile.TemporaryDirectory() as tmp, patch(
+                "ui.roughcut.roughcut_export.build_concat_render_plan_from_snapshot",
+                wraps=build_concat_render_plan_from_snapshot,
+            ) as nle_adapter:
+                temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
+                srt_target = Path(tmp) / "clip_roughcut.srt"
+                srt_plan = widget._build_render_plan_for_srt_target(srt_target, result)
+                legacy_srt_plan = build_concat_render_plan(
+                    result.edl_segments,
+                    srt_target.with_suffix(".mov"),
+                    temp_dir,
+                    render_mode=roughcut_render_mode(),
+                )
+
+                video_target = Path(tmp) / "manual_render.mov"
+                video_plan = widget._build_render_plan_for_video_target(video_target, result)
+                legacy_video_plan = build_concat_render_plan(
+                    result.edl_segments,
+                    video_target,
+                    temp_dir,
+                    render_mode=roughcut_render_mode(),
+                )
+
+            self.assertEqual(nle_adapter.call_count, 2)
+            self.assertEqual(srt_plan.output_path, legacy_srt_plan.output_path)
+            self.assertEqual(srt_plan.extract_commands, legacy_srt_plan.extract_commands)
+            self.assertEqual(srt_plan.concat_command, legacy_srt_plan.concat_command)
+            self.assertEqual(srt_plan.segment_manifest, legacy_srt_plan.segment_manifest)
+            self.assertEqual(srt_plan.stitched_cut_boundaries, legacy_srt_plan.stitched_cut_boundaries)
+            self.assertEqual(video_plan.output_path, legacy_video_plan.output_path)
+            self.assertEqual(video_plan.extract_commands, legacy_video_plan.extract_commands)
+            self.assertEqual(video_plan.concat_command, legacy_video_plan.concat_command)
+            self.assertEqual(video_plan.segment_manifest, legacy_video_plan.segment_manifest)
+            self.assertEqual(video_plan.stitched_cut_boundaries, legacy_video_plan.stitched_cut_boundaries)
         finally:
             widget.close()
 
@@ -1039,6 +1120,93 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(Path(data["render_plan_path"]).name, "automation_render_render_plan.json")
             self.assertEqual(Path(data["edl_path"]).name, "automation_render_edl.json")
             self.assertEqual(data["stitched_cut_boundary_count"], 1)
+        finally:
+            widget.close()
+
+    def test_app_command_roughcut_export_and_render_use_nle_snapshot_route(self):
+        widget = RoughcutWidget()
+        try:
+            editor = SimpleNamespace(media_path="/tmp/source.mov")
+            owner = SimpleNamespace(
+                _roughcut_widget=widget,
+                _current_project_path="",
+                _multiclip_files=[],
+                _multiclip_boundaries=[],
+                _active_editor=lambda: editor,
+                isMinimized=lambda: False,
+                show=lambda: None,
+                raise_=lambda: None,
+                activateWindow=lambda: None,
+            )
+            widget.owner = owner
+            widget._result = RoughCutResult(
+                segments=(
+                    RoughCutSegment(
+                        "major_A",
+                        0.0,
+                        8.0,
+                        title="첫 장면",
+                        major_id="A",
+                        minor_groups=(
+                            RoughCutMinorGroup("A1", "A", "A1", "첫 장면", 0.0, 4.0, chapter_ids=("chapter_0001",)),
+                            RoughCutMinorGroup("A2", "A", "A2", "둘째 장면", 4.0, 8.0, chapter_ids=("chapter_0002",)),
+                        ),
+                    ),
+                ),
+                chapters=(
+                    ChapterMetadata("chapter_0001", "첫 장면", 0.0, 4.0, major_id="A", minor_code="A1"),
+                    ChapterMetadata("chapter_0002", "둘째 장면", 4.0, 8.0, major_id="A", minor_code="A2"),
+                ),
+                edit_decisions=(
+                    EditDecision("chapter_0001", "keep", source_start=0.0, source_end=4.0),
+                    EditDecision("chapter_0002", "keep", source_start=4.0, source_end=8.0),
+                ),
+                edl_segments=(
+                    EDLSegment("/tmp/source.mov", "chapter_0001", 0.0, 4.0, 0.0, 4.0, chapter_id="chapter_0001"),
+                    EDLSegment("/tmp/source.mov", "chapter_0002", 4.0, 8.0, 4.0, 8.0, chapter_id="chapter_0002"),
+                ),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+            widget._editor_segments = lambda: [
+                {"start": 0.0, "end": 4.0, "text": "첫 자막", "speaker": "00"},
+                {"start": 4.0, "end": 8.0, "text": "둘째 자막", "speaker": "00"},
+            ]
+            started = []
+            widget._start_render_worker = lambda plan, dry_run=False: started.append((plan, dry_run))
+
+            with tempfile.TemporaryDirectory() as tmp, patch(
+                "ui.roughcut.roughcut_export.build_concat_render_plan_from_snapshot",
+                wraps=build_concat_render_plan_from_snapshot,
+            ) as nle_adapter:
+                export_path = Path(tmp) / "bridge_roughcut.srt"
+                export_result = execute_app_command(owner, {"command": "roughcut-export-srt", "path": str(export_path)})
+                render_path = Path(tmp) / "bridge_render.mov"
+                render_result = execute_app_command(owner, {"command": "roughcut-render-video", "path": str(render_path)})
+                export_render_plan = Path(export_result["data"]["render_plan_path"])
+                export_edl = Path(export_result["data"]["edl_path"])
+                export_render_plan_exists = export_render_plan.exists()
+                export_edl_exists = export_edl.exists()
+                render_payload = json.loads(export_render_plan.read_text(encoding="utf-8"))
+
+            self.assertTrue(export_result["ok"])
+            self.assertEqual(export_result["message"], "roughcut_srt_exported")
+            self.assertEqual(export_result["data"]["subtitle_count"], 2)
+            self.assertTrue(export_render_plan_exists)
+            self.assertTrue(export_edl_exists)
+            self.assertEqual(render_payload["edl"]["schema"], "ai_subtitle_studio.roughcut.edl.v1")
+            self.assertEqual(render_payload["stitched_cut_boundaries"][0]["timeline_sec"], 4.0)
+            self.assertTrue(render_result["ok"])
+            self.assertTrue(render_result["queued"])
+            self.assertEqual(render_result["message"], "roughcut_render_started")
+            self.assertEqual(render_result["data"]["path"], str(render_path))
+            self.assertEqual(render_result["data"]["stitched_cut_boundary_count"], 1)
+            self.assertEqual(render_result["data"]["extract_command_count"], len(started[0][0].extract_commands))
+            self.assertEqual(render_result["data"]["concat_command_count"], 1)
+            self.assertEqual(len(started), 1)
+            self.assertFalse(started[0][1])
+            self.assertEqual(started[0][0].output_path, str(render_path))
+            self.assertEqual(nle_adapter.call_count, 2)
         finally:
             widget.close()
 

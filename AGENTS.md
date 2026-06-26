@@ -103,8 +103,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.00.16-source-app
-Phase: SOURCE_APP_CONTINUATION_V4_0_16
+Document-Version: 04.00.17-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_0_17
 Last-Updated: 2026-06-26
 Updated-By: Codex
 Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.00.16`
-- Latest release checkpoint: `v04.00.16`
+- App version in code: `04.00.17`
+- Latest release checkpoint: `v04.00.17`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -201,34 +201,34 @@ Completed item rule:
   - `./venv/bin/python tools/qa_suite_runner.py major`
   - `./venv/bin/python tools/qa_suite_runner.py full`
 - Latest known one-command full QA pass:
-  - `output/manual_verification/latest/qa_suite_full_20260522_081710`
-  - command: `./venv/bin/python tools/qa_suite_runner.py full`
+  - `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901`
+  - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py full --output-dir output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901`
   - result: pass, `failed_count=0`
-  - scenarios: `editor_compact_macau`, `video_menu_macau`, `save_export_macau`, `menu_stt_lora_macau`, `x5_high_rolling_180s`
+  - scenarios: `editor_compact_macau`, `video_menu_macau`, `save_export_macau`, `menu_stt_lora_macau`, `roughcut_reopen_macau`, `roughcut_interaction_macau`, `roughcut_candidate_macau`, `roughcut_release_audit_macau`, `x5_high_rolling_180s`
+  - note: the default X5 path `test video/X5_시승기_후반.MP4` was restored as an ignored local fixture from the existing X5 video-only `.mov` plus the real X5 raw WAV; no `AI_SUBTITLE_STUDIO_QA_X5_MEDIA` override was used.
 - Latest source-app quick smoke for the current release line:
-  - `output/manual_verification/latest/qa_suite_quick_20260525_141648`
+  - `output/manual_verification/latest/qa_suite_quick_20260626_022343`
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
   - result: pass, `failed_count=0`
-- Latest local non-release commit:
-  - `0ca501bf` - `fix: stabilize editor timeline and project UI`
-- Latest focused guard set for the current local editor/timeline patch:
-  - command: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest tests/test_editor_autosave_cleanup.py tests/test_editor_srt_open_refresh.py tests/test_main_file_ops_nonfatal.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_renderer_overlay.py tests/test_sidebar_terminal_layout.py tests/test_subtitle_boundary_alignment.py tests/test_timeline_hit_targets.py tests/test_timeline_layout_constants.py tests/test_timeline_playhead_fit.py tests/test_video_player_widget.py -q`
-  - result: `709 passed`
-  - additional checks: `py_compile` on touched Python modules and `git diff --check` passed before commit.
-  - note: source-app spot verification covered the Macau project editor UI and global minimap bottom line, but no new Macau/X5 promotion artifact has been stored under `output/manual_verification/latest/` yet.
+- Latest release checkpoint scope:
+  - `v04.00.17` - completed source-app internal NLE read-only baseline plus X5 standard fixture QA hardening.
+- Latest focused guard set for the completed NLE baseline:
+  - command: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py`
+  - result: `269 passed, 4 subtests passed`
+  - additional checks: touched Python `py_compile` and `git diff --check -- .` passed before commit/push.
 - Latest full QA X5 rolling summary:
-  - artifact: `output/manual_verification/latest/qa_suite_full_20260522_081710/x5_high_rolling_180s`
-  - `total_elapsed_sec=61.142`
-  - `pipeline_elapsed_sec=61.027`
-  - `peak_rss_bytes=2154872832`
-  - `final/raw=54/52`
-  - STT pressure transitions: `['critical', 'critical']`
+  - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
+  - `total_elapsed_sec=48.511`
+  - `pipeline_elapsed_sec=48.327`
+  - `peak_rss_bytes=765329408`
+  - `final/raw=55/56`
+  - note: this used the default X5 MP4 path without explicit override.
 - Recent live-app STT recovery check:
   - artifact: `output/manual_verification/latest/20260522_stt_zero_result_fallback_live`
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `ACTION_ITEMS.md`, section `Active Execution Queue`.
-- Current active item: Source-App Internal NLE Timeline Architecture Plan.
+- Current active item: Post-Generation Editor Readiness And Verification Index.
 
 ## Current Risks
 
@@ -237,23 +237,23 @@ Completed item rule:
 - Long-flow STT2 rescue and word timestamp precision still have meaningful wall-clock cost; optimize only by reducing waiting, cleanup churn, UI/status hot paths, or safe resource lifetime waste.
 - Do not lower X5 quality gates, skip STT2, skip LLM, downgrade models, or loosen subtitle quality policy as a speed optimization.
 - Tinyping long-flow is manual-only unless the owner explicitly requests it.
-- The internal NLE timeline plan is a source-app domain/adapter plan only. It must not reopen native migration, Swift rewrite, QML migration, or visible Premiere-style UI work without explicit owner approval.
+- The completed internal NLE baseline is a source-app domain/adapter layer only. It must not reopen native migration, Swift rewrite, QML migration, or visible Premiere-style UI work without explicit owner approval.
 - Always re-check `git status` before widening a follow-up patch.
 
 ## Narrow Next Item
 
 Use `ACTION_ITEMS.md` as the executable queue. The current narrow target is:
 
-1. Map current ownership and invariants for project payloads, media assets, editor segments, roughcut candidates, cut-boundary seeds, render plans, sidecars, timeline canvas state, and save/reopen behavior.
-2. Draft the source-app NLE domain contract in docs before runtime changes: `ProjectAsset`, `Sequence`, `Track`, `Clip`, `CaptionSegment`, `TimelineMarker`, and `RenderPlan`.
-3. Add read-only adapters only after the docs/schema boundary is reviewed, and prove that existing SRT/project/roughcut data round-trips unchanged.
+1. Map current generation completion, autosave, editor idle-ready, roughcut follow-up, and cleanup timing.
+2. Add or verify tests proving playback/edit/status commands can proceed before heavier cleanup completes.
+3. Keep the first slice owner-map/doc/test oriented before changing runtime behavior.
 
 QA gate for that item:
 
 - No UI/UX labels, layout, colors, shortcuts, popup behavior, or visible workflow changes without explicit owner approval.
 - No subtitle quality policy, STT2, LLM, LoRA, VAD, timing, or model-selection changes.
-- Legacy `.aissproj`, direct SRT open, roughcut sidecars, and rendered roughcut reopen paths must continue to load.
-- Source-app Macau and X5 fixture proof must be stored under `output/manual_verification/latest/` before promoting the architecture as the new baseline.
+- Generation completion must return the editor to a trustworthy interactive state before heavy cleanup can stall playback/editing.
+- Subtitle time editing, timeline zoom/fit/time-window, subtitle magnet, playback controls, save, and bottom/global menu buttons must stay responsive.
 
 ## Fixtures
 

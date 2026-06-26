@@ -60,6 +60,12 @@ PY
 ./venv/bin/python tools/qa_suite_runner.py full
 ```
 
+`full`의 기본 X5 경로는 `test video/X5_시승기_후반.MP4`입니다. 자동 fallback 후보는 오디오 스트림이 있을 때만 선택되며, 표준 MP4가 없으면 X5 시나리오는 `media_missing`으로 실패해야 합니다. 오디오가 있는 외부 X5 소스를 보조 proof로 사용할 때만 아래처럼 명시 override를 사용하고, 결과 보고서에는 표준 MP4 proof와 구분해서 기록합니다.
+
+```bash
+AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/path/to/audio-bearing-x5-media' ./venv/bin/python tools/qa_suite_runner.py full
+```
+
 기능별로는 owner 주변의 좁은 pytest를 먼저 사용합니다. 예시는 아래와 같습니다.
 
 ```bash

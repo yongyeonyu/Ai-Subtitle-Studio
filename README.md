@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.16-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.16-30D158?style=for-the-badge)](RELEASE_v04.00.16.md)
+[![App Version](https://img.shields.io/badge/app-04.00.17-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.17-30D158?style=for-the-badge)](RELEASE_v04.00.17.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -148,9 +148,9 @@ Artifacts are written under `output/manual_verification/latest/qa_suite_<profile
 
 Current verified baseline:
 
-- `quick`: `qa_suite_quick_20260525_141648`
+- `quick`: `qa_suite_quick_20260626_022343`
 - `major`: `qa_suite_major_20260521_121601`
-- `full`: `qa_suite_full_20260522_081710`
+- `full`: `qa_suite_full_standard_x5_restored_20260626_0901`
 
 Operational rules:
 
@@ -223,10 +223,10 @@ Recommended read order for a fresh continuation:
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.16` |
-| Latest release checkpoint | `v04.00.16` |
-| Handoff document version | `04.00.16-source-app` |
-| Active phase | `SOURCE_APP_CONTINUATION_V4_0_16` |
+| App version in code | `04.00.17` |
+| Latest release checkpoint | `v04.00.17` |
+| Handoff document version | `04.00.17-source-app` |
+| Active phase | `SOURCE_APP_CONTINUATION_V4_0_17` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -257,7 +257,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.16.md`](RELEASE_v04.00.16.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.17.md`](RELEASE_v04.00.17.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

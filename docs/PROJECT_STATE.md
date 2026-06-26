@@ -38,7 +38,7 @@
 - 러프컷 초안 생성과 PHASE2 편집 흐름 보강
 - 기존 Python/PyQt6 source app 유지와 실제 앱 검증 중심 진행
 
-`core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.16.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름과 source-app internal NLE timeline architecture plan은 이미 진행 중인 작업 축으로 보입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
+`core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.17.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름과 source-app internal NLE read-only baseline은 현재 구조 기준선으로 반영되어 있습니다. 현재 활성 작업 축은 post-generation editor readiness와 최신 검증 index 정리입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
 
 현재 운영 방향상 `native/` 디렉터리와 관련 실험 흔적은 저장소 참고 자료로 남아 있을 수 있지만, active roadmap은 아닙니다. owner가 다시 명시하지 않는 한 새 native migration 전개를 기본 작업으로 취급하지 않습니다.
 
@@ -65,20 +65,20 @@
 
 ## Version/release notes
 
-- 현재 코드에서 확인되는 앱 버전 상수는 `04.00.16`입니다. (`core/runtime/config.py`)
-- 루트에는 `RELEASE_v04.00.07.md`부터 `RELEASE_v04.00.16.md`까지 릴리스 노트가 존재합니다.
-- 최신 릴리스 문서(`RELEASE_v04.00.16.md`)는 새 제품 기능보다 roughcut exact-join/render/app-command 증빙과 다음 구조 전환 계획을 묶는 체크포인트 성격이 강합니다.
+- 현재 코드에서 확인되는 앱 버전 상수는 `04.00.17`입니다. (`core/runtime/config.py`)
+- 루트에는 `RELEASE_v04.00.07.md`부터 `RELEASE_v04.00.17.md`까지 릴리스 노트가 존재합니다.
+- 최신 릴리스 문서(`RELEASE_v04.00.17.md`)는 source-app internal NLE read-only baseline 완료와 X5 표준 fixture QA 보강을 묶는 체크포인트 성격이 강합니다.
 - `README.md`와 릴리스 문서 기준 공식 검증 흐름은 `tools/qa_suite_runner.py`와 pytest, `compileall`, `git diff --check`, source-app smoke를 조합하는 방식입니다.
 - DMG/패키징은 저장소에 관련 디렉터리가 있어도 기본 작업이 아니라 요청 시 별도 검증 대상으로 취급해야 합니다.
 
 ## Open action items
 
-`ACTION_ITEMS.md` 기준 현재 상단 활성 큐는 source-app internal NLE timeline architecture plan입니다. 문서에서 직접 확인되는 핵심 축은 다음과 같습니다.
+`ACTION_ITEMS.md` 기준 현재 상단 활성 큐는 `Post-Generation Editor Readiness And Verification Index`입니다. 문서에서 직접 확인되는 핵심 축은 다음과 같습니다.
 
-- 프로젝트/미디어/시퀀스/트랙/클립/자막/마커/렌더플랜 소유권을 문서와 read-only adapter부터 정리
-- cut boundary point와 clip boundary span을 분리한 단일 시간 모델 정립
-- 기존 `.aissproj`, direct SRT, roughcut sidecar, rendered roughcut reopen 경로의 호환성 유지
-- 실앱 Macau/X5 증빙을 남긴 뒤에만 새 구조를 baseline으로 승격
+- generation completion, autosave, editor idle-ready, roughcut follow-up, cleanup timing의 owner path 정리
+- heavier cleanup이 끝나기 전에도 playback/edit/status commands가 가능한지 검증
+- subtitle time edit 후 timeline zoom/fit/time-window, subtitle magnet, playback controls, save, bottom/global menu 버튼 반응성 확인
+- post-generation UI-frame shake 원인 추적과 verification index 최신화
 
 세부 우선순위는 `ACTION_ITEMS.md`가 단일 소스 오브 트루스이므로, 새 세션에서는 반드시 그 파일의 최신 체크 상태를 다시 읽어야 합니다.
 

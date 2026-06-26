@@ -299,9 +299,41 @@ def _x5_media_for_suite() -> Path:
         return Path(override).expanduser()
     for candidate in X5_MEDIA_CANDIDATES:
         path = Path(candidate).expanduser()
-        if path.is_file():
+        if path.is_file() and _media_has_audio_stream(path):
             return path
     return Path(X5_MEDIA).expanduser()
+
+
+def _media_has_audio_stream(path: Path | str) -> bool:
+    try:
+        completed = subprocess.run(
+            [
+                "ffprobe",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "json",
+                str(Path(path).expanduser()),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except Exception:
+        return False
+    if completed.returncode != 0:
+        return False
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except Exception:
+        return False
+    return bool(payload.get("streams"))
 
 
 def _full_media(
@@ -602,6 +634,7 @@ def build_scenarios(profile: str, output_root: Path) -> list[dict[str, Any]]:
                 steps=[
                     _step("open_project", "open-project", str(multi_candidate_project), timeout=60.0, delay_sec=3.0),
                     _step("open_roughcut", "open-roughcut", timeout=45.0, delay_sec=1.0),
+                    _step("open_roughcut_refresh", "open-roughcut", timeout=45.0, delay_sec=1.0),
                     {
                         **_step("status_ready", "status", timeout=30.0),
                         "expect_data": {
@@ -1184,6 +1217,7 @@ def _run_full_media(spec: dict[str, Any], python_bin: Path) -> dict[str, Any]:
     output_dir = Path(spec["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = output_dir / "logs"
+    started_at = time.strftime("%Y-%m-%d %H:%M:%S")
     argv = [
         str(python_bin),
         str(ROOT / "tools" / "verify_full_media_pipeline.py"),
@@ -1196,6 +1230,31 @@ def _run_full_media(spec: dict[str, Any], python_bin: Path) -> dict[str, Any]:
         "--duration-sec",
         str(spec["duration_sec"]),
     ]
+    media_path = Path(str(spec.get("media", ""))).expanduser()
+    if not media_path.is_file():
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "run.stdout").write_text("", encoding="utf-8")
+        (logs_dir / "run.stderr").write_text(f"media_missing: {media_path}\n", encoding="utf-8")
+        payload = {
+            "ok": False,
+            "error": "media_missing",
+            "message": str(media_path),
+            "data": {"media": str(media_path)},
+        }
+        scenario_result = {
+            "id": spec["id"],
+            "type": spec["type"],
+            "description": spec.get("description", ""),
+            "started_at": started_at,
+            "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "output_dir": str(output_dir),
+            "ok": False,
+            "failed_step": "full_media",
+            "result": payload,
+            "command": argv[2:],
+        }
+        (output_dir / "summary.json").write_text(json.dumps(scenario_result, ensure_ascii=False, indent=2), encoding="utf-8")
+        return scenario_result
     returncode, payload = _run_subprocess(
         argv,
         cwd=ROOT,
@@ -1206,7 +1265,7 @@ def _run_full_media(spec: dict[str, Any], python_bin: Path) -> dict[str, Any]:
         "id": spec["id"],
         "type": spec["type"],
         "description": spec.get("description", ""),
-        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "started_at": started_at,
         "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "output_dir": str(output_dir),
         "ok": bool(payload.get("ok")) and returncode == 0,

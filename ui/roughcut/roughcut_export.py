@@ -9,8 +9,8 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
+from core.project.nle_snapshot import build_concat_render_plan_from_snapshot, build_project_nle_snapshot
 from core.roughcut import (
-    build_concat_render_plan,
     build_ffmpeg_subtitle_burnin_command,
     edl_to_dict,
     retime_subtitles_for_edl,
@@ -155,11 +155,11 @@ class RoughcutExportMixin:
     def _build_render_plan_for_srt_target(self, target_srt_path: Path, result):
         output_path = self._render_output_path_for_srt_target(Path(target_srt_path), result)
         temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
-        return build_concat_render_plan(
-            result.edl_segments,
+        return self._build_nle_render_plan_for_target(
             output_path,
             temp_dir,
             render_mode=roughcut_render_mode(),
+            result=result,
         )
 
     def _build_render_plan_for_video_target(self, target_video_path: Path, result):
@@ -175,11 +175,21 @@ class RoughcutExportMixin:
             )
             target = target.with_suffix((first_source.suffix if first_source is not None else "") or ".mp4")
         temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
-        return build_concat_render_plan(
-            result.edl_segments,
+        return self._build_nle_render_plan_for_target(
             target,
             temp_dir,
             render_mode=roughcut_render_mode(),
+            result=result,
+        )
+
+    def _build_nle_render_plan_for_target(self, output_path: Path, temp_dir: Path, *, render_mode: str, result):
+        project = self._nle_project_payload_for_render_plan(result, render_mode=render_mode)
+        snapshot = build_project_nle_snapshot(project, project_path=self._project_path())
+        return build_concat_render_plan_from_snapshot(
+            snapshot,
+            str(output_path),
+            str(temp_dir),
+            render_mode=render_mode,
         )
 
     def _rendered_video_sidecar_paths(self, target: Path) -> tuple[Path, Path]:
@@ -252,6 +262,46 @@ class RoughcutExportMixin:
             "subtitle_burnin_command": build_ffmpeg_subtitle_burnin_command(output_path, srt_path, subtitled_path),
             "render_mode": getattr(plan, "render_mode", roughcut_render_mode()),
             "roughcut_export_style": dict(getattr(self, "_roughcut_export_style", {}) or {}),
+        }
+
+    def _nle_project_payload_for_render_plan(self, result, *, render_mode: str) -> dict:
+        edl_payload = edl_to_dict(
+            result.edl_segments,
+            metadata={"source": self._media_path()},
+            chapters=result.chapters,
+            major_segments=result.segments,
+        )
+        media_files = self._project_media_files()
+        clip_boundaries = self._clip_boundaries(fallback_duration=float(edl_payload.get("duration") or 0.0))
+        candidate_id = str(getattr(self, "_selected_candidate_id", "") or "roughcut_export_current")
+        return {
+            "project_name": "roughcut_export",
+            "mode": self._project_editor_mode(),
+            "video": {
+                "duration_sec": float(edl_payload.get("duration") or 0.0),
+                "primary_fps": 30.0,
+            },
+            "editor_state": {
+                "mode": self._project_editor_mode(),
+                "media_files": media_files,
+                "multiclip": {"boundaries": clip_boundaries},
+            },
+            "roughcut_state": {
+                "selected_candidate_id": candidate_id,
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "name": "current roughcut export",
+                        "outputs": {
+                            "edl": edl_payload,
+                            "render_plan": {
+                                "render_mode": render_mode,
+                                "stitched_cut_boundaries": list(edl_payload.get("stitched_cut_boundaries") or []),
+                            },
+                        },
+                    }
+                ],
+            },
         }
 
     def _dry_run_render_plan(self):

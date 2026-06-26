@@ -1,5 +1,15 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260626-085500-nle-completion-audit-gap-review.md`
+- `.agents/sentinel/handoffs/20260626-085419-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-083751-x5-source-app-proof-blocker-review.md`
+- `.agents/sentinel/handoffs/20260626-083622-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-082519-nle-app-command-save-reload-compatibility-gap.md`
+- `.agents/sentinel/handoffs/20260626-082444-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-081702-nle-render-export-parity-risk.md`
+- `.agents/sentinel/handoffs/20260626-081618-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-081028-editor-readiness-owner-map.md`
+- `.agents/sentinel/handoffs/20260626-080728-nle-closeout-doc-consistency-review.md`
 - `.agents/sentinel/handoffs/20260626-024301-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260626-021011-qa-runner-fixture-repair-risk.md`
 - `.agents/sentinel/handoffs/20260626-020348-watchdog-handoff-probe.md`

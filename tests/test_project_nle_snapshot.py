@@ -1,4 +1,5 @@
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,13 +9,14 @@ from core.project.nle_snapshot import (
     markers_from_roughcut_sidecar_payload,
     markers_from_stitched_cut_boundaries,
 )
-from core.project.project_context import build_editor_state
+from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_io import (
     clear_project_file_cache,
     read_project_file,
     read_project_storage_payload,
     write_project_file,
 )
+from ui.editor.editor_project_open_native import load_stitched_cut_boundaries_for_srt_open
 
 
 class ProjectNleSnapshotTests(unittest.TestCase):
@@ -244,6 +246,47 @@ class ProjectNleSnapshotTests(unittest.TestCase):
                 self.assertEqual(markers[0].metadata["exact_join"]["segment_before_id"], "chapter_0001")
                 self.assertEqual(markers[0].metadata["exact_join"]["segment_after_id"], "chapter_0002")
 
+    def test_direct_srt_sidecar_rows_project_to_nle_exact_join_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            srt_path = root / "clip_roughcut.srt"
+            media_path = root / "clip.mov"
+            sidecar_path = root / "clip_roughcut_render_plan.json"
+            srt_path.write_text("1\n00:00:01,000 --> 00:00:02,000\n외부 SRT\n\n", encoding="utf-8")
+            media_path.write_bytes(b"video")
+            sidecar_path.write_text(
+                json.dumps(
+                    {
+                        "render_plan": {
+                            "stitched_cut_boundaries": [
+                                {
+                                    "timeline_sec": 4.0,
+                                    "time": 4.0,
+                                    "source": "roughcut_concat_join",
+                                    "segment_before_id": "chapter_0001",
+                                    "segment_after_id": "chapter_0002",
+                                    "timeline_before_end": 4.0,
+                                    "timeline_after_start": 5.0,
+                                }
+                            ]
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            rows, loaded_sidecar_path = load_stitched_cut_boundaries_for_srt_open(str(srt_path), str(media_path))
+            markers = markers_from_stitched_cut_boundaries(rows)
+
+        self.assertEqual(Path(loaded_sidecar_path).name, "clip_roughcut_render_plan.json")
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(markers[0].kind, "roughcut_exact_join")
+        self.assertEqual(markers[0].time_domain, "output")
+        self.assertEqual(markers[0].time, 4.0)
+        self.assertEqual(markers[0].metadata["exact_join"]["segment_before_id"], "chapter_0001")
+        self.assertEqual(markers[0].metadata["exact_join"]["segment_after_id"], "chapter_0002")
+
     def test_top_level_sidecar_rows_win_over_nested_rows_like_existing_reader(self):
         payload = {
             "stitched_cut_boundaries": [
@@ -325,6 +368,36 @@ class ProjectNleSnapshotTests(unittest.TestCase):
         ]
         self.assertEqual(len(exact_markers), 1)
         self.assertEqual(exact_markers[0].time, 4.0)
+
+    def test_legacy_gap_rows_remain_non_destructive_while_snapshot_preserves_sequence_duration(self):
+        project = {
+            "project_name": "gap_integrity",
+            "video": {"duration_sec": 8.0, "primary_fps": 30.0},
+            "editor_state": build_editor_state(
+                mode="single",
+                media_files=["/tmp/source.mov"],
+                segments=[
+                    {"start": 0.0, "end": 2.0, "text": "before"},
+                    {"start": 2.0, "end": 5.0, "text": "", "is_gap": True},
+                    {"start": 5.0, "end": 8.0, "text": "after"},
+                ],
+                primary_fps=30.0,
+            ),
+        }
+        before_rows = project_segments_to_editor(project)
+        before = copy.deepcopy(project)
+
+        snapshot = build_project_nle_snapshot(project)
+        after_rows = project_segments_to_editor(project)
+
+        self.assertEqual(project, before)
+        self.assertEqual(before_rows, after_rows)
+        self.assertTrue(any(row.get("is_gap") for row in after_rows))
+        self.assertEqual(snapshot.sequences[0].duration, 8.0)
+        self.assertEqual(
+            [(caption.sequence_start, caption.sequence_end, caption.text) for caption in snapshot.sequences[0].captions],
+            [(0.0, 2.0, "before"), (5.0, 8.0, "after")],
+        )
 
     def test_project_file_roundtrip_does_not_persist_snapshot_fields_or_drop_asset_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:

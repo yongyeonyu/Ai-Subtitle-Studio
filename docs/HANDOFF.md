@@ -33,6 +33,161 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-26 Addendum - v04.00.17 Source-App NLE Baseline Release
+
+### Scope
+
+- Promoted the completed source-app internal NLE read-only baseline to release checkpoint `v04.00.17`.
+- The release includes the existing NLE domain contract, read-only snapshot adapter, roughcut exact-join marker projection, render/export plan routing through `build_concat_render_plan_from_snapshot`, and legacy save/reopen/sidecar compatibility guards.
+- X5 full QA proof was restored on the standard path by requiring automatic X5 media candidates to include audio and by restoring ignored local media at `test video/X5_시승기_후반.MP4`.
+- No UI/UX labels, layout, colors, shortcuts, popup behavior, subtitle timing policy, STT2, LLM, LoRA, VAD, or model-selection policy were changed.
+- DMG/sign/notarization/App Store upload were not run.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py ui/roughcut/roughcut_export.py tools/qa_suite_runner.py tests/test_project_nle_snapshot.py tests/test_qa_suite_runner.py tests/test_roughcut_ui_v2.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py` -> `269 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py tests/test_qa_suite_runner.py` -> `103 passed`
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py full --output-dir output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901` -> pass, `passed_count=9`, `failed_count=0`
+- `git diff --check -- .`
+
+### Next recommended action
+
+- Start the `Post-Generation Editor Readiness And Verification Index` queue item from `ACTION_ITEMS.md`.
+- Keep the NLE snapshot read-only until a later owner-approved compatibility gate explicitly allows persistence/schema write changes.
+
+## 2026-06-26 Addendum - X5 Standard Fixture Restore And Full QA
+
+### Scope
+
+- Tightened the source-app QA runner's automatic X5 full-media fixture selection so audio-less fallback media cannot silently become the full QA X5 source.
+- `tools/qa_suite_runner.py` now requires automatic X5 candidates to have an audio stream; the explicit `AI_SUBTITLE_STUDIO_QA_X5_MEDIA` override is still honored for named proof runs.
+- Missing full-media paths now produce a structured `media_missing` scenario result instead of an empty-stdout verifier traceback.
+- Restored the default X5 QA media path as an ignored local fixture: `test video/X5_시승기_후반.MP4`.
+  - Source video: existing `test video/X5_시승기_후반_자막소스.mov` video-only file.
+  - Source audio: real X5 raw WAV at `/Users/u_mo_c/Music/Music/Media.localized/Music/Unknown Artist/Unknown Album/X5_시승기_편집중_raw.wav`.
+  - Output properties: 180 seconds, H.264 1280x720 25 fps video plus AAC audio.
+- Added one extra `open-roughcut` refresh step to `roughcut_release_audit_macau`, matching the existing multi-candidate smoke path and removing a readiness flake where `status` could run before `roughcut_runtime` fields were populated.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-083751-x5-source-app-proof-blocker-review.md` was reviewed by Dex as `accept/revise`: the audio-less standard fixture blocker was accepted; the suggested dummy/mock X5 proof was rejected for promotion evidence.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-085500-nle-completion-audit-gap-review.md` was reviewed by Dex as `revise/defer`: standard X5 media absence was accepted as a real proof gap before fixture restore; the unproven claim that NLE snapshot deletes legacy `is_gap` rows was not adopted because current focused tests preserve gap rows and project round-trip metadata.
+
+### Validation
+
+- `./venv/bin/python -m py_compile tools/qa_suite_runner.py tests/test_qa_suite_runner.py`
+- `./venv/bin/python -m pytest -q tests/test_qa_suite_runner.py -k "x5 or full_media or full_adds_x5"` -> `6 passed, 23 deselected`
+- `./venv/bin/python -m pytest -q tests/test_qa_suite_runner.py` -> `29 passed`
+- `git diff --check -- tools/qa_suite_runner.py tests/test_qa_suite_runner.py`
+- Earlier standard X5 MP4 preflight before restore:
+  - artifact: `output/manual_verification/latest/x5_standard_media_missing_20260626_0848`
+  - result: `media_missing`
+  - missing path: `test video/X5_시승기_후반.MP4`
+- X5 audio override full source-app QA:
+  - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/Users/u_mo_c/Music/Music/Media.localized/Music/Unknown Artist/Unknown Album/X5_시승기_편집중_raw.wav' ./venv/bin/python tools/qa_suite_runner.py full --output-dir output/manual_verification/latest/qa_suite_full_x5_audio_override_20260626_0849`
+  - artifact: `output/manual_verification/latest/qa_suite_full_x5_audio_override_20260626_0849`
+  - result: pass, `passed_count=9`, `failed_count=0`
+  - X5 counts: `final_segment_count=52`, `raw_segment_count=52`
+  - X5 timing: `total_elapsed_sec=71.874`, `pipeline_elapsed_sec=48.758`
+  - X5 quality: `self_review_overall_score=90.026825`, `completion_avg_quality=89.761`, `llm_rollback_count=0`
+- Standard X5 restored full source-app QA without override:
+  - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py full --output-dir output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901`
+  - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901`
+  - result: pass, `passed_count=9`, `failed_count=0`
+  - X5 media: `test video/X5_시승기_후반.MP4`
+  - X5 counts: `final_segment_count=55`, `raw_segment_count=56`
+  - X5 timing: `total_elapsed_sec=48.511`, `pipeline_elapsed_sec=48.327`
+  - X5 quality: `self_review_overall_score=88.982358`, `completion_avg_quality=90.056`, `llm_rollback_count=0`
+
+### Next recommended action
+
+- Continue from `ACTION_ITEMS.md` item 1, now that the source-app internal NLE baseline has standard-path Macau/X5 full QA proof. If the ignored local `test video/` fixture is lost again, recreate or restore `test video/X5_시승기_후반.MP4` before relying on default full QA.
+
+## 2026-06-26 Addendum - NLE Render Export Runtime Route
+
+### Scope
+
+- Routed roughcut SRT/video render plan construction through the read-only NLE snapshot adapter.
+- `ui/roughcut/roughcut_export.py` now builds a temporary unsaved project payload from the current roughcut result, creates `NLESnapshot`, and calls `build_concat_render_plan_from_snapshot` for SRT and video targets.
+- Legacy `_render_plan.json` / `_edl.json` sidecar writers, sidecar readers, save files, UI labels, popup behavior, STT/LLM/VAD/model policy, and subtitle timing were not changed.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-081702-nle-render-export-parity-risk.md` was reviewed by Dex as `revise/accept`: sidecar schema and exact-join drift risks were accepted; claims that snapshot metadata would replace sidecar payloads were not adopted because this slice keeps legacy sidecar payload generation.
+- Added real `RoughcutWidget` app-command coverage so `roughcut-export-srt` and `roughcut-render-video` are proven to hit the NLE snapshot route, not only the dummy bridge test double.
+- Added NLE compatibility guards for direct SRT sidecar rows becoming output-time exact-join markers, and for legacy gap rows remaining non-destructive while sequence duration stays intact.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-082519-nle-app-command-save-reload-compatibility-gap.md` was reviewed by Dex as `revise/accept`: app-command, direct sidecar, and gap-row evidence gaps were accepted; the QThread snapshot pointer crash claim was not adopted because the worker receives the built `RenderCommandPlan`, not an `NLESnapshot`.
+
+### Validation
+
+- `./venv/bin/python -m py_compile ui/roughcut/roughcut_export.py tests/test_roughcut_ui_v2.py`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "render_plan_builders_route_through_nle_snapshot_adapter_with_legacy_parity or rendered_roughcut_video_writes_exact_join_sidecars_for_reopen or exact_join_sidecars"` -> `3 passed, 33 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_v2_output_compat.py tests/test_project_nle_snapshot.py` -> `11 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py` -> `259 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "roughcut_render_video_queues_expected_outputs or roughcut_export_srt_writes_output"` -> `2 passed, 72 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py` -> `9 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "app_command_roughcut_export_and_render_use_nle_snapshot_route or render_plan_builders_route_through_nle_snapshot_adapter_with_legacy_parity or automation_render_video_to_path_starts_worker_for_requested_target or exported_roughcut_srt_writes_exact_join_sidecars_for_reopen"` -> `4 passed, 33 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py tests/test_project_nle_snapshot.py` -> `269 passed, 4 subtests passed`
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick` -> pass, `failed_count=0`, artifact `output/manual_verification/latest/qa_suite_quick_20260626_082959`
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py full` -> fail, `failed_count=1`, artifact `output/manual_verification/latest/qa_suite_full_20260626_083038`
+  - Macau/app scenarios passed: `8`
+  - X5 failed: `x5_high_rolling_180s`, `empty_subtitle_output:raw_segments_zero`
+  - Fixture blocker note: `output/manual_verification/latest/qa_suite_full_20260626_083038/x5_high_rolling_180s/fixture_blocker.md`
+  - Current X5 `test video/X5_시승기_후반_자막소스.mov` and available X5 `자막소스.mov*.bak` files have no audio stream; `/Users/u_mo_c/Downloads` search did not find `X5_시승기_후반.MP4`.
+- `git diff --check -- .`
+
+### Next recommended action
+
+- Continue NLE completion by restoring or pointing `AI_SUBTITLE_STUDIO_QA_X5_MEDIA` at an X5 source media file with audio, then rerun the X5/full source-app proof before promotion.
+
+## 2026-06-26 Addendum - NLE Closeout Doc Consistency Sync
+
+### Scope
+
+- Synced `AGENTS.md` and `docs/PROJECT_STATE.md` with `ACTION_ITEMS.md` after the NLE baseline closeout.
+- Removed the completed Jammini delegation queue rows from `ACTION_ITEMS.md` so the active queue only shows remaining executable work.
+- Reviewed Jammini handoff `.agents/sentinel/handoffs/20260626-080728-nle-closeout-doc-consistency-review.md` as `accept with one correction`: stale current-item findings were accepted; old chronological `docs/HANDOFF.md` addenda were intentionally left as history.
+
+### Validation target
+
+- `rg` checks should show no current-state claim that the active queue item is `Source-App Internal NLE Timeline Architecture Plan`.
+- This slice is docs/agent-handoff only. It does not change runtime code, UI/UX, subtitle timing, STT, LLM, LoRA, VAD, model-selection policy, save files, or render output.
+
+### Next recommended action
+
+- Continue with `ACTION_ITEMS.md` item 1, execution order step 1: map generation completion, autosave, editor idle-ready, roughcut follow-up, and cleanup timing before changing runtime behavior.
+
+## 2026-06-26 Addendum - Post-Generation Editor Readiness Owner Map
+
+### Scope
+
+- Completed `ACTION_ITEMS.md` item 1, execution order step 1 as an owner-map/doc slice.
+- No runtime behavior, UI/UX, subtitle timing, STT, LLM, LoRA, VAD, model-selection policy, save file, or render output changed.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-081028-editor-readiness-owner-map.md` was reviewed by Dex as `accept/revise`: the broad owner map was useful, but unverified corruption claims and the non-existent roughcut generator file candidate were not adopted.
+
+### Owner map
+
+| Area | Current owner path | Notes |
+| --- | --- | --- |
+| Backend completion signal | `ui/main/main_signals.py::_do_finalize_generation_complete` | Resolves the active editor and calls `_finalize_generation_from_backend`, falling back to `_set_process_completed`. |
+| Generation completion state | `ui/editor/editor_pipeline_completion.py`, `ui/editor/editor_pipeline_cleanup.py` | Flushes pending segment queues, clears previews, refreshes timestamp metadata, marks state complete, schedules follow-ups, and waits/retries if final rows have not landed yet. |
+| Autosave after generation | `ui/editor/editor_pipeline_cleanup.py::_schedule_generation_completion_autosave`, `ui/editor/editor_save_manager.py::_on_save` and deferred project save helpers | Autosave forces save without canceling post-generation roughcut; deferred project save state is already guarded by focused tests. |
+| Editor idle-ready | `ui/main/main_runtime_cleanup.py::_force_editor_idle_after_generation`, `ui/main/main_personalization.py::_post_generation_resource_cleanup` | Clears processing locks, restores cursors, marks `_auto_processing_active=False`, resets live preview caches, and schedules post-generation GC instead of immediate heavy model release. |
+| Roughcut follow-up | `ui/editor/editor_pipeline_completion.py::_schedule_generation_complete_followups`, `ui/editor/editor_roughcut_draft.py` | Schedules roughcut draft at 900 ms, verifies/requeues at 2600 ms, and cancels pending roughcut for foreground edit/playback paths without cancelling completed/running work incorrectly. |
+| Heavy cleanup / model release | `ui/main/main_runtime_cleanup.py::_schedule_post_generation_gc`, `_prioritize_video_playback_runtime`, `_prioritize_manual_editor_interaction_runtime`, `_release_ai_models_for_editor_mode` | Playback/manual edit reserves runtime, defers GC/model release, pauses personalization, and retries release after playback/editor priority windows. |
+| Current proof surface | `tests/test_editor_autosave_cleanup.py`, `tests/test_editor_roughcut_draft.py`, `tests/test_sidebar_terminal_layout.py`, `tests/test_main_nonfatal_signals.py`, `tests/test_timeline_playhead_fit.py`, `tests/test_subtitle_text_edit_keys.py`, `tests/test_video_player_widget.py` | Existing tests cover backend finalizer, generation autosave, cleanup defer, roughcut follow-up, foreground priority, and completion signal fallback. |
+
+### Focused validation run
+
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_autosave_cleanup.py -k "backend_generation_finalizer or generation_completion_autosave or set_process_completed"`
+  - `12 passed, 36 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_roughcut_draft.py -k "post_generation or foreground_activity or cancel_post_generation_roughcut"`
+  - `16 passed, 40 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_sidebar_terminal_layout.py -k "post_generation_gc or prioritize_video_playback_runtime or prioritize_manual_editor_interaction_runtime"`
+  - `7 passed, 98 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_main_nonfatal_signals.py -k "finalize_generation_complete"`
+  - `1 passed, 3 deselected`
+
+### Next recommended action
+
+- Before runtime changes, add or tighten the smallest test that proves playback/edit/status commands can proceed before heavy cleanup finishes.
+- Do not add UI changes, visible labels, new timing policy, model policy changes, or new mutable subtitle timing owners.
+
 ## 2026-06-26 Addendum - Active Queue After NLE Baseline
 
 ### Scope

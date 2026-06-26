@@ -40,6 +40,7 @@ class QASuiteRunnerTests(unittest.TestCase):
             [
                 "open_project",
                 "open_roughcut",
+                "open_roughcut_refresh",
                 "status_ready",
                 "select_candidate_draft",
                 "thumbnail_preview_proxy",
@@ -94,10 +95,37 @@ class QASuiteRunnerTests(unittest.TestCase):
                 qa_suite_runner,
                 "X5_MEDIA_CANDIDATES",
                 (missing, fallback),
+            ), patch.object(
+                qa_suite_runner,
+                "_media_has_audio_stream",
+                return_value=True,
             ):
                 scenarios = qa_suite_runner.build_scenarios("full", root / "suite")
 
         self.assertEqual(Path(scenarios[-1]["media"]), fallback)
+
+    def test_build_scenarios_full_skips_audio_less_x5_fallback_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = root / "X5_시승기_후반.MP4"
+            fallback = root / "X5_시승기_후반_자막소스.mov"
+            fallback.write_bytes(b"video-only")
+            with patch.object(qa_suite_runner, "MACAU_MEDIA", root / "missing_macau.mp4"), patch.object(
+                qa_suite_runner,
+                "X5_MEDIA",
+                missing,
+            ), patch.object(
+                qa_suite_runner,
+                "X5_MEDIA_CANDIDATES",
+                (missing, fallback),
+            ), patch.object(
+                qa_suite_runner,
+                "_media_has_audio_stream",
+                return_value=False,
+            ):
+                scenarios = qa_suite_runner.build_scenarios("full", root / "suite")
+
+        self.assertEqual(Path(scenarios[-1]["media"]), missing)
 
     def test_build_scenarios_full_uses_explicit_x5_media_override(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -419,13 +447,15 @@ class QASuiteRunnerTests(unittest.TestCase):
 
     def test_run_full_media_rejects_verifier_empty_subtitle_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
+            media = Path(tmp) / "media.mp4"
+            media.write_bytes(b"fixture")
             output_dir = Path(tmp) / "x5_high_rolling_180s"
             spec = {
                 "id": "x5_high_rolling_180s",
                 "type": "full_media",
                 "description": "X5 high-mode 3-minute rolling-window verification.",
                 "output_dir": output_dir,
-                "media": "/tmp/media.mp4",
+                "media": str(media),
                 "mode": "high",
                 "duration_sec": 180.0,
             }
@@ -442,6 +472,32 @@ class QASuiteRunnerTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["failed_step"], "full_media")
         self.assertEqual(result["result"]["failure_reason"], "empty_subtitle_output:raw_segments_zero")
+
+    def test_run_full_media_reports_missing_media_without_verifier_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_media = Path(tmp) / "missing.mp4"
+            output_dir = Path(tmp) / "x5_high_rolling_180s"
+            spec = {
+                "id": "x5_high_rolling_180s",
+                "type": "full_media",
+                "description": "X5 high-mode 3-minute rolling-window verification.",
+                "output_dir": output_dir,
+                "media": str(missing_media),
+                "mode": "high",
+                "duration_sec": 180.0,
+            }
+            with patch("tools.qa_suite_runner._run_subprocess") as run_subprocess:
+                result = qa_suite_runner._run_full_media(spec, qa_suite_runner.DEFAULT_PYTHON)
+            summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+            stderr_text = (output_dir / "logs" / "run.stderr").read_text(encoding="utf-8")
+
+        run_subprocess.assert_not_called()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failed_step"], "full_media")
+        self.assertEqual(result["result"]["error"], "media_missing")
+        self.assertEqual(Path(result["result"]["data"]["media"]), missing_media)
+        self.assertEqual(summary["result"]["error"], "media_missing")
+        self.assertIn("media_missing", stderr_text)
 
     def test_main_app_pids_includes_bundle_python_main(self):
         calls = []
