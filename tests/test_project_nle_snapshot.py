@@ -465,6 +465,238 @@ class ProjectNleSnapshotTests(unittest.TestCase):
             [(1.0, 2.0, "roundtrip")],
         )
 
+    def test_compatibility_characterization_locks_legacy_rows_and_nle_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_path = root / "source.mov"
+            proxy_path = root / "proxy.mov"
+            project_path = root / "compatibility.aissproj"
+            media_path.write_bytes(b"media")
+            proxy_path.write_bytes(b"proxy")
+            fps = 60000 / 1001
+            duration_sec = 3000 / fps
+            first_start_frame = 2676
+            boundary_frame = 2677
+            first_end_frame = 2766
+            gap_end_frame = 2826
+            last_end_frame = 2946
+            exact_join = {
+                "time": boundary_frame / fps,
+                "timeline_sec": boundary_frame / fps,
+                "frame": boundary_frame,
+                "source": "roughcut_concat_join",
+                "detector": "roughcut-edl-join-v1",
+                "reason": "roughcut_concat_segment_join",
+                "segment_before_id": "chapter_0001",
+                "segment_after_id": "chapter_0002",
+                "source_before_path": str(media_path),
+                "source_after_path": str(media_path),
+                "output_before_end": boundary_frame / fps,
+                "output_after_start": boundary_frame / fps,
+                "timeline_before_end": boundary_frame / fps,
+                "timeline_after_start": first_end_frame / fps,
+                "join_gap_sec": (first_end_frame - boundary_frame) / fps,
+            }
+            project = {
+                "project_name": "compatibility_characterization",
+                "mode": "single",
+                "video": {"duration_sec": duration_sec, "primary_fps": fps},
+                "timeline": {
+                    "total_duration": duration_sec,
+                    "timebase": {"primary_fps": fps},
+                    "tracks": [
+                        {
+                            "clips": [
+                                {
+                                    "id": "clip_main",
+                                    "source_path": str(media_path),
+                                    "type": "video",
+                                    "source_duration": duration_sec,
+                                    "timeline_start": 0.0,
+                                    "timeline_end": duration_sec,
+                                    "fps": fps,
+                                    "width": 1280,
+                                    "height": 720,
+                                    "order": 0,
+                                    "proxy_path": str(proxy_path),
+                                    "cache_key": "preview-cache-001",
+                                    "relink": {"last_known_path": str(media_path)},
+                                }
+                            ]
+                        }
+                    ],
+                },
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[str(media_path)],
+                    segments=[
+                        {
+                            "id": "caption_first",
+                            "start_frame": first_start_frame,
+                            "end_frame": first_end_frame,
+                            "timeline_start_frame": first_start_frame,
+                            "timeline_end_frame": first_end_frame,
+                            "frame_rate": fps,
+                            "timeline_frame_rate": fps,
+                            "text": "first subtitle",
+                            "speaker": "00",
+                            "words": [{"word": "first", "start": 1.0, "end": 1.2}],
+                            "quality_candidates": [{"candidate_id": "qc1", "score": 0.91}],
+                            "stt_ensemble_source": "STT1",
+                            "subtitle_stage_confidence": {
+                                "stages": {"stt": {"label": "green", "score": 91}},
+                                "stage_order": ["stt"],
+                            },
+                            "clip_local_start_frame": first_start_frame,
+                            "clip_local_end_frame": first_end_frame,
+                            "source_frame_rate": fps,
+                        },
+                        {
+                            "id": "gap_middle",
+                            "start_frame": first_end_frame,
+                            "end_frame": gap_end_frame,
+                            "timeline_start_frame": first_end_frame,
+                            "timeline_end_frame": gap_end_frame,
+                            "frame_rate": fps,
+                            "timeline_frame_rate": fps,
+                            "text": "",
+                            "is_gap": True,
+                        },
+                        {
+                            "id": "caption_last",
+                            "start_frame": gap_end_frame,
+                            "end_frame": last_end_frame,
+                            "timeline_start_frame": gap_end_frame,
+                            "timeline_end_frame": last_end_frame,
+                            "frame_rate": fps,
+                            "timeline_frame_rate": fps,
+                            "text": "last subtitle",
+                            "speaker": "01",
+                            "quality": {"confidence_label": "green"},
+                        },
+                    ],
+                    primary_fps=fps,
+                ),
+                "roughcut_state": {
+                    "selected_candidate_id": "roughcut_a",
+                    "candidates": [
+                        {
+                            "candidate_id": "roughcut_a",
+                            "name": "roughcut A",
+                            "outputs": {
+                                "edl": {
+                                    "duration": 4.0,
+                                    "metadata": {
+                                        "source": "compatibility",
+                                        "roughcut_v2": {"major_segment_count": 2},
+                                    },
+                                    "segments": [
+                                        {
+                                            "segment_id": "chapter_0001",
+                                            "chapter_id": "chapter_0001",
+                                            "source_path": str(media_path),
+                                            "source_start": 0.0,
+                                            "source_end": boundary_frame / fps,
+                                            "output_start": 0.0,
+                                            "output_end": boundary_frame / fps,
+                                            "timeline_start": 0.0,
+                                            "timeline_end": boundary_frame / fps,
+                                            "metadata": {"major_id": "A", "minor_code": "A1"},
+                                        },
+                                        {
+                                            "segment_id": "chapter_0002",
+                                            "chapter_id": "chapter_0002",
+                                            "source_path": str(media_path),
+                                            "source_start": first_end_frame / fps,
+                                            "source_end": duration_sec,
+                                            "output_start": boundary_frame / fps,
+                                            "output_end": 4.0,
+                                            "timeline_start": first_end_frame / fps,
+                                            "timeline_end": duration_sec,
+                                            "metadata": {"major_id": "B", "minor_code": "B1"},
+                                        },
+                                    ],
+                                    "stitched_cut_boundaries": [exact_join],
+                                },
+                                "render_plan": {
+                                    "output_path": str(root / "roughcut.mov"),
+                                    "render_mode": "sync_safe",
+                                    "segment_manifest": [
+                                        {
+                                            "segment_id": "chapter_0001",
+                                            "source_path": str(media_path),
+                                            "source_start": 0.0,
+                                            "source_end": boundary_frame / fps,
+                                            "output_end": boundary_frame / fps,
+                                            "metadata": {"manifest_shape": "legacy"},
+                                        }
+                                    ],
+                                    "stitched_cut_boundaries": [exact_join],
+                                },
+                            },
+                        }
+                    ],
+                },
+            }
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            rows = project_segments_to_editor(loaded)
+            snapshot = build_project_nle_snapshot(loaded, project_path=str(project_path))
+
+        self.assertNotIn("nle", storage)
+        self.assertNotIn("nle_snapshot", storage)
+        stored_clip = storage["timeline"]["tracks"][0]["clips"][0]
+        self.assertEqual(stored_clip["proxy_path"], str(proxy_path))
+        self.assertEqual(stored_clip["cache_key"], "preview-cache-001")
+        self.assertEqual(stored_clip["relink"]["last_known_path"], str(media_path))
+
+        subtitle_rows = [row for row in rows if not row.get("is_gap")]
+        gap_rows = [row for row in rows if row.get("is_gap")]
+        self.assertEqual(len(subtitle_rows), 2)
+        self.assertEqual(len(gap_rows), 1)
+        self.assertEqual((subtitle_rows[0]["start_frame"], subtitle_rows[-1]["end_frame"]), (first_start_frame, last_end_frame))
+        self.assertEqual((gap_rows[0]["start_frame"], gap_rows[0]["end_frame"]), (first_end_frame, gap_end_frame))
+        self.assertEqual(subtitle_rows[0]["quality_candidates"][0]["candidate_id"], "qc1")
+        self.assertEqual(subtitle_rows[0]["words"][0]["word"], "first")
+        self.assertEqual(subtitle_rows[0]["stt_ensemble_source"], "STT1")
+        self.assertEqual(subtitle_rows[0]["subtitle_stage_confidence"]["stages"]["stt"]["score"], 91)
+        self.assertEqual(subtitle_rows[0]["clip_local_start_frame"], first_start_frame)
+
+        sequence = snapshot.sequences[0]
+        self.assertEqual(snapshot.metadata["caption_count"], 2)
+        self.assertEqual(sequence.duration, round(duration_sec, 6))
+        self.assertEqual(
+            [caption.text for caption in sequence.captions],
+            ["first subtitle", "last subtitle"],
+        )
+        self.assertAlmostEqual(sequence.captions[0].sequence_start, first_start_frame / fps)
+        self.assertAlmostEqual(sequence.captions[0].sequence_end, first_end_frame / fps)
+        self.assertAlmostEqual(sequence.captions[1].sequence_start, gap_end_frame / fps)
+        self.assertAlmostEqual(sequence.captions[1].sequence_end, last_end_frame / fps)
+        self.assertEqual(sequence.captions[0].metadata["quality_candidates"][0]["candidate_id"], "qc1")
+        self.assertEqual(sequence.captions[0].metadata["words"][0]["word"], "first")
+        self.assertEqual(sequence.captions[0].metadata["subtitle_stage_confidence"]["stages"]["stt"]["score"], 91)
+        self.assertEqual(sequence.captions[0].metadata["start_frame"], first_start_frame)
+
+        render_plan = snapshot.render_plans[0]
+        self.assertEqual(render_plan.output_duration, 4.0)
+        self.assertEqual(render_plan.segments[0]["metadata"]["major_id"], "A")
+        self.assertEqual(render_plan.segment_manifest[0]["metadata"]["manifest_shape"], "legacy")
+        self.assertEqual(render_plan.stitched_cut_boundaries[0]["segment_before_id"], "chapter_0001")
+        exact_markers = [
+            marker
+            for marker in sequence.markers
+            if marker.kind == "roughcut_exact_join"
+        ]
+        self.assertEqual(len(exact_markers), 1)
+        self.assertAlmostEqual(exact_markers[0].time, boundary_frame / fps)
+        self.assertEqual(exact_markers[0].metadata["frame"], boundary_frame)
+        self.assertEqual(exact_markers[0].metadata["detector"], "roughcut-edl-join-v1")
+        self.assertEqual(exact_markers[0].metadata["exact_join"]["segment_after_id"], "chapter_0002")
+
 
 if __name__ == "__main__":
     unittest.main()

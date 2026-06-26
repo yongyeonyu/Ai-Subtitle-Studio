@@ -1,5 +1,26 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Slice 0.5 compatibility characterization - 2026-06-27
+
+- 실행 모드: source-app NLE compatibility characterization before mutable write-path work.
+- 결과: pass
+- 저장 위치:
+  - Action source: `NLE_Action.md`
+  - Guard tests: `tests/test_project_nle_snapshot.py`, `tests/test_editor_srt_open_refresh.py`
+  - Jammini review: `.agents/sentinel/handoffs/20260627-010819-nle-slice-05-compat-review.md`
+- 수정 요약:
+  - Added a legacy `.aissproj` / `NLESnapshot` characterization guard for subtitle count, first/last frame timing, gap rows, 60000/1001fps frame fields, segment metadata, roughcut exact-join sidecar shape, render-plan output duration, and non-persistence of `nle` / `nle_snapshot`.
+  - Strengthened direct SRT reopen guards so SRT timing/text win over linked project metadata, including row-count mismatch cases.
+  - Removed completed Slice 0.5 from `NLE_Action.md`.
+- 검증:
+  - `./venv/bin/python -m py_compile tests/test_project_nle_snapshot.py tests/test_editor_srt_open_refresh.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_editor_srt_open_refresh.py` -> `27 passed, 4 subtests passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py` -> `200 passed, 4 subtests passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py` -> `71 passed`
+  - `git diff --check -- .` -> pass
+- 자막 품질 영향:
+  - None. Tests/documentation only; no STT2, LLM, LoRA, VAD, timing policy, UI/UX, save format, release, tag, push, or DMG behavior changed.
+
 ## v04.00.18 source-app timing/cut-boundary release - 2026-06-27
 
 - 실행 모드: source-app release checkpoint without DMG.

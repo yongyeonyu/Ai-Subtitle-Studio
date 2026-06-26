@@ -317,18 +317,6 @@ No code changes in the first review pass.
 
 ## Execution Slices
 
-### Slice 0.5 - Compatibility Characterization
-
-Deliverables:
-
-- lock the current legacy `.aissproj`, direct SRT, roughcut sidecar, and rendered roughcut reopen behavior before mutable NLE write-path work,
-- record subtitle count, first/last time, output duration, sidecar metadata, gap rows, and frame-quantized custom fields,
-- prove that current `NLESnapshot` projection matches the same semantic rows without persisting new NLE fields.
-
-Acceptance:
-
-- characterization tests fail if a future NLE projection drops custom metadata, gap rows, frame-quantized fields, roughcut exact-join sidecar shapes, or direct SRT timing/text precedence.
-
 ### Slice 1 - Trace Workspace Baseline
 
 Deliverables:

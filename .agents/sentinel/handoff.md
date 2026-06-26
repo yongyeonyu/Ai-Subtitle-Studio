@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260627-010819-nle-slice-05-compat-review.md`
 - `.agents/sentinel/handoffs/20260627-005119-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260627-005024-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260627-004000-nle-action-plan-risk-review.md`

@@ -183,13 +183,28 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
 
     def test_direct_srt_metadata_merge_preserves_srt_text_and_restores_project_tags(self):
         lifecycle = _Lifecycle()
-        srt_segments = [{"start": 1.0, "end": 2.0, "text": "SRT 수정 텍스트", "is_gap": False}]
+        srt_segments = [
+            {
+                "start": 1.2,
+                "end": 2.4,
+                "start_frame": 36,
+                "end_frame": 72,
+                "timeline_start_frame": 36,
+                "timeline_end_frame": 72,
+                "text": "SRT 수정 텍스트",
+                "is_gap": False,
+            }
+        ]
         project_segments = project_segments_to_editor(
             {
                 "segments": [
                     {
-                        "start": 1.0,
-                        "end": 2.0,
+                        "start": 0.5,
+                        "end": 1.6,
+                        "start_frame": 15,
+                        "end_frame": 48,
+                        "timeline_start_frame": 15,
+                        "timeline_end_frame": 48,
                         "text": "프로젝트 텍스트",
                         "speaker": "02",
                         "quality": {"confidence_label": "red"},
@@ -206,11 +221,46 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
         merged = lifecycle._merge_srt_segments_with_project_metadata(srt_segments, project_segments)
 
         self.assertEqual(merged[0]["text"], "SRT 수정 텍스트")
+        self.assertEqual((merged[0]["start"], merged[0]["end"]), (1.2, 2.4))
+        self.assertEqual((merged[0]["start_frame"], merged[0]["end_frame"]), (36, 72))
+        self.assertEqual((merged[0]["timeline_start_frame"], merged[0]["timeline_end_frame"]), (36, 72))
         self.assertEqual(merged[0]["speaker"], "02")
         self.assertEqual(merged[0]["quality"]["confidence_label"], "red")
         self.assertEqual(merged[0]["quality_candidates"][0]["candidate_id"], "c1")
         self.assertEqual(merged[0]["subtitle_stage_confidence"]["stages"]["stt"]["label"], "yellow")
         self.assertEqual(merged[0]["line"], 0)
+
+    def test_direct_srt_metadata_merge_keeps_unmatched_srt_rows_clean(self):
+        lifecycle = _Lifecycle()
+        srt_segments = [
+            {"start": 1.0, "end": 2.0, "text": "첫 SRT", "is_gap": False},
+            {"start": 3.0, "end": 4.0, "text": "프로젝트에 없는 SRT", "is_gap": False},
+        ]
+        project_segments = project_segments_to_editor(
+            {
+                "segments": [
+                    {
+                        "start": 1.0,
+                        "end": 2.0,
+                        "text": "첫 프로젝트",
+                        "speaker": "02",
+                        "quality_candidates": [{"candidate_id": "project-only"}],
+                    }
+                ]
+            }
+        )
+
+        merged = lifecycle._merge_srt_segments_with_project_metadata(srt_segments, project_segments)
+
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0]["text"], "첫 SRT")
+        self.assertEqual(merged[0]["speaker"], "02")
+        self.assertEqual(merged[0]["quality_candidates"][0]["candidate_id"], "project-only")
+        self.assertEqual(merged[1]["text"], "프로젝트에 없는 SRT")
+        self.assertEqual((merged[1]["start"], merged[1]["end"]), (3.0, 4.0))
+        self.assertNotIn("speaker", merged[1])
+        self.assertNotIn("quality_candidates", merged[1])
+        self.assertEqual([row["line"] for row in merged], [0, 1])
 
     def test_linked_project_srt_open_uses_project_restore_helper(self):
         class _DelegatingLifecycle(EditorLifecycleMixin):

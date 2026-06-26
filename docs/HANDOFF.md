@@ -33,6 +33,29 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-27 Addendum - NLE Slice 0.5 Compatibility Characterization
+
+### Scope
+
+- Added characterization guards before mutable NLE write-path work.
+- `tests/test_project_nle_snapshot.py` now locks legacy `.aissproj` roundtrip behavior for subtitle count, first/last frame timing, gap rows, 60000/1001fps frame-quantized fields, segment metadata, roughcut exact-join sidecar shape, render-plan output duration, and non-persistence of `nle` / `nle_snapshot` fields.
+- `tests/test_editor_srt_open_refresh.py` now locks direct SRT timing/text precedence when linked project metadata has different timing and when SRT/project row counts do not match.
+- Completed Slice 0.5 was removed from `NLE_Action.md`.
+- Jammini handoff `.agents/sentinel/handoffs/20260627-010819-nle-slice-05-compat-review.md` was classified as `revise 후 accept`: adopted the 60000/1001fps and SRT mismatch guards; deferred malformed sidecar, gap-edge, and duration-clamp cases to later fixture/runtime slices.
+
+### Validation
+
+- `./venv/bin/python -m py_compile tests/test_project_nle_snapshot.py tests/test_editor_srt_open_refresh.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_editor_srt_open_refresh.py` -> `27 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py` -> `200 passed, 4 subtests passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py` -> `71 passed`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Start Slice 1, `Trace Workspace Baseline`, from `NLE_Action.md`.
+- Keep trace logging lightweight, temp-root bounded, and isolated from UI logging/subtitle generation failures.
+
 ## 2026-06-27 Addendum - v04.00.18 Release
 
 ### Scope
