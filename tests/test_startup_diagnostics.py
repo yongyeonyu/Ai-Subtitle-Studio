@@ -10,6 +10,7 @@ from core.pipeline.startup_diagnostics import (
     format_startup_diagnostic_log,
     persist_startup_diagnostic,
 )
+from core.project.project_io import read_project_file
 
 
 class StartupDiagnosticsTests(unittest.TestCase):
@@ -35,7 +36,7 @@ class StartupDiagnosticsTests(unittest.TestCase):
 
         diagnostic = build_startup_diagnostic(
             "/tmp/source/틴니핑.MP4",
-            settings={"max_speakers": 2},
+            settings={"max_speakers": 2, "speaker_diarization_auto_enabled": False},
             cut_boundaries=[{"timeline_sec": 120.0}, {"timeline_sec": 300.0}],
             provisional_cut_boundaries=[{"timeline_sec": 180.0}],
             expected_time_sec=321.0,
@@ -93,8 +94,7 @@ class StartupDiagnosticsTests(unittest.TestCase):
 
             self.assertTrue(persist_startup_diagnostic(project_path, diagnostic))
 
-            with open(project_path, "r", encoding="utf-8") as handle:
-                saved = json.load(handle)
+            saved = read_project_file(project_path)
             self.assertTrue(saved["analysis"]["old"])
             self.assertEqual(saved["analysis"]["startup_diagnostic"], diagnostic)
             self.assertEqual(saved["editor_state"]["analysis"]["startup_diagnostic"], diagnostic)

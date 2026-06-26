@@ -202,11 +202,18 @@ configure_qt_gpu_rendering_before_app()
 from PyQt6.QtCore import QTimer, qInstallMessageHandler
 from PyQt6.QtWidgets import QApplication
 from core.runtime.logger import get_logger
+from core.runtime.trace_logger import initialize_app_trace
 from ui.button_feedback import install_button_click_feedback
 from ui.dialogs.message_box import install_qmessagebox_hooks
 
 try:
     get_logger().install_stream_capture()
+except Exception:
+    pass
+try:
+    _APP_TRACE = initialize_app_trace()
+    if _APP_TRACE is not None:
+        _APP_TRACE.log_event("app_start", stage="runtime", level="INFO")
 except Exception:
     pass
 

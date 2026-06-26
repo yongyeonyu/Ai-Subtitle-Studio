@@ -38,6 +38,12 @@
 
 `core/engine/subtitle_engine.py`처럼 크고 많은 책임을 가진 owner 파일이 존재하므로, 수정 전 소유 경계를 더 잘게 확인해야 합니다.
 
+## Trace and temporary workspace boundary
+
+Trace diagnostics live under `core/runtime/` and must stay independent from product logging and subtitle generation. `core/runtime/temp_workspace.py` owns the per-user temporary workspace root and required subdirectories for trace, packages, exports, voice, and preview artifacts. `core/runtime/trace_logger.py` owns manifest/latest JSONL trace events and writes them through a bounded asynchronous writer so UI, playback, and editor hot paths do not perform synchronous trace file I/O. `tools/collect_trace_package.py` copies stable trace/package evidence for handoff and QA.
+
+Trace files are diagnostic evidence only. They must not become subtitle timing, cut-boundary, save-file, or UI state owners. Failure modes such as disk full, permission denied, JSON serialization failure, queue overflow, and shutdown flush failure must stay isolated from `AppLogger`, UI logging, and subtitle generation. Forked child processes must not inherit a parent app trace singleton.
+
 ## UI layer
 
 `ui/`는 화면과 상호작용을 담당합니다.

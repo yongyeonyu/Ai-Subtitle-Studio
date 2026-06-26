@@ -75,6 +75,22 @@ AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/path/to/audi
 ./venv/bin/python -m pytest -q tests/test_roughcut_*.py
 ```
 
+## Trace workspace validation
+
+Trace/temp-workspace changes should first prove syntax, focused trace behavior, then the startup/app-command diagnostic guard.
+
+```bash
+./venv/bin/python -m py_compile main.py core/runtime/temp_workspace.py core/runtime/trace_logger.py tools/collect_trace_package.py tests/test_trace_logger.py tests/test_startup_diagnostics.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_startup_diagnostics.py tests/test_app_command_bridge.py -k "trace or diagnostic or open_media or open_project"
+```
+
+Trace packages are collected with:
+
+```bash
+./venv/bin/python tools/collect_trace_package.py --run-id <trace-run-id>
+```
+
 ## PyQt / offscreen UI validation
 
 PyQt UI 회귀는 화면 서버에 의존하지 않는 경로를 우선 사용합니다.

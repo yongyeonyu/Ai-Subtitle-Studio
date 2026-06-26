@@ -33,6 +33,30 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-27 Addendum - NLE Slice 1 Trace Workspace Baseline
+
+### Scope
+
+- Added the Slice 1 trace/temp workspace baseline from `NLE_Action.md`.
+- `core/runtime/temp_workspace.py` now owns a per-user temp root plus required `Diagnostics/Trace`, `Diagnostics/Packages`, `Exports`, `Voice`, and `Preview` directories, with cleanup/prune/usage reporting helpers.
+- `core/runtime/trace_logger.py` now owns diagnostic trace manifests, run events, and `latest.jsonl` through a bounded async writer. Trace failure modes are isolated from `AppLogger`, UI logging, and subtitle generation, and forked children reset the parent app trace singleton.
+- `tools/collect_trace_package.py` now packages stable trace evidence and trims partial active JSONL lines.
+- `main.py` initializes a best-effort app trace at startup without UI/UX, subtitle timing, STT2, LLM, LoRA, VAD, model-selection, save-format, release, tag, push, or DMG changes.
+- Completed Slice 1 was removed from `NLE_Action.md`.
+- Jammini handoff `.agents/sentinel/handoffs/20260627-012027-nle-slice-1-trace-review.md` was classified as `revise 후 accept`: adopted per-user temp root, async trace writer, fork reset, and stable active-log package copying.
+
+### Validation
+
+- `./venv/bin/python -m py_compile main.py core/runtime/temp_workspace.py core/runtime/trace_logger.py tools/collect_trace_package.py tests/test_trace_logger.py tests/test_startup_diagnostics.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py` -> `12 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_startup_diagnostics.py tests/test_app_command_bridge.py -k "trace or diagnostic or open_media or open_project"` -> `18 passed, 71 deselected`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Start Slice 2, `Cut Boundary Source-FPS Scout`, from `NLE_Action.md`.
+- Use the fixed fixture `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4` and prove frame `2766` / `2677` candidate detection or preservation before touching final subtitle split/snap behavior.
+
 ## 2026-06-27 Addendum - NLE Slice 0.5 Compatibility Characterization
 
 ### Scope

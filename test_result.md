@@ -1,5 +1,29 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Slice 1 trace workspace baseline - 2026-06-27
+
+- 실행 모드: source-app trace/temp workspace baseline for NLE action diagnostics.
+- 결과: pass
+- 저장 위치:
+  - Action source: `NLE_Action.md`
+  - Runtime owners: `core/runtime/temp_workspace.py`, `core/runtime/trace_logger.py`
+  - Package collector: `tools/collect_trace_package.py`
+  - Guard tests: `tests/test_trace_logger.py`, `tests/test_startup_diagnostics.py`, `tests/test_app_command_bridge.py`
+  - Jammini review: `.agents/sentinel/handoffs/20260627-012027-nle-slice-1-trace-review.md`
+- 수정 요약:
+  - Added a per-user temp workspace with trace/package/export/voice/preview directories, cleanup, prune, and usage reporting.
+  - Added bounded async trace logging with manifest, run events, `latest.jsonl`, media fingerprint metadata, FPS numerator/denominator fields, failure isolation, and fork-child singleton reset.
+  - Added stable trace package collection that trims partial active JSONL lines.
+  - Initialized best-effort app trace startup in `main.py`.
+  - Removed completed Slice 1 from `NLE_Action.md`.
+- 검증:
+  - `./venv/bin/python -m py_compile main.py core/runtime/temp_workspace.py core/runtime/trace_logger.py tools/collect_trace_package.py tests/test_trace_logger.py tests/test_startup_diagnostics.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py` -> `12 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_startup_diagnostics.py tests/test_app_command_bridge.py -k "trace or diagnostic or open_media or open_project"` -> `18 passed, 71 deselected`
+  - `git diff --check -- .` -> pass
+- 자막 품질 영향:
+  - None. Diagnostic trace/temp workspace only; no UI/UX, subtitle timing, STT2, LLM, LoRA, VAD, model-selection, save-format, release, tag, push, or DMG behavior changed.
+
 ## NLE Slice 0.5 compatibility characterization - 2026-06-27
 
 - 실행 모드: source-app NLE compatibility characterization before mutable write-path work.

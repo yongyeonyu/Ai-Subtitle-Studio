@@ -317,25 +317,6 @@ No code changes in the first review pass.
 
 ## Execution Slices
 
-### Slice 1 - Trace Workspace Baseline
-
-Deliverables:
-
-- `core/runtime/temp_workspace.py`,
-- `core/runtime/trace_logger.py`,
-- `tools/collect_trace_package.py`,
-- `tests/test_trace_logger.py`.
-
-Acceptance:
-
-- app run creates `latest.jsonl`,
-- one High run creates manifest and events,
-- deleting temp root removes trace/package/export/voice/preview temp artifacts,
-- logger failure cannot break UI logging or generation,
-- repeated runs cannot collide on the same run directory,
-- cleanup/usage reporting prevents unbounded temp growth,
-- disk full, permission denied, queue overflow, JSON serialization failure, and shutdown flush failure are isolated from UI logging and subtitle generation.
-
 ### Slice 2 - Cut Boundary Source-FPS Scout
 
 Deliverables:
