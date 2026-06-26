@@ -256,6 +256,8 @@ class VideoPlayerWidget(
             except Exception:
                 self.current_frame = self.frame_for_sec(snapped_sec)
         self._update_frame_count_label()
+        if hasattr(self, "_refresh_time_label"):
+            self._refresh_time_label(force=True)
         self.set_subtitle_display_time(snapped_sec, refresh=False)
         self._pending_seek_sec = float(snapped_sec) if remember_pending else None
         if hide_thumbnail_threshold is not None and snapped_sec > float(hide_thumbnail_threshold):
@@ -280,7 +282,7 @@ class VideoPlayerWidget(
         self.current_time = sec
         return frame, sec
 
-    def _frame_count_text(self) -> str:
+    def _frame_display_values(self) -> tuple[int, int, int, float]:
         frame_map = getattr(self, "frame_time_map", None)
         if frame_map is None:
             frame_map = build_frame_time_map(self.total_time, self.frame_rate)
@@ -291,7 +293,27 @@ class VideoPlayerWidget(
         if total_frames > 0:
             current_frame = min(current_frame, total_frames - 1)
             display_frame = current_frame + 1
-        return f"F {display_frame} / {total_frames}"
+        fps = normalize_fps(getattr(frame_map, "fps", getattr(self, "frame_rate", 30.0)) or 30.0)
+        return current_frame, display_frame, total_frames, fps
+
+    def _format_frame_clock_time(self, sec: float) -> str:
+        total_ms = max(0, int(round(float(sec or 0.0) * 1000.0)))
+        hours, rem = divmod(total_ms, 3_600_000)
+        minutes, rem = divmod(rem, 60_000)
+        seconds, millis = divmod(rem, 1000)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
+        return f"{minutes:02d}:{seconds:02d}.{millis:03d}"
+
+    def _frame_time_label_text(self) -> str:
+        current_frame, _display_frame, total_frames, fps = self._frame_display_values()
+        current_sec = self.sec_for_frame(current_frame) if total_frames > 0 else 0.0
+        total_sec = total_frames / max(fps, 1.0) if total_frames > 0 else 0.0
+        return f"{self._format_frame_clock_time(current_sec)} / {self._format_frame_clock_time(total_sec)}"
+
+    def _frame_count_text(self) -> str:
+        _current_frame, display_frame, total_frames, _fps = self._frame_display_values()
+        return f"{display_frame} / {total_frames}"
 
     def _update_frame_count_label(self, *, force: bool = False) -> None:
         label = getattr(self, "frame_count_label", None)

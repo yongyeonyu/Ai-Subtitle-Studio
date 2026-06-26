@@ -1,6 +1,7 @@
 import unittest
 
 from core.cut_boundary import magnetize_segments_to_cut_boundaries
+from core.cut_boundary import snap_late_segment_starts_to_confirmed_cuts
 from core.engine.subtitle_timing import (
     _selected_stt_candidate_span,
     align_stt_candidates_to_subtitle_segments,
@@ -27,6 +28,61 @@ class SubtitleBoundaryAlignmentTests(unittest.TestCase):
         self.assertTrue(rows)
         for row in rows:
             self.assertTrue(row["end"] <= 5.0 or row["start"] >= 5.0)
+
+    def test_confirmed_cut_pulls_late_start_when_previous_subtitle_overlaps_cut(self):
+        rows = snap_late_segment_starts_to_confirmed_cuts(
+            [
+                {"start": 31.22, "end": 35.54, "text": "컷 직전 자막"},
+                {"start": 35.63, "end": 39.94, "text": "컷 직후 자막"},
+            ],
+            [{"timeline_sec": 35.2, "fps": 60.0, "status": "confirmed"}],
+            primary_fps=60.0,
+        )
+
+        self.assertAlmostEqual(rows[0]["end"], 35.2, places=3)
+        self.assertAlmostEqual(rows[1]["start"], 35.2, places=3)
+        self.assertEqual(rows[1]["_cut_boundary_start_snap_policy"]["task"], "subtitle_cut_boundary_start_snap")
+
+    def test_confirmed_cut_magnetize_pulls_late_start_after_split_trimmed_previous(self):
+        rows = magnetize_segments_to_cut_boundaries(
+            [
+                {"start": 31.22, "end": 35.54, "text": "컷 직전 자막"},
+                {"start": 35.95, "end": 39.94, "text": "컷 직후 늦은 자막"},
+            ],
+            confirmed_boundaries=[{"timeline_sec": 35.2, "fps": 60.0, "status": "confirmed"}],
+            provisional_boundaries=[],
+            primary_fps=60.0,
+        )
+
+        self.assertAlmostEqual(rows[0]["end"], 35.2, places=3)
+        self.assertAlmostEqual(rows[1]["start"], 35.2, places=3)
+        self.assertEqual(rows[1]["_cut_boundary_start_snap_policy"]["source"], "confirmed_visual_cut")
+
+    def test_confirmed_cut_does_not_pull_late_start_without_previous_overlap(self):
+        rows = snap_late_segment_starts_to_confirmed_cuts(
+            [
+                {"start": 31.22, "end": 34.9, "text": "컷 전에 끝난 자막"},
+                {"start": 35.95, "end": 39.94, "text": "컷 뒤 침묵 후 자막"},
+            ],
+            [{"timeline_sec": 35.2, "fps": 60.0, "status": "confirmed"}],
+            primary_fps=60.0,
+        )
+
+        self.assertAlmostEqual(rows[0]["end"], 34.9, places=3)
+        self.assertAlmostEqual(rows[1]["start"], 35.95, places=3)
+        self.assertNotIn("_cut_boundary_start_snap_policy", rows[1])
+
+    def test_confirmed_cut_does_not_push_start_that_is_well_before_cut(self):
+        rows = snap_late_segment_starts_to_confirmed_cuts(
+            [
+                {"start": 77.9, "end": 81.7, "text": "컷보다 먼저 시작한 자막"},
+            ],
+            [{"timeline_sec": 78.9, "fps": 60.0, "status": "confirmed"}],
+            primary_fps=60.0,
+        )
+
+        self.assertAlmostEqual(rows[0]["start"], 77.9, places=3)
+        self.assertNotIn("_cut_boundary_start_snap_policy", rows[0])
 
     def test_stt_candidates_align_to_final_subtitle_union_without_text_changes(self):
         segments = [

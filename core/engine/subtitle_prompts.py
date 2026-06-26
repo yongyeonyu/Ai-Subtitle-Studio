@@ -6,6 +6,7 @@ from core.engine.subtitle_settings import _get_user_settings
 from core.engine.llm_candidate_policy import format_candidate_options_for_prompt
 from core.native_swift_subtitle_llm_context import format_subtitle_llm_context_for_prompt
 from core.personalization.runtime_lora_context import build_runtime_lora_prompt
+from core.personalization.subtitle_split_protocol import reference_split_protocol_llm_rule
 from core.runtime import config
 from core.subtitle_quality.llm_guarded_corrector import build_conservative_prompt
 
@@ -39,7 +40,7 @@ _HARDCODED_LLM_RULES = """
 9. [언어 제한] 한국어와 영어 이외의 언어(중국어, 일본어 등)는 절대 사용하지 마세요.
 10. [고유명사/숫자 보호] 사람 이름, 장소, 브랜드, 행사명, 숫자, 영어 표기는 확실하지 않으면 원문 그대로 두세요.
 11. [창작 금지] 절대 부가 설명이나 인사말을 넣지 말고, 오직 분리된 결과 문자열만 출력하세요.
-12. [문맥 분리] 단어 하나, 접속어 하나, 주어만/서술어만 남는 1~2어절 자막으로 쪼개지 마세요. 긴 무음이나 강한 장면 전환이 없는 한 LoRA ground truth처럼 보통 18~24자 안팎의 자연스러운 구어 문장 단위로 묶으세요.
+12. [문맥 분리] {reference_split_protocol}
 13. [LoRA 분리 우선] LoRA/데이터셋의 줄바꿈·문장 호흡 예시가 있으면 그 패턴을 우선하고, 단순 글자수 때문에 문맥을 끊지 마세요.
 
 [출력 형식]
@@ -81,6 +82,7 @@ def _build_llm_prompt(
         .replace("{threshold}", str(threshold))
         .replace("{end_words}", end_words)
         .replace("{start_words}", start_words)
+        .replace("{reference_split_protocol}", reference_split_protocol_llm_rule())
         .replace("{text}", text)
     )
     lora_prompt = build_runtime_lora_prompt(text, rules, effective_settings)

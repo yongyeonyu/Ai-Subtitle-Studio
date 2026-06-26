@@ -818,7 +818,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertIn("1920x1080", widget.info_label.text())
             self.assertIn("24fps", widget.info_label.text())
             self.assertNotIn("불러오는 중", widget.info_label.text())
-            self.assertEqual(widget.time_label.text(), "00:00 / 00:12")
+            self.assertEqual(widget.time_label.text(), "00:00.000 / 00:12.000")
         finally:
             widget.close()
             widget.deleteLater()
@@ -855,22 +855,23 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         widget = VideoPlayerWidget()
         try:
             self.assertFalse(widget.frame_count_label.isHidden())
-            self.assertEqual(widget.frame_count_label.text(), "F 0 / 0")
+            self.assertEqual(widget.frame_count_label.text(), "0 / 0")
             widget.current_time = 2.0
             widget._rebuild_frame_time_map(duration=10.0, fps=25.0)
             control_layout = widget.frame_count_label.parentWidget().layout()
 
             self.assertFalse(widget.frame_count_label.isHidden())
-            self.assertEqual(widget.frame_count_label.text(), "F 51 / 250")
+            self.assertEqual(widget.frame_count_label.text(), "51 / 250")
             self.assertEqual(widget.frame_count_label.width(), widget._FRAME_COUNT_LABEL_WIDTH)
             self.assertGreater(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.time_label))
             self.assertLess(control_layout.indexOf(widget.frame_count_label), control_layout.indexOf(widget.status_info_container))
 
             widget._apply_seek_state(4.0)
 
-            self.assertEqual(widget.frame_count_label.text(), "F 101 / 250")
+            self.assertEqual(widget.frame_count_label.text(), "101 / 250")
+            self.assertEqual(widget.time_label.text(), "00:04.000 / 00:10.000")
             state = widget._quick_control_bar_state()
-            self.assertEqual(state["frameText"], "F 101 / 250")
+            self.assertEqual(state["frameText"], "101 / 250")
         finally:
             widget.close()
             widget.deleteLater()
@@ -908,8 +909,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                 "height": 2160,
             })
 
-            self.assertEqual(widget.time_label.text(), "00:00 / 07:59")
-            self.assertEqual(widget.frame_count_label.text(), f"F 1 / {widget.frame_time_map.total_frames}")
+            self.assertEqual(widget.time_label.text(), "00:00.000 / 07:59.730")
+            self.assertEqual(widget.frame_count_label.text(), f"1 / {widget.frame_time_map.total_frames}")
         finally:
             widget.close()
             widget.deleteLater()
@@ -1765,7 +1766,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
             self.assertEqual(widget.current_frame, 313)
             self.assertAlmostEqual(widget.current_time, frame_to_sec(313, fps), places=6)
-            self.assertEqual(widget.frame_count_label.text(), f"F 314 / {widget.frame_time_map.total_frames}")
+            self.assertEqual(widget.frame_count_label.text(), f"314 / {widget.frame_time_map.total_frames}")
+            self.assertEqual(widget.time_label.text(), "00:05.222 / 00:20.003")
         finally:
             widget.close()
             widget.deleteLater()

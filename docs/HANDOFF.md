@@ -33,6 +33,263 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-26 Addendum - NAS 50 Split Protocol And Heydealer Validation
+
+### Scope
+
+- Analyzed the primary 50 NAS truth SRT pairs from `docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`.
+- Added a narrow subtitle split protocol module and wired it into LLM hard rules plus runtime LoRA prompt guidance.
+- Kept the change prompt/protocol-only: no project save/load format, UI/UX, STT2, VAD, model-selection, default split floor, release, or DMG work changed.
+- Verified Heydealer with cached High raw STT/postprocess so the STT path was not rerun.
+
+### Artifacts
+
+- NAS 50 analysis: `output/manual_verification/latest/nas_50_subtitle_split_protocol_20260626_203523/`
+- Heydealer validation summary: `output/manual_verification/latest/heydealer_split_protocol_validation_20260626_204038/summary.md`
+- Source benchmark JSON: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_204038/benchmark_results.json`
+- Rejected runtime-floor candidate metrics: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_204038/protocol_13_floor/metrics.json`
+- NAS result folder: `/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/자막벤치`
+- NAS result files:
+  - `헤이딜러_최종_벤치_v04.00.17_splitproto_20260626.srt`
+  - `헤이딜러_최종_벤치_v04.00.17_splitproto_20260626.txt`
+  - `헤이딜러_최종_벤치_v04.00.17_splitproto_20260626_metrics.json`
+
+### Result
+
+- 50-reference speech rows after parenthetical/dash stripping: `17,322`.
+- Learned compact-char distribution: `p25=9`, `p50=13`, `p75=17`, `p90=22`, `p95=25`.
+- Accepted protocol id: `nas_50_reference_split.v1`.
+- Heydealer cached High score: `quality_score 87.490 -> 87.623` (`+0.133`).
+- Segment count stayed `417 -> 417`; the accepted result is a small timing/overlap improvement, not a count-alignment improvement.
+- The runtime-floor candidate (`split_length_threshold=13`, `subtitle_lora_split_floor_chars=13`, `subtitle_common_split_target_chars=13`, `subtitle_common_split_hard_max_chars=22`) was rejected: rows `537`, `quality_score=85.692`, `count_score=87.317`, `split_merge_overlap_score=70.119`.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/personalization/subtitle_split_protocol.py core/engine/subtitle_prompts.py core/personalization/runtime_lora_context.py tests/test_subtitle_rules_runtime.py tests/test_subtitle_llm_context_policy.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_rules_runtime.py tests/test_subtitle_llm_context_policy.py` -> `8 passed`
+- `git diff --check -- .` -> pass
+
+### Jammini Review
+
+- Jammini handoff `.agents/sentinel/handoffs/20260626-203500-nas-50-split-protocol-risk-review.md` reviewed as `accept/revise/defer`.
+- Accepted: candidate-lock conflict risk, score false-positive risk, and avoiding count-only promotion.
+- Revised: save/reopen forced resegmentation is not introduced by this prompt-only patch.
+- Deferred: cross-device personalization divergence and broader VFR/drop-frame validation matrix.
+
+### Next Recommended Action
+
+- Do not promote `13/22` as runtime defaults yet.
+- Next slice should target the safe middle: reduce over-merged rows only before final timing selection, then gate on start/overlap quality, not count score alone.
+
+## 2026-06-26 Addendum - Heydealer NAS Benchmark Result
+
+### Scope
+
+- Created the first NAS-local benchmark result for action item 48, `헤이딜러_최종`, under that source folder's `자막벤치` directory.
+- Reused the existing High generation artifact from `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_175343/mode_high/output_segments.json`; no new High generation run was needed.
+- Copied the matched truth SRT, exported the generated benchmark SRT, wrote a score TXT, and saved the detector JSON.
+- Updated benchmark scoring to `split_merge_aware.v1` so a clean indoor-mic result is not under-scored when one generated subtitle row corresponds to multiple short reference-SRT captions.
+- No app UI/UX, STT2, LLM, LoRA, VAD, model-selection policy, save/load behavior, release action, or DMG work changed.
+
+### Artifacts
+
+- NAS folder: `/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/자막벤치`
+- Truth copy: `헤이딜러_최종_정답_20260626.srt`
+- Generated benchmark SRT: `헤이딜러_최종_벤치_v04.00.17_20260626.srt`
+- Score report: `헤이딜러_최종_벤치_v04.00.17_20260626.txt`
+- Metrics JSON: `헤이딜러_최종_벤치_v04.00.17_20260626_metrics.json`
+- Cut detector JSON: `헤이딜러_최종_cut_boundaries_det_20260626.json`
+- LoRA candidate JSONL: `헤이딜러_최종_LoRA학습후보_v04.00.17_20260626.jsonl`
+- LoRA candidate review: `헤이딜러_최종_LoRA학습후보_v04.00.17_20260626.md`
+
+### Result
+
+- Scoring policy: parentheses comments removed, dash removed, start/end timing weighted 70/30, split/merge-aware reference alignment.
+- `quality_score=87.49` after rescoring; previous one-to-one score was `82.48`.
+- `cer=0.134089`, one-to-one `start_timing_mae_sec=0.6427`, split/merge `split_merge_start_timing_mae_sec=0.3907`, split/merge `split_merge_start_weighted_timing_mae_sec=0.3850`.
+- `segmentation_score=90.576`; classic count-only score remains `67.805` because the reference has more short captions than the generated output.
+- Reference/generated SRT rows: `615/417`.
+- Medium cut detector normalized candidates: `29`.
+- Generated subtitle starts within `0.5s` of detector cuts: `27/29`; truth subtitle starts within `0.5s`: `29/29`.
+- The TXT starts with the exact truth video/subtitle pair and includes `[det]`, `[check]{001-000}`, `[missing]`, and pending LoRA candidate rows.
+- LoRA candidate export contains `34` pending rows: `18` high-priority and `16` medium-priority. All rows remain `accepted_for_text_lora=false` until owner review.
+
+### Next recommended action
+
+- 대표님 should review the TXT's `[det]` list, replace `[check]{001-000}` with the confirmed detector range/list, and add any missed cuts as `[missing]{time=|frame=|note=}`.
+- Dex should sort any owner-added `[missing]` lines by time/frame on the next pass before using the file as benchmark truth.
+
+## 2026-06-26 Addendum - NAS Subtitle Benchmark 50 Plan
+
+### Scope
+
+- Added owner-facing benchmark execution plan at `docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`.
+- Added owner-fillable recording context registry at `docs/NAS_SUBTITLE_BENCHMARK_RECORDING_CONTEXT.md`.
+- The plan defines the future per-fixture workflow for creating NAS-local `자막벤치` folders, copying truth SRTs, generating current-version High benchmark SRT/TXT outputs, recording score tables, recording detector/check cut-boundary blocks, and appending LoRA training candidates.
+- The recording context registry lets the owner mark each fixture's recording situation, audio source/noise tags, cut pattern, reference-SRT quality, and tuning notes before situation-specific tuning is attempted.
+- Current NAS scan found 52 exact video/SRT stem pairs under `/Volumes/photo/22_유튜브영상_개인`; the confirmed primary 50 includes `카이엔 일렉트릭 리뷰`, while `BMW X1 m35i 리뷰` and `M FEST 2026` remain extra candidates.
+- Confirmed cut-boundary review format: `[det]{번호|time=|frame=|score=}` plus `[check]{001-037}` plus `[missing]{time=|frame=}`.
+- No benchmark run, app UI/UX change, STT/LLM/LoRA/VAD policy change, save/load change, or release action was performed for this planning slice.
+
+### Next recommended action
+
+- If the owner says `1번 벤치마킹하자`, run only action item 01 from `docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md` and write outputs into that source folder's `자막벤치` directory.
+- Do not ask again about including Cayenne in primary 50; it is already included. Treat `BMW X1 m35i 리뷰` and `M FEST 2026` as extras unless the owner changes the set.
+
+## 2026-06-26 Addendum - Cayenne High Cut-Boundary E2E Runner Proof
+
+### Scope
+
+- Added confirmed cut-boundary input support to `tools/benchmark_subtitle_pipeline_variants.py` via `--cut-boundaries-json`.
+- The benchmark runner now mirrors the source-app saved cut-boundary post-processing path by applying `magnetize_segments_to_cut_boundaries` and `split_segments_by_cut_boundaries` before scoring/exporting benchmark artifacts.
+- Added focused tests in `tests/test_benchmark_mode_profiles.py` for cut-boundary JSON loading and application.
+- No UI/UX, STT2, LLM, LoRA, VAD, model-selection, save/load format, render output, or release packaging behavior was changed.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-143500-cayenne-e2e-validation-checklist.md` was reviewed by Dex as `accept`: the checklist was used for scoring-rule and drift-risk coverage, with no code adopted directly.
+
+### Cayenne E2E result
+
+- Artifact: `output/manual_verification/latest/cayenne_high_cut_boundary_e2e_20260626_1446/summary.md`
+- Generated SRT: `output/manual_verification/latest/cayenne_high_cut_boundary_e2e_20260626_1446/mode_high_cut_boundaries_output.srt`
+- No-cut benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_143345/benchmark_results.json`
+- Cut-aware benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_144217/benchmark_results.json`
+- Cut-boundary input: `output/manual_verification/latest/cayenne_cut_boundary_scan_20260626_1024/cut_boundaries.json`
+- Metrics:
+  - `final_segments`: `247 -> 247`
+  - `quality_score`: `77.219 -> 77.315` (`+0.096`)
+  - `timing_mae_sec`: `0.7111 -> 0.7018` (`-0.0093s`)
+  - `visual cut within 1 frame`: `0.0% -> 100.0%`
+  - `reference-start within 0.5s on 7 cut truth rows`: `57.143% -> 85.714%`
+  - `reference cut-start score`: `51.821 -> 90.667`
+- Decision: cut-aware High E2E now receives confirmed cut-boundary input and snaps all 7 truth cases to visual cut frames.
+- Remaining caveat: the `78.280s` reference-start vs `78.900s` visual-cut row remains a real manual policy conflict; the cut-aware output is exact to the visual cut and `0.620s` away from that reference start.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/cut_boundary.py tests/test_subtitle_boundary_alignment.py ui/editor/video_player_widget.py ui/editor/video_player_transport.py ui/editor/video_player_surface.py tests/test_video_player_widget.py tools/benchmark_subtitle_pipeline_variants.py tests/test_benchmark_mode_profiles.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_video_player_widget.py` -> `87 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py -k 'cut_boundary_json or cut_boundary_application'` -> `2 passed, 24 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py` -> `26 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k 'cut_boundaries or split_segments_by_cut_boundaries'` -> `3 passed, 82 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k 'split_by_saved_cut_boundaries or shift_cut_boundary_rows'` -> `2 passed, 20 deselected`
+- `git diff --check -- .` -> pass
+
+### Next recommended action
+
+- Treat `78.280s` reference-start vs `78.900s` visual-cut as the first adjudication case before changing production precedence again.
+- If continuing NLE work, resume from `ACTION_ITEMS.md` current queue; this Cayenne proof is subtitle timing/cut-boundary validation, not NLE persistence/write-path promotion proof.
+
+## 2026-06-26 Addendum - Cayenne Reference Cut Truth And Frame-Based Playback Display
+
+### Scope
+
+- Added an ignored local Cayenne cut-boundary truth note at `test video/카이엔 일렉트릭 리뷰_reference_cut_boundaries.txt`.
+- The truth note records reference-SRT cut-start rows as both frame indexes and frame-based timecodes for the 60 fps Cayenne source.
+- Updated the editor playback display to show:
+  - `current_frame / total_frames`
+  - `current_time / total_time`
+- Playback time text is now derived from frame position when frame metadata is available.
+- No STT2, LLM, LoRA, VAD, model-selection policy, save/load format, subtitle timing generation policy, render output, shortcuts, colors, popup behavior, or layout structure was changed.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-130000-playback-display-risk-review.md` was reviewed by Dex as `accept with correction`: narrow-control-bar, QML sync, frame-map, and 59.94 fps precision risks were accepted; the landed implementation reuses the existing control-bar state path instead of adding a new signal channel.
+
+### Cut-boundary assessment
+
+- The Cayenne cut-start truth set has 7 reference rows.
+- 6 of 7 rows line up with the detected visual cut within roughly one video frame:
+  - `35.200000s`
+  - `118.866667s`
+  - `426.616667s`
+  - `591.166667s`
+  - `640.366667s`
+  - `730.516667s`
+- The remaining row is a real policy conflict:
+  - reference subtitle start: `78.280000s`
+  - detected visual cut: `78.900000s`
+  - interpretation: the visual cut detection appears plausible, but the answer subtitle starts before the visual cut, so this cannot be treated as a simple detector miss without deciding whether reference-start or visual-cut should win.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/cut_boundary.py tests/test_subtitle_boundary_alignment.py ui/editor/video_player_widget.py ui/editor/video_player_transport.py ui/editor/video_player_surface.py tests/test_video_player_widget.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_video_player_widget.py` -> `87 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k 'cut_boundaries or split_segments_by_cut_boundaries'` -> `3 passed, 82 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k 'split_by_saved_cut_boundaries or shift_cut_boundary_rows'` -> `2 passed, 20 deselected`
+- `git diff --check -- .` -> pass before this handoff addendum; rerun after edits before closeout.
+
+### Next recommended action
+
+- If tightening the cut-start policy further, treat the `78.28s` reference-start vs `78.9s` visual-cut conflict as the first manual adjudication case.
+- Add a compact visual/manual artifact for this row before changing production cut-start precedence again.
+
+## 2026-06-26 Addendum - Cayenne Production Cut-Start Snap Improvement
+
+### Scope
+
+- Added a narrow production cut-boundary timing improvement in `core/cut_boundary.py`.
+- New helper: `snap_late_segment_starts_to_confirmed_cuts`.
+- The helper pulls a near-late subtitle start onto a confirmed visual cut only when the previous subtitle reaches that cut boundary.
+- This uses generated subtitle rows plus confirmed visual cut boundaries only. Reference SRT is used only for validation scoring.
+- No UI/UX labels, layout, colors, shortcuts, menus, popup behavior, STT2, LLM, LoRA, VAD, model-selection, save format, or render output changed.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-121900-cayenne-timing-improvement-risk-review.md` was reviewed by Dex as `accept with correction`: reference-leakage and false-confidence risks were accepted; the landed implementation is `core/cut_boundary.py` cut magnetization, not a reference-aware `subtitle_timing.py` correction.
+
+### Validation
+
+- Cayenne production-function rescore:
+  - artifact: `output/manual_verification/latest/cayenne_production_cut_magnet_rescore_20260626_1227/summary.md`
+  - source visual cut scan: `output/manual_verification/latest/cayenne_cut_boundary_scan_20260626_1024/cut_boundaries.json`
+  - `mode_high`: `start_priority_score=66.629` (`+8.234`), `avg_start_error_sec=0.7321` (`-0.0124s`), `ref_start_within_0_5_pct=47.719` (`+1.052pp`), `cut_start_score=90.667` (`+38.868`), `ref_cut_start_within_0_5_pct=85.714` (`+28.571pp`), `avg_end_error_sec=0.7247` (`-0.0062s`)
+  - `mode_high_piecewise_drift`: `start_priority_score=67.100` (`+8.240`), `avg_start_error_sec=0.7186` (`-0.0126s`), `ref_start_within_0_5_pct=48.421` (`+1.053pp`), `cut_start_score=90.667` (`+38.868`), `ref_cut_start_within_0_5_pct=85.714` (`+28.571pp`), `avg_end_error_sec=0.7243` (`-0.0063s`)
+  - remaining caveat: the `78.9s` visual cut is snapped exactly to the cut while the reference subtitle starts at `78.28s`, so that case is a real cut-vs-reference-start conflict.
+- Focused checks:
+  - `./venv/bin/python -m py_compile core/cut_boundary.py tests/test_subtitle_boundary_alignment.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py` -> `12 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k 'cut_boundaries or split_segments_by_cut_boundaries'` -> `3 passed, 82 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k 'split_by_saved_cut_boundaries or shift_cut_boundary_rows'` -> `2 passed, 20 deselected`
+- Known unrelated validation debt:
+  - Broader `tests/test_pipeline_cut_boundary_cache.py -k 'cut_boundary or split_by_saved_cut_boundaries or shift_cut_boundary_rows'` currently fails 5 tests because those tests open a project as UTF-8 JSON after the current binary project writer stores an `AISS-PROJECT` payload. This was localized and is not caused by the cut-start snap helper.
+
+### Next recommended action
+
+- If widening this improvement, first add an end-to-end generation fixture where confirmed visual cut rows exist before final subtitle magnetization.
+- Keep reference SRT out of production timing decisions; use it only for scoring artifacts.
+
+## 2026-06-26 Addendum - Cayenne High Start-First Cut Rescore And NLE Boundary
+
+### Scope
+
+- Copied owner-provided Cayenne media/reference files into ignored local `test video/` fixture storage before this validation run.
+- Ran Cayenne full-duration High reference comparisons and then rescored the existing outputs with the owner-corrected rules:
+  - parenthetical `(...)` / `（...）` reference text is comment text and excluded from scoring;
+  - dash characters are ignored for text accuracy only;
+  - subtitle start time is weighted first;
+  - visual cut-start alignment is checked separately against a Cayenne visual cut scan.
+- No runtime code, UI/UX, subtitle timing policy, STT2, LLM, LoRA, VAD, model-selection, save file, or render-output behavior changed.
+- Jammini handoff `.agents/sentinel/handoffs/20260626-095500-nle-baseline-remaining-gap-review.md` was reviewed by Dex as `accept with correction`: NLE write-path compatibility and Editor Readiness/NLE boundary findings were accepted; the claim that Cayenne/X5 High subtitle-quality proof also proves NLE exact-join/render sidecar E2E parity was corrected.
+
+### Validation
+
+- Original Cayenne High command:
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --media 'test video/카이엔 일렉트릭 리뷰.MP4' --reference-srt 'test video/카이엔 일렉트릭 리뷰.srt' --start-sec 0 --duration-sec 761.576667 --variants mode_high --ranking-policy primary_first --keep-artifacts`
+  - artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_095259/benchmark_results.json`
+- Original Cayenne High + piecewise drift command:
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --media 'test video/카이엔 일렉트릭 리뷰.MP4' --reference-srt 'test video/카이엔 일렉트릭 리뷰.srt' --start-sec 0 --duration-sec 761.576667 --variants mode_high_piecewise_drift --ranking-policy primary_first --cached-raw-segments .codex_work/benchmarks/subtitle_pipeline_variants/20260626_095259/mode_high/raw_segments.json --keep-artifacts`
+  - artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_095737/benchmark_results.json`
+  - note: the profile method is still `selective_ensemble`, so this was not a no-STT cached-only comparison.
+- Start-first owner-corrected rescore with visual cut-start check:
+  - artifact: `output/manual_verification/latest/cayenne_high_reference_start_first_cut_20260626_1038/summary.md`
+  - normalized reference: `output/manual_verification/latest/cayenne_high_reference_start_first_cut_20260626_1038/reference_without_parenthetical_comments.srt`
+  - visual cut scan artifact: `output/manual_verification/latest/cayenne_cut_boundary_scan_20260626_1024/cut_boundaries.json`
+  - reference rows: `291 -> 285`
+  - visual cuts: `7` medium cuts at `35.2`, `78.9`, `118.8667`, `426.6`, `591.1667`, `640.3667`, `730.5`
+  - score formula: `0.35*start_mae_score + 0.15*ref_start_within_0_5_pct + 0.20*cut_start_score + 0.15*unique_ref_coverage_score + 0.10*end_mae_score + 0.05*text_score`
+  - `mode_high`: `start_priority_score=58.395`, `avg_start_error_sec=0.7445`, `p95_start_error_sec=2.3068`, `ref_start_within_0_5_pct=46.667`, `cut_start_score=51.799`, `final/reference=246/285`
+  - `mode_high_piecewise_drift`: `start_priority_score=58.860`, `avg_start_error_sec=0.7312`, `p95_start_error_sec=2.3043`, `ref_start_within_0_5_pct=47.368`, `cut_start_score=51.799`, `final/reference=247/285`
+  - result: tiny positive start-time direction only; visual cut-start score did not improve.
+
+### Next recommended action
+
+- Keep NLE snapshot/read-only render routing as the current baseline.
+- Do not add NLE persistence/write-path fields until an owner-approved compatibility gate proves old `.aissproj`, direct SRT reopen, roughcut sidecars, rendered roughcut reopen, missing-media relink, and cache/proxy metadata remain non-destructive.
+- Continue active runtime work from `ACTION_ITEMS.md` item 1 unless the owner explicitly reopens NLE write-path implementation.
+
 ## 2026-06-26 Addendum - v04.00.17 Source-App NLE Baseline Release
 
 ### Scope

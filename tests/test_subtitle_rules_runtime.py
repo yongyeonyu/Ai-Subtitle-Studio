@@ -64,6 +64,8 @@ class SubtitleRulesRuntimeTests(unittest.TestCase):
 
         self.assertIn("자막 분리 규칙", prompt)
         self.assertIn("기본 분리 글자수=19자", prompt)
+        self.assertIn("정답 자막 분할 기준=nas_50_reference_split.v1", prompt)
+        self.assertIn("목표=13자", prompt)
         self.assertIn("그러니까", prompt)
         self.assertIn(",", prompt)
 

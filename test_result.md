@@ -1,5 +1,194 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NAS 50 split protocol and Heydealer cached High validation - 2026-06-26
+
+- 실행 모드: NAS 50 reference-SRT split analysis + LLM/LoRA prompt protocol update + Heydealer cached High postprocess validation.
+- 결과: pass for prompt/protocol update; reject for forcing runtime split floor to 13.
+- 50-reference analysis:
+  - Source: `docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`
+  - Artifact: `output/manual_verification/latest/nas_50_subtitle_split_protocol_20260626_203523/`
+  - Files found: `50/50`
+  - Effective speech rows after parenthetical/dash stripping: `17,322`
+  - Compact-char distribution: `p25=9`, `p50=13`, `p75=17`, `p90=22`, `p95=25`
+  - Accepted protocol id: `nas_50_reference_split.v1`
+- 수정 요약:
+  - Added `core/personalization/subtitle_split_protocol.py` with the NAS 50 split protocol constants.
+  - Updated LLM hard rule and runtime LoRA prompt from the old `18~24자` default wording to the learned `target=13`, `normal=9~17`, `soft upper=22` protocol.
+  - Kept this as prompt/protocol guidance only; did not change saved project format, UI, STT2, VAD, model selection, or default runtime split floor.
+- Heydealer validation:
+  - Source benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_204038/benchmark_results.json`
+  - NAS result SRT: `/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/자막벤치/헤이딜러_최종_벤치_v04.00.17_splitproto_20260626.srt`
+  - NAS report TXT: `/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/자막벤치/헤이딜러_최종_벤치_v04.00.17_splitproto_20260626.txt`
+  - Manual summary: `output/manual_verification/latest/heydealer_split_protocol_validation_20260626_204038/summary.md`
+  - Score: `quality_score 87.490 -> 87.623` (`+0.133`)
+  - Segment count: `417 -> 417`; this is a timing/overlap improvement, not a count-alignment improvement.
+  - Runtime log: LLM candidates `3`, LoRA/Deep/STT-confirmed rows `413`, so most rows bypassed LLM and prompt changes have limited reach on this cached run.
+- Rejected candidate:
+  - `protocol_13_floor_runtime_candidate` with `split_length_threshold=13`, `subtitle_lora_split_floor_chars=13`, `subtitle_common_split_target_chars=13`, `subtitle_common_split_hard_max_chars=22`
+  - Result: `hypothesis_segments=537`, `quality_score=85.692`, `count_score=87.317`, `split_merge_start_timing_mae_sec=0.464`, `split_merge_overlap_score=70.119`
+  - Decision: reject because count improved but start/overlap/local text quality regressed and review burden rose.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/personalization/subtitle_split_protocol.py core/engine/subtitle_prompts.py core/personalization/runtime_lora_context.py tests/test_subtitle_rules_runtime.py tests/test_subtitle_llm_context_policy.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_rules_runtime.py tests/test_subtitle_llm_context_policy.py` -> `8 passed`
+  - `git diff --check -- .` -> pass
+- Jammini:
+  - `.agents/sentinel/handoffs/20260626-203500-nas-50-split-protocol-risk-review.md` reviewed as `accept/revise/defer`.
+  - Accepted: STT candidate-lock conflict risk, validation false-positive risk, need to avoid count-only promotion.
+  - Revised: save/reopen forced-resegment risk is not introduced by this prompt-only patch.
+  - Deferred: cross-device personalization divergence and VFR/drop-frame broader matrix.
+
+## Heydealer High reference comparison and scoring-rule fix - 2026-06-26
+
+- 실행 모드: NAS direct Heydealer final MP4/SRT High benchmark and rescoring.
+- 결과: pass for scoring-rule correction; no generation-path improvement accepted.
+- 기준 파일:
+  - Media: `/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4`
+  - Reference SRT: `/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt`
+- 수정 요약:
+  - `tools/subtitle_benchmark_scoring.py` now excludes parenthetical comments and ASCII dash marks from benchmark text accuracy.
+  - Timing score now uses start-weighted timing MAE (`start 70%`, `end 30%`) while preserving the existing `timing_mae_sec` field.
+  - Added focused tests for parenthetical/dash exclusion and start-time priority.
+- 산출물:
+  - Summary: `output/manual_verification/latest/heydealer_high_reference_compare_20260626_181155/summary.md`
+  - Rescore JSON: `output/manual_verification/latest/heydealer_high_reference_compare_20260626_181155/rescore_metrics.json`
+  - Baseline High benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_175343/benchmark_results.json`
+  - Drift candidate benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_180253/benchmark_results.json`
+  - Cached timing candidate benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_180902/benchmark_results.json`
+- Heydealer High rescore:
+  - `quality_score`: `81.32 -> 82.48` after owner scoring rules.
+  - `CER`: `0.160803 -> 0.134089`
+  - `text_score`: `85.737 -> 88.093`
+  - `start_weighted_timing_mae_sec`: `0.6154`
+  - `start_timing_mae_sec`: `0.6427`, `end_timing_mae_sec`: `0.5516`
+  - `reference/hypothesis`: `615/417`
+- 후보 판정:
+  - `mode_high_piecewise_drift`: rejected; same score and timing as baseline on Heydealer.
+  - Cached timing variants: rejected; best candidate scored `75.539`, `start_weighted_timing_mae_sec=0.736`, and introduced `overlap_count=28`, `max_overlap=10.26`.
+  - Current High generation path remains the accepted Heydealer path for this fixture.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile tools/subtitle_benchmark_scoring.py tools/benchmark_subtitle_pipeline_variants.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py` -> `28 passed`
+  - `git diff --check -- .` -> pass
+- Jammini:
+  - `.agents/sentinel/handoffs/20260626-180300-heydealer-benchmark-risk-review.md` reviewed as `accept with correction`.
+  - Accepted: count-score false-negative risk, duration/last_end stability, need for parenthetical/dash filtering, and start-time-priority scoring.
+  - Correction: the handoff path text had a timestamp typo in the read-file line; Dex verified the real file `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_175343/benchmark_results.json` directly.
+
+## Cayenne High cut-boundary E2E runner proof - 2026-06-26
+
+- 실행 모드: Cayenne full-duration High benchmark with confirmed visual cut-boundary input.
+- 결과: pass
+- 수정 요약:
+  - `tools/benchmark_subtitle_pipeline_variants.py` now accepts `--cut-boundaries-json`.
+  - The benchmark runner applies the same source-app confirmed cut-boundary magnet/split post-processing path before scoring and artifact export.
+  - This closes the validation gap where the source-app production function improved cut-starts but the standalone benchmark did not receive saved cut boundaries.
+- 산출물:
+  - Summary: `output/manual_verification/latest/cayenne_high_cut_boundary_e2e_20260626_1446/summary.md`
+  - Generated SRT: `output/manual_verification/latest/cayenne_high_cut_boundary_e2e_20260626_1446/mode_high_cut_boundaries_output.srt`
+  - Cut-aware benchmark JSON: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_144217/benchmark_results.json`
+  - No-cut benchmark JSON: `.codex_work/benchmarks/subtitle_pipeline_variants/20260626_143345/benchmark_results.json`
+  - Cut-boundary input: `output/manual_verification/latest/cayenne_cut_boundary_scan_20260626_1024/cut_boundaries.json`
+- Cayenne High 전/후:
+  - `final_segments`: `247 -> 247`
+  - `quality_score`: `77.219 -> 77.315` (`+0.096`)
+  - `timing_mae_sec`: `0.7111 -> 0.7018` (`-0.0093s`)
+  - `visual cut within 1 frame`: `0.0% -> 100.0%`
+  - `reference-start within 0.5s on 7 cut truth rows`: `57.143% -> 85.714%`
+  - `reference cut-start score`: `51.821 -> 90.667`
+- 판정:
+  - Confirmed cut-boundary input을 넣은 High E2E는 7개 truth cut 모두 visual cut frame에 맞췄다.
+  - `78.280s` reference start vs `78.900s` visual cut은 남은 수동 판정 리스크다. 현재 결과는 visual cut에는 정확히 맞고 reference start와는 `0.620s` 차이난다.
+  - UI/UX, STT2, LLM, LoRA, VAD, model selection, save/load format, render output은 변경하지 않았다.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/cut_boundary.py tests/test_subtitle_boundary_alignment.py ui/editor/video_player_widget.py ui/editor/video_player_transport.py ui/editor/video_player_surface.py tests/test_video_player_widget.py tools/benchmark_subtitle_pipeline_variants.py tests/test_benchmark_mode_profiles.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_video_player_widget.py` -> `87 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py -k 'cut_boundary_json or cut_boundary_application'` -> `2 passed, 24 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py` -> `26 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k 'cut_boundaries or split_segments_by_cut_boundaries'` -> `3 passed, 82 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k 'split_by_saved_cut_boundaries or shift_cut_boundary_rows'` -> `2 passed, 20 deselected`
+- Jammini:
+  - `.agents/sentinel/handoffs/20260626-143500-cayenne-e2e-validation-checklist.md` reviewed as `accept`.
+  - Accepted: parenthetical/dash scoring rules, start-time weighting, 7 cut-start truth rows, `78.280s` vs `78.900s` conflict tracking, count/first/last/end drift checks.
+
+## Cayenne reference cut truth and frame-based playback display - 2026-06-26
+
+- 실행 모드: Cayenne reference cut truth file generation plus Taption-style playback frame/time display.
+- 결과: pass
+- 컷 경계 판정:
+  - Current detector/production snap looks good for the Cayenne scoring truth set on `6/7` cut-start cases.
+  - Remaining conflict: visual cut `78.9s` is a real visual cut, but the reference subtitle starts at `78.28s`, so exact visual-cut snapping and reference-start matching disagree there.
+- 산출물:
+  - `test video/카이엔 일렉트릭 리뷰_reference_cut_boundaries.txt`
+  - The file records `reference_start_sec`, zero-based `frame_index`, one-based `display_frame`, frame-based time, timecode, detected visual cut time, and reference text.
+  - Media basis: `60fps`, `45695` frames, frame time rule `frame_time_sec = frame_index / fps`.
+- 수정 요약:
+  - Playback control bar now shows frame count as `current / total`.
+  - Playback time label now uses frame-based time from `frame_time_map`, formatted with milliseconds as `current / total`.
+  - Seek/frame-step updates refresh the frame-based time label immediately.
+- 단위/가드:
+  - `ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate,nb_frames,duration,time_base -show_entries format=duration -of json 'test video/카이엔 일렉트릭 리뷰.MP4'` -> `60/1`, `nb_frames=45695`, `duration=761.576667`
+  - `./venv/bin/python -m py_compile core/cut_boundary.py tests/test_subtitle_boundary_alignment.py ui/editor/video_player_widget.py ui/editor/video_player_transport.py ui/editor/video_player_surface.py tests/test_video_player_widget.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_video_player_widget.py` -> `87 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k 'cut_boundaries or split_segments_by_cut_boundaries'` -> `3 passed, 82 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k 'split_by_saved_cut_boundaries or shift_cut_boundary_rows'` -> `2 passed, 20 deselected`
+  - `git diff --check -- .` -> pass
+- Jammini:
+  - `.agents/sentinel/handoffs/20260626-130000-playback-display-risk-review.md` reviewed as `accept with correction`.
+  - Accepted: layout/QML sync, frame map, and 59.94fps precision risks.
+  - Correction: this slice reuses the existing control-bar/QML state path and does not add a new signal channel.
+
+## Cayenne production visual cut start-snap improvement - 2026-06-26
+
+- 실행 모드: production `core.cut_boundary.magnetize_segments_to_cut_boundaries` rescore using Cayenne visual cut scan and owner-corrected reference rules.
+- 결과: pass for the focused improvement slice; start-first score and cut-start alignment improved without changing text, STT2, LLM, LoRA, VAD, model selection, UI/UX, save format, or render output.
+- 수정 요약:
+  - Added `snap_late_segment_starts_to_confirmed_cuts` for confirmed visual cuts.
+  - A late subtitle start is pulled to the visual cut only when the previous subtitle reaches that cut boundary, limiting silent-gap overreach.
+  - Existing confirmed/provisional cut magnet and split paths remain the owner route.
+- Cayenne production-function rescore:
+  - artifact: `output/manual_verification/latest/cayenne_production_cut_magnet_rescore_20260626_1227/summary.md`
+  - visual cuts: `35.2`, `78.9`, `118.8667`, `426.6`, `591.1667`, `640.3667`, `730.5`
+  - `mode_high`: `start_priority_score=66.629` (`+8.234`), `avg_start_error_sec=0.7321` (`-0.0124s`), `ref_start_within_0_5_pct=47.719` (`+1.052pp`), `cut_start_score=90.667` (`+38.868`), `ref_cut_start_within_0_5_pct=85.714` (`+28.571pp`), `avg_end_error_sec=0.7247` (`-0.0062s`), `final/reference=246/285`
+  - `mode_high_piecewise_drift`: `start_priority_score=67.100` (`+8.240`), `avg_start_error_sec=0.7186` (`-0.0126s`), `ref_start_within_0_5_pct=48.421` (`+1.053pp`), `cut_start_score=90.667` (`+38.868`), `ref_cut_start_within_0_5_pct=85.714` (`+28.571pp`), `avg_end_error_sec=0.7243` (`-0.0063s`), `final/reference=247/285`
+  - note: the `78.9s` visual cut is correctly snapped to the cut, while the reference subtitle starts at `78.28s`; this is the remaining cut-vs-reference-start conflict.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/cut_boundary.py tests/test_subtitle_boundary_alignment.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py` -> `12 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k 'cut_boundaries or split_segments_by_cut_boundaries'` -> `3 passed, 82 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_pipeline_cut_boundary_cache.py -k 'split_by_saved_cut_boundaries or shift_cut_boundary_rows'` -> `2 passed, 20 deselected`
+  - Broader `tests/test_pipeline_cut_boundary_cache.py -k 'cut_boundary or split_by_saved_cut_boundaries or shift_cut_boundary_rows'` exposed 5 unrelated existing failures where tests still read a project file as JSON after the current binary `.aissproj` writer stores `AISS-PROJECT` payloads.
+- Jammini:
+  - `.agents/sentinel/handoffs/20260626-121900-cayenne-timing-improvement-risk-review.md` reviewed as `accept with correction`.
+  - Accepted: no production reference-SRT dependency, avoid false confidence when visual cut metadata is missing, keep STT/LLM/VAD policy isolated.
+  - Correction: the landed slice uses `core/cut_boundary.py` production cut magnetization, not `subtitle_timing.py` reference-aware correction.
+
+## Cayenne High start-first and visual cut-start verification - 2026-06-26
+
+- 실행 모드: existing Cayenne High outputs rescored against owner-corrected reference rules with subtitle start time weighted first and visual cut-start alignment checked.
+- 결과: start-first partial improvement only; cut-start alignment did not improve; not accepted as a material Cayenne-quality improvement.
+- 판정 기준:
+  - Reference text inside `(...)` or `（...）` is comment text and must be excluded from scoring.
+  - Reference rows that become empty after removing parenthetical comments are excluded.
+  - Dash characters are ignored for text accuracy only.
+  - Subtitle start time is weighted first; end time and text accuracy are secondary.
+  - Visual cut starts are scanned from the Cayenne video and checked separately.
+  - `start_priority_score = 0.35*start_mae_score + 0.15*ref_start_within_0_5_pct + 0.20*cut_start_score + 0.15*unique_ref_coverage_score + 0.10*end_mae_score + 0.05*text_score`
+  - Cayenne reference rows changed from `291` to `285` for this score.
+  - Visual cut scan found `7` medium visual cuts: `35.2`, `78.9`, `118.8667`, `426.6`, `591.1667`, `640.3667`, `730.5`.
+- 결과:
+  - `mode_high`: `start_priority_score=58.395`, `avg_start_error_sec=0.7445`, `p95_start_error_sec=2.3068`, `ref_start_within_0_5_pct=46.667`, `cut_start_score=51.799`, `ref_cut_start_within_0_5_pct=57.143`, `avg_end_error_sec=0.7309`, `text_score=82.193`, `CER=0.198945`, `final/reference=246/285`
+  - `mode_high_piecewise_drift`: `start_priority_score=58.860`, `avg_start_error_sec=0.7312`, `p95_start_error_sec=2.3043`, `ref_start_within_0_5_pct=47.368`, `cut_start_score=51.799`, `ref_cut_start_within_0_5_pct=57.143`, `avg_end_error_sec=0.7306`, `text_score=82.279`, `CER=0.197940`, `final/reference=247/285`
+  - Delta for `mode_high_piecewise_drift` vs `mode_high`: `start_priority_score +0.465`, `avg_start_error_sec -0.0133`, `ref_start_within_0_5_pct +0.701`, `cut_start_score +0.0`, `avg_end_error_sec -0.0003`
+- 산출물:
+  - `output/manual_verification/latest/cayenne_high_reference_start_first_cut_20260626_1038/summary.md`
+  - `output/manual_verification/latest/cayenne_high_reference_start_first_cut_20260626_1038/summary.json`
+  - `output/manual_verification/latest/cayenne_cut_boundary_scan_20260626_1024/cut_boundaries.json`
+  - `output/manual_verification/latest/cayenne_high_reference_start_first_cut_20260626_1038/reference_without_parenthetical_comments.srt`
+- 참고:
+  - STT/LLM was not rerun for the rescore; existing `output_segments.json` artifacts from the Cayenne High runs were reused. A separate visual cut scan was run for the Cayenne video.
+  - This is subtitle quality/timing evidence only. It does not validate NLE exact-join marker parity, render sidecar duration parity, or save/reopen write-path compatibility.
+  - No UI/UX, subtitle timing policy, STT2, LLM, LoRA, VAD, model-selection, save file, or render-output code changed.
+
 ## v04.00.17 source-app NLE baseline release - 2026-06-26
 
 - 실행 모드: release checkpoint metadata/doc sync for completed source-app internal NLE read-only baseline, roughcut render/export snapshot routing, and X5 standard fixture QA hardening.

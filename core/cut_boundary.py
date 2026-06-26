@@ -376,6 +376,110 @@ def snap_segments_near_cut_boundaries(
     return snapped
 
 
+def snap_late_segment_starts_to_confirmed_cuts(
+    segments: list[dict[str, Any]] | None,
+    boundaries: list[dict[str, Any]] | None,
+    *,
+    enabled: bool = True,
+    primary_fps: float = 30.0,
+    start_after_window_sec: float = 1.05,
+    start_before_window_sec: float = 0.25,
+    min_duration_sec: float = 0.20,
+) -> list[dict[str, Any]]:
+    """Pull a near-late subtitle start onto a confirmed visual cut.
+
+    This is deliberately narrower than the generic cut magnet: late starts are
+    pulled only when the previous subtitle reaches the cut boundary.
+    """
+    if not segments:
+        return []
+    rows = [dict(seg) for seg in segments if isinstance(seg, dict)]
+    if not enabled:
+        return rows
+
+    effective_fps = _boundary_primary_fps(boundaries, primary_fps)
+    cuts = normalize_cut_boundaries(boundaries, primary_fps=effective_fps)
+    cut_times = [
+        float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0)
+        for item in cuts
+        if float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0) > 0.0
+    ]
+    if not cut_times:
+        return rows
+
+    rows.sort(key=lambda row: (_as_float(row.get("start"), 0.0), _as_float(row.get("end"), 0.0)))
+    min_duration = max(0.05, float(min_duration_sec or 0.20))
+    start_after_window = max(0.0, float(start_after_window_sec or 0.0))
+    start_before_window = max(0.0, float(start_before_window_sec or 0.0))
+
+    for cut_sec in cut_times:
+        best: tuple[int, float, int, float, float] | None = None
+        for idx, row in enumerate(rows):
+            if row.get("is_gap"):
+                continue
+            start = _as_float(row.get("start"), 0.0)
+            end = _as_float(row.get("end"), start)
+            if end < cut_sec + min_duration:
+                continue
+            if not (cut_sec - start_before_window <= start <= cut_sec + start_after_window):
+                continue
+            priority = 0 if start >= cut_sec else 1
+            candidate = (priority, abs(start - cut_sec), idx, start, end)
+            if best is None or candidate < best:
+                best = candidate
+        if best is None:
+            continue
+
+        _priority, _distance, idx, old_start, old_end = best
+        if abs(old_start - cut_sec) < 0.001:
+            continue
+        previous_supports_boundary = False
+        previous_needs_trim = False
+        if idx > 0:
+            previous = rows[idx - 1]
+            if not previous.get("is_gap"):
+                prev_start = _as_float(previous.get("start"), 0.0)
+                prev_end = _as_float(previous.get("end"), prev_start)
+                previous_needs_trim = prev_start < cut_sec < prev_end
+                previous_supports_boundary = prev_start < cut_sec and prev_end >= cut_sec - 0.001
+        if old_start > cut_sec + 0.60 and not previous_supports_boundary:
+            continue
+        if previous_needs_trim:
+            previous = rows[idx - 1]
+            prev_start = _as_float(previous.get("start"), 0.0)
+            if cut_sec - prev_start < min_duration:
+                continue
+            previous["end"] = frame_to_sec(sec_to_frame(cut_sec, effective_fps), effective_fps)
+            previous["timeline_end"] = previous["end"]
+            previous["end_frame"] = sec_to_frame(previous["end"], effective_fps)
+            previous["timeline_end_frame"] = previous["end_frame"]
+
+        new_start_frame = sec_to_frame(cut_sec, effective_fps)
+        new_start = frame_to_sec(new_start_frame, effective_fps)
+        row = rows[idx]
+        row["start"] = new_start
+        row["timeline_start"] = new_start
+        row["start_frame"] = new_start_frame
+        row["timeline_start_frame"] = new_start_frame
+        if _as_float(row.get("end"), old_end) < new_start + min_duration:
+            new_end_frame = sec_to_frame(new_start + min_duration, effective_fps)
+            row["end_frame"] = new_end_frame
+            row["timeline_end_frame"] = new_end_frame
+            row["end"] = frame_to_sec(new_end_frame, effective_fps)
+            row["timeline_end"] = row["end"]
+        row["_cut_boundary_start_snap_policy"] = {
+            "task": "subtitle_cut_boundary_start_snap",
+            "source": "confirmed_visual_cut",
+            "cut_sec": round(float(cut_sec), 4),
+            "old_start": round(float(old_start), 4),
+            "new_start": round(float(new_start), 4),
+            "start_before_window_sec": round(start_before_window, 3),
+            "start_after_window_sec": round(start_after_window, 3),
+        }
+
+    return rows
+
+
 def magnetize_segments_to_cut_boundaries(
     segments: list[dict[str, Any]] | None,
     *,
@@ -420,6 +524,15 @@ def magnetize_segments_to_cut_boundaries(
             primary_fps=effective_fps,
             clamp_window_sec=max(float(confirmed_window_sec or 0.0), 0.60),
             min_duration_sec=min_duration_sec,
+        )
+        rows = snap_late_segment_starts_to_confirmed_cuts(
+            rows,
+            confirmed_rows,
+            enabled=True,
+            primary_fps=effective_fps,
+            start_after_window_sec=max(float(confirmed_window_sec or 0.0), 1.05),
+            start_before_window_sec=min(float(confirmed_window_sec or 0.0), 0.25),
+            min_duration_sec=max(float(min_duration_sec or 0.05), 0.20),
         )
     if provisional_rows:
         rows = snap_segments_near_cut_boundaries(
@@ -725,6 +838,7 @@ __all__ = [
     "magnetize_segments_to_cut_boundaries",
     "normalize_cut_boundaries",
     "project_cut_boundaries",
+    "snap_late_segment_starts_to_confirmed_cuts",
     "split_segments_by_cut_boundaries",
     "sync_project_cut_boundaries",
 ]

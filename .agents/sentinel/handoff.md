@@ -1,5 +1,17 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260626-203500-nas-50-split-protocol-risk-review.md`
+- `.agents/sentinel/handoffs/20260626-203104-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-180300-heydealer-benchmark-risk-review.md`
+- `.agents/sentinel/handoffs/20260626-180142-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-143500-cayenne-e2e-validation-checklist.md`
+- `.agents/sentinel/handoffs/20260626-143259-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-130000-playback-display-risk-review.md`
+- `.agents/sentinel/handoffs/20260626-121900-cayenne-timing-improvement-risk-review.md`
+- `.agents/sentinel/handoffs/20260626-121741-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-095500-nle-baseline-remaining-gap-review.md`
+- `.agents/sentinel/handoffs/20260626-095301-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-095157-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260626-085500-nle-completion-audit-gap-review.md`
 - `.agents/sentinel/handoffs/20260626-085419-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260626-083751-x5-source-app-proof-blocker-review.md`

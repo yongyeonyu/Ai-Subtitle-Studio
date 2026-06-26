@@ -134,7 +134,7 @@ class VideoPlayerTransportMixin:
         )
         ctrl_layout.addWidget(self.btn_scan_next_cut)
 
-        self.time_label = _MirrorLabel("00:00 / 00:00")
+        self.time_label = _MirrorLabel("00:00.000 / 00:00.000")
         self.time_label.setObjectName("VideoTimeLabel")
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.time_label.setWordWrap(False)
@@ -142,7 +142,7 @@ class VideoPlayerTransportMixin:
         self.time_label.setStyleSheet("color: #A9B0B7; font-size: 11px; font-weight: 500; background: transparent; border: none;")
         ctrl_layout.addWidget(self.time_label)
 
-        self.frame_count_label = _MirrorLabel("F 0 / 0")
+        self.frame_count_label = _MirrorLabel("0 / 0")
         self.frame_count_label.setObjectName("VideoFrameCountLabel")
         self.frame_count_label.setToolTip("현재 프레임 / 전체 프레임")
         self.frame_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -221,7 +221,7 @@ class VideoPlayerTransportMixin:
             return 84
         try:
             metrics = QFontMetrics(label.font())
-            text = str(label.text() or "00:00 / 00:00")
+            text = str(label.text() or "00:00.000 / 00:00.000")
             sample_width = int(metrics.horizontalAdvance(text) or 0)
         except Exception:
             sample_width = 70
@@ -473,6 +473,12 @@ class VideoPlayerTransportMixin:
         return f"{minutes:02d}:{seconds:02d}"
 
     def _time_label_text(self) -> str:
+        frame_text = getattr(self, "_frame_time_label_text", None)
+        if callable(frame_text):
+            try:
+                return str(frame_text())
+            except Exception:
+                pass
         return (
             f"{self._format_clock_time(getattr(self, 'current_time', 0.0))} / "
             f"{self._format_clock_time(getattr(self, 'total_time', 0.0))}"
@@ -482,10 +488,10 @@ class VideoPlayerTransportMixin:
         label = getattr(self, "time_label", None)
         if label is None:
             return
-        pos_ms = int(float(getattr(self, "current_time", 0.0) or 0.0) * 1000)
-        if force or abs(pos_ms - int(getattr(self, "_last_time_label_ms", -250) or -250)) >= 250:
-            self._last_time_label_ms = pos_ms
-            label.setText(self._time_label_text())
+        text = self._time_label_text()
+        if force or text != str(label.text() or ""):
+            self._last_time_label_ms = int(float(getattr(self, "current_time", 0.0) or 0.0) * 1000)
+            label.setText(text)
 
     def _format_probe_fps(self, fps_value) -> str:
         try:
@@ -913,8 +919,8 @@ class VideoPlayerTransportMixin:
     def _ui_tick(self):
         self._update_btn()
         self._ensure_source_info_label_visible()
-        self._refresh_time_label()
         if not getattr(self, "_source_ready", True):
+            self._refresh_time_label()
             return
         is_playing = self.media_player.playbackState() == self.media_player.PlaybackState.PlayingState
         target_interval = self._play_ui_interval_ms if is_playing else self._idle_ui_interval_ms
@@ -931,6 +937,7 @@ class VideoPlayerTransportMixin:
                 self._refresh_provider_segments(force=False)
 
         self._update_frame_count_label()
+        self._refresh_time_label()
         self._refresh_subtitle_now()
 
 

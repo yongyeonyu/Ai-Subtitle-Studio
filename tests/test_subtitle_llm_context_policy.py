@@ -66,6 +66,8 @@ class SubtitleLLMContextPolicyTests(unittest.TestCase):
         self.assertIn("[이전/현재/다음 STT/VAD 문맥 - Swift]", prompt)
         self.assertIn("previous/next는 문맥 참고용", prompt)
         self.assertIn("커피지와 같이 여기 맞는데 아 가자", prompt)
+        self.assertIn("nas_50_reference_split.v1", prompt)
+        self.assertIn("9~17자", prompt)
 
     def test_context_gate_rejects_previous_subtitle_takeover(self):
         segments = [

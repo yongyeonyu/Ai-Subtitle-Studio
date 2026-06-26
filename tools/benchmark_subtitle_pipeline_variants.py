@@ -1141,6 +1141,60 @@ def score_against_reference(hypothesis: list[dict[str, Any]], reference: list[di
     )
 
 
+def _load_benchmark_cut_boundaries(path_text: str, *, primary_fps: float = 30.0) -> list[dict[str, Any]]:
+    path_value = str(path_text or "").strip()
+    if not path_value:
+        return []
+    path = Path(path_value).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        rows = payload.get("rows")
+        if not isinstance(rows, list):
+            rows = payload.get("cut_boundaries")
+        if not isinstance(rows, list):
+            rows = ((payload.get("analysis") or {}) if isinstance(payload.get("analysis"), dict) else {}).get("cut_boundaries")
+    else:
+        rows = payload
+    if not isinstance(rows, list):
+        return []
+    from core.cut_boundary import normalize_cut_boundaries
+
+    return normalize_cut_boundaries([dict(row) for row in rows if isinstance(row, dict)], primary_fps=primary_fps)
+
+
+def _apply_benchmark_cut_boundaries(rows: list[dict[str, Any]], settings: dict[str, Any]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    path_text = str(settings.get("_benchmark_cut_boundaries_json") or "").strip()
+    if not path_text:
+        return [dict(row) for row in rows]
+    if not bool(settings.get("subtitle_bundle_use_confirmed_cuts", settings.get("subtitle_cut_boundary_guard_enabled", False))):
+        return [dict(row) for row in rows]
+    primary_fps = float(settings.get("_benchmark_cut_boundary_fps", 30.0) or 30.0)
+    confirmed = _load_benchmark_cut_boundaries(path_text, primary_fps=primary_fps)
+    if not confirmed:
+        return [dict(row) for row in rows]
+    from core.cut_boundary import cut_boundary_enabled, magnetize_segments_to_cut_boundaries, split_segments_by_cut_boundaries
+
+    snapped = magnetize_segments_to_cut_boundaries(
+        rows,
+        confirmed_boundaries=confirmed,
+        provisional_boundaries=None,
+        enabled=cut_boundary_enabled(settings),
+        confirmed_window_sec=0.60,
+        min_duration_sec=0.05,
+        primary_fps=primary_fps,
+    )
+    return split_segments_by_cut_boundaries(
+        snapped,
+        confirmed,
+        enabled=cut_boundary_enabled(settings),
+        primary_fps=primary_fps,
+    )
+
+
 def _bind_processor_settings(processor: VideoProcessor, settings: dict[str, Any]) -> None:
     """Keep benchmark variants from being re-routed by app-wide runtime autotune."""
     frozen = dict(settings)
@@ -1372,6 +1426,8 @@ def _run_variant(
         error = str(exc)
     finally:
         processor.release_runtime_models()
+    if final_rows:
+        final_rows = _apply_benchmark_cut_boundaries(final_rows, settings)
     elapsed = time.perf_counter() - started
     score = score_against_reference(final_rows, reference) if final_rows else {}
     readability = score_readability(final_rows, settings) if final_rows else {}
@@ -1436,9 +1492,13 @@ def _run_variant(
                 "subtitle_timing_anchor_max_start_lag_sec",
                 "subtitle_timing_anchor_max_end_lead_sec",
                 "subtitle_timing_anchor_max_end_lag_sec",
+                "_benchmark_cut_boundaries_json",
             )
         },
     }
+    if settings.get("_benchmark_cut_boundaries_json"):
+        row["cut_boundary_artifact"] = str(settings.get("_benchmark_cut_boundaries_json") or "")
+        row["cut_boundary_rows"] = len(_load_benchmark_cut_boundaries(str(settings.get("_benchmark_cut_boundaries_json") or "")))
     resource_summary = _native_resource_summary_for_variant(settings, run_llm=variant.run_llm)
     if resource_summary:
         row["native_resource_summary"] = resource_summary
@@ -1603,6 +1663,11 @@ def main() -> int:
         help="Reuse an existing raw_segments.json for cached post-processing variants.",
     )
     parser.add_argument(
+        "--cut-boundaries-json",
+        default="",
+        help="Optional confirmed cut-boundary JSON to mirror source-app saved cut-boundary post-processing.",
+    )
+    parser.add_argument(
         "--audio-profiles",
         nargs="*",
         default=[],
@@ -1630,6 +1695,8 @@ def main() -> int:
         base_settings["selected_model"] = str(args.llm_model).strip()
     if str(args.cached_raw_segments or "").strip():
         base_settings["_benchmark_cached_raw_segments_path"] = str(Path(args.cached_raw_segments).expanduser())
+    if str(args.cut_boundaries_json or "").strip():
+        base_settings["_benchmark_cut_boundaries_json"] = str(Path(args.cut_boundaries_json).expanduser())
     if args.suite == "modes":
         variants = benchmark_mode_profiles(base_settings, llm_model=str(args.llm_model or "").strip())
     elif args.suite == "mode-lora-deep":

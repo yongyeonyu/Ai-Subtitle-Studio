@@ -65,6 +65,9 @@ def clip_reference(rows: list[dict[str, Any]], start_sec: float, end_sec: float)
 
 def _compact_text(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = re.sub(r"（[^）]*）", "", text)
+    text = text.replace("-", "")
     text = re.sub(r"\s+", "", text, flags=re.UNICODE)
     for bracket in ("(", ")", "（", "）"):
         text = text.replace(bracket, "")
@@ -81,19 +84,156 @@ def _overlap(left: dict[str, Any], right: dict[str, Any]) -> float:
     return max(0.0, end - start)
 
 
+def _row_start(row: dict[str, Any]) -> float:
+    return float(row.get("start", 0.0) or 0.0)
+
+
+def _row_end(row: dict[str, Any]) -> float:
+    start = _row_start(row)
+    return float(row.get("end", start) or start)
+
+
 def _best_ref_for(hyp: dict[str, Any], refs: list[dict[str, Any]]) -> dict[str, Any] | None:
     best_row = None
     best_score = -1.0
-    hyp_mid = (float(hyp.get("start", 0.0) or 0.0) + float(hyp.get("end", 0.0) or 0.0)) / 2.0
+    hyp_mid = (_row_start(hyp) + _row_end(hyp)) / 2.0
     for ref in refs:
         overlap = _overlap(hyp, ref)
-        ref_mid = (float(ref.get("start", 0.0) or 0.0) + float(ref.get("end", 0.0) or 0.0)) / 2.0
+        ref_mid = (_row_start(ref) + _row_end(ref)) / 2.0
         proximity = max(0.0, 1.0 - abs(hyp_mid - ref_mid) / 4.0)
         score = overlap * 2.0 + proximity
         if score > best_score:
             best_score = score
             best_row = ref
     return best_row
+
+
+def _window_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "start": _row_start(rows[0]),
+        "end": _row_end(rows[-1]),
+        "text": _joined_text(rows),
+        "reference_window_count": len(rows),
+    }
+
+
+def _best_ref_window_for(
+    hyp: dict[str, Any],
+    refs: list[dict[str, Any]],
+    *,
+    max_refs: int = 8,
+    search_pad_sec: float = 3.0,
+) -> dict[str, Any] | None:
+    if not refs:
+        return None
+    hyp_start = _row_start(hyp)
+    hyp_end = _row_end(hyp)
+    hyp_mid = (hyp_start + hyp_end) / 2.0
+    candidate_indices = [
+        idx
+        for idx, ref in enumerate(refs)
+        if _row_end(ref) >= hyp_start - search_pad_sec and _row_start(ref) <= hyp_end + search_pad_sec
+    ]
+    if not candidate_indices:
+        ref_row = _best_ref_for(hyp, refs)
+        return _window_row([ref_row]) if ref_row else None
+
+    lo = max(0, min(candidate_indices) - 1)
+    hi = min(len(refs) - 1, max(candidate_indices) + 1)
+    hyp_text = _compact_text(hyp.get("text"))
+    best_window: dict[str, Any] | None = None
+    best_score = -1.0
+    for start_idx in range(lo, hi + 1):
+        for end_idx in range(start_idx, min(hi, start_idx + max_refs - 1) + 1):
+            window = refs[start_idx:end_idx + 1]
+            window_start = _row_start(window[0])
+            window_end = _row_end(window[-1])
+            window_mid = (window_start + window_end) / 2.0
+            overlap = max(0.0, min(hyp_end, window_end) - max(hyp_start, window_start))
+            max_span = max(hyp_end - hyp_start, window_end - window_start, 0.001)
+            overlap_ratio = min(1.0, overlap / max_span)
+            center_delta = abs(hyp_mid - window_mid)
+            if overlap_ratio <= 0.0 and center_delta > search_pad_sec:
+                continue
+            ref_text = _compact_text(_joined_text(window))
+            text_similarity = similarity_ratio(ref_text, hyp_text) if ref_text or hyp_text else 1.0
+            start_err = abs(hyp_start - window_start)
+            end_err = abs(hyp_end - window_end)
+            weighted_err = start_err * 0.7 + end_err * 0.3
+            timing_proximity = max(0.0, 1.0 - weighted_err / max(1.0, search_pad_sec + 1.0))
+            center_proximity = max(0.0, 1.0 - center_delta / max(1.0, search_pad_sec + 1.0))
+            compactness = max(0.0, 1.0 - max(0, len(window) - 1) / max(1.0, float(max_refs)))
+            score = text_similarity * 4.0 + overlap_ratio * 1.5 + timing_proximity + center_proximity * 0.25 + compactness * 0.15
+            if score > best_score:
+                best_score = score
+                best_window = _window_row(window)
+    if best_window is not None:
+        return best_window
+    ref_row = _best_ref_for(hyp, refs)
+    return _window_row([ref_row]) if ref_row else None
+
+
+def _start_weighted_timing_errors(pairs: Iterable[tuple[dict[str, Any], dict[str, Any]]]) -> tuple[float, float, float]:
+    start_errors: list[float] = []
+    end_errors: list[float] = []
+    weighted_errors: list[float] = []
+    for hyp, ref in pairs:
+        start_err = abs(_row_start(hyp) - _row_start(ref))
+        end_err = abs(_row_end(hyp) - _row_end(ref))
+        start_errors.append(start_err)
+        end_errors.append(end_err)
+        weighted_errors.append(start_err * 0.7 + end_err * 0.3)
+    if not weighted_errors:
+        return 0.0, 0.0, 0.0
+    return (
+        sum(start_errors) / len(start_errors),
+        sum(end_errors) / len(end_errors),
+        sum(weighted_errors) / len(weighted_errors),
+    )
+
+
+def _split_merge_alignment_metrics(hyp: list[dict[str, Any]], ref: list[dict[str, Any]]) -> dict[str, float]:
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    local_text_scores: list[float] = []
+    overlap_scores: list[float] = []
+    for row in hyp:
+        ref_window = _best_ref_window_for(row, ref)
+        if not ref_window:
+            continue
+        pairs.append((row, ref_window))
+        local_text_scores.append(similarity_ratio(_compact_text(ref_window.get("text")), _compact_text(row.get("text"))))
+        span = max(
+            _row_end(row) - _row_start(row),
+            _row_end(ref_window) - _row_start(ref_window),
+            0.001,
+        )
+        overlap_scores.append(min(1.0, _overlap(row, ref_window) / span))
+    start_mae, end_mae, start_weighted_mae = _start_weighted_timing_errors(pairs)
+    timing_mae = (
+        sum((abs(_row_start(row) - _row_start(ref_window)) + abs(_row_end(row) - _row_end(ref_window))) / 2.0 for row, ref_window in pairs)
+        / max(1, len(pairs))
+        if pairs
+        else 0.0
+    )
+    return {
+        "timing_mae_sec": timing_mae,
+        "start_timing_mae_sec": start_mae,
+        "end_timing_mae_sec": end_mae,
+        "start_weighted_timing_mae_sec": start_weighted_mae,
+        "timing_score": max(0.0, min(100.0, 100.0 - start_weighted_mae * 26.0)),
+        "overlap_score": (sum(overlap_scores) / max(1, len(overlap_scores))) * 100.0 if overlap_scores else 0.0,
+        "local_text_score": (sum(local_text_scores) / max(1, len(local_text_scores))) * 100.0 if local_text_scores else 0.0,
+    }
+
+
+def _segmentation_tolerant_count_score(
+    classic_count_score: float,
+    *,
+    global_text_similarity: float,
+    split_merge_local_text_score: float,
+) -> float:
+    coverage_score = global_text_similarity * 70.0 + (split_merge_local_text_score / 100.0) * 30.0
+    return max(0.0, min(100.0, max(classic_count_score, coverage_score)))
 
 
 TimingBackend = Callable[[list[dict[str, Any]], list[dict[str, Any]]], dict[str, Any] | None]
@@ -118,6 +258,7 @@ def score_against_reference(
     cpp_backend = cpp_timing_backend or cpp_timing_metrics
     native_timing = swift_backend(hyp, ref) or cpp_backend(hyp, ref)
     local_text_scores: list[float] = []
+    timing_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
     if native_timing:
         avg_timing_error = float(native_timing.get("timing_mae_sec", 0.0) or 0.0)
         overlap_score = float(native_timing.get("overlap_score", 0.0) or 0.0)
@@ -135,11 +276,13 @@ def score_against_reference(
                 except Exception:
                     ref_row = _best_ref_for(row, ref)
                 if ref_row:
+                    timing_pairs.append((row, ref_row))
                     local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
         else:
             for row in hyp:
                 ref_row = _best_ref_for(row, ref)
                 if ref_row:
+                    timing_pairs.append((row, ref_row))
                     local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
     else:
         timing_errors: list[float] = []
@@ -172,21 +315,43 @@ def score_against_reference(
                 0.001,
             )
             overlap_scores.append(min(1.0, _overlap(row, ref_row) / span))
+            timing_pairs.append((row, ref_row))
             local_text_scores.append(similarity_ratio(_compact_text(ref_row.get("text")), _compact_text(row.get("text"))))
         avg_timing_error = sum(timing_errors) / max(1, len(timing_errors))
         overlap_score = (sum(overlap_scores) / max(1, len(overlap_scores))) * 100.0 if overlap_scores else 0.0
         timing_backend = "python"
-    timing_score = max(0.0, min(100.0, 100.0 - avg_timing_error * 26.0))
+    start_mae, end_mae, start_weighted_timing_mae = _start_weighted_timing_errors(timing_pairs)
+    timing_score_mae = start_weighted_timing_mae if timing_pairs else avg_timing_error
+    timing_score = max(0.0, min(100.0, 100.0 - timing_score_mae * 26.0))
     local_text_score = (sum(local_text_scores) / max(1, len(local_text_scores))) * 100.0 if local_text_scores else 0.0
     count_score = max(0.0, 100.0 - abs(len(hyp) - len(ref)) / max(1, len(ref)) * 100.0)
-    quality_score = text_score * 0.52 + timing_score * 0.22 + overlap_score * 0.12 + local_text_score * 0.08 + count_score * 0.06
+    split_merge = _split_merge_alignment_metrics(hyp, ref)
+    segmentation_score = _segmentation_tolerant_count_score(
+        count_score,
+        global_text_similarity=float(text_similarity),
+        split_merge_local_text_score=float(split_merge.get("local_text_score", local_text_score) or local_text_score),
+    )
+    scoring_timing_score = float(split_merge.get("timing_score", timing_score) or timing_score)
+    scoring_overlap_score = float(split_merge.get("overlap_score", overlap_score) or overlap_score)
+    scoring_local_text_score = float(split_merge.get("local_text_score", local_text_score) or local_text_score)
+    quality_score = (
+        text_score * 0.52
+        + scoring_timing_score * 0.22
+        + scoring_overlap_score * 0.12
+        + scoring_local_text_score * 0.08
+        + segmentation_score * 0.06
+    )
     return {
         "reference_segments": len(ref),
         "hypothesis_segments": len(hyp),
+        "scoring_alignment": "split_merge_aware.v1",
         "cer": round(float(cer), 6),
         "global_text_similarity": round(float(text_similarity), 6),
         "text_score": round(text_score, 3),
         "timing_mae_sec": round(avg_timing_error, 4),
+        "start_timing_mae_sec": round(start_mae, 4),
+        "end_timing_mae_sec": round(end_mae, 4),
+        "start_weighted_timing_mae_sec": round(start_weighted_timing_mae, 4),
         "max_start_error_sec": round(max_start_error, 4),
         "max_end_error_sec": round(max_end_error, 4),
         "max_pair_timing_error_sec": round(max_pair_timing_error, 4),
@@ -197,5 +362,13 @@ def score_against_reference(
         "timing_metrics_backend": timing_backend,
         "local_text_score": round(local_text_score, 3),
         "count_score": round(count_score, 3),
+        "split_merge_timing_mae_sec": round(float(split_merge.get("timing_mae_sec", avg_timing_error) or 0.0), 4),
+        "split_merge_start_timing_mae_sec": round(float(split_merge.get("start_timing_mae_sec", start_mae) or 0.0), 4),
+        "split_merge_end_timing_mae_sec": round(float(split_merge.get("end_timing_mae_sec", end_mae) or 0.0), 4),
+        "split_merge_start_weighted_timing_mae_sec": round(float(split_merge.get("start_weighted_timing_mae_sec", start_weighted_timing_mae) or 0.0), 4),
+        "split_merge_timing_score": round(scoring_timing_score, 3),
+        "split_merge_overlap_score": round(scoring_overlap_score, 3),
+        "split_merge_local_text_score": round(scoring_local_text_score, 3),
+        "segmentation_score": round(segmentation_score, 3),
         "quality_score": round(quality_score, 3),
     }

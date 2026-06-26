@@ -974,7 +974,7 @@ class VideoPlayerSurfaceMixin:
         try:
             self._refresh_source_info_label()
             self._refresh_time_label(force=True)
-            self.frame_count_label.setText("F 0 / 0")
+            self.frame_count_label.setText("0 / 0")
             self.frame_count_label.show()
             self._refresh_source_name_label()
         except Exception as exc:

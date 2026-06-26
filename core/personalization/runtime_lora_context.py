@@ -12,6 +12,11 @@ from core.personalization.lora_runtime_policy import (
 )
 from core.personalization.lora_storage import load_best_settings, load_learned_rules
 from core.personalization.lora_vector_retriever import retrieve_lora_context
+from core.personalization.subtitle_split_protocol import (
+    REFERENCE_SPLIT_TARGET_COMPACT_CHARS,
+    reference_split_protocol_llm_rule,
+    reference_split_protocol_runtime_line,
+)
 from core.runtime import config
 from core.text_utils import clean_text as _norm, compact_text as _compact, strip_subtitle_quote_marks
 from core.utils import load_subtitle_rules
@@ -80,7 +85,7 @@ def _legacy_correction_matches(text: str, limit: int = 6) -> list[dict[str, str]
 def _gap_summary(settings: dict[str, Any] | None) -> list[str]:
     settings = settings or {}
     items = [
-        ("목표 글자 수", "split_length_threshold", "20자"),
+        ("목표 글자 수", "split_length_threshold", f"{REFERENCE_SPLIT_TARGET_COMPACT_CHARS}자"),
         ("최대 자막 길이", "sub_max_duration", "6.0초"),
         ("최소 유지 시간", "sub_min_duration", "0.2초"),
         ("최대 CPS", "sub_max_cps", "12자/초"),
@@ -109,7 +114,7 @@ def _split_rule_summary(rules: dict[str, Any] | None, settings: dict[str, Any] |
     )
     split_rules = _limit_items(list(merged.get("split_rules") or []), 16, max_chars=12)
     split_punctuation = _limit_items(list(merged.get("split_punctuation") or []), 8, max_chars=4)
-    summary = [f"기본 분리 글자수={max_chars}자"]
+    summary = [f"기본 분리 글자수={max_chars}자", reference_split_protocol_runtime_line()]
     if split_rules:
         summary.append(f"분리 어미/접속어={', '.join(split_rules)}")
     if split_punctuation:
@@ -482,7 +487,7 @@ def build_runtime_lora_prompt(
         "[텍스트 LoRA/개인화 컨텍스트 - 사용자 프롬프트보다 우선]",
         "사용자가 직접 고친 자막 데이터와 규칙을 최우선 참고하되, 원문에 없는 말은 절대 추가하지 마세요.",
         "이 컨텍스트는 최종 자막의 검수, 줄바꿈, 시작/끝 단어, 사용자 단어, 오답 회피에만 사용합니다.",
-        "자막 분리는 LoRA ground truth의 문장 호흡을 우선합니다. 의미 없는 1~2어절 마이크로 자막은 만들지 말고, 보통 18~24자 안팎의 자연스러운 구어 문장 단위로 묶으세요.",
+        "자막 분리는 LoRA ground truth의 문장 호흡을 우선합니다. " + reference_split_protocol_llm_rule(),
         "단어 하나, 접속어 하나, 주어/서술어가 분리된 조각은 긴 무음이나 강한 컷 경계가 없는 한 앞뒤 문맥과 합쳐야 합니다.",
         "간격 메뉴 값은 시간 생성 지시가 아니라 분리 판단 참고값이며, 실제 시간 보정은 최종 간격 패스에서 적용됩니다.",
         f"- 간격/분할 값: {', '.join(_gap_summary(settings))}",

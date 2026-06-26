@@ -7,9 +7,11 @@ from unittest import mock
 from core.native_swift_subtitle_assembly import ASSEMBLED_VARIANT_NAME
 from tools.apply_subtitle_benchmark_quality_gate import apply_gate
 from tools.benchmark_subtitle_pipeline_variants import (
+    _apply_benchmark_cut_boundaries,
     _copy_chunk_dir,
     _compact_text,
     _enforce_swift_assembly_quality_floor,
+    _load_benchmark_cut_boundaries,
     _native_global_canvas_summary_for_variant,
     _native_resource_summary_for_variant,
     _native_segments_summary_for_variant,
@@ -26,6 +28,7 @@ from tools.benchmark_subtitle_pipeline_variants import (
     score_against_reference,
     score_readability,
 )
+from tools import subtitle_benchmark_scoring
 
 
 class BenchmarkModeProfilesTests(unittest.TestCase):
@@ -390,6 +393,74 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(score["overlap_score"], 75.0)
         self.assertEqual(score["local_text_score"], 100.0)
 
+    def test_benchmark_text_accuracy_ignores_parenthetical_comments_and_dash_marks(self):
+        self.assertEqual(
+            _compact_text("안녕하세요 (편집자 주석) - 소설가입니다"),
+            _compact_text("안녕하세요 소설가입니다"),
+        )
+
+        score = subtitle_benchmark_scoring.score_against_reference(
+            [{"start": 0.0, "end": 1.0, "text": "안녕하세요 소설가입니다"}],
+            [{"start": 0.0, "end": 1.0, "text": "안녕하세요 (광고주님의 축복) - 소설가입니다"}],
+            swift_timing_backend=lambda _hyp, _ref: None,
+            cpp_timing_backend=lambda _hyp, _ref: None,
+        )
+
+        self.assertEqual(score["cer"], 0.0)
+        self.assertEqual(score["text_score"], 100.0)
+
+    def test_benchmark_timing_score_weights_start_error_above_end_error(self):
+        reference = [{"start": 10.0, "end": 12.0, "text": "테스트"}]
+        start_late = subtitle_benchmark_scoring.score_against_reference(
+            [{"start": 11.0, "end": 12.0, "text": "테스트"}],
+            reference,
+            swift_timing_backend=lambda _hyp, _ref: None,
+            cpp_timing_backend=lambda _hyp, _ref: None,
+        )
+        end_late = subtitle_benchmark_scoring.score_against_reference(
+            [{"start": 10.0, "end": 13.0, "text": "테스트"}],
+            reference,
+            swift_timing_backend=lambda _hyp, _ref: None,
+            cpp_timing_backend=lambda _hyp, _ref: None,
+        )
+
+        self.assertEqual(start_late["start_weighted_timing_mae_sec"], 0.7)
+        self.assertEqual(end_late["start_weighted_timing_mae_sec"], 0.3)
+        self.assertLess(start_late["timing_score"], end_late["timing_score"])
+
+    def test_benchmark_score_is_split_merge_aware_for_reference_fragments(self):
+        score = subtitle_benchmark_scoring.score_against_reference(
+            [{"start": 0.0, "end": 2.0, "text": "안녕하세요 소설가입니다"}],
+            [
+                {"start": 0.0, "end": 1.0, "text": "안녕하세요"},
+                {"start": 1.0, "end": 2.0, "text": "소설가입니다"},
+            ],
+            swift_timing_backend=lambda _hyp, _ref: None,
+            cpp_timing_backend=lambda _hyp, _ref: None,
+        )
+
+        self.assertEqual(score["scoring_alignment"], "split_merge_aware.v1")
+        self.assertEqual(score["count_score"], 50.0)
+        self.assertEqual(score["segmentation_score"], 100.0)
+        self.assertEqual(score["split_merge_local_text_score"], 100.0)
+        self.assertEqual(score["split_merge_start_weighted_timing_mae_sec"], 0.0)
+        self.assertEqual(score["quality_score"], 100.0)
+
+    def test_benchmark_split_merge_score_still_penalizes_missing_text(self):
+        score = subtitle_benchmark_scoring.score_against_reference(
+            [{"start": 0.0, "end": 1.0, "text": "안녕하세요"}],
+            [
+                {"start": 0.0, "end": 1.0, "text": "안녕하세요"},
+                {"start": 1.0, "end": 2.0, "text": "소설가입니다"},
+            ],
+            swift_timing_backend=lambda _hyp, _ref: None,
+            cpp_timing_backend=lambda _hyp, _ref: None,
+        )
+
+        self.assertLess(score["global_text_similarity"], 1.0)
+        self.assertLess(score["segmentation_score"], 100.0)
+        self.assertLess(score["quality_score"], 100.0)
+
     def test_best_mode_quality_gate_rejects_swift_assembled_below_fast_auto_high_floor(self):
         rows = [
             {"name": "mode_fast", "elapsed_sec": 9.0, "quality": {"quality_score": 75.0}, "readability": {"readability_score": 93.0}, "final_segments": 20},
@@ -515,6 +586,45 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         packaging_only = _variant_chunk_settings(base, {"subtitle_lora_packaging_enabled": False})
 
         self.assertEqual(signature, _chunk_extraction_signature(packaging_only))
+
+    def test_benchmark_cut_boundary_json_loads_scan_rows(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cuts.json"
+            path.write_text(
+                '{"rows":[{"timeline_sec":10.0,"source":"visual"},{"time":20.0,"source":"visual"}]}',
+                encoding="utf-8",
+            )
+
+            rows = _load_benchmark_cut_boundaries(str(path), primary_fps=25.0)
+
+            self.assertEqual([row["timeline_frame"] for row in rows], [250, 500])
+            self.assertEqual([row["timeline_sec"] for row in rows], [10.0, 20.0])
+
+    def test_benchmark_cut_boundary_application_mirrors_source_app_magnetize(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cuts.json"
+            path.write_text(
+                '{"rows":[{"timeline_sec":10.0,"source":"visual","status":"confirmed"}]}',
+                encoding="utf-8",
+            )
+            settings = {
+                "_benchmark_cut_boundaries_json": str(path),
+                "_benchmark_cut_boundary_fps": 25.0,
+                "subtitle_bundle_use_confirmed_cuts": True,
+                "subtitle_cut_boundary_guard_enabled": True,
+            }
+
+            rows = _apply_benchmark_cut_boundaries(
+                [
+                    {"start": 8.8, "end": 10.0, "text": "before"},
+                    {"start": 10.8, "end": 12.0, "text": "after"},
+                ],
+                settings,
+            )
+
+            self.assertEqual(rows[0]["end"], 10.0)
+            self.assertEqual(rows[1]["start"], 10.0)
+            self.assertEqual(rows[1]["_cut_boundary_start_snap_policy"]["source"], "confirmed_visual_cut")
 
     def test_copy_chunk_dir_hardlinks_wavs_and_copies_metadata(self):
         with TemporaryDirectory() as tmp:
@@ -770,9 +880,9 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(ranked[0]["name"], "slower_better")
         self.assertEqual(ranked[0]["ranking_policy"], "primary_first")
 
-    def test_reference_text_compaction_keeps_punctuation_but_ignores_parentheses(self):
-        self.assertEqual(_compact_text("안녕(하세요)!..~"), "안녕하세요!..~")
-        self.assertEqual(_compact_text("안녕 （하세요） !"), "안녕하세요!")
+    def test_reference_text_compaction_keeps_punctuation_but_drops_parenthetical_comments(self):
+        self.assertEqual(_compact_text("안녕(하세요)!..~"), "안녕!..~")
+        self.assertEqual(_compact_text("안녕 （하세요） !"), "안녕!")
 
 
 if __name__ == "__main__":
