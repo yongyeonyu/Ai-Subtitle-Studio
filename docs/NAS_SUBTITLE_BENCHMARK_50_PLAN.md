@@ -28,6 +28,30 @@ NAS 원본 영상과 기존 정답 SRT를 기준으로 AI Subtitle Studio 현재
 - 컷 경계 검수는 자동 detector 결과와 owner check 결과를 분리한다.
 - STT2, LLM, LoRA, VAD, 모델 선택 정책은 이 벤치 계획 때문에 바꾸지 않는다.
 
+## Truth Learning Dry-Run
+
+NAS 50 정답지를 학습 입력으로 쓰기 전에는 read-only manifest를 먼저 확인한다.
+
+```bash
+./venv/bin/python tools/nas_truth_learning.py
+./venv/bin/python tools/nas_truth_learning.py --with-records
+```
+
+역할:
+
+- `tools/nas_truth_learning.py`는 `## 50 Action Items` 섹션만 읽고 `Extra Candidates`는 제외한다.
+- 파일 존재, dataset split, calibration 역할, importable truth row 수를 확인한다.
+- `--with-records`는 SRT를 메모리에서만 읽고 기존 LoRA/personalization store에는 쓰지 않는다.
+- `split_analysis_effective_rows`는 분할/타이밍 분석용 non-empty row 기준이고, `importable_truth_rows`는 실제 text/voice LoRA import 가능한 speech row 기준이다.
+
+현재 기준:
+
+- dataset split: train `40`, validation `5`, holdout `5`
+- calibration fixtures: `헤이딜러_최종`, `카이엔 일렉트릭 리뷰`
+- primary 50 present pairs: `50/50`
+- split analysis effective rows: `17,322`
+- importable truth rows: `17,262`
+
 ## 실행 트리거
 
 대표님이 `1번 벤치마킹하자`처럼 번호를 지정하면 해당 액션아이템 하나만 실행한다.
