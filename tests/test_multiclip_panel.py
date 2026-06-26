@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QComboBox, QMessageBox
+from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QPushButton, QComboBox, QMessageBox, QWidget
 
 from ui.main.main_file_ops import FileOpsMixin
 from ui.project.multiclip_panel import MultiClipEditor
@@ -84,6 +84,16 @@ class _DummyCacheWindow(FileOpsMixin):
 
     def _restore_current_work_mode(self):
         self.restore_calls += 1
+
+
+class _SafeDialogParent(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.runner_calls = 0
+
+    def _run_foreground_file_dialog(self, opener):
+        self.runner_calls += 1
+        return opener()
 
 
 class _FakeMessageBox:
@@ -163,6 +173,27 @@ class MulticlipPanelTests(unittest.TestCase):
 
         self.assertEqual(owner._multiclip_files, ["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"])
         self.assertEqual(owner.backend.calls, [(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"], "/tmp/work")])
+
+    def test_multiclip_add_clip_uses_parent_foreground_dialog_runner(self):
+        parent = _SafeDialogParent()
+        dlg = MultiClipEditor(["/tmp/a.mp4"], parent)
+        try:
+            def _open(dialog_parent, title, _folder, _filter):
+                self.assertIs(dialog_parent, dlg)
+                self.assertEqual(title, "클립 추가")
+                return (["/tmp/b.mp4"], "")
+
+            with patch.object(QFileDialog, "getOpenFileNames", side_effect=_open):
+                dlg._on_add_clip()
+
+            self.assertEqual(parent.runner_calls, 1)
+            self.assertIn("/tmp/b.mp4", dlg.sorted_files)
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+            parent.close()
+            parent.deleteLater()
+            self.app.processEvents()
 
     def test_folder_dialog_individual_mode_opens_editor_pipeline_and_forces_export(self):
         owner = _DummyFolderWindow()

@@ -284,12 +284,24 @@ class MultiClipEditor(QDialog):
         )
 
     def _on_add_clip(self):
-        paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "클립 추가",
-            get_last_folder() or os.path.expanduser("~"),
-            MEDIA_FILTER,
-        )
+        folder = get_last_folder() or os.path.expanduser("~")
+        parent = self.parent()
+        foreground_runner = getattr(parent, "_run_foreground_file_dialog", None)
+        if callable(foreground_runner):
+            paths, _ = foreground_runner(
+                lambda: QFileDialog.getOpenFileNames(self, "클립 추가", folder, MEDIA_FILTER)
+            )
+        else:
+            safe_open = getattr(parent, "_safe_open_file_names", None)
+            if callable(safe_open):
+                paths, _ = safe_open("클립 추가", folder, MEDIA_FILTER)
+            else:
+                paths, _ = QFileDialog.getOpenFileNames(
+                    self,
+                    "클립 추가",
+                    folder,
+                    MEDIA_FILTER,
+                )
         if not paths:
             return
 

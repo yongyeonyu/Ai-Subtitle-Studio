@@ -48,6 +48,20 @@ PROJECT_MEDIA_FILTER = (
 )
 
 
+def _safe_open_file_names_for_owner(owner, title: str, folder: str, file_filter: str):
+    opener = getattr(owner, "_safe_open_file_names", None)
+    if callable(opener):
+        return opener(title, folder, file_filter)
+    return QFileDialog.getOpenFileNames(owner, title, folder, file_filter)
+
+
+def _safe_open_file_name_for_owner(owner, title: str, folder: str, file_filter: str):
+    opener = getattr(owner, "_safe_open_file_name", None)
+    if callable(opener):
+        return opener(title, folder, file_filter)
+    return QFileDialog.getOpenFileName(owner, title, folder, file_filter)
+
+
 def _is_placeholder_middle_row(row: dict) -> bool:
     if not isinstance(row, dict):
         return False
@@ -321,7 +335,7 @@ class ProjectUIMixin:
         if not ok or not name.strip():
             return
 
-        paths, _ = QFileDialog.getOpenFileNames(
+        paths, _ = _safe_open_file_names_for_owner(
             self,
             "영상/음성 파일 선택",
             get_last_folder() or os.path.expanduser("~"),
@@ -355,7 +369,7 @@ class ProjectUIMixin:
             self.backend.start_pipeline(paths)
 
     def _open_project(self):
-        filepath, _ = QFileDialog.getOpenFileName(
+        filepath, _ = _safe_open_file_name_for_owner(
             self,
             "프로젝트 열기",
             PROJECTS_DIR,
@@ -402,7 +416,7 @@ class ProjectUIMixin:
         if not project:
             return
 
-        new_paths, _ = QFileDialog.getOpenFileNames(
+        new_paths, _ = _safe_open_file_names_for_owner(
             self,
             "추가할 영상/음성 선택",
             get_last_folder() or os.path.expanduser("~"),
