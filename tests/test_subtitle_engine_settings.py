@@ -1210,6 +1210,44 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertEqual(restored[0]["text"], "아 이거는 10원짤데 그냥 가져가?")
         self.assertNotIn("_final_stt_anchor_guard_policy", restored[0])
 
+    def test_final_stt_slot_order_guard_restores_one_slot_ahead_timing(self):
+        final_rows = [
+            {
+                "start": 89.0,
+                "end": 91.1,
+                "text": "지금 일단 옵션이 몇 개 들어간 것",
+            }
+        ]
+        source_rows = [
+            {
+                "start": 87.0,
+                "end": 88.0,
+                "text": "지금 일단 옵션이 몇 개 들어간 것",
+                "stt_selected_source": "STT1",
+            },
+            {
+                "start": 89.0,
+                "end": 91.1,
+                "text": "헤드라이트가 당연히",
+                "stt_selected_source": "STT1",
+            },
+        ]
+
+        restored = subtitle_engine._restore_final_stt_slot_order_drift(
+            final_rows,
+            source_rows,
+            {"subtitle_final_stt_slot_order_guard_enabled": True},
+            stage="test",
+        )
+
+        self.assertEqual(restored[0]["text"], "지금 일단 옵션이 몇 개 들어간 것")
+        self.assertAlmostEqual(restored[0]["start"], 87.0, places=3)
+        self.assertAlmostEqual(restored[0]["end"], 88.0, places=3)
+        self.assertEqual(
+            restored[0]["_final_stt_slot_order_guard_policy"]["action"],
+            "restore_text_matched_stt_slot",
+        )
+
     def test_final_stt_anchor_guard_reinserts_missing_primary_anchor_and_trims_overlap(self):
         final_rows = [
             {
@@ -1933,6 +1971,115 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertEqual(len(result), 12)
         self.assertTrue(any(row.get("_llm_macro_chunk_policy", {}).get("llm_called") for row in result))
 
+    def test_process_one_llm_text_only_lock_preserves_stt_timing_when_llm_returns_chunks(self):
+        segment = {
+            "start": 10.0,
+            "end": 13.0,
+            "text": "지금 일단 옵션이 몇 개 들어간 것 같습니다",
+            "stt_selected_source": "STT1",
+            "stt_candidates": [
+                {
+                    "source": "STT1",
+                    "start": 10.0,
+                    "end": 13.0,
+                    "text": "지금 일단 옵션이 몇 개 들어간 것 같습니다",
+                    "score": 92,
+                }
+            ],
+            "words": [
+                {"word": "지금", "start": 10.0, "end": 10.3},
+                {"word": "일단", "start": 10.35, "end": 10.7},
+                {"word": "옵션이", "start": 10.75, "end": 11.1},
+                {"word": "몇", "start": 11.2, "end": 11.4},
+                {"word": "개", "start": 11.45, "end": 11.7},
+                {"word": "들어간", "start": 11.75, "end": 12.1},
+                {"word": "것", "start": 12.15, "end": 12.35},
+                {"word": "같습니다", "start": 12.4, "end": 13.0},
+            ],
+        }
+        settings = {
+            "subtitle_llm_text_only_timing_lock_enabled": True,
+            "llm_confidence_gate_enabled": False,
+            "deep_subtitle_policy_enabled": False,
+            "editor_lora_runtime_enabled": False,
+            "subtitle_quality_auto_correct_enabled": False,
+        }
+        chunks = ["지금 일단 옵션이 몇 개", "들어간 것 같습니다"]
+
+        with (
+            unittest.mock.patch("core.engine.subtitle_engine._select_stt_candidate_text", return_value=None),
+            unittest.mock.patch("core.engine.subtitle_engine.ask_exaone_to_split", return_value=chunks),
+            unittest.mock.patch(
+                "core.engine.subtitle_engine._verify_llm_chunks",
+                side_effect=lambda _text, _chunks, _settings, _lora, **_kwargs: (_chunks, _lora),
+            ),
+            unittest.mock.patch(
+                "core.engine.subtitle_engine._deep_rerank_chunks",
+                side_effect=lambda _text, _chunks, _settings, _lora: (_chunks, _lora),
+            ),
+        ):
+            result = subtitle_engine._process_one(
+                (segment, {}, 8, {}, "exaone3.5:7.8b", "", "", False, settings)
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "지금 일단 옵션이 몇 개 들어간 것 같습니다")
+        self.assertAlmostEqual(result[0]["start"], 10.0, places=3)
+        self.assertAlmostEqual(result[0]["end"], 13.0, places=3)
+        self.assertTrue(result[0]["_llm_text_only_timing_lock_policy"]["preserved_timing"])
+
+    def test_process_one_llm_only_text_only_lock_preserves_stt_timing_when_llm_returns_chunks(self):
+        segment = {
+            "start": 20.0,
+            "end": 23.0,
+            "text": "헤드라이트가 당연히 들어갑니다",
+            "stt_selected_source": "STT2",
+            "stt_candidates": [
+                {
+                    "source": "STT2",
+                    "start": 20.0,
+                    "end": 23.0,
+                    "text": "헤드라이트가 당연히 들어갑니다",
+                    "score": 90,
+                }
+            ],
+            "words": [
+                {"word": "헤드라이트가", "start": 20.0, "end": 20.7},
+                {"word": "당연히", "start": 20.8, "end": 21.3},
+                {"word": "들어갑니다", "start": 21.4, "end": 23.0},
+            ],
+        }
+        settings = {
+            "subtitle_llm_text_only_timing_lock_enabled": True,
+            "llm_confidence_gate_enabled": False,
+            "deep_subtitle_policy_enabled": False,
+            "editor_lora_runtime_enabled": False,
+            "subtitle_quality_auto_correct_enabled": False,
+        }
+        chunks = ["헤드라이트가 당연히", "들어갑니다"]
+
+        with (
+            unittest.mock.patch("core.engine.subtitle_engine._select_stt_candidate_text", return_value=None),
+            unittest.mock.patch("core.engine.subtitle_engine.ask_exaone_to_split", return_value=chunks),
+            unittest.mock.patch(
+                "core.engine.subtitle_engine._verify_llm_chunks",
+                side_effect=lambda _text, _chunks, _settings, _lora, **_kwargs: (_chunks, _lora),
+            ),
+            unittest.mock.patch(
+                "core.engine.subtitle_engine._deep_rerank_chunks",
+                side_effect=lambda _text, _chunks, _settings, _lora: (_chunks, _lora),
+            ),
+        ):
+            result = subtitle_engine._process_one_llm_only(
+                (segment, {}, 8, {}, "exaone3.5:7.8b", "", "", False, settings)
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "헤드라이트가 당연히 들어갑니다")
+        self.assertAlmostEqual(result[0]["start"], 20.0, places=3)
+        self.assertAlmostEqual(result[0]["end"], 23.0, places=3)
+        self.assertTrue(result[0]["_llm_text_only_timing_lock_policy"]["preserved_count"])
+
     def test_macro_chunk_stt_rows_reject_freeform_llm_rewrite(self):
         segments = [
             {
@@ -1986,7 +2133,7 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertEqual(split_text.call_count, 1)
         self.assertEqual([row["text"] for row in result], [row["text"] for row in segments])
         self.assertTrue(all(row.get("_llm_macro_chunk_policy", {}).get("source_lock") == "stt_rows" for row in result))
-        self.assertTrue(all(row.get("_llm_macro_chunk_policy", {}).get("reason") == "llm_rejected_keep_lora_deep_prepass" for row in result))
+        self.assertTrue(all(row.get("_llm_macro_chunk_policy", {}).get("reason") == "text_only_timing_lock_keep_stt_rows" for row in result))
 
     def test_lora_deep_prepass_uses_runtime_worker_plan_and_preserves_order(self):
         segments = [

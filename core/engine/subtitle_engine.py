@@ -96,6 +96,7 @@ from core.native_swift_subtitle_llm_context import (
     evaluate_subtitle_llm_context_gate_via_swift,
 )
 from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
+from core.subtitle_quality.vad_alignment_checker import prioritize_vad_voice_starts
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.runtime.logger import get_logger
@@ -119,6 +120,7 @@ from core.engine.subtitle_final_integrity import (
     _best_stt_anchor_for_final_row,
     _final_transcript_integrity_guard,
     _restore_final_stt_anchor_drift,
+    _restore_final_stt_slot_order_drift,
     _restore_missing_final_stt_anchor_rows,
     _source_stt_anchor_rows,
 )
@@ -307,6 +309,44 @@ def _self_review_subtitle_quality(
     return rows
 
 
+def _apply_final_vad_voice_start_priority(
+    segments: list[dict],
+    vad_segments: list[dict] | None,
+    settings: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    settings = dict(settings or {})
+    if not segments or not vad_segments:
+        return segments
+    if not _setting_bool(settings, "vad_post_stt_align_enabled", True):
+        return segments
+    if not _setting_bool(settings, "vad_voice_start_priority_enabled", True):
+        return segments
+    default_pull = max(1.25, _setting_float(settings, "vad_post_stt_max_shift_sec", 0.7))
+    max_pull = max(0.0, _setting_float(settings, "vad_voice_start_priority_max_pull_sec", default_pull))
+    default_edge_pad = _setting_float(settings, "vad_post_stt_edge_pad_sec", 0.04)
+    edge_pad = max(0.0, _setting_float(settings, "vad_voice_start_priority_edge_pad_sec", default_edge_pad))
+    min_overlap = max(0.0, _setting_float(settings, "vad_voice_start_priority_min_overlap_sec", 0.04))
+    min_gap = max(0.0, _setting_float(settings, "vad_voice_start_priority_min_gap_sec", 0.02))
+    max_stt_lead = max(0.0, _setting_float(settings, "vad_voice_start_priority_max_stt_lead_sec", 0.12))
+    adjusted, changed = prioritize_vad_voice_starts(
+        segments,
+        vad_segments,
+        max_pull_sec=max_pull,
+        edge_pad_sec=edge_pad,
+        min_overlap_sec=min_overlap,
+        min_gap_sec=min_gap,
+        max_stt_lead_sec=max_stt_lead,
+    )
+    if changed:
+        get_logger().log(
+            f"[VAD-시작우선] {stage}: 최종 자막 시작점 {changed}개를 VAD 음성 시작 기준으로 보정"
+        )
+        adjusted = align_stt_candidates_to_subtitle_segments(adjusted)
+    return adjusted
+
+
 from core.engine.subtitle_stt_candidate_selection import (
     _apply_stt_candidate_decision,
     _attach_lora_and_deep_timing,
@@ -471,6 +511,91 @@ def _guard_llm_chunk_text_with_stt_words(final_text: str, chunk_words: list[dict
         "stt_text": stt_text[:80],
         "similarity": round(float(ratio), 3),
     }
+
+
+def _segment_has_stt_timing_anchor(seg: dict | None) -> bool:
+    if not isinstance(seg, dict):
+        return False
+    if any(
+        key in seg and seg.get(key) not in (None, "")
+        for key in (
+            "_stt_original_candidate_start",
+            "_stt_original_candidate_end",
+            "original_start",
+            "original_end",
+        )
+    ):
+        return True
+    for key in ("stt_selected_source", "stt_ensemble_source", "stt_preview_source", "stt_source"):
+        source = str(seg.get(key) or "").strip().upper().split("_", 1)[0]
+        if source in {"STT1", "STT2"}:
+            return True
+    for candidate in list(seg.get("stt_candidates") or []):
+        if not isinstance(candidate, dict):
+            continue
+        source = str(
+            candidate.get("source")
+            or candidate.get("stt_selected_source")
+            or candidate.get("stt_preview_source")
+            or candidate.get("stt_source")
+            or ""
+        ).strip().upper().split("_", 1)[0]
+        if source in {"STT1", "STT2"} and str(candidate.get("text", "") or "").strip():
+            return True
+    return False
+
+
+def _llm_text_only_timing_lock_enabled(seg: dict, settings: dict | None) -> bool:
+    return _setting_bool(settings or {}, "subtitle_llm_text_only_timing_lock_enabled", True) and _segment_has_stt_timing_anchor(seg)
+
+
+def _locked_llm_text_only_row(
+    seg: dict,
+    *,
+    source_text: str,
+    chunks: list[str] | tuple[str, ...] | None,
+    corrections: dict | None,
+    speaker: str,
+    segment_lora: dict | None,
+    segment_settings: dict | None,
+    stage: str,
+) -> dict:
+    joined = " ".join(
+        _clean(str(chunk), corrections)
+        for chunk in list(chunks or [])
+        if _clean(str(chunk), corrections)
+    ).strip()
+    fallback_text = _clean(source_text, corrections)
+    final_text = joined or fallback_text
+    row = {**seg, "text": final_text, "speaker": speaker}
+
+    policy = {
+        "task": "llm_text_only_timing_lock",
+        "stage": stage,
+        "preserved_count": True,
+        "preserved_timing": True,
+        "input_chunks": len(list(chunks or [])),
+        "source_start": round(float(seg.get("start", 0.0) or 0.0), 3),
+        "source_end": round(float(seg.get("end", seg.get("start", 0.0)) or 0.0), 3),
+    }
+    lora_meta = dict(segment_lora or {})
+    rewrite_policy = assess_llm_rewrite_policy(source_text, [final_text])
+    if rewrite_policy.get("changed"):
+        lora_meta["_llm_rewrite_policy"] = rewrite_policy
+    lora_meta["_llm_text_only_timing_lock_policy"] = policy
+
+    locked_start = row.get("start")
+    locked_end = row.get("end")
+    locked_timeline_start = row.get("timeline_start")
+    attached = _attach_lora_and_deep_timing(row, lora_meta, segment_settings)
+    if locked_start is not None:
+        attached["start"] = locked_start
+    if locked_end is not None:
+        attached["end"] = locked_end
+    if locked_timeline_start is not None:
+        attached["timeline_start"] = locked_timeline_start
+    attached["_llm_text_only_timing_lock_policy"] = policy
+    return attached
 
 
 def _match_chunk_words_to_stt_timing(
@@ -725,6 +850,19 @@ def _process_one(args: tuple) -> list[dict]:
 
     if chunks:
         chunks, segment_lora = _deep_rerank_chunks(text, chunks, segment_settings, segment_lora)
+        if _llm_text_only_timing_lock_enabled(seg, segment_settings):
+            return [
+                _locked_llm_text_only_row(
+                    seg,
+                    source_text=text,
+                    chunks=chunks,
+                    corrections=corrections,
+                    speaker=spk,
+                    segment_lora=segment_lora,
+                    segment_settings=segment_settings,
+                    stage="process_one",
+                )
+            ]
         rewrite_policy = assess_llm_rewrite_policy(text, chunks)
         if rewrite_policy.get("changed"):
             segment_lora = dict(segment_lora or {})
@@ -981,6 +1119,19 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
     if not chunks:
         return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
     chunks, segment_lora = _deep_rerank_chunks(cleaned_text, chunks, segment_settings, segment_lora)
+    if _llm_text_only_timing_lock_enabled(seg, segment_settings):
+        return [
+            _locked_llm_text_only_row(
+                seg,
+                source_text=cleaned_text,
+                chunks=chunks,
+                corrections=corrections,
+                speaker=spk,
+                segment_lora=segment_lora,
+                segment_settings=segment_settings,
+                stage="process_one_llm_only",
+            )
+        ]
     rewrite_policy = assess_llm_rewrite_policy(cleaned_text, chunks)
     if rewrite_policy.get("changed"):
         segment_lora = dict(segment_lora or {})
@@ -1181,6 +1332,7 @@ def optimize_stt_candidate_segments(segments: list[dict], vad_segments: list[dic
     optimized = _self_review_subtitle_quality(optimized, vad_segments or [], loaded_settings)
     optimized = _annotate_context_consistency(optimized, loaded_settings)
     optimized = _apply_output_variant_selector(optimized, [dict(seg) for seg in segments if isinstance(seg, dict)], vad_segments or [], loaded_settings, stage="stt_candidate")
+    optimized = _apply_final_vad_voice_start_priority(optimized, vad_segments or [], loaded_settings, stage="stt_candidate")
     optimized = _annotate_auto_review(optimized, loaded_settings)
     optimized = _apply_lora_card_packaging(optimized, loaded_settings, rules, stage="stt_candidate")
     optimized = _annotate_stage_confidence(optimized, loaded_settings)
@@ -1736,6 +1888,7 @@ def optimize_segments(
     optimized = _enforce_final_subtitle_text_policy(optimized, corrections)
     optimized = _apply_final_sequence_cleanup(optimized, loaded_settings, stage="llm_final")
     optimized = _restore_final_stt_anchor_drift(optimized, original_segments, loaded_settings, stage="llm_final")
+    optimized = _restore_final_stt_slot_order_drift(optimized, original_segments, loaded_settings, stage="llm_final")
     optimized = _restore_missing_final_stt_anchor_rows(optimized, original_segments, loaded_settings, stage="llm_final")
     _emit_processing_preview(
         stage_segments_callback,
@@ -1756,6 +1909,7 @@ def optimize_segments(
     optimized = _enforce_final_subtitle_text_policy(optimized, None)
     optimized = _expand_non_speaker_multiline_segments(optimized, loaded_settings)
     optimized = _final_transcript_integrity_guard(optimized, original_segments, vad_segments or [], loaded_settings)
+    optimized = _restore_final_stt_slot_order_drift(optimized, original_segments, loaded_settings, stage="post_integrity")
     if llm_disabled_final:
         optimized = _restore_no_llm_raw_stt_text(optimized, original_segments, loaded_settings)
         optimized = _restore_missing_final_stt_anchor_rows(
@@ -1764,6 +1918,7 @@ def optimize_segments(
             loaded_settings,
             stage="no_llm_raw_text_lock",
         )
+    optimized = _apply_final_vad_voice_start_priority(optimized, vad_segments or [], loaded_settings, stage="llm_final")
     _emit_processing_preview(
         stage_segments_callback,
         stage="final_integrity_guard",

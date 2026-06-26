@@ -279,6 +279,141 @@ def adjust_segments_to_vad_boundaries(
     return adjusted, changed
 
 
+def prioritize_vad_voice_starts(
+    segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    max_pull_sec: float = 1.25,
+    edge_pad_sec: float = 0.04,
+    min_overlap_sec: float = 0.04,
+    min_gap_sec: float = 0.02,
+    max_stt_lead_sec: float = 0.12,
+) -> tuple[list[dict[str, Any]], int]:
+    """Pull late subtitle starts back to the detected VAD speech onset."""
+
+    def stt_anchor_start(row: dict[str, Any]) -> float | None:
+        selected_source = str(row.get("stt_selected_source") or row.get("stt_ensemble_source") or "").strip().upper()
+        selected_base = selected_source.split("_", 1)[0]
+        candidates = [
+            candidate
+            for candidate in list(row.get("stt_candidates") or [])
+            if isinstance(candidate, dict)
+        ]
+        ordered: list[dict[str, Any]] = []
+        if selected_base:
+            ordered.extend(
+                candidate
+                for candidate in candidates
+                if str(
+                    candidate.get("source")
+                    or candidate.get("stt_selected_source")
+                    or candidate.get("stt_source")
+                    or ""
+                ).strip().upper().split("_", 1)[0] == selected_base
+            )
+        ordered.extend(candidate for candidate in candidates if candidate not in ordered)
+        for item in ordered:
+            for key in ("_stt_original_candidate_start", "original_start", "start"):
+                try:
+                    value = float(item.get(key))
+                except (TypeError, ValueError):
+                    continue
+                if value >= 0.0:
+                    return value
+        row_has_original_anchor = any(row.get(key) not in (None, "") for key in ("_stt_original_candidate_start", "original_start"))
+        row_has_stt_source = selected_base in {"STT1", "STT2"}
+        if row_has_original_anchor or row_has_stt_source:
+            for key in ("_stt_original_candidate_start", "original_start", "start"):
+                try:
+                    value = float(row.get(key))
+                except (TypeError, ValueError):
+                    continue
+                if value >= 0.0:
+                    return value
+        return None
+
+    vad = sorted(normalize_vad_segments(vad_segments), key=lambda item: (item["start"], item["end"]))
+    rows = sorted(
+        [dict(seg) for seg in (segments or []) if isinstance(seg, dict)],
+        key=lambda item: (_as_float(item.get("start")), _as_float(item.get("end"))),
+    )
+    if not rows or not vad:
+        return rows, 0
+
+    max_pull = max(0.0, _as_float(max_pull_sec, 1.25))
+    pad = max(0.0, _as_float(edge_pad_sec, 0.04))
+    min_overlap = max(0.0, _as_float(min_overlap_sec, 0.04))
+    min_gap = max(0.0, _as_float(min_gap_sec, 0.02))
+    max_stt_lead = max(0.0, _as_float(max_stt_lead_sec, 0.12))
+    changed = 0
+    previous_end: float | None = None
+
+    for row in rows:
+        if row.get("is_gap"):
+            continue
+        start = max(0.0, _as_float(row.get("start"), 0.0))
+        end = max(start, _as_float(row.get("end"), start))
+        if end <= start:
+            previous_end = end
+            continue
+
+        best: dict[str, Any] | None = None
+        best_delay = 0.0
+        for ref in vad:
+            vad_start = float(ref["start"])
+            vad_end = float(ref["end"])
+            if vad_start >= start - 0.001:
+                continue
+            if vad_end <= start + min_overlap:
+                continue
+            overlap = max(0.0, min(end, vad_end) - max(start, vad_start))
+            if overlap < min_overlap:
+                continue
+            delay = start - vad_start
+            if delay > max_pull:
+                continue
+            if best is None or delay > best_delay:
+                best = ref
+                best_delay = delay
+
+        if best is None:
+            previous_end = end
+            continue
+
+        desired = max(0.0, float(best["start"]) - pad)
+        anchor_start = stt_anchor_start(row)
+        if anchor_start is not None:
+            desired = max(desired, max(0.0, anchor_start - max_stt_lead))
+        if previous_end is not None:
+            desired = max(desired, previous_end + min_gap)
+        if desired >= start - 0.001:
+            previous_end = end
+            continue
+
+        old_start = start
+        row["start"] = round(desired, 3)
+        row["timeline_start"] = row["start"]
+        meta = dict(row.get("asr_metadata") or {})
+        meta["vad_voice_start_priority"] = {
+            "from": round(old_start, 3),
+            "to": round(desired, 3),
+            "vad_start": round(float(best["start"]), 3),
+            "vad_end": round(float(best["end"]), 3),
+            "max_pull_sec": round(max_pull, 3),
+            "edge_pad_sec": round(pad, 3),
+            "max_stt_lead_sec": round(max_stt_lead, 3),
+        }
+        if anchor_start is not None:
+            meta["vad_voice_start_priority"]["stt_anchor_start"] = round(anchor_start, 3)
+        row["asr_metadata"] = meta
+        changed += 1
+        previous_end = end
+
+    if changed:
+        rows = annotate_segments_vad_alignment(rows, vad)
+    return rows, changed
+
+
 def review_vad_enabled(settings: dict[str, Any] | None) -> bool:
     settings = settings or {}
     return bool(settings.get("review_vad_before_stt_enabled", False))

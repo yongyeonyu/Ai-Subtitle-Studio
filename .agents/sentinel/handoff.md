@@ -1,5 +1,8 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260626-221500-timing-lock-support-risk-review.md`
+- `.agents/sentinel/handoffs/20260626-215623-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260626-211503-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260626-203500-nas-50-split-protocol-risk-review.md`
 - `.agents/sentinel/handoffs/20260626-203104-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260626-180300-heydealer-benchmark-risk-review.md`

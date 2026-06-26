@@ -14,6 +14,7 @@ from core.subtitle_quality.vad_alignment_checker import (
     annotate_segments_vad_alignment,
     apply_review_vad_settings,
     adjust_segments_to_vad_boundaries,
+    prioritize_vad_voice_starts,
     vad_overlap_ratio,
 )
 
@@ -84,6 +85,86 @@ class SubtitleQualityModelsTest(unittest.TestCase):
         self.assertEqual(adjusted[0]["start"], 1.95)
         self.assertEqual(adjusted[0]["end"], 3.05)
         self.assertEqual(adjusted[0]["quality"]["vad_alignment_score"], 90.909)
+
+    def test_vad_voice_start_priority_pulls_late_final_start_to_speech_onset(self):
+        segments = [{"start": 10.9, "end": 12.0, "text": "늦은 자막"}]
+        vad = [{"start": 10.2, "end": 11.8}]
+
+        adjusted, changed = prioritize_vad_voice_starts(
+            segments,
+            vad,
+            max_pull_sec=1.0,
+            edge_pad_sec=0.04,
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(adjusted[0]["start"], 10.16, places=3)
+        self.assertEqual(adjusted[0]["timeline_start"], adjusted[0]["start"])
+        self.assertEqual(adjusted[0]["end"], 12.0)
+        self.assertEqual(
+            adjusted[0]["asr_metadata"]["vad_voice_start_priority"]["vad_start"],
+            10.2,
+        )
+
+    def test_vad_voice_start_priority_respects_stt_anchor_lead_limit(self):
+        segments = [
+            {
+                "start": 10.9,
+                "end": 12.0,
+                "text": "앵커 있는 자막",
+                "_stt_original_candidate_start": 10.7,
+                "_stt_original_candidate_end": 12.0,
+            }
+        ]
+        vad = [{"start": 10.2, "end": 11.8}]
+
+        adjusted, changed = prioritize_vad_voice_starts(
+            segments,
+            vad,
+            max_pull_sec=1.0,
+            edge_pad_sec=0.04,
+            max_stt_lead_sec=0.12,
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(adjusted[0]["start"], 10.58, places=3)
+        self.assertEqual(
+            adjusted[0]["asr_metadata"]["vad_voice_start_priority"]["stt_anchor_start"],
+            10.7,
+        )
+
+    def test_vad_voice_start_priority_keeps_previous_subtitle_boundary_safe(self):
+        segments = [
+            {"start": 9.0, "end": 10.3, "text": "앞 자막"},
+            {"start": 10.9, "end": 12.0, "text": "뒤 자막"},
+        ]
+        vad = [{"start": 10.2, "end": 11.8}]
+
+        adjusted, changed = prioritize_vad_voice_starts(
+            segments,
+            vad,
+            max_pull_sec=1.0,
+            edge_pad_sec=0.04,
+            min_gap_sec=0.02,
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertAlmostEqual(adjusted[1]["start"], 10.32, places=3)
+        self.assertEqual(adjusted[0]["end"], 10.3)
+
+    def test_vad_voice_start_priority_ignores_unrelated_earlier_vad_span(self):
+        segments = [{"start": 10.9, "end": 12.0, "text": "자막"}]
+        vad = [{"start": 9.0, "end": 10.91}]
+
+        adjusted, changed = prioritize_vad_voice_starts(
+            segments,
+            vad,
+            max_pull_sec=2.0,
+            min_overlap_sec=0.04,
+        )
+
+        self.assertEqual(changed, 0)
+        self.assertAlmostEqual(adjusted[0]["start"], 10.9, places=3)
 
     def test_batch_vad_alignment_matches_single_segment_annotations(self):
         segments = [

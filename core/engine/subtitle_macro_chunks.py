@@ -321,6 +321,57 @@ def rows_from_macro_chunks(
     return result
 
 
+def rows_from_macro_text_only_chunks(
+    rows: list[dict],
+    chunks: list[str],
+    *,
+    rules: dict,
+    corrections: dict,
+    settings: dict,
+    threshold: int,
+    macro_policy: dict,
+    callbacks: dict[str, Any],
+    base_lora_meta: dict | None = None,
+) -> list[dict]:
+    clean_text = callbacks["clean_text"]
+    segment_lora_runtime = callbacks["segment_lora_runtime"]
+    attach_lora_and_deep_timing = callbacks["attach_lora_and_deep_timing"]
+    source_rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    clean_chunks = [clean_text(str(chunk), corrections) for chunk in list(chunks or [])]
+    clean_chunks = [chunk for chunk in clean_chunks if chunk]
+    if len(clean_chunks) != len(source_rows):
+        return attach_macro_policy(
+            source_rows,
+            {
+                **dict(macro_policy),
+                "reason": "text_only_timing_lock_count_mismatch_keep_stt_rows",
+                "preserved_count": True,
+                "preserved_timing": True,
+                "output_chunks": len(clean_chunks),
+            },
+        )
+
+    result: list[dict] = []
+    for row, text in zip(source_rows, clean_chunks):
+        locked_start = row.get("start")
+        locked_end = row.get("end")
+        locked_timeline_start = row.get("timeline_start")
+        item = {**row, "text": text, "_llm_macro_chunk_policy": dict(macro_policy)}
+        chunk_settings, chunk_lora = segment_lora_runtime(item, settings, rules, threshold)
+        merged_lora = {**dict(base_lora_meta or {}), **dict(chunk_lora or {})}
+        merged_lora["_llm_macro_chunk_policy"] = dict(macro_policy)
+        attached = attach_lora_and_deep_timing(item, merged_lora, chunk_settings)
+        if locked_start is not None:
+            attached["start"] = locked_start
+        if locked_end is not None:
+            attached["end"] = locked_end
+        if locked_timeline_start is not None:
+            attached["timeline_start"] = locked_timeline_start
+        attached["_llm_macro_chunk_policy"] = dict(macro_policy)
+        result.append(attached)
+    return result
+
+
 def process_llm_macro_group(
     rows: list[dict],
     *,
@@ -359,6 +410,7 @@ def process_llm_macro_group(
     macro_threshold = setting_int(macro_settings, "split_length_threshold", threshold)
     duration = float(macro_seg.get("end", 0.0) or 0.0) - float(macro_seg.get("start", 0.0) or 0.0)
     should_call, macro_lora = apply_llm_confidence_gate(macro_seg, text, macro_threshold, duration, macro_settings, macro_lora)
+    text_only_lock = _setting_bool(macro_settings, "subtitle_llm_text_only_timing_lock_enabled", True) and _stt_backed_rows(rows)
     policy = {
         "schema": MACRO_CHUNK_POLICY_SCHEMA,
         "task": "llm_macro_chunk",
@@ -369,6 +421,8 @@ def process_llm_macro_group(
         "llm_called": bool(should_call),
         "reason": "gate_requested_llm" if should_call else "gate_skipped",
     }
+    if text_only_lock:
+        policy.update({"source_lock": "stt_rows", "preserved_count": True, "preserved_timing": True})
     if not should_call:
         return attach_macro_policy(rows, policy)
 
@@ -428,10 +482,31 @@ def process_llm_macro_group(
     )
     if not chunks:
         policy["llm_called"] = True
-        policy["reason"] = "llm_rejected_keep_lora_deep_prepass"
+        policy["reason"] = (
+            "text_only_timing_lock_keep_stt_rows"
+            if text_only_lock
+            else "llm_rejected_keep_lora_deep_prepass"
+        )
         return attach_macro_policy(rows, policy)
     chunks, macro_lora = deep_rerank_chunks(text, chunks, macro_settings, macro_lora)
     policy["output_chunks"] = len(chunks or [])
+    if text_only_lock:
+        policy["reason"] = "text_only_timing_lock_row_text_only"
+        return rows_from_macro_text_only_chunks(
+            rows,
+            chunks or [],
+            rules=rules,
+            corrections=corrections,
+            settings=macro_settings,
+            threshold=macro_threshold,
+            macro_policy=policy,
+            callbacks={
+                "clean_text": clean_text,
+                "segment_lora_runtime": segment_lora_runtime,
+                "attach_lora_and_deep_timing": attach_lora_and_deep_timing,
+            },
+            base_lora_meta=macro_lora,
+        )
     result = rows_from_macro_chunks(
         {**macro_seg, "text": text},
         chunks or [],

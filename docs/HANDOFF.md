@@ -33,6 +33,138 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## 2026-06-26 Addendum - LLM Text-Only Timing Lock And STT Slot Guard
+
+### Scope
+
+- Added a default-on LLM text-only timing lock for STT-backed subtitle rows.
+- LLM chunk output can still correct text, but it no longer creates new timing rows for STT1/STT2-backed rows.
+- Added a final STT slot-order guard for the `-1`/adjacent-slot case where final text matches one STT anchor but timing is attached to the previous or next STT slot.
+- Tightened VAD voice-start priority so VAD can refine starts only inside the selected/original STT anchor, with `vad_voice_start_priority_max_stt_lead_sec=0.12`.
+- Added windowed STT drift metadata under `asr_metadata.window_drift_report` for High rolling-window diagnosis.
+
+### Result
+
+- New default keys:
+  - `subtitle_llm_text_only_timing_lock_enabled=True`
+  - `subtitle_final_stt_slot_order_guard_enabled=True`
+  - `vad_voice_start_priority_max_stt_lead_sec=0.12`
+  - `stt_window_drift_report_enabled=True`
+- `core/engine/subtitle_engine.py::_process_one` and `_process_one_llm_only` preserve STT-backed row count/start/end when LLM returns multiple chunks.
+- `core/engine/subtitle_macro_chunks.py` applies macro LLM text only when chunk count exactly matches STT row count; otherwise it keeps source STT rows instead of redistributing chunks over timings.
+- Jammini support review `20260626-221500-timing-lock-support-risk-review.md` was classified by Dex as `defer`: it mainly described manual editor timing-lock risks, not this STT-backed LLM timing-source lock.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/engine/subtitle_engine.py core/engine/subtitle_final_integrity.py core/engine/subtitle_macro_chunks.py core/engine/subtitle_stt_candidate_selection.py core/subtitle_quality/vad_alignment_checker.py core/audio/media_processor_transcribe_windowed.py tests/test_subtitle_engine_settings.py tests/test_subtitle_quality_models.py tests/test_media_processor_overlap.py` -> pass
+- `./venv/bin/python -m json.tool dataset/custom_defaults.json >/tmp/custom_defaults_check.json` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "text_only_lock or slot_order or macro_chunk_stt_rows"` -> `4 passed, 78 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py -k "vad_voice_start_priority"` -> `4 passed, 8 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "windowed_span_finalize"` -> `2 passed, 102 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py tests/test_subtitle_boundary_alignment.py tests/test_stt_ensemble.py tests/test_media_processor_overlap.py tests/test_subtitle_quality_models.py -k "llm or stt_anchor or vad or windowed or drift"` initially passed once with `76 passed, 171 deselected`.
+- A later rerun of the same broad `-k` command aborted in pre-existing `tests/test_media_processor_overlap.py::test_vad_retry_rejects_noisy_micro_segments` during native audio memory cleanup import; final current validation used split related subsets:
+  - `tests/test_subtitle_engine_settings.py -k "llm or stt_anchor or slot_order or text_only_lock"` -> `26 passed, 56 deselected`
+  - `tests/test_media_processor_overlap.py -k "windowed or drift"` -> `14 passed, 90 deselected`
+  - `tests/test_stt_ensemble.py tests/test_subtitle_boundary_alignment.py tests/test_subtitle_quality_models.py -k "stt_anchor or drift or vad_voice_start_priority or boundary"` -> `17 passed, 44 deselected`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- Run the owner's current High-mode fixture around the screenshot region and confirm final row starts no longer shift by one STT slot.
+- Use `asr_metadata.window_drift_report` in saved/debug rows to identify whether long-video drift starts at STT window finalize or later subtitle optimization.
+
+## 2026-06-26 Addendum - Final VAD Voice Start Priority
+
+### Scope
+
+- Added a final-output VAD voice-start priority pass for cases where STT1/STT2 or VAD detected speech earlier but the final subtitle start drifted late.
+- The pass only adjusts subtitle `start`/`timeline_start`; it does not change text, split count, STT2, LLM, LoRA, model selection, save/load format, UI labels, layout, colors, shortcuts, menus, or popup behavior.
+- It runs after output selection/final integrity for the LLM path and after output selection for the STT-candidate path.
+
+### Result
+
+- New helper: `core/subtitle_quality/vad_alignment_checker.py::prioritize_vad_voice_starts`.
+- New final route: `core/engine/subtitle_engine.py::_apply_final_vad_voice_start_priority`.
+- It pulls a late start back to the detected VAD speech onset within the configured pull window, while clamping against the previous subtitle boundary.
+- Each adjustment records `asr_metadata.vad_voice_start_priority`.
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/subtitle_quality/vad_alignment_checker.py core/engine/subtitle_engine.py tests/test_subtitle_quality_models.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py tests/test_stt_ensemble.py -k "vad or voice_start"` -> `9 passed, 39 deselected`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py tests/test_stt_ensemble.py -k "vad or voice_start" tests/test_subtitle_engine_settings.py -k "final_gap or stt_anchor or vad" tests/test_subtitle_boundary_alignment.py` -> `40 passed, 99 deselected`
+- `git diff --check -- .` -> pass
+- Wider `tests/test_subtitle_engine_settings.py` currently has two macro-chunk LLM tests failing because the local Ollama availability path rolls back before the mocked `ollama_split_text` call; this was not accepted as a VAD regression.
+
+### Next Recommended Action
+
+- Re-run the owner's current High-mode fixture and compare start-time/cut-boundary rows visually against the screenshot case.
+- If false-positive VAD pulls appear in noisy outdoor segments, tune only `vad_voice_start_priority_max_pull_sec` / `min_overlap_sec` rather than changing STT/LLM model policy.
+
+## 2026-06-26 Addendum - Foreground-Safe File Dialog Dispatch
+
+### Scope
+
+- Routed project/media file dialogs that bypassed the foreground-safe wrapper through the existing file dialog priority path.
+- Covered `ProjectUIMixin._open_project`, `ProjectUIMixin._create_project`, `ProjectUIMixin._add_video_to_project`, and `MultiClipEditor._on_add_clip`.
+- Kept dialog titles, filters, start folders, UI labels, layout, colors, shortcuts, popup text, STT2, LLM, LoRA, VAD, subtitle timing, model-selection, save/load format, release, tag, push, and DMG behavior unchanged.
+
+### Result
+
+- File selection now keeps `_foreground_file_open_requested` active until project/media dispatch has started.
+- Startup optional work and editor AI model release continue to defer while file-open foreground priority is active.
+- Existing fallback remains: if an owner object lacks `_safe_open_file_name(s)`, the old direct `QFileDialog` path is used.
+
+### Validation
+
+- `./venv/bin/python -m py_compile ui/main/main_file_ops.py ui/project/project_panel.py ui/project/multiclip_panel.py tests/test_main_file_ops_nonfatal.py tests/test_multiclip_panel.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_main_file_ops_nonfatal.py tests/test_multiclip_panel.py` -> `20 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_main_file_ops_nonfatal.py tests/test_main_window_nonfatal.py tests/test_multiclip_panel.py` -> `42 passed`
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "open_project or open_media"` -> `3 passed, 71 deselected`
+- `git diff --check -- .` -> pass
+
+### Next Recommended Action
+
+- If the owner still sees a selected file not opening, capture the exact button/path used and inspect backend active-state dispatch after the dialog returns.
+
+## 2026-06-26 Addendum - NAS 50 Truth Learning Dry-Run
+
+### Scope
+
+- Added a read-only NAS 50 truth-learning manifest layer at `core/personalization/nas_truth_learning.py`.
+- Added CLI entrypoint `tools/nas_truth_learning.py` for checking the primary 50 video/SRT pairs before any LoRA or deep-policy promotion.
+- The parser reads only `## 50 Action Items` from `docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`; `Extra Candidates` are excluded.
+- No UI/UX, STT2, LLM, LoRA runtime default, VAD, model-selection, project save/load, release, tag, push, or DMG behavior changed.
+
+### Result
+
+- `./venv/bin/python tools/nas_truth_learning.py`:
+  - `items_total=50`
+  - `present_pairs=50`
+  - `missing_media=0`
+  - `missing_subtitle=0`
+  - `dataset_splits={'holdout': 5, 'train': 40, 'validation': 5}`
+  - `fixture_roles={'calibration': 2, 'primary': 48}`
+- `./venv/bin/python tools/nas_truth_learning.py --with-records`:
+  - `analyzed_pairs=50`
+  - `importable_truth_rows=17262`
+  - `split_analysis_effective_rows=17322`
+  - `excluded_parenthetical_rows=1978`
+  - `skipped_empty_text=1003`
+  - `skipped_pure_symbols=60`
+
+### Validation
+
+- `./venv/bin/python -m py_compile core/personalization/nas_truth_learning.py tools/nas_truth_learning.py tests/test_nas_truth_learning.py` -> pass
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nas_truth_learning.py tests/test_ground_truth_import.py` -> `12 passed`
+- `tools/jammini_watchdog.sh --status` -> route visible
+- `tools/jammini_watchdog.sh --handoff-probe` -> `.agents/sentinel/handoffs/20260626-211503-watchdog-handoff-probe.md` visible; Dex reviewed as `accept`.
+
+### Next Recommended Action
+
+- Build Slice B as a read-only style-prior artifact from this manifest before changing runtime candidate scoring.
+- Keep `13/22` as guidance only until validation/holdout proves start-time and overlap improvements.
+
 ## 2026-06-26 Addendum - NAS 50 Split Protocol And Heydealer Validation
 
 ### Scope

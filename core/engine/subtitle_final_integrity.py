@@ -741,6 +741,184 @@ def _best_stt_anchor_for_final_row(row: dict, anchors: list[dict], settings: dic
     return best[1], best[2]
 
 
+def _anchor_row_overlap_meta(row: dict, anchor: dict) -> dict:
+    row_span = _subtitle_row_span(row)
+    anchor_span = _subtitle_row_span(anchor)
+    if row_span is None or anchor_span is None:
+        return {"overlap_ratio": 0.0, "mid_delta_sec": 999.0}
+    row_start, row_end = row_span
+    anchor_start, anchor_end = anchor_span
+    row_duration = max(0.05, row_end - row_start)
+    anchor_duration = max(0.05, anchor_end - anchor_start)
+    overlap = max(0.0, min(row_end, anchor_end) - max(row_start, anchor_start))
+    overlap_ratio = overlap / max(0.05, min(row_duration, anchor_duration))
+    row_mid = (row_start + row_end) / 2.0
+    anchor_mid = (anchor_start + anchor_end) / 2.0
+    return {
+        "overlap_ratio": round(overlap_ratio, 4),
+        "mid_delta_sec": round(abs(row_mid - anchor_mid), 4),
+    }
+
+
+def _slot_text_similarity(text: str, anchor_text: str) -> float:
+    similarity = _stt_candidate_similarity(text, anchor_text)
+    text_compact = _stt_candidate_compact_text(text)
+    anchor_compact = _stt_candidate_compact_text(anchor_text)
+    if text_compact and anchor_compact:
+        short_len = min(len(text_compact), len(anchor_compact))
+        long_len = max(len(text_compact), len(anchor_compact))
+        if short_len >= 5 and (text_compact in anchor_compact or anchor_compact in text_compact):
+            similarity = max(similarity, min(0.96, short_len / max(1, long_len) + 0.22))
+    return similarity
+
+
+def _best_text_stt_anchor_for_final_row(row: dict, anchors: list[dict], settings: dict | None) -> tuple[dict | None, dict]:
+    text = str(row.get("text", "") or "").strip()
+    if not text:
+        return None, {}
+    min_similarity = max(
+        0.05,
+        min(0.95, _setting_float(settings or {}, "subtitle_final_stt_slot_order_min_similarity", 0.64)),
+    )
+    best: tuple[float, dict, dict] | None = None
+    text_numbers = _subtitle_number_tokens(text)
+    for anchor in anchors:
+        anchor_text = str(anchor.get("text", "") or "").strip()
+        if not anchor_text:
+            continue
+        anchor_numbers = _subtitle_number_tokens(anchor_text)
+        if text_numbers and anchor_numbers and not text_numbers.issubset(anchor_numbers):
+            continue
+        similarity = _slot_text_similarity(text, anchor_text)
+        if similarity < min_similarity:
+            continue
+        anchor_priority = float(anchor.get("_anchor_priority", 0.0) or 0.0)
+        overlap_meta = _anchor_row_overlap_meta(row, anchor)
+        score = similarity + min(0.12, anchor_priority * 0.02)
+        meta = {
+            **overlap_meta,
+            "text_similarity": round(similarity, 4),
+            "anchor_priority": round(anchor_priority, 4),
+        }
+        if best is None or score > best[0]:
+            best = (score, anchor, meta)
+    if best is None:
+        return None, {}
+    return best[1], best[2]
+
+
+def _restore_final_stt_slot_order_drift(
+    optimized: list[dict],
+    source_segments: list[dict],
+    settings: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    settings = dict(settings or {})
+    if not optimized or not source_segments:
+        return optimized
+    if not _bool_setting(settings, "subtitle_final_stt_anchor_guard_enabled", True):
+        return optimized
+    if not _bool_setting(settings, "subtitle_final_stt_slot_order_guard_enabled", True):
+        return optimized
+    anchors = _source_stt_anchor_rows(source_segments)
+    if not anchors:
+        return optimized
+    min_margin = max(
+        0.0,
+        min(0.5, _setting_float(settings, "subtitle_final_stt_slot_order_min_similarity_margin", 0.10)),
+    )
+    max_source_distance = max(1, _setting_int(settings, "subtitle_final_stt_slot_order_max_source_distance", 1))
+    max_good_mid_delta = max(
+        0.05,
+        _setting_float(settings, "subtitle_final_stt_slot_order_good_mid_delta_sec", 0.25),
+    )
+    min_bad_mid_delta = max(
+        max_good_mid_delta,
+        _setting_float(settings, "subtitle_final_stt_slot_order_bad_mid_delta_sec", 0.45),
+    )
+    min_good_overlap = max(
+        0.0,
+        min(0.95, _setting_float(settings, "subtitle_final_stt_slot_order_good_overlap_ratio", 0.45)),
+    )
+    restored_count = 0
+    rows: list[dict] = []
+    used_anchor_keys: set[tuple] = set()
+    for raw_row in list(optimized or []):
+        row = dict(raw_row) if isinstance(raw_row, dict) else {}
+        text = str(row.get("text", "") or "").strip()
+        if not text or row.get("is_gap"):
+            rows.append(row)
+            continue
+        temporal_anchor, temporal_meta = _best_stt_anchor_for_final_row(row, anchors, settings)
+        text_anchor, text_meta = _best_text_stt_anchor_for_final_row(row, anchors, settings)
+        if not temporal_anchor or not text_anchor:
+            rows.append(row)
+            continue
+        temporal_key = _stt_anchor_guard_key(temporal_anchor)
+        text_key = _stt_anchor_guard_key(text_anchor)
+        if temporal_key == text_key or text_key in used_anchor_keys:
+            rows.append(row)
+            used_anchor_keys.add(text_key)
+            continue
+        temporal_index = temporal_anchor.get("_source_segment_index")
+        text_index = text_anchor.get("_source_segment_index")
+        if temporal_index is not None and text_index is not None:
+            try:
+                source_distance = abs(int(text_index) - int(temporal_index))
+            except (TypeError, ValueError):
+                source_distance = max_source_distance + 1
+            if source_distance > max_source_distance:
+                rows.append(row)
+                continue
+
+        temporal_similarity = _slot_text_similarity(text, str(temporal_anchor.get("text", "") or ""))
+        text_similarity = float(text_meta.get("text_similarity", 0.0) or 0.0)
+        if text_similarity < temporal_similarity + min_margin:
+            rows.append(row)
+            continue
+        if (
+            float(text_meta.get("overlap_ratio", 0.0) or 0.0) >= min_good_overlap
+            or float(text_meta.get("mid_delta_sec", 999.0) or 999.0) <= max_good_mid_delta
+        ):
+            rows.append(row)
+            used_anchor_keys.add(text_key)
+            continue
+        if float(text_meta.get("mid_delta_sec", 0.0) or 0.0) < min_bad_mid_delta:
+            rows.append(row)
+            continue
+
+        restored = {
+            **row,
+            "start": float(text_anchor.get("start", row.get("start", 0.0)) or 0.0),
+            "end": float(text_anchor.get("end", row.get("end", row.get("start", 0.0))) or 0.0),
+            "stt_selected_source": str(text_anchor.get("source") or row.get("stt_selected_source") or "STT"),
+            "_stt_original_candidate_start": float(text_anchor.get("start", row.get("start", 0.0)) or 0.0),
+            "_stt_original_candidate_end": float(text_anchor.get("end", row.get("end", row.get("start", 0.0))) or 0.0),
+            "_final_stt_slot_order_guard_policy": {
+                "task": "final_stt_slot_order_guard",
+                "stage": stage,
+                "action": "restore_text_matched_stt_slot",
+                "text": text[:80],
+                "source": str(text_anchor.get("source") or "STT"),
+                "from_source_segment_index": temporal_anchor.get("_source_segment_index"),
+                "to_source_segment_index": text_anchor.get("_source_segment_index"),
+                "from_source_candidate_index": temporal_anchor.get("_source_candidate_index"),
+                "to_source_candidate_index": text_anchor.get("_source_candidate_index"),
+                "temporal_similarity": round(float(temporal_similarity), 4),
+                **text_meta,
+                "temporal_overlap_ratio": temporal_meta.get("overlap_ratio"),
+                "temporal_mid_delta_sec": temporal_meta.get("mid_delta_sec"),
+            },
+        }
+        rows.append(restored)
+        used_anchor_keys.add(text_key)
+        restored_count += 1
+    if restored_count:
+        get_logger().log(f"[자막무결성-STT슬롯] {stage}: 한 칸 앞/뒤 STT 슬롯에 붙은 최종 자막 {restored_count}개 복구")
+    return rows
+
+
 def _stt_anchor_is_represented(anchor: dict, rows: list[dict], settings: dict | None) -> bool:
     anchor_span = _subtitle_row_span(anchor)
     if anchor_span is None:

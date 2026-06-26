@@ -180,6 +180,7 @@ def _attach_lora_and_deep_timing(row: dict, lora_meta: dict | None, settings: di
         "_llm_verifier_policy",
         "_llm_rollback_policy",
         "_llm_rewrite_policy",
+        "_llm_text_only_timing_lock_policy",
         "_llm_macro_chunk_policy",
         "_accuracy_decision_graph",
     ):

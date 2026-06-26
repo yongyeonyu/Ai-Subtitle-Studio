@@ -86,6 +86,67 @@ from core.audio.media_processor_transcribe import (
 )
 
 
+def _window_segment_span(seg: dict) -> tuple[float, float] | None:
+    try:
+        start = float(seg.get("start"))
+        end = float(seg.get("end"))
+    except (TypeError, ValueError):
+        return None
+    if end <= start:
+        return None
+    return start, end
+
+
+def _median_float(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _window_drift_report(
+    raw_segments: list[dict],
+    final_segments: list[dict],
+    *,
+    previous_end: float,
+    window_index: int,
+    total_windows: int,
+) -> dict:
+    raw_spans = [span for span in (_window_segment_span(seg) for seg in list(raw_segments or [])) if span is not None]
+    final_spans = [span for span in (_window_segment_span(seg) for seg in list(final_segments or [])) if span is not None]
+    paired_count = min(len(raw_spans), len(final_spans))
+    start_drifts = [final_spans[index][0] - raw_spans[index][0] for index in range(paired_count)]
+    dedupe_selected = [
+        str(((seg.get("asr_metadata") or {}).get("overlap_candidate") or {}).get("selected") or "")
+        for seg in list(final_segments or [])
+        if isinstance((seg.get("asr_metadata") or {}).get("overlap_candidate"), dict)
+    ]
+    previous_trim_count = sum(
+        1
+        for seg in list(final_segments or [])
+        if ((seg.get("asr_metadata") or {}).get("overlap_candidate") or {}).get("selected") == "trimmed"
+    )
+    median_start_drift = _median_float(start_drifts)
+    return {
+        "schema": "ai_subtitle_studio.stt_window_drift_report.v1",
+        "window_index": int(window_index),
+        "total_windows": int(total_windows),
+        "raw_count": len(raw_spans),
+        "final_count": len(final_spans),
+        "raw_first": None if not raw_spans else round(raw_spans[0][0], 3),
+        "raw_last": None if not raw_spans else round(raw_spans[-1][1], 3),
+        "final_first": None if not final_spans else round(final_spans[0][0], 3),
+        "final_last": None if not final_spans else round(final_spans[-1][1], 3),
+        "median_start_drift": None if median_start_drift is None else round(float(median_start_drift), 4),
+        "previous_end": round(float(previous_end or 0.0), 3),
+        "previous_end_trim_count": int(previous_trim_count),
+        "dedupe_selected": [item for item in dedupe_selected if item],
+    }
+
+
 def _runtime_parallel_worker_plan(*args, **kwargs):
     owner = sys.modules.get("core.audio.media_processor_transcribe")
     planner = getattr(owner, "runtime_parallel_worker_plan", runtime_parallel_worker_plan)
@@ -649,12 +710,25 @@ class VideoProcessorTranscribeWindowedMixin:
             }
             trimmed["asr_metadata"] = meta
             finalized.append(trimmed)
-        return self._dedupe_overlapping_segments(
+        deduped = self._dedupe_overlapping_segments(
             finalized,
             previous_end=previous_end,
             dedup_window=float(settings.get("sub_dedup_window", 0.5) or 0.5),
             vad_segments=vad_segments or [],
         )
+        if deduped and bool(settings.get("stt_window_drift_report_enabled", True)):
+            first = dict(deduped[0])
+            meta = dict(first.get("asr_metadata") or {})
+            meta["window_drift_report"] = _window_drift_report(
+                window_segments,
+                deduped,
+                previous_end=previous_end,
+                window_index=window_index,
+                total_windows=total_windows,
+            )
+            first["asr_metadata"] = meta
+            deduped[0] = first
+        return deduped
     def _transcribe_with_windowed_spans(
         self,
         chunk_dir: str,

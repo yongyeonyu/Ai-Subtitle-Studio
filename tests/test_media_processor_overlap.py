@@ -710,6 +710,46 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertEqual([w["word"] for w in finalized[0]["words"]], ["확정", "새구간"])
         self.assertEqual(finalized[0]["asr_metadata"]["windowed_span_finalize"]["commit_start"], 174.0)
 
+    def test_windowed_span_finalize_records_drift_report_with_absolute_times(self):
+        chunk = [
+            {
+                "start": 168.0,
+                "end": 181.0,
+                "text": "앞 겹침 확정 새구간",
+                "words": [
+                    {"word": "앞", "start": 168.3, "end": 168.8},
+                    {"word": "겹침", "start": 170.0, "end": 170.5},
+                    {"word": "확정", "start": 174.2, "end": 174.8},
+                    {"word": "새구간", "start": 180.2, "end": 180.8},
+                ],
+                "asr_metadata": {"backend": "unit"},
+            }
+        ]
+
+        finalized = self.processor._apply_windowed_span_finalize(
+            chunk,
+            {"start": 168.0, "end": 348.0},
+            {
+                "stt_windowed_finalize_enabled": True,
+                "stt_window_sec": 180.0,
+                "stt_window_overlap_sec": 12.0,
+                "stt_window_hysteresis_sec": 6.0,
+                "stt_window_max_boundary_shift_sec": 0.12,
+                "stt_window_drift_report_enabled": True,
+            },
+            window_index=1,
+            total_windows=3,
+            previous_end=160.0,
+            vad_segments=[],
+        )
+
+        report = finalized[0]["asr_metadata"]["window_drift_report"]
+        self.assertEqual(report["schema"], "ai_subtitle_studio.stt_window_drift_report.v1")
+        self.assertEqual(report["window_index"], 1)
+        self.assertEqual(report["raw_first"], 168.0)
+        self.assertAlmostEqual(report["final_first"], 174.2)
+        self.assertAlmostEqual(report["median_start_drift"], 6.2)
+
     def test_transcribe_uses_three_minute_window_restart_structure(self):
         with tempfile.TemporaryDirectory() as tmp:
             for idx in range(7):

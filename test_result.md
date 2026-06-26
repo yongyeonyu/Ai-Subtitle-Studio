@@ -1,5 +1,101 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## LLM text-only timing lock and STT slot guard - 2026-06-26
+
+- 실행 모드: final subtitle timing hotfix for `-1` adjacent STT slot drift and long High-mode window drift diagnostics.
+- 결과: pass for focused guard tests.
+- 원인 후보:
+  - STT1/STT2 rows could be correct, but LLM chunk output was later redistributed across word timings, creating final rows with changed count/start/end.
+  - Macro LLM chunks also redistributed grouped STT rows, which could attach corrected text to an adjacent STT slot.
+  - VAD voice-start priority needed to be constrained to the same STT anchor so it could not pull a row into a previous subtitle slot.
+- 수정 요약:
+  - Added default-on `subtitle_llm_text_only_timing_lock_enabled`.
+  - STT-backed `_process_one` and `_process_one_llm_only` now keep one original STT row and preserve `start`/`end` even when LLM returns multiple chunks.
+  - STT-backed macro LLM groups now apply text only when chunk count exactly matches source row count; otherwise they keep source STT rows instead of redistributing chunks over timings.
+  - Added final STT slot-order guard to restore timing when final text matches STT anchor `i` but timing is attached to adjacent anchor `i-1`/`i+1`.
+  - Added `vad_voice_start_priority_max_stt_lead_sec=0.12` and windowed STT `asr_metadata.window_drift_report`.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/engine/subtitle_engine.py core/engine/subtitle_final_integrity.py core/engine/subtitle_macro_chunks.py core/engine/subtitle_stt_candidate_selection.py core/subtitle_quality/vad_alignment_checker.py core/audio/media_processor_transcribe_windowed.py tests/test_subtitle_engine_settings.py tests/test_subtitle_quality_models.py tests/test_media_processor_overlap.py` -> pass
+  - `./venv/bin/python -m json.tool dataset/custom_defaults.json >/tmp/custom_defaults_check.json` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "text_only_lock or slot_order or macro_chunk_stt_rows"` -> `4 passed, 78 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py -k "vad_voice_start_priority"` -> `4 passed, 8 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "windowed_span_finalize"` -> `2 passed, 102 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py tests/test_subtitle_boundary_alignment.py tests/test_stt_ensemble.py tests/test_media_processor_overlap.py tests/test_subtitle_quality_models.py -k "llm or stt_anchor or vad or windowed or drift"` initially passed once with `76 passed, 171 deselected`.
+  - Later rerun of that broad `-k` command aborted in pre-existing `tests/test_media_processor_overlap.py::test_vad_retry_rejects_noisy_micro_segments` during native audio memory cleanup import; final current validation used split related subsets:
+    - `tests/test_subtitle_engine_settings.py -k "llm or stt_anchor or slot_order or text_only_lock"` -> `26 passed, 56 deselected`
+    - `tests/test_media_processor_overlap.py -k "windowed or drift"` -> `14 passed, 90 deselected`
+    - `tests/test_stt_ensemble.py tests/test_subtitle_boundary_alignment.py tests/test_subtitle_quality_models.py -k "stt_anchor or drift or vad_voice_start_priority or boundary"` -> `17 passed, 44 deselected`
+  - `git diff --check -- .` -> pass
+- 잼민이 handoff 판정:
+  - `.agents/sentinel/handoffs/20260626-221500-timing-lock-support-risk-review.md` -> `defer`; manual editor timing-lock risks were not directly applicable to this STT-backed LLM timing-source lock.
+- 정책 영향:
+  - Subtitle timing policy intentionally changed per owner request: STT1/STT2-backed rows are now the final timing source of truth against LLM chunk redistribution.
+  - No UI/UX label/layout/color/shortcut/popup text, STT2 execution, model-selection, save/load, release, tag, push, or DMG behavior changed.
+
+## Final VAD voice-start priority - 2026-06-26
+
+- 실행 모드: subtitle timing hotfix for late final starts after VAD/STT detection.
+- 결과: pass for focused VAD/timing guard tests; wider macro-chunk LLM failures remain classified as unrelated environment/local-Ollama path.
+- 원인 후보:
+  - STT 앙상블 직후 VAD post-align은 이미 있었지만, 이후 LLM/분할/문맥보정/출력후보선택/final cleanup을 지나면서 최종 subtitle start가 VAD/STT 후보보다 늦어질 수 있었다.
+- 수정 요약:
+  - Added `prioritize_vad_voice_starts()` to pull late subtitle starts back to the detected VAD speech onset.
+  - Wired the final pass into the STT-candidate and LLM final output paths.
+  - The pass updates only `start`/`timeline_start`, preserves `end` and text, clamps against the previous subtitle boundary, and records `asr_metadata.vad_voice_start_priority`.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/subtitle_quality/vad_alignment_checker.py core/engine/subtitle_engine.py tests/test_subtitle_quality_models.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py tests/test_stt_ensemble.py -k "vad or voice_start"` -> `9 passed, 39 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py tests/test_stt_ensemble.py -k "vad or voice_start" tests/test_subtitle_engine_settings.py -k "final_gap or stt_anchor or vad" tests/test_subtitle_boundary_alignment.py` -> `40 passed, 99 deselected`
+  - `git diff --check -- .` -> pass
+- 미해결 검증:
+  - Full `tests/test_subtitle_engine_settings.py` had 2 failures in macro-chunk LLM tests because local Ollama availability handling rolled back before the mocked `ollama_split_text` call. This did not touch or exercise the new VAD voice-start priority path.
+- 정책 영향:
+  - Subtitle timing policy intentionally changed per owner request: VAD speech onset now has final-start priority when the final subtitle starts late inside the same speech span.
+  - No UI/UX label/layout/color/shortcut/popup text, STT2, LLM, LoRA, model-selection, save/load, release, tag, push, or DMG behavior changed.
+
+## Foreground-safe file dialog dispatch - 2026-06-26
+
+- 실행 모드: project/media file dialog dispatch bug fix.
+- 결과: pass
+- 원인 후보:
+  - 일반 `파일 선택`은 `_safe_open_file_names()`를 사용했지만, `프로젝트 열기`, `프로젝트 만들기`, `프로젝트에 영상 추가`, `멀티클립 클립 추가`는 `QFileDialog`를 직접 호출했다.
+  - 직접 호출 경로는 startup optional work, home rebuild, editor AI release와 선택 후 dispatch가 경쟁할 수 있었다.
+- 수정 요약:
+  - `ProjectUIMixin._open_project`, `_create_project`, `_add_video_to_project`를 owner의 foreground-safe dialog wrapper로 연결했다.
+  - `MultiClipEditor._on_add_clip`은 parent foreground dialog runner를 먼저 사용하고, 없으면 기존 direct `QFileDialog`로 fallback한다.
+  - Dialog title/filter/start folder/UI label/layout/popup behavior는 변경하지 않았다.
+- 단위/가드:
+  - `./venv/bin/python -m py_compile ui/main/main_file_ops.py ui/project/project_panel.py ui/project/multiclip_panel.py tests/test_main_file_ops_nonfatal.py tests/test_multiclip_panel.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_main_file_ops_nonfatal.py tests/test_multiclip_panel.py` -> `20 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_main_file_ops_nonfatal.py tests/test_main_window_nonfatal.py tests/test_multiclip_panel.py` -> `42 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "open_project or open_media"` -> `3 passed, 71 deselected`
+  - `git diff --check -- .` -> pass
+- 정책 영향:
+  - No UI/UX label/layout/color/shortcut/popup text, STT2, LLM, LoRA, VAD, subtitle timing, model-selection, save/load, release, tag, push, or DMG behavior changed.
+
+## NAS 50 truth-learning dry-run manifest - 2026-06-26
+
+- 실행 모드: read-only NAS 50 truth-learning manifest and in-memory SRT dry-run.
+- 결과: pass
+- 수정 요약:
+  - Added `core/personalization/nas_truth_learning.py` to parse only the primary `## 50 Action Items` section from `docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`.
+  - Added `tools/nas_truth_learning.py` for read-only manifest checks before LoRA/deep-policy promotion.
+  - Added `tests/test_nas_truth_learning.py` for parser scope, fixed dataset split, missing-file reporting, and store-free dry-run truth row building.
+- Dry-run 결과:
+  - `items_total=50`, `present_pairs=50`, `missing_media=0`, `missing_subtitle=0`
+  - `dataset_splits={'holdout': 5, 'train': 40, 'validation': 5}`
+  - `fixture_roles={'calibration': 2, 'primary': 48}`
+  - `analyzed_pairs=50`
+  - `importable_truth_rows=17262`
+  - `split_analysis_effective_rows=17322`
+  - `excluded_parenthetical_rows=1978`
+  - `skipped_empty_text=1003`, `skipped_pure_symbols=60`
+- 단위/가드:
+  - `./venv/bin/python -m py_compile core/personalization/nas_truth_learning.py tools/nas_truth_learning.py tests/test_nas_truth_learning.py` -> pass
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nas_truth_learning.py tests/test_ground_truth_import.py` -> `12 passed`
+- 정책 영향:
+  - No UI/UX, STT2, LLM, LoRA runtime default, VAD, model-selection, project save/load, release, tag, push, or DMG behavior changed.
+
 ## NAS 50 split protocol and Heydealer cached High validation - 2026-06-26
 
 - 실행 모드: NAS 50 reference-SRT split analysis + LLM/LoRA prompt protocol update + Heydealer cached High postprocess validation.
