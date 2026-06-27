@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from core.runtime import config
 from core.audio.media_processor import VideoProcessor
+from core.audio import media_processor_transcribe as transcribe_module
 from core.audio.stt_quality_presets import apply_stt_quality_preset
 
 
@@ -222,7 +223,19 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as chunk_dir, \
-             patch.object(self.processor, "_word_precision_ranges", return_value=[SimpleNamespace(start=0.0, end=1.0)]), \
+             patch.object(self.processor, "_word_precision_ranges", return_value=[SimpleNamespace(
+                 start=0.0,
+                 end=1.0,
+                 primary={
+                     "selected": True,
+                     "precision_review": True,
+                     "needs_review": True,
+                     "quality": {
+                         "confidence_label": "red",
+                         "flags": ["word_timestamps_missing", "outside_vad_speech"],
+                     },
+                 },
+             )]), \
              patch.object(self.processor, "_prepare_recheck_clip", return_value={"start": 0.0, "end": 1.0}), \
              patch.object(self.processor, "_collect_transcribe_result", return_value=[]) as collect:
             result = self.processor._recheck_word_timestamps_for_precision(
@@ -241,6 +254,21 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertFalse(overrides["stt_primary_fast_native_enabled"])
         self.assertTrue(overrides["stt_npu_prefer_enabled"])
         self.assertTrue(overrides["whisperkit_native_auto_enabled"])
+        spans = self.processor._stt_stage_wall_clock_spans_snapshot()
+        precision_span = next(span for span in spans if span.get("stage") == "word_precision")
+        self.assertEqual(precision_span["range_count"], 1)
+        self.assertEqual(precision_span["prepared_clip_count"], 1)
+        self.assertEqual(precision_span["range_audio_sec"], 1.0)
+        self.assertEqual(precision_span["max_range_duration_sec"], 1.0)
+        self.assertEqual(precision_span["prepared_audio_sec"], 1.0)
+        self.assertEqual(precision_span["max_prepared_clip_duration_sec"], 1.0)
+        self.assertEqual(precision_span["selected_range_count"], 1)
+        self.assertEqual(precision_span["precision_review_range_count"], 1)
+        self.assertEqual(precision_span["needs_review_range_count"], 1)
+        self.assertEqual(precision_span["red_range_count"], 1)
+        self.assertEqual(precision_span["yellow_range_count"], 0)
+        self.assertEqual(precision_span["risk_range_count"], 1)
+        self.assertEqual(precision_span["missing_word_range_count"], 1)
 
     def test_word_precision_recheck_allows_explicit_precision_model(self):
         segments = [{"start": 0.0, "end": 1.0, "text": "저신뢰", "stt_score": 20}]
@@ -1197,6 +1225,173 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertIsNotNone(_Worker.last_kwargs)
         self.assertFalse(_Worker.last_kwargs["_allow_window_rolling"])
 
+    def test_collect_transcribe_result_merges_child_collect_fallback_spans(self):
+        class _Worker(VideoProcessor):
+            def transcribe(self, *args, **kwargs):
+                self._record_stt_stage_wall_clock_span(
+                    "stt_collect_whisperkit_fallback",
+                    time.perf_counter(),
+                    label=kwargs.get("log_label"),
+                    reason="empty_segments",
+                    total_chunks=1,
+                )
+                yield [{"start": 0.0, "end": 1.0, "text": "ok"}], 1, 1
+
+            def stop_transcribe(self):
+                return None
+
+        worker = _Worker()
+        worker._load_all_settings = lambda: {}
+        worker._reset_stt_stage_wall_clock_spans()
+
+        result = worker._collect_transcribe_result(
+            "/tmp/does-not-matter",
+            "unit-model",
+            label="STT2",
+        )
+
+        self.assertEqual(result, [{"start": 0.0, "end": 1.0, "text": "ok"}])
+        spans = worker._stt_stage_wall_clock_spans_snapshot()
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(spans[0]["stage"], "stt_collect_whisperkit_fallback")
+        self.assertEqual(spans[0]["reason"], "empty_segments")
+        self.assertEqual(spans[0]["source_collect_label"], "STT2")
+
+    def test_collect_transcribe_result_replays_primary_collect_cache_when_enabled(self):
+        class _Worker(VideoProcessor):
+            calls = 0
+
+            def transcribe(self, *args, **kwargs):
+                type(self).calls += 1
+                self._record_stt_stage_wall_clock_span(
+                    "stt_primary_collect_transcribe",
+                    time.perf_counter(),
+                    label=kwargs.get("log_label"),
+                    emitted_segment_count=1,
+                )
+                yield [{"start": 0.0, "end": 1.0, "text": "cached"}], 1, 1
+
+            def stop_transcribe(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as chunk_dir:
+            self._write_silent_wav(os.path.join(chunk_dir, "vad_000_0.000.wav"), frames=16000)
+            cache_path = os.path.join(chunk_dir, "primary_collect_cache.json")
+            worker = _Worker()
+            worker._load_all_settings = lambda: {
+                "stt_primary_collect_cache_enabled": True,
+                "stt_primary_collect_cache_path": cache_path,
+                "stt_persistent_runtime_reuse_enabled": False,
+            }
+            worker._reset_stt_stage_wall_clock_spans()
+
+            first = worker._collect_transcribe_result(chunk_dir, "unit-model", target_end_sec=1.0, label="STT1")
+            second = worker._collect_transcribe_result(chunk_dir, "unit-model", target_end_sec=1.0, label="STT1")
+
+        self.assertEqual(first, second)
+        self.assertEqual(_Worker.calls, 1)
+        diagnostics = worker._last_collect_transcribe_diagnostics
+        self.assertTrue(diagnostics["collect_cache_enabled"])
+        self.assertTrue(diagnostics["collect_cache_hit"])
+        self.assertFalse(diagnostics["collect_provider_called"])
+        spans = worker._stt_stage_wall_clock_spans_snapshot()
+        self.assertTrue(any(span.get("collect_cache_write") is True for span in spans))
+        self.assertTrue(any(span.get("collect_cache_hit") is True for span in spans))
+
+    def test_primary_collect_cache_key_ignores_unrelated_cache_controls(self):
+        with tempfile.TemporaryDirectory() as chunk_dir:
+            self._write_silent_wav(os.path.join(chunk_dir, "vad_000_0.000.wav"), frames=16000)
+            base_settings = {
+                "stt_quality_preset": "high",
+                "stt_primary_collect_cache_enabled": True,
+                "stt_primary_collect_cache_path": os.path.join(chunk_dir, "primary_a.json"),
+                "stt_recheck_collect_cache_enabled": False,
+                "subtitle_llm_macro_response_cache_enabled": False,
+                "subtitle_llm_context_keep_cache_path": os.path.join(chunk_dir, "keep_a.json"),
+            }
+            toggled_settings = {
+                **base_settings,
+                "stt_primary_collect_cache_path": os.path.join(chunk_dir, "primary_b.json"),
+                "stt_recheck_collect_cache_enabled": True,
+                "stt_recheck_collect_cache_path": os.path.join(chunk_dir, "recheck.json"),
+                "subtitle_llm_macro_response_cache_enabled": True,
+                "subtitle_llm_macro_response_cache_path": os.path.join(chunk_dir, "macro.json"),
+                "subtitle_llm_context_keep_cache_path": os.path.join(chunk_dir, "keep_b.json"),
+            }
+
+            base_key = transcribe_module._stt_primary_collect_cache_key(
+                chunk_dir=chunk_dir,
+                settings=base_settings,
+                model="demo-model",
+                language="ko",
+                label="STT1",
+                target_end_sec=1.0,
+                is_single=False,
+                settings_overrides={"word_timestamps": False},
+            )
+            toggled_key = transcribe_module._stt_primary_collect_cache_key(
+                chunk_dir=chunk_dir,
+                settings=toggled_settings,
+                model="demo-model",
+                language="ko",
+                label="STT1",
+                target_end_sec=1.0,
+                is_single=False,
+                settings_overrides={"word_timestamps": False},
+            )
+            model_changed_key = transcribe_module._stt_primary_collect_cache_key(
+                chunk_dir=chunk_dir,
+                settings=toggled_settings,
+                model="other-model",
+                language="ko",
+                label="STT1",
+                target_end_sec=1.0,
+                is_single=False,
+                settings_overrides={"word_timestamps": False},
+            )
+
+        self.assertEqual(base_key, toggled_key)
+        self.assertNotEqual(base_key, model_changed_key)
+
+    def test_collect_transcribe_result_bypasses_primary_collect_cache_for_preview(self):
+        class _Worker(VideoProcessor):
+            calls = 0
+
+            def transcribe(self, *args, **kwargs):
+                type(self).calls += 1
+                segment = {"start": 0.0, "end": 1.0, "text": f"call-{type(self).calls}"}
+                callback = kwargs.get("preview_callback")
+                if callable(callback):
+                    callback([dict(segment)], kwargs.get("log_label"))
+                yield [segment], 1, 1
+
+            def stop_transcribe(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as chunk_dir:
+            self._write_silent_wav(os.path.join(chunk_dir, "vad_000_0.000.wav"), frames=16000)
+            cache_path = os.path.join(chunk_dir, "primary_collect_cache.json")
+            worker = _Worker()
+            worker._load_all_settings = lambda: {
+                "stt_primary_collect_cache_enabled": True,
+                "stt_primary_collect_cache_path": cache_path,
+                "stt_persistent_runtime_reuse_enabled": False,
+            }
+            preview_calls = []
+
+            worker._collect_transcribe_result(chunk_dir, "unit-model", target_end_sec=1.0, label="STT1")
+            second = worker._collect_transcribe_result(
+                chunk_dir,
+                "unit-model",
+                target_end_sec=1.0,
+                label="STT1",
+                preview_callback=lambda rows, label: preview_calls.append((label, rows)),
+            )
+
+        self.assertEqual(_Worker.calls, 2)
+        self.assertEqual(second[0]["text"], "call-2")
+        self.assertEqual(preview_calls[0][0], "STT1")
+
     def test_ensemble_runs_stt1_and_stt2_on_parallel_threads(self):
         with tempfile.TemporaryDirectory() as tmp:
             wav_path = os.path.join(tmp, "vad_000_0.000.wav")
@@ -1314,6 +1509,20 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertFalse(calls[1][1]["stt_persistent_runtime_reuse_enabled"])
             self.assertEqual(result[0][0][0]["text"], "보강 후보")
             self.assertEqual(result[0][0][0]["stt_ensemble_source"], "STT2_SELECTIVE_RECHECK")
+            spans = self.processor._stt_stage_wall_clock_spans_snapshot()
+            recheck_span = next(span for span in spans if span.get("stage") == "stt2_selective_recheck")
+            self.assertEqual(recheck_span["range_count"], 1)
+            self.assertEqual(recheck_span["prepared_clip_count"], 1)
+            self.assertEqual(recheck_span["applied_count"], 1)
+            self.assertEqual(recheck_span["applied_segment_count"], 1)
+            self.assertEqual(recheck_span["range_audio_sec"], 1.0)
+            self.assertEqual(recheck_span["max_range_duration_sec"], 1.0)
+            self.assertEqual(recheck_span["prepared_audio_sec"], 1.0)
+            self.assertEqual(recheck_span["max_prepared_clip_duration_sec"], 1.0)
+            self.assertEqual(recheck_span["missing_voice_range_count"], 0)
+            self.assertEqual(recheck_span["route_hint_range_count"], 0)
+            self.assertEqual(recheck_span["low_score_range_count"], 1)
+            self.assertEqual(recheck_span["empty_text_range_count"], 0)
 
     def test_window_parallel_uses_aggressive_cap_for_three_minute_windows(self):
         with patch("core.audio.media_processor_transcribe._stt_memory_pressure_stage", return_value="normal"), \

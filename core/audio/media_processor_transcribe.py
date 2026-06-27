@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,7 @@ import threading
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from core.audio import stt_rescue
 from core.audio.audio_chunk_manifest import audio_chunk_manifest, chunk_dir_signature
@@ -103,6 +105,205 @@ def _join_clean_word_texts(words: list[dict]) -> str:
         if cleaned:
             parts.append(cleaned)
     return " ".join(parts).strip()
+
+
+STT_PRIMARY_COLLECT_CACHE_SCHEMA = "ai_subtitle_studio.stt_primary_collect_cache.v1"
+_STT_PRIMARY_COLLECT_CACHE_BY_PATH: dict[str, dict] = {}
+_STT_PRIMARY_COLLECT_CACHE_LOCK = threading.Lock()
+_STT_PRIMARY_COLLECT_CACHE_IGNORED_SETTING_KEYS = {
+    "stt_primary_collect_cache_enabled",
+    "stt_primary_collect_cache_path",
+    "stt_primary_collect_cache_max_entries",
+    "stt_recheck_collect_cache_enabled",
+    "stt_recheck_collect_cache_path",
+    "stt_recheck_collect_cache_max_entries",
+    "subtitle_llm_context_keep_cache_enabled",
+    "subtitle_llm_context_keep_cache_path",
+    "subtitle_llm_context_keep_cache_max_entries",
+    "subtitle_llm_macro_response_cache_enabled",
+    "subtitle_llm_macro_response_cache_path",
+    "subtitle_llm_macro_response_cache_max_entries",
+}
+
+
+def _stt_primary_collect_cache_enabled(settings: dict | None) -> bool:
+    value = dict(settings or {}).get("stt_primary_collect_cache_enabled", False)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+    return bool(value)
+
+
+def _stt_primary_collect_cache_path(settings: dict | None) -> Path:
+    override = str(dict(settings or {}).get("stt_primary_collect_cache_path") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(config.OUTPUT_DIR) / "stt_primary_collect_cache" / "primary_collect_v1.json"
+
+
+def _stt_primary_collect_cache_max_entries(settings: dict | None) -> int:
+    try:
+        return max(1, int(dict(settings or {}).get("stt_primary_collect_cache_max_entries", 64) or 64))
+    except Exception:
+        return 64
+
+
+def _stt_primary_collect_label(label: str) -> bool:
+    normalized = str(label or "").strip().upper().replace("_", "-")
+    return normalized == "STT1" or normalized.startswith("STT1-") or normalized.startswith("BENCH-STT1")
+
+
+def _stt_primary_collect_cache_safe_payload(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _stt_primary_collect_cache_safe_payload(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            if str(key) not in _STT_PRIMARY_COLLECT_CACHE_IGNORED_SETTING_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stt_primary_collect_cache_safe_payload(item) for item in value]
+    return str(value)
+
+
+def _stt_primary_file_sha256(path: str) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with open(path, "rb") as handle:
+            while True:
+                data = handle.read(1024 * 1024)
+                if not data:
+                    break
+                size += len(data)
+                digest.update(data)
+        return digest.hexdigest(), size
+    except Exception:
+        return "", 0
+
+
+def _stt_primary_chunk_fingerprints(chunk_dir: str) -> list[dict]:
+    root = os.path.abspath(str(chunk_dir or ""))
+    if not root or not os.path.isdir(root):
+        return []
+    try:
+        names = sorted(
+            [name for name in os.listdir(root) if str(name).lower().endswith(".wav")],
+            key=chunk_sort_key,
+        )
+    except Exception:
+        names = []
+    fingerprints: list[dict] = []
+    for name in names:
+        path = os.path.join(root, name)
+        sha256, size_bytes = _stt_primary_file_sha256(path)
+        fingerprints.append(
+            {
+                "name": str(name),
+                "audio_sha256": sha256,
+                "size_bytes": int(size_bytes),
+            }
+        )
+    return fingerprints
+
+
+def _stt_primary_collect_cache_key(
+    *,
+    chunk_dir: str,
+    settings: dict | None,
+    model: str,
+    language: str,
+    label: str,
+    target_end_sec: float | None,
+    is_single: bool,
+    settings_overrides: dict | None,
+) -> str:
+    payload = {
+        "schema": STT_PRIMARY_COLLECT_CACHE_SCHEMA,
+        "model": str(model or ""),
+        "language": str(language or ""),
+        "label": str(label or ""),
+        "target_end_sec": round(float(target_end_sec), 6) if target_end_sec is not None else None,
+        "is_single": bool(is_single),
+        "settings": _stt_primary_collect_cache_safe_payload(dict(settings or {})),
+        "settings_overrides": _stt_primary_collect_cache_safe_payload(dict(settings_overrides or {})),
+        "chunks": _stt_primary_chunk_fingerprints(chunk_dir),
+    }
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _load_stt_primary_collect_cache_unlocked(path: Path) -> dict:
+    cache_path = str(path)
+    if cache_path in _STT_PRIMARY_COLLECT_CACHE_BY_PATH:
+        return _STT_PRIMARY_COLLECT_CACHE_BY_PATH[cache_path]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema") != STT_PRIMARY_COLLECT_CACHE_SCHEMA:
+            raise ValueError("unsupported cache schema")
+        entries = payload.get("entries")
+        cache = dict(entries) if isinstance(entries, dict) else {}
+    except Exception:
+        cache = {}
+    _STT_PRIMARY_COLLECT_CACHE_BY_PATH[cache_path] = cache
+    return cache
+
+
+def _cached_stt_primary_collect_segments(path: Path, key: str) -> tuple[list[dict], dict] | None:
+    with _STT_PRIMARY_COLLECT_CACHE_LOCK:
+        cache = _load_stt_primary_collect_cache_unlocked(path)
+        entry = cache.get(key)
+        if not isinstance(entry, dict):
+            return None
+        segments = entry.get("segments")
+        if not isinstance(segments, list):
+            return None
+        clean = [dict(seg) for seg in segments if isinstance(seg, dict)]
+        if segments != [] and not clean:
+            return None
+        diagnostics = entry.get("diagnostics")
+        return clean, dict(diagnostics) if isinstance(diagnostics, dict) else {}
+
+
+def _store_stt_primary_collect_segments(
+    path: Path,
+    key: str,
+    segments: list[dict],
+    *,
+    max_entries: int,
+    diagnostics: dict | None = None,
+) -> bool:
+    clean_segments = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    if not clean_segments:
+        return False
+    try:
+        with _STT_PRIMARY_COLLECT_CACHE_LOCK:
+            cache = _load_stt_primary_collect_cache_unlocked(path)
+            clean_diagnostics = {
+                str(diag_key): value
+                for diag_key, value in dict(diagnostics or {}).items()
+                if isinstance(value, (str, int, float, bool)) or value is None
+            }
+            cache[key] = {
+                "schema": STT_PRIMARY_COLLECT_CACHE_SCHEMA,
+                "created_epoch": round(time.time(), 3),
+                "segments": clean_segments,
+                "diagnostics": clean_diagnostics,
+            }
+            entries = dict(list(cache.items())[-max(1, int(max_entries)) :])
+            payload = {
+                "schema": STT_PRIMARY_COLLECT_CACHE_SCHEMA,
+                "updated_epoch": round(time.time(), 3),
+                "entries": entries,
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str), encoding="utf-8")
+            tmp.replace(path)
+            _STT_PRIMARY_COLLECT_CACHE_BY_PATH[str(path)] = entries
+        return True
+    except Exception:
+        return False
 
 from core.audio.media_processor_transcribe_policy import VideoProcessorTranscribePolicyMixin
 from core.audio.media_processor_transcribe_recheck import VideoProcessorTranscribeRecheckMixin
@@ -253,14 +454,83 @@ class VideoProcessorTranscribeMixin(
         reuse_worker = self._stt_persistent_runtime_reuse_enabled(effective_settings)
         pressure_stage = _stt_memory_pressure_stage(effective_settings)
         resource_policy = stage_owned_resource_policy(effective_settings, pressure_stage=pressure_stage)
+        self._last_collect_transcribe_diagnostics = {}
         if reuse_worker and not resource_policy.allow_stt_collect_worker_reuse:
             # Stage-owned resource policy keeps STT reuse fast only while macOS
             # has enough memory headroom for persistent WhisperKit/MLX workers.
             reuse_worker = False
+        primary_collect_label = _stt_primary_collect_label(label)
+        primary_cache_enabled = _stt_primary_collect_cache_enabled(effective_settings)
+        primary_cache_allowed = primary_collect_label and primary_cache_enabled and not callable(preview_callback)
+        primary_cache_path: Path | None = None
+        primary_cache_key = ""
+        primary_cache_hit = False
+        primary_cache_write = False
+        primary_provider_called = primary_collect_label
+        if primary_cache_allowed:
+            primary_cache_path = _stt_primary_collect_cache_path(effective_settings)
+            primary_cache_key = _stt_primary_collect_cache_key(
+                chunk_dir=chunk_dir,
+                settings=effective_settings,
+                model=model,
+                language=getattr(self, "language", ""),
+                label=label,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                settings_overrides=settings_overrides,
+            )
+            cached_payload = _cached_stt_primary_collect_segments(primary_cache_path, primary_cache_key)
+            if cached_payload is not None:
+                cached_segments, cached_diagnostics = cached_payload
+                primary_cache_hit = True
+                primary_provider_called = False
+                diagnostics = {
+                    key: value
+                    for key, value in dict(cached_diagnostics or {}).items()
+                    if isinstance(value, (str, int, float, bool)) or value is None
+                }
+                diagnostics.update({
+                    "label": str(label or ""),
+                    "status": "cache_hit",
+                    "resolved_model": str(diagnostics.get("resolved_model") or model or ""),
+                    "target_end_sec": float(target_end_sec) if target_end_sec is not None else None,
+                    "collect_elapsed_sec": 0.0,
+                    "worker_reuse_enabled": bool(reuse_worker),
+                    "worker_cache_hit": False,
+                    "worker_cache_busy": False,
+                    "worker_transient": False,
+                    "resource_pressure_stage": str(pressure_stage or ""),
+                    "resource_allows_worker_reuse": bool(resource_policy.allow_stt_collect_worker_reuse),
+                    "collect_cache_enabled": True,
+                    "collect_cache_hit": True,
+                    "collect_cache_write": False,
+                    "collect_provider_called": False,
+                    "collect_cache_path": str(primary_cache_path),
+                    "emitted_segment_count": len(cached_segments),
+                })
+                self._last_collect_transcribe_diagnostics = {
+                    key: value
+                    for key, value in diagnostics.items()
+                    if isinstance(value, (str, int, float, bool)) or value is None
+                }
+                if hasattr(self, "_record_stt_stage_wall_clock_span"):
+                    self._record_stt_stage_wall_clock_span(
+                        "stt_primary_collect_transcribe",
+                        time.perf_counter(),
+                        source_collect_label=label,
+                        **{
+                            key: value
+                            for key, value in diagnostics.items()
+                            if isinstance(value, (str, int, float, bool)) or value is None
+                        },
+                    )
+                return [dict(seg) for seg in cached_segments]
         cache_key = f"{self.language}|{str(model or '').strip()}"
         worker = None
         transient_worker = True
         worker_id = 0
+        worker_cache_hit = False
+        worker_cache_busy = False
 
         with self._ensemble_child_lock:
             children = getattr(self, "_ensemble_child_processors", None)
@@ -280,9 +550,11 @@ class VideoProcessorTranscribeMixin(
                 if cached is not None and id(cached) not in busy:
                     worker = cached
                     transient_worker = False
+                    worker_cache_hit = True
                     if worker not in children:
                         children.append(worker)
                 else:
+                    worker_cache_busy = cached is not None
                     worker = type(self)()
                     if cached is None:
                         cache[cache_key] = worker
@@ -309,6 +581,12 @@ class VideoProcessorTranscribeMixin(
                     get_logger().log(f"  ⚠️ [STT window] worker state copy skipped ({attr}): {exc}")
         worker._fast_mode_overrides = dict(effective_settings or {}) if effective_settings else None
         result: list[dict] = []
+        child_span_start = 0
+        if hasattr(worker, "_stt_stage_wall_clock_spans_snapshot"):
+            try:
+                child_span_start = len(worker._stt_stage_wall_clock_spans_snapshot())
+            except Exception:
+                child_span_start = 0
         try:
             try:
                 for chunk_segs, _idx, _total in worker.transcribe(
@@ -323,10 +601,87 @@ class VideoProcessorTranscribeMixin(
                     _allow_window_rolling=False,
                 ):
                     result.extend(chunk_segs or [])
+                if primary_cache_allowed and primary_cache_path is not None and primary_cache_key and result:
+                    primary_cache_write = _store_stt_primary_collect_segments(
+                        primary_cache_path,
+                        primary_cache_key,
+                        result,
+                        max_entries=_stt_primary_collect_cache_max_entries(effective_settings),
+                    )
             except RuntimeError as exc:
                 get_logger().log(f"  ⚠️ [{label}] 보조 STT 재검사 실패, 기존 STT 결과를 유지합니다: {exc}")
                 result = []
         finally:
+            if hasattr(worker, "_stt_stage_wall_clock_spans_snapshot"):
+                try:
+                    child_spans = worker._stt_stage_wall_clock_spans_snapshot()[child_span_start:]
+                except Exception:
+                    child_spans = []
+                collect_spans = [
+                    {
+                        **dict(span),
+                        "source_collect_label": label,
+                        **(
+                            {
+                                "collect_cache_enabled": bool(primary_cache_enabled),
+                                "collect_cache_hit": bool(primary_cache_hit),
+                                "collect_cache_write": bool(primary_cache_write),
+                                "collect_provider_called": bool(primary_provider_called),
+                                "collect_cache_path": str(primary_cache_path or ""),
+                            }
+                            if primary_collect_label
+                            else {}
+                        ),
+                    }
+                    for span in child_spans
+                    if str((span or {}).get("stage") or "").startswith("stt_collect_")
+                    or str((span or {}).get("stage") or "").endswith("_collect_transcribe")
+                ]
+                if collect_spans:
+                    if hasattr(self, "_merge_stt_stage_wall_clock_spans"):
+                        self._merge_stt_stage_wall_clock_spans(collect_spans)
+                    else:
+                        spans = getattr(self, "_stt_stage_wall_clock_spans", None)
+                        if not isinstance(spans, list):
+                            spans = []
+                            self._stt_stage_wall_clock_spans = spans
+                        spans.extend(collect_spans)
+            run_diagnostics = getattr(worker, "_last_transcribe_run_diagnostics", None)
+            if isinstance(run_diagnostics, dict):
+                collect_diagnostics = {
+                    key: value
+                    for key, value in run_diagnostics.items()
+                    if isinstance(value, (str, int, float, bool))
+                }
+                collect_diagnostics.update(
+                    {
+                        "worker_reuse_enabled": bool(reuse_worker),
+                        "worker_cache_hit": bool(worker_cache_hit),
+                        "worker_cache_busy": bool(worker_cache_busy),
+                        "worker_transient": bool(transient_worker),
+                        "resource_pressure_stage": str(pressure_stage or ""),
+                        "resource_allows_worker_reuse": bool(resource_policy.allow_stt_collect_worker_reuse),
+                    }
+                )
+                if primary_collect_label:
+                    if primary_cache_allowed and primary_cache_path is not None and primary_cache_key and result:
+                        primary_cache_write = _store_stt_primary_collect_segments(
+                            primary_cache_path,
+                            primary_cache_key,
+                            result,
+                            max_entries=_stt_primary_collect_cache_max_entries(effective_settings),
+                            diagnostics=collect_diagnostics,
+                        ) or primary_cache_write
+                    collect_diagnostics.update(
+                        {
+                            "collect_cache_enabled": bool(primary_cache_enabled),
+                            "collect_cache_hit": bool(primary_cache_hit),
+                            "collect_cache_write": bool(primary_cache_write),
+                            "collect_provider_called": bool(primary_provider_called),
+                            "collect_cache_path": str(primary_cache_path or ""),
+                        }
+                    )
+                self._last_collect_transcribe_diagnostics = collect_diagnostics
             if reuse_worker:
                 with self._ensemble_child_lock:
                     busy = getattr(self, "_stt_collect_worker_busy", set())
@@ -691,6 +1046,7 @@ class VideoProcessorTranscribeMixin(
         preview_callback=None,
         cleanup_chunk_dir: bool = True,
     ):
+        self._reset_stt_stage_wall_clock_spans()
         get_logger().log(
             "\n🎧 [STT 선택 앙상블] STT1 빠른 1차 인식 → 저신뢰 구간만 STT2/단어 타임태그 정밀 보강 "
             f"(STT1: {primary_model.split(chr(47))[-1]}, STT2: {secondary_model.split(chr(47))[-1]})"
@@ -713,15 +1069,69 @@ class VideoProcessorTranscribeMixin(
                 "stt_word_timestamp_precision_pass": False,
                 "stt_word_timestamps_precision_enabled": False,
             }
-            primary_segments = self._collect_transcribe_result(
-                chunk_dir,
-                primary_model,
-                target_end_sec=target_end_sec,
-                is_single=is_single,
-                label="STT1",
-                preview_callback=self._ensemble_preview_callback("STT1", preview_callback),
-                settings_overrides=primary_overrides,
-            )
+            primary_started = time.perf_counter()
+            primary_status = "ok"
+            try:
+                primary_segments = self._collect_transcribe_result(
+                    chunk_dir,
+                    primary_model,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    label="STT1",
+                    preview_callback=self._ensemble_preview_callback("STT1", preview_callback),
+                    settings_overrides=primary_overrides,
+                )
+            except Exception:
+                primary_status = "failed"
+                raise
+            finally:
+                primary_diagnostics = getattr(self, "_last_collect_transcribe_diagnostics", None)
+                primary_metadata = {
+                    "status": primary_status,
+                    "label": "STT1",
+                    "result_segments": len(primary_segments or []) if "primary_segments" in locals() else 0,
+                }
+                if isinstance(primary_diagnostics, dict):
+                    for key in (
+                        "backend",
+                        "router_backend",
+                        "resolved_model",
+                        "chunk_count",
+                        "submitted_chunk_count",
+                        "chunk_audio_sec",
+                        "target_end_sec",
+                        "word_timestamps",
+                        "progress_by_audio_duration",
+                        "worker_silence_timeout_sec",
+                        "whisperkit_worker_count",
+                        "whisperkit_stream_results",
+                        "whisperkit_compute_profile",
+                        "submission_reordered",
+                        "received_chunks",
+                        "processed_chunks",
+                        "emitted_segment_count",
+                        "done_seen",
+                        "setup_elapsed_sec",
+                        "collect_elapsed_sec",
+                        "worker_reuse_enabled",
+                        "worker_cache_hit",
+                        "worker_cache_busy",
+                        "worker_transient",
+                        "resource_pressure_stage",
+                        "resource_allows_worker_reuse",
+                        "collect_cache_enabled",
+                        "collect_cache_hit",
+                        "collect_cache_write",
+                        "collect_provider_called",
+                        "collect_cache_path",
+                    ):
+                        if key in primary_diagnostics:
+                            primary_metadata[key] = primary_diagnostics.get(key)
+                self._record_stt_stage_wall_clock_span(
+                    "stt_primary_transcribe",
+                    primary_started,
+                    **primary_metadata,
+                )
             if not primary_segments:
                 get_logger().log("  ⚠️ [STT 선택 앙상블] STT1 결과가 비어 있어 STT2 전체 인식으로 대체합니다.")
                 fallback_overrides = {
@@ -731,15 +1141,29 @@ class VideoProcessorTranscribeMixin(
                     "stt_word_timestamp_precision_pass": False,
                     "stt_word_timestamps_precision_enabled": False,
                 }
-                primary_segments = self._collect_transcribe_result(
-                    chunk_dir,
-                    secondary_model,
-                    target_end_sec=target_end_sec,
-                    is_single=is_single,
-                    label="STT2",
-                    preview_callback=self._ensemble_preview_callback("STT2", preview_callback),
-                    settings_overrides=fallback_overrides,
-                )
+                fallback_started = time.perf_counter()
+                fallback_status = "ok"
+                try:
+                    primary_segments = self._collect_transcribe_result(
+                        chunk_dir,
+                        secondary_model,
+                        target_end_sec=target_end_sec,
+                        is_single=is_single,
+                        label="STT2",
+                        preview_callback=self._ensemble_preview_callback("STT2", preview_callback),
+                        settings_overrides=fallback_overrides,
+                    )
+                except Exception:
+                    fallback_status = "failed"
+                    raise
+                finally:
+                    self._record_stt_stage_wall_clock_span(
+                        "stt2_full_fallback_transcribe",
+                        fallback_started,
+                        status=fallback_status,
+                        label="STT2",
+                        result_segments=len(primary_segments or []),
+                    )
                 for seg in primary_segments:
                     seg["stt_selected_source"] = "STT2"
                     seg["stt_ensemble_source"] = "STT2_FALLBACK"
@@ -779,11 +1203,21 @@ class VideoProcessorTranscribeMixin(
                 from core.subtitle_quality.vad_alignment_checker import adjust_segments_to_vad_boundaries
 
                 self._notify_stage("⏳ [VAD] 선택 앙상블 자막 위치 재계산 중")
+                vad_align_started = time.perf_counter()
+                vad_input_count = len(primary_segments or [])
                 primary_segments, adjusted_count = adjust_segments_to_vad_boundaries(
                     primary_segments,
                     vad_strict,
                     max_shift_sec=float(settings.get("vad_post_stt_max_shift_sec", 0.7) or 0.7),
                     edge_pad_sec=float(settings.get("vad_post_stt_edge_pad_sec", 0.04) or 0.04),
+                )
+                self._record_stt_stage_wall_clock_span(
+                    "vad_stt_consensus",
+                    vad_align_started,
+                    status="applied",
+                    input_segments=vad_input_count,
+                    adjusted_count=int(adjusted_count or 0),
+                    result_segments=len(primary_segments or []),
                 )
                 get_logger().log(f"  🎯 [VAD 후처리] 선택 앙상블 자막 위치 {adjusted_count}개 보정")
 

@@ -1,0 +1,143 @@
+import unittest
+
+from core.project.nle_runtime_cutover import (
+    NLE_RUNTIME_CUTOVER_SCHEMA,
+    nle_final_overlay_segments_from_editor_rows,
+    nle_global_canvas_segments_from_editor_rows,
+    nle_save_export_segments_from_editor_rows,
+)
+
+
+class ProjectNleRuntimeCutoverTests(unittest.TestCase):
+    def test_final_overlay_cutover_projects_only_final_rows_from_nle_caption_state(self):
+        rows = [
+            {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "first", "speaker": "00"},
+            {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+            {"id": "stt_1", "start": 1.1, "end": 1.8, "text": "raw", "_live_stt_preview": True},
+            {
+                "id": "caption_2",
+                "start": 2.0,
+                "end": 3.0,
+                "text": "second",
+                "speaker": "01",
+                "stt_candidates": [{"source": "STT2", "text": "second raw"}],
+            },
+        ]
+
+        overlay = nle_final_overlay_segments_from_editor_rows(rows, primary_fps=30.0, center_sec=1.5)
+
+        self.assertEqual([row["text"] for row in overlay], ["first", "second"])
+        self.assertEqual([row["start_frame"] for row in overlay], [0, 60])
+        self.assertEqual([row["end_frame"] for row in overlay], [30, 90])
+        self.assertTrue(all(row["_nle_runtime_surface"] == "final_overlay" for row in overlay))
+        self.assertTrue(all(row["_nle_runtime_schema"] == NLE_RUNTIME_CUTOVER_SCHEMA for row in overlay))
+        self.assertFalse(any(row.get("is_gap") for row in overlay))
+        self.assertFalse(any(row.get("_live_stt_preview") for row in overlay))
+        self.assertFalse(any("stt_candidates" in row for row in overlay))
+
+    def test_final_overlay_cutover_keeps_context_window_bounded(self):
+        rows = [
+            {"id": f"caption_{index}", "start": float(index), "end": float(index) + 0.5, "text": f"seg {index}"}
+            for index in range(30)
+        ]
+
+        overlay = nle_final_overlay_segments_from_editor_rows(
+            rows,
+            primary_fps=30.0,
+            center_sec=15.0,
+            before_sec=2.0,
+            after_sec=2.0,
+            max_segments=5,
+        )
+
+        self.assertLessEqual(len(overlay), 5)
+        self.assertTrue(any(row["start"] <= 15.0 < row["end"] or abs(row["start"] - 15.0) < 1.0 for row in overlay))
+
+    def test_global_canvas_cutover_projects_final_rows_without_context_window(self):
+        rows = [
+            {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "first"},
+            {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+            {"id": "stt_1", "start": 1.1, "end": 1.8, "text": "raw", "_live_stt_preview": True},
+            {"id": "draft_1", "start": 1.2, "end": 1.9, "text": "draft", "_live_subtitle_preview": True},
+            {"id": "caption_2", "start": 100.0, "end": 101.0, "text": "last"},
+        ]
+
+        global_rows = nle_global_canvas_segments_from_editor_rows(rows, primary_fps=30.0)
+
+        self.assertEqual([row["text"] for row in global_rows], ["first", "last"])
+        self.assertEqual([row["_nle_runtime_surface"] for row in global_rows], ["global_canvas", "global_canvas"])
+        self.assertTrue(all(row["_nle_runtime_schema"] == NLE_RUNTIME_CUTOVER_SCHEMA for row in global_rows))
+        self.assertFalse(any(row.get("is_gap") for row in global_rows))
+        self.assertFalse(any(row.get("_live_stt_preview") or row.get("_live_subtitle_preview") for row in global_rows))
+        self.assertEqual([row["start_frame"] for row in global_rows], [0, 3000])
+
+    def test_save_export_cutover_projects_final_rows_without_candidates_or_gaps(self):
+        rows = [
+            {
+                "id": "caption_1",
+                "start": 0.0,
+                "end": 1.0,
+                "text": "first",
+                "stt_candidates": [{"source": "STT1", "text": "raw"}],
+            },
+            {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+            {"id": "preview_1", "start": 1.1, "end": 1.8, "text": "preview", "_live_subtitle_preview": True},
+            {"id": "caption_2", "start": 2.0, "end": 3.0, "text": "second"},
+        ]
+
+        export_rows = nle_save_export_segments_from_editor_rows(rows, primary_fps=30.0)
+
+        self.assertEqual([row["text"] for row in export_rows], ["first", "second"])
+        self.assertEqual([row["_nle_runtime_surface"] for row in export_rows], ["save_export", "save_export"])
+        self.assertTrue(all(row["_nle_runtime_schema"] == NLE_RUNTIME_CUTOVER_SCHEMA for row in export_rows))
+        self.assertFalse(any(row.get("is_gap") for row in export_rows))
+        self.assertFalse(any(row.get("_live_subtitle_preview") for row in export_rows))
+        self.assertFalse(any("stt_candidates" in row for row in export_rows))
+
+    def test_final_overlay_cutover_repairs_one_frame_micro_overlap_to_shared_boundary(self):
+        rows = [
+            {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "first"},
+            {"id": "caption_2", "start": 0.96, "end": 2.0, "text": "second"},
+        ]
+
+        overlay = nle_final_overlay_segments_from_editor_rows(rows, primary_fps=30.0, center_sec=1.0)
+
+        self.assertEqual([row["text"] for row in overlay], ["first", "second"])
+        self.assertEqual([row["start_frame"] for row in overlay], [0, 30])
+        self.assertEqual([row["end_frame"] for row in overlay], [30, 60])
+        self.assertEqual(overlay[1]["start"], 1.0)
+        self.assertEqual(overlay[1]["_nle_runtime_overlap_repaired"], "shared_boundary")
+
+    def test_global_canvas_cutover_drops_unfixable_overlap_instead_of_drawing_two_final_rows(self):
+        rows = [
+            {"id": "caption_1", "start": 0.0, "end": 2.0, "text": "first"},
+            {"id": "caption_2", "start": 1.0, "end": 3.0, "text": "second"},
+            {"id": "caption_3", "start": 3.0, "end": 4.0, "text": "third"},
+        ]
+
+        global_rows = nle_global_canvas_segments_from_editor_rows(rows, primary_fps=30.0)
+
+        self.assertEqual([row["text"] for row in global_rows], ["first", "third"])
+        self.assertEqual([row["_nle_runtime_surface"] for row in global_rows], ["global_canvas", "global_canvas"])
+
+    def test_save_export_cutover_rejects_unfixable_final_overlap(self):
+        rows = [
+            {"id": "caption_1", "start": 0.0, "end": 2.0, "text": "first"},
+            {"id": "caption_2", "start": 1.0, "end": 3.0, "text": "second"},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "nle_save_export_final_overlap"):
+            nle_save_export_segments_from_editor_rows(rows, primary_fps=30.0)
+
+    def test_save_export_cutover_rejects_micro_overlap_that_would_collapse_segment(self):
+        rows = [
+            {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "first"},
+            {"id": "caption_2", "start": 0.96, "end": 1.0, "text": "second"},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "nle_save_export_final_overlap"):
+            nle_save_export_segments_from_editor_rows(rows, primary_fps=30.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -157,19 +157,7 @@ class VideoPlayerSubtitleMixin:
         ]
         if not final_ranges:
             return rows
-        filtered: list[dict] = []
-        for seg in rows:
-            if not self._overlay_preview_row(seg):
-                filtered.append(seg)
-                continue
-            rng = self._row_time_range(seg)
-            if rng is None:
-                continue
-            start, end = rng
-            overlaps_final = any(start < f_end - 0.001 and end > f_start + 0.001 for f_start, f_end in final_ranges)
-            if not overlaps_final:
-                filtered.append(seg)
-        return filtered
+        return [seg for seg in rows if not self._overlay_preview_row(seg)]
 
     def _segments_signature_fast(self, segments) -> str:
         digest = hashlib.sha256()

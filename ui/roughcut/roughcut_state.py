@@ -22,7 +22,6 @@ from core.video_codec import roughcut_render_mode
 from core.roughcut import (
     EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
     build_edl_segments,
-    build_concat_render_plan,
     build_ffmpeg_subtitle_burnin_command,
     build_markdown_guide,
     edl_to_dict,
@@ -328,7 +327,13 @@ class RoughcutStateMixin:
             source_suffix = Path(media_path).suffix if media_path else ".mp4"
             output_path = self._default_output_path(f"_roughcut{source_suffix or '.mp4'}")
             temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
-            plan = build_concat_render_plan(result.edl_segments, output_path, temp_dir, render_mode=roughcut_render_mode())
+            render_mode = roughcut_render_mode()
+            plan = self._build_nle_render_plan_for_target(
+                output_path,
+                temp_dir,
+                render_mode=render_mode,
+                result=result,
+            )
             srt_path = self._default_output_path("_roughcut.srt")
             subtitled_path = output_path.with_name(f"{output_path.stem}_subtitled{output_path.suffix or '.mp4'}")
             outputs["render_plan"] = asdict(plan)

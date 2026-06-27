@@ -15,16 +15,76 @@ class EditorMulticlipContextMixin:
         except Exception:
             return -1
 
-    def _arm_snapshot_undo_routing(self):
-        self._snapshot_undo_revision = self._editor_doc_revision()
-        self._snapshot_redo_revision = None
+    def _editor_doc_snapshot_signature(self):
+        try:
+            doc = self.text_edit.document()
+        except Exception:
+            return None
+        rows = []
+        try:
+            count = int(doc.blockCount())
+        except Exception:
+            return None
+        for index in range(count):
+            try:
+                block = doc.findBlockByNumber(index)
+                ud = block.userData()
+                rows.append(
+                    (
+                        str(block.text()),
+                        str(getattr(ud, "spk_id", "")),
+                        round(float(getattr(ud, "start_sec", 0.0) or 0.0), 6),
+                        (
+                            round(float(getattr(ud, "end_sec", 0.0) or 0.0), 6)
+                            if getattr(ud, "end_sec", None) is not None
+                            else None
+                        ),
+                        bool(getattr(ud, "is_gap", False)),
+                    )
+                )
+            except Exception:
+                return None
+        return tuple(rows)
 
-    def _arm_snapshot_redo_routing(self):
+    def _arm_snapshot_undo_routing(self, *, allow_revision_drift: bool = False):
+        self._snapshot_undo_revision = self._editor_doc_revision()
+        self._snapshot_undo_allow_revision_drift = bool(allow_revision_drift)
+        self._snapshot_undo_signature = (
+            self._editor_doc_snapshot_signature() if bool(allow_revision_drift) else None
+        )
+        self._snapshot_redo_revision = None
+        self._snapshot_redo_allow_revision_drift = False
+        self._snapshot_redo_signature = None
+
+    def _arm_snapshot_redo_routing(self, *, allow_revision_drift: bool = False):
         self._snapshot_redo_revision = self._editor_doc_revision()
+        self._snapshot_redo_allow_revision_drift = bool(allow_revision_drift)
+        self._snapshot_redo_signature = (
+            self._editor_doc_snapshot_signature() if bool(allow_revision_drift) else None
+        )
 
     def _clear_snapshot_history_routing(self):
         self._snapshot_undo_revision = None
         self._snapshot_redo_revision = None
+        self._snapshot_undo_allow_revision_drift = False
+        self._snapshot_redo_allow_revision_drift = False
+        self._snapshot_undo_signature = None
+        self._snapshot_redo_signature = None
+
+    def _snapshot_history_route_matches(self, prefix: str, current_revision: int) -> bool:
+        revision = getattr(self, f"_snapshot_{prefix}_revision", None)
+        if revision == current_revision:
+            return True
+        if not bool(getattr(self, f"_snapshot_{prefix}_allow_revision_drift", False)):
+            setattr(self, f"_snapshot_{prefix}_revision", None)
+            return False
+        signature = getattr(self, f"_snapshot_{prefix}_signature", None)
+        if signature is not None and signature == self._editor_doc_snapshot_signature():
+            return True
+        setattr(self, f"_snapshot_{prefix}_revision", None)
+        setattr(self, f"_snapshot_{prefix}_allow_revision_drift", False)
+        setattr(self, f"_snapshot_{prefix}_signature", None)
+        return False
 
     def _fps_for_media_path(self, path: str) -> float:
         try:
@@ -62,14 +122,15 @@ class EditorMulticlipContextMixin:
     def _route_undo(self):
         from PyQt6.QtWidgets import QApplication
         current_revision = self._editor_doc_revision()
-        if getattr(self, "_snapshot_undo_revision", None) != current_revision:
+        undo_route_matches = self._snapshot_history_route_matches("undo", current_revision)
+        self._snapshot_history_route_matches("redo", current_revision)
+        if undo_route_matches:
+            allow_revision_drift = bool(getattr(self, "_snapshot_undo_allow_revision_drift", False))
             self._snapshot_undo_revision = None
-        if getattr(self, "_snapshot_redo_revision", None) != current_revision:
-            self._snapshot_redo_revision = None
-        if getattr(self, "_snapshot_undo_revision", None) == current_revision:
-            self._snapshot_undo_revision = None
+            self._snapshot_undo_allow_revision_drift = False
+            self._snapshot_undo_signature = None
             self._undo_mgr.undo()
-            self._arm_snapshot_redo_routing()
+            self._arm_snapshot_redo_routing(allow_revision_drift=allow_revision_drift)
             return
         fw = QApplication.focusWidget()
         if hasattr(fw, 'undo') and fw.hasFocus():
@@ -80,14 +141,15 @@ class EditorMulticlipContextMixin:
     def _route_redo(self):
         from PyQt6.QtWidgets import QApplication
         current_revision = self._editor_doc_revision()
-        if getattr(self, "_snapshot_undo_revision", None) != current_revision:
-            self._snapshot_undo_revision = None
-        if getattr(self, "_snapshot_redo_revision", None) != current_revision:
+        self._snapshot_history_route_matches("undo", current_revision)
+        redo_route_matches = self._snapshot_history_route_matches("redo", current_revision)
+        if redo_route_matches:
+            allow_revision_drift = bool(getattr(self, "_snapshot_redo_allow_revision_drift", False))
             self._snapshot_redo_revision = None
-        if getattr(self, "_snapshot_redo_revision", None) == current_revision:
-            self._snapshot_redo_revision = None
+            self._snapshot_redo_allow_revision_drift = False
+            self._snapshot_redo_signature = None
             self._undo_mgr.redo()
-            self._arm_snapshot_undo_routing()
+            self._arm_snapshot_undo_routing(allow_revision_drift=allow_revision_drift)
             return
         fw = QApplication.focusWidget()
         if hasattr(fw, 'redo') and fw.hasFocus():

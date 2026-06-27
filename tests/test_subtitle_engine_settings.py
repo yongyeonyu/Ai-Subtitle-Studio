@@ -1971,6 +1971,161 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertEqual(len(result), 12)
         self.assertTrue(any(row.get("_llm_macro_chunk_policy", {}).get("llm_called") for row in result))
 
+    def test_macro_chunk_response_cache_replays_provider_chunks_through_verifier_without_provider_call(self):
+        segments = [
+            {
+                "start": float(index * 2),
+                "end": float(index * 2 + 1.4),
+                "text": f"테스트 문장 {index} 입니다",
+                "words": [
+                    {"word": "테스트", "start": float(index * 2), "end": float(index * 2 + 0.3)},
+                    {"word": "문장", "start": float(index * 2 + 0.35), "end": float(index * 2 + 0.7)},
+                    {"word": str(index), "start": float(index * 2 + 0.75), "end": float(index * 2 + 0.95)},
+                    {"word": "입니다", "start": float(index * 2 + 1.0), "end": float(index * 2 + 1.3)},
+                ],
+            }
+            for index in range(12)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = {
+                "subtitle_llm_macro_chunk_enabled": True,
+                "subtitle_llm_macro_chunk_min_rows": 10,
+                "subtitle_llm_macro_chunk_max_rows": 15,
+                "subtitle_llm_macro_chunk_use_cut_boundaries": True,
+                "subtitle_llm_macro_response_cache_enabled": True,
+                "subtitle_llm_macro_response_cache_path": str(Path(tmp) / "macro_cache.json"),
+                "split_length_threshold": 10,
+                "sub_max_duration": 6.0,
+                "llm_confidence_gate_enabled": True,
+                "llm_confidence_gate_min_lora_score": 82.0,
+                "llm_candidate_policy_enabled": False,
+                "editor_lora_runtime_enabled": False,
+                "subtitle_quality_auto_correct_enabled": False,
+                "deep_subtitle_policy_enabled": False,
+                "deep_policy_event_logging_enabled": False,
+                "runtime_quality_self_review_enabled": False,
+                "subtitle_output_selector_enabled": False,
+                "subtitle_context_consistency_enabled": False,
+                "subtitle_auto_review_enabled": False,
+                "accuracy_decision_graph_enabled": False,
+            }
+            common_patches = (
+                unittest.mock.patch("core.engine.subtitle_engine.get_selected_llm", return_value="exaone3.5:7.8b"),
+                unittest.mock.patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+                unittest.mock.patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
+                unittest.mock.patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
+                unittest.mock.patch("core.engine.subtitle_engine.warmup_ollama_model"),
+            )
+            with (
+                common_patches[0],
+                common_patches[1],
+                common_patches[2],
+                common_patches[3],
+                common_patches[4],
+                unittest.mock.patch(
+                    "core.engine.subtitle_engine._verify_llm_chunks",
+                    side_effect=lambda _text, _chunks, _settings, _lora, **_kwargs: (None, _lora),
+                ),
+                unittest.mock.patch(
+                    "core.engine.subtitle_engine._deep_rerank_chunks",
+                    side_effect=lambda _text, _chunks, _settings, _lora: (_chunks, _lora),
+                ),
+                unittest.mock.patch(
+                    "core.engine.subtitle_engine.ollama_split_text",
+                    return_value=[str(row["text"]) for row in segments],
+                ) as first_split,
+            ):
+                first = subtitle_engine.optimize_segments(segments)
+            with (
+                unittest.mock.patch("core.engine.subtitle_engine.get_selected_llm", return_value="exaone3.5:7.8b"),
+                unittest.mock.patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+                unittest.mock.patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model) as second_resolve_model,
+                unittest.mock.patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
+                unittest.mock.patch("core.engine.subtitle_engine.warmup_ollama_model") as second_warmup_model,
+                unittest.mock.patch(
+                    "core.engine.subtitle_engine._verify_llm_chunks",
+                    side_effect=lambda _text, _chunks, _settings, _lora, **_kwargs: (None, _lora),
+                ),
+                unittest.mock.patch(
+                    "core.engine.subtitle_engine._deep_rerank_chunks",
+                    side_effect=lambda _text, _chunks, _settings, _lora: (_chunks, _lora),
+                ),
+                unittest.mock.patch(
+                    "core.engine.subtitle_engine.ollama_split_text",
+                    side_effect=AssertionError("cached macro response should skip provider call"),
+                ) as second_split,
+            ):
+                second = subtitle_engine.optimize_segments(segments)
+
+        self.assertEqual(first_split.call_count, 1)
+        second_resolve_model.assert_not_called()
+        second_warmup_model.assert_not_called()
+        second_split.assert_not_called()
+        self.assertEqual([row["text"] for row in first], [row["text"] for row in second])
+        first_policies = [row.get("_llm_macro_chunk_policy", {}) for row in first]
+        second_policies = [row.get("_llm_macro_chunk_policy", {}) for row in second]
+        self.assertTrue(any(policy.get("llm_response_cache_write") for policy in first_policies))
+        self.assertTrue(any(policy.get("llm_response_cache_hit") for policy in second_policies))
+        self.assertTrue(all(policy.get("llm_provider_called") is False for policy in second_policies))
+
+    def test_macro_gate_zero_llm_rows_defers_ollama_resolution_and_warmup(self):
+        segments = [
+            {
+                "start": float(index * 2),
+                "end": float(index * 2 + 1.4),
+                "text": f"테스트 문장 {index} 입니다",
+                "words": [
+                    {"word": "테스트", "start": float(index * 2), "end": float(index * 2 + 0.3)},
+                    {"word": "문장", "start": float(index * 2 + 0.35), "end": float(index * 2 + 0.7)},
+                    {"word": str(index), "start": float(index * 2 + 0.75), "end": float(index * 2 + 0.95)},
+                    {"word": "입니다", "start": float(index * 2 + 1.0), "end": float(index * 2 + 1.3)},
+                ],
+            }
+            for index in range(12)
+        ]
+        settings = {
+            "subtitle_llm_macro_chunk_enabled": True,
+            "subtitle_llm_macro_chunk_min_rows": 10,
+            "subtitle_llm_macro_chunk_max_rows": 15,
+            "split_length_threshold": 10,
+            "sub_max_duration": 6.0,
+            "llm_confidence_gate_enabled": True,
+            "llm_candidate_policy_enabled": False,
+            "editor_lora_runtime_enabled": False,
+            "subtitle_quality_auto_correct_enabled": False,
+            "deep_subtitle_policy_enabled": False,
+            "deep_policy_event_logging_enabled": False,
+            "runtime_quality_self_review_enabled": False,
+            "subtitle_output_selector_enabled": False,
+            "subtitle_context_consistency_enabled": False,
+            "subtitle_auto_review_enabled": False,
+            "accuracy_decision_graph_enabled": False,
+        }
+        gated_rows = [
+            {**dict(row), "_llm_gate_policy": {"task": "llm_gate", "call_llm": False, "reason": "test_fast_lane"}}
+            for row in segments
+        ]
+
+        with (
+            unittest.mock.patch("core.engine.subtitle_engine.get_selected_llm", return_value="exaone3.5:7.8b"),
+            unittest.mock.patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+            unittest.mock.patch("core.engine.subtitle_engine._preprocess_lora_deep_without_llm", return_value=gated_rows),
+            unittest.mock.patch(
+                "core.engine.subtitle_engine._build_llm_review_gates",
+                return_value=([False] * len(gated_rows), gated_rows),
+            ),
+            unittest.mock.patch("core.engine.subtitle_engine._resolve_runtime_llm_model") as resolve_model,
+            unittest.mock.patch("core.engine.subtitle_engine.warmup_ollama_model") as warmup_model,
+            unittest.mock.patch("core.engine.subtitle_engine.ollama_split_text") as split_text,
+        ):
+            result = subtitle_engine.optimize_segments(segments)
+
+        resolve_model.assert_not_called()
+        warmup_model.assert_not_called()
+        split_text.assert_not_called()
+        self.assertEqual(len(result), len(segments))
+        self.assertTrue(all(row.get("_llm_gate_policy", {}).get("call_llm") is False for row in result))
+
     def test_process_one_llm_text_only_lock_preserves_stt_timing_when_llm_returns_chunks(self):
         segment = {
             "start": 10.0,

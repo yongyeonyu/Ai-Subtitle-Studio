@@ -1,5 +1,25 @@
 # Waste Action Items
 
+## 2026-06-28
+
+- `recheck_prepared_clip_metadata_reuse_cache_hit`: exact collect-cache hit에서 준비된 STT2/word WAV clip을 metadata sidecar로 재사용하는 방향
+  hypothesis: STT2/word collect provider 출력은 캐시로 건너뛰어도 recheck clip 준비 시간이 남으므로, 준비 WAV까지 재사용하면 cache-hit elapsed를 더 줄일 수 있다.
+  change: `_stt_word_precision`/`_fast_stt2_recheck` 디렉터리를 collect-cache enabled 조건에서 보존하고, metadata-matched prepared clip 재사용 경로와 단위 테스트를 임시 적용했다.
+  metrics: prior warmup-skip hit `20260628_005314` elapsed `1.312s`, word prepare `0.527071s`, STT2 prepare `0.098612s`, macro proofread `0.400186s`; candidate runs `20260628_010037` elapsed `1.149s`, word prepare `0.496650s`, STT2 prepare `0.086384s`, macro `0.322706s`; `20260628_010050` elapsed `1.183s`, word prepare `0.512973s`, STT2 prepare `0.079436s`, macro `0.326570s`.
+  quality: raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0` 유지.
+  artifact: `output/manual_verification/latest/recheck_prepared_clip_reuse_rejected_20260628/recheck_prepared_clip_reuse_rejection_report.md`
+  rejection reason: prepare time이 의미 있게 줄지 않았고, metadata sidecar와 임시 directory retention은 속도 근거 대비 상태 수명 복잡도가 크다. 코드와 테스트는 되돌렸고 반복하지 않는다.
+
+## 2026-06-27
+
+- `high_context_boundary_llm_batch_default`: High 문맥 경계 LLM pair 검수를 비중첩 쌍 단위로 한 번의 Ollama JSON 호출에 배치하는 방향
+  hypothesis: 문맥 경계 후처리에서 같은 prompt/모델을 두 번 호출하는 비용을 한 번으로 줄이면 subtitle postprocess elapsed를 줄일 수 있다.
+  change: `core/engine/subtitle_context_refiner.py`에 비중첩 pair batch prompt/parse/default decision 경로를 임시 적용하고, `tests/test_subtitle_context_refiner.py`에 batch/fallback 단위 테스트를 추가했다.
+  metrics: HeyDealer 180s non-profile repeat는 pipeline elapsed `[69.223, 67.564]`, avg `68.393s`, raw/final `58/55`, final overlap `0`, `stable_for_save_reopen=true`, memory pressure `critical`; reference-scored run은 elapsed `64.222s`, raw/final `58/56`, subtitle postprocess `9.879991s`, word precision `20.835965s`.
+  quality: reference quality `81.335 -> 81.316`, text `94.267 -> 94.241`, segmentation `87.879 -> 87.812`, timing MAE는 `1.5958s` 유지. 배치 LLM이 `경계/단어 보정 1쌍`을 적용해 per-pair 기준과 다른 결정을 냈다.
+  artifact: `output/manual_verification/latest/stt2_word_precision_context_batch_20260627/context_batch_rejection_report.md`, `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_194512/benchmark_results.json`
+  rejection reason: postprocess 시간은 줄었지만 기준 SRT 품질/text/segmentation이 소폭 하락했으므로 기본값으로 채택하지 않는다. 동일 row에서 per-pair 결정과 batch 결정이 완전히 같다는 parity guard가 생기기 전까지 반복하지 않는다.
+
 ## 2026-05-20
 
 - `candidate2`: `cut_prescan_done`의 `cleanup=True` 제거

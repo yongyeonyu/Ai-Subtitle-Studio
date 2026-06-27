@@ -3,9 +3,15 @@ from __future__ import annotations
 """Durable helpers for STT recheck planning and cleanup."""
 
 from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
+import threading
+import time
 from typing import Any, Callable
 
 from core.audio import stt_rescue
+from core.runtime import config
 from core.native_stt_recheck import (
     low_score_primary_indices as native_low_score_primary_indices,
     match_low_score_pair_indices as native_match_low_score_pair_indices,
@@ -18,6 +24,23 @@ from core.native_stt_recheck import (
 _RECHECK_OVERLAP_THRESHOLD = 0.18
 _SEGMENT_RANGE_OVERLAP_RATIO = 0.35
 _RANGE_COMPONENT_OVERLAP_RATIO = 0.92
+STT_RECHECK_COLLECT_CACHE_SCHEMA = "ai_subtitle_studio.stt_recheck_collect_cache.v1"
+_STT_RECHECK_COLLECT_CACHE_BY_PATH: dict[str, dict[str, Any]] = {}
+_STT_RECHECK_COLLECT_CACHE_LOCK = threading.Lock()
+_STT_RECHECK_COLLECT_CACHE_IGNORED_SETTING_KEYS = {
+    "stt_recheck_collect_cache_enabled",
+    "stt_recheck_collect_cache_path",
+    "stt_recheck_collect_cache_max_entries",
+    "stt_primary_collect_cache_enabled",
+    "stt_primary_collect_cache_path",
+    "stt_primary_collect_cache_max_entries",
+    "subtitle_llm_context_keep_cache_enabled",
+    "subtitle_llm_context_keep_cache_path",
+    "subtitle_llm_context_keep_cache_max_entries",
+    "subtitle_llm_macro_response_cache_enabled",
+    "subtitle_llm_macro_response_cache_path",
+    "subtitle_llm_macro_response_cache_max_entries",
+}
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -25,6 +48,23 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool = False) -> bool:
+    value = dict(settings or {}).get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+    return bool(value)
+
+
+def _setting_int(settings: dict[str, Any] | None, key: str, default: int) -> int:
+    try:
+        value = dict(settings or {}).get(key, default)
+        if value in (None, ""):
+            value = default
+        return int(value)
+    except Exception:
+        return int(default)
 
 
 def _segment_text(segment: dict[str, Any]) -> str:
@@ -36,6 +76,148 @@ def _segment_score(segment: dict[str, Any], score_fn: Callable[[dict[str, Any]],
         return max(0.0, min(100.0, float(score_fn(segment) or 0.0)))
     except Exception:
         return 0.0
+
+
+def _cache_safe_payload(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _cache_safe_payload(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            if str(key) not in _STT_RECHECK_COLLECT_CACHE_IGNORED_SETTING_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_cache_safe_payload(item) for item in value]
+    return str(value)
+
+
+def _recheck_collect_cache_path(settings: dict[str, Any] | None) -> Path:
+    override = str(dict(settings or {}).get("stt_recheck_collect_cache_path") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(config.OUTPUT_DIR) / "stt_recheck_collect_cache" / "recheck_collect_v1.json"
+
+
+def _file_sha256(path: str) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                digest.update(chunk)
+        return digest.hexdigest(), size
+    except Exception:
+        return "", 0
+
+
+def _prepared_clip_cache_fingerprint(clip: dict[str, Any]) -> dict[str, Any]:
+    path = str(clip.get("path") or "")
+    sha256, size_bytes = _file_sha256(path)
+    start = round(_as_float(clip.get("start"), 0.0), 6)
+    end = round(max(start, _as_float(clip.get("end"), start)), 6)
+    return {
+        "audio_sha256": sha256,
+        "size_bytes": int(size_bytes),
+        "start": start,
+        "end": end,
+        "duration_sec": round(max(0.0, end - start), 6),
+    }
+
+
+def _recheck_collect_cache_key(
+    *,
+    prepared_clips: list[dict[str, Any]],
+    settings: dict[str, Any] | None,
+    model: str,
+    label: str,
+    settings_overrides: dict[str, Any] | None,
+    annotate_source: str,
+    is_single: bool,
+) -> str:
+    payload = {
+        "schema": STT_RECHECK_COLLECT_CACHE_SCHEMA,
+        "model": str(model or ""),
+        "label": str(label or ""),
+        "annotate_source": str(annotate_source or ""),
+        "is_single": bool(is_single),
+        "settings": _cache_safe_payload(dict(settings or {})),
+        "settings_overrides": _cache_safe_payload(dict(settings_overrides or {})),
+        "clips": [_prepared_clip_cache_fingerprint(dict(clip)) for clip in list(prepared_clips or [])],
+    }
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _load_recheck_collect_cache_unlocked(path: Path) -> dict[str, Any]:
+    cache_path = str(path)
+    if cache_path in _STT_RECHECK_COLLECT_CACHE_BY_PATH:
+        return _STT_RECHECK_COLLECT_CACHE_BY_PATH[cache_path]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema") != STT_RECHECK_COLLECT_CACHE_SCHEMA:
+            raise ValueError("unsupported cache schema")
+        entries = payload.get("entries")
+        cache = dict(entries) if isinstance(entries, dict) else {}
+    except Exception:
+        cache = {}
+    _STT_RECHECK_COLLECT_CACHE_BY_PATH[cache_path] = cache
+    return cache
+
+
+def _save_recheck_collect_cache_unlocked(path: Path, cache: dict[str, Any], *, max_entries: int) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entries = dict(list(cache.items())[-max(1, int(max_entries)) :])
+        payload = {
+            "schema": STT_RECHECK_COLLECT_CACHE_SCHEMA,
+            "updated_epoch": round(time.time(), 3),
+            "entries": entries,
+        }
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str), encoding="utf-8")
+        tmp.replace(path)
+        _STT_RECHECK_COLLECT_CACHE_BY_PATH[str(path)] = entries
+    except Exception:
+        pass
+
+
+def _cached_recheck_collect_segments(path: Path, key: str) -> list[dict[str, Any]] | None:
+    with _STT_RECHECK_COLLECT_CACHE_LOCK:
+        cache = _load_recheck_collect_cache_unlocked(path)
+        entry = cache.get(key)
+        if not isinstance(entry, dict):
+            return None
+        segments = entry.get("segments")
+        if not isinstance(segments, list):
+            return None
+        clean = [dict(seg) for seg in segments if isinstance(seg, dict)]
+        return clean if segments == [] or clean else None
+
+
+def _store_recheck_collect_segments(
+    path: Path,
+    key: str,
+    segments: list[dict[str, Any]],
+    *,
+    max_entries: int,
+) -> bool:
+    clean_segments = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    if not clean_segments:
+        return False
+    with _STT_RECHECK_COLLECT_CACHE_LOCK:
+        cache = _load_recheck_collect_cache_unlocked(path)
+        cache[key] = {
+            "schema": STT_RECHECK_COLLECT_CACHE_SCHEMA,
+            "created_epoch": round(time.time(), 3),
+            "segments": clean_segments,
+        }
+        _save_recheck_collect_cache_unlocked(path, cache, max_entries=max_entries)
+    return True
 
 
 def normalize_scored_tracks(
@@ -360,6 +542,33 @@ def annotate_candidate_segments(
         return segments, str(exc)
 
 
+def collect_recheck_segments(
+    *,
+    collect_fn: Callable[..., list[dict[str, Any]]],
+    chunk_dir: str,
+    model: str,
+    label: str,
+    settings_overrides: dict[str, Any] | None,
+    is_single: bool = False,
+    timing_out: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    collect_started = time.perf_counter()
+    try:
+        return list(
+            collect_fn(
+                chunk_dir,
+                model,
+                is_single=is_single,
+                label=label,
+                settings_overrides=settings_overrides,
+            )
+            or []
+        )
+    finally:
+        if timing_out is not None:
+            timing_out["collect_elapsed_sec"] = round(max(0.0, time.perf_counter() - collect_started), 6)
+
+
 def collect_and_annotate_segments(
     *,
     collect_fn: Callable[..., list[dict[str, Any]]],
@@ -373,20 +582,23 @@ def collect_and_annotate_segments(
     vad_segments: list[dict[str, Any]] | None,
     peer_segments: list[dict[str, Any]] | None = None,
     is_single: bool = False,
+    timing_out: dict[str, float] | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
-    segments = list(
-        collect_fn(
-            chunk_dir,
-            model,
-            is_single=is_single,
-            label=label,
-            settings_overrides=settings_overrides,
-        )
-        or []
+    segments = collect_recheck_segments(
+        collect_fn=collect_fn,
+        chunk_dir=chunk_dir,
+        model=model,
+        label=label,
+        settings_overrides=settings_overrides,
+        is_single=is_single,
+        timing_out=timing_out,
     )
     if not segments:
+        if timing_out is not None:
+            timing_out.setdefault("annotate_elapsed_sec", 0.0)
         return [], None
-    return annotate_candidate_segments(
+    annotate_started = time.perf_counter()
+    annotated, error = annotate_candidate_segments(
         segments,
         annotate_fn=annotate_fn,
         source=annotate_source,
@@ -394,6 +606,9 @@ def collect_and_annotate_segments(
         vad_segments=vad_segments,
         peer_segments=peer_segments,
     )
+    if timing_out is not None:
+        timing_out["annotate_elapsed_sec"] = round(max(0.0, time.perf_counter() - annotate_started), 6)
+    return annotated, error
 
 
 def _python_uncovered_vad_indices(
@@ -928,6 +1143,14 @@ class CollectedRecheckBatch:
     prepared_clips: list[dict[str, Any]]
     collected_segments: list[dict[str, Any]]
     annotate_error: str | None
+    prepare_elapsed_sec: float = 0.0
+    collect_elapsed_sec: float = 0.0
+    annotate_elapsed_sec: float = 0.0
+    total_elapsed_sec: float = 0.0
+    collect_cache_enabled: bool = False
+    collect_cache_hit: bool = False
+    collect_cache_write: bool = False
+    collect_provider_called: bool = False
 
 
 @dataclass(frozen=True)
@@ -1043,31 +1266,93 @@ def prepare_and_collect_recheck_segments(
     peer_segments: list[dict[str, Any]] | None = None,
     is_single: bool = False,
 ) -> CollectedRecheckBatch:
+    total_started = time.perf_counter()
+    prepare_started = time.perf_counter()
     prepared = collect_prepared_recheck_clips(
         ranges=ranges,
         out_dir=out_dir,
         settings=settings,
         prepare_clip_fn=prepare_clip_fn,
     )
+    prepare_elapsed = round(max(0.0, time.perf_counter() - prepare_started), 6)
     if not prepared:
-        return CollectedRecheckBatch(prepared_clips=[], collected_segments=[], annotate_error=None)
-    collected_segments, annotate_error = collect_and_annotate_segments(
-        collect_fn=collect_fn,
-        chunk_dir=out_dir,
-        model=model,
-        label=label,
-        settings_overrides=settings_overrides,
-        annotate_fn=annotate_fn,
-        annotate_source=annotate_source,
-        settings=settings,
-        vad_segments=vad_segments,
-        peer_segments=peer_segments,
-        is_single=is_single,
-    )
+        return CollectedRecheckBatch(
+            prepared_clips=[],
+            collected_segments=[],
+            annotate_error=None,
+            prepare_elapsed_sec=prepare_elapsed,
+            total_elapsed_sec=round(max(0.0, time.perf_counter() - total_started), 6),
+        )
+    timing: dict[str, float] = {}
+    cache_enabled = _setting_bool(settings, "stt_recheck_collect_cache_enabled", False)
+    cache_path: Path | None = None
+    cache_key = ""
+    cache_hit = False
+    cache_write = False
+    provider_called = False
+    raw_segments: list[dict[str, Any]] | None = None
+    if cache_enabled:
+        cache_path = _recheck_collect_cache_path(settings)
+        cache_key = _recheck_collect_cache_key(
+            prepared_clips=prepared,
+            settings=settings,
+            model=model,
+            label=label,
+            settings_overrides=settings_overrides,
+            annotate_source=annotate_source,
+            is_single=is_single,
+        )
+        raw_segments = _cached_recheck_collect_segments(cache_path, cache_key)
+        cache_hit = raw_segments is not None
+
+    if raw_segments is None:
+        provider_called = True
+        raw_segments = collect_recheck_segments(
+            collect_fn=collect_fn,
+            chunk_dir=out_dir,
+            model=model,
+            label=label,
+            settings_overrides=settings_overrides,
+            is_single=is_single,
+            timing_out=timing,
+        )
+        if cache_enabled and cache_path is not None and cache_key and raw_segments:
+            cache_write = _store_recheck_collect_segments(
+                cache_path,
+                cache_key,
+                raw_segments,
+                max_entries=_setting_int(settings, "stt_recheck_collect_cache_max_entries", 128),
+            )
+    else:
+        timing["collect_elapsed_sec"] = 0.0
+
+    if raw_segments:
+        annotate_started = time.perf_counter()
+        collected_segments, annotate_error = annotate_candidate_segments(
+            raw_segments,
+            annotate_fn=annotate_fn,
+            source=annotate_source,
+            settings=settings,
+            vad_segments=vad_segments,
+            peer_segments=peer_segments,
+        )
+        timing["annotate_elapsed_sec"] = round(max(0.0, time.perf_counter() - annotate_started), 6)
+    else:
+        collected_segments = []
+        annotate_error = None
+        timing.setdefault("annotate_elapsed_sec", 0.0)
     return CollectedRecheckBatch(
         prepared_clips=prepared,
         collected_segments=collected_segments,
         annotate_error=annotate_error,
+        prepare_elapsed_sec=prepare_elapsed,
+        collect_elapsed_sec=float(timing.get("collect_elapsed_sec", 0.0) or 0.0),
+        annotate_elapsed_sec=float(timing.get("annotate_elapsed_sec", 0.0) or 0.0),
+        total_elapsed_sec=round(max(0.0, time.perf_counter() - total_started), 6),
+        collect_cache_enabled=cache_enabled,
+        collect_cache_hit=cache_hit,
+        collect_cache_write=cache_write,
+        collect_provider_called=provider_called,
     )
 
 
@@ -1465,6 +1750,7 @@ __all__ = [
     "collapse_duplicate_recheck_ranges",
     "collect_prepared_recheck_clips",
     "collect_and_annotate_segments",
+    "collect_recheck_segments",
     "low_score_recheck_overrides",
     "low_score_recheck_ranges",
     "prepare_and_collect_recheck_segments",

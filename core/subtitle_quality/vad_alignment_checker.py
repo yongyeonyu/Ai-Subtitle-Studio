@@ -520,6 +520,14 @@ def _consensus_span_from_sources(
     if "VAD" in source_spans and "STT1" in source_spans and "STT2" not in source_spans:
         vad_span = source_spans["VAD"]
         stt1_span = source_spans["STT1"]
+        if not _spans_similar(
+            vad_span,
+            stt1_span,
+            start_tolerance_sec=start_tolerance_sec,
+            end_tolerance_sec=end_tolerance_sec,
+            duration_tolerance_sec=duration_tolerance_sec,
+        ):
+            return None
         span = (min(vad_span[0], stt1_span[0]), max(vad_span[1], stt1_span[1]))
         return span, {
             "matched_sources": ["VAD", "STT1"],

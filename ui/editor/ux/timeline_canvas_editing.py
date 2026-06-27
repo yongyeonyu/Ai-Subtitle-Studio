@@ -131,6 +131,15 @@ def apply_timing_drag(canvas, delta: float) -> None:
             canvas._update_drag_visual_rect(before_rect)
         return
 
+    if edge == "center":
+        try:
+            requested_start = canvas._snap_to_frame(float(canvas._drag_s0_start) + float(delta or 0.0))
+        except Exception:
+            requested_start = float(getattr(canvas, "_drag_s0_start", 0.0) or 0.0)
+        candidate_filter = getattr(canvas, "_filter_segment_move_snap_candidates", None)
+        if callable(candidate_filter):
+            snap_candidates = candidate_filter(snap_candidates, target_start=requested_start)
+
     native_candidates = []
     for candidate in snap_candidates:
         if not isinstance(candidate, dict):
@@ -206,6 +215,68 @@ def apply_timing_drag(canvas, delta: float) -> None:
             adj_r["start"] = shared
             seg["end"] = shared
 
+    def _apply_center_neighbor_reorder_preview() -> str | None:
+        if str(getattr(canvas, "_drag_edge", "") or "") != "center":
+            return None
+        _restore_adjacent_segments()
+        try:
+            original_start = canvas._snap_to_frame(float(getattr(canvas, "_drag_s0_start", seg.get("start", 0.0)) or 0.0))
+            original_end = canvas._snap_to_frame(float(getattr(canvas, "_drag_s0_end", seg.get("end", original_start)) or original_start))
+            current_start = canvas._snap_to_frame(float(seg.get("start", original_start) or original_start))
+            current_end = canvas._snap_to_frame(float(seg.get("end", original_end) or original_end))
+        except Exception:
+            setattr(canvas, "_drag_center_reorder_direction", None)
+            return None
+        duration = max(min_span, canvas._snap_to_frame(original_end - original_start))
+        fps = max(1.0, float(canvas._get_fps() if hasattr(canvas, "_get_fps") else 30.0))
+        epsilon = max(0.001, 0.5 / fps)
+        total_limit = max(duration, float(getattr(canvas, "total_duration", 0.0) or 0.0))
+
+        adj_r = getattr(canvas, "_drag_adj_r", None)
+        if isinstance(adj_r, dict) and not bool(adj_r.get("is_gap")) and not canvas._is_stt_preview_segment(adj_r):
+            try:
+                adj_start = canvas._snap_to_frame(float(getattr(canvas, "_drag_adj_orig_start_r", adj_r.get("start", 0.0)) or 0.0))
+                adj_end = canvas._snap_to_frame(float(getattr(canvas, "_drag_adj_orig_end_r", adj_r.get("end", adj_start)) or adj_start))
+            except Exception:
+                adj_start = adj_end = 0.0
+            adj_duration = max(min_span, canvas._snap_to_frame(adj_end - adj_start))
+            if abs(adj_start - original_end) <= 0.05 and current_start >= adj_start - epsilon:
+                next_adj_start = original_start
+                next_adj_end = canvas._snap_to_frame(next_adj_start + adj_duration)
+                next_seg_start = next_adj_end
+                next_seg_end = canvas._snap_to_frame(next_seg_start + duration)
+                if next_seg_end <= total_limit + epsilon:
+                    adj_r["start"] = next_adj_start
+                    adj_r["end"] = next_adj_end
+                    seg["start"] = next_seg_start
+                    seg["end"] = next_seg_end
+                    setattr(canvas, "_drag_center_reorder_direction", "right")
+                    return "right"
+
+        adj_l = getattr(canvas, "_drag_adj_l", None)
+        if isinstance(adj_l, dict) and not bool(adj_l.get("is_gap")) and not canvas._is_stt_preview_segment(adj_l):
+            try:
+                adj_start = canvas._snap_to_frame(float(getattr(canvas, "_drag_adj_orig_start_l", adj_l.get("start", 0.0)) or 0.0))
+                adj_end = canvas._snap_to_frame(float(getattr(canvas, "_drag_adj_orig_end_l", adj_l.get("end", adj_start)) or adj_start))
+            except Exception:
+                adj_start = adj_end = 0.0
+            adj_duration = max(min_span, canvas._snap_to_frame(adj_end - adj_start))
+            if abs(adj_end - original_start) <= 0.05 and current_end <= adj_end + epsilon:
+                next_seg_start = adj_start
+                next_seg_end = canvas._snap_to_frame(next_seg_start + duration)
+                next_adj_start = next_seg_end
+                next_adj_end = canvas._snap_to_frame(next_adj_start + adj_duration)
+                if next_seg_start >= -epsilon:
+                    seg["start"] = max(0.0, next_seg_start)
+                    seg["end"] = next_seg_end
+                    adj_l["start"] = next_adj_start
+                    adj_l["end"] = next_adj_end
+                    setattr(canvas, "_drag_center_reorder_direction", "left")
+                    return "left"
+
+        setattr(canvas, "_drag_center_reorder_direction", None)
+        return None
+
     if edge == "square_right":
         limit = float(getattr(canvas, "total_duration", 0.0) or 0.0)
         min_end = canvas._snap_to_frame(float(seg.get("start", 0.0) or 0.0) + min_span)
@@ -275,11 +346,16 @@ def apply_timing_drag(canvas, delta: float) -> None:
         if native:
             seg["start"] = canvas._snap_to_frame(float(native.get("start", seg.get("start", 0.0)) or 0.0))
             seg["end"] = canvas._snap_to_frame(float(native.get("end", seg.get("end", total_limit)) or total_limit))
+            reorder_direction = _apply_center_neighbor_reorder_preview()
             if canvas.active_seg_start is not None:
                 canvas.active_seg_start = seg["start"]
             if hasattr(canvas, "_sync_active_segment_key"):
                 canvas._sync_active_segment_key(seg=seg)
             guide_time = canvas._snap_to_frame(float(native.get("guideTime", seg["start"]) or seg["start"]))
+            if reorder_direction == "right":
+                guide_time = canvas._snap_to_frame(float(seg.get("end", guide_time) or guide_time))
+            elif reorder_direction == "left":
+                guide_time = canvas._snap_to_frame(float(seg.get("start", guide_time) or guide_time))
             snapped = _native_snapped(native)
             canvas._set_drag_guides(guide_time, snapped)
             _consume_shadow_snap(snapped)
@@ -326,10 +402,15 @@ def apply_timing_drag(canvas, delta: float) -> None:
         )
         seg["start"] = next_start
         seg["end"] = canvas._snap_to_frame(next_start + duration)
+        reorder_direction = _apply_center_neighbor_reorder_preview()
         if canvas.active_seg_start is not None:
             canvas.active_seg_start = seg["start"]
         if hasattr(canvas, "_sync_active_segment_key"):
             canvas._sync_active_segment_key(seg=seg)
+        if reorder_direction == "right":
+            guide_time = canvas._snap_to_frame(float(seg.get("end", guide_time) or guide_time))
+        elif reorder_direction == "left":
+            guide_time = canvas._snap_to_frame(float(seg.get("start", guide_time) or guide_time))
         canvas._set_drag_guides(guide_time, snapped)
         _consume_shadow_snap(snapped)
 

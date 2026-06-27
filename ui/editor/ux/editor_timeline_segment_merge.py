@@ -294,6 +294,7 @@ class EditorTimelineSegmentMergeMixin:
             "left_ud": left_ref["ud"],
             "right_ud": right_ref["ud"],
             "left_start_sec": float(left_ref["start_sec"]),
+            "left_end_sec": float(left_ref["end_sec"]),
             "right_start_sec": float(right_ref["start_sec"]),
             "left_indices": list(left_ref["indices"]),
             "right_indices": list(right_ref["indices"]),
@@ -418,6 +419,37 @@ class EditorTimelineSegmentMergeMixin:
             return
         right_texts = self._group_texts(ctx["doc"], int(ctx["right_line"]), ctx["right_last"])
         if not right_texts:
+            return
+        left_texts = self._group_texts(ctx["doc"], int(ctx["left_line"]), ctx["left_last"])
+        merged_text = " ".join(left_texts + right_texts).strip()
+
+        get_current_segments = getattr(self, "_get_current_segments", None)
+        nle_merge_result = None
+        if callable(get_current_segments) and merged_text:
+            try:
+                current_segments = list(get_current_segments())
+            except Exception:
+                current_segments = []
+            nle_merge = getattr(self, "_nle_live_editor_caption_merge_result", None)
+            if callable(nle_merge):
+                nle_merge_result = nle_merge(
+                    current_segments=current_segments,
+                    left_line=int(ctx["left_line"]),
+                    right_line=int(ctx["right_line"]),
+                    left_start=float(ctx["left_start_sec"]),
+                    left_end=float(ctx["left_end_sec"]),
+                    right_start=float(ctx["right_start_sec"]),
+                    right_end=float(ctx["right_end_sec"]),
+                    merged_text=merged_text,
+                )
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if nle_merge_result is not None and callable(reloader):
+            undo_mgr = getattr(self, "_undo_mgr", None)
+            if undo_mgr is not None and hasattr(undo_mgr, "push_immediate"):
+                undo_mgr.push_immediate()
+            self._last_nle_live_editor_operation = nle_merge_result.operation.to_dict()
+            self._last_nle_live_editor_projection = nle_merge_result.after_projection.to_dict()
+            reloader([dict(row) for row in nle_merge_result.projected_rows], preserve_view=True, mark_dirty=True)
             return
 
         self._undo_mgr.push_immediate()

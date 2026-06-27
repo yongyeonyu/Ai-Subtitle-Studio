@@ -1070,6 +1070,63 @@ class RoughcutUiV2Tests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_saved_candidate_render_plan_uses_nle_snapshot_adapter_with_legacy_parity(self):
+        widget = RoughcutWidget()
+        try:
+            widget._active_editor = lambda: SimpleNamespace(media_path="/tmp/source.mov")
+            widget._source_signature = "fixture-signature"
+            result = RoughCutResult(
+                segments=(
+                    RoughCutSegment(
+                        "major_A",
+                        0.0,
+                        8.0,
+                        title="첫 장면",
+                        major_id="A",
+                        minor_groups=(
+                            RoughCutMinorGroup("A1", "A", "A1", "첫 장면", 0.0, 4.0, chapter_ids=("chapter_0001",)),
+                            RoughCutMinorGroup("A2", "A", "A2", "둘째 장면", 4.0, 8.0, chapter_ids=("chapter_0002",)),
+                        ),
+                    ),
+                ),
+                chapters=(
+                    ChapterMetadata("chapter_0001", "첫 장면", 0.0, 4.0, major_id="A", minor_code="A1"),
+                    ChapterMetadata("chapter_0002", "둘째 장면", 4.0, 8.0, major_id="A", minor_code="A2"),
+                ),
+                edit_decisions=(
+                    EditDecision("chapter_0001", "keep", source_start=0.0, source_end=4.0),
+                    EditDecision("chapter_0002", "keep", source_start=4.0, source_end=8.0),
+                ),
+                edl_segments=(
+                    EDLSegment("/tmp/source.mov", "chapter_0001", 0.0, 4.0, 0.0, 4.0, chapter_id="chapter_0001"),
+                    EDLSegment("/tmp/source.mov", "chapter_0002", 4.0, 8.0, 4.0, 8.0, chapter_id="chapter_0002"),
+                ),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+
+            with patch(
+                "ui.roughcut.roughcut_export.build_concat_render_plan_from_snapshot",
+                wraps=build_concat_render_plan_from_snapshot,
+            ) as nle_adapter:
+                payload = widget._current_candidate_payload(result)
+
+            render_plan = payload["outputs"]["render_plan"]
+            legacy_plan = build_concat_render_plan(
+                result.edl_segments,
+                Path("/tmp/source_roughcut.mov"),
+                Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut",
+                render_mode=roughcut_render_mode(),
+            )
+            self.assertEqual(nle_adapter.call_count, 1)
+            self.assertEqual(render_plan["output_path"], legacy_plan.output_path)
+            self.assertEqual(render_plan["extract_commands"], legacy_plan.extract_commands)
+            self.assertEqual(render_plan["concat_command"], legacy_plan.concat_command)
+            self.assertEqual(render_plan["segment_manifest"], legacy_plan.segment_manifest)
+            self.assertEqual(render_plan["stitched_cut_boundaries"], legacy_plan.stitched_cut_boundaries)
+        finally:
+            widget.close()
+
     def test_automation_render_video_to_path_starts_worker_for_requested_target(self):
         widget = RoughcutWidget()
         try:

@@ -60,6 +60,19 @@ class NativeSubtitleSegmentsTests(unittest.TestCase):
         self.assertRegex(summary["segment_feed_signature"], r"^[0-9a-f]{16}$")
         self.assertTrue(summary["stable_for_save_reopen"])
 
+    def test_segment_summary_treats_overlap_as_save_reopen_unstable(self):
+        rows = [
+            {"start": 0.0, "end": 1.0, "text": "A"},
+            {"start": 0.9, "end": 1.5, "text": "B"},
+        ]
+        with patch("core.native_subtitle_segments.native_subtitle_segments_enabled", return_value=False):
+            summary = native.segment_summary(rows)
+
+        self.assertEqual(summary["invalid_duration_count"], 0)
+        self.assertEqual(summary["non_monotonic_count"], 0)
+        self.assertEqual(summary["overlap_count"], 1)
+        self.assertFalse(summary["stable_for_save_reopen"])
+
     def test_swift_segments_summary_bridge_shapes_subtitle_core_payload(self):
         rows = [{"start": 0.0, "end": 1.0, "text": "테스트"}]
         with patch(

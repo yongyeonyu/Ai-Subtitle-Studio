@@ -38,7 +38,7 @@
 - 러프컷 초안 생성과 PHASE2 편집 흐름 보강
 - 기존 Python/PyQt6 source app 유지와 실제 앱 검증 중심 진행
 
-`core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.18.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름과 source-app internal NLE domain baseline은 현재 구조 기준선으로 반영되어 있습니다. NLE는 read-only snapshot baseline 위에 runtime-only mutable save-owner pilot이 추가되었고, persisted NLE project fields are still not approved. 2026-06-27 기준 post-generation editor readiness closeout이 완료되어 `ACTION_ITEMS.md` active queue는 비어 있습니다. 새 작업은 owner가 새 scope를 지정하거나 검증된 회귀가 concrete next action을 만들 때 추가합니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
+`core/roughcut/`, `ui/roughcut/`, `RELEASE_v04.00.18.md`, `ACTION_ITEMS.md`를 보면 러프컷/PHASE2 흐름과 source-app internal NLE domain baseline은 현재 구조 기준선으로 반영되어 있습니다. NLE는 read-only snapshot baseline 위에 runtime-only mutable save-owner pilot, save/reload persistence guard, render/export parity proof, final-overlay runtime cutover, cleanup gate audit, release checkpoint parity proof, phase 11 no-op cleanup closeout, caption-move dual-write adoption, caption-resize dual-write adoption, caption-delete dual-write adoption, gap-generate dual-write adoption, caption-merge dual-write adoption, caption-split dual-write adoption, candidate-confirm dual-write adoption, live-editor diamond resize cutover, live-editor boundary-handle resize cutover, live-editor delete-to-gap cutover, live-editor gap-generate cutover, live-editor diamond merge cutover, live-editor text/smart split cutover, live-editor STT1/STT2 candidate-confirm cutover, final-surface overlap guard, and persistence cutover readiness audit가 추가되었고, persisted NLE project fields are still not approved. 2026-06-27/2026-06-28 기준 post-generation editor readiness closeout, Taption-derived segment editing parity patch, Taption subtitle segment UI/UX parity completion, Full NLE Transition phases 1-11, cut-boundary generation latency profile closeout, NLE caption-move/Taption reorder dual-write slice, NLE caption-resize slice, live editor diamond/square resize cutover, live editor delete-to-gap cutover, live editor gap-generate cutover, roughcut saved-candidate render-plan cutover, live editor caption-merge cutover, live editor caption-split cutover, live editor candidate-confirm cutover, NLE final-surface overlap guard, and NLE persistence cutover audit가 완료되었습니다. 현재 active queue는 STT2 / word precision generation latency profiling and Mac App Store submission readiness입니다. 다만 세부 사용자 플로우는 일부가 문서 추론일 수 있습니다.
 
 현재 운영 방향상 `native/` 디렉터리와 관련 실험 흔적은 저장소 참고 자료로 남아 있을 수 있지만, active roadmap은 아닙니다. owner가 다시 명시하지 않는 한 새 native migration 전개를 기본 작업으로 취급하지 않습니다.
 
@@ -73,12 +73,53 @@
 
 ## Open action items
 
-`ACTION_ITEMS.md` 기준 현재 active execution queue는 비어 있습니다.
+`ACTION_ITEMS.md` 기준 현재 active execution queue는 아래 두 축입니다.
 
-최근 완료된 closeout은 `Post-Generation Editor Readiness And Verification Index`이며, 증거는 아래 위치에 있습니다.
+- `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`: 컷 경계가 병목이 아니라는 HeyDealer 180s evidence 이후, STT2 rescue, selective word timestamp precision, LLM gate/skip, common split, VAD/STT consensus, cleanup pressure를 품질 보존 방식으로 계측합니다.
+- `Mac App Store Submission Readiness`: 현재 source app을 Mac App Store 제출 후보로 올리기 위한 signing, sandbox, package, validation, metadata 준비 계획입니다. 비파괴 readiness audit은 `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.md`에 있으며 `local_packaging_ready=true`, `app_store_submission_ready=false`입니다. Packaging/upload/notarization/DMG 작업은 owner 명시 승인 전에는 실행하지 않습니다.
+
+완료된 NLE caption move / Taption reorder dual-write evidence는 `output/manual_verification/latest/nle_caption_move_dual_write_20260627/caption_move_dual_write_report.md`에 남아 있습니다.
+
+완료된 NLE caption resize dual-write evidence는 `output/manual_verification/latest/nle_caption_resize_dual_write_20260627/caption_resize_dual_write_report.md`에 남아 있습니다.
+
+완료된 NLE live editor diamond cutover evidence는 `output/manual_verification/latest/nle_live_editor_diamond_cutover_20260627/live_editor_diamond_cutover_report.md`에 남아 있습니다.
+
+완료된 NLE live editor boundary-handle resize cutover evidence는 `output/manual_verification/latest/nle_live_editor_boundary_resize_cutover_20260627/boundary_resize_cutover_report.md`에 남아 있습니다.
+완료된 NLE live editor caption-delete cutover evidence는 `output/manual_verification/latest/nle_live_editor_caption_delete_cutover_20260627/caption_delete_cutover_report.md`에 남아 있습니다.
+완료된 NLE live editor gap-generate cutover evidence는 `output/manual_verification/latest/nle_live_editor_gap_generate_cutover_20260627/gap_generate_cutover_report.md`에 남아 있습니다.
+완료된 NLE live editor caption-merge cutover evidence는 `output/manual_verification/latest/nle_live_editor_caption_merge_cutover_20260628/caption_merge_cutover_report.md`에 남아 있습니다.
+완료된 NLE live editor caption-split cutover evidence는 `output/manual_verification/latest/nle_live_editor_caption_split_cutover_20260628/caption_split_cutover_report.md`에 남아 있습니다.
+완료된 NLE live editor candidate-confirm cutover evidence는 `output/manual_verification/latest/nle_live_editor_candidate_confirm_cutover_20260628/candidate_confirm_cutover_report.md`에 남아 있습니다.
+
+완료된 NLE final-surface overlap guard evidence는 `output/manual_verification/latest/nle_final_surface_overlap_guard_20260628/final_surface_overlap_guard_report.md`에 남아 있습니다.
+
+완료된 NLE persistence cutover audit evidence는 `output/manual_verification/latest/nle_persistence_cutover_audit_20260628/nle_persistence_cutover_audit.md`에 남아 있습니다. 최신 감사는 8개 NLE dual-write operation family의 save/reopen semantic roundtrip을 증명하지만, `gap_generate`, `caption_split`, `caption_merge`, `candidate_confirm`의 legacy ID renumbering을 별도 risk flag로 남깁니다.
+
+완료된 cut-boundary latency evidence는 `output/manual_verification/latest/cut_boundary_latency_profile_20260627/latency_profile_report.md`에 남아 있습니다.
+
+완료된 `Full NLE Transition Plan` evidence는 아래 위치에 남아 있습니다.
+
+완료된 Taption subtitle segment UI/UX parity evidence는 `test_result.md`와 `output/manual_verification/latest/taption_segment_uiux_parity_20260627/checklist.md`에 남아 있습니다.
+
+최근 완료된 Taption-derived segment editing parity patch와 Taption subtitle segment UI/UX parity completion은 final subtitle overlay와 STT1/STT2 candidate lane 표시를 분리하고, final segment stability가 overlap `0`을 요구하도록 보강했으며, gap snap, boundary release, one-gap overwrite, one-word edit retention, immediate neighbor reorder preview/commit을 focused guards로 고정했습니다. 증거는 아래 위치에 있습니다.
 
 - `test_result.md`
 - `docs/HANDOFF.md`
+- `output/manual_verification/latest/qa_suite_quick_20260627_141230`
+- `output/manual_verification/latest/taption_segment_uiux_parity_20260627/checklist.md`
+- `output/manual_verification/latest/nle_domain_contract_20260627/domain_contract.md`
+- `output/manual_verification/latest/nle_read_only_parity_20260627/projection_parity_report.md`
+- `output/manual_verification/latest/nle_operation_model_20260627/operation_model_report.md`
+- `output/manual_verification/latest/nle_dual_write_pilot_20260627/gap_delete_pilot_report.md`
+- `output/manual_verification/latest/nle_save_reload_compat_20260627/save_reload_compat_report.md`
+- `output/manual_verification/latest/nle_render_export_parity_20260627/render_export_parity_report.md`
+- `output/manual_verification/latest/nle_runtime_cutover_final_overlay_20260627/final_overlay_cutover_report.md`
+- `output/manual_verification/latest/nle_cleanup_gate_audit_20260627/cleanup_gate_audit.md`
+- `output/manual_verification/latest/nle_release_checkpoint_parity_20260627/release_checkpoint_parity_report.md`
+- `output/manual_verification/latest/nle_phase11_cleanup_20260627/cleanup_report.md`
+
+이전 `Post-Generation Editor Readiness And Verification Index` closeout 증거는 아래 위치에 남아 있습니다.
+
 - `output/manual_verification/latest/post_generation_editor_readiness_index_20260627/verification_index.md`
 
 세부 우선순위는 여전히 `ACTION_ITEMS.md`가 단일 소스 오브 트루스이므로, 새 세션에서는 반드시 그 파일의 최신 상태를 다시 읽어야 합니다.

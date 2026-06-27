@@ -1,5 +1,1592 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Persistence Cutover Audit - 2026-06-28 KST
+
+- 실행 모드: source-app NLE persistence cutover readiness audit; no disk-format cutover.
+- 결과: pass for audit/prep; blocked for persisted NLE format cutover.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_persistence_cutover_audit_20260628/nle_persistence_cutover_audit.md`
+  - JSON: `output/manual_verification/latest/nle_persistence_cutover_audit_20260628/nle_persistence_cutover_audit.json`
+  - Roundtrip fixture: `output/manual_verification/latest/nle_persistence_cutover_audit_20260628/roundtrip_fixture/nle-persistence-cutover-audit.aissproj`
+- 수정 요약:
+  - Added `tools/audit_nle_persistence_cutover.py`.
+  - Added `tests/test_nle_persistence_cutover_audit.py`.
+  - The audit writes a temp project fixture, verifies runtime `NLEProjectState` hydration, confirms disk storage stays clean of `nle`, `nle_snapshot`, `_nle_project_state`, and quarantine runtime keys, and records future-payload quarantine behavior.
+  - Extended the audit to run all eight current NLE dual-write operation families through save/reopen roundtrip while keeping the legacy disk shape unchanged.
+  - The operation matrix separates semantic row roundtrip from ID preservation, exposing legacy ID renumbering where it still exists without approving persisted NLE fields.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `4 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_cutover_audit_20260628` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py -k "persistence or cutover or dual_write or gap_delete or caption_move or caption_resize or caption_split or caption_merge or caption_delete or candidate_confirm"` -> `28 passed`.
+- 핵심 결과:
+  - `prep_ready=true`.
+  - `persistence_cutover_ready=false`.
+  - Operation roundtrip families: `8`; operation roundtrip all passed: `true`.
+  - ID preserved: `true` for `gap_delete`, `caption_move`, `caption_resize`, `caption_delete`; `false` for `gap_generate`, `caption_split`, `caption_merge`, `candidate_confirm` under the legacy disk projection.
+  - Blockers: `persisted_nle_project_fields_not_approved`, `legacy_disk_shape_required_for_compatibility`, `owner_approval_required_before_disk_format_change`.
+- 자막 품질 영향:
+  - None. This touched audit tooling/tests/docs only and did not change STT, LLM, VAD, timing, UI, save format, render/export behavior, or App Store packaging.
+- 남은 위험:
+  - Persisting top-level `nle`, `nle_snapshot`, or `_nle_project_state` remains blocked until a separate owner-approved compatibility gate exists.
+
+## NLE Final Surface Overlap Guard - 2026-06-28 KST
+
+- 실행 모드: source-app runtime NLE final-surface projection guard.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_final_surface_overlap_guard_20260628/final_surface_overlap_guard_report.md`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-033000-next-safe-action-review.md`
+- 수정 요약:
+  - `core/project/nle_runtime_cutover.py` now repairs one-frame final-surface micro-overlap to a shared boundary when the current caption still keeps at least one frame.
+  - Final overlay/global-canvas projections drop unfixable overlapped final rows rather than drawing two active final subtitles together.
+  - Save/export projection rejects unfixable final overlap with `nle_save_export_final_overlap` instead of writing an overlapped final SRT.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py tests/test_project_nle_runtime_cutover.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py` -> `8 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_video_context_window.py tests/test_project_assets.py -k "nle_runtime_projection or final_overlay or save_export or externalize_project_text_assets_routes_final_srt"` -> `2 passed, 12 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py` -> `54 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py -k "overlap or final_overlay or global_canvas or save_export or nle"` -> `21 passed, 144 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_native_subtitle_segments.py tests/test_native_subtitle_stt_segments.py` -> `7 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_assets.py -k "externalize_project_text_assets or nle_save_export"` -> `3 passed, 3 deselected`.
+- 자막 품질 영향:
+  - Positive guard only. Final subtitle surfaces now have a stricter no-overlap contract at projection time.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, model selection, persisted save format, packaging, and UI layout were not changed.
+- 남은 위험:
+  - Persisted NLE project fields remain gated; this is not a disk-format cutover.
+
+## Mac App Store Submission Target Lock - 2026-06-28 KST
+
+- 실행 모드: non-destructive App Store submission readiness target lock; no packaging, signing, notarization, upload, release, or DMG build.
+- 결과: pass for static audit/tooling; blocked for real App Store submission until owner-approved signing/package/validation artifacts exist.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/app_store_readiness_target_lock_20260628/app_store_readiness_audit.md`
+  - Audit JSON: `output/manual_verification/latest/app_store_readiness_target_lock_20260628/app_store_readiness_audit.json`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-031000-app-store-readiness-next-step-review.md`
+- 수정 요약:
+  - `tools/audit_app_store_readiness.py` now reports `submission_target=mac_app_store_pkg`.
+  - The audit separates the Mac App Store `.pkg` track from the Developer ID beta `.dmg` track and marks DMG as non-submission evidence.
+  - `docs/APP_STORE_SUBMISSION_READINESS.md` and `packaging/macos/README.md` now document the track boundary and non-code metadata checklist.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tests/test_app_store_readiness_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py` -> `4 passed`.
+  - `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_target_lock_20260628` -> pass.
+- 핵심 결과:
+  - `local_packaging_ready=true`, `app_store_submission_ready=false`, `status=blocked`, blocker count `14`.
+  - `mac_app_store_pkg` status is `blocked`; `developer_id_beta_dmg` status is `opt_in_hold`.
+- 자막 품질 영향:
+  - None. This touched readiness audit/docs only and did not change generation, STT2, word precision, LLM, LoRA, VAD, timing, UI, save/load, render/export, or cache defaults.
+- 남은 위험:
+  - Signed `.app`, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner-provided metadata are still missing.
+
+## STT Latency Stage Variance Analysis - 2026-06-28 KST
+
+- 실행 모드: NAS-off analysis-only generation latency evidence; no runtime behavior change.
+- 결과: pass for analysis tooling and focused tests; hold for algorithm/default changes until real-media backfill.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_latency_stage_variance_20260628/stage_variance_summary.md`
+  - JSON: `output/manual_verification/latest/stt_latency_stage_variance_20260628/stage_variance_summary.json`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-025200-stt-latency-nas-off-variance-review.md`
+- 수정 요약:
+  - Added `tools/summarize_stage_variance.py`, an analysis-only CLI for existing `benchmark_results.json` artifacts.
+  - The tool summarizes elapsed variance, stage totals, cache hit/provider-call flags, memory-pressure distribution, final overlap/global-canvas gates, and duration-bound failures.
+  - Added `tests/test_stage_variance_summary.py`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/summarize_stage_variance.py tests/test_stage_variance_summary.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stage_variance_summary.py` -> `3 passed`.
+  - Generated the variance report from 10 existing generated/cache benchmark artifacts.
+- 핵심 결과:
+  - Elapsed avg/min/max/range: `41.66/1.312/82.433/81.121s`.
+  - Stage ranges: STT1 `20.134950s`, STT2 `15.939524s`, word precision `20.271760s`, subtitle postprocess `30.410655s`.
+  - Worst memory-pressure counts: `unknown=4`, `normal=4`, `critical=2`.
+  - Invalid/non-monotonic/overlap/global max-active gates stayed pass across the selected artifacts, while old generated tail-collapse runs are still marked as duration-bound failures.
+- 자막 품질 영향:
+  - None. This reads existing artifacts only and does not change STT2, word precision, LLM, LoRA, VAD, timing, save/load, render/export, UI, or cache defaults.
+- 남은 위험:
+  - This is generated/synthetic and artifact-only evidence. It does not approve production speed claims or default cache enablement without NAS HeyDealer or another representative owner fixture.
+
+## NLE Live Editor Candidate Confirm Cutover - 2026-06-28 02:55 KST
+
+- 실행 모드: source-app NLE runtime editing adoption, live editor STT1/STT2 candidate confirmation.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_live_editor_candidate_confirm_cutover_20260628/candidate_confirm_cutover_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_candidate_confirm_20260628`
+- 수정 요약:
+  - Added `apply_candidate_confirm_dual_write_pilot(...)` to route STT1/STT2 candidate confirmation through runtime `NLEProjectState`, record a `candidate_confirm` `NLEEditorOperation`, and preserve candidate-lane evidence in the undo snapshot.
+  - `select_stt_candidate_as_subtitle(...)` now attempts NLE `candidate_confirm` only after the existing Taption/source-app placement logic computes confirmed final rows.
+  - The live route accepts NLE projection only when projected rows preserve the confirmed source-app rows within `0.001s`; otherwise it falls back to the existing Taption/source-app path.
+  - Accepted Jammini/서린 review checkpoint for STT/live-preview isolation, final overlap gates, fallback preservation, and undo/focus evidence.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/editor_segments_stt_selection_flow.py tests/test_project_nle_dual_write.py tests/test_project_segment_reload.py tests/test_timeline_hit_targets.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "candidate_confirm"` -> `2 passed, 18 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "select_stt_candidate"` -> `15 passed, 73 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "stt_candidate"` -> `6 passed, 144 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py -k "candidate_confirm or caption_split or caption_merge or caption_delete or gap_generate or caption_resize or caption_move or nle_operation or runtime_nle or final_overlay or save_export"` -> `29 passed, 21 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_native_subtitle_stt_segments.py tests/test_project_segment_reload.py -k "stt_candidate or selected_source or select_stt_candidate"` -> `17 passed, 74 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py -k "candidate or stt or feed or preview or final_overlay or overlap"` -> `12 passed, 153 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_candidate_confirm_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - None. This only routes an existing editor candidate-confirm mutation through runtime NLE dual-write while preserving legacy fallback and final overlap gates.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, model selection, save format, packaging, release, commit, and push were not changed.
+- 남은 위험:
+  - Persisted NLE project fields remain gated.
+  - No live manual screenshot/video proof was captured for this slice; coverage is offscreen PyQt, domain tests, focused feed tests, and source-app quick QA.
+
+## NLE Live Editor Caption Split Cutover - 2026-06-28 02:20 KST
+
+- 실행 모드: source-app NLE runtime editing adoption, live editor text/smart caption split.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_live_editor_caption_split_cutover_20260628/caption_split_cutover_report.md`
+- 수정 요약:
+  - Added `apply_caption_split_dual_write_pilot(...)` to route final subtitle split through runtime `NLEProjectState`, record a `caption_split` `NLEEditorOperation`, and project back into legacy `editor_state`.
+  - `split_segment_with_text(...)` now attempts NLE `caption_split` for stable final captions and reloads projected rows through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)`.
+  - STT/live-preview rows, NLE rejection, missing caption identity, unsupported timeline shape, or invalid rows keep the existing Taption/source-app QTextDocument split fallback path.
+  - Snapshot undo routing now supports content-signature matching for NLE reload edits, preventing delayed Qt document revision changes from sending split undo into QTextEdit's internal undo stack.
+  - Delegated and accepted a bounded Jammini/서린 review for STT/live-preview isolation, final overlap gates, Taption fallback preservation, and undo/focus evidence gaps.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/editor_segments_manual_edits.py ui/editor/editor_multiclip_context.py tests/test_project_nle_dual_write.py tests/test_editor_split_undo.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_split"` -> `2 passed, 16 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_split_undo.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `18 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py -k "caption_split or caption_merge or caption_delete or gap_generate or caption_resize or caption_move or nle_operation or runtime_nle or final_overlay or save_export"` -> `11 passed, 19 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "smart_split or inline_cursor or commit_inline_edit"` -> `7 passed, 69 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "split or gap_generate_undo_routes_to_snapshot_before_textedit_undo"` -> `8 passed, 142 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "split or gap or merge"` -> `20 passed, 142 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_caption_split_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - None. This only routes an existing Taption-style split mutation through runtime NLE dual-write while preserving legacy fallback and final overlap gates.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, model selection, save format, packaging, release, commit, and push were not changed.
+- 남은 위험:
+  - Persisted NLE project fields remain gated.
+  - No live manual screenshot/video proof was captured for this slice; coverage is offscreen PyQt and domain tests.
+
+## Taption Jammini Communication Pack Adoption - 2026-06-28 KST
+
+- 실행 모드: Taption `docs/agent_communication` review and AI Subtitle Studio documentation adoption.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/taption_jammini_pack_adoption_20260628/jammini_pack_adoption_report.md`
+- 수정 요약:
+  - Added AI Subtitle Studio-specific 한결/서린/유진 role cards under `.agents/sentinel/agents/`.
+  - Added `docs/agent_communication/README.md` to map Taption's Jammini pack to this repo's `.agents/sentinel` and `tools/jammini_*` paths.
+  - Updated `cooperation.md`, `AGENTS.md`, `docs/README.md`, and `docs/HANDOFF.md` with the Taption-derived clean-room import boundary, NLE parallel packet protocol, routing discipline, and unknown-cause debugging protocol.
+- 검증:
+  - Compared Taption helper scripts with this repo's adapted `tools/jammini_watchdog.sh`, `tools/jammini_delegate.sh`, and `tools/lib/jammini_conversation_resolver.py`; no script replacement needed.
+  - `bash -n tools/jammini_watchdog.sh tools/jammini_delegate.sh` -> pass.
+  - `tools/jammini_watchdog.sh --status` -> pass, canonical conversation `d2075935-3595-4188-baed-4ee0b45cb7a8`; no current Jammini Teamwork worker id visible.
+  - `git diff --check` on touched docs/role-card files -> pass.
+- 자막 품질 영향:
+  - None. This was documentation and delegation-contract work only.
+
+## NLE Live Editor Caption Merge Cutover - 2026-06-28 01:52 KST
+
+- 실행 모드: source-app NLE runtime editing adoption, live editor diamond caption merge.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_live_editor_caption_merge_cutover_20260628/caption_merge_cutover_report.md`
+- 수정 요약:
+  - Added `apply_caption_merge_dual_write_pilot(...)` to route final subtitle merge through runtime `NLEProjectState`, record a `caption_merge` `NLEEditorOperation`, and project back into legacy `editor_state`.
+  - Live editor diamond merge now attempts NLE `caption_merge` when both sides are stable final captions, then reloads projected rows through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)`.
+  - STT/live-preview rows, NLE rejection, missing caption identity, unsupported timeline shape, or invalid rows keep the existing Taption/source-app QTextDocument merge fallback path.
+  - Delegated bounded Jammini review for STT/live-preview isolation, final overlap gates, Taption fallback preservation, and doc/test evidence gaps.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/ux/editor_timeline_segment_merge.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_merge or caption_delete or gap_generate"` -> `6 passed, 10 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "diamond_merge_routes_live_editor_mutation or diamond_merge_falls_back or diamond_merge_extends_left_segment or diamond_merge_resolves_timeline_row_line_to_document_block"` -> `4 passed, 158 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py -k "caption_merge or caption_delete or gap_generate or caption_resize or caption_move or nle_operation or runtime_nle or final_overlay or save_export"` -> `25 passed, 21 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_timeline_hit_targets.py -k "diamond_merge or merge_preview or resize or gap_generate or segment_delete"` -> `45 passed, 267 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py` -> `165 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_013224/benchmark_results.json` -> `accepted=true`.
+  - `git diff --check -- core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/ux/editor_timeline_segment_merge.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+- 자막 품질 영향:
+  - No subtitle-generation, STT2, word precision, LLM, LoRA, VAD, timing, or mode-selection behavior changed.
+  - This routes an existing Taption-style adjacent-caption merge mutation through runtime NLE dual-write while preserving legacy fallback and final overlap gates.
+
+## NLE Roughcut State Render Plan Cutover - 2026-06-28 01:42 KST
+
+- 실행 모드: source-app internal NLE ownership adoption slice.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_roughcut_state_render_plan_cutover_20260628/roughcut_state_render_plan_report.md`
+- 수정 요약:
+  - `ui/roughcut/roughcut_state.py` now builds saved roughcut candidate `outputs.render_plan` through the NLE snapshot adapter path used by roughcut export/render actions.
+  - Legacy render command, concat command, segment manifest, and stitched-boundary parity are guarded by a new focused test.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile ui/roughcut/roughcut_state.py tests/test_roughcut_ui_v2.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "saved_candidate_render_plan_uses_nle_snapshot_adapter_with_legacy_parity or render_plan_builders_route_through_nle_snapshot_adapter_with_legacy_parity or app_command_roughcut_export_and_render_use_nle_snapshot_route"` -> `3 passed, 35 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_v2_output_compat.py tests/test_project_nle_snapshot.py -k "nle_snapshot_render_plan_matches_legacy_concat_builder or render_plan or roughcut_exact_join or save_reload"` -> `3 passed, 16 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `48 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_013224/benchmark_results.json` -> `accepted=true`.
+  - `git diff --check -- ui/roughcut/roughcut_state.py tests/test_roughcut_ui_v2.py` -> pass.
+- 자막 품질 영향:
+  - No subtitle-generation, STT2, word precision, LLM, LoRA, VAD, timing, or mode-selection behavior changed.
+  - This only moves stored roughcut candidate render-plan construction to the NLE projection path while preserving legacy render command parity.
+
+## Generated Video Tail Collapse Fix - 2026-06-28 01:55 KST
+
+- 실행 모드: NAS-off generated 180s Korean fixture, source-app `mode_high` generation after VAD/STT consensus guard.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/generated_video_tail_collapse_fix_20260628/tail_collapse_fix_report.md`
+  - Fixed acceptance: `output/manual_verification/latest/generated_video_tail_collapse_fix_20260628/reference_benchmark_acceptance.md`
+  - Fixed SRT: `output/manual_verification/latest/generated_video_tail_collapse_fix_20260628/generated_final_subtitles_fixed.srt`
+  - Fixed SRT validation: `output/manual_verification/latest/generated_video_tail_collapse_fix_20260628/fixed_srt_validation.json`
+- 수정 요약:
+  - `vad_stt_timing_consensus` no longer applies the STT1/VAD-only union path unless VAD and STT1 spans are similar.
+  - This blocks broad full-file VAD spans from stretching later STT1 subtitles into tail fragments.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/subtitle_quality/vad_alignment_checker.py tools/evaluate_reference_benchmark_acceptance.py tools/benchmark_subtitle_pipeline_variants.py tests/test_subtitle_quality_models.py tests/test_reference_benchmark_acceptance.py tests/test_benchmark_mode_profiles.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py -k "vad_voice_start_priority or vad_stt_timing_consensus"` -> `10 passed, 8 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_reference_benchmark_acceptance.py tests/test_benchmark_mode_profiles.py -k "reference_benchmark_acceptance or native_segments_summary"` -> `7 passed, 33 deselected`.
+  - Fixed benchmark `20260628_013224`: elapsed `44.307s`, raw/final/reference `54/54/54`, quality/text/timing `93.411/91.676/0.1391s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.12/180.584`, short/long `0/0`, global max active/stable `1/true`, strict acceptance `true`.
+  - Fixed SRT direct parse: rows `54`, invalid/non-monotonic/overlap `0/0/0`, short/long `0/0`, beyond media duration `0`, last end `180.12s`.
+- 자막 품질 영향:
+  - Positive on the generated fixture: the previous 59.792s tail segment and 0.05s fragments are gone.
+  - No STT model, STT2, word precision, LLM, LoRA, VAD extraction, or mode-selection policy was changed.
+
+## Generated Video Strict Acceptance Gate - 2026-06-28 01:50 KST
+
+- 실행 모드: strict reference benchmark acceptance gate hardening.
+- 결과: pass for the gate change; the known generated-video benchmark is now correctly rejected.
+- 저장 위치:
+  - Acceptance report: `output/manual_verification/latest/generated_video_strict_acceptance_gate_20260628/reference_benchmark_acceptance.md`
+  - Acceptance JSON: `output/manual_verification/latest/generated_video_strict_acceptance_gate_20260628/reference_benchmark_acceptance.json`
+- 수정 요약:
+  - `tools/evaluate_reference_benchmark_acceptance.py` now computes a media/window duration bound and rejects final `last_end` beyond that bound.
+  - `tools/benchmark_subtitle_pipeline_variants.py` now records final segment min/max duration and short/long segment counts in `native_segments_summary`.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile tools/evaluate_reference_benchmark_acceptance.py tools/benchmark_subtitle_pipeline_variants.py tests/test_reference_benchmark_acceptance.py tests/test_benchmark_mode_profiles.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_reference_benchmark_acceptance.py tests/test_benchmark_mode_profiles.py -k "reference_benchmark_acceptance or native_segments_summary"` -> `7 passed, 33 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_010403/benchmark_results.json --output-dir output/manual_verification/latest/generated_video_strict_acceptance_gate_20260628` -> `accepted=false`, exit code `2`, reason `final_last_end_beyond_duration_bound`.
+- 자막 품질 영향:
+  - No subtitle-generation, STT, LLM, LoRA, VAD, timing, or model-selection behavior changed.
+  - This only hardens the proof gate so a duration-bound subtitle failure cannot be reported as accepted.
+
+## Generated Video Strict Duration Validation - 2026-06-28 01:35 KST
+
+- 실행 모드: NAS-off generated 180s Korean fixture, direct media/SRT duration-bound validation.
+- 결과: fail under stricter verification. The legacy benchmark acceptance for the same run remains recorded separately, but it is not sufficient for production-quality proof.
+- 저장 위치:
+  - Strict report: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`
+  - Strict JSON: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.json`
+  - Generated final SRT: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/generated_final_subtitles.srt`
+- 검증:
+  - `ffprobe` media duration: `180.584s`.
+  - Generated final SRT direct parse: rows `54`, invalid/non-monotonic/overlap `0/0/0`.
+  - Strict bounds: generated last end `182.032s`, reference last end `180.583s`, rows beyond media duration `17`, short segments under `0.3s` `16`, long segments over `12.0s` `1`.
+- 판정:
+  - The output does not overlap internally, but it is not production-acceptable because final subtitles extend beyond the video and tail segments collapse to 0.05s rows.
+  - The benchmark acceptance path must add media-duration, min-duration, and long-tail gates before generated-fixture pass claims can be trusted.
+
+## NLE Save/Export Projection Cutover - 2026-06-28 01:20 KST
+
+- 실행 모드: source-app internal NLE runtime adoption slice.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_save_export_projection_cutover_20260628/save_export_projection_report.md`
+- 수정 요약:
+  - Added `nle_save_export_segments_from_editor_rows(...)` as the `save_export` final-caption projection surface.
+  - Routed `externalize_project_text_assets(...)` final SRT/cache rows through the NLE save/export projection.
+  - Kept silence/gap rows on the existing vector-canvas gap metadata path, and kept STT1/STT2 reference tracks separate from final SRT output.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py core/project/project_assets.py tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py -k "save_export or externalize_project_text_assets"` -> `4 passed, 6 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py` -> `44 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k "externalize_project_text_assets or external_text_assets or hot_open_subtitle_segments_cache"` -> `1 passed, 84 deselected`.
+- 자막 품질 영향:
+  - No subtitle-generation policy, STT, LLM, LoRA, VAD, timing, or model-selection behavior changed.
+  - Final SRT/cache rows now use NLE final-caption projection, while live STT/subtitle preview and candidate payloads remain out of final output.
+- 남은 위험:
+  - This is not persisted NLE project-field approval and not a visible NLE UI redesign. Broader save/reload/export smoke remains required before legacy cleanup.
+
+## Generated Video Subtitle Validation - 2026-06-28 01:05 KST
+
+- 실행 모드: NAS-off generated 180s Korean fixture, source-app `mode_high` generation on the current worktree.
+- 결과: legacy benchmark gate pass, stricter duration-bound validation fail. NAS was not used.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
+  - Generated final SRT: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/generated_final_subtitles.srt`
+  - SRT validation: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/generated_final_subtitles_srt_report.json`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_010403/benchmark_results.md`
+  - Acceptance: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/acceptance/reference_benchmark_acceptance.md`
+- 검증:
+  - Generated fixture preflight -> ready, clipped reference rows `54`.
+  - Benchmark `20260628_010403`: elapsed `44.968s`, raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, final stable `true`, global max active/stable `1/true`, acceptance `true`.
+  - Generated final SRT: rows `54`, invalid/non-monotonic/overlap `0/0/0`, `ready_for_review=true`.
+  - Follow-up strict duration-bound report: `fail`, generated last end `182.032s` against media duration `180.584s`, rows beyond duration `17`, sub-0.3s rows `16`, long tail row `1`.
+- 자막 품질 영향:
+  - No subtitle-generation policy, STT2, word precision, LLM, LoRA, VAD, timing, or model-selection behavior was changed for this validation.
+  - STT1/STT2/word collect caches remained default-off during the run.
+- 남은 위험:
+  - Generated-fixture proof only and currently not production-acceptable under strict media-bound validation.
+  - Representative real-footage NAS backfill is still required before production-wide speed claims.
+
+## Recheck Prepared Clip Reuse Candidate - 2026-06-28 01:05 KST
+
+- 실행 모드: cache-hit prepare-time candidate review.
+- 결과: rejected and reverted. No runtime code kept.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/recheck_prepared_clip_reuse_rejected_20260628/recheck_prepared_clip_reuse_rejection_report.md`
+  - Waste record: `waste_action_item.md`
+- 검증:
+  - Prior warmup-skip hit `20260628_005314`: elapsed `1.312s`, word prepare `0.527071s`, STT2 prepare `0.098612s`.
+  - Candidate runs `20260628_010037` / `20260628_010050`: elapsed `1.149s` / `1.183s`, word prepare `0.496650s` / `0.512973s`, STT2 prepare `0.086384s` / `0.079436s`.
+  - Quality stayed raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final overlap `0`.
+- 판정:
+  - Prepare-time improvement was not material; directory retention plus metadata sidecar complexity was not accepted.
+
+## Macro Cache Warmup Skip - 2026-06-28 00:58 KST
+
+- 실행 모드: NAS-off generated 180s Korean fixture, `mode_high`, exact cache-hit path for STT1/STT2/word collect and macro proofread response.
+- 결과: pass. NAS was off, so no real-footage backfill is claimed.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/macro_cache_warmup_skip_20260628/macro_cache_warmup_skip_report.md`
+  - Generated final SRT: `output/manual_verification/latest/macro_cache_warmup_skip_20260628/synthetic_final_warmup_skip.srt`
+  - SRT validation: `output/manual_verification/latest/macro_cache_warmup_skip_20260628/synthetic_final_warmup_skip_srt_report.json`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_005314/benchmark_results.md`
+  - Acceptance: `output/manual_verification/latest/macro_cache_warmup_skip_20260628/acceptance/reference_benchmark_acceptance.md`
+- 수정 요약:
+  - Added a macro response-cache preflight before local LLM worker preparation.
+  - When every LLM macro candidate group has an exact response-cache hit, runtime LLM model resolution and Ollama warmup are skipped.
+  - Any cache miss or uncertain preflight falls back to the existing provider preparation path.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/engine/subtitle_macro_chunks.py core/engine/subtitle_engine.py tests/test_subtitle_engine_settings.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "macro_chunk_response_cache or macro_gate_zero_llm_rows or optimize_segments_batches_llm_into_macro_chunks"` -> `3 passed, 81 deselected`.
+  - Generated fixture benchmark `20260628_005314`: elapsed `1.312s`, raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, acceptance `true`.
+  - Macro proofread detail `3.606041s -> 0.400186s` compared with the previous combined cache-hit run `20260628_004504`; macro hit/write/provider groups stayed `1/0/0`.
+  - Generated final SRT block count `54`, invalid/non-monotonic/overlap `0/0/0`, `ready_for_review=true`.
+- 자막 품질 영향:
+  - No subtitle-generation policy, STT, word precision, LLM verifier, LoRA, VAD, timing, or model-selection behavior changed.
+  - Replay still runs candidate-lock verification, subtitle verifier, Deep rerank, final integrity, and reference acceptance.
+- 남은 위험:
+  - Generated-fixture exact-repeat proof only. Keep STT collect caches disabled by default and require NAS HeyDealer or another representative owner fixture before claiming production-wide speed.
+
+## Combined Collect Cache Generated-Fixture Subtitle Proof - 2026-06-28 00:52 KST
+
+- 실행 모드: NAS-off generated 180s Korean fixture, `mode_high`, exact replay caches enabled together for STT1 primary collect, STT2 collect, word precision collect, and macro proofread response.
+- 결과: pass. NAS was off, so no real-footage backfill is claimed.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/combined_collect_cache_20260628/combined_collect_cache_report.md`
+  - Generated final SRT: `output/manual_verification/latest/combined_collect_cache_20260628/synthetic_final_from_second_run.srt`
+  - SRT validation: `output/manual_verification/latest/combined_collect_cache_20260628/synthetic_final_from_second_run_srt_report.json`
+  - First benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_004231/benchmark_results.md`
+  - Second benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_004504/benchmark_results.md`
+  - First acceptance: `output/manual_verification/latest/combined_collect_cache_20260628/acceptance_first/reference_benchmark_acceptance.md`
+  - Second acceptance: `output/manual_verification/latest/combined_collect_cache_20260628/acceptance_second/reference_benchmark_acceptance.md`
+- 수정 요약:
+  - STT1 primary collect and STT2/word collect cache keys now ignore unrelated cache enable/path/max-entry controls.
+  - This prevents duplicate provider collect work when multiple exact replay caches are enabled together for the same media/settings run.
+  - Defaults remain off: `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false`.
+- 검증:
+  - First write benchmark `20260628_004231`: elapsed `72.570s`, raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, `accepted=true`.
+  - Second cache-hit benchmark `20260628_004504`: elapsed `4.449s`, same quality/text/timing/final gates, STT1/STT2/word collect `0.0s/0.0s/0.0s`, STT1/STT2/word collect hit/write/provider `true/false/false`, macro hit/write/provider groups `1/0/0`, `accepted=true`.
+  - Generated final SRT: block count `54`, invalid/non-monotonic/overlap `0/0/0`, `ready_for_review=true`.
+- 자막 품질 영향:
+  - No subtitle-generation policy, STT2 selection, word precision selection, LLM/LoRA/VAD, timing, or model-selection behavior changed.
+  - Replay still runs downstream annotation, STT2 replacement selection, word precision timing application, VAD/STT consensus, LLM/LoRA postprocess, final integrity, and scored reference acceptance.
+- 남은 위험:
+  - Generated-fixture exact-repeat proof only. Keep STT collect caches disabled by default until NAS HeyDealer or another representative owner fixture passes.
+
+## STT1 Primary Collect Cache Candidate - 2026-06-28 00:35 KST
+
+- 실행 모드: source-app generation latency candidate, opt-in exact STT1 primary collect replay cache.
+- 결과: pass on owner-approved generated 180s Korean fixture; NAS was off, so no real-footage backfill is claimed.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_primary_collect_cache_20260628/primary_collect_cache_report.md`
+  - Cache file: `output/manual_verification/latest/stt_primary_collect_cache_20260628/primary_collect_cache_diagnostics.json`
+  - First benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_003224/benchmark_results.md`
+  - Second benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_003326/benchmark_results.md`
+  - First acceptance: `output/manual_verification/latest/stt_primary_collect_cache_20260628/acceptance_diag_first/reference_benchmark_acceptance.md`
+  - Second acceptance: `output/manual_verification/latest/stt_primary_collect_cache_20260628/acceptance_diag_second/reference_benchmark_acceptance.md`
+- 수정 요약:
+  - Added `stt_primary_collect_cache_enabled=false` and `stt_primary_collect_cache_max_entries=64`.
+  - Added an exact STT1 primary collect cache keyed by chunk audio hashes, model, language, target duration, and effective settings.
+  - Cache hits are disabled when a `preview_callback` exists, preserving live STT preview events.
+  - Cache-hit diagnostics preserve provider backend/model from the write run.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/audio/media_processor_transcribe.py core/runtime/config.py tools/verify_full_media_pipeline.py tests/test_media_processor_overlap.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "collect_transcribe_result"` -> `4 passed, 103 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "stage_wall_clock_rollup"` -> `1 passed, 14 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py -k "stage_wall_clock or parse_setting_overrides or cli_setting_overrides"` -> `4 passed, 45 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "collect_transcribe_result or word_precision_recheck_uses_user_selected_stt1_model or word_precision_recheck_allows_explicit_precision_model or selective or recheck"` -> `18 passed, 89 deselected`.
+  - `git diff --check -- core/audio/media_processor_transcribe.py core/runtime/config.py tools/verify_full_media_pipeline.py tests/test_media_processor_overlap.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - First write benchmark `20260628_003224`: elapsed `51.964s`, raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, STT1 collect `17.717081s`, cache hit/write/provider `false/true/true`, `accepted=true`.
+  - Second cache-hit benchmark `20260628_003326`: elapsed `37.715s`, raw/final/reference `54/54/54`, same quality/text/timing/final gates, STT1 collect `0.0s`, STT1 parent `0.049428s`, cache hit/write/provider `true/false/false`, `accepted=true`.
+- 자막 품질 영향:
+  - No subtitle-generation policy, STT2 selection, word precision selection, LLM/LoRA/VAD, timing, or model-selection behavior changed.
+  - Cache replay still runs downstream STT2/word/postprocess/final integrity and reference acceptance.
+- 남은 위험:
+  - This is exact repeated-input synthetic-fixture proof only. Keep `stt_primary_collect_cache_enabled=false` until NAS HeyDealer or another representative real-media backfill passes.
+
+## STT1 Primary Collect Diagnostics - 2026-06-28 00:17 KST
+
+- 실행 모드: source-app generation latency diagnostics, behavior-preserving STT1 collect breakdown.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_primary_collect_diagnostics_20260628/stt_primary_collect_report.md`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_001645/benchmark_results.md`
+  - Acceptance: `output/manual_verification/latest/stt_primary_collect_diagnostics_20260628/acceptance/reference_benchmark_acceptance.md`
+- 수정 요약:
+  - Added STT collect diagnostics to `core/audio/media_processor_transcribe_run.py` and `core/audio/media_processor_transcribe.py`.
+  - `stt_primary_transcribe` now exposes backend, chunk count, submitted chunk count, worker count, setup time, collect time, received/processed chunks, emitted segment count, and worker-cache state.
+  - Added nested collect spans: `stt_primary_collect_transcribe`, `stt2_collect_transcribe`, and `word_precision_collect_transcribe`.
+  - `tools/verify_full_media_pipeline.py` now propagates the new collect diagnostics into summary metrics.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/audio/media_processor_transcribe_run.py core/audio/media_processor_transcribe.py tools/verify_full_media_pipeline.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "stage_wall_clock_rollup"` -> `1 passed, 14 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py -k "stage_wall_clock or parse_setting_overrides or cli_setting_overrides"` -> `4 passed, 45 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "word_precision_recheck_uses_user_selected_stt1_model or word_precision_recheck_allows_explicit_precision_model or selective or recheck"` -> `14 passed, 91 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py -k "prepare_and_collect_recheck_segments or collect_and_annotate_segments"` -> `4 passed, 35 deselected`.
+  - Generated fixture `mode_high` run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_001645/benchmark_results.md` -> elapsed `49.380s`, raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`.
+  - `tools/evaluate_reference_benchmark_acceptance.py` on the generated-fixture benchmark -> `accepted=true`.
+- 자막 품질 영향:
+  - No subtitle-generation policy, STT2, word precision range selection, LLM/LoRA/VAD, timing, or model-selection behavior changed.
+  - STT1 finding: total `20.135353s`, setup `0.046327s`, collect `19.986159s`, chunks `2`, worker count `2`, backend `whisperkit_persistent`.
+- 남은 위험:
+  - This proves ownership of the STT1 cost on the generated fixture only. It does not justify skipping STT1, downgrading the model, shrinking windows, or enabling STT collect cache by default.
+
+## Generated Video Subtitle Validation - 2026-06-28 00:08 KST
+
+- 실행 모드: NAS-off owner fallback validation, source-app `mode_high` generation on Dex-generated 180s Korean fixture.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/generated_video_subtitle_validation_20260628/validation_report.md`
+  - Generated final SRT: `output/manual_verification/latest/generated_video_subtitle_validation_20260628/generated_final_subtitles.srt`
+  - Preflight: `output/manual_verification/latest/generated_video_subtitle_validation_20260628/preflight/reference_fixture_availability.md`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_000644/benchmark_results.md`
+  - Acceptance: `output/manual_verification/latest/generated_video_subtitle_validation_20260628/acceptance/reference_benchmark_acceptance.md`
+- 수정 요약:
+  - Code was not changed.
+  - Reused the Dex-generated `180.583s` Korean fixture and matching `54`-row reference SRT after the owner said NAS was off.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "output/manual_verification/latest/high_context_keep_cache_20260627/synthetic_fixture/synthetic_high_context_keep_cache.mp4" --reference-srt "output/manual_verification/latest/high_context_keep_cache_20260627/synthetic_fixture/synthetic_high_context_keep_cache.srt" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/generated_video_subtitle_validation_20260628/preflight` -> ready, clipped reference rows `54`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "output/manual_verification/latest/high_context_keep_cache_20260627/synthetic_fixture/synthetic_high_context_keep_cache.mp4" --reference-srt "output/manual_verification/latest/high_context_keep_cache_20260627/synthetic_fixture/synthetic_high_context_keep_cache.srt" --start-sec 0 --duration-sec 180 --keep-artifacts` -> elapsed `78.344s`, raw/final/reference `54/54/54`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_000644/benchmark_results.json --output-dir output/manual_verification/latest/generated_video_subtitle_validation_20260628/acceptance` -> `accepted=true`.
+- 자막 품질 영향:
+  - Final invalid/non-monotonic/overlap `0/0/0`, save/reopen stable `true`, global canvas max active `1`.
+  - Quality/text/timing MAE `80.153/91.676/1.437s`; STT1/STT2/word precision counts `17/37/9`.
+- 남은 위험:
+  - This is owner-requested generated-fixture fallback evidence while NAS is off. It does not replace representative real-footage backfill before enabling STT collect cache by default or approving broad latency trims.
+
+## NLE Global Canvas Final Projection Cutover - 2026-06-27
+
+- 실행 모드: source-app runtime NLE adoption slice, global canvas final-only projection.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_global_canvas_final_projection_20260627/global_canvas_projection_report.md`
+- 원인 후보 또는 수정 요약:
+  - Added `nle_global_canvas_segments_from_editor_rows(...)` beside the existing final-overlay NLE runtime projection helper.
+  - `TimelineWidget.update_segments(..., global_rows=...)` now allows the timeline canvas to keep live STT/subtitle preview rows while the global canvas subtitle lane receives final-only NLE rows.
+  - Editor redraw and live-preview update paths pass confirmed final rows through the NLE global-canvas projection, preventing final subtitle minimap rows from being mixed with live STT/subtitle preview rows.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py ui/editor/editor_segments_timeline_context.py ui/editor/editor_segments_stt_selection_flow.py ui/timeline/timeline_widget.py tests/test_project_nle_runtime_cutover.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_timeline_playhead_fit.py -k "nle_runtime_cutover or final_overlay_cutover or global_canvas_cutover or final_only_rows_to_global_canvas or project_loaded_stt_preview"` -> `5 passed, 158 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "global_canvas or project_loaded_stt_preview or final_only_rows_to_global_canvas"` -> `9 passed, 151 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_snapshot.py` -> `20 passed, 4 subtests passed`.
+  - `git diff --check -- core/project/nle_runtime_cutover.py ui/editor/editor_segments_timeline_context.py ui/editor/editor_segments_stt_selection_flow.py ui/timeline/timeline_widget.py tests/test_project_nle_runtime_cutover.py tests/test_timeline_playhead_fit.py` -> pass.
+- 자막 품질 영향:
+  - No subtitle-generation, STT2, LLM, LoRA, VAD, timing, or model-selection policy changed.
+  - Timeline preview behavior is preserved; only the global canvas subtitle-lane data source can now be final-only when editor code supplies NLE `global_rows`.
+- 남은 위험:
+  - This is a focused runtime projection cutover, not full timeline/save/render/export ownership cleanup. Broader persistence and render/export cutover remain gated.
+
+## STT Recheck Collect Cache Candidate - 2026-06-27 23:50 KST
+
+- 실행 모드: source-app generation latency candidate, opt-in STT2/word precision collect replay cache.
+- 결과: pass on owner-approved generated 3-minute fixture; NAS acceptance not run because NAS was off.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_recheck_collect_cache_20260627/collect_cache_report.md`
+  - Final cache-hit SRT: `output/manual_verification/latest/stt_recheck_collect_cache_20260627/synthetic_final_subtitles_cache_hit.srt`
+  - Cache file: `output/manual_verification/latest/stt_recheck_collect_cache_20260627/stt_recheck_collect_cache.json`
+  - First acceptance: `output/manual_verification/latest/stt_recheck_collect_cache_20260627/acceptance_first/reference_benchmark_acceptance.md`
+  - Second acceptance: `output/manual_verification/latest/stt_recheck_collect_cache_20260627/acceptance_second/reference_benchmark_acceptance.md`
+- 원인 후보 또는 수정 요약:
+  - Added an opt-in exact collect replay cache for STT2 and word precision recheck batches.
+  - Cache hits skip the provider collect call only; annotation, STT2 replacement selection, word precision timing application, final integrity, and reference acceptance still run.
+  - Live STT2 preview callback paths disable this cache so candidate-lane preview events are not skipped.
+  - `stt_recheck_collect_cache_enabled` remains default `false` until real-media backfill is accepted.
+- Synthetic fixture verification:
+  - First write run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_234839/benchmark_results.md`; elapsed `46.498s`, raw/final/reference `54/54/54`, quality `80.153`, text `91.676`, timing MAE `1.437s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, STT2 collect `14.284272s`, word precision collect `10.930693s`, cache hit/write/provider `false/true/true`, accepted `true`.
+  - Second cache-hit run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_234935/benchmark_results.md`; elapsed `20.105s`, same quality/text/timing/final gates, STT2 collect `0.0s`, word precision collect `0.0s`, cache hit/write/provider `true/false/false`, accepted `true`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/audio/stt_recheck_service.py core/audio/media_processor_transcribe_recheck.py core/runtime/config.py tools/benchmark_subtitle_pipeline_variants.py tools/verify_full_media_pipeline.py tests/test_stt_recheck_service.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py -k "prepare_and_collect_recheck_segments or collect_and_annotate_segments"` -> `4 passed, 35 deselected`.
+  - `./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "stage_wall_clock_rollup"` -> `1 passed, 14 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "word_precision_recheck_uses_user_selected_stt1_model or word_precision_recheck_allows_explicit_precision_model or selective or recheck"` -> `14 passed, 91 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "ensemble_preview_callback_receives_stt2_segments or word_precision_recheck_uses_user_selected_stt1_model or word_precision_recheck_allows_explicit_precision_model or selective or recheck"` -> `15 passed, 90 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py -k "prepare_and_collect_recheck_segments"` -> `3 passed, 36 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py -k "stage_wall_clock_summary"` -> `1 passed, 33 deselected`.
+  - `git diff --check -- core/audio/stt_recheck_service.py core/audio/media_processor_transcribe_recheck.py core/runtime/config.py tools/benchmark_subtitle_pipeline_variants.py tools/verify_full_media_pipeline.py tests/test_stt_recheck_service.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `tools/evaluate_reference_benchmark_acceptance.py` on both synthetic collect-cache benchmark results -> `accepted=true`.
+- 자막 품질 영향:
+  - No quality regression on the generated fixture. Both runs kept raw/final/reference `54/54/54`, quality `80.153`, text `91.676`, timing MAE `1.437s`, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`.
+- 남은 위험:
+  - Synthetic fixture proof is not production-wide real-footage proof. Backfill on NAS HeyDealer or another representative owner fixture before enabling this cache by default.
+
+## Macro Proofread Response Cache Candidate - 2026-06-27 23:37 KST
+
+- 실행 모드: source-app generation latency candidate, exact macro proofread response replay cache.
+- 결과: pass on owner-approved generated 3-minute fixture; NAS acceptance not run because NAS was off.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/macro_response_cache_20260627/macro_response_cache_report.md`
+  - Cache file: `output/manual_verification/latest/macro_response_cache_20260627/macro_response_cache_replay.json`
+  - First acceptance: `output/manual_verification/latest/macro_response_cache_20260627/acceptance_first/reference_benchmark_acceptance.md`
+  - Second acceptance: `output/manual_verification/latest/macro_response_cache_20260627/acceptance_second/reference_benchmark_acceptance.md`
+- 원인 후보 또는 수정 요약:
+  - Added an exact prompt/model/provider cache for macro proofread LLM response chunks.
+  - Cache hits skip the external provider call only; candidate-lock verification, subtitle verifier, and Deep rerank still run before accepting or rejecting the replayed chunks.
+  - Benchmark postprocess diagnostics now expose macro response cache enabled/hit/write/provider-call group counts.
+- Synthetic fixture verification:
+  - First write run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_233240/benchmark_results.md`; elapsed `82.433s`, raw/final/reference `54/54/54`, quality `80.153`, text `91.676`, timing MAE `1.437s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, proofread elapsed `30.731199s`, accepted `true`, cache entries `1`.
+  - Second cache-hit run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_233531/benchmark_results.md`; elapsed `55.247s`, same quality/text/timing/final gates, proofread elapsed `0.545337s`, macro cache hit/write/provider groups `1/0/0`, accepted `true`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/engine/subtitle_engine.py core/engine/subtitle_macro_chunks.py tools/benchmark_subtitle_pipeline_variants.py tests/test_subtitle_engine_settings.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py tests/test_benchmark_mode_profiles.py -k "macro_chunk_response_cache or optimize_segments_batches_llm_into_macro_chunks or macro_gate_zero_llm_rows or macro_chunk_stt_rows_reject_freeform_llm_rewrite or parse_setting_overrides or cli_setting_overrides"` -> `6 passed, 112 deselected`.
+  - `tools/evaluate_reference_benchmark_acceptance.py` on both synthetic macro-cache benchmark results -> `accepted=true`.
+- 자막 품질 영향:
+  - No quality regression on the generated fixture. Both runs kept raw/final/reference `54/54/54`, quality `80.153`, text `91.676`, timing MAE `1.437s`, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`.
+- 남은 위험:
+  - Synthetic fixture proof is not production-wide real-footage proof. Current latest cache-hit run still spends STT1 `20.176462s`, STT2 collect `15.227744s`, and word precision collect `18.462423s`; backfill on NAS HeyDealer or another representative owner fixture when available.
+
+## High Context Keep Cache Candidate - 2026-06-27 23:19 KST
+
+- 실행 모드: source-app generation latency candidate, strict High context-boundary keep/no-correction cache.
+- 결과: pass on owner-approved generated 3-minute fixture; NAS acceptance not run because NAS was off.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/high_context_keep_cache_20260627/keep_cache_report.md`
+  - Fixture: `output/manual_verification/latest/high_context_keep_cache_20260627/synthetic_fixture/fixture_report.md`
+  - Summary: `output/manual_verification/latest/high_context_keep_cache_20260627/synthetic_keep_cache_summary.json`
+- 원인 후보 또는 수정 요약:
+  - Implemented an exact prompt/model/settings cache that reuses only prior High context-boundary `keep` decisions with no correction request and no applied change.
+  - Move, merge, invalid, correction-requested, or changed decisions are not cached.
+  - Candidate budget still counts candidate pairs, so cache hits cannot expand the checked pair set.
+  - Benchmark/verifier artifacts now expose keep-cache enabled/hit/miss/write counts, and the benchmark tool accepts `--setting key=value` overrides to isolate cache-path validation.
+  - Fixed benchmark CLI override precedence so explicit `--setting` values win over mode-profile defaults.
+  - Generated a 180.583s Korean validation video plus matching SRT with 54 reference rows after the owner stated NAS was off.
+- Synthetic fixture verification:
+  - First write run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_231459/benchmark_results.md`; elapsed `144.476s`, raw/final/reference `54/54/54`, quality `80.153`, text `91.676`, timing MAE `1.437s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, High context calls/cache hit-miss-write `8/0-8-8`, accepted `true`.
+  - Second cache-hit run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_231734/benchmark_results.md`; elapsed `83.281s`, same quality/text/timing/final gates, High context calls/cache hit-miss-write `0/8-0-0`, High context elapsed `67.699701s -> 0.003326s`, accepted `true`.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/engine/subtitle_context_refiner.py core/runtime/config.py tools/benchmark_subtitle_pipeline_variants.py tools/verify_full_media_pipeline.py tests/test_subtitle_context_refiner.py tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_context_refiner.py` -> `8 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "stage_wall_clock or repeat_summary_rolls_up_accuracy_preserving_stt2_metrics"` -> `2 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py -k "parse_setting_overrides or cli_setting_overrides"` -> `2 passed, 32 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_context_refiner.py tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py -k "context_refiner or stage_wall_clock or repeat_summary_rolls_up_accuracy_preserving_stt2_metrics or parse_setting_overrides or cli_setting_overrides"` -> `13 passed, 44 deselected`.
+  - `tools/evaluate_reference_benchmark_acceptance.py` on both synthetic benchmark results -> `accepted=true`.
+- 자막 품질 영향:
+  - No quality regression on the generated fixture. Both runs kept raw/final/reference `54/54/54`, quality `80.153`, text `91.676`, timing MAE `1.437s`, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`.
+- 남은 위험:
+  - Synthetic fixture proof is not production-wide real-footage proof. Backfill on NAS HeyDealer or another representative owner fixture when available.
+
+## High Context Decision Diagnostics - 2026-06-27 22:47 KST
+
+- 실행 모드: owner-required source-app generation latency diagnostics, NAS HeyDealer first 180 seconds only.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/high_context_decision_diagnostics_20260627/decision_diagnostics_report.md`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_224543/benchmark_results.md`
+  - Acceptance: `output/manual_verification/latest/high_context_decision_diagnostics_20260627/acceptance/reference_benchmark_acceptance.md`
+- 원인 후보 또는 수정 요약:
+  - Added behavior-preserving decision-action diagnostics for High context-boundary checks.
+  - Re-ran the owner-required NAS HeyDealer MP4/SRT first 180 seconds with `mode_high`.
+  - Result: elapsed `59.559s`, raw/final/reference `58/56/89`, quality `81.335`, text `94.267`, timing MAE `1.5958s`.
+  - Final subtitle gates: invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`; global canvas `max_active_segments=1`.
+  - High context-boundary: candidate/skipped/call/failed/changed/max pairs `2/55/2/0/0/8`; keep/move/merge/invalid `2/0/0/0`; correction requested/applied `0/0`.
+  - Interpretation: current NAS fixture points to a decision-equivalent no-change gate as the only safe High context-boundary speed candidate. It does not approve batching or broad skipping.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/engine/subtitle_context_refiner.py tools/verify_full_media_pipeline.py tools/benchmark_subtitle_pipeline_variants.py tests/test_subtitle_context_refiner.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_context_refiner.py` -> `6 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "stage_wall_clock or repeat_summary_rolls_up_accuracy_preserving_stt2_metrics"` -> `2 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260627_224543/benchmark_results.json --output-dir output/manual_verification/latest/high_context_decision_diagnostics_20260627/acceptance` -> `accepted=true`.
+- 자막 품질 영향:
+  - None. This adds diagnostics and validation evidence only; STT2, word precision, LLM/LoRA/VAD policy, timing policy, final subtitle stability, save/render/export, visible UI/UX, packaging, commit, and push behavior were not changed.
+- 남은 위험:
+  - This does not approve a runtime latency trim. The next candidate still needs same NAS fixture before/after reference scoring.
+
+## STT Recheck Reason Breakdown - 2026-06-27 22:36 KST
+
+- 실행 모드: owner-required source-app generation latency diagnostics, NAS HeyDealer first 180 seconds only.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_recheck_reason_breakdown_20260627/reason_breakdown_report.md`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_223426/benchmark_results.md`
+  - Acceptance: `output/manual_verification/latest/stt_recheck_reason_breakdown_20260627/acceptance/reference_benchmark_acceptance.md`
+- 원인 후보 또는 수정 요약:
+  - Added behavior-preserving reason breakdown diagnostics for STT2 selective recheck and word precision.
+  - Re-ran the owner-required NAS HeyDealer MP4/SRT first 180 seconds with `mode_high`.
+  - Result: elapsed `58.820s`, raw/final/reference `58/56/89`, quality `81.335`, text `94.267`, timing MAE `1.5958s`.
+  - Final subtitle gates: invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`; global canvas `max_active_segments=1`.
+  - STT2 selective recheck: missing voice / route hint / low score / empty text `1/0/0/1`; applied segment count `37`; range/prepared audio `180.096s/120.000s`.
+  - Word precision: selected / precision review / needs review `0/0/0`; red / yellow / risk / missing word `0/0/0/0`; range/prepared count `25/25`; applied `7`.
+  - Interpretation: current NAS fixture points away from STT2 skip and review-critical word-range removal. The next speed candidate should focus on collect scheduling/cache reuse or a decision-equivalent High context-boundary gate.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/audio/media_processor_transcribe_recheck.py tools/verify_full_media_pipeline.py tests/test_media_processor_overlap.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "word_precision_recheck_uses_user_selected_stt1_model or selective_ensemble_runs_stt2_only_for_low_score_ranges"` -> `2 passed, 103 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "stage_wall_clock or repeat_summary_rolls_up_accuracy_preserving_stt2_metrics"` -> `2 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260627_223426/benchmark_results.json --output-dir output/manual_verification/latest/stt_recheck_reason_breakdown_20260627/acceptance` -> `accepted=true`.
+- 자막 품질 영향:
+  - None. This adds diagnostics and validation evidence only; STT2, word precision, LLM/LoRA/VAD policy, timing policy, final subtitle stability, save/render/export, visible UI/UX, packaging, commit, and push behavior were not changed.
+- 남은 위험:
+  - This does not approve a runtime latency trim. It narrows the next safe investigation target to collect scheduling/cache reuse or decision-equivalent postprocess work.
+
+## STT Recheck Duration Diagnostics - 2026-06-27 22:24 KST
+
+- 실행 모드: owner-required source-app generation latency diagnostics, NAS HeyDealer first 180 seconds only.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_recheck_duration_diagnostics_20260627/diagnostics_report.md`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_222233/benchmark_results.md`
+  - Acceptance: `output/manual_verification/latest/stt_recheck_duration_diagnostics_20260627/acceptance/reference_benchmark_acceptance.md`
+- 원인 후보 또는 수정 요약:
+  - Added behavior-preserving STT2/word precision diagnostics for range audio duration, prepared clip duration, and STT2 applied segment count.
+  - Re-ran the owner-required NAS HeyDealer MP4/SRT first 180 seconds with `mode_high`.
+  - Result: elapsed `59.255s`, raw/final/reference `58/56/89`, quality `81.335`, text `94.267`, timing MAE `1.5958s`.
+  - Final subtitle gates: invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`; global canvas `max_active_segments=1`.
+  - STT2 selective recheck: elapsed `13.843705s`, raw/range/prepared `1/1/1`, collected/applied ranges/applied segments `37/1/37`, range audio `180.096s`, prepared audio `120.000s`.
+  - Word precision: elapsed `12.253285s`, range/prepared `25/25`, collected/applied `26/7`, range audio `67.640s`, prepared audio `89.690s`.
+  - Interpretation: STT2 `applied_count=1` is a single broad rescue range, not a safe single-segment trim target; the next latency candidate must still use same NAS fixture before/after reference scoring.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/audio/media_processor_transcribe_recheck.py tools/verify_full_media_pipeline.py tests/test_media_processor_overlap.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "word_precision_recheck_uses_user_selected_stt1_model or selective_ensemble_runs_stt2_only_for_low_score_ranges"` -> `2 passed, 103 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "stage_wall_clock or repeat_summary_rolls_up_accuracy_preserving_stt2_metrics"` -> `2 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260627_222233/benchmark_results.json --output-dir output/manual_verification/latest/stt_recheck_duration_diagnostics_20260627/acceptance` -> `accepted=true`.
+- 자막 품질 영향:
+  - None. This adds diagnostics and validation evidence only; STT2, word precision, LLM/LoRA/VAD policy, timing policy, final subtitle stability, save/render/export, visible UI/UX, packaging, commit, and push behavior were not changed.
+- 남은 위험:
+  - This proves the measurement surface and NAS HeyDealer gate. It does not approve a runtime latency trim; the next candidate still needs same-fixture before/after proof.
+
+## NAS HeyDealer 3-Minute Reference Benchmark - 2026-06-27 22:13 KST
+
+- 실행 모드: owner-required source-app generation latency acceptance gate, NAS HeyDealer first 180 seconds only.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215/reference_benchmark_report.md`
+  - Preflight: `output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215_preflight/reference_fixture_availability.md`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_221152/benchmark_results.md`
+  - Acceptance: `output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215_acceptance/reference_benchmark_acceptance.md`
+- 원인 후보 또는 수정 요약:
+  - Mounted `/Volumes/photo` via the NAS route and verified the exact HeyDealer MP4/SRT pair exists.
+  - Ran `mode_high` against `/Volumes/photo/.../[20260209]헤이딜러광고/헤이딜러_최종.MP4` with matching `헤이딜러_최종.srt`, span `0s~180s`.
+  - Result: elapsed `60.187s`, raw/final/reference `58/56/89`, quality `81.335`, text `94.267`, timing MAE `1.5958s`.
+  - Final subtitle gates: invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`; global canvas `max_active_segments=1`, `stable_for_global_canvas=true`.
+  - Stage spans: STT1 `18.089376s`, STT2 selective recheck `13.769461s`, word precision `12.176120s`, subtitle postprocess `16.049834s`, High context-boundary `15.531674s`.
+  - Candidate lane counts: STT1 selected `21`, STT2 selected `37`, word precision `7`.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --fallback-media "output/_audio_fingerprint/.../헤이딜러_최종_cleaned.wav" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215_preflight` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260627_221152/benchmark_results.json --output-dir output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215_acceptance` -> `accepted=true`.
+- 자막 품질 영향:
+  - None. This is a validation run only; STT2, word precision, LLM/LoRA/VAD policy, timing policy, final subtitle stability, save/render/export, visible UI/UX, packaging, commit, and push behavior were not changed.
+- 남은 위험:
+  - This proves the current baseline on the owner-required NAS HeyDealer 3-minute fixture. It does not approve a new latency trim by itself; the next trim candidate still needs same-fixture before/after proof.
+
+## NLE Live Editor Gap Generate Cutover - 2026-06-27
+
+- 실행 모드: source-app NLE runtime editing adoption, live editor silence-gap subtitle generation.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_live_editor_gap_generate_cutover_20260627/gap_generate_cutover_report.md`
+  - Runtime operation: `core/project/nle_dual_write.py`
+  - Live editor route: `ui/editor/ux/editor_timeline_video.py`, `ui/editor/ux/editor_timeline_gap_split.py`
+  - Focused tests: `tests/test_project_nle_dual_write.py`, `tests/test_timeline_playhead_fit.py`
+- 수정 요약:
+  - Added `apply_gap_generate_dual_write_pilot(...)` to route silence-gap subtitle generation through runtime `NLEProjectState`, record a `gap_generate` `NLEEditorOperation`, and project back into legacy `editor_state`.
+  - Live editor gap generation now attempts NLE `gap_generate` when the gap row is stable, then reloads projected rows through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)`.
+  - Taption-style `to/from` behavior is preserved: generated subtitles keep the selected gap span, while left/right silence gap rows remain around the new subtitle when needed.
+  - Live STT preview rows, NLE rejection, missing gap identity/range, unsupported timeline shape, or invalid rows keep the existing Taption/source-app direct gap generation path.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/ux/editor_timeline_gap_split.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "gap_generate or caption_delete or gap_delete"` -> `7 passed, 7 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "gap_generate_routes_live_editor_mutation or gap_generate_skips_nle or segment_delete_routes_live_editor_mutation"` -> `3 passed, 156 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "gap_generate or gap_delete or gap_to_segs or segment_delete"` -> `13 passed, 137 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py` -> `42 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "gap_generate or delete or resize or diamond or single_gap or center_drag"` -> `36 passed, 123 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py` -> `162 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate or delete"` -> `68 passed, 158 deselected`.
+  - `git diff --check -- core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/ux/editor_timeline_gap_split.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+- 자막 품질 영향:
+  - None intended. This routes an existing silence-gap subtitle generation mutation through runtime NLE dual-write while preserving legacy fallback, STT preview preservation, final overlap gates, save format, render/export behavior, visible UI/UX, packaging, release, commit, and push behavior.
+- 남은 위험:
+  - Historical note: at this checkpoint, broader live mutation routing was still incremental and split/merge/candidate-confirm were not yet cut over. Later entries in this file record the completed split, merge, and candidate-confirm NLE routes.
+
+## NLE Live Editor Caption Delete Cutover - 2026-06-27
+
+- 실행 모드: source-app NLE runtime editing adoption, live editor segment delete-to-gap.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_live_editor_caption_delete_cutover_20260627/caption_delete_cutover_report.md`
+  - Runtime operation: `core/project/nle_dual_write.py`
+  - Live editor route: `ui/editor/ux/editor_timeline_video.py`, `ui/editor/ux/editor_timeline_gap_split.py`
+  - Focused tests: `tests/test_project_nle_dual_write.py`, `tests/test_timeline_playhead_fit.py`
+- 수정 요약:
+  - Added `apply_caption_delete_dual_write_pilot(...)` to route final subtitle delete-to-gap through runtime `NLEProjectState`, record a `caption_delete` `NLEEditorOperation`, and project back into legacy `editor_state`.
+  - Live editor segment deletion now attempts NLE `caption_delete` when the row is a stable final caption, then reloads projected rows through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)`.
+  - Delete mode is recorded as `replace_with_silence_gap`, so Taption-style subtitle deletion still becomes an editable silence gap rather than a final-overlap or disappearing-time mutation.
+  - Live STT preview rows, NLE rejection, missing caption identity, unsupported timeline shape, or invalid rows keep the existing Taption/source-app direct gap conversion path.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/ux/editor_timeline_gap_split.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_delete or gap_delete or caption_resize"` -> `9 passed, 3 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "segment_delete_routes_live_editor_mutation or segment_delete_skips_nle or square_left_resize_routes_live_editor_mutation or diamond_resize_routes_live_editor_mutation"` -> `4 passed, 153 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "segment_delete or gap_generate or gap_delete or gap_to_segs"` -> `13 passed, 137 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py` -> `40 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "delete or resize or diamond or single_gap or center_drag"` -> `34 passed, 123 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py` -> `160 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate or delete"` -> `68 passed, 158 deselected`.
+  - `git diff --check -- core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/ux/editor_timeline_gap_split.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+- 자막 품질 영향:
+  - None intended. This routes an existing editor delete-to-gap mutation through runtime NLE dual-write while preserving legacy fallback, STT preview preservation, final overlap gates, save format, render/export behavior, visible UI/UX, packaging, release, commit, and push behavior.
+- 남은 위험:
+  - Historical note: at this checkpoint, broader live mutation routing was still incremental and split/merge/candidate-confirm were not yet cut over. Later entries in this file record the completed split, merge, and candidate-confirm NLE routes.
+
+## NAS HeyDealer 3-Minute Reference Preflight Refresh - 2026-06-27 21:52 KST
+
+- 실행 모드: owner-required source-app generation latency acceptance gate, NAS HeyDealer first 180 seconds only.
+- 결과: blocked. The NAS HeyDealer MP4 and matching SRT are still not mounted in this session, so no X5, project-reference, or cached-audio substitute was run for acceptance.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/heydealer_nas_reference_preflight_20260627_latest/reference_fixture_availability.md`
+  - JSON: `output/manual_verification/latest/heydealer_nas_reference_preflight_20260627_latest/reference_fixture_availability.json`
+- 원인 후보 또는 수정 요약:
+  - Preflight returned `reference_media_missing` and `reference_srt_missing`.
+  - `/Volumes` currently exposes only `Macintosh HD` and `action6`; `/Volumes/photo` is not mounted.
+  - `find /Volumes/action6 -maxdepth 7` found no HeyDealer-named media or SRT candidates.
+  - Cached HeyDealer WAV exists, but remains fallback-only for instrumentation/structural stability and must not approve latency trims.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --fallback-media "output/_audio_fingerprint/헤이딜러_최종_2c274c4ab434764a8546/헤이딜러_최종_cleaned.wav" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/heydealer_nas_reference_preflight_20260627_latest` -> expected exit `2`, `blocking_reasons=["reference_media_missing","reference_srt_missing"]`, `ready_for_reference_scored_benchmark=false`, fallback available.
+- 자막 품질 영향:
+  - None. This is a validation gate/documentation refresh only; STT2, word precision, LLM/LoRA/VAD policy, timing policy, final subtitle stability, save/render/export, visible UI/UX, packaging, commit, and push behavior were not changed.
+- 남은 위험:
+  - Next latency optimization remains blocked until the exact NAS HeyDealer MP4 plus matching SRT are mounted/restored.
+  - X5/project-reference/cached-audio runs are regression or instrumentation surfaces only under the current owner directive.
+
+## NLE Live Editor Boundary Resize Cutover - 2026-06-27
+
+- 실행 모드: source-app NLE runtime editing adoption, live editor boundary-handle caption resize.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_live_editor_boundary_resize_cutover_20260627/boundary_resize_cutover_report.md`
+  - Runtime route: `ui/editor/ux/editor_timeline_video.py`
+  - Focused tests: `tests/test_timeline_playhead_fit.py`
+- 수정 요약:
+  - `_on_seg_time_changed(...)` now attempts runtime NLE `caption_resize` dual-write for `square_left` and `square_right` subtitle boundary-handle resizes, in addition to the existing `diamond` route.
+  - Safe projection applies through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)`.
+  - NLE rejection, transient STT/live-preview rows, unsupported runtime shape, and invalid/collapsing rows keep the existing legacy Taption/source-app timing path.
+  - Existing trim/delete behavior and final-overlap rejection are preserved by the `caption_resize` NLE dual-write operation gate.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile ui/editor/ux/editor_timeline_video.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "square_left_resize_routes_live_editor_mutation or square_right_resize_routes_live_editor_mutation or square_resize_falls_back or diamond_resize_routes_live_editor_mutation"` -> `4 passed, 151 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "resize or diamond or single_gap or center_drag"` -> `32 passed, 123 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py` -> `38 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate"` -> `63 passed, 163 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py` -> `158 passed`.
+  - `git diff --check -- ui/editor/ux/editor_timeline_video.py tests/test_timeline_playhead_fit.py` -> pass.
+- 자막 품질 영향:
+  - None intended. This routes existing boundary resize mutations through runtime NLE dual-write while preserving legacy fallback and final overlap gates. STT2, word precision, LLM/LoRA/VAD quality policy, timing policy, model selection, save format, render/export behavior, visible UI/UX, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - Broader live mutation routing remains incremental. Current live editor NLE coverage includes `diamond`, `square_left`, and `square_right` caption resize; other mutation families should stay behind focused operation/projection parity gates.
+
+## Mac App Store Readiness Audit - 2026-06-27
+
+- 실행 모드: non-destructive Mac App Store submission readiness audit; no packaging, signing, notarization, upload, tag, release, or DMG build.
+- 결과: blocked for submission, pass for local audit coverage.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.md`
+  - Audit JSON: `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.json`
+  - Non-code submission draft: `docs/APP_STORE_SUBMISSION_READINESS.md`
+- 수정 요약:
+  - Added `tools/audit_app_store_readiness.py` to inspect packaging scripts, entitlements, Info.plist template, signing/auth environment presence, submission artifacts, and owner-input metadata without running release tooling.
+  - Added `tests/test_app_store_readiness_audit.py` to prove the audit blocks when signed app/pkg/validation artifacts are missing and that required sandbox entitlements are present.
+  - Added a non-code submission readiness draft for privacy, export compliance, screenshots, support URL, review notes, age rating, release notes, and entitlement explanation.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tests/test_app_store_readiness_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_audit_20260627` -> `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `14`.
+- 자막 품질 영향:
+  - None. This is packaging-readiness audit/documentation only; STT2, word precision, LLM/LoRA/VAD quality policy, timing policy, final subtitle stability, NLE runtime routing, save format, render/export behavior, visible UI/UX, commit, and push behavior were not changed.
+- 남은 위험:
+  - Missing signed `.app`, signed `.pkg`, sandbox smoke, App Store Connect validation artifact, Apple Distribution codesign identity, installer identity, and owner-provided App Store metadata.
+  - Source-app pytest or QA must not be treated as App Store readiness proof.
+
+## NAS HeyDealer 3-Minute Reference Preflight - 2026-06-27
+
+- 실행 모드: owner-required source-app generation latency test gate, NAS HeyDealer first 180 seconds.
+- 결과: blocked. The NAS HeyDealer MP4 and matching SRT are not mounted in this session, so no substitute X5 or fallback-audio benchmark was used for acceptance.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/heydealer_nas_reference_preflight_20260627/reference_fixture_availability.md`
+  - JSON: `output/manual_verification/latest/heydealer_nas_reference_preflight_20260627/reference_fixture_availability.json`
+- 원인 후보 또는 수정 요약:
+  - Owner required the next test to use the NAS HeyDealer 3-minute video.
+  - Preflight found `/Volumes/photo/.../헤이딜러_최종.MP4` and matching `.srt` missing.
+  - Cached HeyDealer WAV exists, but the preflight marks it fallback-only for instrumentation/structural stability, not latency-trim approval.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --fallback-media "output/_audio_fingerprint/헤이딜러_최종_2c274c4ab434764a8546/헤이딜러_최종_cleaned.wav" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/heydealer_nas_reference_preflight_20260627` -> expected exit `2`, `blocking_reasons=["reference_media_missing","reference_srt_missing"]`, `ready_for_reference_scored_benchmark=false`, fallback available.
+- 자막 품질 영향:
+  - None. This is a validation gate/documentation update only; STT2, word precision, LLM/LoRA/VAD quality policy, timing policy, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - The next latency candidate is blocked until `/Volumes/photo` is mounted with the HeyDealer MP4 and matching SRT.
+  - X5/project-reference smokes remain useful regression surfaces, but they cannot replace the owner-required NAS HeyDealer 3-minute acceptance test.
+
+## X5 Project Reference 180s Acceptance - 2026-06-27
+
+- 실행 모드: source-app generation latency validation hardening, long local project-reference X5 smoke.
+- 결과: pass for aligned project-reference fixture; rejected one semantic mismatch fixture.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/x5_project_reference_180s_20260627/reference_benchmark_report.md`
+  - Accepted preflight: `output/manual_verification/latest/x5_project_reference_180s_20260627/preflight_front/reference_fixture_availability.md`
+  - Accepted benchmark JSON: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_211807/benchmark_results.json`
+  - Accepted benchmark markdown: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_211807/benchmark_results.md`
+  - Accepted gate: `output/manual_verification/latest/x5_project_reference_180s_20260627/acceptance_front/reference_benchmark_acceptance.md`
+  - Rejected mismatch gate: `output/manual_verification/latest/x5_project_reference_180s_20260627/acceptance_rejected_back/reference_benchmark_acceptance.md`
+- 수정 요약:
+  - Added `tools/evaluate_reference_benchmark_acceptance.py` to classify a single reference-scored benchmark with absolute quality/text/timing/final-stability gates.
+  - Added `tests/test_reference_benchmark_acceptance.py` to prove stable results pass, semantic mismatches fail, and final overlap fails.
+  - Verified the cached 180s X5 WAV is semantically aligned with `projects/X5_시승기_전반.assets/subtitles/final.srt`, not with the similarly named `X5_후반` project SRT.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile tools/evaluate_reference_benchmark_acceptance.py tests/test_reference_benchmark_acceptance.py tools/materialize_reference_srt.py tests/test_materialize_reference_srt.py tools/verify_reference_fixture_availability.py tests/test_reference_fixture_availability.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_reference_benchmark_acceptance.py tests/test_materialize_reference_srt.py tests/test_reference_fixture_availability.py` -> `8 passed`.
+  - X5 accepted 180s project-reference run -> elapsed `70.383s`, raw/final/reference `43/50/67`, quality `76.387`, text `90.767`, timing MAE `1.5457s`, final invalid/non-monotonic/overlap `0/0/0`, global canvas `max_active_segments=1`.
+  - X5 rejected mismatch run -> quality `23.234`, text `4.756`, timing MAE `3.3362s`, rejected for `quality_score_below_floor`, `text_score_below_floor`, and `timing_mae_above_ceiling`.
+- 자막 품질 영향:
+  - None intended. This adds acceptance classification and fixture validation only. STT2, word precision, LLM/LoRA/VAD quality policy, timing policy, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - The accepted 180s X5 run is a project-reference smoke, not NAS HeyDealer ground truth.
+  - Under the current owner directive, it must not be used as the next latency-trim acceptance substitute; the NAS HeyDealer 3-minute reference is required first.
+
+## X5 Local Reference Fixture Smoke - 2026-06-27
+
+- 실행 모드: source-app generation latency validation hardening, short-loop reference-scored X5 smoke.
+- 결과: pass for local 60s reference smoke; not sufficient for broad latency-trim acceptance.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/x5_local_reference_fixture_20260627/reference_benchmark_report.md`
+  - Materialized SRT: `output/manual_verification/latest/x5_local_reference_fixture_20260627/x5_120_3s_180_3s_reference.srt`
+  - Preflight: `output/manual_verification/latest/x5_local_reference_fixture_20260627/preflight/reference_fixture_availability.md`
+  - Benchmark JSON: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_210811/benchmark_results.json`
+  - Benchmark markdown: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_210811/benchmark_results.md`
+- 수정 요약:
+  - Added `tools/materialize_reference_srt.py` to convert cached reference JSON rows into a relative-time SRT fixture with a materialization report.
+  - Added `tests/test_materialize_reference_srt.py` to prove clipped absolute rows become relative SRT rows with millisecond timestamps.
+  - Restored a local X5 60s reference-scored smoke path using `.codex_work/bench/x5_120_3s_180_3s.wav` and `.codex_work/bench/x5_120_3s_180_3s_reference.json`.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile tools/materialize_reference_srt.py tests/test_materialize_reference_srt.py tools/verify_reference_fixture_availability.py tests/test_reference_fixture_availability.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_materialize_reference_srt.py tests/test_reference_fixture_availability.py` -> `5 passed`.
+  - X5 local preflight -> `ready_for_reference_scored_benchmark=true`, reference clipped segments `26`.
+  - X5 local `mode_high` reference benchmark -> elapsed `29.831s`, raw/final `28/23`, quality `80.914`, text `81.734`, timing MAE `0.5608s`, final invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`.
+- 자막 품질 영향:
+  - None intended. This adds a fixture-materialization and validation surface only. STT2, word precision, LLM/LoRA/VAD quality policy, timing policy, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - This is only a cached 60s X5 local reference smoke.
+  - The owner-required NAS HeyDealer 3-minute reference-scored acceptance run is still required before adopting STT2 collect, word precision collect, High context-boundary, worker scheduling, or cleanup latency trims.
+
+## Reference Fixture Availability Preflight - 2026-06-27
+
+- 실행 모드: source-app generation latency validation hardening, reference-scored fixture preflight.
+- 결과: pass for preflight guard; blocked for reference-scored latency-trim acceptance until the real media/SRT fixture is restored.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/reference_fixture_availability_20260627/reference_fixture_availability.md`
+  - JSON: `output/manual_verification/latest/reference_fixture_availability_20260627/reference_fixture_availability.json`
+- 수정 요약:
+  - Added `tools/verify_reference_fixture_availability.py` to check real media and reference SRT readiness before running or accepting a reference-scored generation-latency benchmark.
+  - Added `tests/test_reference_fixture_availability.py` to prove ready, missing-reference, and fallback-only states are classified correctly.
+  - The preflight emits a warning when fallback media exists: fallback media can prove instrumentation and structural stability only, and must not approve latency trims.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile tools/verify_reference_fixture_availability.py tests/test_reference_fixture_availability.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_reference_fixture_availability.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --fallback-media "output/_audio_fingerprint/헤이딜러_최종_2c274c4ab434764a8546/헤이딜러_최종_cleaned.wav" --output-dir output/manual_verification/latest/reference_fixture_availability_20260627` -> expected exit `2`, `blocking_reasons=["reference_media_missing","reference_srt_missing"]`, `non_reference_media_available=true`.
+- 자막 품질 영향:
+  - None. This changes validation readiness only; STT2, word precision, LLM/LoRA/VAD quality policy, timing policy, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - `/Volumes/photo/.../헤이딜러_최종.MP4` and the matching `.srt` are missing in this session.
+  - Cached HeyDealer WAV exists but remains fallback-only; it cannot approve text/timing/segmentation-affecting latency changes.
+
+## STT High Context Boundary Diagnostics And Accurate Test Surface - 2026-06-27
+
+- 실행 모드: source-app generation latency instrumentation, stricter accuracy-first test method applied.
+- 결과: pass for measurement coverage; no subtitle algorithm or quality policy change.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_high_context_diag_x5_audio_20260627/high_context_diag_report.md`
+  - X5 audio verifier: `output/manual_verification/latest/stt_high_context_diag_x5_audio_20260627/tinyping_full_verify.json`
+  - Repeat summary: `output/manual_verification/latest/stt_high_context_diag_x5_audio_20260627/repeat_summary.json`
+  - Repeat CSV: `output/manual_verification/latest/stt_high_context_diag_x5_audio_20260627/repeat_summary.csv`
+  - QE review handoff: `.agents/sentinel/handoffs/20260627-stt-accuracy-test-review.md`
+- 수정 요약:
+  - `core/engine/subtitle_context_refiner.py` now collects optional High context-boundary diagnostics without changing output rows.
+  - `core/engine/subtitle_engine.py` forwards the diagnostics through the existing stage preview callback.
+  - `tools/benchmark_subtitle_pipeline_variants.py` and `tools/verify_full_media_pipeline.py` now surface candidate pairs, skipped pairs, LLM calls, failed calls, changed pairs, max pairs, and elapsed time in stage spans, summary metrics, repeat JSON/CSV, and compact CLI output.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile core/engine/subtitle_context_refiner.py core/engine/subtitle_engine.py tools/benchmark_subtitle_pipeline_variants.py tools/verify_full_media_pipeline.py tests/test_subtitle_context_refiner.py tests/test_benchmark_mode_profiles.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_context_refiner.py tests/test_verify_full_media_pipeline.py -k "context_refiner or stage_wall_clock or repeat_summary"` -> `7 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py -k "run_postprocess or stage_wall_clock_summary"` -> `3 passed, 29 deselected`.
+  - X5 cached-audio 180s verifier -> pipeline `74.919s`, raw/final `43/50`, final invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`, global max active `1`, STT2 selected `28`, word precision `9`, memory pressure `critical`; High context-boundary candidate/call/changed `4/4/0`, failed calls `0`, elapsed `32.230357s`.
+  - `git diff --check -- core/engine/subtitle_context_refiner.py core/engine/subtitle_engine.py tools/benchmark_subtitle_pipeline_variants.py tools/verify_full_media_pipeline.py tests/test_subtitle_context_refiner.py tests/test_benchmark_mode_profiles.py tests/test_verify_full_media_pipeline.py` -> pass.
+- 자막 품질 영향:
+  - None intended. STT2, word precision, LLM/LoRA/VAD quality policy, model selection, timing policy, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - X5 cached-audio verification is not reference-scored quality acceptance.
+  - The owner-required NAS HeyDealer media/SRT under `/Volumes/photo/...` are unavailable, so the next optimization candidate is blocked until that reference-scored gate can run.
+  - Memory pressure still reached `critical`; pass/fail alone is not enough to close the latency item.
+
+## STT Collect Fallback Precision Instrumentation - 2026-06-27
+
+- 실행 모드: source-app generation latency instrumentation, stricter collect/worker test method applied.
+- 결과: pass; no subtitle algorithm or quality policy change.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_collect_fallback_precision_20260627/fallback_precision_report.md`
+  - Benchmark smoke: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_201523/benchmark_results.json`
+  - Verifier smoke: `output/manual_verification/latest/stt_collect_fallback_precision_20260627/verify_smoke/tinyping_full_verify.json`
+  - Repeat summary: `output/manual_verification/latest/stt_collect_fallback_precision_20260627/verify_smoke/repeat_summary.json`
+- 수정 요약:
+  - `core/audio/media_processor_transcribe_run.py` records `stt_collect_whisperkit_fallback` spans for WhisperKit zero-chunk, empty-segment, and timeout fallback into MLX.
+  - `core/audio/media_processor_transcribe.py` merges child collect-worker `stt_collect_*` spans back into the parent stage-wall-clock artifact.
+  - `tools/verify_full_media_pipeline.py` now exposes fallback count/total/max elapsed in `summary_metrics`, repeat summary JSON/CSV, and compact CLI output.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m py_compile tools/verify_full_media_pipeline.py core/audio/media_processor_transcribe.py core/audio/media_processor_transcribe_run.py core/audio/media_processor_transcribe_recheck.py tests/test_media_processor_overlap.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py -k "collect_transcribe_result"` -> `2 passed, 103 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py -k "stage_wall_clock or repeat_summary"` -> `3 passed, 43 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py -k "prepare_and_collect_recheck_segments or collect_and_annotate_segments"` -> `3 passed, 35 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_media_processor_overlap.py tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py -k "collect_transcribe_result or stage_wall_clock or repeat_summary"` -> `5 passed, 146 deselected`.
+  - Local 60s benchmark smoke -> elapsed `24.355s`, raw/final `2/2`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`; fallback count `2`, total `7.962836s`, max `7.493920s`; STT2 collect `10.661352s`, word precision collect `3.640260s`.
+  - Local 60s verifier smoke -> pipeline `30.374s`, raw/final `2/2`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`; fallback count `2`, total `14.900298s`, max `7.530310s`; repeat CSV includes the fallback total column.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - None intended. This is measurement and test-surface improvement only. STT2, word precision, LLM/LoRA/VAD quality policy, model selection, timing policy, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - Local 60s smoke proves the new metrics and stability fields, but it is not a NAS HeyDealer 3-minute quality acceptance substitute.
+  - Next candidate should compare long-fixture collect time against fallback overhead before touching worker scheduling or cache behavior.
+
+## STT2 / Word Precision Substage Timing Instrumentation - 2026-06-27
+
+- 실행 모드: source-app generation latency instrumentation, stricter test method applied.
+- 결과: pass; no subtitle algorithm or quality policy change.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt2_word_precision_substage_timing_20260627/substage_timing_report.md`
+  - Local reference smoke: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_200405/benchmark_results.json`
+- 수정 요약:
+  - `core/audio/stt_recheck_service.py` now records `prepare_elapsed_sec`, `collect_elapsed_sec`, `annotate_elapsed_sec`, and `total_elapsed_sec` for `prepare_and_collect_recheck_segments(...)`.
+  - `core/audio/media_processor_transcribe_recheck.py` carries those values into `stt2_selective_recheck` and `word_precision` stage wall-clock spans.
+  - `tools/benchmark_subtitle_pipeline_variants.py` and `tools/verify_full_media_pipeline.py` aggregate the substage elapsed fields into benchmark JSON and repeat-summary metrics/CSV.
+- 검증:
+  - `./venv/bin/python -m py_compile core/audio/stt_recheck_service.py core/audio/media_processor_transcribe_recheck.py tools/benchmark_subtitle_pipeline_variants.py tools/verify_full_media_pipeline.py tests/test_stt_recheck_service.py tests/test_benchmark_mode_profiles.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py -k "prepare_and_collect_recheck_segments or collect_and_annotate_segments"` -> `3 passed, 35 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py -k "stage_wall_clock_summary"` -> `1 passed, 30 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "stage_wall_clock or repeat_summary"` -> `2 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py` -> `46 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py tests/test_media_processor_overlap.py -k "word_precision or stt_recheck or duration_first or prepare_and_collect"` -> `46 passed, 96 deselected`.
+  - `git diff --check -- .` -> pass.
+  - Local 60s reference smoke -> elapsed `28.641s`, raw/final `2/2`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`; STT2 total `11.258246s` with collect `11.201352s`; word precision total `4.368781s` with collect `4.304654s`.
+- 자막 품질 영향:
+  - None intended. This is timing instrumentation only. STT2, word precision, LLM/LoRA/VAD quality policy, model selection, timing policy, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - HeyDealer/NAS fixture path was unavailable in this session because `/Volumes` access hung, so long-fixture quality comparison was not rerun for this instrumentation slice.
+  - The next latency candidate should focus on collect-time scheduling/worker behavior, not clip preparation or annotation.
+
+## STT2 / Word Precision Context-Boundary Batch Candidate Rejection - 2026-06-27
+
+- 실행 모드: source-app generation latency candidate, stricter test method applied.
+- 결과: pass for investigation and rollback; candidate rejected, no context-boundary batch code kept.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt2_word_precision_context_batch_20260627/context_batch_rejection_report.md`
+  - Non-profile repeat: `output/manual_verification/latest/stt2_word_precision_context_batch_20260627/baseline_repeat2/repeat_summary.json`
+  - Reference benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_194512/benchmark_results.json`
+- 후보 요약:
+  - Tried batching non-overlapping High context-boundary LLM pair checks into one Ollama JSON call.
+  - Focused tests for the temporary batch path passed, but the real reference fixture showed output drift, so the code and added tests were reverted.
+- 더 정확한 테스트 방식:
+  - Non-profile repeat stayed the speed truth.
+  - Reference-scored HeyDealer 180s SRT benchmark stayed the acceptance truth for quality, text score, timing MAE, final count, and overlap stability.
+  - cProfile remained diagnostic only and was not used as elapsed-speed proof.
+- 검증:
+  - Temporary focused candidate guards passed before rejection: `tests/test_subtitle_context_refiner.py` -> `6 passed`; macro LLM focused subset -> `4 passed, 79 deselected`.
+  - HeyDealer 180s non-profile repeat with candidate -> pipeline elapsed `[69.223, 67.564]`, avg `68.393s`, raw/final `58/55`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`, STT2 selected `37`, word precision `14`, memory pressure `critical`.
+  - HeyDealer 180s reference benchmark with candidate -> elapsed `64.222s`, raw/final `58/56`, quality `81.316`, text `94.241`, timing MAE `1.5958s`, segmentation `87.812`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`; subtitle postprocess `9.879991s`, word precision `20.835965s`.
+  - Accepted prior reference baseline -> quality `81.335`, text `94.267`, timing MAE `1.5958s`, segmentation `87.879`, subtitle postprocess `12.518010s`.
+  - Rollback validation: `./venv/bin/python -m py_compile core/engine/subtitle_context_refiner.py tests/test_subtitle_context_refiner.py core/engine/subtitle_engine.py tests/test_subtitle_engine_settings.py` -> pass.
+  - Rollback validation: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_context_refiner.py` -> `4 passed`.
+  - Existing accepted trim guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "macro_gate_zero_llm_rows or batches_llm_into_macro_chunks or llm_confidence_gate_skips"` -> `4 passed, 79 deselected`.
+  - Verifier/benchmark guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py` -> `46 passed`.
+  - `git diff -- core/engine/subtitle_context_refiner.py tests/test_subtitle_context_refiner.py` -> no diff, confirming the rejected candidate code/test patch was removed.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - None kept. The candidate was rejected and reverted because it slightly reduced reference quality/text/segmentation. STT2, word precision, LLM/LoRA/VAD quality policy, timing policy, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed by this rejected candidate.
+- 남은 위험:
+  - Context-boundary LLM batching should not be retried unless batch-vs-per-pair decision parity is proven first.
+  - Generation latency remains open; next candidates must target redundant waiting/cache/scheduling or proven cleanup churn without changing subtitle decisions.
+
+## STT2 / Word Precision LLM Zero-Candidate Defer Trim - 2026-06-27
+
+- 실행 모드: source-app generation latency trim, stricter test method applied.
+- 결과: pass, first safe trim applied; overall latency remains open.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt2_word_precision_llm_defer_20260627/llm_defer_report.md`
+  - Non-profile repeat: `output/manual_verification/latest/stt2_word_precision_llm_defer_20260627/baseline_repeat2/repeat_summary.json`
+  - Profile diagnostic: `output/manual_verification/latest/stt2_word_precision_llm_defer_20260627/profile_diagnostic/function_profile_generation_summary.json`
+  - Reference benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_192926/benchmark_results.json`
+- 수정 요약:
+  - `core/engine/subtitle_engine.py` now defers runtime LLM model resolution and Ollama warmup until a macro LLM gate proves `llm_rows > 0`.
+  - Zero-candidate macro rows continue through LoRA/Deep/STT confirmed output without preparing a local LLM that will not be called.
+  - Added a regression test proving zero-candidate macro rows do not call `_resolve_runtime_llm_model`, `warmup_ollama_model`, or `ollama_split_text`.
+- 더 정확한 테스트 방식:
+  - Unit no-call guard for the exact zero-candidate path.
+  - Focused LLM macro/gate tests for neighboring behavior.
+  - Non-profile repeat for wall-clock speed truth.
+  - cProfile diagnostic for ownership only.
+  - Reference-scored HeyDealer 180s SRT benchmark for quality score, timing MAE, final counts, and overlap stability.
+- 검증:
+  - `./venv/bin/python -m py_compile core/engine/subtitle_engine.py tests/test_subtitle_engine_settings.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "macro_gate_zero_llm_rows or batches_llm_into_macro_chunks or llm_confidence_gate_skips"` -> `4 passed, 79 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "llm or macro or gate"` -> `17 passed, 66 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py` -> `46 passed`.
+  - HeyDealer 180s non-profile repeat -> pipeline elapsed `[65.317, 61.873]`, avg `63.595s`, raw/final `58/55`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`, STT2 selected `37`, word precision `14`, memory pressure `critical`.
+  - HeyDealer 180s profile diagnostic -> pipeline elapsed `65.057s`, raw/final `58/55`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`, stage wall-clock top `word_precision=20.302507s`, cut-boundary top cumulative `0.000941s`.
+  - HeyDealer 180s reference benchmark `mode_high` -> elapsed `66.007s`, raw/final `58/56`, quality `81.335`, text `94.267`, timing MAE `1.5958s`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`; stage spans STT1 `18.117848s`, STT2 `14.458806s`, word precision `20.851735s`, subtitle postprocess `12.518010s`.
+- 자막 품질 영향:
+  - None. STT2, word precision, LLM/LoRA/VAD quality policy, timing policy, model selection, final subtitle stability, save format, render/export, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - Total wall-clock did not materially improve because word precision variance rose in the reference run even though subtitle postprocess dropped. Keep the latency action item active.
+  - Memory pressure still reached `critical`; next work must remain behavior-preserving and target measured redundant waiting/cache/scheduling only.
+
+## STT2 / Word Precision Wall-Clock Stage Spans - 2026-06-27
+
+- 실행 모드: source-app generation latency profiling with accurate wall-clock stage spans.
+- 결과: pass
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt2_word_precision_wall_clock_20260627/wall_clock_stage_report.md`
+  - Non-reference wall-clock probe: `output/manual_verification/latest/stt2_word_precision_wall_clock_20260627/wall_clock_probe/tinyping_full_verify.json`
+  - Repeat summary: `output/manual_verification/latest/stt2_word_precision_wall_clock_20260627/wall_clock_probe/repeat_summary.json`
+  - Reference-scored benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_191323/benchmark_results.json`
+- 수정 요약:
+  - `core/audio/media_processor_transcribe.py` and `core/audio/media_processor_transcribe_recheck.py` now record direct `perf_counter` spans for STT1 primary transcription, selective STT2 rescue, word timestamp precision, and VAD/STT consensus.
+  - `tools/benchmark_subtitle_pipeline_variants.py` records subtitle postprocess wall-clock spans and writes a `stage_wall_clock_summary` into each variant result.
+  - `tools/verify_full_media_pipeline.py` exposes stage wall-clock rollups in `summary_metrics`, markdown summaries, repeat JSON/CSV, and CLI output.
+  - No runtime trim was applied in this slice; this only made the performance test more exact before any scheduling/cache change.
+- 검증:
+  - `./venv/bin/python -m py_compile core/audio/media_processor_transcribe.py core/audio/media_processor_transcribe_recheck.py tools/benchmark_subtitle_pipeline_variants.py tools/verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py` -> `46 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_ensemble.py tests/test_subtitle_quality_models.py -k "word_precision or stt_anchor or vad_stt_timing_consensus or selective"` -> `6 passed, 48 deselected`.
+  - HeyDealer 180s non-reference wall-clock probe -> elapsed `65.222s`, raw/final `58/55`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`, STT2 selected `37`, word precision `14`, memory pressure `critical`; stage spans STT1 `18.162010s`, STT2 `14.360250s`, word precision `12.489603s`, VAD/STT consensus `0.000227s`, subtitle postprocess `20.108474s`.
+  - HeyDealer 180s reference benchmark `mode_high` -> elapsed `65.824s`, raw/final `58/56`, quality `81.335`, text `94.267`, timing MAE `1.5958s`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`; stage spans STT1 `19.519015s`, STT2 `14.229755s`, word precision `12.560951s`, VAD/STT consensus `0.000222s`, subtitle postprocess `19.406983s`.
+- 자막 품질 영향:
+  - None. STT2, word precision, LLM, LoRA, VAD, model selection, timing policy, and final subtitle behavior were not changed.
+- 남은 위험:
+  - The next trim candidate must come from redundant waiting, duplicate cache work, or scheduling serialization inside the measured stages; do not reduce model coverage or loosen quality gates.
+  - Memory pressure still reached `critical`, so pass/fail alone is not enough performance proof.
+
+## STT2 / Word Precision Latency Profile And Accurate Test Method - 2026-06-27
+
+- 실행 모드: source-app generation latency profiling, stricter test method applied.
+- 결과: pass
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt2_word_precision_latency_20260627/latency_profile_report.md`
+  - Baseline repeat: `output/manual_verification/latest/stt2_word_precision_latency_20260627/baseline_repeat2/repeat_summary.json`
+  - Profile diagnostic: `output/manual_verification/latest/stt2_word_precision_latency_20260627/profile_diagnostic/function_profile_generation_summary.json`
+  - Reference benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_185402/benchmark_results.json`
+- 수정 요약:
+  - `tools/verify_full_media_pipeline.py` now records STT2/word precision counts, final invalid/non-monotonic/overlap stability, global canvas max-active stability, memory pressure, and reference-quality fields in `summary_metrics`.
+  - Non-trivial verification now fails if the final native summary has invalid duration, non-monotonic order, overlap, or `stable_for_save_reopen=false`.
+  - Function profile artifacts now include `function_profile_generation_summary.json/.md` with generation owner groups: STT primary, STT2 recheck, word precision, LLM refinement, VAD/STT consensus, subtitle postprocess, and cleanup trim.
+  - No runtime trim was applied because the safe next step is true wall-clock stage spans inside STT/word precision before scheduling changes.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py` -> `14 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py` -> `44 passed`.
+  - `git diff --check -- tools/verify_full_media_pipeline.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - HeyDealer 180s non-profile repeat -> elapsed `[65.648, 59.402]`, avg `62.525s`, raw/final `58/55`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`, STT2 selected `37`, word precision `14`, memory pressure `critical`.
+  - HeyDealer 180s profile diagnostic -> top generation stage `stt_primary_transcribe` `45.702069s`; STT2 `27.404475s`, word precision `12.976476s`, LLM refinement `16.734457s`, subtitle postprocess `17.731724s`, cleanup trim `0.085355s`; cut-boundary top cumulative `0.000572s`.
+  - HeyDealer 180s reference benchmark `mode_high` -> elapsed `62.640s`, raw/final `58/56`, quality `81.335`, text `94.267`, timing MAE `1.5958s`, final overlap `0`, `stable_for_save_reopen=true`, global `max_active_segments=1`.
+- 자막 품질 영향:
+  - None. STT2, word precision, LLM, LoRA, VAD, model selection, timing policy, and final subtitle generation behavior were not changed.
+- 남은 위험:
+  - cProfile cumulative times are non-additive and diagnostic only. Next trim work needs true wall-clock stage spans before touching scheduling/cache behavior.
+  - Memory pressure still reached `critical`; do not treat pass/fail alone as performance proof.
+
+## NLE Live Editor Diamond Cutover - 2026-06-27
+
+- 실행 모드: source-app internal NLE runtime adoption, one live editor mutation surface cutover.
+- 결과: pass
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_live_editor_diamond_cutover_20260627/live_editor_diamond_cutover_report.md`
+  - Passing quick QA: `output/manual_verification/latest/qa_suite_quick_nle_live_diamond_retry_20260627`
+  - First failed quick QA retained for QE traceability: `output/manual_verification/latest/qa_suite_quick_nle_live_diamond_20260627`
+  - Runtime route: `ui/editor/ux/editor_timeline_video.py`
+  - Focused tests: `tests/test_timeline_playhead_fit.py`
+- 수정 요약:
+  - Routed `diamond` shared-boundary subtitle resize in `_on_seg_time_changed(...)` through runtime NLE `caption_resize` dual-write when safe.
+  - On success, projected NLE rows are applied through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)`.
+  - On NLE rejection, unsupported runtime shape, or project floor-frame micro-row collapse risk, the existing Taption/legacy direct-edit path remains the fallback.
+  - Removed the completed NLE runtime editing adoption item from `ACTION_ITEMS.md`; next active item is STT2 / word precision latency profiling.
+- QE note:
+  - First quick QA failed at `editor_compact_macau / merge_diamond` because a one-frame-ish smart-split row collapsed to zero duration in the shadow project floor-frame normalization and was removed by the NLE route.
+  - Added a micro-row fallback guard and a regression test; retry quick QA passed.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/ux/editor_timeline_video.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "diamond_resize"` -> `4 passed, 148 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "resize or diamond"` -> `26 passed, 126 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py` -> `38 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate"` -> `63 passed, 163 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py` -> `155 passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_live_diamond_retry_20260627` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - None. Runtime edit routing only. STT2, LLM, LoRA, VAD, timing policy, generation quality, visible UI/UX, save format, render/export, packaging, release, commit, and push were not changed.
+- 남은 위험:
+  - Only the `diamond` shared-boundary live editor surface is routed through NLE dual-write.
+  - Broader live editor mutation routing should preserve the micro-row fallback or first improve project-frame normalization for one-frame subtitles.
+
+## NLE Caption Resize Dual-Write And Accurate Test Slice - 2026-06-27
+
+- 실행 모드: source-app internal NLE adoption, subtitle boundary resize / diamond shared-boundary slice, stricter test method applied.
+- 결과: pass
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_caption_resize_dual_write_20260627/caption_resize_dual_write_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_caption_resize_20260627`
+  - Dual-write helper: `core/project/nle_dual_write.py`
+  - Focused tests: `tests/test_project_nle_dual_write.py`
+  - Active queue: `ACTION_ITEMS.md`
+- 수정 요약:
+  - Added `apply_caption_resize_dual_write_pilot(...)` to route boundary-handle and diamond-style resize operations through runtime `NLEProjectState`, record a `caption_resize` `NLEEditorOperation`, and project back into legacy `editor_state`.
+  - Preserved Taption-derived resize behavior by trimming/deleting affected neighbor rows and absorbing silence gaps before the final-overlap gate.
+  - Kept final-overlap rejection in the NLE operation projection gate, so overlapped final subtitles are rejected instead of saved.
+  - Updated the active queue so the next remaining NLE adoption step is one live editor mutation surface cutover.
+- 더 정확한 테스트 방식:
+  - New tests check operation metadata, runtime NLE projection rows, legacy editor rows, save/reload storage shape, final release-stability metrics, silent-gap absorption, diamond shared-boundary behavior, and no-mutation-on-reject behavior.
+  - Existing Taption resize/diamond UI regressions and source-app quick QA were run after focused NLE tests.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py tests/test_project_nle_dual_write.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `10 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py` -> `38 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "resize or diamond"` -> `23 passed, 126 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate"` -> `63 passed, 163 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py` -> `152 passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_caption_resize_20260627` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - None. This adds runtime NLE operation/dual-write coverage only. STT2, LLM, LoRA, VAD, timing policy, generation quality, visible UI/UX, save format, render/export, packaging, release, commit, and push were not changed.
+- 남은 위험:
+  - This is not yet a live editor routing cutover. The next item must connect one editor mutation surface through NLE dual-write while preserving the existing Taption-derived behavior.
+  - Persisted NLE project fields remain unapproved.
+
+## NLE Caption Move Dual-Write And Taption Reorder Slice - 2026-06-27
+
+- 실행 모드: source-app internal NLE adoption, subtitle segment body move / Taption neighbor reorder slice.
+- 결과: pass
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_caption_move_dual_write_20260627/caption_move_dual_write_report.md`
+  - Dual-write helper: `core/project/nle_dual_write.py`
+  - Focused tests: `tests/test_project_nle_dual_write.py`
+  - Active queue: `ACTION_ITEMS.md`
+- 수정 요약:
+  - Added `apply_caption_move_dual_write_pilot(...)` to route final subtitle body moves through runtime `NLEProjectState`, record a `caption_move` `NLEEditorOperation`, and project back into legacy `editor_state`.
+  - Added Taption-style neighbor reorder metadata: `taption_reorder`, `reorder_direction`, and `reorder_neighbor_id`.
+  - Kept final-overlap rejection in the existing NLE operation projection gate, so an overlapping final subtitle move is rejected instead of saved.
+  - Promoted the next active queue item to source-app NLE runtime editing adoption. Current status: `caption_resize` is now complete; one live editor mutation surface remains next.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py tests/test_project_nle_dual_write.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `6 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `30 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_timeline_hit_targets.py -k "center_reorder or reorder_release or center_drag_reorders"` -> `3 passed, 296 deselected`.
+- 자막 품질 영향:
+  - None. This adds runtime NLE operation/dual-write coverage only. STT2, LLM, LoRA, VAD, timing policy, generation quality, visible UI/UX, save format, render/export, packaging, release, commit, and push were not changed.
+- 남은 위험:
+  - This is not yet a live editor routing cutover. The next item must connect one editor mutation surface through NLE dual-write before broader runtime adoption.
+  - Persisted NLE project fields remain unapproved.
+
+## Cut-Boundary Generation Latency Profile Closeout - 2026-06-27
+
+- 실행 모드: source-app High generation profiling, owner-relevant HeyDealer first 180s, precision testing method applied.
+- 결과: pass, no cut-boundary runtime trim applied.
+- 저장 위치:
+  - Closeout report: `output/manual_verification/latest/cut_boundary_latency_profile_20260627/latency_profile_report.md`
+  - Baseline repeat: `output/manual_verification/latest/cut_boundary_latency_profile_20260627/baseline_repeat2/repeat_summary.json`
+  - Profile diagnostic: `output/manual_verification/latest/cut_boundary_latency_profile_20260627/profile_diagnostic/function_profile_cut_boundary_summary.json`
+  - Reference-scored benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260627_180138/benchmark_results.json`
+  - Active queue: `ACTION_ITEMS.md`
+- 수정 요약:
+  - `tools/verify_full_media_pipeline.py` now writes a cut-boundary-specific cProfile summary with owner-stage grouping.
+  - Added focused tests for cut-boundary profile grouping and `summary_metrics` exposure.
+  - Separated real elapsed timing from profiler diagnosis: non-profile repeat is wall-clock truth, cProfile is owner diagnosis only.
+  - Completed the cut-boundary latency item without changing runtime behavior because cut-boundary owner cost measured below 1ms.
+  - Added the next active performance item for STT2 / word precision latency profiling with accuracy-preserving gates.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/verify_full_media_pipeline.py tests/test_verify_full_media_pipeline.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py -k "cut_boundary_profile or summary_metrics"` -> `4 passed, 6 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_verify_full_media_pipeline.py` -> `10 passed`.
+  - Non-profile repeat HeyDealer 180s: pipeline elapsed `[63.911, 59.479]`, avg `61.695s`, raw/final `58/55`, readability `87.225`, stage trim `360.205ms`, pass.
+  - Profile diagnostic HeyDealer 180s: pipeline elapsed `64.514s`, raw/final `58/55`, cut-boundary top cumulative `0.000602s`, confirmed split/snap `0.000525s`, pass.
+  - Reference-scored HeyDealer 180s `mode_high`: elapsed `63.617s`, raw/final `58/56`, quality `81.335`, text score `94.267`, timing MAE `1.5958s`, final overlap `0`, `stable_for_save_reopen=true`, `stable_for_global_canvas=true`.
+- 자막 품질 영향:
+  - None. No generation policy, STT2, LLM, LoRA, VAD, timing, model selection, final subtitle behavior, editor UI/UX, save format, render/export, packaging, release, commit, or push behavior was changed.
+- 남은 위험:
+  - The wall-clock generation delay remains, but the current evidence points away from cut-boundary work and toward STT2 rescue / selective word timestamps / LLM gate / cleanup pressure.
+  - The next item must not skip STT2 or loosen quality gates; it should only measure and trim redundant scheduling/cache/wait work.
+
+## Full NLE Transition Phase 11 Cleanup - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition, rollback-preserving cleanup closeout.
+- 결과: pass, no-op code cleanup
+- 저장 위치:
+  - Cleanup artifact: `output/manual_verification/latest/nle_phase11_cleanup_20260627/cleanup_report.md`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Audited the final-overlay NLE runtime cutover owner path for proven-dead legacy write paths.
+  - Confirmed phase 8 cutover was a final-overlay read/provider cutover, not a broad write-path replacement.
+  - Kept `_subtitle_context_window_from_segments(...)` and `_subtitle_memory_visible_window(...)` because they remain live preview, multiclip, video controls, context fallback, and rollback dependencies.
+  - Removed the completed `Full NLE Transition Plan` from `ACTION_ITEMS.md`; the next active item is `Cut-Boundary Generation Latency Profiling And Safe Trim`.
+- 검증:
+  - `rg`/direct code reads over `core/project/nle_runtime_cutover.py`, `ui/editor/editor_segments_timeline_context.py`, runtime cache/context helpers, and focused tests -> no proven-dead legacy write path found.
+  - `./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py core/project/nle_render_export_parity.py core/project/nle_persistence_guard.py ui/editor/editor_segments_timeline_context.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_persistence_guard.py tests/test_editor_video_context_window.py tests/test_video_player_widget.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_editor_video_context_window.py tests/test_video_player_widget.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `123 passed, 4 subtests passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/nle_phase11_cleanup_20260627/quick_after_cleanup` -> pass, `failed_count=0`.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - None. No app code was removed or changed. STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, final subtitle generation, render/export runtime, project save format, and visible editor UI/UX are unchanged.
+- 남은 위험:
+  - Full NLE transition remains a source-app internal ownership baseline, not persisted NLE project-format approval or timeline/global-canvas/save/render/export runtime cutover.
+
+## Full NLE Transition Phase 10 Release Checkpoint Parity And Rollback Proof - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition, two consecutive post-cutover checkpoint proof.
+- 결과: pass
+- 저장 위치:
+  - Parity artifact: `output/manual_verification/latest/nle_release_checkpoint_parity_20260627/release_checkpoint_parity_report.md`
+  - Checkpoint A quick QA: `output/manual_verification/latest/nle_release_checkpoint_parity_20260627/checkpoint_a_quick`
+  - Checkpoint B quick QA: `output/manual_verification/latest/nle_release_checkpoint_parity_20260627/checkpoint_b_quick`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Produced two consecutive post-cutover checkpoint bundles after final-overlay runtime cutover.
+  - Each checkpoint ran the focused NLE runtime/save/reload/render/export/editor parity guard set and source-app quick QA.
+  - Preserved rollback by removing no legacy write paths, changing no save format, and switching no timeline/global-canvas/save/render/export owner.
+  - Marked phase 10 complete in `ACTION_ITEMS.md`; phase 11 narrow cleanup is now the next NLE transition item.
+- 검증:
+  - Checkpoint A py_compile -> pass.
+  - Checkpoint A focused parity guard -> `123 passed, 4 subtests passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/nle_release_checkpoint_parity_20260627/checkpoint_a_quick` -> pass, `failed_count=0`.
+  - Checkpoint B py_compile -> pass.
+  - Checkpoint B focused parity guard -> `123 passed, 4 subtests passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/nle_release_checkpoint_parity_20260627/checkpoint_b_quick` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - None. This phase is verification and documentation only. It does not change STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, final subtitle generation, render/export runtime, project save format, or visible editor UI/UX.
+- 남은 위험:
+  - Phase 11 cleanup can now be considered, but only as a narrow deletion pass that preserves rollback and reruns the same guard set.
+
+## Full NLE Transition Phase 9 Cleanup Gate Audit - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition, cleanup gate audit.
+- 결과: blocked for deletion, pass for gate execution
+- 저장 위치:
+  - Gate artifact: `output/manual_verification/latest/nle_cleanup_gate_audit_20260627/cleanup_gate_audit.md`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Audited whether phase 9 could remove legacy write paths.
+  - Found that only one post-cutover quick QA checkpoint exists after final-overlay runtime cutover.
+  - Treated the older full QA checkpoint as pre-cutover evidence, not as a post-cutover cleanup release checkpoint.
+  - Did not remove any legacy write path.
+  - Converted the next NLE step to phase 10 release checkpoint parity and rollback proof.
+- 검증:
+  - `rg`/direct file reads over `ACTION_ITEMS.md`, `AGENTS.md`, `docs/HANDOFF.md`, `docs/PROJECT_STATE.md`, `test_result.md`, and phase 8 artifacts -> completed.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - None. This gate audit is documentation and execution-queue management only. It does not change STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, final subtitle generation, render/export runtime, project save format, or visible editor UI/UX.
+- 남은 위험:
+  - Legacy write-path cleanup remains unsafe until two consecutive post-cutover release checkpoints prove save/reload/export/editor parity and rollback safety.
+
+## Full NLE Transition Phase 8 Runtime Cutover: Final Overlay - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition, single-surface runtime cutover.
+- 결과: pass
+- 저장 위치:
+  - Cutover artifact: `output/manual_verification/latest/nle_runtime_cutover_final_overlay_20260627/final_overlay_cutover_report.md`
+  - Runtime cutover helper: `core/project/nle_runtime_cutover.py`
+  - Provider integration: `ui/editor/editor_segments_timeline_context.py`
+  - Focused tests: `tests/test_project_nle_runtime_cutover.py`, `tests/test_editor_video_context_window.py`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Selected `final_overlay` as the single low-risk runtime surface.
+  - Added `nle_final_overlay_segments_from_editor_rows()` to project final overlay rows through NLE caption state.
+  - Normal video subtitle provider now uses NLE final-overlay rows.
+  - Gap rows, live preview rows, STT preview rows, and STT candidate metadata are excluded from the final overlay.
+  - Live generation preview, timeline, global canvas, save/reload, render/export execution, and project persistence remain on their existing paths.
+  - Marked phase 8 complete in `ACTION_ITEMS.md`; phase 9 cleanup remains blocked until release-checkpoint parity and rollback proof exist.
+  - No broad runtime conversion, visible editor UI route, subtitle quality policy, save-format approval, packaging, release, commit, or push was performed.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` -> route visible.
+  - `tools/jammini_watchdog.sh --handoff-probe` -> `20260627-161935`, handoff file visible, first line `DEX_REVIEW_READY`.
+  - `./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py ui/editor/editor_segments_timeline_context.py tests/test_project_nle_runtime_cutover.py tests/test_editor_video_context_window.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_editor_video_context_window.py -k "nle_runtime or video_context or live_preview"` -> `10 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_editor_video_context_window.py tests/test_video_player_widget.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `123 passed, 4 subtests passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick` -> first run `output/manual_verification/latest/qa_suite_quick_20260627_162452` failed at `open_project` with `app_unreachable`; immediate rerun `output/manual_verification/latest/qa_suite_quick_20260627_162641` passed with `failed_count=0`.
+- 자막 품질 영향:
+  - None. This cutover changes only the runtime provider for final overlay rows. It does not change STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, final subtitle generation, project save format, render/export execution, or visible editor UI/UX.
+- 남은 위험:
+  - Only `final_overlay` was cut over. Timeline, global canvas, save/reload, render/export, and persistence ownership remain on existing paths.
+  - Phase 9 cleanup must not delete legacy write paths until two consecutive release checkpoints prove parity and rollback safety.
+
+## Full NLE Transition Phase 7 Render/Export Parity - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition planning, phase 7 render/export parity.
+- 결과: pass
+- 저장 위치:
+  - Parity artifact: `output/manual_verification/latest/nle_render_export_parity_20260627/render_export_parity_report.md`
+  - Render/export parity helper: `core/project/nle_render_export_parity.py`
+  - Focused tests: `tests/test_project_nle_render_export_parity.py`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Added `RenderExportParityReport` and `RenderExportSurfaceReport`.
+  - Added `build_project_nle_render_export_parity_report()` and `assert_project_nle_render_export_parity()`.
+  - Compared one final caption frame projection across `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, and `exported_assets`.
+  - Locked final overlay to final captions only: no gaps and no STT candidate rows.
+  - Preserved global-canvas gap and STT candidate evidence while requiring the final caption projection hash to match.
+  - Checked roughcut exact-join sidecar rows against NLE markers and export render-plan rows against EDL/manifest rows.
+  - Added a negative guard where export manifest drift fails the parity assertion.
+  - Marked phase 7 complete in `ACTION_ITEMS.md`; the next action is phase 8 runtime cutover, one owner-approved surface at a time.
+  - No runtime ownership cutover, visible editor UI route, subtitle quality policy, save-format approval, packaging, release, commit, or push was performed.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` -> route visible.
+  - `tools/jammini_watchdog.sh --handoff-probe` -> `20260627-161256`, handoff file visible, first line `DEX_REVIEW_READY`.
+  - `./venv/bin/python -m py_compile core/project/nle_render_export_parity.py tests/test_project_nle_render_export_parity.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_render_export_parity.py` -> `2 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_render_export_parity.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `33 passed, 4 subtests passed`.
+- 자막 품질 영향:
+  - None. This read-only parity proof does not change STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, final subtitle timing/text, render execution, export execution, or visible editor UI/UX.
+- 남은 위험:
+  - Phase 7 proves read-only parity only; it does not switch runtime rendering/export ownership.
+  - Phase 8 needs a separate owner-approved single-surface cutover target and focused rollback gate.
+
+## Full NLE Transition Phase 6 Save/Reload Compatibility - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition planning, phase 6 save/reload compatibility.
+- 결과: pass
+- 저장 위치:
+  - Compatibility artifact: `output/manual_verification/latest/nle_save_reload_compat_20260627/save_reload_compat_report.md`
+  - Persistence guard: `core/project/nle_persistence_guard.py`
+  - Focused tests: `tests/test_project_nle_persistence_guard.py`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Added `strip_unapproved_nle_persistence_fields()` and `assert_no_unapproved_nle_persistence_fields()`.
+  - Guarded `project_io`, `project_format`, and `project_manager` save/reload boundaries.
+  - Unapproved persisted `nle`, `nle_snapshot`, and disk-shaped `_nle_project_state` fields are stripped.
+  - Reload/hydration can record metadata-only `_nle_persistence_quarantine`, but that quarantine report is runtime-only and removed before disk write.
+  - Runtime `NLEProjectState` remains allowed in memory and is still never persisted.
+  - Marked phase 6 complete in `ACTION_ITEMS.md`; the next action is phase 7 render/export parity.
+  - No visible editor UI route, subtitle quality policy, save-format approval, packaging, release, commit, or push was performed.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` -> route visible.
+  - `tools/jammini_watchdog.sh --handoff-probe` -> `20260627-160313`, handoff file visible, first line `DEX_REVIEW_READY`.
+  - `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/project_io.py core/project/project_manager.py tests/test_project_nle_persistence_guard.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py` -> `4 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `31 passed, 4 subtests passed`.
+- 자막 품질 영향:
+  - None. This persistence guard does not change STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, final subtitle text/timing, render/export runtime, or visible editor UI/UX.
+- 남은 위험:
+  - Persisted NLE project fields remain unapproved; this phase only strips/quarantines them.
+  - Phase 7 must still prove render/export parity across final projection consumers.
+
+## Full NLE Transition Phase 5 Gap-Delete Dual-Write Pilot - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition planning, phase 5 dual-write pilot.
+- 결과: pass
+- 저장 위치:
+  - Pilot artifact: `output/manual_verification/latest/nle_dual_write_pilot_20260627/gap_delete_pilot_report.md`
+  - Dual-write helper: `core/project/nle_dual_write.py`
+  - Focused tests: `tests/test_project_nle_dual_write.py`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Selected `gap_delete` as the low-risk dual-write pilot family.
+  - Added `apply_gap_delete_dual_write_pilot()` to route one explicit gap deletion through runtime `NLEProjectState`.
+  - Projected runtime NLE rows back into legacy `editor_state`.
+  - Built before/after `ProjectionParityReport` and a `gap_delete` `NLEEditorOperation` with a matching undo snapshot.
+  - Focused fixture proves before `gap_count=1`, after `gap_count=0`, final `overlap_count=0`, `max_active_segments=1`, candidate evidence retained in undo snapshot, and disk payload free of `_nle_project_state`, `nle`, and `nle_snapshot`.
+  - Marked phase 5 complete in `ACTION_ITEMS.md`; the next action is phase 6 save/reload compatibility.
+  - No visible editor UI route, save-format change, packaging, release, commit, or push was performed.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` -> route visible.
+  - `tools/jammini_watchdog.sh --handoff-probe` -> `20260627-155406`, handoff file visible, first line `DEX_REVIEW_READY`.
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py tests/test_project_nle_dual_write.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `27 passed, 4 subtests passed`.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - None. The pilot deletes only an explicit gap row and keeps final caption rows, STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, render/export runtime, and UI behavior unchanged.
+- 남은 위험:
+  - Phase 5 proves only the `gap_delete` operation family, not broad runtime NLE write ownership.
+  - Phase 6 must harden save/reload compatibility against unapproved persisted NLE payloads before additional operation families are routed.
+
+## Full NLE Transition Phase 4 Operation Model - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition planning, phase 4 operation model.
+- 결과: pass
+- 저장 위치:
+  - Operation model artifact: `output/manual_verification/latest/nle_operation_model_20260627/operation_model_report.md`
+  - Operation contract helper: `core/project/nle_operations.py`
+  - Focused tests: `tests/test_project_nle_operations.py`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Added `NLEEditorOperation`, `NLEUndoSnapshot`, `build_nle_editor_operation()`, and `build_nle_undo_snapshot()`.
+  - Covered `caption_move`, `caption_resize`, `caption_split`, `caption_merge`, `caption_delete`, `gap_generate`, `gap_delete`, `candidate_confirm`, `marker_edit`, and `roughcut_range_edit`.
+  - Required a matching undo snapshot for every operation.
+  - Rejected final-caption operations when after-projection has invalid duration, non-monotonic rows, final overlap, or `max_active_segments>1`.
+  - Required `candidate_confirm` provenance such as `candidate_source=STT1` or `STT2`.
+  - Required `roughcut_range_edit` to use `time_domain=output`.
+  - Marked phase 4 complete in `ACTION_ITEMS.md`; the next action is phase 5 dual-write pilot.
+  - No runtime write routing, save-format change, visible UI/UX change, packaging, release, commit, or push was performed.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` -> route visible.
+  - `tools/jammini_watchdog.sh --handoff-probe` -> `20260627-154738`, handoff file visible, first line `DEX_REVIEW_READY`.
+  - `./venv/bin/python -m py_compile core/project/nle_operations.py tests/test_project_nle_operations.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py` -> `5 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `24 passed, 4 subtests passed`.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - None. Operation/undo contract code only; STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, save format, render/export runtime, and UI behavior were not changed.
+- 남은 위험:
+  - Phase 4 defines transaction contracts but does not prove a live dual-write route.
+  - Phase 5 must choose exactly one low-risk operation family and keep rollback behind projection/adapter parity gates.
+
+## Full NLE Transition Phase 3 Read-Only Projection Parity - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition planning, phase 3 read-only projection parity.
+- 결과: pass
+- 저장 위치:
+  - Parity artifact: `output/manual_verification/latest/nle_read_only_parity_20260627/projection_parity_report.md`
+  - Read-only parity helper: `core/project/nle_projection_parity.py`
+  - Focused tests: `tests/test_project_nle_snapshot.py`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Added `ProjectionSurfaceParity` and `ProjectionParityReport` for read-only NLE projection proof.
+  - Added `build_project_nle_projection_parity_report()` and `assert_project_nle_read_only_parity()`.
+  - Covered timeline, video overlay, global canvas, save/export, and roughcut parity without runtime write routing.
+  - Focused fixture proves `caption_count=2`, `gap_count=1`, `candidate_count=3`, `invalid_duration_count=0`, `non_monotonic_count=0`, `overlap_count=0`, `max_active_segments=1`, `save_reload_stable=true`, `global_canvas_stable=true`, and `render_export_stable=true`.
+  - Marked phase 3 complete in `ACTION_ITEMS.md`; the next action is phase 4 operation model.
+  - No runtime cutover, save-format change, visible UI/UX change, packaging, release, commit, or push was performed.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` -> route visible.
+  - `tools/jammini_watchdog.sh --handoff-probe` -> `20260627-153926`, handoff file visible, first line `DEX_REVIEW_READY`.
+  - `./venv/bin/python -m py_compile core/project/nle_projection_parity.py tests/test_project_nle_snapshot.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "read_only_projection_parity or compatibility_characterization or direct_srt or roughcut_exact_join"` -> `5 passed, 10 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `19 passed, 4 subtests passed`.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - None. Read-only projection/assertion code only; STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, save format, render/export runtime, and UI behavior were not changed.
+- 남은 위험:
+  - Phase 3 proves read-only projection parity, not live runtime NLE write ownership.
+  - Phase 4 must define operation/undo transaction contracts before any dual-write pilot is considered.
+
+## Full NLE Transition Phase 2 Domain Contract - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition planning, phase 2 domain contract.
+- 결과: pass
+- 저장 위치:
+  - Domain contract artifact: `output/manual_verification/latest/nle_domain_contract_20260627/domain_contract.md`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Defined the internal NLE domain contract for `NLEDocument`, `MediaAsset`, `Clip`, `Sequence`, `CaptionSegment`, `SilenceGap`, `CandidateLane`, `TimelineMarker`, `RoughcutRange`, `EditorOperation`, `UndoSnapshot`, and `ProjectionParityReport`.
+  - Separated `source`, `sequence`, `output`, and `ui` time domains.
+  - Set the phase 3 read-only parity validation checklist.
+  - Marked phase 2 complete in `ACTION_ITEMS.md`; the next action is phase 3 read-only parity.
+  - No runtime cutover, save-format change, visible UI/UX change, packaging, release, commit, or push was performed.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` -> route visible.
+  - `tools/jammini_watchdog.sh --handoff-probe` -> `20260627-153303`, handoff file visible, first line `DEX_REVIEW_READY`.
+  - `rg`/direct file reads over owner inventory, NLE snapshot/state files, and sentinel review files -> completed.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - None. Planning/documentation-only; STT2, LLM, LoRA, VAD, cut-boundary/timing policy, model selection, save format, render/export runtime, and UI behavior were not changed.
+- 남은 위험:
+  - This contract artifact is not implementation proof.
+  - Phase 3 must add or extend read-only projection parity tests before any runtime write-path cutover.
+
+## Full NLE Transition Phase 1 Owner Inventory - 2026-06-27
+
+- 실행 모드: source-app internal NLE transition planning, phase 1 owner inventory.
+- 결과: pass
+- 저장 위치:
+  - Owner inventory artifact: `output/manual_verification/latest/nle_owner_inventory_20260627/owner_inventory.md`
+  - Active queue: `ACTION_ITEMS.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Mapped current mutable owners for final subtitle rows, silence/gap rows, STT1/STT2 candidate lanes, timeline canvas state, video overlay feed, global canvas/minimap, roughcut/cut boundaries, project save/load, export/render, and undo/redo.
+  - Classified current NLE surfaces as runtime-only `NLEProjectState` save projection plus read-only `NLESnapshot` render/export projection.
+  - Marked phase 1 complete in `ACTION_ITEMS.md`; the next NLE planning action is phase 2 domain contract.
+  - No runtime cutover, project persistence change, visible UI/UX change, packaging, release, commit, or push was performed.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` -> route visible.
+  - `tools/jammini_watchdog.sh --handoff-probe` -> `20260627-152654`, handoff file visible, first line `DEX_REVIEW_READY`.
+  - `rg`/direct file reads over NLE owner files, sentinel review files, editor/timeline/project/roughcut owners -> completed.
+- 자막 품질 영향:
+  - None. Planning/documentation-only inventory; STT2, LLM, LoRA, VAD, cut-boundary policy, timing-quality, model selection, save format, render/export runtime, and UI behavior were not changed.
+- 남은 위험:
+  - This is an owner-map artifact, not implementation proof.
+  - Phase 2 must define the domain contract before any new NLE runtime write path is routed.
+
+## Taption Segment UI/UX Parity Checklist Slice - 2026-06-27
+
+- 실행 모드: source-app Taption segment UI/UX parity checklist and focused PyQt guards.
+- 결과: pass
+- 저장 위치:
+  - Active queue: `ACTION_ITEMS.md`
+  - Checklist artifact: `output/manual_verification/latest/taption_segment_uiux_parity_20260627/checklist.md`
+  - Handoff: `docs/HANDOFF.md`
+- 수정 요약:
+  - Added a Taption-to-source-app segment UI/UX parity matrix with `covered`, `patched-now`, and `macOS-mapped` statuses.
+  - Added a canvas guard proving center segment move suppresses a single silence/gap snap candidate when no subtitle boundary owns the target.
+  - Added a boundary release guard proving commit uses the visible snapped boundary rather than raw pointer intent.
+  - Added an editor timing guard proving center move over one silence/gap absorbs the gap without saving a final subtitle overlap.
+  - Added an inline editor guard proving one-word up/down arrow navigation stays in edit mode.
+  - Added Taption-style immediate neighbor reorder preview for center body drag while preserving existing overwrite/trim behavior for partial overlap moves.
+  - Added release/commit routing for `center_reorder_left/right` so the document reloads in timeline order and does not save a final overlap.
+  - Completed and removed the Taption segment parity item from `ACTION_ITEMS.md`; evidence remains in this result, `docs/HANDOFF.md`, and the checklist artifact.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "one_word_arrow or center_segment_move or boundary_release or stt_candidate"` -> `10 passed, 138 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "single_gap or center_drag or resize_overwrites"` -> `4 passed, 144 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "reorders_across_adjacent or reorder_release or center_drag_can_move_across"` -> `3 passed, 147 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_reorder_commit or center_drag_right_preserves or center_drag_left_preserves"` -> `3 passed, 146 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate or boundary_release or one_word_arrow or reorder"` -> `65 passed, 161 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py` -> `152 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_reorder or center_drag or single_gap or resize_overwrites"` -> `5 passed, 144 deselected`
+  - `./venv/bin/python -m py_compile ui/editor/ux/timeline_canvas_editing.py ui/editor/ux/timeline_subtitle_segment_editing.py ui/editor/ux/editor_timeline_video.py tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py` -> pass
+  - `git diff --check -- .` -> pass
+- 자막 품질 영향:
+  - None. No STT2, LLM, LoRA, VAD, cut-boundary, timing-quality, model-selection, save-format, release, tag, push, packaging, or DMG behavior changed.
+- 남은 위험:
+  - No live manual screenshot/video proof was captured for this checklist slice; coverage is focused offscreen widget/unit tests plus the earlier source-app quick QA in the parent parity patch.
+  - Taption touch-only haptic gestures remain intentionally macOS-mapped and were not copied as new visible input behavior.
+
+## Taption Segment Editing Parity - 2026-06-27
+
+- 실행 모드: source-app Taption-derived segment editing parity patch.
+- 결과: pass
+- 저장 위치:
+  - Handoff: `docs/HANDOFF.md`
+  - Quick QA artifact: `output/manual_verification/latest/qa_suite_quick_20260627_141230`
+  - Active queue source: `ACTION_ITEMS.md`
+- 수정 요약:
+  - Preserved STT1/STT2 raw candidate lanes as editor evidence while preventing STT preview rows from drawing on the video subtitle overlay once final rows exist.
+  - Strengthened final subtitle summary stability so `stable_for_save_reopen` requires `invalid_duration_count=0`, `non_monotonic_count=0`, and `overlap_count=0`.
+  - Added Taption-style center segment drag snap filtering: when movement crosses a silence/gap toward a real subtitle boundary, the gap candidate is suppressed so the subtitle boundary owns the snap guide.
+  - Added regression coverage for video overlay final-only filtering, gap-beyond-subtitle snap priority, and overlap-as-unstable final summary behavior.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py` -> `150 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate"` -> `60 passed, 161 deselected`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_native_subtitle_segments.py tests/test_native_subtitle_stt_segments.py tests/test_video_player_widget.py` -> `87 passed`
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "stt_candidate or live_stt_preview or stt_preview"` -> `32 passed, 56 deselected`
+  - `./venv/bin/python -m py_compile ui/editor/editor_segments_timeline_context.py ui/editor/editor_segments_stt_selection_flow.py ui/editor/video_player_subtitles.py core/native_subtitle_segments.py tools/benchmark_subtitle_pipeline_variants.py ui/editor/ux/timeline_subtitle_segment_editing.py ui/editor/ux/timeline_canvas_editing.py tests/test_timeline_playhead_fit.py tests/test_timeline_hit_targets.py tests/test_video_player_widget.py tests/test_native_subtitle_segments.py tests/test_benchmark_mode_profiles.py` -> pass
+  - `git diff --check -- .` -> pass
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick` -> pass, `failed_count=0`
+- 자막 품질 영향:
+  - None intended. STT2, LLM, LoRA, VAD, cut-boundary quality policy, model selection, save format, release, tag, push, packaging, and DMG behavior were not changed.
+- 남은 위험:
+  - No live screenshot/video proof was captured for this patch; coverage is focused offscreen tests plus source-app quick QA.
+
 ## Post-Generation Editor Readiness And Verification Index Closeout - 2026-06-27
 
 - 실행 모드: source-app post-generation editor readiness closeout with owner-limited NAS HeyDealer 180s proof.

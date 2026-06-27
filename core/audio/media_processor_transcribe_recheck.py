@@ -85,6 +85,139 @@ from core.audio.media_processor_transcribe import (
 )
 
 class VideoProcessorTranscribeRecheckMixin:
+    @staticmethod
+    def _recheck_range_duration_stats(ranges) -> tuple[float, float]:
+        durations: list[float] = []
+        for item in list(ranges or []):
+            try:
+                start = float(getattr(item, "start", 0.0) or 0.0)
+                end = float(getattr(item, "end", start) or start)
+            except Exception:
+                continue
+            durations.append(round(max(0.0, end - start), 6))
+        if not durations:
+            return 0.0, 0.0
+        return round(sum(durations), 6), round(max(durations), 6)
+
+    @staticmethod
+    def _prepared_clip_duration_stats(prepared_clips) -> tuple[float, float]:
+        durations: list[float] = []
+        for clip in list(prepared_clips or []):
+            if not isinstance(clip, dict):
+                continue
+            try:
+                start = float(clip.get("start", 0.0) or 0.0)
+                end = float(clip.get("end", start) or start)
+            except Exception:
+                continue
+            durations.append(round(max(0.0, end - start), 6))
+        if not durations:
+            return 0.0, 0.0
+        return round(sum(durations), 6), round(max(durations), 6)
+
+    @staticmethod
+    def _word_precision_range_reason_stats(ranges) -> dict[str, int]:
+        stats = {
+            "selected_range_count": 0,
+            "precision_review_range_count": 0,
+            "needs_review_range_count": 0,
+            "red_range_count": 0,
+            "yellow_range_count": 0,
+            "risk_range_count": 0,
+            "missing_word_range_count": 0,
+        }
+        for item in list(ranges or []):
+            primary = getattr(item, "primary", {}) if item is not None else {}
+            if not isinstance(primary, dict):
+                primary = {}
+            if any(bool(primary.get(key)) for key in ("editor_selected", "selected")):
+                stats["selected_range_count"] += 1
+            if bool(primary.get("precision_review")):
+                stats["precision_review_range_count"] += 1
+            if bool(primary.get("needs_review")):
+                stats["needs_review_range_count"] += 1
+            quality = primary.get("quality") if isinstance(primary.get("quality"), dict) else {}
+            label = str(quality.get("confidence_label") or "").strip().lower()
+            if label == "red":
+                stats["red_range_count"] += 1
+            elif label == "yellow":
+                stats["yellow_range_count"] += 1
+            flags = {str(flag) for flag in (quality.get("flags") or ())}
+            if flags.intersection({"outside_vad_speech", "high_cps", "short_duration_long_text"}):
+                stats["risk_range_count"] += 1
+            if flags.intersection({"word_timestamps_missing"}):
+                stats["missing_word_range_count"] += 1
+        return stats
+
+    @staticmethod
+    def _secondary_recheck_range_reason_stats(ranges, *, threshold: float) -> dict[str, int]:
+        stats = {
+            "missing_voice_range_count": 0,
+            "route_hint_range_count": 0,
+            "low_score_range_count": 0,
+            "empty_text_range_count": 0,
+        }
+        for item in list(ranges or []):
+            primary = getattr(item, "primary", {}) if item is not None else {}
+            if not isinstance(primary, dict):
+                primary = {}
+            meta = primary.get("asr_metadata") if isinstance(primary.get("asr_metadata"), dict) else {}
+            primary_text = str(getattr(item, "primary_text", "") or primary.get("text") or "").strip()
+            if bool(meta.get("missing_voice_candidate")):
+                stats["missing_voice_range_count"] += 1
+            if bool(primary.get("stt_route_secondary_recheck_hint")):
+                stats["route_hint_range_count"] += 1
+            try:
+                score = float(getattr(item, "primary_score", 0.0) or 0.0)
+            except Exception:
+                score = 0.0
+            if primary_text and score <= float(threshold):
+                stats["low_score_range_count"] += 1
+            if not primary_text:
+                stats["empty_text_range_count"] += 1
+        return stats
+
+    def _reset_stt_stage_wall_clock_spans(self) -> None:
+        self._stt_stage_wall_clock_spans = []
+
+    def _record_stt_stage_wall_clock_span(self, stage: str, started: float, **metadata) -> None:
+        try:
+            elapsed = max(0.0, time.perf_counter() - float(started))
+        except Exception:
+            elapsed = 0.0
+        spans = getattr(self, "_stt_stage_wall_clock_spans", None)
+        if not isinstance(spans, list):
+            spans = []
+            self._stt_stage_wall_clock_spans = spans
+        row = {
+            "stage": str(stage or "unknown"),
+            "elapsed_sec": round(elapsed, 6),
+        }
+        for key, value in dict(metadata or {}).items():
+            if value is None:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                row[str(key)] = value
+        spans.append(row)
+
+    def _merge_stt_stage_wall_clock_spans(self, rows: list[dict] | tuple[dict, ...]) -> None:
+        spans = getattr(self, "_stt_stage_wall_clock_spans", None)
+        if not isinstance(spans, list):
+            spans = []
+            self._stt_stage_wall_clock_spans = spans
+        for item in list(rows or []):
+            if not isinstance(item, dict):
+                continue
+            row = {str(key): value for key, value in item.items() if isinstance(value, (str, int, float, bool))}
+            if row.get("stage"):
+                spans.append(row)
+
+    def _stt_stage_wall_clock_spans_snapshot(self) -> list[dict]:
+        spans = getattr(self, "_stt_stage_wall_clock_spans", None)
+        if not isinstance(spans, list):
+            return []
+        return [dict(item) for item in spans if isinstance(item, dict)]
+
     def _transcribe_zero_window_fallback(
         self,
         chunk_dir: str,
@@ -240,57 +373,128 @@ class VideoProcessorTranscribeRecheckMixin:
         vad_strict: list[dict],
         primary_model: str,
     ) -> list[dict]:
-        if not segments:
-            return segments
-        if not self._setting_bool(settings, "stt_word_timestamps_precision_enabled", True):
-            return segments
-        if bool(settings.get("stt_word_timestamp_precision_pass", False)):
-            return segments
-        if self._stt_word_timestamps_for_pass(settings):
-            return segments
+        started = time.perf_counter()
+        input_count = len(segments or [])
+        range_count = 0
+        prepared_count = 0
+        collected_count = 0
+        applied_count = 0
+        range_audio_sec = 0.0
+        max_range_duration_sec = 0.0
+        prepared_audio_sec = 0.0
+        max_prepared_clip_duration_sec = 0.0
+        result_count = input_count
+        prepare_elapsed = 0.0
+        collect_elapsed = 0.0
+        annotate_elapsed = 0.0
+        batch_elapsed = 0.0
+        collect_cache_enabled = False
+        collect_cache_hit = False
+        collect_cache_write = False
+        collect_provider_called = False
+        reason_stats: dict[str, int] = {}
+        status = "not_started"
+        try:
+            if not segments:
+                status = "empty_input"
+                return segments
+            if not self._setting_bool(settings, "stt_word_timestamps_precision_enabled", True):
+                status = "disabled"
+                return segments
+            if bool(settings.get("stt_word_timestamp_precision_pass", False)):
+                status = "already_precision_pass"
+                return segments
+            if self._stt_word_timestamps_for_pass(settings):
+                status = "word_timestamps_already_enabled"
+                return segments
 
-        ranges = self._word_precision_ranges(segments, settings)
-        if not ranges:
-            return segments
+            ranges = self._word_precision_ranges(segments, settings)
+            range_count = len(ranges)
+            range_audio_sec, max_range_duration_sec = self._recheck_range_duration_stats(ranges)
+            reason_stats = self._word_precision_range_reason_stats(ranges)
+            if not ranges:
+                status = "no_ranges"
+                return segments
 
-        get_logger().log(
-            f"  🔬 [단어 타임태그] 저신뢰/정밀 구간 {len(ranges)}개만 word timestamp 재인식"
-        )
-        self._notify_stage(f"⏳ [STT] 단어 타임태그 {len(ranges)}개 정밀 보정 중")
-        precision_dir = os.path.join(chunk_dir, "_stt_word_precision")
-        shutil.rmtree(precision_dir, ignore_errors=True)
-        os.makedirs(precision_dir, exist_ok=True)
-        batch = prepare_and_collect_recheck_segments_via_service(
-            ranges=ranges,
-            out_dir=precision_dir,
-            settings=settings,
-            prepare_clip_fn=self._prepare_recheck_clip,
-            collect_fn=self._collect_transcribe_result,
-            model=resolve_precision_model_via_service(settings, primary_model=primary_model),
-            label="STT-단어정밀",
-            settings_overrides=precision_pass_overrides_via_service(),
-            annotate_fn=self._annotate_stt_candidates,
-            annotate_source="WORD_PRECISION",
-            vad_segments=vad_strict,
-            peer_segments=segments,
-            is_single=False,
-        )
-        if not batch.prepared_clips:
-            return segments
-        if not batch.collected_segments:
-            return segments
-        if batch.annotate_error:
-            get_logger().log(f"  ⚠️ [단어 타임태그] 정밀 구간 점수 계산 실패: {batch.annotate_error}")
+            get_logger().log(
+                f"  🔬 [단어 타임태그] 저신뢰/정밀 구간 {len(ranges)}개만 word timestamp 재인식"
+            )
+            self._notify_stage(f"⏳ [STT] 단어 타임태그 {len(ranges)}개 정밀 보정 중")
+            precision_dir = os.path.join(chunk_dir, "_stt_word_precision")
+            shutil.rmtree(precision_dir, ignore_errors=True)
+            os.makedirs(precision_dir, exist_ok=True)
+            batch = prepare_and_collect_recheck_segments_via_service(
+                ranges=ranges,
+                out_dir=precision_dir,
+                settings=settings,
+                prepare_clip_fn=self._prepare_recheck_clip,
+                collect_fn=self._collect_transcribe_result,
+                model=resolve_precision_model_via_service(settings, primary_model=primary_model),
+                label="STT-단어정밀",
+                settings_overrides=precision_pass_overrides_via_service(),
+                annotate_fn=self._annotate_stt_candidates,
+                annotate_source="WORD_PRECISION",
+                vad_segments=vad_strict,
+                peer_segments=segments,
+                is_single=False,
+            )
+            prepared_count = len(batch.prepared_clips or [])
+            collected_count = len(batch.collected_segments or [])
+            prepared_audio_sec, max_prepared_clip_duration_sec = self._prepared_clip_duration_stats(batch.prepared_clips)
+            prepare_elapsed = float(batch.prepare_elapsed_sec or 0.0)
+            collect_elapsed = float(batch.collect_elapsed_sec or 0.0)
+            annotate_elapsed = float(batch.annotate_elapsed_sec or 0.0)
+            batch_elapsed = float(batch.total_elapsed_sec or 0.0)
+            collect_cache_enabled = bool(batch.collect_cache_enabled)
+            collect_cache_hit = bool(batch.collect_cache_hit)
+            collect_cache_write = bool(batch.collect_cache_write)
+            collect_provider_called = bool(batch.collect_provider_called)
+            if not batch.prepared_clips:
+                status = "prepare_empty"
+                return segments
+            if not batch.collected_segments:
+                status = "collect_empty"
+                return segments
+            if batch.annotate_error:
+                get_logger().log(f"  ⚠️ [단어 타임태그] 정밀 구간 점수 계산 실패: {batch.annotate_error}")
 
-        updated, applied = self._apply_word_precision_segments(
-            segments,
-            batch.collected_segments,
-            ranges,
-            settings,
-        )
-        if applied > 0:
-            get_logger().log(f"  ✅ [단어 타임태그] {applied}개 자막 타이밍을 단어 기준으로 보정했습니다.")
-        return updated
+            updated, applied = self._apply_word_precision_segments(
+                segments,
+                batch.collected_segments,
+                ranges,
+                settings,
+            )
+            applied_count = int(applied or 0)
+            result_count = len(updated or [])
+            status = "applied" if applied_count > 0 else "no_applied_segments"
+            if applied > 0:
+                get_logger().log(f"  ✅ [단어 타임태그] {applied}개 자막 타이밍을 단어 기준으로 보정했습니다.")
+            return updated
+        finally:
+            self._record_stt_stage_wall_clock_span(
+                "word_precision",
+                started,
+                status=status,
+                input_segments=input_count,
+                range_count=range_count,
+                prepared_clip_count=prepared_count,
+                collected_segment_count=collected_count,
+                applied_count=applied_count,
+                result_segments=result_count,
+                range_audio_sec=round(range_audio_sec, 6),
+                max_range_duration_sec=round(max_range_duration_sec, 6),
+                prepared_audio_sec=round(prepared_audio_sec, 6),
+                max_prepared_clip_duration_sec=round(max_prepared_clip_duration_sec, 6),
+                prepare_elapsed_sec=round(prepare_elapsed, 6),
+                collect_elapsed_sec=round(collect_elapsed, 6),
+                annotate_elapsed_sec=round(annotate_elapsed, 6),
+                batch_elapsed_sec=round(batch_elapsed, 6),
+                collect_cache_enabled=collect_cache_enabled,
+                collect_cache_hit=collect_cache_hit,
+                collect_cache_write=collect_cache_write,
+                collect_provider_called=collect_provider_called,
+                **reason_stats,
+            )
     def _recheck_low_score_stt_ranges(
         self,
         chunk_dir: str,
@@ -403,106 +607,190 @@ class VideoProcessorTranscribeRecheckMixin:
         target_end_sec: float = None,
         preview_callback=None,
     ) -> list[dict]:
-        if not chunk_segs or not self._selective_secondary_recheck_enabled(settings, primary_model):
-            return chunk_segs
-        secondary_model = str(settings.get("selected_whisper_model_secondary") or "").strip()
-        context_label = "선택 STT2 재검사" if self._stt_selective_ensemble_enabled(settings) else "Fast STT2 재검사"
+        started = time.perf_counter()
+        input_count = len(chunk_segs or [])
+        range_count = 0
+        raw_range_count = 0
+        prepared_count = 0
+        collected_count = 0
+        applied_count = 0
+        applied_segment_count = 0
+        range_audio_sec = 0.0
+        max_range_duration_sec = 0.0
+        prepared_audio_sec = 0.0
+        max_prepared_clip_duration_sec = 0.0
+        result_count = input_count
+        prepare_elapsed = 0.0
+        collect_elapsed = 0.0
+        annotate_elapsed = 0.0
+        batch_elapsed = 0.0
+        collect_cache_enabled = False
+        collect_cache_hit = False
+        collect_cache_write = False
+        collect_provider_called = False
+        reason_stats: dict[str, int] = {}
+        status = "not_started"
         try:
-            scored_primary = self._annotate_stt_candidates(
-                [dict(seg) for seg in chunk_segs if isinstance(seg, dict)],
-                source="STT1",
+            if not chunk_segs:
+                status = "empty_input"
+                return chunk_segs
+            if not self._selective_secondary_recheck_enabled(settings, primary_model):
+                status = "disabled"
+                return chunk_segs
+            secondary_model = str(settings.get("selected_whisper_model_secondary") or "").strip()
+            context_label = "선택 STT2 재검사" if self._stt_selective_ensemble_enabled(settings) else "Fast STT2 재검사"
+            try:
+                scored_primary = self._annotate_stt_candidates(
+                    [dict(seg) for seg in chunk_segs if isinstance(seg, dict)],
+                    source="STT1",
+                    vad_segments=vad_strict,
+                    settings=settings,
+                )
+            except Exception as exc:
+                status = "score_failed"
+                get_logger().log(f"  ⚠️ [{context_label}] STT1 점수 계산 실패: {exc}")
+                return chunk_segs
+            result_count = len(scored_primary or [])
+
+            range_settings = dict(settings)
+            if target_end_sec is not None:
+                range_settings["_stt_recheck_target_end_sec"] = float(target_end_sec)
+
+            ranges, raw_range_count = build_selective_secondary_recheck_ranges(
+                primary_segments=scored_primary,
                 vad_segments=vad_strict,
+                settings=range_settings,
+                score_fn=self._segment_score_100,
+                chunk_path_for_time=lambda target_sec: self._chunk_path_covering_time(chunk_dir, target_sec),
+            )
+            range_count = len(ranges)
+            range_audio_sec, max_range_duration_sec = self._recheck_range_duration_stats(ranges)
+            threshold = stt_rescue.threshold(settings)
+            reason_stats = self._secondary_recheck_range_reason_stats(ranges, threshold=threshold)
+            if raw_range_count > len(ranges):
+                get_logger().log(
+                    f"  ⚡ [{context_label}] STT2 재검사 예산 적용: {raw_range_count}개 → {len(ranges)}개"
+                )
+            if not ranges:
+                status = "no_ranges"
+                return scored_primary
+
+            get_logger().log(
+                f"  🔁 [{context_label}] STT1 {threshold:.0f}점 이하/누락/경계 후보 {len(ranges)}개를 STT2로 확인"
+            )
+            self._notify_stage(f"⏳ [STT] 저점 구간 {len(ranges)}개 STT2 확인 중")
+
+            collect_fn = self._collect_transcribe_result
+            batch_settings = settings
+            if callable(preview_callback):
+                if bool(settings.get("stt_recheck_collect_cache_enabled", False)):
+                    batch_settings = {**dict(settings), "stt_recheck_collect_cache_enabled": False}
+                stt2_preview_callback = self._ensemble_preview_callback("STT2", preview_callback)
+
+                def collect_fn(*args, **kwargs):
+                    kwargs["preview_callback"] = stt2_preview_callback
+                    return self._collect_transcribe_result(*args, **kwargs)
+
+            rescue_dir = os.path.join(chunk_dir, "_fast_stt2_recheck")
+            shutil.rmtree(rescue_dir, ignore_errors=True)
+            os.makedirs(rescue_dir, exist_ok=True)
+
+            batch = prepare_and_collect_recheck_segments_via_service(
+                ranges=ranges,
+                out_dir=rescue_dir,
+                settings=batch_settings,
+                prepare_clip_fn=self._prepare_recheck_clip,
+                collect_fn=collect_fn,
+                model=secondary_model,
+                label="Fast-STT2",
+                settings_overrides=selective_secondary_recheck_overrides_via_service(),
+                annotate_fn=self._annotate_stt_candidates,
+                annotate_source="STT2",
+                vad_segments=vad_strict,
+                peer_segments=scored_primary,
+                is_single=False,
+            )
+            prepared_count = len(batch.prepared_clips or [])
+            collected_count = len(batch.collected_segments or [])
+            prepared_audio_sec, max_prepared_clip_duration_sec = self._prepared_clip_duration_stats(batch.prepared_clips)
+            prepare_elapsed = float(batch.prepare_elapsed_sec or 0.0)
+            collect_elapsed = float(batch.collect_elapsed_sec or 0.0)
+            annotate_elapsed = float(batch.annotate_elapsed_sec or 0.0)
+            batch_elapsed = float(batch.total_elapsed_sec or 0.0)
+            collect_cache_enabled = bool(batch.collect_cache_enabled)
+            collect_cache_hit = bool(batch.collect_cache_hit)
+            collect_cache_write = bool(batch.collect_cache_write)
+            collect_provider_called = bool(batch.collect_provider_called)
+            if not batch.prepared_clips:
+                status = "prepare_empty"
+                return scored_primary
+            if not batch.collected_segments:
+                status = "collect_empty"
+                return scored_primary
+            if batch.annotate_error:
+                get_logger().log(f"  ⚠️ [{context_label}] STT2 점수 계산 실패: {batch.annotate_error}")
+
+            applied = apply_recheck_selection_to_tracks_via_service(
+                prepared_clips=batch.prepared_clips,
+                rescue_segments=batch.collected_segments,
                 settings=settings,
+                replacement_is_better_fn=stt_rescue.replacement_is_better,
+                mark_segments_fn=stt_rescue.mark_rescue_segments,
+                base_tracks={"primary": scored_primary},
+                decorate_segment_fn=lambda seg: {
+                    **seg,
+                    "stt_selected_source": "STT2",
+                    "stt_ensemble_source": "STT2_SELECTIVE_RECHECK",
+                    "stt_preview_source": "STT2",
+                    "stt_source": "STT2",
+                },
+                retention_ratios={"primary": float(settings.get("stt_selective_recheck_min_segment_retention_ratio", 0.9) or 0.9)},
             )
-        except Exception as exc:
-            get_logger().log(f"  ⚠️ [{context_label}] STT1 점수 계산 실패: {exc}")
-            return chunk_segs
+            applied_count = len(applied.selection.applied_ranges or [])
+            applied_segment_count = len(applied.selection.applied_segments or [])
 
-        range_settings = dict(settings)
-        if target_end_sec is not None:
-            range_settings["_stt_recheck_target_end_sec"] = float(target_end_sec)
+            if not applied.selection.applied_segments:
+                status = "no_improvement"
+                get_logger().log(f"  ↩️ [{context_label}] 개선된 저점 구간이 없어 STT1 결과를 유지합니다.")
+                return scored_primary
 
-        ranges, raw_range_count = build_selective_secondary_recheck_ranges(
-            primary_segments=scored_primary,
-            vad_segments=vad_strict,
-            settings=range_settings,
-            score_fn=self._segment_score_100,
-            chunk_path_for_time=lambda target_sec: self._chunk_path_covering_time(chunk_dir, target_sec),
-        )
-        if raw_range_count > len(ranges):
-            get_logger().log(
-                f"  ⚡ [{context_label}] STT2 재검사 예산 적용: {raw_range_count}개 → {len(ranges)}개"
+            if applied.merged_tracks is None:
+                candidate_updated = list(applied.preview_tracks.get("primary", []))
+                status = "retention_rejected"
+                get_logger().log(
+                    f"  ↩️ [{context_label}] STT2 보강 결과가 원본 세그먼트를 과도하게 줄여 "
+                    f"STT1 유지 ({len(scored_primary)}개 → {len(candidate_updated)}개)"
+                )
+                return scored_primary
+            updated = list((applied.merged_tracks or {}).get("primary", []))
+            result_count = len(updated)
+            status = "applied"
+            get_logger().log(f"  ✅ [{context_label}] 저점 구간 {len(applied.selection.applied_ranges)}개를 STT2 결과로 보강했습니다.")
+            return updated
+        finally:
+            self._record_stt_stage_wall_clock_span(
+                "stt2_selective_recheck",
+                started,
+                status=status,
+                input_segments=input_count,
+                raw_range_count=raw_range_count,
+                range_count=range_count,
+                prepared_clip_count=prepared_count,
+                collected_segment_count=collected_count,
+                applied_count=applied_count,
+                applied_segment_count=applied_segment_count,
+                result_segments=result_count,
+                range_audio_sec=round(range_audio_sec, 6),
+                max_range_duration_sec=round(max_range_duration_sec, 6),
+                prepared_audio_sec=round(prepared_audio_sec, 6),
+                max_prepared_clip_duration_sec=round(max_prepared_clip_duration_sec, 6),
+                prepare_elapsed_sec=round(prepare_elapsed, 6),
+                collect_elapsed_sec=round(collect_elapsed, 6),
+                annotate_elapsed_sec=round(annotate_elapsed, 6),
+                batch_elapsed_sec=round(batch_elapsed, 6),
+                collect_cache_enabled=collect_cache_enabled,
+                collect_cache_hit=collect_cache_hit,
+                collect_cache_write=collect_cache_write,
+                collect_provider_called=collect_provider_called,
+                **reason_stats,
             )
-        if not ranges:
-            return scored_primary
-
-        threshold = stt_rescue.threshold(settings)
-        get_logger().log(
-            f"  🔁 [{context_label}] STT1 {threshold:.0f}점 이하/누락/경계 후보 {len(ranges)}개를 STT2로 확인"
-        )
-        self._notify_stage(f"⏳ [STT] 저점 구간 {len(ranges)}개 STT2 확인 중")
-
-        rescue_dir = os.path.join(chunk_dir, "_fast_stt2_recheck")
-        shutil.rmtree(rescue_dir, ignore_errors=True)
-        os.makedirs(rescue_dir, exist_ok=True)
-        collect_fn = self._collect_transcribe_result
-        if callable(preview_callback):
-            stt2_preview_callback = self._ensemble_preview_callback("STT2", preview_callback)
-
-            def collect_fn(*args, **kwargs):
-                kwargs["preview_callback"] = stt2_preview_callback
-                return self._collect_transcribe_result(*args, **kwargs)
-
-        batch = prepare_and_collect_recheck_segments_via_service(
-            ranges=ranges,
-            out_dir=rescue_dir,
-            settings=settings,
-            prepare_clip_fn=self._prepare_recheck_clip,
-            collect_fn=collect_fn,
-            model=secondary_model,
-            label="Fast-STT2",
-            settings_overrides=selective_secondary_recheck_overrides_via_service(),
-            annotate_fn=self._annotate_stt_candidates,
-            annotate_source="STT2",
-            vad_segments=vad_strict,
-            peer_segments=scored_primary,
-            is_single=False,
-        )
-        if not batch.prepared_clips:
-            return scored_primary
-        if not batch.collected_segments:
-            return scored_primary
-        if batch.annotate_error:
-            get_logger().log(f"  ⚠️ [{context_label}] STT2 점수 계산 실패: {batch.annotate_error}")
-
-        applied = apply_recheck_selection_to_tracks_via_service(
-            prepared_clips=batch.prepared_clips,
-            rescue_segments=batch.collected_segments,
-            settings=settings,
-            replacement_is_better_fn=stt_rescue.replacement_is_better,
-            mark_segments_fn=stt_rescue.mark_rescue_segments,
-            base_tracks={"primary": scored_primary},
-            decorate_segment_fn=lambda seg: {
-                **seg,
-                "stt_selected_source": "STT2",
-                "stt_ensemble_source": "STT2_SELECTIVE_RECHECK",
-                "stt_preview_source": "STT2",
-                "stt_source": "STT2",
-            },
-            retention_ratios={"primary": float(settings.get("stt_selective_recheck_min_segment_retention_ratio", 0.9) or 0.9)},
-        )
-
-        if not applied.selection.applied_segments:
-            get_logger().log(f"  ↩️ [{context_label}] 개선된 저점 구간이 없어 STT1 결과를 유지합니다.")
-            return scored_primary
-
-        if applied.merged_tracks is None:
-            candidate_updated = list(applied.preview_tracks.get("primary", []))
-            get_logger().log(
-                f"  ↩️ [{context_label}] STT2 보강 결과가 원본 세그먼트를 과도하게 줄여 "
-                f"STT1 유지 ({len(scored_primary)}개 → {len(candidate_updated)}개)"
-            )
-            return scored_primary
-        updated = list((applied.merged_tracks or {}).get("primary", []))
-        get_logger().log(f"  ✅ [{context_label}] 저점 구간 {len(applied.selection.applied_ranges)}개를 STT2 결과로 보강했습니다.")
-        return updated

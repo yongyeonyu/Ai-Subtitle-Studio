@@ -175,6 +175,18 @@ def _segment_vectors(rows: list[dict[str, Any]]) -> tuple[list[float], list[floa
     return starts, ends, text_lengths, texts
 
 
+def _apply_final_stability_contract(summary: dict[str, Any]) -> dict[str, Any]:
+    result = dict(summary or {})
+    try:
+        invalid = int(result.get("invalid_duration_count", 0) or 0)
+        non_monotonic = int(result.get("non_monotonic_count", 0) or 0)
+        overlaps = int(result.get("overlap_count", 0) or 0)
+    except Exception:
+        return result
+    result["stable_for_save_reopen"] = invalid == 0 and non_monotonic == 0 and overlaps == 0
+    return result
+
+
 def _python_segment_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     starts, ends, text_lengths, texts = _segment_vectors(rows)
     count = min(len(starts), len(ends), len(text_lengths))
@@ -218,7 +230,7 @@ def _python_segment_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         previous_start = start
         previous_end = end
     total_chars = sum(text_lengths[:count])
-    return {
+    return _apply_final_stability_contract({
         "schema": "ai_subtitle_studio.subtitle_segments.summary.v1",
         "segment_count": count,
         "invalid_duration_count": invalid,
@@ -234,10 +246,10 @@ def _python_segment_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "max_overlap_index": max_overlap_index,
         "max_chars": max(text_lengths[:count], default=0),
         "avg_chars": round(total_chars / count, 6) if count else 0.0,
-        "stable_for_save_reopen": invalid == 0 and non_monotonic == 0,
+        "stable_for_save_reopen": False,
         "segment_feed_signature": _segment_feed_signature(starts, ends, text_lengths, texts, count),
         "native_backend": "python",
-    }
+    })
 
 
 def segment_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -246,7 +258,7 @@ def segment_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             starts, ends, text_lengths, texts = _segment_vectors(rows)
             result = _native.segment_summary(starts, ends, text_lengths, texts)
             if isinstance(result, dict):
-                return dict(result)
+                return _apply_final_stability_contract(result)
         except Exception:
             pass
     return _python_segment_summary(rows)

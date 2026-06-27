@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
+import time
+from pathlib import Path
 from typing import Any, Callable
 
 from core.engine.llm_correction_guard import normalized_edit_distance
+from core.runtime import config
 
 CONTEXT_BOUNDARY_SCHEMA = "ai_subtitle_studio.subtitle_llm_context_boundary.v1"
+KEEP_DECISION_CACHE_SCHEMA = "ai_subtitle_studio.high_context_keep_decision_cache.v1"
+_KEEP_DECISION_CACHE_BY_PATH: dict[str, dict[str, Any]] = {}
 
 
 def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool = False) -> bool:
@@ -478,6 +484,95 @@ def _decision_action(decision: dict[str, Any]) -> str:
     return "keep"
 
 
+def _requested_correction_count(decision: Any) -> int:
+    if not isinstance(decision, dict):
+        return 0
+    return sum(1 for item in list(decision.get("corrections") or []) if isinstance(item, dict))
+
+
+def _applied_correction_count(rows: list[dict[str, Any]]) -> int:
+    seen: set[tuple[str, str, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for item in list(row.get("_llm_context_word_corrections") or []):
+            if not isinstance(item, dict):
+                continue
+            key = (
+                str(item.get("word_index") or ""),
+                str(item.get("from") or ""),
+                str(item.get("to") or ""),
+            )
+            if key[1] and key[2]:
+                seen.add(key)
+    return len(seen)
+
+
+def _keep_cache_path(settings: dict[str, Any]) -> Path:
+    override = str(settings.get("subtitle_llm_context_keep_cache_path") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(config.OUTPUT_DIR) / "high_context_boundary_cache" / "keep_decisions_v1.json"
+
+
+def _keep_cache_key(*, model: str, prompt: str, settings: dict[str, Any]) -> str:
+    payload = {
+        "schema": KEEP_DECISION_CACHE_SCHEMA,
+        "model": str(model or "").strip(),
+        "prompt": str(prompt or ""),
+        "word_correction_enabled": bool(_setting_bool(settings, "subtitle_llm_context_word_correction_enabled", True)),
+        "allow_merge": bool(_setting_bool(settings, "subtitle_llm_context_allow_merge", True)),
+        "max_word_corrections": int(_setting_int(settings, "subtitle_llm_context_max_word_corrections", 2)),
+    }
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _load_keep_cache(path: Path) -> dict[str, Any]:
+    cache_key = str(path)
+    if cache_key in _KEEP_DECISION_CACHE_BY_PATH:
+        return _KEEP_DECISION_CACHE_BY_PATH[cache_key]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema") != KEEP_DECISION_CACHE_SCHEMA:
+            raise ValueError("unsupported cache schema")
+        entries = payload.get("entries")
+        cache = dict(entries) if isinstance(entries, dict) else {}
+    except Exception:
+        cache = {}
+    _KEEP_DECISION_CACHE_BY_PATH[cache_key] = cache
+    return cache
+
+
+def _save_keep_cache(path: Path, cache: dict[str, Any], *, max_entries: int = 512) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entries = dict(list(cache.items())[-max(1, int(max_entries)) :])
+        payload = {
+            "schema": KEEP_DECISION_CACHE_SCHEMA,
+            "updated_epoch": round(time.time(), 3),
+            "entries": entries,
+        }
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+        _KEEP_DECISION_CACHE_BY_PATH[str(path)] = entries
+    except Exception:
+        pass
+
+
+def _cached_keep_decision(cache: dict[str, Any], key: str) -> dict[str, Any] | None:
+    entry = cache.get(key)
+    if not isinstance(entry, dict):
+        return None
+    decision = entry.get("decision")
+    if not isinstance(decision, dict):
+        return None
+    if _decision_action(decision) != "keep" or _requested_correction_count(decision) > 0:
+        return None
+    return {"action": "keep", "corrections": [], "reason": str(decision.get("reason") or "cached_keep_no_change")}
+
+
 def _apply_decision_to_pair(
     left: dict[str, Any],
     right: dict[str, Any],
@@ -594,39 +689,122 @@ def refine_high_contextual_boundaries(
     model: str = "",
     logger: Any = None,
     decision_func: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
+    diagnostics_out: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    started = time.perf_counter()
+    diagnostics = diagnostics_out if isinstance(diagnostics_out, dict) else None
+
+    def _record_diagnostics(
+        *,
+        enabled: bool,
+        reason: str,
+        output_count: int,
+        candidate_pairs: int = 0,
+        skipped_pairs: int = 0,
+        calls: int = 0,
+        failed_calls: int = 0,
+        changed_pairs: int = 0,
+        max_pairs: int = 0,
+        keep_decisions: int = 0,
+        move_boundary_decisions: int = 0,
+        merge_decisions: int = 0,
+        invalid_decisions: int = 0,
+        correction_requests: int = 0,
+        applied_corrections: int = 0,
+        keep_cache_enabled: bool = False,
+        keep_cache_hits: int = 0,
+        keep_cache_misses: int = 0,
+        keep_cache_writes: int = 0,
+    ) -> None:
+        if diagnostics is None:
+            return
+        diagnostics.clear()
+        diagnostics.update(
+            {
+                "schema": "ai_subtitle_studio.high_context_boundary_diagnostics.v1",
+                "enabled": bool(enabled),
+                "reason": str(reason or ""),
+                "input_segment_count": len(rows),
+                "output_segment_count": int(output_count),
+                "candidate_pair_count": int(candidate_pairs),
+                "skipped_pair_count": int(skipped_pairs),
+                "llm_call_count": int(calls),
+                "failed_call_count": int(failed_calls),
+                "changed_pair_count": int(changed_pairs),
+                "max_pairs": int(max_pairs),
+                "keep_decision_count": int(keep_decisions),
+                "move_boundary_decision_count": int(move_boundary_decisions),
+                "merge_decision_count": int(merge_decisions),
+                "invalid_decision_count": int(invalid_decisions),
+                "correction_request_count": int(correction_requests),
+                "applied_correction_count": int(applied_corrections),
+                "keep_cache_enabled": bool(keep_cache_enabled),
+                "keep_cache_hit_count": int(keep_cache_hits),
+                "keep_cache_miss_count": int(keep_cache_misses),
+                "keep_cache_write_count": int(keep_cache_writes),
+                "elapsed_sec": round(max(0.0, time.perf_counter() - started), 6),
+            }
+        )
+
     s = dict(settings or {})
     if not rows:
+        _record_diagnostics(enabled=False, reason="empty", output_count=0)
         return []
     if not _is_high_mode(s):
+        _record_diagnostics(enabled=False, reason="not_high_mode", output_count=len(rows))
         return rows
     if not _setting_bool(s, "subtitle_llm_context_boundary_refine_enabled", False):
+        _record_diagnostics(enabled=False, reason="disabled", output_count=len(rows))
         return rows
     if not _supports_context_refine_model(model):
+        _record_diagnostics(enabled=False, reason="unsupported_model", output_count=len(rows))
         return rows
 
     ask = decision_func or _default_llm_decision
     max_pairs = max(0, _setting_int(s, "subtitle_llm_context_max_pairs", 24))
     if max_pairs <= 0:
+        _record_diagnostics(enabled=False, reason="max_pairs_zero", output_count=len(rows), max_pairs=max_pairs)
         return rows
+
+    keep_cache_enabled = _setting_bool(s, "subtitle_llm_context_keep_cache_enabled", False)
+    keep_cache: dict[str, Any] = {}
+    keep_cache_path: Path | None = None
+    keep_cache_max_entries = max(1, _setting_int(s, "subtitle_llm_context_keep_cache_max_entries", 512))
+    if keep_cache_enabled:
+        keep_cache_path = _keep_cache_path(s)
+        keep_cache = _load_keep_cache(keep_cache_path)
 
     idx = 0
     calls = 0
+    candidate_pairs = 0
+    skipped_pairs = 0
+    failed_calls = 0
     changed_pairs = 0
+    keep_decisions = 0
+    move_boundary_decisions = 0
+    merge_decisions = 0
+    invalid_decisions = 0
+    correction_requests = 0
+    applied_corrections = 0
+    keep_cache_hits = 0
+    keep_cache_misses = 0
+    keep_cache_writes = 0
     output: list[dict[str, Any]] = []
     while idx < len(rows):
-        if idx >= len(rows) - 1 or calls >= max_pairs:
+        if idx >= len(rows) - 1 or candidate_pairs >= max_pairs:
             output.append(dict(rows[idx]))
             idx += 1
             continue
         left = dict(rows[idx])
         right = dict(rows[idx + 1])
         if not _candidate_pair(left, right, s):
+            skipped_pairs += 1
             output.append(left)
             idx += 1
             continue
 
+        candidate_pairs += 1
         words = _segment_words(left) + _segment_words(right)
         pair_start = _as_float(left.get("start"), 0.0)
         pair_end = _as_float(right.get("end"), _as_float(right.get("start"), pair_start))
@@ -645,17 +823,66 @@ def refine_high_contextual_boundaries(
             "prompt": prompt,
             "pair_index": idx,
         }
-        calls += 1
-        try:
-            decision = ask(left, right, context)
-        except Exception as exc:
-            if logger is not None:
-                try:
-                    logger.log(f"[High-문맥경계] LLM 경계 검수 실패: {exc}")
-                except Exception:
-                    pass
-            decision = None
+        cache_key = ""
+        cache_hit = False
+        decision: dict[str, Any] | None = None
+        if keep_cache_enabled:
+            cache_key = _keep_cache_key(model=str(model or ""), prompt=prompt, settings=s)
+            cached_decision = _cached_keep_decision(keep_cache, cache_key)
+            if cached_decision is not None:
+                decision = cached_decision
+                cache_hit = True
+                keep_cache_hits += 1
+            else:
+                keep_cache_misses += 1
+        if not cache_hit:
+            calls += 1
+            try:
+                decision = ask(left, right, context)
+            except Exception as exc:
+                failed_calls += 1
+                if logger is not None:
+                    try:
+                        logger.log(f"[High-문맥경계] LLM 경계 검수 실패: {exc}")
+                    except Exception:
+                        pass
+                decision = None
+        if isinstance(decision, dict):
+            action = _decision_action(decision)
+            if action == "move_boundary":
+                move_boundary_decisions += 1
+            elif action == "merge":
+                merge_decisions += 1
+            else:
+                keep_decisions += 1
+            correction_requests += _requested_correction_count(decision)
+        else:
+            invalid_decisions += 1
         pair_rows, changed = _apply_decision_to_pair(left, right, decision, s, pair_index=idx)
+        applied_count = _applied_correction_count(pair_rows)
+        applied_corrections += applied_count
+        if (
+            keep_cache_enabled
+            and not cache_hit
+            and cache_key
+            and keep_cache_path is not None
+            and isinstance(decision, dict)
+            and _decision_action(decision) == "keep"
+            and _requested_correction_count(decision) == 0
+            and applied_count == 0
+            and not changed
+        ):
+            keep_cache[cache_key] = {
+                "schema": KEEP_DECISION_CACHE_SCHEMA,
+                "created_epoch": round(time.time(), 3),
+                "decision": {
+                    "action": "keep",
+                    "corrections": [],
+                    "reason": str(decision.get("reason") or ""),
+                },
+            }
+            _save_keep_cache(keep_cache_path, keep_cache, max_entries=keep_cache_max_entries)
+            keep_cache_writes += 1
         if len(pair_rows) == 1:
             output.extend(pair_rows)
             idx += 2
@@ -675,4 +902,25 @@ def refine_high_contextual_boundaries(
             logger.log(f"[High-문맥경계] 현재+다음 자막 {calls}쌍 검수, 경계/단어 보정 {changed_pairs}쌍")
         except Exception:
             pass
+    _record_diagnostics(
+        enabled=True,
+        reason="completed",
+        output_count=len(output),
+        candidate_pairs=candidate_pairs,
+        skipped_pairs=skipped_pairs,
+        calls=calls,
+        failed_calls=failed_calls,
+        changed_pairs=changed_pairs,
+        max_pairs=max_pairs,
+        keep_decisions=keep_decisions,
+        move_boundary_decisions=move_boundary_decisions,
+        merge_decisions=merge_decisions,
+        invalid_decisions=invalid_decisions,
+        correction_requests=correction_requests,
+        applied_corrections=applied_corrections,
+        keep_cache_enabled=keep_cache_enabled,
+        keep_cache_hits=keep_cache_hits,
+        keep_cache_misses=keep_cache_misses,
+        keep_cache_writes=keep_cache_writes,
+    )
     return output

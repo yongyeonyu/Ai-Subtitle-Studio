@@ -11,6 +11,26 @@
 
 ## Lessons Learned
 
+### 2026-06-28
+
+- generated-video acceptance를 자막 개수, text/timing 점수, overlap만으로 pass 처리하지 않는다.
+  - 이유: `20260628_010403` NAS-off generated-video run은 legacy benchmark acceptance가 `accepted=true`였지만, 직접 media/SRT 검증에서 영상 길이 `180.584s`를 넘어 `182.032s`까지 자막이 생성됐고, out-of-duration row `17`, sub-0.3s row `16`, 59.792s tail row `1`이 확인됐다.
+  - 다음 원칙: generated fixture 검증은 media duration bound, minimum subtitle duration, long-tail segment gate를 함께 통과해야 한다. Global canvas duration을 subtitle `last_end`에서 자동으로 잡은 결과를 영상 길이 검증으로 오해하지 않는다.
+
+- VAD/STT timing consensus에서 전체 파일급 VAD span을 단일 자막 row에 union하지 않는다.
+  - 이유: `20260628_010403`에서 broad VAD `[0.0, 180.912]`가 STT1 row와 union되면서 row 38이 `121.120-180.912`로 늘고, 뒤 row들이 0.05s tail fragments로 밀렸다.
+  - 다음 원칙: STT1/VAD-only union은 VAD와 STT1 span이 start/end/duration tolerance 안에서 비슷할 때만 허용한다. Broad VAD는 row-level timing proof가 아니라 coverage hint로만 다룬다.
+
+### 2026-06-27
+
+- 자막 생성 지연을 컷 경계 병목으로 바로 단정하지 않는다.
+  - 이유: HeyDealer 180s High run에서 전체 pipeline은 약 60초였지만 cut-boundary cProfile owner rows의 top cumulative time은 `0.000602s`, confirmed cut split/snap은 `0.000525s`였다.
+  - 다음 원칙: 성능 진단은 non-profile repeat elapsed와 profiler owner diagnosis를 분리하고, reference-scored fixture로 raw/final count, quality, timing MAE, final overlap, save/global-canvas stability를 함께 확인한 뒤에만 trim을 제안한다.
+
+- reference fixture preflight를 파일 존재/파싱 통과로만 승인하지 않는다.
+  - 이유: X5 180s cached WAV는 이름상 `후반`처럼 보였지만 실제 음성은 `X5_전반` 프로젝트 SRT와 정렬됐다. `X5_후반` SRT도 파일/파싱 preflight는 통과했지만 reference benchmark quality `23.234`, text `4.756`, timing MAE `3.3362s`로 semantic mismatch였다.
+  - 다음 원칙: media/SRT 조합은 `verify_reference_fixture_availability.py` 후 반드시 `benchmark_subtitle_pipeline_variants.py --reference-srt`와 `evaluate_reference_benchmark_acceptance.py`까지 통과해야 latency trim 판단에 쓴다. 파일명이나 SRT parse 성공만으로 reference-fit을 주장하지 않는다.
+
 ### 2026-05-20
 
 - 수동 저장 직후 러프컷 LLM이 뜨면 editor 러프컷 타이머만 보지 않는다.

@@ -221,6 +221,24 @@ class SubtitleQualityModelsTest(unittest.TestCase):
             "stt1_vad_union_span",
         )
 
+    def test_vad_stt_timing_consensus_rejects_broad_vad_stt1_union(self):
+        segments = [
+            {
+                "start": 130.84,
+                "end": 133.88,
+                "text": "영상 오버레이에는 최종 자막만 보여야 합니다",
+                "stt_selected_source": "STT1",
+            }
+        ]
+        vad = [{"start": 0.0, "end": 180.912}]
+
+        adjusted, changed = apply_vad_stt_timing_consensus(segments, vad)
+
+        self.assertEqual(changed, 0)
+        self.assertAlmostEqual(adjusted[0]["start"], 130.84, places=3)
+        self.assertAlmostEqual(adjusted[0]["end"], 133.88, places=3)
+        self.assertNotIn("vad_stt_timing_consensus", adjusted[0].get("asr_metadata") or {})
+
     def test_vad_stt_timing_consensus_uses_stt_pair_when_vad_disagrees(self):
         segments = [
             {

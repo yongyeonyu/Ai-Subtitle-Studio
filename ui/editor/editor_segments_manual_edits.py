@@ -250,12 +250,39 @@ class EditorSegmentsManualEditsMixin:
             self.timeline.center_to_sec(center_sec, smooth=True)
         self._sync_lock = False
 
-    def _finalize_manual_edit_snapshot(self) -> None:
+    def _finalize_manual_edit_snapshot(self, *, allow_revision_drift: bool = False) -> None:
         self._mark_dirty()
         self._finalize_edit()
         arm_snapshot_undo = getattr(self, "_arm_snapshot_undo_routing", None)
         if callable(arm_snapshot_undo):
-            arm_snapshot_undo()
+            try:
+                arm_snapshot_undo(allow_revision_drift=bool(allow_revision_drift))
+            except TypeError:
+                arm_snapshot_undo()
+
+    def _focus_split_result_row(self, *, split_sec: float, preferred_line: int) -> None:
+        doc = self.text_edit.document()
+        target_block = None
+        tolerance = max(0.05, 1.5 / max(1.0, float(getattr(self, "video_fps", 30.0) or 30.0)))
+        for index in range(doc.blockCount()):
+            block = doc.findBlockByNumber(index)
+            ud = block.userData()
+            if not isinstance(ud, SubtitleBlockData):
+                continue
+            try:
+                if abs(float(ud.start_sec) - float(split_sec)) <= tolerance:
+                    target_block = block
+                    break
+            except Exception:
+                continue
+        if target_block is None:
+            target_block = doc.findBlockByNumber(max(0, min(int(preferred_line), doc.blockCount() - 1)))
+        if target_block.isValid():
+            self._set_split_cursor_and_timeline_focus(
+                QTextCursor(target_block),
+                active_start=float(split_sec),
+                center_sec=float(split_sec),
+            )
 
     def split_segment_with_text(self, line_num: int, split_sec: float, cursor: int):
         doc = self.text_edit.document()
@@ -275,6 +302,7 @@ class EditorSegmentsManualEditsMixin:
         start_sec = self._frame_time(ud.start_sec)
         spk_id = ud.spk_id
         split_sec = self._frame_time(split_sec)
+        end_sec = None
 
         try:
             canvas_segs = self.timeline.canvas.segments
@@ -307,6 +335,30 @@ class EditorSegmentsManualEditsMixin:
 
         left_doc = left.replace("\n", "\u2028")
         right_doc = right.replace("\n", "\u2028")
+
+        nle_split = getattr(self, "_nle_live_editor_caption_split_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if callable(nle_split) and callable(reloader):
+            try:
+                current_segments = list(self._get_current_segments(force_rebuild=True))
+            except Exception:
+                current_segments = []
+            nle_result = nle_split(
+                current_segments=current_segments,
+                line_num=int(line_num),
+                start_sec=float(start_sec),
+                end_sec=float(end_sec if end_sec is not None else split_sec),
+                split_sec=float(split_sec),
+                left_text=left,
+                right_text=right,
+            )
+            if nle_result is not None:
+                self._last_nle_live_editor_operation = nle_result.operation.to_dict()
+                self._last_nle_live_editor_projection = nle_result.after_projection.to_dict()
+                reloader(list(nle_result.projected_rows), preserve_view=True, mark_dirty=True)
+                self._focus_split_result_row(split_sec=float(split_sec), preferred_line=int(line_num) + 1)
+                self._finalize_manual_edit_snapshot(allow_revision_drift=True)
+                return
 
         cur = QTextCursor(block)
         cur.beginEditBlock()

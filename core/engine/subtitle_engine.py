@@ -27,6 +27,7 @@ from core.engine.llm_candidate_policy import (
 )
 from core.engine.subtitle_macro_chunks import (
     build_llm_macro_groups as _build_llm_macro_groups,
+    llm_macro_groups_require_provider_call as _llm_macro_groups_require_provider_call,
     llm_macro_chunk_enabled as _llm_macro_chunk_enabled,
     process_llm_macro_groups as _process_llm_macro_groups,
 )
@@ -1395,6 +1396,7 @@ def _emit_processing_preview(
     stage: str,
     stage_label: str,
     segments: list[dict] | None,
+    diagnostics: dict | None = None,
 ) -> None:
     if not callable(preview_callback):
         return
@@ -1439,6 +1441,7 @@ def _emit_processing_preview(
                 "stage": str(stage or ""),
                 "stage_label": str(stage_label or stage or ""),
                 "segments": snapshot,
+                **({"diagnostics": dict(diagnostics)} if isinstance(diagnostics, dict) and diagnostics else {}),
             }
         )
     except Exception:
@@ -1656,6 +1659,33 @@ def _llm_macro_callbacks() -> dict:
     }
 
 
+def _llm_macro_response_cache_diagnostics(rows: list[dict]) -> dict:
+    policies = [
+        dict(row.get("_llm_macro_chunk_policy") or {})
+        for row in list(rows or [])
+        if isinstance(row, dict) and isinstance(row.get("_llm_macro_chunk_policy"), dict)
+    ]
+    if not policies:
+        return {}
+
+    def groups_with(flag: str) -> set[str]:
+        groups: set[str] = set()
+        for row_index, policy in enumerate(policies):
+            if not bool(policy.get(flag)):
+                continue
+            group = policy.get("group_index")
+            groups.add(str(group if group is not None else row_index))
+        return groups
+
+    return {
+        "schema": "ai_subtitle_studio.llm_macro_response_cache_diagnostics.v1",
+        "response_cache_enabled": any(bool(policy.get("llm_response_cache_enabled")) for policy in policies),
+        "response_cache_hit_group_count": len(groups_with("llm_response_cache_hit")),
+        "response_cache_write_group_count": len(groups_with("llm_response_cache_write")),
+        "provider_called_group_count": len(groups_with("llm_provider_called")),
+    }
+
+
 def optimize_segments(
     segments: list[dict],
     vad_segments: list[dict] | None = None,
@@ -1666,9 +1696,38 @@ def optimize_segments(
         return segments
     original_segments = [dict(seg) for seg in segments if isinstance(seg, dict)]
     loaded_settings, rules, model, corrections, threshold, user_prompt, api_key, _raw_corr, _settings = _optimizer_context()
-    model = _resolve_runtime_llm_model(model, logger=get_logger(), context="자막 LLM")
     llm_disabled_final = _llm_model_disabled(model)
     short_m = model.split(":")[0].upper()
+
+    def _resolve_model_for_llm_call() -> str:
+        nonlocal model, short_m
+        model = _resolve_runtime_llm_model(model, logger=get_logger(), context="자막 LLM")
+        short_m = model.split(":")[0].upper()
+        return model
+
+    def _prepare_llm_workers_for_call() -> tuple[int, str]:
+        resolved_model = _resolve_model_for_llm_call()
+        max_workers, worker_mode = _effective_llm_workers(resolved_model, _EXAONE_WORKERS, loaded_settings, len(args))
+        if worker_mode == "api":
+            get_logger().log(f"🤖 {short_m} API 안전 모드: {max_workers}개 워커 순차 처리 중...")
+        elif worker_mode == "local_auto":
+            warmup_ollama_model(resolved_model, logger=get_logger())
+            get_logger().log(
+                f"{short_m} 리소스 자동 모드: {max_workers}개 워커 병렬 처리 "
+                f"({len(segments)}개, CPU/메모리/작업량 기준)"
+            )
+        else:
+            warmup_ollama_model(resolved_model, logger=get_logger())
+            configured_workers = max(1, min(_EXAONE_WORKERS, len(args)))
+            if max_workers < configured_workers:
+                get_logger().log(
+                    f"{short_m} 로컬 Ollama 안전 모드: {max_workers}개 워커 병렬 처리 "
+                    f"(설정 {_EXAONE_WORKERS} → 제한 {max_workers}, {len(segments)}개)"
+                )
+            else:
+                get_logger().log(f"{short_m} {max_workers}개 워커 병렬 처리 ({len(segments)}개)...")
+        return max_workers, worker_mode
+
     get_logger().log(f"\n━━━ 자막 최적화 시작 ({len(segments)}개 세그먼트) ━━━")
     get_logger().log(
         f"설정 적용: LLM({model}), 간격 설정은 최종 패스에서 적용"
@@ -1691,7 +1750,10 @@ def optimize_segments(
     if runtime_lora_enabled(loaded_settings):
         get_logger().log("[텍스트 LoRA] 자동 교정 허용: 교정 memory/오답 memory/사용자 단어/줄바꿈 규칙을 최종 LLM에 적용합니다.")
 
-    args = [(seg, rules, threshold, corrections, model, user_prompt, api_key, conservative, loaded_settings) for seg in segments]
+    def _build_process_args() -> list[tuple]:
+        return [(seg, rules, threshold, corrections, model, user_prompt, api_key, conservative, loaded_settings) for seg in segments]
+
+    args = _build_process_args()
     optimized: list[dict] = []
 
     if llm_disabled_final:
@@ -1714,27 +1776,7 @@ def optimize_segments(
         )
 
     else:
-        max_workers, worker_mode = _effective_llm_workers(model, _EXAONE_WORKERS, loaded_settings, len(args))
         codex_native_fast_path = _codex_native_fast_path_enabled(model, loaded_settings, len(args))
-        if worker_mode == "api":
-            get_logger().log(f"🤖 {short_m} API 안전 모드: {max_workers}개 워커 순차 처리 중...")
-        elif worker_mode == "local_auto":
-            warmup_ollama_model(model, logger=get_logger())
-            get_logger().log(
-                f"{short_m} 리소스 자동 모드: {max_workers}개 워커 병렬 처리 "
-                f"({len(segments)}개, CPU/메모리/작업량 기준)"
-            )
-        else:
-            warmup_ollama_model(model, logger=get_logger())
-            configured_workers = max(1, min(_EXAONE_WORKERS, len(args)))
-            if max_workers < configured_workers:
-                get_logger().log(
-                    f"{short_m} 로컬 Ollama 안전 모드: {max_workers}개 워커 병렬 처리 "
-                    f"(설정 {_EXAONE_WORKERS} → 제한 {max_workers}, {len(segments)}개)"
-                )
-            else:
-                get_logger().log(f"{short_m} {max_workers}개 워커 병렬 처리 ({len(segments)}개)...")
-
         use_macro_chunks = _llm_macro_chunk_enabled(loaded_settings, model, len(segments)) or codex_native_fast_path
         if codex_native_fast_path:
             get_logger().log(
@@ -1778,6 +1820,23 @@ def optimize_segments(
                     f"네이티브 확정 {native_rows}개"
                 )
             groups = _build_llm_macro_groups(gated_rows, needs_llm, loaded_settings)
+            max_workers = 1
+            if llm_rows > 0:
+                provider_required = _llm_macro_groups_require_provider_call(
+                    groups,
+                    rules=rules,
+                    threshold=threshold,
+                    corrections=corrections,
+                    model=model,
+                    user_prompt=user_prompt,
+                    conservative=conservative,
+                    settings=loaded_settings,
+                    callbacks=_llm_macro_callbacks(),
+                )
+                if provider_required:
+                    max_workers, _worker_mode = _prepare_llm_workers_for_call()
+                else:
+                    get_logger().log("[LLM-묶음처리] 모든 LLM 후보가 응답 캐시에 있어 Ollama 준비를 생략합니다.")
             optimized = _process_llm_macro_groups(
                 groups,
                 rules=rules,
@@ -1797,8 +1856,13 @@ def optimize_segments(
                 stage="proofread_dictionary_llm",
                 stage_label="검사/교정/단어사전/LLM 반영",
                 segments=optimized,
+                diagnostics=_llm_macro_response_cache_diagnostics(optimized),
             )
-        elif max_workers == 1:
+        else:
+            max_workers, _worker_mode = _prepare_llm_workers_for_call()
+            args = _build_process_args()
+
+        if not use_macro_chunks and max_workers == 1:
             result_map: dict[int, list] = {}
             for idx in process_order:
                 a = args[idx]
@@ -1816,7 +1880,7 @@ def optimize_segments(
                 stage_label="검사/교정/단어사전/LLM 반영",
                 segments=optimized,
             )
-        else:
+        elif not use_macro_chunks:
             try:
                 def _process_with_progress(index: int, arg):
                     _emit_llm_progress(llm_progress_callback, active=True, idx=index, total=len(args), seg=segments[index])
@@ -1873,6 +1937,7 @@ def optimize_segments(
             segments=optimized,
         )
 
+    high_context_diagnostics: dict = {}
     optimized = refine_high_contextual_boundaries(
         optimized,
         vad_segments=vad_segments or [],
@@ -1880,12 +1945,14 @@ def optimize_segments(
         rules=rules,
         model=model,
         logger=get_logger(),
+        diagnostics_out=high_context_diagnostics,
     )
     _emit_processing_preview(
         stage_segments_callback,
         stage="high_context_boundary",
         stage_label="High 문맥 경계/단어 보정",
         segments=optimized,
+        diagnostics=high_context_diagnostics,
     )
 
     optimized = _smooth_deep_sequence(optimized, loaded_settings)

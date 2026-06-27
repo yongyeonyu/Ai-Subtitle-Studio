@@ -149,12 +149,12 @@ class _Timeline:
         self.scroll = _TimelineScroll()
         self.waveform_paths = []
 
-    def update_segments(self, segs, active_sec, total_dur):
+    def update_segments(self, segs, active_sec, total_dur, *, global_rows=None):
         self.updated = (list(segs), active_sec, total_dur)
         self.canvas.segments = list(segs)
         self.canvas.total_duration = float(total_dur or 0.0)
         self.global_canvas.total_duration = float(total_dur or 0.0)
-        self.global_canvas.segments = list(segs)
+        self.global_canvas.segments = list(global_rows if global_rows is not None else segs)
 
     def set_active(self, sec):
         self.active_calls.append(float(sec))
@@ -2282,6 +2282,13 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.reload_called_with[0]["quality"]["confidence_label"], "green")
         self.assertEqual(len(editor._live_stt_preview_segments), 1)
         self.assertEqual(editor._live_stt_preview_segments[0]["text"], "STT1 후보")
+        operation = getattr(editor, "_last_nle_live_editor_operation", {})
+        projection = getattr(editor, "_last_nle_live_editor_projection", {})
+        self.assertEqual(operation.get("kind"), "candidate_confirm")
+        self.assertEqual(operation.get("metadata", {}).get("candidate_source"), "STT1")
+        self.assertEqual(operation.get("metadata", {}).get("operation_family"), "candidate_confirm")
+        self.assertEqual(projection.get("overlap_count"), 0)
+        self.assertLessEqual(int(projection.get("max_active_segments", 1)), 1)
 
     def test_select_stt_candidate_strips_whisper_control_tokens(self):
         editor = _LivePreviewEditor()
@@ -2705,6 +2712,9 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
         self.assertEqual(editor._cached_segs[0]["text"], "STT2 후보")
         self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT2")
+        operation = getattr(editor, "_last_nle_live_editor_operation", {})
+        self.assertEqual(operation.get("kind"), "candidate_confirm")
+        self.assertEqual(operation.get("metadata", {}).get("candidate_source"), "STT2")
 
         editor._undo_mgr.undo()
         self.assertEqual(editor._cached_segs[0]["text"], "기존")

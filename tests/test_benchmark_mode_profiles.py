@@ -7,6 +7,7 @@ from unittest import mock
 from core.native_swift_subtitle_assembly import ASSEMBLED_VARIANT_NAME
 from tools.apply_subtitle_benchmark_quality_gate import apply_gate
 from tools.benchmark_subtitle_pipeline_variants import (
+    _apply_cli_setting_overrides,
     _apply_benchmark_cut_boundaries,
     _copy_chunk_dir,
     _compact_text,
@@ -16,8 +17,10 @@ from tools.benchmark_subtitle_pipeline_variants import (
     _native_resource_summary_for_variant,
     _native_segments_summary_for_variant,
     _native_stt_segments_summary_for_variant,
+    _parse_setting_overrides,
     _rank_rows,
     _run_postprocess,
+    _stage_wall_clock_summary,
     _base_benchmark_settings,
     _chunk_extraction_signature,
     _variant_chunk_settings,
@@ -32,6 +35,33 @@ from tools import subtitle_benchmark_scoring
 
 
 class BenchmarkModeProfilesTests(unittest.TestCase):
+    def test_parse_setting_overrides_accepts_booleans_numbers_and_paths(self):
+        overrides = _parse_setting_overrides([
+            "subtitle_llm_context_keep_cache_enabled=true",
+            "subtitle_llm_context_keep_cache_max_entries=64",
+            "subtitle_llm_context_keep_cache_path=/tmp/keep_cache.json",
+        ])
+
+        self.assertTrue(overrides["subtitle_llm_context_keep_cache_enabled"])
+        self.assertEqual(overrides["subtitle_llm_context_keep_cache_max_entries"], 64)
+        self.assertEqual(overrides["subtitle_llm_context_keep_cache_path"], "/tmp/keep_cache.json")
+
+    def test_cli_setting_overrides_win_over_mode_variant_defaults(self):
+        variants = benchmark_mode_profiles(_base_benchmark_settings("current"))
+        high = {variant.name: variant for variant in variants}["mode_high"]
+        self.assertTrue(bool(high.overrides.get("subtitle_llm_context_require_risk_signal")))
+
+        patched = _apply_cli_setting_overrides(
+            [high],
+            {
+                "subtitle_llm_context_require_risk_signal": False,
+                "subtitle_llm_context_max_pairs": 8,
+            },
+        )[0]
+
+        self.assertFalse(bool(patched.overrides["subtitle_llm_context_require_risk_signal"]))
+        self.assertEqual(patched.overrides["subtitle_llm_context_max_pairs"], 8)
+
     def test_mode_profiles_map_to_actual_fast_auto_high_paths(self):
         variants = benchmark_mode_profiles(_base_benchmark_settings("current"))
         by_name = {variant.name: variant for variant in variants}
@@ -240,10 +270,49 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(summary["segment_count"], 2)
         self.assertEqual(summary["overlap_count"], 1)
         self.assertEqual(summary["segment_feed_signature"], "fedcba9876543210")
-        self.assertTrue(summary["stable_for_save_reopen"])
+        self.assertFalse(summary["stable_for_save_reopen"])
         self.assertEqual(summary["max_gap_index"], -1)
         self.assertEqual(summary["max_overlap"], 0.2)
         self.assertEqual(summary["max_overlap_index"], 1)
+
+    def test_native_segments_summary_includes_strict_duration_bounds(self):
+        with mock.patch(
+            "tools.benchmark_subtitle_pipeline_variants.summarize_segments_via_swift",
+            return_value={
+                "schema": "ai_subtitle_studio.subtitle_segments.summary.v1",
+                "backend": "swift",
+                "segment_count": 3,
+                "invalid_duration_count": 0,
+                "non_monotonic_count": 0,
+                "overlap_count": 0,
+                "empty_text_count": 0,
+                "total_duration": 61.842,
+                "first_start": 0.0,
+                "last_end": 62.0,
+                "max_gap": 0.1,
+                "max_gap_index": 1,
+                "max_overlap": 0.0,
+                "max_overlap_index": -1,
+                "max_chars": 5,
+                "avg_chars": 4.5,
+                "stable_for_save_reopen": True,
+                "segment_feed_signature": "fedcba9876543210",
+            },
+        ):
+            summary = _native_segments_summary_for_variant(
+                [
+                    {"start": 0.0, "end": 0.05, "text": "짧음"},
+                    {"start": 1.0, "end": 2.0, "text": "정상"},
+                    {"start": 2.2, "end": 62.0, "text": "김"},
+                ]
+            )
+
+        self.assertEqual(summary["min_segment_duration_sec"], 0.05)
+        self.assertEqual(summary["max_segment_duration_sec"], 59.8)
+        self.assertEqual(summary["short_segment_threshold_sec"], 0.3)
+        self.assertEqual(summary["short_segment_count"], 1)
+        self.assertEqual(summary["long_segment_threshold_sec"], 12.0)
+        self.assertEqual(summary["long_segment_count"], 1)
 
     def test_native_stt_segments_summary_keeps_compact_stt2_counts(self):
         with mock.patch(
@@ -674,6 +743,63 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
 
         self.assertEqual(rows[0]["text"], "- 아이스로 드릴까요?\n- 네네")
         self.assertEqual(rows[0]["speaker_list"], ["00", "01"])
+
+    @mock.patch("tools.benchmark_subtitle_pipeline_variants.subtitle_engine.optimize_segments")
+    def test_run_postprocess_passes_stage_segments_callback_for_detail_timing(self, optimize_segments):
+        seen = []
+
+        def fake_optimize(_rows, *, vad_segments=None, stage_segments_callback=None):
+            if callable(stage_segments_callback):
+                stage_segments_callback({
+                    "stage": "proofread_dictionary_llm",
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "ok"}],
+                    "diagnostics": {"high_context_boundary_candidate_pair_count": 0},
+                })
+            return [{"start": 0.0, "end": 1.0, "text": "ok"}]
+
+        optimize_segments.side_effect = fake_optimize
+
+        rows = _run_postprocess(
+            [{"start": 0.0, "end": 1.0, "text": "ok"}],
+            [],
+            _base_benchmark_settings("current"),
+            run_llm=True,
+            stage_segments_callback=lambda payload: seen.append(dict(payload)),
+        )
+
+        self.assertEqual(rows[0]["text"], "ok")
+        self.assertEqual(seen[0]["stage"], "proofread_dictionary_llm")
+        self.assertEqual(seen[0]["diagnostics"]["high_context_boundary_candidate_pair_count"], 0)
+
+    def test_stage_wall_clock_summary_keeps_repeated_stage_totals_and_latest(self):
+        summary = _stage_wall_clock_summary(
+            [
+                {"stage": "stt_primary_transcribe", "elapsed_sec": 20.1254, "status": "ok"},
+                {"stage": "subtitle_postprocess", "elapsed_sec": 3.0, "pass_name": "prefilter"},
+                {"stage": "subtitle_postprocess", "elapsed_sec": 4.25, "pass_name": "final"},
+                {"stage": "", "elapsed_sec": 99.0},
+                {
+                    "stage": "word_precision",
+                    "elapsed_sec": "2.5",
+                    "prepare_elapsed_sec": 0.75,
+                    "collect_elapsed_sec": 1.5,
+                    "annotate_elapsed_sec": 0.25,
+                    "batch_elapsed_sec": 2.55,
+                },
+            ]
+        )
+
+        self.assertEqual(summary["schema"], "ai_subtitle_studio.stage_wall_clock_summary.v1")
+        self.assertEqual(summary["span_count"], 4)
+        self.assertEqual(summary["top_stage"], "stt_primary_transcribe")
+        self.assertEqual(summary["stage_summaries"]["subtitle_postprocess"]["count"], 2)
+        self.assertEqual(summary["stage_summaries"]["subtitle_postprocess"]["total_elapsed_sec"], 7.25)
+        self.assertEqual(summary["stage_summaries"]["subtitle_postprocess"]["latest_elapsed_sec"], 4.25)
+        self.assertEqual(summary["stage_summaries"]["word_precision"]["total_elapsed_sec"], 2.5)
+        self.assertEqual(summary["stage_summaries"]["word_precision"]["total_prepare_elapsed_sec"], 0.75)
+        self.assertEqual(summary["stage_summaries"]["word_precision"]["total_collect_elapsed_sec"], 1.5)
+        self.assertEqual(summary["stage_summaries"]["word_precision"]["total_annotate_elapsed_sec"], 0.25)
+        self.assertEqual(summary["stage_summaries"]["word_precision"]["total_batch_elapsed_sec"], 2.55)
 
     def test_mode_lora_deep_profiles_cover_expected_ablation_paths(self):
         variants = benchmark_mode_lora_deep_profiles(_base_benchmark_settings("current"))

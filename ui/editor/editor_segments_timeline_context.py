@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from PyQt6.QtGui import QTextCursor
 
+from core.project.nle_runtime_cutover import (
+    nle_final_overlay_segments_from_editor_rows,
+    nle_global_canvas_segments_from_editor_rows,
+)
 from ui.editor.editor_helpers import build_segment_lookup
 
 
@@ -119,7 +123,12 @@ class EditorSegmentsTimelineContextMixin:
         if hasattr(self, "_highlighter"):
             self._refresh_visible_quality_map()
         total_dur = self._timeline_total_duration_for_segments(timeline_segs)
-        self.timeline.update_segments(timeline_segs, self._active_seg_start, total_dur)
+        self.timeline.update_segments(
+            timeline_segs,
+            self._active_seg_start,
+            total_dur,
+            global_rows=self._nle_global_canvas_context_from_segments(segs),
+        )
         if hasattr(self, "video_player") and hasattr(self.video_player, "set_context_segments"):
             self.video_player.set_context_segments(self._video_context_segments_for_redraw())
         self._apply_initial_timeline_fit_if_needed(segs)
@@ -128,6 +137,37 @@ class EditorSegmentsTimelineContextMixin:
         if not hasattr(self, "video_player"):
             return
         self._apply_video_context_segments(self._video_subtitle_context_for_player())
+
+    def _nle_final_overlay_context_from_segments(self, segments, *, center_sec: float | None = None):
+        if center_sec is None:
+            center_sec = self._subtitle_context_center_sec()
+        before, after, max_segments = self._subtitle_context_window_seconds()
+        try:
+            fps = float(getattr(self, "video_fps", 0.0) or 0.0)
+        except Exception:
+            fps = 0.0
+        rows = nle_final_overlay_segments_from_editor_rows(
+            list(segments or []),
+            primary_fps=fps or 30.0,
+            center_sec=float(center_sec or 0.0),
+            before_sec=before,
+            after_sec=after,
+            max_segments=max_segments,
+        )
+        return rows
+
+    def _nle_global_canvas_context_from_segments(self, segments):
+        try:
+            fps = float(getattr(self, "video_fps", 0.0) or 0.0)
+        except Exception:
+            fps = 0.0
+        try:
+            return nle_global_canvas_segments_from_editor_rows(
+                list(segments or []),
+                primary_fps=fps or 30.0,
+            )
+        except Exception:
+            return [seg for seg in list(segments or []) if isinstance(seg, dict) and not seg.get("is_gap")]
 
     def _video_subtitle_context_for_player(self):
         cache = getattr(self, "_subtitle_memory_cache", None)
@@ -141,15 +181,18 @@ class EditorSegmentsTimelineContextMixin:
                 global_sec = float(getattr(self.timeline.canvas, "playhead_sec", 0.0) or 0.0)
                 ctx = self._resolve_active_context(global_sec=global_sec)
                 if ctx:
-                    return self._subtitle_context_window_from_segments(
-                        list(ctx.get("local_segments", []) or []),
-                        center_sec=float(ctx.get("local_sec", 0.0) or 0.0),
-                    )
+                    local_sec = float(ctx.get("local_sec", 0.0) or 0.0)
+                    local_segments = list(ctx.get("local_segments", []) or [])
+                    nle_window = self._nle_final_overlay_context_from_segments(local_segments, center_sec=local_sec)
+                    return nle_window or self._subtitle_context_window_from_segments(local_segments, center_sec=local_sec)
         except Exception:
             pass
         live_preview_context = self._video_subtitle_live_preview_context()
         if live_preview_context is not None:
             return live_preview_context
+        nle_window = self._nle_final_overlay_context_from_segments(self._subtitle_memory_segments())
+        if nle_window:
+            return nle_window
         return self._subtitle_memory_visible_window()
 
     def _schedule_timeline(self):

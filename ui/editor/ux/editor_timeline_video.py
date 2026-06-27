@@ -16,8 +16,16 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtMultimedia import QMediaPlayer
 
-from core.frame_time import frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
+from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame, sec_to_nearest_frame, snap_sec_to_frame
 from core.native_swift_timeline import plan_subtitle_timing_edit_via_swift
+from core.project.nle_dual_write import (
+    apply_caption_delete_dual_write_pilot,
+    apply_caption_merge_dual_write_pilot,
+    apply_caption_resize_dual_write_pilot,
+    apply_caption_split_dual_write_pilot,
+    apply_gap_generate_dual_write_pilot,
+)
+from core.project.project_context import build_editor_state, project_segments_to_editor
 from ui.editor.timeline_scan_cut_patches import install_scan_cut_patches
 from ui.editor.ux.editor_timeline_gap_split import EditorTimelineGapSplitMixin
 from ui.editor.ux.editor_timeline_segment_merge import EditorTimelineSegmentMergeMixin
@@ -989,6 +997,291 @@ class EditorTimelineVideoMixin(
         QTimer.singleShot(80, lambda s=dict(state): self._restore_timeline_view_for_resize(s))
         QTimer.singleShot(240, lambda s=dict(state): self._restore_timeline_view_for_resize(s))
 
+    def _nle_live_editor_project_from_rows(self, rows: list[dict]) -> dict:
+        fps = float(self._current_frame_fps())
+        media_path = str(getattr(self, "media_path", "") or "")
+        media_files = [media_path] if media_path else []
+        duration = 0.0
+        try:
+            duration = float(getattr(getattr(self, "video_player", None), "total_time", 0.0) or 0.0)
+        except Exception:
+            duration = 0.0
+        for row in rows:
+            if isinstance(row, dict):
+                try:
+                    duration = max(duration, float(row.get("end", row.get("start", 0.0)) or 0.0))
+                except Exception:
+                    pass
+        return {
+            "project_name": "live_editor_nle_timing_edit",
+            "mode": "single",
+            "video": {"duration_sec": duration, "primary_fps": fps},
+            "editor_state": build_editor_state(
+                mode="single",
+                media_files=media_files,
+                segments=[dict(row) for row in rows if isinstance(row, dict)],
+                primary_fps=fps,
+            ),
+        }
+
+    def _nle_live_editor_caption_id_for_line(
+        self,
+        project: dict,
+        *,
+        line_num: int,
+        start_sec: float,
+        end_sec: float,
+    ) -> str:
+        rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        final_rows = [
+            row for row in rows
+            if isinstance(row, dict)
+            and not bool(row.get("is_gap") or row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview"))
+        ]
+        for row in final_rows:
+            try:
+                if int(row.get("line", -1)) == int(line_num):
+                    return str(row.get("id") or "")
+            except Exception:
+                continue
+        fps = max(1.0, float(self._current_frame_fps()))
+        tolerance = max(0.05, 1.5 / fps)
+        for row in final_rows:
+            try:
+                row_start = float(row.get("start", 0.0) or 0.0)
+                row_end = float(row.get("end", row_start) or row_start)
+            except Exception:
+                continue
+            if abs(row_start - float(start_sec)) <= tolerance and abs(row_end - float(end_sec)) <= tolerance:
+                return str(row.get("id") or "")
+        return ""
+
+    def _nle_live_editor_caption_resize_result(
+        self,
+        *,
+        current_segments: list[dict],
+        line_num: int,
+        new_start: float,
+        new_end: float,
+        edge_type: str,
+    ):
+        if edge_type not in {"diamond", "square_left", "square_right"}:
+            return None
+        if not current_segments:
+            return None
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "update_segments"):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        fps = float(self._current_frame_fps())
+        for row in current_segments:
+            if not isinstance(row, dict) or bool(row.get("is_gap") or row.get("stt_pending")):
+                continue
+            try:
+                row_start = float(row.get("start", 0.0) or 0.0)
+                row_end = float(row.get("end", row_start) or row_start)
+            except Exception:
+                return None
+            if sec_to_frame(row_end, fps) <= sec_to_frame(row_start, fps):
+                return None
+        project = self._nle_live_editor_project_from_rows(current_segments)
+        caption_id = self._nle_live_editor_caption_id_for_line(
+            project,
+            line_num=int(line_num),
+            start_sec=float(new_start),
+            end_sec=float(new_end),
+        )
+        if not caption_id:
+            return None
+        try:
+            return apply_caption_resize_dual_write_pilot(
+                project,
+                caption_id=caption_id,
+                new_start=float(new_start),
+                new_end=float(new_end),
+                edge=str(edge_type or "diamond"),
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return None
+
+    def _nle_live_editor_caption_delete_result(
+        self,
+        *,
+        current_segments: list[dict],
+        line_num: int,
+        start_sec: float,
+        end_sec: float,
+    ):
+        if not current_segments:
+            return None
+        if getattr(self, "_live_stt_preview_segments", None):
+            return None
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "update_segments"):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        for row in current_segments:
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        project = self._nle_live_editor_project_from_rows(current_segments)
+        caption_id = self._nle_live_editor_caption_id_for_line(
+            project,
+            line_num=int(line_num),
+            start_sec=float(start_sec),
+            end_sec=float(end_sec),
+        )
+        if not caption_id:
+            return None
+        try:
+            return apply_caption_delete_dual_write_pilot(
+                project,
+                caption_id=caption_id,
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return None
+
+    def _nle_live_editor_caption_merge_result(
+        self,
+        *,
+        current_segments: list[dict],
+        left_line: int,
+        right_line: int,
+        left_start: float,
+        left_end: float,
+        right_start: float,
+        right_end: float,
+        merged_text: str,
+    ):
+        if not current_segments:
+            return None
+        if getattr(self, "_live_stt_preview_segments", None):
+            return None
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "update_segments"):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        for row in current_segments:
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        project = self._nle_live_editor_project_from_rows(current_segments)
+        left_caption_id = self._nle_live_editor_caption_id_for_line(
+            project,
+            line_num=int(left_line),
+            start_sec=float(left_start),
+            end_sec=float(left_end),
+        )
+        right_caption_id = self._nle_live_editor_caption_id_for_line(
+            project,
+            line_num=int(right_line),
+            start_sec=float(right_start),
+            end_sec=float(right_end),
+        )
+        if not left_caption_id or not right_caption_id or left_caption_id == right_caption_id:
+            return None
+        try:
+            return apply_caption_merge_dual_write_pilot(
+                project,
+                left_caption_id=left_caption_id,
+                right_caption_id=right_caption_id,
+                merged_text=str(merged_text or ""),
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return None
+
+    def _nle_live_editor_caption_split_result(
+        self,
+        *,
+        current_segments: list[dict],
+        line_num: int,
+        start_sec: float,
+        end_sec: float,
+        split_sec: float,
+        left_text: str,
+        right_text: str,
+    ):
+        if not current_segments:
+            return None
+        if getattr(self, "_live_stt_preview_segments", None):
+            return None
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "update_segments"):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        for row in current_segments:
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        project = self._nle_live_editor_project_from_rows(current_segments)
+        caption_id = self._nle_live_editor_caption_id_for_line(
+            project,
+            line_num=int(line_num),
+            start_sec=float(start_sec),
+            end_sec=float(end_sec),
+        )
+        if not caption_id:
+            return None
+        try:
+            return apply_caption_split_dual_write_pilot(
+                project,
+                caption_id=caption_id,
+                split_sec=float(split_sec),
+                left_text=str(left_text or ""),
+                right_text=str(right_text or ""),
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return None
+
+    def _nle_live_editor_gap_generate_result(
+        self,
+        *,
+        current_segments: list[dict],
+        gap_start: float,
+        gap_end: float,
+        sub_start: float,
+        sub_end: float,
+        mode: str,
+    ):
+        if not current_segments:
+            return None
+        if getattr(self, "_live_stt_preview_segments", None):
+            return None
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "update_segments"):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        for row in current_segments:
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        project = self._nle_live_editor_project_from_rows(current_segments)
+        try:
+            return apply_gap_generate_dual_write_pilot(
+                project,
+                gap_start=float(gap_start),
+                gap_end=float(gap_end),
+                sub_start=float(sub_start),
+                sub_end=float(sub_end),
+                mode=str(mode or ""),
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return None
+
     def _on_seg_time_changed(self, line_num: int, new_start: float, new_end: float, edge_type: str = ""):
         new_start = self._snap_to_frame(new_start)
         new_end = self._snap_to_frame(new_end)
@@ -1043,6 +1336,88 @@ class EditorTimelineVideoMixin(
                 for seg in current_segments
                 if not bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview"))
             ]
+        if edge_type in {"center_reorder_left", "center_reorder_right"} and not editing_transient_stt:
+            def _center_reorder_rows() -> list[dict] | None:
+                rows = [dict(seg) for seg in list(current_segments or []) if isinstance(seg, dict)]
+                moving_idx = None
+                for idx, seg in enumerate(rows):
+                    try:
+                        if int(seg.get("line", -1)) == int(line_num):
+                            moving_idx = idx
+                            break
+                    except Exception:
+                        continue
+                if moving_idx is None:
+                    return None
+
+                moving = rows[moving_idx]
+                neighbor_idx = moving_idx + (1 if edge_type == "center_reorder_right" else -1)
+                if neighbor_idx < 0 or neighbor_idx >= len(rows):
+                    return None
+                neighbor = rows[neighbor_idx]
+                if bool(neighbor.get("is_gap")) or bool(neighbor.get("stt_pending")):
+                    return None
+                try:
+                    neighbor_start = self._snap_to_frame(float(neighbor.get("start", 0.0) or 0.0))
+                    neighbor_end = self._snap_to_frame(float(neighbor.get("end", neighbor_start) or neighbor_start))
+                except Exception:
+                    return None
+                neighbor_duration = max(min_span, self._snap_to_frame(neighbor_end - neighbor_start))
+                move_duration = max(min_span, self._snap_to_frame(float(new_end) - float(new_start)))
+                reordered_start = self._snap_to_frame(float(new_start))
+                reordered_end = self._snap_to_frame(float(new_start) + move_duration)
+                reorder_eps = max(0.001, 0.5 / max(1.0, self._current_frame_fps()))
+
+                if edge_type == "center_reorder_right":
+                    if abs(neighbor_start - old_end) > 0.05 or reordered_start < neighbor_start - reorder_eps:
+                        return None
+                    neighbor["start"] = old_start
+                    neighbor["end"] = self._snap_to_frame(old_start + neighbor_duration)
+                    moving["start"] = reordered_start
+                    moving["end"] = reordered_end
+                else:
+                    if abs(neighbor_end - old_start) > 0.05 or reordered_end > neighbor_end + reorder_eps:
+                        return None
+                    moving["start"] = reordered_start
+                    moving["end"] = reordered_end
+                    neighbor["start"] = moving["end"]
+                    neighbor["end"] = self._snap_to_frame(float(neighbor["start"]) + neighbor_duration)
+                return rows
+
+            reordered_rows = _center_reorder_rows()
+            reloader = getattr(self, "_reload_segments_from_list", None)
+            if reordered_rows is not None and callable(reloader):
+                cur.endEditBlock()
+                self._sync_lock = prev_sync_lock
+                try:
+                    self._active_seg_start = float(new_start)
+                except Exception:
+                    pass
+                reloader(reordered_rows, preserve_view=True, mark_dirty=True)
+                if timeline is not None and hasattr(timeline, "_finish_subtitle_resize_keep_view"):
+                    timeline._finish_subtitle_resize_keep_view()
+                return
+        nle_resize_result = self._nle_live_editor_caption_resize_result(
+            current_segments=current_segments,
+            line_num=int(line_num),
+            new_start=float(new_start),
+            new_end=float(new_end),
+            edge_type=str(edge_type or ""),
+        ) if not editing_transient_stt else None
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if nle_resize_result is not None and callable(reloader):
+            cur.endEditBlock()
+            self._sync_lock = prev_sync_lock
+            try:
+                self._active_seg_start = float(new_start)
+            except Exception:
+                pass
+            self._last_nle_live_editor_operation = nle_resize_result.operation.to_dict()
+            self._last_nle_live_editor_projection = nle_resize_result.after_projection.to_dict()
+            reloader([dict(row) for row in nle_resize_result.projected_rows], preserve_view=True, mark_dirty=True)
+            if timeline is not None and hasattr(timeline, "_finish_subtitle_resize_keep_view"):
+                timeline._finish_subtitle_resize_keep_view()
+            return
         native_timing_plan = None
         if current_segments and edge_type != "diamond":
             native_timing_plan = plan_subtitle_timing_edit_via_swift(

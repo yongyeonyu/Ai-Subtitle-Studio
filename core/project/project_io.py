@@ -13,6 +13,10 @@ from typing import Any
 from core.native_json import dumps_json_bytes, json_default, loads_json
 from core.project.project_format import build_storage_project_payload, hydrate_project_runtime_views
 from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY, attach_project_nle_state
+from core.project.nle_persistence_guard import (
+    NLE_PERSISTENCE_QUARANTINE_KEY,
+    strip_unapproved_nle_persistence_fields,
+)
 
 try:
     import msgpack  # type: ignore
@@ -35,6 +39,7 @@ _PROJECT_RUNTIME_KEYS = {
     "_hot_open_subtitle_segments_cache",
     "_hot_open_stt_preview_segments_cache",
     NLE_PROJECT_STATE_RUNTIME_KEY,
+    NLE_PERSISTENCE_QUARANTINE_KEY,
     "project_path",
 }
 
@@ -84,6 +89,7 @@ def prime_project_file_cache(filepath: str, project: dict[str, Any]) -> None:
 
 def _attach_project_path(project: dict[str, Any], filepath: str) -> dict[str, Any]:
     if isinstance(project, dict):
+        strip_unapproved_nle_persistence_fields(project, source="project_io.read")
         project["_project_file_path"] = _project_cache_key(filepath)
         attach_project_nle_state(project, project_path=filepath)
     return project
@@ -91,6 +97,7 @@ def _attach_project_path(project: dict[str, Any], filepath: str) -> dict[str, An
 
 def _project_payload_for_disk(project: dict[str, Any]) -> dict[str, Any]:
     payload = dict(project if isinstance(project, dict) else {})
+    strip_unapproved_nle_persistence_fields(payload, source="project_io.write")
     for key in _PROJECT_RUNTIME_KEYS:
         payload.pop(key, None)
     try:

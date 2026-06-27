@@ -15,6 +15,15 @@ Current packaging goals:
 - Network client entitlement for optional local/remote model calls.
 - Audio input entitlement for optional dictation/STT workflows.
 
+Distribution track boundary:
+
+- Mac App Store submission uses a signed, sandboxed `.app` plus a signed `.pkg`
+  and App Store Connect validation output.
+- Developer ID beta distribution uses a signed `.app` inside a `.dmg`; this is
+  useful for owner testing, but it is not Mac App Store submission proof.
+- Do not run package, upload, notarization, or DMG commands without explicit
+  owner approval for that step.
+
 Release checklist:
 
 1. Build the Swift worker with `swift build -c release`.

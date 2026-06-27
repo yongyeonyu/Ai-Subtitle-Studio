@@ -131,6 +131,10 @@ DEFAULT_ADV_SETTINGS = {
     "subtitle_llm_context_max_word_corrections": 2,
     "subtitle_llm_context_timeout_sec": 45.0,
     "subtitle_llm_context_num_predict": 180,
+    "subtitle_llm_context_keep_cache_enabled": True,
+    "subtitle_llm_context_keep_cache_max_entries": 512,
+    "subtitle_llm_macro_response_cache_enabled": True,
+    "subtitle_llm_macro_response_cache_max_entries": 512,
     "subtitle_llm_text_only_timing_lock_enabled": True,
     "subtitle_final_stt_slot_order_guard_enabled": True,
     "llm_threads_auto_enabled": True,
@@ -309,6 +313,10 @@ DEFAULT_ADV_SETTINGS = {
     "stt_low_score_recheck_max_audio_sec": 160.0,
     "stt_low_score_recheck_min_improvement": 1.5,
     "stt_recheck_native_fast_audio_filter_enabled": True,
+    "stt_recheck_collect_cache_enabled": False,
+    "stt_recheck_collect_cache_max_entries": 128,
+    "stt_primary_collect_cache_enabled": False,
+    "stt_primary_collect_cache_max_entries": 64,
     "stt_persistent_runtime_reuse_enabled": True,
     # macOS native STT speed path: finish Swift/MLX STT1 first, then batch
     # low-score STT2 rescue and word-timestamp precision once instead of

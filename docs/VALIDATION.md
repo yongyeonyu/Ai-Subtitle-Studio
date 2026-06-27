@@ -113,13 +113,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_pla
 
 ## NLE mutable owner pilot validation
 
-Runtime-only NLE state changes should prove legacy hydration, non-persistence of NLE runtime fields, direct SRT/no-media safety, save/reopen compatibility, and roughcut sidecar/render parity.
+Runtime-only NLE state changes should prove legacy hydration, non-persistence of NLE runtime fields, direct SRT/no-media safety, save/reopen compatibility, final-surface no-overlap projection, and roughcut sidecar/render parity.
 
 ```bash
 ./venv/bin/python -m py_compile core/project/nle_project_state.py core/project/project_io.py core/project/project_format.py core/project/project_manager.py tests/test_project_nle_snapshot.py
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "runtime_nle or save_project_routes or direct_srt_rows or roughcut_exact_join_marker_parity or compatibility_characterization or project_file_roundtrip"
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_project_segment_reload.py tests/test_editor_srt_open_refresh.py
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py -k "final_overlay or global_canvas or save_export or overlap or nle"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_cutover_audit_YYYYMMDD
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py -k "persistence or cutover or dual_write or gap_delete or caption_move or caption_resize or caption_split or caption_merge or caption_delete or candidate_confirm"
 ```
 
 ## Post-generation editor readiness validation
@@ -135,6 +138,52 @@ When the owner asks to limit real-media validation to the NAS HeyDealer first th
 ```bash
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts
 ```
+
+## Real-media latency profiling validation
+
+When diagnosing generation latency, keep three evidence surfaces separate:
+
+- non-profile `verify_full_media_pipeline.py --repeat` runs are the wall-clock speed truth.
+- `stage_wall_clock_summary` in verifier and benchmark results is the named-stage elapsed truth for STT1, selective STT2 rescue, word precision, VAD/STT consensus, subtitle postprocess, and High context-boundary pair diagnostics.
+- `verify_full_media_pipeline.py --profile-functions` runs are ownership diagnostics only; cProfile cumulative rows are non-additive and can overlap.
+- `benchmark_subtitle_pipeline_variants.py --reference-srt` runs are the reference quality and timing truth.
+
+For non-trivial media slices, the verifier fails if final subtitles have invalid duration, non-monotonic order, overlap, or `stable_for_save_reopen=false`. Reference-scored or generated-fixture acceptance must also verify final SRT bounds against the actual media duration, reject sub-0.3s tail fragments, and flag long tail rows; do not treat global canvas duration derived from subtitle `last_end` as a media-duration proof. The summary metrics also expose STT2/word precision counts, global canvas max-active stability, memory pressure, High context-boundary candidate/call/change counts, and generation-owner profile summaries. If the reference media/SRT is unavailable, a non-reference run can prove instrumentation and structural stability only; it must not approve a latency trim that can change subtitle text, timing, segmentation, or LLM/STT decisions.
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --fallback-media "output/_audio_fingerprint/헤이딜러_최종_2c274c4ab434764a8546/헤이딜러_최종_cleaned.wav" --output-dir output/manual_verification/latest/reference_fixture_availability_YYYYMMDD
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_full_media_pipeline.py --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --mode high --output-dir output/manual_verification/latest/<artifact> --run-prefix baseline_repeat2 --start-sec 0 --duration-sec 180 --repeat 2
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_full_media_pipeline.py --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --mode high --output-dir output/manual_verification/latest/<artifact> --run-prefix profile_diagnostic --start-sec 0 --duration-sec 180 --profile-functions --profile-top 160
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts
+```
+
+If the long HeyDealer/X5 reference fixture is unavailable, the cached X5 60s rows can be materialized for short-loop reference-scored smoke only. Do not use this as broad trim acceptance.
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/materialize_reference_srt.py --reference-json .codex_work/bench/x5_120_3s_180_3s_reference.json --output-srt output/manual_verification/latest/x5_local_reference_fixture_YYYYMMDD/x5_120_3s_180_3s_reference.srt --report-json output/manual_verification/latest/x5_local_reference_fixture_YYYYMMDD/materialized_reference_report.json
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media .codex_work/bench/x5_120_3s_180_3s.wav --reference-srt output/manual_verification/latest/x5_local_reference_fixture_YYYYMMDD/x5_120_3s_180_3s_reference.srt --start-sec 0 --duration-sec 60 --output-dir output/manual_verification/latest/x5_local_reference_fixture_YYYYMMDD/preflight
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media .codex_work/bench/x5_120_3s_180_3s.wav --reference-srt output/manual_verification/latest/x5_local_reference_fixture_YYYYMMDD/x5_120_3s_180_3s_reference.srt --start-sec 0 --duration-sec 60 --keep-artifacts
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/<timestamp>/benchmark_results.json --output-dir output/manual_verification/latest/x5_local_reference_fixture_YYYYMMDD/acceptance
+```
+
+For a longer local project-reference smoke, use the cached 180s X5 audio with the semantically aligned `X5_전반` project SRT, then classify acceptance after scoring. The same audio with `X5_후반` SRT is known to be a semantic mismatch and should be rejected.
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media output/_audio_fingerprint/X5_시승기_후반_32346f324ad776ce0fe2/X5_시승기_후반_cleaned.wav --reference-srt projects/X5_시승기_전반.assets/subtitles/final.srt --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/x5_project_reference_180s_YYYYMMDD/preflight_front
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media output/_audio_fingerprint/X5_시승기_후반_32346f324ad776ce0fe2/X5_시승기_후반_cleaned.wav --reference-srt projects/X5_시승기_전반.assets/subtitles/final.srt --start-sec 0 --duration-sec 180 --keep-artifacts
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/<timestamp>/benchmark_results.json --output-dir output/manual_verification/latest/x5_project_reference_180s_YYYYMMDD/acceptance_front
+```
+
+## Mac App Store readiness audit
+
+App Store readiness checks must stay separate from normal source-app pytest/QA. The audit below is non-destructive: it does not build, sign, notarize, upload, or create a DMG.
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_audit_YYYYMMDD
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py
+```
+
+Do not claim App Store submission readiness unless the audit and separate artifacts prove a signed sandboxed `.app`, strict `codesign` validation, signed App Store `.pkg`, package signature check, sandbox smoke, App Store Connect validation output, and owner-approved App Store Connect metadata.
 
 ## PyQt / offscreen UI validation
 

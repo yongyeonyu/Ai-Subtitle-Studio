@@ -1,6 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
+from core.project.nle_runtime_cutover import NLE_RUNTIME_CUTOVER_SCHEMA
 from ui.editor.editor_helpers import build_segment_lookup
 from ui.editor.editor_segments import EditorSegmentsMixin
 
@@ -13,6 +14,7 @@ class _EditorHarness(EditorSegmentsMixin):
             "editor_video_context_max_segments": 48,
         }
         self._active_seg_start = playhead_sec
+        self.video_fps = 30.0
         self.timeline = SimpleNamespace(canvas=SimpleNamespace(playhead_sec=playhead_sec))
         self._cached_segs = list(segments)
         self._subtitle_memory_cache = build_segment_lookup(self._cached_segs)
@@ -86,6 +88,31 @@ class EditorVideoContextWindowTests(unittest.TestCase):
         self.assertTrue(any(seg["start"] <= 500.0 < seg["end"] or abs(seg["start"] - 500.0) < 1.0 for seg in window))
         self.assertGreaterEqual(window[0]["start"], 489.0)
         self.assertLessEqual(window[-1]["start"], 522.0)
+
+    def test_video_context_final_overlay_uses_nle_runtime_projection(self):
+        segments = [
+            {
+                "id": "caption_1",
+                "start": 0.0,
+                "end": 1.0,
+                "text": "첫째",
+                "speaker": "00",
+                "stt_candidates": [{"source": "STT1", "text": "raw"}],
+            },
+            {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+            {"id": "preview_1", "start": 1.2, "end": 2.2, "text": "후보", "stt_pending": True},
+            {"id": "caption_2", "start": 2.0, "end": 3.0, "text": "둘째", "speaker": "01"},
+        ]
+        editor = _EditorHarness(segments, playhead_sec=1.5)
+
+        window = editor._video_subtitle_context_for_player()
+
+        self.assertEqual([seg["text"] for seg in window], ["첫째", "둘째"])
+        self.assertTrue(all(seg.get("_nle_runtime_surface") == "final_overlay" for seg in window))
+        self.assertTrue(all(seg.get("_nle_runtime_schema") == NLE_RUNTIME_CUTOVER_SCHEMA for seg in window))
+        self.assertFalse(any(seg.get("is_gap") for seg in window))
+        self.assertFalse(any(seg.get("stt_pending") for seg in window))
+        self.assertFalse(any("stt_candidates" in seg for seg in window))
 
     def test_video_context_includes_live_preview_segments_while_processing(self):
         segments = [

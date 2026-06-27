@@ -110,6 +110,10 @@ from core.project.nle_project_state import (
     project_segments_from_nle_state,
     sync_project_nle_state_from_editor_rows,
 )
+from core.project.nle_persistence_guard import (
+    NLE_PERSISTENCE_QUARANTINE_KEY,
+    strip_unapproved_nle_persistence_fields,
+)
 from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import normalize_work_mode
 
@@ -352,7 +356,9 @@ def _build_clip_rows(
 
 
 def _sanitize_project_workspace_fields(project: dict) -> dict:
+    strip_unapproved_nle_persistence_fields(project, source="project_manager.sanitize")
     project.pop(NLE_PROJECT_STATE_RUNTIME_KEY, None)
+    project.pop(NLE_PERSISTENCE_QUARANTINE_KEY, None)
     project.pop("nle", None)
     project.pop("nle_snapshot", None)
     project["workspace"] = sanitize_workspace_state(project.get("workspace", {}) or {})

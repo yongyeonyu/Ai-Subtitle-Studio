@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
+
+from core.engine.subtitle_prompts import _build_llm_prompt
+from core.runtime import config
 
 try:
     from core.native_cut_boundary import llm_macro_group_ranges as _native_llm_macro_group_ranges
@@ -11,6 +19,9 @@ except Exception:  # pragma: no cover - optional native extension.
 
 
 MACRO_CHUNK_POLICY_SCHEMA = "ai_subtitle_studio.subtitle_llm_macro_chunk.v1"
+MACRO_RESPONSE_CACHE_SCHEMA = "ai_subtitle_studio.subtitle_llm_macro_response_cache.v1"
+_MACRO_RESPONSE_CACHE_BY_PATH: dict[str, dict[str, Any]] = {}
+_MACRO_RESPONSE_CACHE_LOCK = threading.Lock()
 
 
 def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool = True) -> bool:
@@ -38,6 +49,107 @@ def _setting_float(settings: dict[str, Any] | None, key: str, default: float) ->
         return float(value)
     except Exception:
         return float(default)
+
+
+def _macro_response_cache_path(settings: dict[str, Any]) -> Path:
+    override = str(settings.get("subtitle_llm_macro_response_cache_path") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(config.OUTPUT_DIR) / "subtitle_llm_macro_response_cache" / "macro_responses_v1.json"
+
+
+def _macro_response_cache_key(
+    *,
+    provider: str,
+    model: str,
+    text: str,
+    threshold: int,
+    rules: dict[str, Any],
+    user_prompt: str,
+    conservative: bool,
+    settings: dict[str, Any],
+    candidate_options: list[dict[str, Any]] | None,
+    context_pack: dict[str, Any] | None,
+) -> str:
+    prompt = _build_llm_prompt(
+        text,
+        threshold,
+        rules,
+        user_prompt,
+        conservative=conservative,
+        settings=settings,
+        candidate_options=candidate_options,
+        context_pack=context_pack,
+    )
+    payload = {
+        "schema": MACRO_RESPONSE_CACHE_SCHEMA,
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "prompt": prompt,
+    }
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _load_macro_response_cache_unlocked(path: Path) -> dict[str, Any]:
+    cache_key = str(path)
+    if cache_key in _MACRO_RESPONSE_CACHE_BY_PATH:
+        return _MACRO_RESPONSE_CACHE_BY_PATH[cache_key]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema") != MACRO_RESPONSE_CACHE_SCHEMA:
+            raise ValueError("unsupported cache schema")
+        entries = payload.get("entries")
+        cache = dict(entries) if isinstance(entries, dict) else {}
+    except Exception:
+        cache = {}
+    _MACRO_RESPONSE_CACHE_BY_PATH[cache_key] = cache
+    return cache
+
+
+def _save_macro_response_cache_unlocked(path: Path, cache: dict[str, Any], *, max_entries: int) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entries = dict(list(cache.items())[-max(1, int(max_entries)) :])
+        payload = {
+            "schema": MACRO_RESPONSE_CACHE_SCHEMA,
+            "updated_epoch": round(time.time(), 3),
+            "entries": entries,
+        }
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+        _MACRO_RESPONSE_CACHE_BY_PATH[str(path)] = entries
+    except Exception:
+        pass
+
+
+def _cached_macro_response_chunks(path: Path, key: str) -> list[str] | None:
+    with _MACRO_RESPONSE_CACHE_LOCK:
+        cache = _load_macro_response_cache_unlocked(path)
+        entry = cache.get(key)
+        if not isinstance(entry, dict):
+            return None
+        chunks = entry.get("chunks")
+        if not isinstance(chunks, list) or not chunks:
+            return None
+        clean_chunks = [str(chunk) for chunk in chunks if str(chunk or "").strip()]
+        return clean_chunks or None
+
+
+def _store_macro_response_chunks(path: Path, key: str, chunks: list[str], *, max_entries: int) -> bool:
+    clean_chunks = [str(chunk) for chunk in list(chunks or []) if str(chunk or "").strip()]
+    if not clean_chunks:
+        return False
+    with _MACRO_RESPONSE_CACHE_LOCK:
+        cache = _load_macro_response_cache_unlocked(path)
+        cache[key] = {
+            "schema": MACRO_RESPONSE_CACHE_SCHEMA,
+            "created_epoch": round(time.time(), 3),
+            "chunks": clean_chunks,
+        }
+        _save_macro_response_cache_unlocked(path, cache, max_entries=max_entries)
+    return True
 
 
 def llm_macro_chunk_enabled(settings: dict[str, Any], model: str, segment_count: int) -> bool:
@@ -433,44 +545,74 @@ def process_llm_macro_group(
             candidate_options = row_locked_options
             policy["source_lock"] = "stt_rows"
     context_pack = llm_context_pack_for_rows(rows) if callable(llm_context_pack_for_rows) else None
-    if "Gemini" in model:
-        chunks = ask_gemini_to_split(
-            text,
-            macro_threshold,
-            rules,
-            model,
-            user_prompt,
-            api_key,
+    provider = "gemini" if "Gemini" in model else ("openai" if is_openai_model(model) else "ollama")
+    cache_enabled = _setting_bool(macro_settings, "subtitle_llm_macro_response_cache_enabled", False)
+    cache_hit = False
+    cache_write = False
+    cache_key = ""
+    cache_path: Path | None = None
+    cache_max_entries = max(1, _setting_int(macro_settings, "subtitle_llm_macro_response_cache_max_entries", 512))
+    chunks: list[str] | None = None
+    provider_chunks: list[str] | None = None
+    if cache_enabled:
+        cache_path = _macro_response_cache_path(macro_settings)
+        cache_key = _macro_response_cache_key(
+            provider=provider,
+            model=model,
+            text=text,
+            threshold=macro_threshold,
+            rules=rules,
+            user_prompt=user_prompt,
             conservative=conservative,
             settings=macro_settings,
             candidate_options=candidate_options,
             context_pack=context_pack,
         )
-    elif is_openai_model(model):
-        chunks = ask_openai_to_split(
-            text,
-            macro_threshold,
-            rules,
-            model,
-            user_prompt,
-            api_key,
-            conservative=conservative,
-            settings=macro_settings,
-            candidate_options=candidate_options,
-            context_pack=context_pack,
-        )
-    else:
-        chunks = ask_exaone_to_split(
-            text,
-            macro_threshold,
-            rules,
-            model,
-            user_prompt,
-            conservative=conservative,
-            settings=macro_settings,
-            candidate_options=candidate_options,
-            context_pack=context_pack,
-        )
+        cached_chunks = _cached_macro_response_chunks(cache_path, cache_key)
+        if cached_chunks is not None:
+            chunks = cached_chunks
+            cache_hit = True
+            policy["reason"] = "llm_response_cache_hit"
+    if chunks is None:
+        if "Gemini" in model:
+            chunks = ask_gemini_to_split(
+                text,
+                macro_threshold,
+                rules,
+                model,
+                user_prompt,
+                api_key,
+                conservative=conservative,
+                settings=macro_settings,
+                candidate_options=candidate_options,
+                context_pack=context_pack,
+            )
+        elif provider == "openai":
+            chunks = ask_openai_to_split(
+                text,
+                macro_threshold,
+                rules,
+                model,
+                user_prompt,
+                api_key,
+                conservative=conservative,
+                settings=macro_settings,
+                candidate_options=candidate_options,
+                context_pack=context_pack,
+            )
+        else:
+            chunks = ask_exaone_to_split(
+                text,
+                macro_threshold,
+                rules,
+                model,
+                user_prompt,
+                conservative=conservative,
+                settings=macro_settings,
+                candidate_options=candidate_options,
+                context_pack=context_pack,
+            )
+        provider_chunks = list(chunks or []) if chunks else None
     chunks, macro_lora = verify_llm_chunks(
         text,
         chunks,
@@ -479,6 +621,16 @@ def process_llm_macro_group(
         fallback="lora_deep_prepass",
         candidate_options=candidate_options,
         context_pack=context_pack,
+    )
+    if provider_chunks and cache_enabled and not cache_hit and cache_key and cache_path is not None:
+        cache_write = _store_macro_response_chunks(cache_path, cache_key, provider_chunks, max_entries=cache_max_entries)
+    policy.update(
+        {
+            "llm_response_cache_enabled": bool(cache_enabled),
+            "llm_response_cache_hit": bool(cache_hit),
+            "llm_response_cache_write": bool(cache_write),
+            "llm_provider_called": bool(not cache_hit),
+        }
     )
     if not chunks:
         policy["llm_called"] = True
@@ -523,6 +675,106 @@ def process_llm_macro_group(
         base_lora_meta=macro_lora,
     )
     return result or attach_macro_policy(rows, {**policy, "reason": "empty_chunk_distribution"})
+
+
+def llm_macro_groups_require_provider_call(
+    groups: list[dict],
+    *,
+    rules: dict,
+    threshold: int,
+    corrections: dict,
+    model: str,
+    user_prompt: str,
+    conservative: bool,
+    settings: dict,
+    callbacks: dict[str, Any],
+) -> bool:
+    for index, group in enumerate(list(groups or [])):
+        if not group.get("needs_llm"):
+            continue
+        rows = [dict(row) for row in list(group.get("rows") or []) if isinstance(row, dict)]
+        if _macro_group_requires_provider_call(
+            rows,
+            rules=rules,
+            threshold=threshold,
+            corrections=corrections,
+            model=model,
+            user_prompt=user_prompt,
+            conservative=conservative,
+            settings=settings,
+            group_index=index,
+            callbacks=callbacks,
+        ):
+            return True
+    return False
+
+
+def _macro_group_requires_provider_call(
+    rows: list[dict],
+    *,
+    rules: dict,
+    threshold: int,
+    corrections: dict,
+    model: str,
+    user_prompt: str,
+    conservative: bool,
+    settings: dict,
+    group_index: int,
+    callbacks: dict[str, Any],
+) -> bool:
+    try:
+        clean_text = callbacks["clean_text"]
+        segment_lora_runtime = callbacks["segment_lora_runtime"]
+        setting_int = callbacks["setting_int"]
+        apply_llm_confidence_gate = callbacks["apply_llm_confidence_gate"]
+        build_candidate_options = callbacks["build_llm_candidate_options"]
+        is_openai_model = callbacks["is_openai_model"]
+        llm_context_pack_for_rows = callbacks.get("llm_context_pack_for_rows")
+
+        macro_seg = macro_segment_from_group(rows)
+        if not macro_seg:
+            return False
+        text = clean_text(str(macro_seg.get("text", "") or ""), corrections)
+        if not text:
+            return False
+        macro_settings, macro_lora = segment_lora_runtime({**macro_seg, "text": text}, settings, rules, threshold)
+        macro_threshold = setting_int(macro_settings, "split_length_threshold", threshold)
+        duration = float(macro_seg.get("end", 0.0) or 0.0) - float(macro_seg.get("start", 0.0) or 0.0)
+        should_call, _macro_lora = apply_llm_confidence_gate(
+            macro_seg,
+            text,
+            macro_threshold,
+            duration,
+            macro_settings,
+            macro_lora,
+        )
+        if not should_call:
+            return False
+        if not _setting_bool(macro_settings, "subtitle_llm_macro_response_cache_enabled", False):
+            return True
+        candidate_options = build_candidate_options(text, macro_threshold, rules, macro_settings)
+        if _stt_backed_rows(rows):
+            row_locked_options = _stt_row_locked_candidate_options(rows)
+            if row_locked_options:
+                candidate_options = row_locked_options
+        context_pack = llm_context_pack_for_rows(rows) if callable(llm_context_pack_for_rows) else None
+        provider = "gemini" if "Gemini" in model else ("openai" if is_openai_model(model) else "ollama")
+        cache_path = _macro_response_cache_path(macro_settings)
+        cache_key = _macro_response_cache_key(
+            provider=provider,
+            model=model,
+            text=text,
+            threshold=macro_threshold,
+            rules=rules,
+            user_prompt=user_prompt,
+            conservative=conservative,
+            settings=macro_settings,
+            candidate_options=candidate_options,
+            context_pack=context_pack,
+        )
+        return _cached_macro_response_chunks(cache_path, cache_key) is None
+    except Exception:
+        return True
 
 
 def process_llm_macro_groups(

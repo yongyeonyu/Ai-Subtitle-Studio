@@ -8,6 +8,10 @@ from core.project.project_roughcut_store import (
     compact_project_roughcut_payload,
     hydrate_project_roughcut_payload,
 )
+from core.project.nle_persistence_guard import (
+    NLE_PERSISTENCE_QUARANTINE_KEY,
+    strip_unapproved_nle_persistence_fields,
+)
 
 PROJECT_SCHEMA_VERSION = "04.00.18"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v5"
@@ -164,6 +168,7 @@ def refresh_project_video_header(project: dict[str, Any] | None) -> dict[str, An
 def hydrate_project_runtime_views(project: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(project, dict):
         return project
+    strip_unapproved_nle_persistence_fields(project, source="project_format.hydrate")
     header = project_video_header(project)
     if not header:
         header = refresh_project_video_header(project)
@@ -233,6 +238,7 @@ def hydrate_project_runtime_views(project: dict[str, Any] | None) -> dict[str, A
 
 def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload = dict(project or {})
+    strip_unapproved_nle_persistence_fields(payload, source="project_format.storage")
     header = refresh_project_video_header(payload)
     payload["video"] = header
     compact_project_roughcut_payload(payload, primary_fps=project_primary_fps(payload))
@@ -244,6 +250,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload.pop("_nle_project_state", None)
     payload.pop("nle", None)
     payload.pop("nle_snapshot", None)
+    payload.pop(NLE_PERSISTENCE_QUARANTINE_KEY, None)
     editor_state = payload.get("editor_state")
     if isinstance(editor_state, dict):
         editor_state = dict(editor_state)

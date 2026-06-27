@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+SHORT_FINAL_SEGMENT_THRESHOLD_SEC = 0.3
+LONG_FINAL_SEGMENT_THRESHOLD_SEC = 12.0
+
 from core.audio.media_processor import VideoProcessor  # noqa: E402
 from core.audio.npu_acceleration import prefer_npu_whisper_model  # noqa: E402
 from core.audio.stt_backend_router import select_stt_backend  # noqa: E402
@@ -87,6 +90,45 @@ DEFAULT_MEDIA = DEFAULT_FIXTURE_DIR / "X5_시승기_후반.
 DEFAULT_REFERENCE = DEFAULT_FIXTURE_DIR / "X5_시스응기_후반.srt"
 if not DEFAULT_REFERENCE.exists():
     DEFAULT_REFERENCE = DEFAULT_FIXTURE_DIR / "X5_시승기_후반.srt"
+
+
+def _parse_value_text(value_text: str) -> Any:
+    text = str(value_text).strip()
+    if text.lower() in {"true", "false", "null", "none", ""}:
+        return {"true": True, "false": False, "null": None, "none": None}.get(text.lower(), text)
+    try:
+        return json.loads(text)
+    except Exception:
+        return text
+
+
+def _parse_setting_overrides(raw_values: list[str] | None) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    for raw in raw_values or []:
+        if "=" not in raw:
+            raise ValueError(f"Invalid --setting value: {raw!r}; expected key=value")
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"Invalid --setting key in {raw!r}")
+        overrides[key] = _parse_value_text(value)
+    return overrides
+
+
+def _apply_cli_setting_overrides(variants: list[Variant], overrides: dict[str, Any]) -> list[Variant]:
+    if not overrides:
+        return variants
+    return [
+        Variant(
+            name=variant.name,
+            phase=variant.phase,
+            description=variant.description,
+            method=variant.method,
+            run_llm=variant.run_llm,
+            overrides={**dict(variant.overrides or {}), **overrides},
+        )
+        for variant in variants
+    ]
 
 
 def benchmark_variants(base_settings: dict[str, Any]) -> list[Variant]:
@@ -492,6 +534,96 @@ def _mode_profile_method(settings: dict[str, Any]) -> str:
     return "stt1_only"
 
 
+def _append_stage_wall_clock_span(
+    spans: list[dict[str, Any]],
+    stage: str,
+    started: float,
+    **metadata: Any,
+) -> None:
+    try:
+        elapsed = max(0.0, time.perf_counter() - float(started))
+    except Exception:
+        elapsed = 0.0
+    row: dict[str, Any] = {
+        "stage": str(stage or "unknown"),
+        "elapsed_sec": round(elapsed, 6),
+    }
+    for key, value in dict(metadata or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            row[str(key)] = value
+    spans.append(row)
+
+
+def _stage_wall_clock_summary(spans: list[dict[str, Any]]) -> dict[str, Any]:
+    clean_rows: list[dict[str, Any]] = []
+    for span in list(spans or []):
+        if not isinstance(span, dict):
+            continue
+        stage = str(span.get("stage") or "").strip()
+        if not stage:
+            continue
+        try:
+            elapsed = round(max(0.0, float(span.get("elapsed_sec") or 0.0)), 6)
+        except (TypeError, ValueError):
+            elapsed = 0.0
+        row = {key: value for key, value in span.items() if isinstance(value, (str, int, float, bool))}
+        row["stage"] = stage
+        row["elapsed_sec"] = elapsed
+        clean_rows.append(row)
+
+    stage_summaries: dict[str, dict[str, Any]] = {}
+    for row in clean_rows:
+        stage = str(row.get("stage") or "")
+        data = stage_summaries.setdefault(
+            stage,
+            {
+                "count": 0,
+                "total_elapsed_sec": 0.0,
+                "max_elapsed_sec": 0.0,
+                "latest_elapsed_sec": 0.0,
+            },
+        )
+        elapsed = float(row.get("elapsed_sec") or 0.0)
+        data["count"] = int(data.get("count", 0) or 0) + 1
+        data["total_elapsed_sec"] = round(float(data.get("total_elapsed_sec", 0.0) or 0.0) + elapsed, 6)
+        data["max_elapsed_sec"] = round(max(float(data.get("max_elapsed_sec", 0.0) or 0.0), elapsed), 6)
+        data["latest_elapsed_sec"] = round(elapsed, 6)
+        for key, value in row.items():
+            if key == "elapsed_sec" or not str(key).endswith("_elapsed_sec"):
+                continue
+            try:
+                sub_elapsed = round(max(0.0, float(value or 0.0)), 6)
+            except (TypeError, ValueError):
+                continue
+            total_key = f"total_{key}"
+            max_key = f"max_{key}"
+            latest_key = f"latest_{key}"
+            data[total_key] = round(float(data.get(total_key, 0.0) or 0.0) + sub_elapsed, 6)
+            data[max_key] = round(max(float(data.get(max_key, 0.0) or 0.0), sub_elapsed), 6)
+            data[latest_key] = round(sub_elapsed, 6)
+
+    top_stage = None
+    top_elapsed = None
+    if stage_summaries:
+        top_stage, top_data = max(
+            stage_summaries.items(),
+            key=lambda item: float(item[1].get("max_elapsed_sec") or 0.0),
+        )
+        top_elapsed = top_data.get("max_elapsed_sec")
+
+    return {
+        "schema": "ai_subtitle_studio.stage_wall_clock_summary.v1",
+        "note": "Wall-clock spans are measured with perf_counter. Some stages can be nested; compare named stages directly instead of summing all rows as exclusive time.",
+        "span_count": len(clean_rows),
+        "top_stage": top_stage,
+        "top_elapsed_sec": top_elapsed,
+        "stage_summaries": stage_summaries,
+        "spans": clean_rows,
+    }
+
+
 def _native_resource_summary_for_variant(settings: dict[str, Any], *, run_llm: bool) -> dict[str, Any]:
     active_labels = ["pipeline", "stt", "subtitle_optimize"]
     if run_llm:
@@ -528,16 +660,52 @@ def _native_resource_summary_for_variant(settings: dict[str, Any], *, run_llm: b
     }
 
 
+def _segment_duration_bounds_for_variant(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    durations: list[float] = []
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        try:
+            start = float(row.get("start", 0.0) or 0.0)
+            end = float(row.get("end", start) or start)
+        except Exception:
+            continue
+        if end <= start:
+            continue
+        durations.append(end - start)
+    if not durations:
+        return {
+            "min_segment_duration_sec": 0.0,
+            "max_segment_duration_sec": 0.0,
+            "short_segment_threshold_sec": SHORT_FINAL_SEGMENT_THRESHOLD_SEC,
+            "short_segment_count": 0,
+            "long_segment_threshold_sec": LONG_FINAL_SEGMENT_THRESHOLD_SEC,
+            "long_segment_count": 0,
+        }
+    return {
+        "min_segment_duration_sec": round(min(durations), 6),
+        "max_segment_duration_sec": round(max(durations), 6),
+        "short_segment_threshold_sec": SHORT_FINAL_SEGMENT_THRESHOLD_SEC,
+        "short_segment_count": sum(1 for duration in durations if duration < SHORT_FINAL_SEGMENT_THRESHOLD_SEC),
+        "long_segment_threshold_sec": LONG_FINAL_SEGMENT_THRESHOLD_SEC,
+        "long_segment_count": sum(1 for duration in durations if duration > LONG_FINAL_SEGMENT_THRESHOLD_SEC),
+    }
+
+
 def _native_segments_summary_for_variant(rows: list[dict[str, Any]]) -> dict[str, Any]:
     summary = summarize_segments_via_swift(rows) or cpp_segment_summary(rows)
     if not isinstance(summary, dict):
         return {}
+    invalid_count = int(summary.get("invalid_duration_count", 0) or 0)
+    non_monotonic_count = int(summary.get("non_monotonic_count", 0) or 0)
+    overlap_count = int(summary.get("overlap_count", 0) or 0)
+    duration_bounds = _segment_duration_bounds_for_variant(rows)
     return {
         "backend": str(summary.get("backend") or summary.get("native_backend") or "native"),
         "segment_count": int(summary.get("segment_count", 0) or 0),
-        "invalid_duration_count": int(summary.get("invalid_duration_count", 0) or 0),
-        "non_monotonic_count": int(summary.get("non_monotonic_count", 0) or 0),
-        "overlap_count": int(summary.get("overlap_count", 0) or 0),
+        "invalid_duration_count": invalid_count,
+        "non_monotonic_count": non_monotonic_count,
+        "overlap_count": overlap_count,
         "empty_text_count": int(summary.get("empty_text_count", 0) or 0),
         "total_duration": round(float(summary.get("total_duration", 0.0) or 0.0), 6),
         "first_start": round(float(summary.get("first_start", 0.0) or 0.0), 6),
@@ -548,8 +716,9 @@ def _native_segments_summary_for_variant(rows: list[dict[str, Any]]) -> dict[str
         "max_overlap_index": int(summary.get("max_overlap_index", -1)),
         "max_chars": int(summary.get("max_chars", 0) or 0),
         "avg_chars": round(float(summary.get("avg_chars", 0.0) or 0.0), 6),
-        "stable_for_save_reopen": bool(summary.get("stable_for_save_reopen", False)),
+        "stable_for_save_reopen": invalid_count == 0 and non_monotonic_count == 0 and overlap_count == 0,
         "segment_feed_signature": str(summary.get("segment_feed_signature") or ""),
+        **duration_bounds,
     }
 
 
@@ -1217,13 +1386,24 @@ def _primary_model(settings: dict[str, Any]) -> str:
     return str(routed or requested)
 
 
-def _run_postprocess(rows: list[dict[str, Any]], vad: list[dict[str, Any]], settings: dict[str, Any], *, run_llm: bool) -> list[dict[str, Any]]:
+def _run_postprocess(
+    rows: list[dict[str, Any]],
+    vad: list[dict[str, Any]],
+    settings: dict[str, Any],
+    *,
+    run_llm: bool,
+    stage_segments_callback=None,
+) -> list[dict[str, Any]]:
     model = str(settings.get("selected_model") or "").strip()
     if not run_llm:
         model = "사용 안함 (benchmark no-llm)"
         settings = {**settings, "selected_model": model}
     with patched_subtitle_settings(settings, model):
-        optimized = subtitle_engine.optimize_segments([dict(row) for row in rows], vad_segments=vad)
+        optimized = subtitle_engine.optimize_segments(
+            [dict(row) for row in rows],
+            vad_segments=vad,
+            stage_segments_callback=stage_segments_callback,
+        )
     return _apply_benchmark_speaker_postprocess(optimized, settings)
 
 
@@ -1339,15 +1519,174 @@ def _run_variant(
     vad = _load_vad(chunk_dir)
     processor = VideoProcessor()
     _bind_processor_settings(processor, settings)
+    if hasattr(processor, "_reset_stt_stage_wall_clock_spans"):
+        processor._reset_stt_stage_wall_clock_spans()
     started = time.perf_counter()
     error = ""
+    stage_wall_clock_spans: list[dict[str, Any]] = []
     raw_rows: list[dict[str, Any]] = []
     final_rows: list[dict[str, Any]] = []
+
+    def _run_postprocess_with_span(
+        rows: list[dict[str, Any]],
+        *,
+        run_llm: bool,
+        pass_name: str,
+    ) -> list[dict[str, Any]]:
+        postprocess_started = time.perf_counter()
+        step_started = postprocess_started
+        detail_spans: list[dict[str, Any]] = []
+        status = "ok"
+        output_rows: list[dict[str, Any]] = []
+
+        def _stage_callback(payload: dict[str, Any]) -> None:
+            nonlocal step_started
+            now = time.perf_counter()
+            if not isinstance(payload, dict):
+                return
+            stage = str(payload.get("stage") or "").strip() or "unknown"
+            segments_payload = payload.get("segments")
+            detail_row: dict[str, Any] = {
+                "stage": stage,
+                "elapsed_sec": round(max(0.0, now - step_started), 6),
+                "segment_count": len(segments_payload) if isinstance(segments_payload, list) else 0,
+            }
+            diagnostics = payload.get("diagnostics")
+            if stage == "high_context_boundary" and isinstance(diagnostics, dict):
+                for key in (
+                    "candidate_pair_count",
+                    "skipped_pair_count",
+                    "llm_call_count",
+                    "failed_call_count",
+                    "changed_pair_count",
+                    "max_pairs",
+                    "keep_decision_count",
+                    "move_boundary_decision_count",
+                    "merge_decision_count",
+                    "invalid_decision_count",
+                    "correction_request_count",
+                    "applied_correction_count",
+                    "keep_cache_hit_count",
+                    "keep_cache_miss_count",
+                    "keep_cache_write_count",
+                    "elapsed_sec",
+                ):
+                    value = diagnostics.get(key)
+                    if isinstance(value, (int, float, bool)):
+                        detail_row[f"high_context_boundary_{key}"] = value
+                if isinstance(diagnostics.get("reason"), str):
+                    detail_row["high_context_boundary_reason"] = str(diagnostics.get("reason") or "")
+                if isinstance(diagnostics.get("enabled"), bool):
+                    detail_row["high_context_boundary_enabled"] = bool(diagnostics.get("enabled"))
+                if isinstance(diagnostics.get("keep_cache_enabled"), bool):
+                    detail_row["high_context_boundary_keep_cache_enabled"] = bool(diagnostics.get("keep_cache_enabled"))
+            if stage == "proofread_dictionary_llm" and isinstance(diagnostics, dict):
+                mapping = {
+                    "response_cache_enabled": "llm_macro_response_cache_enabled",
+                    "response_cache_hit_group_count": "llm_macro_response_cache_hit_group_count",
+                    "response_cache_write_group_count": "llm_macro_response_cache_write_group_count",
+                    "provider_called_group_count": "llm_macro_provider_called_group_count",
+                }
+                for source_key, target_key in mapping.items():
+                    value = diagnostics.get(source_key)
+                    if isinstance(value, (int, float, bool)):
+                        detail_row[target_key] = value
+            if stage == "proofread_dictionary_llm" and isinstance(segments_payload, list):
+                macro_policies = [
+                    dict(row.get("_llm_macro_chunk_policy") or {})
+                    for row in segments_payload
+                    if isinstance(row, dict) and isinstance(row.get("_llm_macro_chunk_policy"), dict)
+                ]
+
+                def macro_groups_with(flag: str) -> set[str]:
+                    groups: set[str] = set()
+                    for row_index, policy in enumerate(macro_policies):
+                        if not bool(policy.get(flag)):
+                            continue
+                        group = policy.get("group_index")
+                        groups.add(str(group if group is not None else row_index))
+                    return groups
+
+                if macro_policies:
+                    detail_row["llm_macro_response_cache_enabled"] = any(
+                        bool(policy.get("llm_response_cache_enabled")) for policy in macro_policies
+                    )
+                    detail_row["llm_macro_response_cache_hit_group_count"] = len(
+                        macro_groups_with("llm_response_cache_hit")
+                    )
+                    detail_row["llm_macro_response_cache_write_group_count"] = len(
+                        macro_groups_with("llm_response_cache_write")
+                    )
+                    detail_row["llm_macro_provider_called_group_count"] = len(
+                        macro_groups_with("llm_provider_called")
+                    )
+            detail_spans.append(detail_row)
+            step_started = now
+
+        try:
+            output_rows = _run_postprocess(
+                rows,
+                vad,
+                settings,
+                run_llm=run_llm,
+                stage_segments_callback=_stage_callback,
+            )
+            return output_rows
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            detail_top_stage = None
+            detail_top_elapsed = None
+            if detail_spans:
+                top = max(detail_spans, key=lambda item: float(item.get("elapsed_sec") or 0.0))
+                detail_top_stage = str(top.get("stage") or "")
+                detail_top_elapsed = round(float(top.get("elapsed_sec") or 0.0), 6)
+            _append_stage_wall_clock_span(
+                stage_wall_clock_spans,
+                "subtitle_postprocess",
+                postprocess_started,
+                status=status,
+                pass_name=pass_name,
+                run_llm=bool(run_llm),
+                input_segments=len(rows or []),
+                result_segments=len(output_rows or []),
+                detail_stage_count=len(detail_spans),
+                detail_top_stage=detail_top_stage,
+                detail_top_elapsed_sec=detail_top_elapsed,
+            )
+            for item in detail_spans:
+                detail_elapsed = round(float(item.get("elapsed_sec") or 0.0), 6)
+                stage_wall_clock_spans.append(
+                    {
+                        "stage": "subtitle_postprocess_detail",
+                        "elapsed_sec": detail_elapsed,
+                        "status": status,
+                        "pass_name": pass_name,
+                        "detail_stage": str(item.get("stage") or ""),
+                        "detail_elapsed_sec": detail_elapsed,
+                        "detail_segment_count": int(item.get("segment_count") or 0),
+                        **{
+                            key: value
+                            for key, value in item.items()
+                            if (
+                                str(key).startswith("high_context_boundary_")
+                                or str(key).startswith("llm_macro_")
+                            )
+                            and isinstance(value, (str, int, float, bool))
+                        },
+                    }
+                )
+
     try:
         if variant.method == "cached_raw":
             raw_rows = _load_cached_raw_segments(settings)
             raw_rows = annotate_stt_candidates(raw_rows, source="cached", vad_segments=vad, settings=settings)
-            final_rows = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            final_rows = _run_postprocess_with_span(
+                raw_rows,
+                run_llm=variant.run_llm,
+                pass_name="final",
+            )
         elif variant.method == "stt1_only":
             raw_rows = _collect_transcribe(
                 processor.transcribe(
@@ -1359,7 +1698,11 @@ def _run_variant(
                 )
             )
             raw_rows = annotate_stt_candidates(raw_rows, source="STT1", vad_segments=vad, settings=settings)
-            final_rows = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            final_rows = _run_postprocess_with_span(
+                raw_rows,
+                run_llm=variant.run_llm,
+                pass_name="final",
+            )
         elif variant.method == "stt1_word_precision":
             raw_rows = _collect_transcribe(
                 processor.transcribe(
@@ -1371,7 +1714,11 @@ def _run_variant(
                 )
             )
             scored = annotate_stt_candidates(raw_rows, source="STT1", vad_segments=vad, settings=settings)
-            lora_deep_rows = _run_postprocess(scored, vad, settings, run_llm=False)
+            lora_deep_rows = _run_postprocess_with_span(
+                scored,
+                run_llm=False,
+                pass_name="lora_deep_prefilter",
+            )
             _bind_processor_settings(processor, settings)
             precision_rows = processor._recheck_word_timestamps_for_precision(
                 str(chunk_dir),
@@ -1381,7 +1728,11 @@ def _run_variant(
                 _primary_model(settings),
             )
             raw_rows = precision_rows
-            final_rows = _run_postprocess(precision_rows, vad, settings, run_llm=variant.run_llm)
+            final_rows = _run_postprocess_with_span(
+                precision_rows,
+                run_llm=variant.run_llm,
+                pass_name="final",
+            )
         elif variant.method in {"parallel_ensemble", "selective_ensemble"}:
             raw_rows = _collect_transcribe(
                 processor.transcribe_ensemble(
@@ -1390,7 +1741,11 @@ def _run_variant(
                     cleanup_chunk_dir=False,
                 )
             )
-            final_rows = _run_postprocess(raw_rows, vad, settings, run_llm=variant.run_llm)
+            final_rows = _run_postprocess_with_span(
+                raw_rows,
+                run_llm=variant.run_llm,
+                pass_name="final",
+            )
         elif variant.method == "proposed_lora_deep_gate":
             raw_rows = _collect_transcribe(
                 processor.transcribe(
@@ -1402,7 +1757,11 @@ def _run_variant(
                 )
             )
             scored = annotate_stt_candidates(raw_rows, source="STT1", vad_segments=vad, settings=settings)
-            lora_deep_rows = _run_postprocess(scored, vad, settings, run_llm=False)
+            lora_deep_rows = _run_postprocess_with_span(
+                scored,
+                run_llm=False,
+                pass_name="lora_deep_prefilter",
+            )
             _bind_processor_settings(processor, settings)
             rechecked = processor._recheck_primary_low_score_with_secondary(
                 str(chunk_dir),
@@ -1419,12 +1778,19 @@ def _run_variant(
                 _primary_model(settings),
             )
             raw_rows = rechecked
-            final_rows = _run_postprocess(rechecked, vad, settings, run_llm=variant.run_llm)
+            final_rows = _run_postprocess_with_span(
+                rechecked,
+                run_llm=variant.run_llm,
+                pass_name="final",
+            )
         else:
             raise RuntimeError(f"unsupported variant method: {variant.method}")
     except Exception as exc:
         error = str(exc)
     finally:
+        processor_stage_wall_clock_spans: list[dict[str, Any]] = []
+        if hasattr(processor, "_stt_stage_wall_clock_spans_snapshot"):
+            processor_stage_wall_clock_spans = processor._stt_stage_wall_clock_spans_snapshot()
         processor.release_runtime_models()
     if final_rows:
         final_rows = _apply_benchmark_cut_boundaries(final_rows, settings)
@@ -1487,6 +1853,12 @@ def _run_variant(
                 "subtitle_llm_context_word_correction_enabled",
                 "subtitle_llm_context_max_pairs",
                 "subtitle_llm_context_require_risk_signal",
+                "subtitle_llm_context_keep_cache_enabled",
+                "subtitle_llm_context_keep_cache_max_entries",
+                "subtitle_llm_macro_response_cache_enabled",
+                "subtitle_llm_macro_response_cache_max_entries",
+                "stt_recheck_collect_cache_enabled",
+                "stt_recheck_collect_cache_max_entries",
                 "deep_subtitle_policy_enabled",
                 "deep_timing_adjustment_enabled",
                 "subtitle_timing_anchor_max_start_lag_sec",
@@ -1496,6 +1868,9 @@ def _run_variant(
             )
         },
     }
+    stage_wall_clock_summary = _stage_wall_clock_summary(processor_stage_wall_clock_spans + stage_wall_clock_spans)
+    if stage_wall_clock_summary.get("span_count"):
+        row["stage_wall_clock_summary"] = stage_wall_clock_summary
     if settings.get("_benchmark_cut_boundaries_json"):
         row["cut_boundary_artifact"] = str(settings.get("_benchmark_cut_boundaries_json") or "")
         row["cut_boundary_rows"] = len(_load_benchmark_cut_boundaries(str(settings.get("_benchmark_cut_boundaries_json") or "")))
@@ -1657,6 +2032,7 @@ def main() -> int:
     )
     parser.add_argument("--variants", nargs="*", default=[], help="Optional variant names to run.")
     parser.add_argument("--llm-model", default="", help="Override subtitle LLM model for LLM variants.")
+    parser.add_argument("--setting", action="append", default=[], help="Additional setting override in key=value format.")
     parser.add_argument(
         "--cached-raw-segments",
         default="",
@@ -1690,6 +2066,8 @@ def main() -> int:
     work_dir.mkdir(parents=True, exist_ok=True)
 
     base_settings = _base_benchmark_settings(args.stt_profile)
+    setting_overrides = _parse_setting_overrides(args.setting)
+    base_settings.update(setting_overrides)
     base_settings["_benchmark_span_sec"] = float(args.duration_sec)
     if str(args.llm_model or "").strip():
         base_settings["selected_model"] = str(args.llm_model).strip()
@@ -1707,6 +2085,7 @@ def main() -> int:
         variants = benchmark_mode_lora_packaging_profiles(base_settings, llm_model=str(args.llm_model or "").strip())
     else:
         variants = benchmark_variants(base_settings)
+    variants = _apply_cli_setting_overrides(variants, setting_overrides)
     if args.variants:
         wanted = set(args.variants)
         variants = [variant for variant in variants if variant.name in wanted]

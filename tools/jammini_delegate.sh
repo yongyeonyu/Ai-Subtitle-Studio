@@ -276,7 +276,7 @@ send_prompt() {
     else
       clean_request="$(printf '%s' "${request:-}" | tr '\n' ' ' | sed -e 's/[[:space:]]\{1,\}/ /g' | cut -c 1-200)"
     fi
-    local notify_msg="[Jammini Dispatch] 역할: ${role} | 범위: ${scope:-작업 분석} | 일감 수신: ${clean_request}"
+    local notify_msg="🤖 [Jammini Working] 역할: ${role} | 범위: ${scope:-작업 분석} | 📋 일감 수신: ${clean_request}"
     local notify_err
     notify_err="$(mktemp)"
     if ! "$ag_send" "$canonical_id" "$notify_msg" >/dev/null 2>"$notify_err"; then

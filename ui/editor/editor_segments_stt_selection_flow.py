@@ -9,6 +9,8 @@ from PyQt6.QtCore import QTimer
 from core.engine.subtitle_live_editor_feed import build_subtitle_live_editor_feed
 from core.engine.subtitle_timing import align_stt_preview_to_subtitle_segments
 from core.native_swift_timeline import apply_subtitle_magnet_via_swift
+from core.project.nle_dual_write import apply_candidate_confirm_dual_write_pilot
+from core.project.project_context import build_editor_state
 from core.project.project_srt import strip_whisper_control_tokens
 from core.timeline_time import segment_display_time_bounds
 from ui.editor.editor_subtitle_assist import (
@@ -18,6 +20,109 @@ from ui.editor.editor_subtitle_assist import (
 
 
 class EditorSegmentsSttSelectionFlowMixin:
+    def _nle_candidate_confirm_project_from_rows(self, rows: list[dict]) -> dict:
+        try:
+            fps = float(getattr(self, "video_fps", 30.0) or 30.0)
+        except Exception:
+            fps = 30.0
+        media_path = str(getattr(self, "media_path", "") or "")
+        media_files = [media_path] if media_path else []
+        duration = 0.0
+        try:
+            duration = float(getattr(getattr(self, "video_player", None), "total_time", 0.0) or 0.0)
+        except Exception:
+            duration = 0.0
+        for row in list(rows or []):
+            if not isinstance(row, dict):
+                continue
+            try:
+                duration = max(duration, float(row.get("end", row.get("start", 0.0)) or 0.0))
+            except Exception:
+                pass
+        return {
+            "project_name": "live_editor_nle_candidate_confirm",
+            "mode": "single",
+            "video": {"duration_sec": duration, "primary_fps": fps},
+            "editor_state": build_editor_state(
+                mode="single",
+                media_files=media_files,
+                segments=[dict(row) for row in list(rows or []) if isinstance(row, dict)],
+                stt_preview_segments=[
+                    dict(row)
+                    for row in list(getattr(self, "_live_stt_preview_segments", []) or [])
+                    if isinstance(row, dict)
+                ],
+                primary_fps=fps,
+            ),
+        }
+
+    def _nle_live_editor_candidate_confirm_result(
+        self,
+        *,
+        before_segments: list[dict],
+        confirmed_segments: list[dict],
+        candidate: dict,
+        candidate_source: str,
+    ):
+        if not before_segments or not confirmed_segments or not isinstance(candidate, dict):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        source = str(candidate_source or "").strip().upper()
+        if source not in {"STT1", "STT2"}:
+            return None
+        for row in list(confirmed_segments or []):
+            if not isinstance(row, dict):
+                return None
+            if bool(row.get("is_gap") or row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        project = self._nle_candidate_confirm_project_from_rows(before_segments)
+        try:
+            result = apply_candidate_confirm_dual_write_pilot(
+                project,
+                confirmed_rows=[dict(row) for row in confirmed_segments],
+                candidate=dict(candidate),
+                candidate_source=source,
+                candidate_lanes=[
+                    dict(row)
+                    for row in list(getattr(self, "_live_stt_preview_segments", []) or [])
+                    if isinstance(row, dict)
+                ],
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+            if not self._nle_candidate_confirm_preserves_confirmed_rows(
+                list(result.projected_rows),
+                [dict(row) for row in confirmed_segments],
+            ):
+                return None
+            return result
+        except Exception:
+            return None
+
+    def _nle_candidate_confirm_preserves_confirmed_rows(
+        self,
+        projected_rows: list[dict],
+        confirmed_rows: list[dict],
+    ) -> bool:
+        if len(projected_rows) != len(confirmed_rows):
+            return False
+        for projected, confirmed in zip(projected_rows, confirmed_rows):
+            if str(projected.get("text", "") or "") != str(confirmed.get("text", "") or ""):
+                return False
+            if bool(projected.get("is_gap")) != bool(confirmed.get("is_gap")):
+                return False
+            if str(projected.get("stt_selected_source", "") or "") != str(confirmed.get("stt_selected_source", "") or ""):
+                return False
+            for key in ("start", "end"):
+                try:
+                    left = float(projected.get(key, 0.0) or 0.0)
+                    right = float(confirmed.get(key, 0.0) or 0.0)
+                except Exception:
+                    return False
+                if abs(left - right) > 0.001:
+                    return False
+        return True
+
     def _live_subtitle_preview_sync_active(self) -> bool:
         """Return True only when subtitle preview rows can stay in sync with the editor."""
         explicit_preview = any(
@@ -687,6 +792,18 @@ class EditorSegmentsSttSelectionFlowMixin:
 
         for line, seg in enumerate(current):
             seg["line"] = line
+        nle_confirm = self._nle_live_editor_candidate_confirm_result(
+            before_segments=current_with_gaps,
+            confirmed_segments=current,
+            candidate=candidate,
+            candidate_source=cand_source,
+        )
+        if nle_confirm is not None:
+            self._last_nle_live_editor_operation = nle_confirm.operation.to_dict()
+            self._last_nle_live_editor_projection = nle_confirm.after_projection.to_dict()
+            current = [dict(row) for row in nle_confirm.projected_rows]
+            for line, seg in enumerate(current):
+                seg["line"] = line
         self._active_seg_start = candidate_anchor_sec
 
         if hasattr(self, "text_edit"):
@@ -749,7 +866,14 @@ class EditorSegmentsSttSelectionFlowMixin:
             confirmed + subtitle_preview + preview,
             key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
         )
-        self.timeline.update_segments(combined, self._active_seg_start, total_dur)
+        global_rows = None
+        nle_global_rows = getattr(self, "_nle_global_canvas_context_from_segments", None)
+        if callable(nle_global_rows):
+            try:
+                global_rows = nle_global_rows(confirmed_segments)
+            except Exception:
+                global_rows = None
+        self.timeline.update_segments(combined, self._active_seg_start, total_dur, global_rows=global_rows)
         if getattr(self, "_queue_mode_fit_view", False):
             try:
                 setattr(self.timeline, "_manual_zoom_since_fit", False)
@@ -777,7 +901,14 @@ class EditorSegmentsSttSelectionFlowMixin:
             confirmed + subtitle_preview + preview,
             key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
         )
-        self.timeline.update_segments(combined, self._active_seg_start, total_dur)
+        global_rows = None
+        nle_global_rows = getattr(self, "_nle_global_canvas_context_from_segments", None)
+        if callable(nle_global_rows):
+            try:
+                global_rows = nle_global_rows(confirmed_segments)
+            except Exception:
+                global_rows = None
+        self.timeline.update_segments(combined, self._active_seg_start, total_dur, global_rows=global_rows)
         # 실시간 드래프트가 타임라인에만 남지 않도록 같은 window를 비디오 overlay에도 바로 반영한다.
         video_context = getattr(self, "_video_subtitle_live_preview_context", None)
         apply_video_context = getattr(self, "_apply_video_context_segments", None)

@@ -534,6 +534,7 @@ class TimelineSubtitleSegmentEditingMixin(TimelineLiveCutDetectionMixin, _Legacy
         self._drag_adj_orig_end_l = self._drag_adj_l["end"] if self._drag_adj_l else 0.0
         self._drag_adj_orig_start_r = self._drag_adj_r["start"] if self._drag_adj_r else 0.0
         self._drag_adj_orig_end_r = self._drag_adj_r["end"] if self._drag_adj_r else 0.0
+        self._drag_center_reorder_direction = None
         self._set_drag_merge_preview_pair(None)
         clearer = getattr(self, "clear_drag_shadow_playhead", None)
         if callable(clearer):
@@ -963,6 +964,90 @@ class TimelineSubtitleSegmentEditingMixin(TimelineLiveCutDetectionMixin, _Legacy
             if prev is None or priority.get(str(item.get("kind")), 0) > priority.get(str(prev.get("kind")), 0):
                 deduped[t] = item
         return list(deduped.values())
+
+    def _segment_move_suppresses_gap_candidate_attachment(self, target_start: float) -> bool:
+        if str(getattr(self, "_drag_edge", "") or "") != "center":
+            return False
+        dragged = getattr(self, "_drag_seg", None)
+        if not isinstance(dragged, dict):
+            return False
+        try:
+            original_start = self._snap_to_frame(float(getattr(self, "_drag_s0_start", dragged.get("start", 0.0)) or 0.0))
+            original_end = self._snap_to_frame(float(getattr(self, "_drag_s0_end", dragged.get("end", original_start)) or original_start))
+            requested_start = self._snap_to_frame(float(target_start or 0.0))
+        except Exception:
+            return False
+        fps = max(1.0, float(self._get_fps() if hasattr(self, "_get_fps") else 30.0))
+        epsilon = max(0.001, 0.5 / fps)
+        moving_right = requested_start > original_start + epsilon
+        moving_left = requested_start < original_start - epsilon
+        if not moving_right and not moving_left:
+            return False
+
+        gap_rows = [
+            dict(gap)
+            for gap in list(getattr(self, "gap_segments", []) or [])
+            if isinstance(gap, dict)
+        ]
+        for seg in list(getattr(self, "segments", []) or []):
+            if isinstance(seg, dict) and bool(seg.get("is_gap")):
+                gap_rows.append(dict(seg))
+
+        def _bounds(row: dict) -> tuple[float, float] | None:
+            try:
+                start = self._snap_to_frame(float(row.get("start", 0.0) or 0.0))
+                end = self._snap_to_frame(float(row.get("end", start) or start))
+            except Exception:
+                return None
+            if end <= start:
+                return None
+            return start, end
+
+        if moving_right:
+            next_real = getattr(self, "_drag_adj_r", None)
+            try:
+                next_start = self._snap_to_frame(float(next_real.get("start", 0.0))) if isinstance(next_real, dict) else None
+            except Exception:
+                next_start = None
+            for gap in gap_rows:
+                bounds = _bounds(gap)
+                if bounds is None:
+                    continue
+                gap_start, gap_end = bounds
+                if gap_end <= original_end + epsilon:
+                    continue
+                if next_start is not None and gap_start >= next_start - epsilon:
+                    continue
+                return True
+            return False
+
+        previous_real = getattr(self, "_drag_adj_l", None)
+        try:
+            previous_end = self._snap_to_frame(float(previous_real.get("end", 0.0))) if isinstance(previous_real, dict) else None
+        except Exception:
+            previous_end = None
+        for gap in gap_rows:
+            bounds = _bounds(gap)
+            if bounds is None:
+                continue
+            gap_start, gap_end = bounds
+            if gap_start >= original_start - epsilon:
+                continue
+            if previous_end is not None and gap_end <= previous_end + epsilon:
+                continue
+            return True
+        return False
+
+    def _filter_segment_move_snap_candidates(self, candidates: list[dict], *, target_start: float) -> list[dict]:
+        suppress_gap = self._segment_move_suppresses_gap_candidate_attachment(target_start)
+        self._drag_suppresses_gap_candidate_attachment = bool(suppress_gap)
+        if not suppress_gap:
+            return list(candidates or [])
+        return [
+            candidate
+            for candidate in list(candidates or [])
+            if str((candidate or {}).get("kind", "") or "") != "gap"
+        ]
 
     def _iter_live_cut_snap_owners(self):
         seen: set[int] = set()
@@ -1881,6 +1966,8 @@ class TimelineSubtitleSegmentEditingMixin(TimelineLiveCutDetectionMixin, _Legacy
     def _finish_timing_drag_cleanup(self, dirty: QRect | None = None) -> None:
         preview_rect = self._merge_preview_repaint_rect(getattr(self, "_drag_merge_pair", None))
         self._drag_merge_pair = None
+        self._drag_suppresses_gap_candidate_attachment = False
+        self._drag_center_reorder_direction = None
         self._finish_drag_live_cut_session(clear_shadow=True)
         self._set_drag_live_cut_shadow(None)
         if preview_rect.isValid() and not preview_rect.isEmpty():
@@ -1925,11 +2012,16 @@ class TimelineSubtitleSegmentEditingMixin(TimelineLiveCutDetectionMixin, _Legacy
                 self.diamond_merge.emit(int(merge_pair[0]), int(merge_pair[1]))
                 self._suppress_next_drag_finished_emit = True
             else:
+                emit_edge = edge
+                if edge == "center":
+                    reorder_direction = str(getattr(self, "_drag_center_reorder_direction", "") or "")
+                    if reorder_direction in {"left", "right"}:
+                        emit_edge = f"center_reorder_{reorder_direction}"
                 self.seg_time_changed.emit(
                     self._drag_seg.get("line", 0),
                     self._drag_seg["start"],
                     self._drag_seg["end"],
-                    edge,
+                    emit_edge,
                 )
             self._finish_timing_drag_cleanup(dirty)
             self._remember_drag_release_guides(guide_secs)

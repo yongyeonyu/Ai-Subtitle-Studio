@@ -410,6 +410,31 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.deleteLater()
             holder.deleteLater()
 
+    def test_canvas_inline_editor_one_word_arrow_keys_stay_in_edit_mode(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.pps = 100.0
+            canvas.total_duration = 4.0
+            canvas.segments = [
+                {"start": 1.0, "end": 2.5, "text": "단어", "line": 0},
+            ]
+            canvas.start_inline_edit(0, 1.0)
+            inline_editor = canvas._ensure_inline_editor()
+
+            for key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                event = QKeyEvent(
+                    QKeyEvent.Type.KeyPress,
+                    key,
+                    Qt.KeyboardModifier.NoModifier,
+                )
+                inline_editor.keyPressEvent(event)
+
+                self.assertTrue(bool(getattr(canvas, "_edit_active", False)))
+                self.assertEqual(inline_editor.toPlainText(), "단어")
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
     def test_canvas_keypress_space_toggles_play_pause_while_inline_edit_is_active(self):
         holder = QWidget()
         holder._toggle_video_play = Mock()
@@ -842,6 +867,65 @@ class TimelineHitTargetTests(unittest.TestCase):
 
             self.assertAlmostEqual(seg["start"], 1.5)
             self.assertAlmostEqual(seg["end"], 2.5)
+        finally:
+            canvas.deleteLater()
+
+    def test_center_drag_reorders_across_adjacent_subtitle_preview(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.pps = 100.0
+            canvas.total_duration = 5.0
+            canvas.segments = [
+                {"start": 0.0, "end": 1.0, "text": "앞", "line": 0},
+                {"start": 1.0, "end": 2.0, "text": "메인", "line": 1},
+                {"start": 2.0, "end": 3.0, "text": "뒤", "line": 2},
+            ]
+
+            seg = canvas.segments[1]
+            with patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_timing_drag_via_swift",
+                return_value=None,
+            ):
+                canvas._setup_drag(seg, "center", canvas._x(1.5))
+                canvas._apply_drag(1.0)
+
+            self.assertAlmostEqual(canvas.segments[2]["start"], 1.0)
+            self.assertAlmostEqual(canvas.segments[2]["end"], 2.0)
+            self.assertAlmostEqual(seg["start"], 2.0)
+            self.assertAlmostEqual(seg["end"], 3.0)
+            self.assertEqual(getattr(canvas, "_drag_center_reorder_direction", None), "right")
+        finally:
+            canvas.deleteLater()
+
+    def test_center_drag_reorder_release_emits_reorder_edge(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.pps = 100.0
+            canvas.total_duration = 5.0
+            canvas.segments = [
+                {"start": 0.0, "end": 1.0, "text": "앞", "line": 0},
+                {"start": 1.0, "end": 2.0, "text": "메인", "line": 1},
+                {"start": 2.0, "end": 3.0, "text": "뒤", "line": 2},
+            ]
+            emitted = []
+            canvas.seg_time_changed.connect(lambda line, start, end, edge: emitted.append((line, start, end, edge)))
+
+            seg = canvas.segments[1]
+            with patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_timing_drag_via_swift",
+                return_value=None,
+            ):
+                canvas._setup_drag(seg, "center", canvas._x(1.5))
+                canvas._apply_drag(1.0)
+            canvas.mouseReleaseEvent(SimpleNamespace())
+
+            self.assertEqual(len(emitted), 1)
+            self.assertEqual(emitted[0][0], 1)
+            self.assertAlmostEqual(emitted[0][1], 2.0)
+            self.assertAlmostEqual(emitted[0][2], 3.0)
+            self.assertEqual(emitted[0][3], "center_reorder_right")
         finally:
             canvas.deleteLater()
 
@@ -2283,6 +2367,105 @@ class TimelineHitTargetTests(unittest.TestCase):
         build_gaps.assert_not_called()
         self.assertGreater(seg["end"], 2.0)
 
+    def test_center_segment_move_prefers_subtitle_boundary_snap_beyond_gap(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.pps = 100.0
+            canvas.total_duration = 6.0
+            canvas.segments = [
+                {"start": 2.0, "end": 3.0, "text": "이동", "line": 0},
+                {"start": 4.0, "end": 5.0, "text": "다음", "line": 1},
+            ]
+            canvas.gap_segments = [
+                {"start": 3.0, "end": 4.0, "text": "", "is_gap": True, "_explicit_gap": True}
+            ]
+            moving = canvas.segments[0]
+            with patch(
+                "ui.editor.ux.timeline_subtitle_segment_editing.build_subtitle_drag_snap_base_via_swift",
+                return_value=None,
+            ), patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_timing_drag_via_swift",
+                return_value=None,
+            ):
+                canvas._setup_drag(moving, "center", canvas._x(2.5))
+                canvas._apply_drag(1.0)
+
+            self.assertAlmostEqual(moving["start"], 3.0)
+            self.assertAlmostEqual(moving["end"], 4.0)
+            self.assertTrue(bool(getattr(canvas, "_drag_suppresses_gap_candidate_attachment", False)))
+            self.assertEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "subtitle")
+        finally:
+            canvas.deleteLater()
+
+    def test_center_segment_move_suppresses_single_gap_snap_without_subtitle_target(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.pps = 100.0
+            canvas.total_duration = 6.0
+            canvas.segments = [
+                {"start": 2.0, "end": 3.0, "text": "이동", "line": 0},
+            ]
+            canvas.gap_segments = [
+                {"start": 3.0, "end": 4.0, "text": "", "is_gap": True, "_explicit_gap": True}
+            ]
+            moving = canvas.segments[0]
+            with patch(
+                "ui.editor.ux.timeline_subtitle_segment_editing.build_subtitle_drag_snap_base_via_swift",
+                return_value=None,
+            ), patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_timing_drag_via_swift",
+                return_value=None,
+            ):
+                canvas._setup_drag(moving, "center", canvas._x(2.5))
+                canvas._apply_drag(1.5)
+
+            self.assertAlmostEqual(moving["start"], 3.5)
+            self.assertAlmostEqual(moving["end"], 4.5)
+            self.assertTrue(bool(getattr(canvas, "_drag_suppresses_gap_candidate_attachment", False)))
+            self.assertNotEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "gap")
+        finally:
+            canvas.deleteLater()
+
+    def test_boundary_release_emits_visible_snapped_boundary(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.pps = 100.0
+            canvas.total_duration = 6.0
+            canvas.segments = [
+                {"start": 1.0, "end": 2.0, "text": "현재", "line": 0},
+                {"start": 3.0, "end": 4.0, "text": "다음", "line": 1},
+            ]
+            emitted = []
+            canvas.seg_time_changed.connect(
+                lambda line, start, end, edge: emitted.append((line, start, end, edge))
+            )
+            current = canvas.segments[0]
+            with patch(
+                "ui.editor.ux.timeline_subtitle_segment_editing.build_subtitle_drag_snap_base_via_swift",
+                return_value=None,
+            ), patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_timing_drag_via_swift",
+                return_value=None,
+            ):
+                canvas._setup_drag(current, "square_right", canvas._x(2.0))
+                canvas._apply_drag(0.95)
+
+            self.assertAlmostEqual(current["end"], 3.0)
+
+            canvas.mouseReleaseEvent(SimpleNamespace())
+
+            self.assertEqual(len(emitted), 1)
+            line, start, end, edge = emitted[0]
+            self.assertEqual(line, 0)
+            self.assertAlmostEqual(start, 1.0)
+            self.assertAlmostEqual(end, 3.0)
+            self.assertEqual(edge, "square_right")
+        finally:
+            canvas.deleteLater()
+
     def test_new_subtitle_placeholder_clears_when_inline_edit_starts(self):
         canvas = self._canvas()
         try:
@@ -2727,7 +2910,7 @@ class TimelineHitTargetTests(unittest.TestCase):
                 self.updated_segments = []
                 self.scroll = type("Scroll", (), {"horizontalScrollBar": lambda _self: DummyScroll()})()
 
-            def update_segments(self, segments, active_sec=None, total_dur=0.0):
+            def update_segments(self, segments, active_sec=None, total_dur=0.0, *, global_rows=None):
                 self.updated_segments = list(segments or [])
 
             def set_active(self, _sec):

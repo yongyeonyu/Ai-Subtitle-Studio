@@ -247,7 +247,8 @@ class Resolver:
         # (or the cached active id is empty or doesn't match project), use the most recent one.
         resolved_active_id = original_active_id
         if most_recent_project_id:
-            if not resolved_active_id:
+            active_node = self.node(resolved_active_id) if resolved_active_id else None
+            if not resolved_active_id or (active_node is not None and not active_node.matches_project):
                 resolved_active_id = most_recent_project_id
             else:
                 cached_mtime = self.file_mtimes.get(resolved_active_id, 0)

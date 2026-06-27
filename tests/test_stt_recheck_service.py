@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -444,6 +445,148 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertEqual(batch.prepared_clips, [{"range": item, "path": "/tmp/clip.wav"}])
         self.assertEqual(batch.collected_segments, [{"text": "주석됨"}])
         self.assertIsNone(batch.annotate_error)
+        self.assertGreaterEqual(batch.prepare_elapsed_sec, 0.0)
+        self.assertGreaterEqual(batch.collect_elapsed_sec, 0.0)
+        self.assertGreaterEqual(batch.annotate_elapsed_sec, 0.0)
+        self.assertGreaterEqual(batch.total_elapsed_sec, 0.0)
+        self.assertFalse(batch.collect_cache_enabled)
+        self.assertFalse(batch.collect_cache_hit)
+        self.assertFalse(batch.collect_cache_write)
+        self.assertTrue(batch.collect_provider_called)
+
+    def test_prepare_and_collect_recheck_segments_replays_cached_collect_then_reannotates(self):
+        item = stt_rescue.SttRecheckRange(
+            start=0.0,
+            end=1.0,
+            primary_score=10.0,
+            secondary_score=0.0,
+            primary_text="원본",
+            secondary_text="",
+            primary={},
+            secondary={},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            clip_path = os.path.join(tmp, "clip.wav")
+            cache_path = os.path.join(tmp, "collect_cache.json")
+            with open(clip_path, "wb") as handle:
+                handle.write(b"deterministic-audio")
+            settings = {
+                "stt_recheck_collect_cache_enabled": True,
+                "stt_recheck_collect_cache_path": cache_path,
+            }
+            calls = {"collect": 0, "annotate": 0}
+
+            def prepare_clip(_item, _out_dir, _idx, _settings):
+                return {"range": item, "path": clip_path, "start": 0.0, "end": 1.0}
+
+            def collect_fn(*_args, **_kwargs):
+                calls["collect"] += 1
+                return [{"start": 0.0, "end": 1.0, "text": "수집됨"}]
+
+            def annotate_fn(segments, **_kwargs):
+                calls["annotate"] += 1
+                return [{**dict(segments[0]), "text": f"주석됨-{calls['annotate']}"}]
+
+            first = stt_recheck_service.prepare_and_collect_recheck_segments(
+                ranges=[item],
+                out_dir=tmp,
+                settings=settings,
+                prepare_clip_fn=prepare_clip,
+                collect_fn=collect_fn,
+                model="demo-model",
+                label="DEMO",
+                settings_overrides={"x": 1},
+                annotate_fn=annotate_fn,
+                annotate_source="RECHECK",
+                vad_segments=[],
+                peer_segments=[],
+                is_single=False,
+            )
+
+            second = stt_recheck_service.prepare_and_collect_recheck_segments(
+                ranges=[item],
+                out_dir=tmp,
+                settings=settings,
+                prepare_clip_fn=prepare_clip,
+                collect_fn=lambda *_args, **_kwargs: self.fail("collect_fn must not run on cache hit"),
+                model="demo-model",
+                label="DEMO",
+                settings_overrides={"x": 1},
+                annotate_fn=annotate_fn,
+                annotate_source="RECHECK",
+                vad_segments=[],
+                peer_segments=[],
+                is_single=False,
+            )
+
+        self.assertEqual(calls["collect"], 1)
+        self.assertEqual(calls["annotate"], 2)
+        self.assertTrue(first.collect_cache_enabled)
+        self.assertFalse(first.collect_cache_hit)
+        self.assertTrue(first.collect_cache_write)
+        self.assertTrue(first.collect_provider_called)
+        self.assertEqual(first.collected_segments, [{"start": 0.0, "end": 1.0, "text": "주석됨-1"}])
+        self.assertTrue(second.collect_cache_enabled)
+        self.assertTrue(second.collect_cache_hit)
+        self.assertFalse(second.collect_cache_write)
+        self.assertFalse(second.collect_provider_called)
+        self.assertEqual(second.collect_elapsed_sec, 0.0)
+        self.assertEqual(second.collected_segments, [{"start": 0.0, "end": 1.0, "text": "주석됨-2"}])
+
+    def test_recheck_collect_cache_key_ignores_unrelated_cache_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            clip_path = os.path.join(tmp, "clip.wav")
+            with open(clip_path, "wb") as handle:
+                handle.write(b"deterministic-audio")
+            prepared = [{"path": clip_path, "start": 0.0, "end": 1.0}]
+            base_settings = {
+                "stt_quality_preset": "high",
+                "stt_recheck_collect_cache_enabled": True,
+                "stt_recheck_collect_cache_path": os.path.join(tmp, "recheck_a.json"),
+                "stt_primary_collect_cache_enabled": False,
+                "subtitle_llm_macro_response_cache_enabled": False,
+                "subtitle_llm_context_keep_cache_path": os.path.join(tmp, "keep_a.json"),
+            }
+            toggled_settings = {
+                **base_settings,
+                "stt_recheck_collect_cache_path": os.path.join(tmp, "recheck_b.json"),
+                "stt_primary_collect_cache_enabled": True,
+                "stt_primary_collect_cache_path": os.path.join(tmp, "primary.json"),
+                "subtitle_llm_macro_response_cache_enabled": True,
+                "subtitle_llm_macro_response_cache_path": os.path.join(tmp, "macro.json"),
+                "subtitle_llm_context_keep_cache_path": os.path.join(tmp, "keep_b.json"),
+            }
+
+            base_key = stt_recheck_service._recheck_collect_cache_key(
+                prepared_clips=prepared,
+                settings=base_settings,
+                model="demo-model",
+                label="STT2",
+                settings_overrides={"word_timestamps": False},
+                annotate_source="STT2",
+                is_single=False,
+            )
+            toggled_key = stt_recheck_service._recheck_collect_cache_key(
+                prepared_clips=prepared,
+                settings=toggled_settings,
+                model="demo-model",
+                label="STT2",
+                settings_overrides={"word_timestamps": False},
+                annotate_source="STT2",
+                is_single=False,
+            )
+            model_changed_key = stt_recheck_service._recheck_collect_cache_key(
+                prepared_clips=prepared,
+                settings=toggled_settings,
+                model="other-model",
+                label="STT2",
+                settings_overrides={"word_timestamps": False},
+                annotate_source="STT2",
+                is_single=False,
+            )
+
+        self.assertEqual(base_key, toggled_key)
+        self.assertNotEqual(base_key, model_changed_key)
 
     def test_prepare_and_collect_recheck_segments_short_circuits_when_prepare_is_empty(self):
         item = stt_rescue.SttRecheckRange(
@@ -474,6 +617,10 @@ class STTRecheckServiceTests(unittest.TestCase):
         self.assertEqual(batch.prepared_clips, [])
         self.assertEqual(batch.collected_segments, [])
         self.assertIsNone(batch.annotate_error)
+        self.assertGreaterEqual(batch.prepare_elapsed_sec, 0.0)
+        self.assertEqual(batch.collect_elapsed_sec, 0.0)
+        self.assertEqual(batch.annotate_elapsed_sec, 0.0)
+        self.assertGreaterEqual(batch.total_elapsed_sec, 0.0)
 
     def test_native_uncovered_vad_indices_match_python_fallback_when_available(self):
         previous = os.environ.get("AI_SUBTITLE_NATIVE_STT_RECHECK")

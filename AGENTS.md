@@ -128,21 +128,22 @@ Read these first when continuing work:
 
 1. `AGENTS.md`
 2. `ACTION_ITEMS.md`
-3. `check_list.md` if present
-4. `File_structure.txt`
-5. `docs/README.md`
-6. `docs/PROJECT_STATE.md`
-7. `docs/FEATURE_REGISTRY.md`
-8. `docs/ARCHITECTURE.md`
-9. `docs/VALIDATION.md`
-10. `docs/HANDOFF.md`
-11. `CODEMAP.md` if present
-12. Latest `RELEASE_v*.md`
-13. `README.md`
-14. `test_case.md`
-15. `test_result.md`
-16. `waste_action_item.md`
-17. `lesson_n_learned.md`
+3. `COMPLETED_ACTION_ITEMS.md`
+4. `check_list.md` if present
+5. `File_structure.txt`
+6. `docs/README.md`
+7. `docs/PROJECT_STATE.md`
+8. `docs/FEATURE_REGISTRY.md`
+9. `docs/ARCHITECTURE.md`
+10. `docs/VALIDATION.md`
+11. `docs/HANDOFF.md`
+12. `CODEMAP.md` if present
+13. Latest `RELEASE_v*.md`
+14. `README.md`
+15. `test_case.md`
+16. `test_result.md`
+17. `waste_action_item.md`
+18. `lesson_n_learned.md`
 
 ## Jammini Communication Check
 
@@ -153,12 +154,18 @@ tools/jammini_watchdog.sh --status
 tools/jammini_watchdog.sh --handoff-probe
 ```
 
+Every Jammini packet sent from this repo must name the project as `AI Subtitle Studio` and the repo root as `/Users/u_mo_c/Downloads/ai_subtitle_studio`. Taption and Taption Encoder are reference projects only; do not label this lane, delegated scope, artifact path, or proof target as Taption/Taption Encoder unless explicitly comparing against those source references.
+
 `--queue-status` is kept as an alias for `--status` for older handoff notes. The reliable source of truth is the physical handoff path:
 
 - `.agents/sentinel/handoffs/*.md`
 - `.agents/sentinel/handoff.md`
+- `.agents/sentinel/agents/*.md` for stable 한결/서린/유진 role cards adapted from Taption's Jammini communication pack
+- `.agents/sentinel/BRIEFING.md` for compact current-state orientation only; `ACTION_ITEMS.md` and `docs/HANDOFF.md` remain authoritative
 
 Chat `ACK` / `WORKING` messages are diagnostic only. Treat a Jammini result as delivered only after `덱스` directly reads the handoff file and classifies it as accept, revise, defer, or reject.
+
+Taption's `docs/agent_communication` Jammini pack is mapped locally in `docs/agent_communication/README.md`. Do not move physical handoffs under `docs/agent_communication`; this repo's reliable handoff store remains `.agents/sentinel/`.
 
 When validating the current release baseline, also read:
 
@@ -176,12 +183,16 @@ Do not recreate those files unless the owner explicitly asks.
 
 - `AGENTS.md`: this bootstrap, operating-rule, and new-chat continuation file.
 - `ACTION_ITEMS.md`: single source of truth for active ideas, action/native work, execution order, QA gates, rollback rules, and parked candidates.
+- `COMPLETED_ACTION_ITEMS.md`: owner-requested archive for completed action-item history that should not remain in the active queue.
 - `docs/README.md`: docs entrypoint and AI navigation order.
 - `docs/PROJECT_STATE.md`: current product state and high-level guardrails snapshot.
 - `docs/FEATURE_REGISTRY.md`: feature owner map and safe validation entrypoints.
 - `docs/ARCHITECTURE.md`: repo structure and boundary map.
 - `docs/VALIDATION.md`: standard validation commands and completion bar.
 - `docs/HANDOFF.md`: rolling next-session handoff; update before finishing meaningful work.
+- `docs/agent_communication/README.md`: Taption Jammini pack mapping for this repo; points to `.agents/sentinel` as the physical handoff store.
+- `cooperation.md`: Dex/Jammini collaboration contract, role boundaries, route proof, NLE parallel packet protocol, and unknown-cause debugging protocol.
+- `.agents/sentinel/BRIEFING.md`: compact Jammini orientation file for the current mission, constraints, artifact index, and source-of-truth pointers. Do not use it as a second queue.
 - `waste_action_item.md`: rejected or ineffective experiments. Check it before proposing or repeating optimization ideas.
 - `lesson_n_learned.md`: repeat-prevention lessons for bad diagnoses, ineffective optimizations, and risky shortcuts.
 - `README.md`: product overview and current user-facing workflow.
@@ -191,8 +202,8 @@ Do not recreate those files unless the owner explicitly asks.
 
 Completed item rule:
 
-- When an item in `ACTION_ITEMS.md` is completed normally, delete the completed item text from that queue document instead of leaving checked-off history.
-- Preserve useful completion evidence in release notes, `test_result.md`, `output/manual_verification/latest/`, `waste_action_item.md`, or `lesson_n_learned.md` only when it is needed for future decisions.
+- When an item in `ACTION_ITEMS.md` is completed normally, remove it from the active queue and move the completed action-item summary to `COMPLETED_ACTION_ITEMS.md`.
+- Preserve detailed completion evidence in release notes, `test_result.md`, `output/manual_verification/latest/`, `waste_action_item.md`, or `lesson_n_learned.md` only when it is needed for future decisions.
 
 ## Current Continuation State
 
@@ -207,7 +218,7 @@ Completed item rule:
   - scenarios: `editor_compact_macau`, `video_menu_macau`, `save_export_macau`, `menu_stt_lora_macau`, `roughcut_reopen_macau`, `roughcut_interaction_macau`, `roughcut_candidate_macau`, `roughcut_release_audit_macau`, `x5_high_rolling_180s`
   - note: the default X5 path `test video/X5_시승기_후반.MP4` was restored as an ignored local fixture from the existing X5 video-only `.mov` plus the real X5 raw WAV; no `AI_SUBTITLE_STUDIO_QA_X5_MEDIA` override was used.
 - Latest source-app quick smoke for the current release line:
-  - `output/manual_verification/latest/qa_suite_quick_20260627_005453`
+  - `output/manual_verification/latest/qa_suite_quick_20260627_162641`
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
   - result: pass, `failed_count=0`
 - Latest release checkpoint scope:
@@ -235,38 +246,241 @@ Completed item rule:
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `ACTION_ITEMS.md`, section `Active Execution Queue`.
-- Current active item: none. The previous `Post-Generation Editor Readiness And Verification Index` item was completed on 2026-06-27 and removed from `ACTION_ITEMS.md`.
+- Current active item: `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`.
+  - latest generated-video direct validation evidence: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
+  - strict duration-bound follow-up: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`
+  - strict acceptance gate follow-up: `output/manual_verification/latest/generated_video_strict_acceptance_gate_20260628/reference_benchmark_acceptance.md`
+  - tail-collapse fix evidence: `output/manual_verification/latest/generated_video_tail_collapse_fix_20260628/tail_collapse_fix_report.md`
+  - NAS-off owner fallback run `20260628_010403`: Dex-generated 180s Korean fixture, elapsed `44.968s`, raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, generated SRT rows `54`, SRT invalid/non-monotonic/overlap `0/0/0`, save/reopen stable `true`, global max active `1`, legacy `accepted=true`; stricter direct SRT/media validation fails because generated last end is `182.032s` against `180.584s` media duration, with `17` rows beyond duration, `16` sub-0.3s rows, and one `59.792s` tail row.
+  - current acceptance behavior: `tools/evaluate_reference_benchmark_acceptance.py` rejects the old benchmark as `accepted=false` with reason `final_last_end_beyond_duration_bound`.
+  - fixed fallback run `20260628_013224`: elapsed `44.307s`, raw/final/reference `54/54/54`, quality/text/timing `93.411/91.676/0.1391s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.12/180.584`, short/long `0/0`, strict `accepted=true`.
+  - latest STT1 primary collect diagnostics evidence: `output/manual_verification/latest/stt_primary_collect_diagnostics_20260628/stt_primary_collect_report.md`
+  - generated-fixture run `20260628_001645`: elapsed `49.380s`, raw/final/reference `54/54/54`, accepted `true`; STT1 total `20.135353s`, setup `0.046327s`, collect `19.986159s`, backend `whisperkit_persistent`, chunks `2`, worker count `2`, worker cache hit `false`. No behavior-preserving STT1 trim was accepted from this evidence.
+  - latest STT1 primary collect cache evidence: `output/manual_verification/latest/stt_primary_collect_cache_20260628/primary_collect_cache_report.md`
+  - generated 3-minute fixture first/second High-mode runs both accepted; STT1 collect `17.717081s -> 0.0s`, STT1 parent elapsed `17.855735s -> 0.049428s`, elapsed `51.964s -> 37.715s`, backend/model diagnostics preserved as `whisperkit_persistent` / `whisperkit-persistent:large-v3-v20240930_turbo_632MB`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`. The cache remains opt-in with default `stt_primary_collect_cache_enabled=false` until real-media backfill is accepted.
+  - latest macro proofread response cache evidence: `output/manual_verification/latest/macro_response_cache_20260627/macro_response_cache_report.md`
+  - generated 3-minute fixture first/second High-mode runs both accepted; proofread elapsed `30.731199s -> 0.545337s`, macro cache hit/write/provider groups `1/0/0`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`.
+  - latest STT2/word collect cache evidence: `output/manual_verification/latest/stt_recheck_collect_cache_20260627/collect_cache_report.md`
+  - generated 3-minute fixture first/second High-mode runs both accepted; STT2 collect `14.284272s -> 0.0s`, word precision collect `10.930693s -> 0.0s`, elapsed `46.498s -> 20.105s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`. The cache remains opt-in with default `stt_recheck_collect_cache_enabled=false` until real-media backfill is accepted.
+  - latest combined collect cache evidence: `output/manual_verification/latest/combined_collect_cache_20260628/combined_collect_cache_report.md`
+  - generated 3-minute fixture first/second High-mode runs both accepted with STT1, STT2, word precision, and macro proofread caches enabled together. First write run `20260628_004231`: elapsed `72.570s`, raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, STT1/STT2/word collect `17.752132s/14.261639s/10.621729s`, macro proofread `28.907253s`. Second cache-hit run `20260628_004504`: elapsed `4.449s`, same quality/final gates, STT1/STT2/word collect all `0.0s` with provider calls `false`, macro provider group `0`, generated final SRT block count `54`, SRT invalid/non-monotonic/overlap `0/0/0`.
+  - latest macro cache warmup-skip evidence: `output/manual_verification/latest/macro_cache_warmup_skip_20260628/macro_cache_warmup_skip_report.md`
+  - generated 3-minute fixture cache-hit run `20260628_005314` accepted with elapsed `1.312s`, raw/final/reference `54/54/54`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, STT1/STT2/word collect all `0.0s`, macro proofread `0.400186s`, macro hit/write/provider groups `1/0/0`, generated final SRT block count `54`, SRT invalid/non-monotonic/overlap `0/0/0`. This skips LLM resolution/Ollama warmup only when every macro LLM group is already response-cache hit.
+  - rejected prepared-clip reuse evidence: `output/manual_verification/latest/recheck_prepared_clip_reuse_rejected_20260628/recheck_prepared_clip_reuse_rejection_report.md`; no code/tests from that candidate remain.
+  - latest NAS-off stage/memory variance evidence: `output/manual_verification/latest/stt_latency_stage_variance_20260628/stage_variance_summary.md`
+  - analysis tool: `tools/summarize_stage_variance.py` reads existing `benchmark_results.json` artifacts and summarizes elapsed variance, stage totals, cache hit/provider-call flags, memory-pressure distribution, final gates, and duration-bound failures without changing runtime behavior.
+  - latest variance result over 10 generated/cache artifacts: elapsed avg/min/max/range `41.66/1.312/82.433/81.121s`; stage ranges STT1 `20.134950s`, STT2 `15.939524s`, word precision `20.271760s`, subtitle postprocess `30.410655s`; worst memory pressure counts `unknown=4`, `normal=4`, `critical=2`; old tail-collapse generated runs are still flagged as duration-bound failures.
+  - Jammini/서린 NAS-off variance review: `.agents/sentinel/handoffs/20260628-025200-stt-latency-nas-off-variance-review.md`; verdict `HOLD` for algorithm/default changes while NAS is unavailable, analysis-only work accepted.
+- Other active queue items:
+  - `Mac App Store Submission Readiness`; non-destructive readiness audit exists at `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.md`; latest target-lock audit is `output/manual_verification/latest/app_store_readiness_target_lock_20260628/app_store_readiness_audit.md` with `submission_target=mac_app_store_pkg`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `14`; Developer ID beta `.dmg` remains a separate opt-in track and packaging/signing/upload/notarization/DMG work remains opt-in until the owner explicitly asks.
 - Latest post-generation editor readiness closeout:
   - verification index: `output/manual_verification/latest/post_generation_editor_readiness_index_20260627/verification_index.md`
   - focused guard result: `7 passed, 190 deselected`
   - NAS HeyDealer first 180s `mode_high`: elapsed `65.383s`, raw/final `58/56`, quality `81.335`, `stable_for_save_reopen=true`, `stable_for_global_canvas=true`
+- Latest cut-boundary generation latency closeout:
+  - closeout report: `output/manual_verification/latest/cut_boundary_latency_profile_20260627/latency_profile_report.md`
+  - baseline repeat: pipeline elapsed `[63.911, 59.479]`, average `61.695s`, raw/final `58/55`, pass
+  - profile diagnostic: cut-boundary top cumulative `0.000602s`, confirmed split/snap `0.000525s`, raw/final `58/55`, pass
+  - reference-scored HeyDealer 180s `mode_high`: elapsed `63.617s`, raw/final `58/56`, quality `81.335`, timing MAE `1.5958s`, final `overlap_count=0`, `stable_for_save_reopen=true`, `stable_for_global_canvas=true`
+  - result: no cut-boundary runtime trim was applied; the next performance work should measure STT2 rescue, selective word timestamps, LLM gate/skip, common split, VAD/STT consensus, and cleanup pressure.
+- Latest STT2/word precision latency profiling slice:
+  - closeout report: `output/manual_verification/latest/stt2_word_precision_latency_20260627/latency_profile_report.md`
+  - wall-clock stage report: `output/manual_verification/latest/stt2_word_precision_wall_clock_20260627/wall_clock_stage_report.md`
+  - verifier change: `tools/verify_full_media_pipeline.py` now exposes STT2/word counts, final invalid/non-monotonic/overlap stability, global canvas max-active stability, memory pressure, reference-quality fields, and generation-owner cProfile summaries.
+  - stage-span change: `core/audio/media_processor_transcribe.py`, `core/audio/media_processor_transcribe_recheck.py`, `tools/benchmark_subtitle_pipeline_variants.py`, and `tools/verify_full_media_pipeline.py` now record direct `perf_counter` spans for STT1 primary transcription, selective STT2 rescue, word timestamp precision, VAD/STT consensus, and subtitle postprocess.
+  - focused guards: touched Python `py_compile` passed; `tests/test_verify_full_media_pipeline.py tests/test_benchmark_mode_profiles.py` -> `46 passed`; STT focused subset -> `6 passed, 48 deselected`.
+  - HeyDealer 180s non-profile repeat: pipeline elapsed `[65.648, 59.402]`, average `62.525s`, raw/final `58/55`, final `overlap_count=0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`, STT2 selected `37`, word precision `14`, memory pressure `critical`.
+  - generation profile diagnostic: `stt_primary_transcribe=45.702069s`, `stt2_selective_recheck=27.404475s`, `word_precision=12.976476s`, `llm_refinement=16.734457s`, `subtitle_postprocess=17.731724s`, `cleanup_trim=0.085355s`, cut-boundary top cumulative `0.000572s`; cProfile rows are diagnostic and non-additive.
+  - reference-scored HeyDealer 180s `mode_high`: elapsed `62.640s`, raw/final `58/56`, quality `81.335`, text score `94.267`, timing MAE `1.5958s`, final `overlap_count=0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`.
+  - wall-clock HeyDealer 180s non-reference probe: elapsed `65.222s`, raw/final `58/55`, final `overlap_count=0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`, STT2 selected `37`, word precision `14`, memory pressure `critical`; stage spans STT1 `18.162010s`, STT2 `14.360250s`, word precision `12.489603s`, VAD/STT consensus `0.000227s`, subtitle postprocess `20.108474s`.
+  - wall-clock reference-scored HeyDealer 180s `mode_high`: elapsed `65.824s`, raw/final `58/56`, quality `81.335`, text score `94.267`, timing MAE `1.5958s`, final `overlap_count=0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`; stage spans STT1 `19.519015s`, STT2 `14.229755s`, word precision `12.560951s`, VAD/STT consensus `0.000222s`, subtitle postprocess `19.406983s`.
+  - first safe trim report: `output/manual_verification/latest/stt2_word_precision_llm_defer_20260627/llm_defer_report.md`
+  - first safe trim behavior: macro LLM mode now defers runtime model resolution and Ollama warmup until `llm_rows > 0`; zero-candidate rows no longer prepare a local LLM that will not be called.
+  - post-trim non-profile repeat: pipeline elapsed `[65.317, 61.873]`, average `63.595s`, raw/final `58/55`, final `overlap_count=0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`, STT2 selected `37`, word precision `14`, memory pressure `critical`.
+  - post-trim reference-scored HeyDealer 180s `mode_high`: elapsed `66.007s`, raw/final `58/56`, quality `81.335`, text score `94.267`, timing MAE `1.5958s`, final `overlap_count=0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`; subtitle postprocess dropped to `12.518010s`, but word precision rose to `20.851735s`.
+  - rejected context-boundary batch candidate: `output/manual_verification/latest/stt2_word_precision_context_batch_20260627/context_batch_rejection_report.md`
+  - rejected candidate result: batching two High context-boundary LLM pair checks into one Ollama call lowered subtitle postprocess to `9.879991s`, but reference quality/text/segmentation drifted `81.335/94.267/87.879 -> 81.316/94.241/87.812`; the code/tests for that candidate were reverted.
+  - substage timing report: `output/manual_verification/latest/stt2_word_precision_substage_timing_20260627/substage_timing_report.md`
+  - substage timing behavior: `stt2_selective_recheck` and `word_precision` spans now expose prepare/collect/annotate/batch elapsed fields. Local 60s reference smoke showed STT2 total `11.258246s` with collect `11.201352s`, and word precision total `4.368781s` with collect `4.304654s`; prepare/annotation were below `0.1s`.
+  - collect fallback precision report: `output/manual_verification/latest/stt_collect_fallback_precision_20260627/fallback_precision_report.md`
+  - collect fallback behavior: `stt_collect_whisperkit_fallback` spans now expose WhisperKit empty/timeout fallback count, reason, source/fallback model, total/max elapsed, chunk counts, emitted segment count, and word timestamp mode. Local 60s smoke showed fallback count `2`, benchmark fallback total `7.962836s`, verifier fallback total `14.900298s`, final overlap `0`, `stable_for_save_reopen=true`, and global max active `1`.
+  - high context-boundary diagnostics report: `output/manual_verification/latest/stt_high_context_diag_x5_audio_20260627/high_context_diag_report.md`
+  - high context-boundary diagnostics behavior: `refine_high_contextual_boundaries(...)` now exposes candidate pairs, skipped pairs, LLM calls, failed calls, changed pairs, max pairs, and elapsed time through benchmark/verifier stage spans, summary metrics, repeat JSON/CSV, and compact CLI output.
+  - X5 cached-audio 180s measurement: pipeline `74.919s`, raw/final `43/50`, final invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`, global max active `1`, STT2 selected `28`, word precision `9`, memory pressure `critical`; top stage `subtitle_postprocess=32.746457s`, detail top `high_context_boundary=32.230736s`, candidate/call/changed `4/4/0`, failed calls `0`.
+  - reference fixture availability preflight: `output/manual_verification/latest/reference_fixture_availability_20260627/reference_fixture_availability.md`
+  - preflight result: reference-scored latency-trim acceptance is blocked because the `/Volumes/photo/...` HeyDealer MP4 and matching `.srt` are missing; cached HeyDealer WAV exists and is fallback-only for instrumentation and structural stability.
+  - owner-required NAS HeyDealer 3-minute preflight: `output/manual_verification/latest/heydealer_nas_reference_preflight_20260627/reference_fixture_availability.md`
+  - latest owner-required NAS HeyDealer 3-minute preflight rerun: `output/manual_verification/latest/heydealer_nas_reference_preflight_20260627_latest/reference_fixture_availability.md`
+  - latest NAS HeyDealer 3-minute accepted run: `output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215/reference_benchmark_report.md`
+  - NAS result: pass. `/Volumes/photo` was mounted, exact MP4/SRT preflight passed, `mode_high` first 180s elapsed `60.187s`, raw/final/reference `58/56/89`, quality `81.335`, text `94.267`, timing MAE `1.5958s`, final invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`, and acceptance returned `accepted=true`.
+  - latest STT2/word duration diagnostics: `output/manual_verification/latest/stt_recheck_duration_diagnostics_20260627/diagnostics_report.md`
+  - latest NAS diagnostic result: pass. Same NAS HeyDealer first 180s elapsed `59.255s`, raw/final/reference `58/56/89`, quality `81.335`, text `94.267`, timing MAE `1.5958s`, final invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`, and acceptance returned `accepted=true`.
+  - STT2 interpretation: `applied_count=1` is one broad rescue range, not one low-value segment. That span requested `180.096s`, prepared `120.000s`, collected `37` segments, and applied `37` segment-level results. Do not trim STT2/word precision from count fields alone.
+  - latest STT2/word reason breakdown diagnostics: `output/manual_verification/latest/stt_recheck_reason_breakdown_20260627/reason_breakdown_report.md`
+  - latest reason-breakdown NAS result: pass. Same NAS HeyDealer first 180s elapsed `58.820s`, raw/final/reference `58/56/89`, quality `81.335`, text `94.267`, timing MAE `1.5958s`, final invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`, and acceptance returned `accepted=true`.
+  - reason interpretation: STT2 is a missing-voice rescue path (`missing_voice/route_hint/low_score/empty_text=1/0/0/1`). Word precision chose `25` ranges, but none were editor-selected, precision-review, needs-review, red/yellow, risk, or missing-word forced (`0/0/0/0/0/0/0`). Next speed work should target collect scheduling/cache reuse or a decision-equivalent High context-boundary gate before changing quality policy.
+  - latest High context decision diagnostics: `output/manual_verification/latest/high_context_decision_diagnostics_20260627/decision_diagnostics_report.md`
+  - latest High context NAS result: pass. Same NAS HeyDealer first 180s elapsed `59.559s`, raw/final/reference `58/56/89`, quality `81.335`, text `94.267`, timing MAE `1.5958s`, final invalid/non-monotonic/overlap `0/0/0`, `stable_for_save_reopen=true`, global canvas `max_active_segments=1`, and acceptance returned `accepted=true`.
+  - High context decision interpretation: candidate/skipped/call/failed/changed/max pairs were `2/55/2/0/0/8`; action counts keep/move/merge/invalid were `2/0/0/0`; correction requested/applied was `0/0`. A future High context speed trim must be a strict decision-equivalent no-change gate, not batching or broad skipping.
+  - high context keep-cache candidate: `output/manual_verification/latest/high_context_keep_cache_20260627/keep_cache_report.md`
+  - keep-cache result: pass on owner-approved generated 3-minute fixture. NAS was off by owner direction, so Dex generated a 180.583s Korean fixture with 54 reference rows and ran two High-mode scored benchmarks. First write run: elapsed `144.476s`, quality/text/timing `80.153/91.676/1.437s`, final invalid/non-monotonic/overlap `0/0/0`, High context candidates/calls/cache hit-miss-write `8/8/0-8-8`, accepted `true`. Second cache-hit run: elapsed `83.281s`, same quality/final gates, High context calls/cache hit-miss-write `0/8-0-0`, High context elapsed `0.003326s`, accepted `true`.
+  - preflight guards: `tools/verify_reference_fixture_availability.py` plus `tests/test_reference_fixture_availability.py`; focused validation `3 passed`.
+  - X5 local reference smoke: `output/manual_verification/latest/x5_local_reference_fixture_20260627/reference_benchmark_report.md`
+  - X5 local result: materialized `.codex_work/bench/x5_120_3s_180_3s_reference.json` into a relative SRT and ran `.codex_work/bench/x5_120_3s_180_3s.wav` with `mode_high`; elapsed `29.831s`, raw/final `28/23`, quality `80.914`, timing MAE `0.5608s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`.
+  - X5 project-reference 180s smoke: `output/manual_verification/latest/x5_project_reference_180s_20260627/reference_benchmark_report.md`
+  - X5 project-reference result: accepted media/SRT pair is cached X5 180s WAV plus `projects/X5_시승기_전반.assets/subtitles/final.srt`; elapsed `70.383s`, raw/final/reference `43/50/67`, quality `76.387`, text `90.767`, timing MAE `1.5457s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`.
+  - X5 rejected mismatch: same media with `projects/X5_시승기_후반.assets/subtitles/final.srt` is rejected by `tools/evaluate_reference_benchmark_acceptance.py` because quality/text/timing failed (`23.234`/`4.756`/`3.3362s`).
+  - result: first trim is correctness-safe but not a total latency closeout; local X5 60s and project-reference X5 180s smokes remain regression surfaces only. The owner-required NAS HeyDealer 3-minute baseline is now accepted, so the next latency slice must compare against that same fixture before adoption.
+- Latest NLE runtime editing adoption slice:
+  - report: `output/manual_verification/latest/nle_caption_move_dual_write_20260627/caption_move_dual_write_report.md`
+  - behavior: `apply_caption_move_dual_write_pilot(...)` routes final subtitle body moves through runtime `NLEProjectState`, records a `caption_move` `NLEEditorOperation`, and projects back into legacy `editor_state`.
+  - Taption rule: neighbor reorder is represented with `taption_reorder`, `reorder_direction`, and `reorder_neighbor_id`; final overlap moves are rejected by the NLE operation projection gate.
+  - focused guards: `tests/test_project_nle_dual_write.py` -> `6 passed`; NLE operation/snapshot/roughcut guard -> `30 passed, 4 subtests passed`; Taption reorder UI subset -> `3 passed, 296 deselected`.
+- Latest NLE caption resize adoption slice:
+  - report: `output/manual_verification/latest/nle_caption_resize_dual_write_20260627/caption_resize_dual_write_report.md`
+  - quick QA: `output/manual_verification/latest/qa_suite_quick_nle_caption_resize_20260627`
+  - behavior: `apply_caption_resize_dual_write_pilot(...)` routes boundary-handle and diamond-style subtitle resize operations through runtime `NLEProjectState`, records a `caption_resize` `NLEEditorOperation`, trims/deletes affected neighbors including silence gaps before the final-overlap gate, and projects back into legacy `editor_state`.
+  - stricter test method: operation metadata, runtime NLE projection rows, legacy editor rows, save/reload storage shape, final `invalid/non_monotonic/overlap/max_active` metrics, existing Taption resize/diamond UI regressions, and source-app quick QA were all checked.
+  - focused guards: NLE dual-write -> `10 passed`; NLE operation/snapshot/persistence/runtime/render-export -> `38 passed, 4 subtests passed`; Taption resize/diamond subset -> `23 passed, 126 deselected`; Taption drag/gap/magnet/app-command subset -> `63 passed, 163 deselected`; timeline/feed -> `152 passed`; source-app quick QA -> pass, `failed_count=0`.
+- Latest NLE live editor mutation cutover slice:
+  - report: `output/manual_verification/latest/nle_live_editor_diamond_cutover_20260627/live_editor_diamond_cutover_report.md`
+  - passing quick QA: `output/manual_verification/latest/qa_suite_quick_nle_live_diamond_retry_20260627`
+  - behavior: `diamond` shared-boundary subtitle resize in `_on_seg_time_changed(...)` now attempts runtime NLE `caption_resize` dual-write and applies projected rows through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)` when safe.
+  - fallback: NLE rejection, unsupported runtime shape, and micro rows that collapse on the project floor-frame grid keep the existing legacy Taption/inline-editor path.
+  - focused guards: diamond route -> `4 passed, 148 deselected`; resize/diamond -> `26 passed, 126 deselected`; NLE operation/snapshot/persistence/runtime/render-export -> `38 passed, 4 subtests passed`; drag/gap/magnet/app-command -> `63 passed, 163 deselected`; timeline/feed -> `155 passed`; source-app quick QA retry -> pass, `failed_count=0`.
+  - QE trace: first quick QA artifact `output/manual_verification/latest/qa_suite_quick_nle_live_diamond_20260627` failed at `merge_diamond`; root cause was a one-frame-ish split row collapsing under project floor-frame normalization, fixed by the micro-row fallback guard.
+- Latest NLE live editor boundary resize cutover slice:
+  - report: `output/manual_verification/latest/nle_live_editor_boundary_resize_cutover_20260627/boundary_resize_cutover_report.md`
+  - behavior: `square_left` and `square_right` subtitle boundary-handle resizes in `_on_seg_time_changed(...)` now attempt runtime NLE `caption_resize` dual-write and apply projected rows through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)` when safe.
+  - fallback: transient STT/live-preview rows, NLE rejection, unsupported runtime shape, and invalid/collapsing rows keep the existing legacy Taption/source-app timing path.
+  - focused guards: boundary/diamond route -> `4 passed, 151 deselected`; resize/diamond/gap/center subset -> `32 passed, 123 deselected`; NLE operation/persistence/runtime/render-export -> `38 passed, 4 subtests passed`; drag/gap/magnet/app-command -> `63 passed, 163 deselected`; timeline/feed -> `158 passed`.
+- Latest NLE live editor caption delete cutover slice:
+  - report: `output/manual_verification/latest/nle_live_editor_caption_delete_cutover_20260627/caption_delete_cutover_report.md`
+  - behavior: live editor segment delete-to-gap now attempts runtime NLE `caption_delete` dual-write, records delete mode `replace_with_silence_gap`, projects the deleted final caption into a silence gap row, and reloads through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)` when safe.
+  - fallback: live STT preview rows, NLE rejection, missing caption identity, unsupported timeline shape, or invalid rows keep the existing Taption/source-app direct gap conversion path.
+  - focused guards: caption delete/gap/resize NLE dual-write -> `9 passed, 3 deselected`; live delete/resize route -> `4 passed, 153 deselected`; Taption gap/delete subset -> `13 passed, 137 deselected`; NLE operation/persistence/runtime/render-export -> `40 passed, 4 subtests passed`; delete/resize/drag subset -> `34 passed, 123 deselected`; timeline/feed -> `160 passed`; drag/gap/magnet/app-command/delete -> `68 passed, 158 deselected`.
+- Latest NLE live editor gap-generate cutover slice:
+  - report: `output/manual_verification/latest/nle_live_editor_gap_generate_cutover_20260627/gap_generate_cutover_report.md`
+  - behavior: live editor gap generation now attempts runtime NLE `gap_generate` dual-write, preserves Taption-style left/right silence gap rows around the generated subtitle, and reloads through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)` when safe.
+  - fallback: live STT preview rows, NLE rejection, missing gap identity/range, unsupported timeline shape, or invalid rows keep the existing Taption/source-app direct gap generation path.
+  - focused guards: gap-generate/delete NLE dual-write -> `7 passed, 7 deselected`; live gap-generate/delete route -> `3 passed, 156 deselected`; Taption gap/delete subset -> `13 passed, 137 deselected`; NLE operation/persistence/runtime/render-export -> `42 passed, 4 subtests passed`; gap/delete/resize subset -> `36 passed, 123 deselected`; timeline/feed -> `162 passed`; drag/gap/magnet/app-command/delete -> `68 passed, 158 deselected`.
+- Latest NLE live editor caption-merge cutover slice:
+  - report: `output/manual_verification/latest/nle_live_editor_caption_merge_cutover_20260628/caption_merge_cutover_report.md`
+  - behavior: diamond merge now attempts runtime NLE `caption_merge` dual-write for stable final caption pairs, records a `caption_merge` operation, and reloads projected rows through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)` when safe.
+  - fallback: live STT preview rows, NLE rejection, missing caption identity, unsupported timeline shape, or invalid rows keep the existing Taption/source-app QTextDocument merge path.
+  - Jammini support slice: delegated review-only check for STT/live-preview isolation, final overlap gates, Taption fallback preservation, and doc/test evidence gaps; expected handoff `.agents/sentinel/handoffs/20260628-015400-nle-caption-merge-support-review.md`.
+  - focused guards: caption-merge/delete/gap-generate NLE dual-write -> `6 passed, 10 deselected`; live diamond-merge route/fallback subset -> `4 passed, 158 deselected`; NLE operation/runtime/save-export subset -> `25 passed, 21 deselected`; Taption merge/resize/gap/delete subset -> `45 passed, 267 deselected`; timeline/feed -> `165 passed`; generated-video strict acceptance recheck -> `accepted=true`.
+- Latest NLE live editor caption-split cutover slice:
+  - report: `output/manual_verification/latest/nle_live_editor_caption_split_cutover_20260628/caption_split_cutover_report.md`
+  - behavior: text/smart caption split now attempts runtime NLE `caption_split` dual-write for stable final captions, records a `caption_split` operation, and reloads projected rows through `_reload_segments_from_list(..., preserve_view=True, mark_dirty=True)` when safe.
+  - fallback: live STT/subtitle preview rows, NLE rejection, missing caption identity, unsupported timeline shape, or invalid rows keep the existing Taption/source-app QTextDocument split path.
+  - Jammini support slice: accepted `.agents/sentinel/handoffs/20260628-021000-nle-caption-split-support-review.md` for STT/live-preview isolation, final overlap gates, Taption fallback preservation, and undo/snapshot focus evidence gaps.
+  - focused guards: caption-split NLE dual-write -> `2 passed, 16 deselected`; editor split undo/fallback -> `3 passed`; full NLE dual-write file -> `18 passed`; NLE operation/runtime/save-export subset -> `11 passed, 19 deselected`; app-command smart split -> `7 passed, 69 deselected`; timeline split/gap undo -> `8 passed, 142 deselected`; timeline split/gap/merge -> `20 passed, 142 deselected`; source-app quick QA `output/manual_verification/latest/qa_suite_quick_nle_caption_split_20260628` -> pass, `failed_count=0`.
+- Latest NLE live editor candidate-confirm cutover slice:
+  - report: `output/manual_verification/latest/nle_live_editor_candidate_confirm_cutover_20260628/candidate_confirm_cutover_report.md`
+  - behavior: STT1/STT2 candidate confirmation now attempts runtime NLE `candidate_confirm` dual-write after Taption/source-app placement computes confirmed final rows, records a `candidate_confirm` operation, preserves candidate-lane evidence in the undo snapshot, and records `_last_nle_live_editor_operation` / `_last_nle_live_editor_projection` when accepted.
+  - fallback: non-STT1/STT2 sources, live STT/subtitle preview rows, NLE rejection, unsupported rows, and any NLE projection that would alter confirmed source-app rows beyond `0.001s` keep the existing Taption/source-app candidate selection path.
+  - Jammini support slice: accepted `.agents/sentinel/handoffs/20260628-023000-nle-candidate-confirm-support-review.md` for STT/live-preview isolation, final overlap gates, fallback preservation, and undo/focus evidence focus; adopted fix made the projection-preservation guard reachable after receiving the NLE result.
+  - focused guards: candidate-confirm NLE dual-write -> `2 passed, 18 deselected`; select_stt_candidate -> `15 passed, 73 deselected`; timeline STT candidate -> `6 passed, 144 deselected`; NLE operation/runtime/save-export subset -> `29 passed, 21 deselected`; native/project STT selection subset -> `17 passed, 74 deselected`; feed/preview/final overlay subset -> `12 passed, 153 deselected`; source-app quick QA `output/manual_verification/latest/qa_suite_quick_nle_candidate_confirm_20260628` -> pass, `failed_count=0`.
+- Latest NLE global canvas final-projection cutover slice:
+  - report: `output/manual_verification/latest/nle_global_canvas_final_projection_20260627/global_canvas_projection_report.md`
+  - behavior: `nle_global_canvas_segments_from_editor_rows(...)` gives the global canvas subtitle lane a final-only NLE projection while the main timeline canvas keeps live STT/subtitle preview rows.
+  - focused guards: runtime/global projection -> `5 passed, 158 deselected`; global canvas subset -> `9 passed, 151 deselected`; NLE runtime/render/snapshot -> `20 passed, 4 subtests passed`.
+- Latest NLE save/export final-projection cutover slice:
+  - report: `output/manual_verification/latest/nle_save_export_projection_cutover_20260628/save_export_projection_report.md`
+  - behavior: `nle_save_export_segments_from_editor_rows(...)` gives externalized final SRT/cache rows a final-only NLE projection while silence gaps stay in vector-canvas gap metadata and STT1/STT2 reference tracks remain separate.
+  - focused guards: save/export projection -> `4 passed, 6 deselected`; NLE runtime/render/export/persistence/dual-write/operation/snapshot -> `44 passed, 4 subtests passed`; external text asset subset -> `1 passed, 84 deselected`.
+- Latest NLE final-surface overlap guard slice:
+  - report: `output/manual_verification/latest/nle_final_surface_overlap_guard_20260628/final_surface_overlap_guard_report.md`
+  - behavior: final overlay/global-canvas/save-export projection now repairs one-frame final micro-overlap to a shared boundary when possible; overlay/global-canvas avoid drawing unfixable overlapped final rows together, and save/export rejects unfixable final overlap before writing final SRT.
+  - focused guards: runtime cutover -> `8 passed`; NLE domain/render/persistence/dual-write/operation/snapshot -> `54 passed, 4 subtests passed`; timeline/feed subset -> `21 passed, 144 deselected`; native subtitle segment set -> `7 passed`; project assets subset -> `3 passed, 3 deselected`.
+- Latest NLE persistence cutover audit slice:
+  - report: `output/manual_verification/latest/nle_persistence_cutover_audit_20260628/nle_persistence_cutover_audit.md`
+  - behavior: `tools/audit_nle_persistence_cutover.py` proves runtime `NLEProjectState` hydration, legacy disk cleanliness, future-payload quarantine, and save/reopen roundtrip for all `8` current NLE dual-write operation families while keeping actual persisted NLE format cutover blocked. The matrix separately reports legacy ID renumbering for `gap_generate`, `caption_split`, `caption_merge`, and `candidate_confirm`.
+  - focused guards: audit tests -> `4 passed`; persistence/dual-write focused set -> `28 passed`.
+- Latest NLE roughcut saved-candidate render-plan cutover slice:
+  - report: `output/manual_verification/latest/nle_roughcut_state_render_plan_cutover_20260628/roughcut_state_render_plan_report.md`
+  - behavior: saved roughcut candidate `outputs.render_plan` payloads now route through the NLE snapshot adapter path used by roughcut export/render actions, while preserving legacy render command, manifest, and stitched-boundary parity.
+  - focused guards: saved/export render-plan route -> `3 passed, 35 deselected`; roughcut snapshot subset -> `3 passed, 16 deselected`; NLE runtime/render/export/persistence/dual-write/operation/snapshot -> `48 passed, 4 subtests passed`; generated-video strict acceptance recheck -> `accepted=true`.
+- Latest Taption-derived segment editing parity closeout:
+  - quick QA: `output/manual_verification/latest/qa_suite_quick_20260627_141230`
+  - focused guards: timeline/feed `150 passed`, drag/gap/app-command `60 passed, 161 deselected`, native/video `87 passed`, project STT preview `32 passed, 56 deselected`
+  - behavior: STT1/STT2 candidate lanes remain preserved for review evidence, video subtitle overlay filters preview rows when final rows exist, final `stable_for_save_reopen` now requires `overlap_count=0`, and center segment drag suppresses gap snap candidates when crossing a silence/gap toward a real subtitle boundary.
+- Latest Taption segment UI/UX parity checklist slice:
+  - checklist: `output/manual_verification/latest/taption_segment_uiux_parity_20260627/checklist.md`
+  - focused guards: hit-target parity `10 passed, 138 deselected`, reorder hit-target parity `3 passed, 147 deselected`, reorder commit parity `3 passed, 146 deselected`, extended drag/gap/STT/app-command parity `65 passed, 161 deselected`, playhead/timing feed parity `152 passed`, center reorder/gap subset `5 passed, 144 deselected`
+  - behavior: single-gap snap suppression without subtitle target, boundary release from visible snapped boundary, one-gap center move absorption without final overlap, one-word inline-editor up/down retention, and immediate neighbor reorder preview/commit are now explicitly guarded.
+- Latest NLE transition planning artifact:
+  - owner inventory: `output/manual_verification/latest/nle_owner_inventory_20260627/owner_inventory.md`
+  - domain contract: `output/manual_verification/latest/nle_domain_contract_20260627/domain_contract.md`
+  - read-only projection parity: `output/manual_verification/latest/nle_read_only_parity_20260627/projection_parity_report.md`
+  - operation model: `output/manual_verification/latest/nle_operation_model_20260627/operation_model_report.md`
+  - dual-write pilot: `output/manual_verification/latest/nle_dual_write_pilot_20260627/gap_delete_pilot_report.md`
+  - save/reload compatibility: `output/manual_verification/latest/nle_save_reload_compat_20260627/save_reload_compat_report.md`
+  - render/export parity: `output/manual_verification/latest/nle_render_export_parity_20260627/render_export_parity_report.md`
+  - runtime cutover final overlay: `output/manual_verification/latest/nle_runtime_cutover_final_overlay_20260627/final_overlay_cutover_report.md`
+  - cleanup gate audit: `output/manual_verification/latest/nle_cleanup_gate_audit_20260627/cleanup_gate_audit.md`
+  - release checkpoint parity and rollback proof: `output/manual_verification/latest/nle_release_checkpoint_parity_20260627/release_checkpoint_parity_report.md`
+  - phase 11 cleanup/no-op closeout: `output/manual_verification/latest/nle_phase11_cleanup_20260627/cleanup_report.md`
+  - latest quick QA for final-overlay cutover: `output/manual_verification/latest/qa_suite_quick_20260627_162641`
+  - phase 1 result: current mutable owners mapped for final subtitle rows, gaps, STT candidate lanes, timeline canvas state, video overlay feed, global canvas/minimap, roughcut/cut boundaries, project save/load, export/render, and undo/redo.
+  - phase 2 result: internal NLE time domains, entities, projection surfaces, validation checklist, and stop conditions are defined.
+  - phase 3 result: read-only projection parity helper and tests now cover timeline, video overlay, global canvas, save/export, and roughcut surfaces with final `overlap_count=0`.
+  - phase 4 result: operation/undo transaction contracts now cover caption, gap, candidate-confirm, marker, roughcut-range, and undo snapshot rules without runtime write routing.
+  - phase 5 result: `gap_delete` dual-write pilot routes one explicit gap removal through runtime `NLEProjectState` and projects back into legacy `editor_state` while keeping disk payload free of NLE fields.
+  - phase 6 result: save/reload guard strips or metadata-quarantines unapproved persisted `nle`, `nle_snapshot`, and disk-shaped `_nle_project_state` payloads while preserving runtime-only `NLEProjectState` hydration and legacy-compatible disk writes.
+  - phase 7 result: render/export parity proof compares one final caption frame projection across source subtitles, final overlay, global canvas, roughcut sidecars, and exported asset plans.
+  - phase 8 result: the `final_overlay` runtime provider uses the NLE final caption projection, and a later focused slice gives global canvas a final-only NLE projection while preserving timeline live-preview rows. Save/reload, render/export, and persistence ownership remain unchanged.
+  - phase 9 result: cleanup deletion is blocked because only one post-cutover quick QA checkpoint exists; the older full QA checkpoint predates final-overlay cutover and cannot count as post-cutover cleanup proof.
+  - phase 10 result: two consecutive post-cutover checkpoint bundles passed: each ran focused NLE runtime/save/reload/render/export/editor parity guards with `123 passed, 4 subtests passed` plus source-app quick QA with `failed_count=0`.
+  - phase 11 result: no code deletion was performed because final-overlay cutover did not create a proven-dead legacy write path; fallback context helpers remain rollback/active dependencies.
 
 ## Current Risks
 
 - High path can pass QA while memory pressure still enters `critical`; do not treat pass/fail alone as enough for performance conclusions.
 - Critical pressure may come from system/native pressure, compressed/wired memory, MPS/Metal driver memory, warm STT workers, LLM residency, editor preview, and app process RSS together.
-- Long-flow STT2 rescue and word timestamp precision still have meaningful wall-clock cost; optimize only by reducing waiting, cleanup churn, UI/status hot paths, or safe resource lifetime waste.
+- Long-flow STT1, STT2 rescue, word timestamp precision, and subtitle postprocess still have meaningful wall-clock cost; optimize only by reducing redundant waiting, duplicate cache work, avoidable scheduling serialization, cleanup churn, UI/status hot paths, or safe resource lifetime waste.
 - Do not lower X5 quality gates, skip STT2, skip LLM, downgrade models, or loosen subtitle quality policy as a speed optimization.
 - Tinyping long-flow is manual-only unless the owner explicitly requests it.
 - The completed internal NLE baseline is a source-app domain/adapter layer only. It must not reopen native migration, Swift rewrite, QML migration, or visible Premiere-style UI work without explicit owner approval.
+- App Store submission is still blocked despite the local packaging skeleton passing audit; signed `.app`, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner-provided metadata are missing.
 - Always re-check `git status` before widening a follow-up patch.
 
 ## Narrow Next Item
 
-Use `ACTION_ITEMS.md` as the executable queue. There is currently no active execution item.
+Use `ACTION_ITEMS.md` as the executable queue. The current narrow target is `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`:
 
-When the owner gives a new scope, add a fresh, concrete item to `ACTION_ITEMS.md` before implementation. Do not revive completed post-generation readiness work unless a new verified regression creates a specific follow-up.
+1. Preserve the cut-boundary profiling method: non-profile elapsed runs for speed truth, profiler diagnostics only for ownership.
+2. Use the new true wall-clock stage spans as speed evidence; do not infer elapsed cost only from non-additive cProfile cumulative rows.
+3. The zero-candidate LLM defer trim is already applied and verified; keep it because quality/timing stability passed, but do not treat it as a full latency fix.
+4. Do not retry High context-boundary LLM batching unless batch output is first proven decision-equivalent to the existing per-pair LLM checks on the same rows.
+5. Use STT2/word precision substage timing and `stt_collect_whisperkit_fallback` overhead on the long fixture before changing worker scheduling; local smoke points to collect/fallback time, not prepare/annotation.
+6. Run `tools/verify_reference_fixture_availability.py` before accepting any new latency trim. The current owner-required fixture is NAS HeyDealer first 180 seconds; if the real media or SRT is missing, fallback media can prove instrumentation and structural stability only.
+7. Use `tools/materialize_reference_srt.py` only for cached X5 60s short-loop smoke; do not treat that smoke as broad latency-trim acceptance.
+8. Run `tools/evaluate_reference_benchmark_acceptance.py` after each reference-scored benchmark; file/SRT preflight alone does not prove semantic alignment.
+9. Inspect STT2/word `applied_segment_count`, `range_audio_sec`, and `prepared_audio_sec` before proposing a trim; `stt2_selective_recheck.applied_count=1` alone is not a safe trim signal.
+10. Inspect STT2/word reason breakdown fields before removing any range family; current NAS evidence points away from STT2 skip and review-critical word-range removal.
+11. Inspect High context-boundary decision actions before changing postprocess behavior; current NAS evidence is keep/move/merge/invalid `2/0/0/0`, so only a decision-equivalent no-change gate is plausible.
+12. High context keep/no-correction cache, macro proofread response replay cache, opt-in STT2/word collect replay cache, opt-in STT1 primary collect replay cache, combined cache-key normalization, and all-hit macro warmup skip were originally synthetic-accepted on the owner-approved generated 3-minute fixture under the legacy score/overlap gate. The strict acceptance gate and VAD/STT consensus guard now reject the old tail-collapse benchmark and accept the fixed generated fallback run. Backfill on NAS HeyDealer or another representative owner fixture when available before claiming production-wide speed or enabling any STT collect cache by default.
+13. Do not retry prepared recheck clip metadata reuse for cache-hit runs without new evidence; the 2026-06-28 candidate was rejected because prepare time stayed around `0.50s` and metadata/directory retention added complexity.
+14. Use `tools/summarize_stage_variance.py` when comparing existing generated/cache benchmark artifacts; it is analysis-only and must not be used to approve default cache enablement or production speed claims.
+15. Identify any further behavior-preserving candidate only from redundant waiting, duplicate cache work, avoidable scheduling serialization, or already-proven cleanup churn in STT1, selective STT2 rescue, word timestamp precision, VAD/STT consensus, or subtitle postprocess. The latest synthetic cache-hit run shows elapsed `1.312s`, STT1/STT2/word collect all `0.0s`, macro provider group `0`, final overlap `0`, generated SRT overlap `0`, and accepted scored quality.
+16. The latest STT1 diagnostics show STT1 setup is negligible and collect dominates; the opt-in cache proves exact repeat replay only. Do not skip STT1, downgrade the primary model, shrink windows, or loosen final subtitle stability to gain speed.
 
 QA gate for that item:
 
-- No UI/UX labels, layout, colors, shortcuts, popup behavior, or visible workflow changes without explicit owner approval.
+- No unrelated UI/UX labels, layout, colors, shortcuts, popup behavior, or visible workflow changes.
 - No subtitle quality policy, STT2, LLM, LoRA, VAD, timing, or model-selection changes.
+- Do not lose STT1/STT2 candidate-lane evidence while keeping final overlay/global-canvas feeds overlap-free.
+- Do not use X5 or fallback cached audio as a substitute for the owner-required NAS HeyDealer 3-minute latency test unless the owner explicitly relaxes that requirement. Latest accepted NAS proof: `output/manual_verification/latest/stt_recheck_reason_breakdown_20260627/reason_breakdown_report.md`.
+- Do not use synthetic keep-cache, macro-cache, STT collect-cache, or combined-cache speed deltas as production-wide proof; they are accepted only for the owner-approved generated fixture until a representative real-media backfill passes.
 - If the new item touches editor readiness, preserve the completed closeout guarantees: generation completion must return the editor to a trustworthy interactive state, and subtitle time editing, timeline zoom/fit/time-window, subtitle magnet, playback controls, save, and bottom/global menu buttons must stay responsive.
 
 ## Fixtures
 
 - Macau quick/smoke: `/Users/u_mo_c/Downloads/마카오테스트`
 - X5 accuracy: `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video/X5_시승기_후반.MP4` plus sibling `.srt`
+- NAS HeyDealer 3-minute reference: `/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4` plus matching `.srt`; this must be mounted for the next generation-latency acceptance test.
 - Tinyping long-flow: `/Users/u_mo_c/Downloads/티니핑/티니핑_유스어드벤처.MP4` (manual only; excluded from default QA unless explicitly requested)
 - Store verification artifacts under `output/manual_verification/latest/`.
 

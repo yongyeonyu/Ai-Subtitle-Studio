@@ -104,6 +104,8 @@ _COMPACT_META_KEYS = {
     "subtitle_status_schema",
     "subtitle_status_score",
     "subtitle_status_source",
+    "_nle_runtime_surface",
+    "_nle_runtime_schema",
     "subtitle_auto_review",
     "subtitle_auto_review_reasons",
     "subtitle_auto_review_severity",
@@ -889,6 +891,16 @@ def _track_metadata_from_write_result(result: dict[str, Any] | None) -> list[dic
     return metadata if isinstance(metadata, list) else []
 
 
+def _nle_save_export_rows(
+    rows: list[dict[str, Any]],
+    *,
+    primary_fps: float,
+) -> list[dict[str, Any]]:
+    from core.project.nle_runtime_cutover import nle_save_export_segments_from_editor_rows
+
+    return nle_save_export_segments_from_editor_rows(rows, primary_fps=primary_fps)
+
+
 def _external_stt_track_payload(stt_external_tracks: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
     refs: dict[str, dict[str, Any]] = {}
     counts: dict[str, int] = {}
@@ -1040,11 +1052,12 @@ def externalize_project_text_assets(
         preserve_order=True,
     )
     gap_vector_rows = _subtitle_gap_vector_rows(final_segments, primary_fps=primary_fps)
+    final_save_export_rows = _nle_save_export_rows(final_segments, primary_fps=primary_fps)
     stt_tracks = dict(stt_tracks or {})
 
     tracks_manifest: dict[str, Any] = {}
     final_info = write_srt_track(
-        final_segments,
+        final_save_export_rows,
         os.path.join(subtitle_dir, "final.srt"),
         metadata_default_fps=primary_fps,
     )

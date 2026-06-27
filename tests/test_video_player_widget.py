@@ -18,6 +18,7 @@ from core.runtime import config
 from ui.editor.video_playback_backend import _BaseExternalBackend, choose_video_backend
 from ui.editor.video_overlay_widgets import SubtitleQuickOverlay, VideoSurfaceView
 from ui.editor.video_player_widget import VideoPlayerWidget
+from ui.editor.video_player_subtitles import VideoPlayerSubtitleMixin
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 
 
@@ -214,6 +215,10 @@ class _FakeAudioOutput:
         self.deleted = True
 
 
+class _SubtitleOverlayFilter(VideoPlayerSubtitleMixin):
+    pass
+
+
 class VideoPlayerWidgetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -237,6 +242,27 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
         self.assertEqual(choice.name, "qt")
         self.assertEqual(choice.reason, "embedded_mpv_disabled")
+
+    def test_video_overlay_filters_stt_preview_when_final_rows_exist(self):
+        overlay = _SubtitleOverlayFilter()
+        rows = [
+            {"start": 1.0, "end": 2.0, "text": "최종"},
+            {"start": 2.5, "end": 3.0, "text": "STT1 후보", "stt_pending": True, "stt_preview_source": "STT1"},
+        ]
+
+        filtered = overlay._filter_overlay_rows(rows)
+
+        self.assertEqual([row["text"] for row in filtered], ["최종"])
+
+    def test_video_overlay_keeps_stt_preview_when_no_final_rows_exist(self):
+        overlay = _SubtitleOverlayFilter()
+        rows = [
+            {"start": 0.0, "end": 1.0, "text": "STT1 후보", "stt_pending": True, "stt_preview_source": "STT1"}
+        ]
+
+        filtered = overlay._filter_overlay_rows(rows)
+
+        self.assertEqual([row["text"] for row in filtered], ["STT1 후보"])
 
     def test_video_backend_prefers_mpv_when_explicitly_enabled(self):
         with patch.dict(

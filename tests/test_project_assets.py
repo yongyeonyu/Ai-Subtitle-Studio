@@ -131,6 +131,51 @@ class ProjectAssetsTests(unittest.TestCase):
             self.assertEqual(stt1_path.read_text(encoding="utf-8"), before_stt1)
             self.assertEqual(stt2_path.read_text(encoding="utf-8"), before_stt2)
 
+    def test_externalize_project_text_assets_routes_final_srt_through_nle_save_export_projection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project.json"
+            project = {
+                "project_path": str(project_path),
+                "video": {"primary_fps": 30.0},
+                "subtitles": {},
+                "editor_state": {"stt": {"candidate_tracks": {}}},
+                "analysis": {},
+            }
+
+            externalize_project_text_assets(
+                str(project_path),
+                project,
+                final_segments=[
+                    {
+                        "id": "caption_1",
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "최종 자막",
+                        "speaker": "00",
+                        "stt_candidates": [{"source": "STT1", "text": "후보"}],
+                    },
+                    {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+                    {"id": "preview_1", "start": 1.1, "end": 1.8, "text": "프리뷰", "_live_stt_preview": True},
+                    {"id": "caption_2", "start": 2.0, "end": 3.0, "text": "저장 자막", "speaker": "01"},
+                ],
+                stt_tracks={},
+            )
+
+            final_srt = (Path(tmp) / "project.assets" / "subtitles" / "final.srt").read_text(encoding="utf-8")
+            hot_cache = project["_hot_open_subtitle_segments_cache"]
+            gap_rows = project["editor_state"]["rendering"]["subtitle_canvas"]["gap_segments"]
+            metadata = project["asset_storage"]["tracks"]["final"]["metadata"]
+
+        self.assertIn("최종 자막", final_srt)
+        self.assertIn("저장 자막", final_srt)
+        self.assertNotIn("프리뷰", final_srt)
+        self.assertNotIn("후보", final_srt)
+        self.assertEqual([row["text"] for row in hot_cache], ["최종 자막", "저장 자막"])
+        self.assertTrue(all(row.get("_nle_runtime_surface") == "save_export" for row in hot_cache))
+        self.assertFalse(any("stt_candidates" in row for row in hot_cache))
+        self.assertEqual(len(gap_rows), 1)
+        self.assertEqual([row.get("_nle_runtime_surface") for row in metadata], ["save_export", "save_export"])
+
 
 if __name__ == "__main__":
     unittest.main()

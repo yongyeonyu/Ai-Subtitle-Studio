@@ -18,6 +18,7 @@ from core.project.nle_project_state import (
     project_segments_from_nle_state,
     sync_project_nle_state_from_editor_rows,
 )
+from core.project.nle_projection_parity import assert_project_nle_read_only_parity
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_io import (
     clear_project_file_cache,
@@ -876,6 +877,167 @@ class ProjectNleSnapshotTests(unittest.TestCase):
         self.assertEqual(exact_markers[0].metadata["frame"], boundary_frame)
         self.assertEqual(exact_markers[0].metadata["detector"], "roughcut-edl-join-v1")
         self.assertEqual(exact_markers[0].metadata["exact_join"]["segment_after_id"], "chapter_0002")
+
+    def test_read_only_projection_parity_covers_timeline_overlay_global_save_and_roughcut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_path = root / "source.mov"
+            project_path = root / "readonly-parity.aissproj"
+            media_path.write_bytes(b"media")
+            project = {
+                "project_name": "readonly_parity",
+                "mode": "single",
+                "video": {"duration_sec": 6.0, "primary_fps": 30.0},
+                "timeline": {
+                    "total_duration": 6.0,
+                    "timebase": {"primary_fps": 30.0},
+                    "tracks": [
+                        {
+                            "clips": [
+                                {
+                                    "id": "clip_main",
+                                    "source_path": str(media_path),
+                                    "type": "video",
+                                    "source_duration": 6.0,
+                                    "timeline_start": 0.0,
+                                    "timeline_end": 6.0,
+                                    "fps": 30.0,
+                                    "order": 0,
+                                }
+                            ]
+                        }
+                    ],
+                },
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[str(media_path)],
+                    segments=[
+                        {
+                            "id": "caption_1",
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "first",
+                            "speaker": "00",
+                            "stt_candidates": [
+                                {"source": "STT1", "start": 0.0, "end": 1.0, "text": "first raw", "score": 0.8}
+                            ],
+                        },
+                        {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+                        {
+                            "id": "caption_2",
+                            "start": 2.0,
+                            "end": 3.0,
+                            "text": "second",
+                            "speaker": "01",
+                            "stt_candidates": [
+                                {"source": "STT2", "start": 2.0, "end": 3.0, "text": "second raw", "score": 0.7}
+                            ],
+                        },
+                    ],
+                    stt_preview_segments=[
+                        {
+                            "start": 4.0,
+                            "end": 5.0,
+                            "text": "diagnostic only",
+                            "stt_preview_source": "STT1",
+                        }
+                    ],
+                    cut_boundaries=[{"time": 2.0, "source": "visual", "status": "confirmed"}],
+                    primary_fps=30.0,
+                ),
+                "analysis": {"cut_boundaries": [{"time": 2.0, "source": "visual", "status": "confirmed"}]},
+                "roughcut_state": {
+                    "selected_candidate_id": "roughcut_a",
+                    "candidates": [
+                        {
+                            "candidate_id": "roughcut_a",
+                            "name": "roughcut A",
+                            "outputs": {
+                                "edl": {
+                                    "duration": 5.0,
+                                    "segments": [
+                                        {
+                                            "segment_id": "chapter_0001",
+                                            "source_path": str(media_path),
+                                            "source_start": 0.0,
+                                            "source_end": 2.0,
+                                            "output_start": 0.0,
+                                            "output_end": 2.0,
+                                        },
+                                        {
+                                            "segment_id": "chapter_0002",
+                                            "source_path": str(media_path),
+                                            "source_start": 3.0,
+                                            "source_end": 6.0,
+                                            "output_start": 2.0,
+                                            "output_end": 5.0,
+                                        },
+                                    ],
+                                    "stitched_cut_boundaries": [
+                                        {
+                                            "time": 2.0,
+                                            "timeline_sec": 2.0,
+                                            "source": "roughcut_concat_join",
+                                            "segment_before_id": "chapter_0001",
+                                            "segment_after_id": "chapter_0002",
+                                        }
+                                    ],
+                                },
+                                "render_plan": {
+                                    "output_path": str(root / "roughcut.mov"),
+                                    "render_mode": "sync_safe",
+                                    "segment_manifest": [
+                                        {
+                                            "segment_id": "chapter_0001",
+                                            "source_path": str(media_path),
+                                            "source_start": 0.0,
+                                            "source_end": 2.0,
+                                            "output_end": 2.0,
+                                        }
+                                    ],
+                                    "stitched_cut_boundaries": [
+                                        {
+                                            "time": 2.0,
+                                            "timeline_sec": 2.0,
+                                            "source": "roughcut_concat_join",
+                                            "segment_before_id": "chapter_0001",
+                                            "segment_after_id": "chapter_0002",
+                                        }
+                                    ],
+                                },
+                            },
+                        }
+                    ],
+                },
+            }
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            report = assert_project_nle_read_only_parity(loaded, project_path=str(project_path))
+
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertNotIn("nle", storage)
+        self.assertNotIn("nle_snapshot", storage)
+        self.assertEqual(report.caption_count, 2)
+        self.assertEqual(report.gap_count, 1)
+        self.assertEqual(report.candidate_count, 3)
+        self.assertEqual(report.invalid_duration_count, 0)
+        self.assertEqual(report.non_monotonic_count, 0)
+        self.assertEqual(report.overlap_count, 0)
+        self.assertEqual(report.max_active_segments, 1)
+        self.assertTrue(report.save_reload_stable)
+        self.assertTrue(report.global_canvas_stable)
+        self.assertTrue(report.render_export_stable)
+        self.assertEqual(report.diff_summary, "ok")
+        surfaces = {surface.target_surface: surface for surface in report.surface_reports}
+        self.assertEqual(set(surfaces), {"timeline", "video_overlay", "global_canvas", "save_export", "roughcut"})
+        self.assertTrue(all(surface.stable for surface in surfaces.values()))
+        self.assertEqual(surfaces["video_overlay"].caption_count, 2)
+        self.assertEqual(surfaces["video_overlay"].candidate_count, 0)
+        self.assertEqual(surfaces["global_canvas"].gap_count, 1)
+        self.assertEqual(surfaces["global_canvas"].candidate_count, 3)
 
 
 if __name__ == "__main__":

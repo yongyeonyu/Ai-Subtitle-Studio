@@ -1031,7 +1031,7 @@ class TimelineWidget(TimelineTimeWindowMixin, QWidget):
         QTimer.singleShot(80, self._restore_segment_drag_view)
         QTimer.singleShot(240, self._restore_segment_drag_view)
 
-    def update_segments(self, segs, active_sec=None, total_dur=0.0, fit_view=False):
+    def update_segments(self, segs, active_sec=None, total_dur=0.0, fit_view=False, *, global_rows=None):
         _keep_view_x = None
         _preserve_scroll_x = None
         try:
@@ -1054,11 +1054,12 @@ class TimelineWidget(TimelineTimeWindowMixin, QWidget):
         if self.canvas.width() != target_w:
             self.canvas.setFixedWidth(target_w)
         self.canvas.update_segments(segs, active_sec, dur)
+        global_canvas_rows = getattr(self.canvas, "segments", None) if global_rows is None else list(global_rows or [])
         self.global_canvas.update_segments(
             getattr(self.canvas, "segments", segs),
             dur,
             signature=getattr(self.canvas, "_segments_geometry_signature", None),
-            rows=getattr(self.canvas, "segments", None),
+            rows=global_canvas_rows,
         )
         self._sync_scenegraph_layer()
         if _keep_view_x is not None and not fit_view:

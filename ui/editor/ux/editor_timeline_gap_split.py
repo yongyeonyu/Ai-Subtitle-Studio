@@ -36,6 +36,31 @@ class EditorTimelineGapSplitMixin:
                     break
         except Exception:
             seg_end = None
+        get_current_segments = getattr(self, "_get_current_segments", None)
+        nle_delete_result = None
+        if callable(get_current_segments) and seg_end is not None and seg_end > seg_start:
+            try:
+                current_segments = list(get_current_segments())
+            except Exception:
+                current_segments = []
+            nle_delete = getattr(self, "_nle_live_editor_caption_delete_result", None)
+            if callable(nle_delete):
+                nle_delete_result = nle_delete(
+                    current_segments=current_segments,
+                    line_num=int(line_num),
+                    start_sec=float(seg_start),
+                    end_sec=float(seg_end),
+                )
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if nle_delete_result is not None and callable(reloader):
+            self._active_seg_start = float(seg_start)
+            self._last_nle_live_editor_operation = nle_delete_result.operation.to_dict()
+            self._last_nle_live_editor_projection = nle_delete_result.after_projection.to_dict()
+            reloader([dict(row) for row in nle_delete_result.projected_rows], preserve_view=True, mark_dirty=True)
+            self._remove_live_detection_for_range(seg_start, seg_end)
+            self._arm_gap_snapshot_undo_routing()
+            return
+
         sub_indices = get_sub_block_indices(doc, line_num, seg_start)
 
         cur = QTextCursor(doc)
@@ -327,6 +352,64 @@ class EditorTimelineGapSplitMixin:
         parts.append(("subtitle", "새자막", sub_start))
         if sub_end < gap_end - 0.02:
             parts.append(("gap", "", sub_end))
+
+        get_current_segments = getattr(self, "_get_current_segments", None)
+        nle_gap_generate_result = None
+        if callable(get_current_segments):
+            try:
+                current_segments = list(get_current_segments())
+            except Exception:
+                current_segments = []
+            nle_gap_generate = getattr(self, "_nle_live_editor_gap_generate_result", None)
+            if callable(nle_gap_generate):
+                nle_gap_generate_result = nle_gap_generate(
+                    current_segments=current_segments,
+                    gap_start=float(gap_start),
+                    gap_end=float(gap_end),
+                    sub_start=float(sub_start),
+                    sub_end=float(sub_end),
+                    mode=str(mode or ""),
+                )
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if nle_gap_generate_result is not None and callable(reloader):
+            self._active_seg_start = float(sub_start)
+            self._last_nle_live_editor_operation = nle_gap_generate_result.operation.to_dict()
+            self._last_nle_live_editor_projection = nle_gap_generate_result.after_projection.to_dict()
+            reloader([dict(row) for row in nle_gap_generate_result.projected_rows], preserve_view=True, mark_dirty=True)
+            self._remove_live_detection_for_range(sub_start, sub_end)
+            target_line = None
+            for row in nle_gap_generate_result.projected_rows:
+                if not isinstance(row, dict) or bool(row.get("is_gap")):
+                    continue
+                try:
+                    if abs(float(row.get("start", 0.0) or 0.0) - float(sub_start)) < 0.05:
+                        target_line = int(row.get("line", 0) or 0)
+                        break
+                except Exception:
+                    continue
+            if target_line is not None:
+                block = self.text_edit.document().findBlockByNumber(target_line)
+                if block.isValid():
+                    cursor = QTextCursor(block)
+                    cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                    self.text_edit.setTextCursor(cursor)
+            timeline = getattr(self, "timeline", None)
+            if timeline is not None:
+                if hasattr(timeline, "set_active"):
+                    timeline.set_active(sub_start)
+                if hasattr(timeline, "set_playhead"):
+                    timeline.set_playhead(sub_start)
+                if hasattr(timeline, "center_to_sec"):
+                    timeline.center_to_sec(sub_start, smooth=True)
+            video_player = getattr(self, "video_player", None)
+            if video_player is not None and hasattr(video_player, "seek"):
+                video_player.seek(self._global_to_local_sec(sub_start) if hasattr(self, "_global_to_local_sec") else sub_start)
+            if hasattr(self.text_edit, "update_margins"):
+                self.text_edit.update_margins()
+            if hasattr(self.text_edit, "timestampArea"):
+                self.text_edit.timestampArea.update()
+            self._arm_gap_snapshot_undo_routing()
+            return
 
         cur = QTextCursor(self.text_edit.document())
         cur.beginEditBlock()

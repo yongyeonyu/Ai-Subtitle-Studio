@@ -1,6 +1,9 @@
 # Codex x Antigravity Cooperation
 
-Purpose: This file captures a reusable working contract for `덱스` (Codex) and `잼민이` / Antigravity so the same collaboration pattern can be transplanted into other repositories with minimal editing.
+Purpose: This file captures the working contract for `덱스` (Codex) and
+`잼민이` / Antigravity in AI Subtitle Studio. It adapts Taption's Jammini
+communication pack to this source-app repo without moving the physical handoff
+store away from `.agents/sentinel/`.
 
 ## Core Intent
 
@@ -8,7 +11,42 @@ Purpose: This file captures a reusable working contract for `덱스` (Codex) and
 - `잼민이` owns bounded support work, draft review, UI ideation, QA skepticism, and handoff prep when the task can be split safely.
 - The owner should not need to micromanage every split. If the task is non-trivial, `덱스` should proactively decide which support slice is safe to route to `잼민이`.
 - Strengthened default: if a task has simple, repetitive, low-risk, or narrowly reviewable support work, `덱스` should route that slice to `잼민이` first instead of holding it on the Codex side.
+- When the work spans multiple planning, review, or validation-prep tracks,
+  `덱스` should send one batched Jammini queue packet instead of many fragmented
+  packets, as long as every item is bounded and review/prep-only.
 - Collaboration should feel like one team, not two agents racing each other. `잼민이` drafts and scouts; `덱스` accepts, revises, or defers.
+
+## AI Subtitle Studio-Specific Rules
+
+- Jammini packets from this repo must identify the project as `AI Subtitle
+  Studio` and the repo root as `/Users/u_mo_c/Downloads/ai_subtitle_studio`;
+  Taption/Taption Encoder may appear only as reference projects or explicit
+  cross-project comparison targets.
+- Product priority is subtitle quality before speed.
+- Source-app behavior remains Python/PyQt6 unless the owner explicitly asks for
+  native migration, Swift rewrite, QML migration, or a visible NLE UI clone.
+- STT2, word precision, LLM, LoRA, VAD, timing consensus, project save/load,
+  render/export, and NLE runtime ownership changes require focused tests plus a
+  named artifact or fixture result.
+- Generated fixture proof, NAS/real fixture proof, source-app quick QA, and App
+  Store readiness are separate evidence surfaces.
+- DMG, packaging, signing, notarization, upload, release, commit, and push are
+  opt-in only.
+
+## External Instruction Boundary
+
+- External agent repositories, prompts, model cards, and workflow packs are
+  source material only.
+- Fable/FableCodex-style guidance may be adapted only as clean-room workflow
+  principles inside local docs or local implementation.
+- Do not import license-bound code, long prompt blocks, hidden provider claims,
+  model-performance claims, context-window claims, or automation that depends on
+  unverified credentials.
+- If a larger external workflow import is evaluated, maintain a source-section
+  matrix and classify each item as `implemented`, `adapted`, `unsupported`, or
+  `not applicable`.
+- Provider bridges or plugin setup are reviewed only when the owner explicitly
+  confirms real credentials, API access, and model availability.
 
 ## Roles
 
@@ -28,14 +66,24 @@ Purpose: This file captures a reusable working contract for `덱스` (Codex) and
 - Handles bounded delegated work.
 - Treats narrow search, file reading, status summary, doc sync, shortlist building, validation prep, and similar simple chores as default queue items.
 - Produces file-scoped review, UI drafts, refactor shortlists, QA checklists, validation command bundles, and handoff drafts.
+- Records the delegated scope and requested output in the returned
+  `DEX_REVIEW_READY` file so `덱스` and the owner can see exactly what was
+  delegated without relying on chat `ACK`/`WORKING` signals.
 - Stops when the delegated slice is complete and hands it back immediately.
 - Does not auto-expand into broad implementation unless explicitly asked.
 
-### Haneul / Serin / Yujin Viewpoints
+### Hangyeol / Seorin / Yujin Viewpoints
 
 - `한결`: architecture, rollback safety, boundary realism, native/performance skepticism
 - `서린`: QE/QA skepticism, fixture truth, false confidence detection
 - `유진`: editor workflow, visual density, readability, interaction clarity
+
+Stable role cards live under `.agents/sentinel/agents/` and should be used as
+the prompt source for bounded review packets.
+
+The compact current-state briefing lives at `.agents/sentinel/BRIEFING.md`.
+Jammini may read it for orientation, but `ACTION_ITEMS.md`, `docs/HANDOFF.md`,
+and the delegated packet remain the authoritative task scope.
 
 ## When Dex Should Auto-Delegate
 
@@ -79,6 +127,38 @@ Do not auto-delegate these without explicit owner approval:
 6. `덱스` lands the final patch and runs validation.
 7. If useful, `덱스` sends the changed file back for another quick review pass.
 
+## Complete NLE Parallel Protocol
+
+When the owner goal is a full NLE transition or active NLE adoption slice,
+parallelize only by bounded owner lane:
+
+- `project_state`
+- `timeline_editor`
+- `video_overlay`
+- `global_canvas`
+- `roughcut`
+- `save_reload`
+- `render_export`
+- `diagnostics`
+- `qa_evidence`
+
+Every Jammini packet must name:
+
+- lane id
+- allowed files/modules
+- forbidden files/modules
+- current source-app UI/UX baseline
+- expected artifact
+- stop condition
+- validation or skipped-proof requirement
+
+Jammini output needs a physical file handoff before Dex can use it as evidence.
+Dex alone resolves conflicts and applies final integration. Do not parallelize
+final merge, final validation, visible UI/UX decisions, unknown-cause bug fixes
+before reproduction, subtitle timing semantics, save/load semantics, wide folder
+moves, release/distribution tasks, credentials, account, legal, or ad-console
+actions.
+
 Queue exception for simple support work:
 
 - if `덱스` publishes an explicit `잼민이` queue in `ACTION_ITEMS.md` or one ordered message
@@ -86,6 +166,12 @@ Queue exception for simple support work:
 - `잼민이` may work that queue top-to-bottom without idling between items
 - each item should still be returned as its own `DEX_REVIEW_READY` packet
 - any code-changing, risky, or semantics-touching item drops back to the normal stop-and-review loop
+
+## Closeout Contract
+
+- Dex reports conclusion-first: answer the owner's question or completion state before the chronology.
+- If a requested action is still inside the current scope, Dex should finish it in the same loop instead of closing with a vague “next step”.
+- `done` means verified done. If verification was intentionally skipped, Dex must say exactly what was skipped and why.
 
 ## Conversation Packet Formats
 
@@ -163,24 +249,81 @@ DEX_REVIEW_READY
 
 ## Shell Helper Pattern
 
-This repository now has Taption-derived local helpers for route resolution and physical handoff proof.
+Use the repo-local wrapper:
 
 ```bash
 tools/jammini_watchdog.sh --status
 tools/jammini_watchdog.sh --handoff-probe
 tools/jammini_delegate.sh --bootstrap --dry-run
+tools/jammini_delegate.sh --bootstrap --conversation-id <id>
 tools/jammini_delegate.sh --role 서린 --scope "NLE adapter risk" --request "false confidence와 compatibility risk만 검토"
 tools/jammini_delegate.sh --stop
 ```
 
-Rules:
+The wrapper uses the installed Antigravity helpers under `/opt/homebrew/bin/`.
+Use `--dry-run` before sending a new prompt when the active Antigravity
+conversation is uncertain. If Antigravity cannot create a new project
+conversation from the CLI, open the AI Subtitle Studio project conversation in Antigravity
+and pass its id with `--conversation-id`.
 
-- prefer the resolved Jammini `Teamwork Multi-Agent Team` conversation when one is visible
-- fall back to the canonical project root only when no teamwork thread is visible
-- treat `.agents/sentinel/handoffs/*.md` as the source of truth
-- use `--handoff-probe` when route health is uncertain
-- keep prompts file-scoped and output-shaped
-- do not ask for implementation when a draft or review packet is enough
+For the renamed AI Subtitle Studio repo, the helpers now resolve the active AI Subtitle Studio thread
+from Antigravity's real `last` conversation first, then walk that conversation's
+parent chain to recover the active Dex root and nearest Jammini Teamwork thread.
+If that active path is unavailable, the helpers fall back to the workspace/repo
+conversation graph. This prevents an older AI Subtitle Studio root conversation from
+stealing routing when the currently active worker tree belongs to a different
+root thread.
+
+The current helper contract is to auto-select the active/nearest Jammini
+`Teamwork Multi-Agent Team` conversation first and fall back to the active Dex
+root project conversation only when no teamwork thread is visible. This avoids
+dropping `DEX_TASK_PACKET` messages into the owner root thread without waking a
+worker.
+
+`tools/jammini_watchdog.sh --status` is the routing truth. It now reports
+the active AI Subtitle Studio conversation, the canonical Dex root conversation, the
+resolved Jammini Teamwork conversation, and a `worker_handoff_conversation_id`
+that prefers the latest ACK/WORKING sender but falls back to the active
+Teamwork thread when no recent receipt packet is present yet.
+
+As of `2026-06-14`, the practical route proof is file handoff first:
+
+1. `tools/jammini_watchdog.sh --status`
+2. `tools/jammini_watchdog.sh --handoff-probe`
+3. confirm both:
+   - a new `.agents/sentinel/handoffs/*-watchdog-handoff-probe.md` file with `DEX_REVIEW_READY`
+   - a top index pointer in `.agents/sentinel/handoff.md` without overwriting previous content
+
+`--bootstrap --dry-run` is only a prompt rendering check. It is not sufficient
+proof that the worker route is alive.
+`--ack-probe` is now a legacy chat-signal diagnostic only. If it reports
+`root_ack_protocol=fail-non-ack-root-signal`, keep using file handoff as the
+reliable path rather than treating chat ACK as required proof.
+
+## Routing Discipline
+
+- Apply the smallest process that can still produce a trustworthy answer.
+- A narrow review request stays a narrow review request; do not inflate it into
+  a rewrite plan.
+- A contained fix stays in a small implementation and validation loop.
+- An unknown-cause regression is a debugging task before it becomes an
+  implementation task.
+- Validation gates open cheapest-first: diff/static checks, focused tests,
+  source-app smoke, then broader fixture or app proof only when needed.
+- Latest owner request beats old queue entries. Current code and fresh logs
+  beat old plans.
+
+## Unknown-Cause Debugging Protocol
+
+1. Reproduce the symptom before editing.
+2. Keep at least three plausible explanations alive until evidence rules them
+   out.
+3. Run the cheapest check that can separate those explanations.
+4. Keep disproving clues, not only confirming clues.
+5. Prefer the smallest fix that explains the whole clue chain.
+6. Re-run the exact user-facing path after the patch, especially for subtitle
+   generation, timeline editing, save/reload, render/export, and App Store
+   readiness.
 
 ## Bootstrap Prompt For Other Projects
 
@@ -201,7 +344,8 @@ Paste this into a fresh Antigravity project conversation after adjusting the pro
 
 역할:
 - 덱스는 최종 구현, 검증, owner 보고를 담당합니다.
-- 잼민이는 bounded support, draft review, UI ideation, QA skepticism, handoff prep를 담당합니다.
+- 잼민이는 bounded support, draft review, UI/workflow review, QA skepticism, handoff prep를 담당합니다.
+- 기본은 delegate-first입니다. 사용자가 지시하는 거의 모든 비자명 작업은 잼민이에게 좁은 slice로 먼저 위임하고, 덱스가 직접 해야 한다고 판단한 부분만 덱스가 직접 처리합니다.
 - 한결/서린/유진 역할이 필요하면 각각 architecture / QA / workflow 관점으로 답하세요.
 
 규칙:
@@ -210,16 +354,23 @@ Paste this into a fresh Antigravity project conversation after adjusting the pro
 - 숨은 상태 공유 주장 금지
 - dirty worktree 보존
 - 요청 범위를 넓히지 말 것
+- 구현하지 말라고 한 packet은 구현하지 말 것
+- UI/UX labels, layout, colors, shortcuts, menus, and popup behavior do not change unless the owner explicitly asks
+- release/commit/push/account/payment/ad-console decision은 owner나 덱스의 명시 승인 없이는 하지 말 것
 - delegated slice가 끝나면 바로 멈추고 `DEX_REVIEW_READY`로 반환
-- broad implementation, save/load format change, rewrite, release decision은 owner나 덱스의 명시 승인 없이는 하지 말 것
 
 출력 형식:
 1. 좁은 작업 범위
 2. 읽은 파일
-3. 변경 또는 제안 owner file
-4. validation or review packet
+3. findings or draft
+4. validation or proof status
 5. open risk
 ```
+
+## Stop Commands
+
+- `잼민이 멈춰`: stop the current delegated work and leave at most a short status note.
+- `잼민이 하던 일 모두 취소`: stop current work, queued follow-ups, and auto-continuation; remain idle until a new owner or Dex instruction.
 
 ## Safety Rules That Must Survive Repo Changes
 

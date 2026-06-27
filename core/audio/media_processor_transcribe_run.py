@@ -409,6 +409,7 @@ class VideoProcessorTranscribeRunMixin:
         if not chunks:
             yield [], 0, 0
             return
+        transcribe_run_started = time.perf_counter()
 
         vad_strict = []
         vad_json = os.path.join(chunk_dir, "vad_strict.json")
@@ -608,6 +609,10 @@ class VideoProcessorTranscribeRunMixin:
         use_whisperkit_persistent = is_whisperkit_persistent_model(target_model)
         submitted_q = q
         safe_paths = [x["input_path"] for x in submitted_q]
+        submission_reordered = False
+        whisperkit_workers = 0
+        whisperkit_stream_results = False
+        whisperkit_compute_profile = ""
         if use_whisperkit_persistent:
             from core.audio.whisperkit_persistent import (
                 ensure_worker,
@@ -638,6 +643,7 @@ class VideoProcessorTranscribeRunMixin:
                                 if submission_order != list(range(total)):
                                     submitted_q = [q[idx] for idx in submission_order]
                                     safe_paths = [x["input_path"] for x in submitted_q]
+                                    submission_reordered = True
                             whisperkit_workers = self._whisperkit_concurrent_worker_count(
                                 s,
                                 total_chunks=len(safe_paths),
@@ -769,14 +775,39 @@ class VideoProcessorTranscribeRunMixin:
         handled_by_fallback = False
         processed_count = 0
         emitted_segment_count = 0
+        native_collect_started = time.perf_counter()
+        received = 0
+        done_seen = False
+
+        def _record_whisperkit_fallback(reason: str, fallback_model: str) -> None:
+            if not hasattr(self, "_record_stt_stage_wall_clock_span"):
+                return
+            try:
+                try:
+                    received_chunks = int(received or 0)
+                except Exception:
+                    received_chunks = 0
+                self._record_stt_stage_wall_clock_span(
+                    "stt_collect_whisperkit_fallback",
+                    native_collect_started,
+                    label=log_label,
+                    reason=reason,
+                    source_model=str(target_model or ""),
+                    fallback_model=str(fallback_model or ""),
+                    total_chunks=int(total or 0),
+                    received_chunks=received_chunks,
+                    processed_chunks=int(processed_count or 0),
+                    emitted_segment_count=int(emitted_segment_count or 0),
+                    word_timestamps=bool(word_timestamps),
+                )
+            except Exception:
+                pass
 
         try:
             if _cfg.IS_MAC and not use_coreml_whisper and not use_whisper_cpp and not use_transformers_whisper:
-                received = 0
                 next_emit_idx = 0
                 pending_payloads: dict[int, tuple[dict, dict]] = {}
                 received_indices: set[int] = set()
-                done_seen = False
                 wait_started_at = time.monotonic()
                 last_wait_log_at = wait_started_at
                 precision_pass_active = bool(s.get("stt_word_timestamp_precision_pass", False))
@@ -1047,6 +1078,7 @@ class VideoProcessorTranscribeRunMixin:
                             f"  ⚠️ [{log_label}] WhisperKit 결과 chunk가 0개라 MLX로 즉시 재시도합니다: "
                             f"{fallback_model.split(chr(47))[-1]}"
                         )
+                        _record_whisperkit_fallback("zero_chunks", fallback_model)
                         handled_by_fallback = True
                         stop_empty_whisperkit_worker(self, proc)
                         previous_overrides = getattr(self, "_fast_mode_overrides", None)
@@ -1079,6 +1111,7 @@ class VideoProcessorTranscribeRunMixin:
                         f"  ⚠️ [{log_label}] WhisperKit 결과 자막이 비어 있어 MLX로 즉시 재시도합니다: "
                         f"{fallback_model.split(chr(47))[-1]}"
                     )
+                    _record_whisperkit_fallback("empty_segments", fallback_model)
                     handled_by_fallback = True
                     stop_empty_whisperkit_worker(self, proc)
                     previous_overrides = getattr(self, "_fast_mode_overrides", None)
@@ -1186,6 +1219,7 @@ class VideoProcessorTranscribeRunMixin:
                     f"  ⚠️ [{log_label}] WhisperKit worker timeout → MLX GPU fallback으로 재시도: "
                     f"{fallback_model.split(chr(47))[-1]}"
                 )
+                _record_whisperkit_fallback("worker_timeout", fallback_model)
                 handled_by_fallback = True
                 stop_empty_whisperkit_worker(self, proc)
                 previous_overrides = getattr(self, "_fast_mode_overrides", None)
@@ -1211,6 +1245,69 @@ class VideoProcessorTranscribeRunMixin:
                 return
             raise RuntimeError(str(exc)) from exc
         finally:
+            if not handled_by_fallback and hasattr(self, "_record_stt_stage_wall_clock_span"):
+                collect_finished = time.perf_counter()
+                chunk_audio_sec = 0.0
+                try:
+                    chunk_audio_sec = sum(float(item.get("duration", 0.0) or 0.0) for item in q)
+                except Exception:
+                    chunk_audio_sec = 0.0
+                if use_whisperkit_persistent:
+                    backend_kind = "whisperkit_persistent"
+                elif use_coreml_whisper:
+                    backend_kind = "coreml"
+                elif use_whisper_cpp:
+                    backend_kind = "whisper_cpp"
+                elif use_transformers_whisper:
+                    backend_kind = "transformers"
+                elif _cfg.IS_MAC:
+                    backend_kind = "mlx"
+                else:
+                    backend_kind = "faster_whisper"
+                label_key = str(log_label or "").lower()
+                if "단어" in label_key or "precision" in label_key or "word" in label_key:
+                    collect_stage = "word_precision_collect_transcribe"
+                elif "stt2" in label_key:
+                    collect_stage = "stt2_collect_transcribe"
+                elif "stt1" in label_key or "bench-stt1" in label_key:
+                    collect_stage = "stt_primary_collect_transcribe"
+                else:
+                    collect_stage = "stt_collect_transcribe"
+                setup_elapsed = max(0.0, native_collect_started - transcribe_run_started)
+                collect_elapsed = max(0.0, collect_finished - native_collect_started)
+                diagnostics = {
+                    "label": str(log_label or ""),
+                    "status": "failed" if had_error else "ok",
+                    "backend": backend_kind,
+                    "router_backend": str(stt_backend_name or ""),
+                    "resolved_model": str(target_model or ""),
+                    "chunk_count": int(total or 0),
+                    "submitted_chunk_count": int(len(safe_paths) or 0),
+                    "chunk_audio_sec": round(float(chunk_audio_sec or 0.0), 6),
+                    "target_end_sec": round(float(target_end_sec or 0.0), 6) if target_end_sec is not None else 0.0,
+                    "word_timestamps": bool(word_timestamps),
+                    "progress_by_audio_duration": bool(progress_by_audio_duration),
+                    "worker_silence_timeout_sec": round(float(worker_silence_timeout_sec or 0.0), 6),
+                    "whisperkit_worker_count": int(whisperkit_workers or 0),
+                    "whisperkit_stream_results": bool(whisperkit_stream_results),
+                    "whisperkit_compute_profile": str(whisperkit_compute_profile or ""),
+                    "submission_reordered": bool(submission_reordered),
+                    "received_chunks": int(received or 0),
+                    "processed_chunks": int(processed_count or 0),
+                    "emitted_segment_count": int(emitted_segment_count or 0),
+                    "done_seen": bool(done_seen),
+                    "setup_elapsed_sec": round(setup_elapsed, 6),
+                    "collect_elapsed_sec": round(collect_elapsed, 6),
+                }
+                try:
+                    self._last_transcribe_run_diagnostics = dict(diagnostics)
+                except Exception:
+                    pass
+                self._record_stt_stage_wall_clock_span(
+                    collect_stage,
+                    transcribe_run_started,
+                    **diagnostics,
+                )
             if not handled_by_fallback:
                 self._release_after_transcribe_job(log_label, force_stop=had_error)
             if cleanup_chunk_dir and not handled_by_fallback:
