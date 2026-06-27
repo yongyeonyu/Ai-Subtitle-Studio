@@ -316,6 +316,46 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_text_edit")
 
+    def test_caption_text_edit_dual_write_preserves_speaker_split_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "caption-text-edit-speakers.aissproj"
+            project = _project_with_three_captions()
+            result = apply_caption_text_edit_dual_write_pilot(
+                project,
+                caption_id="subtitle_vector_0002",
+                new_text="- second\n- reply",
+                new_speaker="01",
+                new_speaker_list=["01", "00"],
+                commit_boundary="release",
+                commit_source="timeline_speaker_split",
+                project_path=str(project_path),
+            )
+
+            legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+            nle_rows = project_segments_from_nle_state(project)
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            reopened = read_project_file(str(project_path))
+            reopened_rows = project_segments_to_editor(reopened, include_analysis_candidates=False)
+
+        self.assertEqual(result.operation_family, "caption_text_edit")
+        self.assertEqual(result.operation.kind, "caption_text_edit")
+        self.assertEqual(result.operation.metadata["commit_source"], "timeline_speaker_split")
+        self.assertEqual(result.operation.metadata["old_speaker"], "01")
+        self.assertEqual(result.operation.metadata["new_speaker"], "01")
+        self.assertEqual(result.operation.metadata["old_speaker_list"], ["01"])
+        self.assertEqual(result.operation.metadata["new_speaker_list"], ["01", "00"])
+        self.assert_final_projection_is_release_stable(result)
+        self.assertEqual(legacy_rows[1]["text"], "- second\n- reply")
+        self.assertEqual(legacy_rows[1]["speaker"], "01")
+        self.assertEqual(legacy_rows[1]["speaker_list"], ["01", "00"])
+        self.assertEqual([(row["start_frame"], row["end_frame"]) for row in legacy_rows], [(0, 30), (30, 60), (60, 90)])
+        self.assertEqual(nle_rows[1]["speaker_list"], ["01", "00"])
+        self.assertRowsAlmostEqual(reopened_rows, legacy_rows)
+        self.assertEqual(reopened_rows[1]["speaker_list"], ["01", "00"])
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+
     def test_caption_resize_dual_write_trims_neighbor_and_preserves_disk_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_path = Path(tmp) / "caption-resize.aissproj"

@@ -429,6 +429,59 @@ class EditorSegmentsManualEditsMixin:
         if not before_doc or not after_doc:
             return
 
+        nle_text_edit = getattr(self, "_nle_live_editor_caption_text_edit_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if callable(nle_text_edit) and callable(reloader):
+            try:
+                current_segments = list(self._get_current_segments(force_rebuild=True))
+            except Exception:
+                current_segments = []
+            end_for_nle = start_sec
+            if end_sec is not None:
+                try:
+                    end_for_nle = self._frame_time(end_sec)
+                except Exception:
+                    end_for_nle = start_sec
+            else:
+                for seg in current_segments:
+                    if not isinstance(seg, dict):
+                        continue
+                    try:
+                        if int(seg.get("line", -1)) != int(line_num):
+                            continue
+                        end_for_nle = float(seg.get("end", start_sec) or start_sec)
+                        break
+                    except Exception:
+                        continue
+            nle_result = nle_text_edit(
+                current_segments=current_segments,
+                line_num=int(line_num),
+                start_sec=float(start_sec),
+                end_sec=float(end_for_nle),
+                new_text=f"{before_doc}\n{after_doc}".replace("\u2028", "\n"),
+                new_speaker=current_spk,
+                new_speaker_list=[current_spk, next_spk],
+                commit_source="timeline_speaker_split",
+            )
+            if nle_result is not None:
+                self._last_nle_live_editor_operation = nle_result.operation.to_dict()
+                self._last_nle_live_editor_projection = nle_result.after_projection.to_dict()
+                reloader(list(nle_result.projected_rows), preserve_view=True, mark_dirty=True)
+                doc = self.text_edit.document()
+                target_line = max(0, min(int(line_num) + 1, doc.blockCount() - 1))
+                target_block = doc.findBlockByNumber(target_line)
+                self._sync_lock = True
+                try:
+                    if target_block.isValid():
+                        self.text_edit.setTextCursor(QTextCursor(target_block))
+                    if hasattr(self, "timeline"):
+                        self.timeline.set_active(start_sec)
+                        self.timeline.center_to_sec(start_sec, smooth=True)
+                finally:
+                    self._sync_lock = False
+                self._finalize_manual_edit_snapshot(allow_revision_drift=True)
+                return
+
         cur = QTextCursor(block)
         cur.beginEditBlock()
         cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)

@@ -238,6 +238,18 @@ def _split_caption_text(left_text: str, right_text: str) -> tuple[str, str]:
     return left, right
 
 
+def _normalized_speaker_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    source = value if isinstance(value, (list, tuple)) else [value]
+    speakers: list[str] = []
+    for item in source:
+        speaker = str(item or "").strip()
+        if speaker and speaker not in speakers:
+            speakers.append(speaker)
+    return speakers
+
+
 def _find_row_by_identity(
     rows: list[dict[str, Any]],
     row_id: str,
@@ -1355,6 +1367,8 @@ def apply_caption_text_edit_dual_write_pilot(
     *,
     caption_id: str,
     new_text: str,
+    new_speaker: str | None = None,
+    new_speaker_list: list[str] | tuple[str, ...] | None = None,
     commit_boundary: str = "",
     commit_source: str = "",
     project_path: str = "",
@@ -1371,11 +1385,31 @@ def apply_caption_text_edit_dual_write_pilot(
     target_id = _caption_identity(target_row, target_index)
     text = str(new_text or "").replace("\u2028", "\n")
     old_text = str(target_row.get("text", "") or "")
-    if old_text == text:
+    old_speaker = str(target_row.get("speaker", target_row.get("spk", "00")) or "00").strip()
+    old_speaker_list = _normalized_speaker_list(target_row.get("speaker_list")) or ([old_speaker] if old_speaker else [])
+    speaker_requested = new_speaker is not None
+    speaker_list_requested = new_speaker_list is not None
+    speaker = str(new_speaker or "").strip() if speaker_requested else old_speaker
+    speaker_list = _normalized_speaker_list(new_speaker_list) if speaker_list_requested else []
+    if speaker_list_requested and not speaker and speaker_list:
+        speaker = speaker_list[0]
+    if speaker_list_requested and not speaker_list and speaker:
+        speaker_list = [speaker]
+    if not speaker:
+        speaker = old_speaker or "00"
+    if (
+        old_text == text
+        and (not speaker_requested or old_speaker == speaker)
+        and (not speaker_list_requested or old_speaker_list == speaker_list)
+    ):
         raise ValueError("nle_caption_text_edit_unchanged")
 
     after_rows = [dict(row) for row in before_rows]
     after_rows[target_index]["text"] = text
+    if speaker_requested or speaker_list_requested:
+        after_rows[target_index]["speaker"] = speaker
+    if speaker_list_requested:
+        after_rows[target_index]["speaker_list"] = speaker_list
     after_rows = _sorted_editor_rows(after_rows)
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
@@ -1403,6 +1437,12 @@ def apply_caption_text_edit_dual_write_pilot(
         "old_text": old_text,
         "new_text": text,
     }
+    if speaker_requested or speaker_list_requested:
+        metadata["old_speaker"] = old_speaker
+        metadata["new_speaker"] = speaker
+    if speaker_list_requested:
+        metadata["old_speaker_list"] = list(old_speaker_list)
+        metadata["new_speaker_list"] = list(speaker_list)
     if commit_boundary:
         metadata["commit_boundary"] = commit_boundary
     if commit_source:

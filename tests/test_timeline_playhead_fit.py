@@ -2988,6 +2988,101 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_canvas_speaker_split_routes_stable_caption_through_nle_text_edit(self):
+        editor = _ResizeTimelineEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor._active_seg_start = 0.0
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("안녕하세요 여러분")
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.timeline = SimpleNamespace(
+            update_segments=Mock(),
+            set_active=Mock(),
+            center_to_sec=Mock(),
+        )
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._schedule_timeline = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 1.2, False, end_sec=3.4))
+
+            editor.split_speaker_segment_with_text(0, 5)
+
+            operation = editor._last_nle_live_editor_operation
+            self.assertEqual(operation["kind"], "caption_text_edit")
+            self.assertEqual(operation["metadata"]["commit_boundary"], "release")
+            self.assertEqual(operation["metadata"]["commit_source"], "timeline_speaker_split")
+            self.assertEqual(operation["metadata"]["new_speaker_list"], ["00", "01"])
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["- 안녕하세요", "- 여러분"])
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["text"], "- 안녕하세요\n- 여러분")
+            self.assertEqual(rows[0]["speaker_list"], ["00", "01"])
+            self.assertAlmostEqual(rows[0]["start"], 1.2)
+            self.assertAlmostEqual(rows[0]["end"], 3.4)
+            editor.timeline.update_segments.assert_called()
+            editor.timeline.set_active.assert_called_with(1.2)
+            editor.timeline.center_to_sec.assert_called_with(1.2, smooth=True)
+        finally:
+            editor.text_edit.close()
+
+    def test_canvas_speaker_split_keeps_qtextdocument_fallback_when_nle_rejects(self):
+        editor = _ResizeTimelineEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor._active_seg_start = 0.0
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("안녕하세요 여러분")
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.timeline = SimpleNamespace(
+            update_segments=Mock(),
+            set_active=Mock(),
+            center_to_sec=Mock(),
+        )
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._schedule_timeline = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 1.2, False, end_sec=3.4))
+
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_text_edit_dual_write_pilot",
+                side_effect=ValueError("forced_nle_reject"),
+            ):
+                editor.split_speaker_segment_with_text(0, 5)
+
+            self.assertFalse(hasattr(editor, "_last_nle_live_editor_operation"))
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["- 안녕하세요", "- 여러분"])
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["speaker_list"], ["00", "01"])
+            editor.timeline.set_active.assert_called_once_with(1.2)
+            editor.timeline.center_to_sec.assert_called_once_with(1.2, smooth=True)
+        finally:
+            editor.text_edit.close()
+
     def test_live_canvas_inline_edit_skips_editor_document_rewrite(self):
         editor = _InlineEditEditor()
         editor.text_edit = QTextEdit()

@@ -1,5 +1,35 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Speaker Split Text Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at speaker split release commit; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_speaker_split_text_commit_sync_20260628/speaker_split_sync_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_speaker_split_commit_20260628`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-053800-nle-speaker-split-scout.md`
+- 수정 요약:
+  - Extended NLE `caption_text_edit` dual-write to optionally preserve `speaker` and `speaker_list`.
+  - Added a live editor NLE text-edit helper for stable final-caption commit paths.
+  - `split_speaker_segment_with_text(...)` now attempts NLE `caption_text_edit` with `commit_boundary=release` and `commit_source=timeline_speaker_split`.
+  - The visible editor result remains two dashed dialogue blocks, while the final segment model remains one multi-speaker row with `speaker_list`.
+  - STT/live preview rows and NLE rejection keep the existing QTextDocument fallback path.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/editor_segments_manual_edits.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_text_edit"` -> `2 passed, 23 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "speaker_split"` -> `4 passed, 165 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "speaker_split or inline_text_commit or caption_split or drag or gap or magnet or center_reorder or center_drag"` -> `86 passed, 235 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "split or speaker or timing"` -> `10 passed, 159 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `25 passed`.
+  - `git diff --check -- .` -> pass.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_speaker_split_commit_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Speaker split no longer creates two final subtitle rows at the same time in the NLE path; it preserves one final multi-speaker row.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, save format, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - Diamond drag delete remains a separate uncovered release source because it is delete-plus-resize and needs an atomic NLE operation slice.
+  - Persisted NLE project fields remain gated.
+
 ## NLE Persistence Identity Matrix Refresh - 2026-06-28 KST
 
 - 실행 모드: source-app NLE persistence identity audit refresh after `caption_text_edit`; no disk-format cutover.

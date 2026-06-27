@@ -25,6 +25,7 @@ from core.project.nle_dual_write import (
     apply_caption_move_dual_write_pilot,
     apply_caption_resize_dual_write_pilot,
     apply_caption_split_dual_write_pilot,
+    apply_caption_text_edit_dual_write_pilot,
     apply_gap_generate_dual_write_pilot,
 )
 from core.project.project_context import build_editor_state, project_segments_to_editor
@@ -1574,6 +1575,55 @@ class EditorTimelineVideoMixin(
                 split_sec=float(split_sec),
                 left_text=str(left_text or ""),
                 right_text=str(right_text or ""),
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return None
+
+    def _nle_live_editor_caption_text_edit_result(
+        self,
+        *,
+        current_segments: list[dict],
+        line_num: int,
+        start_sec: float,
+        end_sec: float,
+        new_text: str,
+        new_speaker: str | None = None,
+        new_speaker_list: list[str] | tuple[str, ...] | None = None,
+        commit_source: str = "live_editor_text_edit",
+    ):
+        if not current_segments:
+            return None
+        if getattr(self, "_live_stt_preview_segments", None):
+            return None
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "update_segments"):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        for row in current_segments:
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        project = self._nle_live_editor_project_from_rows(current_segments)
+        caption_id = self._nle_live_editor_caption_id_for_line(
+            project,
+            line_num=int(line_num),
+            start_sec=float(start_sec),
+            end_sec=float(end_sec),
+        )
+        if not caption_id:
+            return None
+        try:
+            return apply_caption_text_edit_dual_write_pilot(
+                project,
+                caption_id=caption_id,
+                new_text=str(new_text or ""),
+                new_speaker=new_speaker,
+                new_speaker_list=new_speaker_list,
+                commit_boundary="release",
+                commit_source=str(commit_source or "live_editor_text_edit"),
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
         except Exception:
