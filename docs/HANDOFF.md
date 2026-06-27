@@ -33,7 +33,38 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Persistence Render/Export Gate
+## Current Handoff - 2026-06-28 NLE Marker Edit Persistence Gate
+
+### Scope
+
+- Continued the owner goal to move AI Subtitle Studio toward a video-editor/NLE structure while preserving the current source-app and legacy `.aissproj` compatibility.
+- Strengthened `tools/audit_nle_persistence_cutover.py` so provisional cut-boundary `marker_edit` is included in the save/reopen operation roundtrip matrix.
+- The audit now verifies all 11 current NLE dual-write operation families, including marker preservation after legacy project roundtrip, while keeping persisted NLE project fields blocked.
+- No UI/UX, subtitle generation, STT/STT2, word precision, save file format, packaging, or App Store behavior changed.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `5 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_render_export_parity.py tests/test_nle_persistence_cutover_audit.py` -> `41 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_marker_edit_persistence_gate_20260628` -> pass.
+
+### Results
+
+- Audit artifact: `output/manual_verification/latest/nle_marker_edit_persistence_gate_20260628/nle_persistence_cutover_audit.md`
+- `prep_ready=true`, `persistence_cutover_ready=false`.
+- Operation roundtrip families: `11`, all passed.
+- `marker_edit` reopened with `reopened_markers_preserved=true`, projected marker count `1`, reopened marker count `1`.
+- Render/export parity remains stable; final invalid/non-monotonic/overlap `0/0/0`, global max active `1`.
+- Jammini route probe: `.agents/sentinel/handoffs/20260628-083545-watchdog-handoff-probe.md`
+- Jammini scout: `.agents/sentinel/handoffs/20260628-083600-nle-next-safe-slice-scout.md`
+
+### Next Recommended Action
+
+- Keep persisted `nle`, `nle_snapshot`, and `_nle_project_state` fields blocked until a separate owner-approved compatibility gate exists.
+- The Jammini scout recommended Trace Log Bundle diagnostics as a safe next slice; Dex deferred that candidate for a later turn because this turn closed the concrete NLE persistence audit gap.
+
+## Previous Handoff - 2026-06-28 NLE Persistence Render/Export Gate
 
 ### Scope
 
@@ -780,7 +811,7 @@
 - Phase 10 is verification proof only. It did not remove legacy paths, approve persisted NLE fields, or switch timeline/global-canvas/save/render/export ownership.
 - Phase 11 is a no-op cleanup closeout only. It did not approve persisted NLE fields or switch timeline/global-canvas/save/render/export ownership.
 - One quick QA attempt failed at `open_project` with `app_unreachable`, but the immediate rerun passed. Treat the failed artifact as command-channel flake evidence, not final-overlay behavior proof.
-- NLE adoption remains incremental under the owner's video-editor goal. Current runtime write/projection coverage is `gap_delete`, `gap_generate`, `caption_move`, `caption_resize`, `caption_text_edit`, `caption_split`, `caption_range_replace`, `caption_merge`, `caption_delete`, `candidate_confirm`, live editor `diamond`, live editor `square_left`/`square_right` boundary resize, live editor segment delete-to-gap, live editor gap-generate routes, live editor diamond merge route, live editor text/smart split route, live editor STT1/STT2 candidate-confirm route, timeline inline text commit route, shortcut split-at-playhead route, partial range replacement route, final overlay, global canvas final lane, save/export final SRT rows, roughcut saved-candidate render plans, and save/reopen identity preservation for all 10 current dual-write operation families. The known safe existing-family release/commit source audit is complete for now; persisted NLE project-field approval remains open for future items.
+- NLE adoption remains incremental under the owner's video-editor goal. Current runtime write/projection coverage is `gap_delete`, `gap_generate`, `caption_move`, `caption_resize`, `caption_text_edit`, `caption_split`, `caption_range_replace`, `caption_merge`, `caption_delete`, `candidate_confirm`, `marker_edit`, live editor `diamond`, live editor `square_left`/`square_right` boundary resize, live editor segment delete-to-gap, live editor gap-generate routes, live editor diamond merge route, live editor text/smart split route, live editor STT1/STT2 candidate-confirm route, timeline inline text commit route, shortcut split-at-playhead route, partial range replacement route, final overlay, global canvas final lane, save/export final SRT rows, roughcut saved-candidate render plans, and save/reopen identity plus marker preservation for all 11 current dual-write operation families. The known safe existing-family release/commit source audit is complete for now; persisted NLE project-field approval remains open for future items.
 - Generation latency remains open. Current cut-boundary evidence points away from cut-boundary work. The zero-candidate LLM defer trim is safe but not a total latency closeout; High context-boundary batching was rejected for quality drift. Current wall-clock evidence still points toward STT primary transcription, selective STT2 recheck, word precision, and subtitle postprocess. New substage timing says STT2/word precision prepare/annotation are not the target on local smoke; High context-boundary diagnostics show cached X5 audio spent `32.230357s` on `4` pair calls with `0` changed pairs, but that non-reference run cannot approve skipping or batching. cProfile rows remain diagnostic only and must not be treated as elapsed truth.
 - NAS was unavailable because the owner turned it off. The generated 3-minute fixture proves cache mechanics and scored stability, but it is not production-wide real-footage proof. Backfill on NAS HeyDealer or another representative owner fixture before claiming broad speed.
 - App Store submission is not ready until a signed sandboxed app bundle, signed App Store package, sandbox smoke, App Store Connect validation, and owner-approved App Store Connect metadata are produced.

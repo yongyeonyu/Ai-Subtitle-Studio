@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Marker Edit Persistence Gate - 2026-06-28 KST
+
+- 실행 모드: source-app NLE persistence cutover audit strengthening; legacy `.aissproj` disk shape remains unchanged.
+- 결과: pass for provisional cut-boundary `marker_edit` save/reopen coverage; persisted NLE project fields remain blocked.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/nle_marker_edit_persistence_gate_20260628/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_marker_edit_persistence_gate_20260628/nle_persistence_cutover_audit.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-083545-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-083600-nle-next-safe-slice-scout.md`
+- 수정 요약:
+  - `tools/audit_nle_persistence_cutover.py` now includes `marker_edit` in the operation roundtrip matrix.
+  - The audit now compares provisional cut-boundary marker signatures after legacy project reopen, not only editor subtitle rows.
+  - `tests/test_nle_persistence_cutover_audit.py` now expects all 11 current NLE dual-write operation families and checks marker preservation.
+  - No UI/UX, subtitle generation, STT/STT2, word precision, save-file format, packaging, App Store, or runtime editor behavior changed.
+- 실제 감사 결과:
+  - `prep_ready=true`, `persistence_cutover_ready=false`.
+  - Operation roundtrip families `11`, all passed.
+  - `marker_edit` projected/reopened marker count `1/1`, `reopened_markers_preserved=true`.
+  - Render/export parity stable `true`, storage clean `true`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; global max active `1`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `5 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_render_export_parity.py tests/test_nle_persistence_cutover_audit.py` -> `41 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_marker_edit_persistence_gate_20260628` -> pass.
+- 남은 gate:
+  - Do not persist `nle`, `nle_snapshot`, or `_nle_project_state` to `.aissproj` until a separate compatibility gate is explicitly approved.
+
 ## NLE Persistence Render/Export Gate - 2026-06-28 KST
 
 - 실행 모드: source-app NLE persistence cutover audit strengthening; legacy `.aissproj` disk shape remains unchanged.
@@ -138,7 +166,7 @@
   - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_range_replace_20260628` -> pass, `failed_count=0`.
 - 자막 품질 영향:
   - Final overlap stayed `0` and global max active stayed `1` in focused NLE route/audit checks.
-  - Save/reopen operation identity is preserved for all 10 current NLE dual-write operation families.
+  - Save/reopen operation identity was preserved for all 10 then-current NLE dual-write operation families.
   - STT2, word precision, LLM, LoRA, VAD, timing policy, visible UI layout, packaging, and App Store behavior were not changed.
 - 완료 항목 분리:
   - Completed slice summary moved to `COMPLETED_ACTION_ITEMS.md`.

@@ -30,10 +30,15 @@ from core.project.nle_dual_write import (
     apply_caption_text_edit_dual_write_pilot,
     apply_gap_delete_dual_write_pilot,
     apply_gap_generate_dual_write_pilot,
+    apply_marker_edit_dual_write_pilot,
 )
 from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
 from core.project.nle_render_export_parity import assert_project_nle_render_export_parity
-from core.project.project_context import build_editor_state, project_segments_to_editor
+from core.project.project_context import (
+    build_editor_state,
+    project_cut_boundary_provisional_segments,
+    project_segments_to_editor,
+)
 from core.project.project_io import (
     clear_project_file_cache,
     read_project_file,
@@ -316,12 +321,30 @@ def _row_signature(
     return signature
 
 
+def _marker_signature(rows: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
+    signature: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = {
+            "status": str(row.get("status") or ""),
+            "timeline_frame": int(row.get("timeline_frame", row.get("frame", 0)) or 0),
+        }
+        try:
+            item["timeline_sec"] = round(float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0), 6)
+        except (TypeError, ValueError):
+            item["timeline_sec"] = 0.0
+        signature.append(item)
+    return signature
+
+
 def _operation_roundtrip_check(work_dir: Path, operation_name: str, project: dict[str, Any], result: Any) -> dict[str, Any]:
     operation_dir = work_dir / operation_name
     operation_dir.mkdir(parents=True, exist_ok=True)
     project_path = operation_dir / f"{operation_name}.aissproj"
     expected_rows = _row_signature(list(result.projected_rows or []), include_id=False)
     expected_identity_rows = _row_signature(list(result.projected_rows or []), include_id=True)
+    expected_markers = _marker_signature(project_cut_boundary_provisional_segments(project))
 
     write_project_file(str(project_path), deepcopy(project))
     storage = read_project_storage_payload(str(project_path))
@@ -332,6 +355,7 @@ def _operation_roundtrip_check(work_dir: Path, operation_name: str, project: dic
     reopened_rows = project_segments_to_editor(reopened, include_analysis_candidates=False)
     reopened_signature = _row_signature(reopened_rows, include_id=False)
     reopened_identity_signature = _row_signature(reopened_rows, include_id=True)
+    reopened_markers = _marker_signature(project_cut_boundary_provisional_segments(reopened))
 
     return {
         "operation_family": operation_name,
@@ -344,8 +368,11 @@ def _operation_roundtrip_check(work_dir: Path, operation_name: str, project: dic
         "storage_has_nle_snapshot": "nle_snapshot" in storage,
         "reopened_matches_projected": reopened_signature == expected_rows,
         "reopened_identity_preserved": reopened_identity_signature == expected_identity_rows,
+        "reopened_markers_preserved": reopened_markers == expected_markers,
         "projected_count": len(expected_rows),
         "reopened_count": len(reopened_signature),
+        "projected_marker_count": len(expected_markers),
+        "reopened_marker_count": len(reopened_markers),
         "invalid_duration_count": int(getattr(result.after_projection, "invalid_duration_count", 0) or 0),
         "non_monotonic_count": int(getattr(result.after_projection, "non_monotonic_count", 0) or 0),
         "overlap_count": int(getattr(result.after_projection, "overlap_count", 0) or 0),
@@ -472,6 +499,21 @@ def _operation_roundtrip_matrix(work_dir: Path) -> list[dict[str, Any]]:
         ),
     ))
 
+    project = _legacy_project()
+    marker = {"timeline_sec": 1.5, "timeline_frame": 45, "fps": 30.0, "status": "provisional"}
+    cases.append((
+        "marker_edit",
+        project,
+        apply_marker_edit_dual_write_pilot(
+            project,
+            action="create",
+            marker=marker,
+            before_markers=[],
+            after_markers=[marker],
+            commit_source="provisional_cut_boundary_create",
+        ),
+    ))
+
     return [
         _operation_roundtrip_check(work_dir, operation_name, project, result)
         for operation_name, project, result in cases
@@ -489,6 +531,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         bool(row.get("runtime_state_hydrated"))
         and bool(row.get("storage_clean"))
         and bool(row.get("reopened_matches_projected"))
+        and bool(row.get("reopened_markers_preserved"))
         and int(row.get("invalid_duration_count") or 0) == 0
         and int(row.get("non_monotonic_count") or 0) == 0
         and int(row.get("overlap_count") or 0) == 0
@@ -604,8 +647,8 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "",
         "## Operation Roundtrip Matrix",
         "",
-        "| Operation | Runtime NLE | Storage Clean | Reopened Matches | ID Preserved | Final Overlap | Max Active |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| Operation | Runtime NLE | Storage Clean | Reopened Matches | ID Preserved | Markers Preserved | Final Overlap | Max Active |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ])
     for row in operations:
         if not isinstance(row, dict):
@@ -618,6 +661,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
                 str(bool(row.get("storage_clean"))),
                 str(bool(row.get("reopened_matches_projected"))),
                 str(bool(row.get("reopened_identity_preserved"))),
+                str(bool(row.get("reopened_markers_preserved"))),
                 str(row.get("overlap_count")),
                 str(row.get("max_active_segments")),
             ])

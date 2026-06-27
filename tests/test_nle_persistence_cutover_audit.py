@@ -15,7 +15,7 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert report["prep_ready"] is True
     assert report["persistence_cutover_ready"] is False
     assert report["operation_roundtrip_all_passed"] is True
-    assert report["operation_roundtrip_family_count"] == 10
+    assert report["operation_roundtrip_family_count"] == 11
     assert report["render_export_parity_passed"] is True
     assert "persisted_nle_project_fields_not_approved" in report["blockers"]
     runtime = report["checks"]["runtime_roundtrip"]
@@ -88,6 +88,7 @@ def test_nle_persistence_cutover_audit_roundtrips_dual_write_operation_families(
         "caption_text_edit",
         "gap_delete",
         "gap_generate",
+        "marker_edit",
     }
     for row in matrix:
         assert row["runtime_state_hydrated"] is True
@@ -97,10 +98,15 @@ def test_nle_persistence_cutover_audit_roundtrips_dual_write_operation_families(
         assert row["storage_has_nle_snapshot"] is False
         assert row["reopened_matches_projected"] is True
         assert row["reopened_identity_preserved"] is True
+        assert row["reopened_markers_preserved"] is True
         assert row["invalid_duration_count"] == 0
         assert row["non_monotonic_count"] == 0
         assert row["overlap_count"] == 0
         assert row["max_active_segments"] <= 1
+    marker_row = next(row for row in matrix if row["operation_family"] == "marker_edit")
+    assert marker_row["operation_kind"] == "marker_edit"
+    assert marker_row["projected_marker_count"] == 1
+    assert marker_row["reopened_marker_count"] == 1
 
 
 def test_nle_persistence_cutover_audit_writes_json_and_markdown_reports():
@@ -119,6 +125,7 @@ def test_nle_persistence_cutover_audit_writes_json_and_markdown_reports():
         assert "## Render / Export Parity" in markdown
         assert "| exported_assets | True | 2 | 0 | 0 | 2 | 2 | 1 |" in markdown
         assert "## Operation Roundtrip Matrix" in markdown
-        assert "| caption_text_edit | True | True | True | True | 0 | 1 |" in markdown
-        assert "| caption_range_replace | True | True | True | True | 0 | 1 |" in markdown
-        assert "| candidate_confirm | True | True | True | True | 0 | 1 |" in markdown
+        assert "| caption_text_edit | True | True | True | True | True | 0 | 1 |" in markdown
+        assert "| caption_range_replace | True | True | True | True | True | 0 | 1 |" in markdown
+        assert "| candidate_confirm | True | True | True | True | True | 0 | 1 |" in markdown
+        assert "| marker_edit | True | True | True | True | True | 0 | 1 |" in markdown

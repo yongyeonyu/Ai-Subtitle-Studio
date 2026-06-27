@@ -19,8 +19,8 @@ This file is the execution source of truth for four connected workstreams:
 
 Current NLE status:
 
-- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, save/reopen compatibility guards, source-fps scout frame preservation, temp trace workspace, preview/skimming cache ownership, the in-memory `NLEProjectState` editor/save owner pilot, and the main timeline canvas read/projection cutover.
-- Not done yet: commit-boundary mutable sync for timeline canvas drag/release flows. Per-pixel drag writes to NLE state remain explicitly out of scope.
+- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, save/reopen compatibility guards, source-fps scout frame preservation, temp trace workspace, preview/skimming cache ownership, the in-memory `NLEProjectState` editor/save owner pilot, the main timeline canvas read/projection cutover, known safe commit-boundary mutable sync sources, provisional cut-boundary `marker_edit`, and the persistence cutover audit matrix for all 11 current NLE dual-write operation families.
+- Not done yet: persisted NLE project fields are not approved, and per-pixel drag writes to NLE state remain explicitly out of scope. Additional runtime mutation sources require a fresh owner-map and focused audit before adoption.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 

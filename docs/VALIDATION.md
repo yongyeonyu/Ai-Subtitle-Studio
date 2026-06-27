@@ -122,10 +122,10 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_engine1.py tests/test_roughcut_v2_output_compat.py tests/test_roughcut_ui_v2.py
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py -k "final_overlay or global_canvas or save_export or overlap or nle"
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_cutover_audit_YYYYMMDD
-QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py -k "persistence or cutover or dual_write or gap_delete or caption_move or caption_resize or caption_split or caption_range_replace or caption_merge or caption_delete or candidate_confirm"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py -k "persistence or cutover or dual_write or gap_delete or caption_move or caption_resize or caption_split or caption_range_replace or caption_merge or caption_delete or candidate_confirm or marker_edit"
 ```
 
-The persistence cutover audit must also report render/export parity before any future persisted NLE format proposal: stable `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, and `exported_assets` surfaces; final invalid/non-monotonic/overlap `0/0/0`; global max active `1`; and disk storage clean of unapproved NLE runtime fields.
+The persistence cutover audit must also report provisional `marker_edit` save/reopen preservation plus render/export parity before any future persisted NLE format proposal: all 11 current dual-write operation families pass, marker rows are preserved after reopen, stable `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, and `exported_assets` surfaces; final invalid/non-monotonic/overlap `0/0/0`; global max active `1`; and disk storage clean of unapproved NLE runtime fields.
 
 ## Post-generation editor readiness validation
 
