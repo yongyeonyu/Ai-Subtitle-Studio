@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Commit-Boundary Reorder Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at Taption immediate-neighbor center-reorder release only; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_commit_boundary_reorder_sync_20260628/reorder_sync_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_commit_boundary_reorder_20260628`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-043700-nle-center-reorder-sync-test-scout.md`
+- 수정 요약:
+  - `apply_caption_move_dual_write_pilot(...)` now records optional `commit_boundary` and `commit_source` metadata in the operation and undo UI state.
+  - Live editor `center_reorder_left` / `center_reorder_right` release commits now attempt NLE `caption_move` dual-write before reloading projected rows.
+  - If NLE move projection rejects or cannot resolve a supported final-caption shape, the existing Taption/source-app reorder fallback remains unchanged.
+  - Both right and left immediate-neighbor reorder paths are covered.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_move"` -> `4 passed, 17 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_reorder"` -> `3 passed, 161 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_reorder or center_drag or diamond or gap or magnet"` -> `33 passed, 131 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate or save_project_command"` -> `66 passed, 162 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py -k "nle or persistence or candidate_confirm or caption_split or caption_merge or caption_move or gap_generate or save_export or final_overlay or timeline_canvas or overlap"` -> `55 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `20 passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_commit_boundary_reorder_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Positive ownership/provenance guard only. Final subtitle projection remains `overlap_count=0` and global max active `1` in the new live editor coverage.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, save format, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - Normal body `center` move and any remaining commit sources still need separate commit-boundary NLE sync slices. Persisted NLE project fields remain gated.
+
 ## NLE Timeline Canvas Projection Cutover - 2026-06-28 KST
 
 - 실행 모드: source-app NLE runtime projection for the main timeline canvas read path; no drag-time mutable write.

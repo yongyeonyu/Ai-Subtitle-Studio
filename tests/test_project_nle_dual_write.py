@@ -147,6 +147,8 @@ class NLEDualWritePilotTests(unittest.TestCase):
             new_start=2.0,
             new_end=3.0,
             reorder_neighbor_id="subtitle_vector_0003",
+            commit_boundary="release",
+            commit_source="center_reorder_right",
         )
 
         legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
@@ -154,10 +156,39 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assertEqual(result.operation.kind, "caption_move")
         self.assertTrue(result.operation.metadata["taption_reorder"])
         self.assertEqual(result.operation.metadata["reorder_direction"], "right")
+        self.assertEqual(result.operation.metadata["commit_boundary"], "release")
+        self.assertEqual(result.operation.metadata["commit_source"], "center_reorder_right")
+        self.assertEqual(result.operation.undo_snapshot.ui_state_ref["commit_boundary"], "release")
+        self.assertEqual(result.operation.undo_snapshot.ui_state_ref["commit_source"], "center_reorder_right")
         self.assertEqual([row.get("text") for row in legacy_rows], ["first", "third", "second"])
         self.assertEqual([(row["start_frame"], row["end_frame"]) for row in legacy_rows], [(0, 30), (30, 60), (60, 90)])
         self.assertEqual([row.get("id") for row in result.projected_rows], ["subtitle_vector_0001", "subtitle_vector_0003", "subtitle_vector_0002"])
         self.assertEqual([row.get("text") for row in result.projected_rows], ["first", "third", "second"])
+        self.assertEqual(result.after_projection.overlap_count, 0)
+        self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_taption_reorder"], True)
+
+    def test_caption_move_dual_write_supports_taption_left_neighbor_reorder_contract(self):
+        project = _project_with_three_captions()
+        result = apply_caption_move_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0002",
+            new_start=0.0,
+            new_end=1.0,
+            reorder_neighbor_id="subtitle_vector_0001",
+            commit_boundary="release",
+            commit_source="center_reorder_left",
+        )
+
+        legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+
+        self.assertEqual(result.operation.kind, "caption_move")
+        self.assertTrue(result.operation.metadata["taption_reorder"])
+        self.assertEqual(result.operation.metadata["reorder_direction"], "left")
+        self.assertEqual(result.operation.metadata["commit_boundary"], "release")
+        self.assertEqual(result.operation.metadata["commit_source"], "center_reorder_left")
+        self.assertEqual([row.get("text") for row in legacy_rows], ["second", "first", "third"])
+        self.assertEqual([(row["start_frame"], row["end_frame"]) for row in legacy_rows], [(0, 30), (30, 60), (60, 90)])
+        self.assertEqual([row.get("id") for row in result.projected_rows], ["subtitle_vector_0002", "subtitle_vector_0001", "subtitle_vector_0003"])
         self.assertEqual(result.after_projection.overlap_count, 0)
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_taption_reorder"], True)
 

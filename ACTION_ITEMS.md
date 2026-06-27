@@ -42,7 +42,7 @@ Those standalone files were intentionally removed after consolidation.
 
 Goal: Continue the owner-directed NLE transition by moving the main timeline canvas from legacy-only display rows toward NLE-owned state while preserving Taption-derived segment editing behavior.
 
-Status: active. The read/projection cutover is complete and archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`. The open requirement is commit-boundary mutable sync: do not write NLE state on every drag pixel; reconcile at release/commit boundaries only, then prove Taption magnet/gap/reorder behavior and final subtitle no-overlap rules again.
+Status: active. The read/projection cutover and the Taption immediate-neighbor center-reorder release sync are complete and archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`. The open requirement is the remaining commit-boundary mutable sync: do not write NLE state on every drag pixel; reconcile at safe release/commit boundaries only, then prove Taption magnet/gap/reorder behavior and final subtitle no-overlap rules again.
 
 Current baseline:
 
@@ -51,7 +51,8 @@ Current baseline:
 - STT1/STT2/live subtitle preview rows remain visible on the main timeline canvas as editor/diagnostic lanes.
 - Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
 - Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
-- Latest evidence: `output/manual_verification/latest/nle_timeline_canvas_projection_cutover_20260628/timeline_canvas_projection_report.md`.
+- Taption immediate-neighbor `center_reorder_left` / `center_reorder_right` release commits now route through NLE `caption_move` dual-write with `commit_boundary=release`, `commit_source=<edge>`, final overlap `0`, and legacy fallback on NLE rejection.
+- Latest evidence: `output/manual_verification/latest/nle_commit_boundary_reorder_sync_20260628/reorder_sync_report.md`; previous read/projection evidence: `output/manual_verification/latest/nle_timeline_canvas_projection_cutover_20260628/timeline_canvas_projection_report.md`.
 
 Scope:
 
@@ -70,7 +71,7 @@ Scope:
 Execution order:
 
 1. Keep the current read/projection cutover as the baseline; do not remove Taption/source-app fallback paths.
-2. Add a commit/release-boundary sync path only after identifying the exact drag-finished, boundary-handle release, diamond release, split/merge, and candidate-confirm commit sources.
+2. Continue commit/release-boundary sync only after identifying the next exact source that is not already covered by NLE dual-write: normal body center move, remaining drag-finished paths, or other safe release/commit sources.
 3. Preserve STT candidate lane visibility in the main timeline canvas; do not mix those rows into final overlay/global canvas/save/export final surfaces.
 4. Re-run Taption-derived gap/magnet/reorder focused tests and NLE projection tests after each mutable-sync slice.
 5. Run source-app quick QA before marking a slice complete.

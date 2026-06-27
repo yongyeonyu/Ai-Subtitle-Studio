@@ -1060,6 +1060,8 @@ def apply_caption_move_dual_write_pilot(
     new_start: float,
     new_end: float,
     reorder_neighbor_id: str = "",
+    commit_boundary: str = "",
+    commit_source: str = "",
     project_path: str = "",
 ) -> NLEDualWritePilotResult:
     if not isinstance(project, dict):
@@ -1081,6 +1083,12 @@ def apply_caption_move_dual_write_pilot(
         "operation_family": "caption_move",
         "caption_id": target_id,
     }
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
     old_start = _row_start(moving_row)
     old_end = _row_end(moving_row, old_start)
     if reorder_neighbor_id:
@@ -1118,6 +1126,8 @@ def apply_caption_move_dual_write_pilot(
             "new_start": target_start,
             "new_end": target_end,
             "reorder_neighbor_id": str(reorder_neighbor_id or ""),
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
         },
         metadata={"pilot": "dual_write_caption_move"},
     )
