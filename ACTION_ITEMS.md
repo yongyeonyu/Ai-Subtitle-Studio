@@ -52,9 +52,8 @@ Current baseline:
 - STT1/STT2/live subtitle preview rows remain visible on the main timeline canvas as editor/diagnostic lanes.
 - Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
 - Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
-- Release-sync/evidence details live only in the archive pointer above.
-- Provisional cut-boundary create/delete is now covered by NLE `marker_edit` release-commit metadata while preserving the existing scan-boundary UI rows.
-- The latest named uncovered release/commit candidate is `_set_segment_start_to_playhead` / `_set_segment_end_to_playhead`; use the existing NLE `caption_resize` family only with legacy fallback and QTextBlock-shape guards.
+- Completed NLE release-sync/evidence details, including shortcut start/end-to-playhead coverage, live only in the archive pointer above; do not duplicate completed slice summaries in this active queue.
+- No named uncovered release/commit candidate is currently promoted. Next step is a fresh audit for remaining safe release/commit sources that can move to NLE dual-write without per-pixel writes or Taption UX drift.
 
 Scope:
 

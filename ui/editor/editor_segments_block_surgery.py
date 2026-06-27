@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.project.nle_dual_write import apply_caption_resize_dual_write_pilot
 from ui.editor.editor_helpers import insert_gap_after
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
@@ -100,6 +101,161 @@ class EditorSegmentsBlockSurgeryMixin:
             self.text_edit.timestampArea.update()
         self._redraw_timeline()
 
+    def _nle_shortcut_resize_neighbor_shape(
+        self,
+        block,
+        *,
+        direction: str,
+        current_start: float,
+        new_value: float,
+    ) -> bool:
+        if direction == "start":
+            first_block = self._contiguous_segment_first_block(block, start_sec=current_start)
+            last_block = self._contiguous_segment_last_block(block, start_sec=current_start)
+            if first_block != block or last_block != block:
+                return False
+            prev_block = first_block.previous()
+            if not prev_block.isValid():
+                return True
+            prev_data = prev_block.userData()
+            if not isinstance(prev_data, SubtitleBlockData) or not prev_data.is_gap:
+                return False
+            return float(new_value) <= float(current_start)
+        if direction == "end":
+            first_block = self._contiguous_segment_first_block(block, start_sec=current_start)
+            last_block = self._contiguous_segment_last_block(block, start_sec=current_start)
+            if first_block != block or last_block != block:
+                return False
+            next_block = last_block.next()
+            if not next_block.isValid():
+                return True
+            next_data = next_block.userData()
+            if not isinstance(next_data, SubtitleBlockData) or not next_data.is_gap:
+                return False
+            return float(new_value) >= float(getattr(block.userData(), "end_sec", current_start) or current_start)
+        return False
+
+    def _try_nle_shortcut_resize_to_playhead(
+        self,
+        *,
+        block,
+        ud: SubtitleBlockData,
+        new_start: float,
+        new_end: float,
+        direction: str,
+    ) -> bool:
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return False
+        project_builder = getattr(self, "_nle_live_editor_project_from_rows", None)
+        caption_id_for_line = getattr(self, "_nle_live_editor_caption_id_for_line", None)
+        if not callable(project_builder) or not callable(caption_id_for_line):
+            return False
+        if bool(
+            getattr(ud, "is_gap", False)
+            or getattr(ud, "stt_pending", False)
+            or getattr(ud, "stt_mode", False)
+            or getattr(ud, "live_preview", False)
+        ):
+            return False
+        raw_text = block.text().replace("\u2028", "\n").strip()
+        if not raw_text:
+            return False
+
+        try:
+            line_num = int(block.blockNumber())
+            current_start = float(getattr(ud, "start_sec"))
+        except Exception:
+            return False
+        if not self._nle_shortcut_resize_neighbor_shape(
+            block,
+            direction=direction,
+            current_start=current_start,
+            new_value=float(new_start if direction == "start" else new_end),
+        ):
+            return False
+
+        try:
+            current_segments = list(self._get_current_segments(force_rebuild=True))
+        except Exception:
+            return False
+        target_row = None
+        for row in current_segments:
+            if not isinstance(row, dict):
+                continue
+            try:
+                if int(row.get("line", -1)) != line_num:
+                    continue
+                if abs(float(row.get("start", 0.0) or 0.0) - current_start) >= 0.05:
+                    continue
+            except Exception:
+                continue
+            target_row = row
+            break
+        if not isinstance(target_row, dict):
+            return False
+        if bool(
+            target_row.get("is_gap")
+            or target_row.get("stt_pending")
+            or target_row.get("stt_mode")
+            or target_row.get("_live_stt_preview")
+            or target_row.get("_live_subtitle_preview")
+        ):
+            return False
+        try:
+            current_end = float(target_row.get("end", current_start) or current_start)
+            target_new_start = float(new_start)
+            target_new_end = float(new_end)
+        except Exception:
+            return False
+        if target_new_end <= target_new_start:
+            return False
+
+        project = project_builder(current_segments)
+        caption_id = caption_id_for_line(
+            project,
+            line_num=line_num,
+            start_sec=current_start,
+            end_sec=current_end,
+        )
+        if not caption_id:
+            return False
+        commit_source = (
+            "shortcut_start_to_playhead"
+            if direction == "start"
+            else "shortcut_end_to_playhead"
+        )
+        edge = "square_left" if direction == "start" else "square_right"
+        try:
+            nle_result = apply_caption_resize_dual_write_pilot(
+                project,
+                caption_id=caption_id,
+                new_start=target_new_start,
+                new_end=target_new_end,
+                edge=edge,
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return False
+
+        projected_rows = [dict(row) for row in nle_result.projected_rows]
+        self._reload_segments_from_list(projected_rows, preserve_view=True, mark_dirty=True)
+        cache_rows = getattr(self, "_cache_current_segments", None)
+        if callable(cache_rows):
+            cache_rows(projected_rows)
+        operation = nle_result.operation.to_dict()
+        metadata = dict(operation.get("metadata") or {})
+        metadata.update(
+            {
+                "commit_boundary": "release",
+                "commit_source": commit_source,
+                "qtextblock_shape": "single_block_shortcut",
+            }
+        )
+        operation["metadata"] = metadata
+        self._last_nle_block_surgery_operation = operation
+        self._last_nle_block_surgery_projection = nle_result.after_projection.to_dict()
+        return True
+
     def _set_segment_start_to_playhead(self):
         if self._timeline_inline_split_pending():
             return
@@ -113,6 +269,20 @@ class EditorSegmentsBlockSurgeryMixin:
             return
 
         orig_start = float(ud.start_sec)
+        current_end = getattr(ud, "end_sec", None)
+        if current_end is not None:
+            try:
+                if self._try_nle_shortcut_resize_to_playhead(
+                    block=block,
+                    ud=ud,
+                    new_start=sec,
+                    new_end=float(current_end),
+                    direction="start",
+                ):
+                    return
+            except Exception:
+                pass
+
         cursor = self.text_edit.textCursor()
         cursor.beginEditBlock()
 
@@ -149,6 +319,20 @@ class EditorSegmentsBlockSurgeryMixin:
         orig_start = float(ud.start_sec)
         if sec <= orig_start:
             return
+
+        current_end = getattr(ud, "end_sec", None)
+        if current_end is not None:
+            try:
+                if self._try_nle_shortcut_resize_to_playhead(
+                    block=block,
+                    ud=ud,
+                    new_start=orig_start,
+                    new_end=sec,
+                    direction="end",
+                ):
+                    return
+            except Exception:
+                pass
 
         cursor = self.text_edit.textCursor()
         cursor.beginEditBlock()

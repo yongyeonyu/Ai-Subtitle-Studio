@@ -254,6 +254,170 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_segment_start_shortcut_routes_gap_absorb_through_nle_resize(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.media_path = "/tmp/shortcut-start.mp4"
+        editor.video_player = SimpleNamespace(current_time=0.0, total_time=10.0)
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._redraw_timeline = Mock()
+        editor._schedule_timeline = Mock()
+        editor._active_seg_start = None
+        editor._segment_queue = []
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=2, active_seg_start=5.0, playhead_sec=4.0), update_segments=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n무음\n대상 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            gap = editor.text_edit.document().findBlockByNumber(1)
+            target = editor.text_edit.document().findBlockByNumber(2)
+            first.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0, segment_id="caption_prev"))
+            gap.setUserData(SubtitleBlockData("00", 2.0, True, end_sec=5.0, segment_id="gap_prev"))
+            target.setUserData(SubtitleBlockData("00", 5.0, False, end_sec=7.0, segment_id="caption_target"))
+
+            editor._set_segment_start_to_playhead()
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            operation = getattr(editor, "_last_nle_block_surgery_operation", {})
+            projection = getattr(editor, "_last_nle_block_surgery_projection", {})
+            self.assertEqual(operation.get("kind"), "caption_resize")
+            self.assertEqual(operation.get("metadata", {}).get("edge"), "square_left")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "shortcut_start_to_playhead")
+            self.assertEqual(operation.get("metadata", {}).get("qtextblock_shape"), "single_block_shortcut")
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            self.assertEqual([(row["start"], row["end"], bool(row.get("is_gap"))) for row in rows], [
+                (1.0, 2.0, False),
+                (2.0, 4.0, True),
+                (4.0, 7.0, False),
+            ])
+            editor.timeline.update_segments.assert_called()
+            editor._redraw_timeline.assert_not_called()
+        finally:
+            editor.text_edit.close()
+
+    def test_segment_end_shortcut_routes_gap_absorb_through_nle_resize(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.media_path = "/tmp/shortcut-end.mp4"
+        editor.video_player = SimpleNamespace(current_time=0.0, total_time=10.0)
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._redraw_timeline = Mock()
+        editor._schedule_timeline = Mock()
+        editor._active_seg_start = None
+        editor._segment_queue = []
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=0, active_seg_start=1.0, playhead_sec=4.0), update_segments=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("대상 자막\n무음\n뒤 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+
+        try:
+            target = editor.text_edit.document().findBlockByNumber(0)
+            gap = editor.text_edit.document().findBlockByNumber(1)
+            following = editor.text_edit.document().findBlockByNumber(2)
+            target.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=3.0, segment_id="caption_target"))
+            gap.setUserData(SubtitleBlockData("00", 3.0, True, end_sec=5.0, segment_id="gap_next"))
+            following.setUserData(SubtitleBlockData("00", 5.0, False, end_sec=7.0, segment_id="caption_next"))
+
+            editor._set_segment_end_to_playhead()
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            operation = getattr(editor, "_last_nle_block_surgery_operation", {})
+            projection = getattr(editor, "_last_nle_block_surgery_projection", {})
+            self.assertEqual(operation.get("kind"), "caption_resize")
+            self.assertEqual(operation.get("metadata", {}).get("edge"), "square_right")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "shortcut_end_to_playhead")
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            self.assertEqual([(row["start"], row["end"], bool(row.get("is_gap"))) for row in rows], [
+                (1.0, 4.0, False),
+                (4.0, 5.0, True),
+                (5.0, 7.0, False),
+            ])
+            editor.timeline.update_segments.assert_called()
+            editor._redraw_timeline.assert_not_called()
+        finally:
+            editor.text_edit.close()
+
+    def test_segment_start_shortcut_falls_back_when_nle_resize_rejects(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.media_path = "/tmp/shortcut-fallback.mp4"
+        editor.video_player = SimpleNamespace(current_time=0.0, total_time=10.0)
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._redraw_timeline = Mock()
+        editor._schedule_timeline = Mock()
+        editor._active_seg_start = None
+        editor._segment_queue = []
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=2, active_seg_start=5.0, playhead_sec=4.0), update_segments=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n무음\n대상 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            gap = editor.text_edit.document().findBlockByNumber(1)
+            target = editor.text_edit.document().findBlockByNumber(2)
+            first.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0, segment_id="caption_prev"))
+            gap.setUserData(SubtitleBlockData("00", 2.0, True, end_sec=5.0, segment_id="gap_prev"))
+            target.setUserData(SubtitleBlockData("00", 5.0, False, end_sec=7.0, segment_id="caption_target"))
+
+            with patch(
+                "ui.editor.editor_segments_block_surgery.apply_caption_resize_dual_write_pilot",
+                side_effect=ValueError("forced-nle-reject"),
+            ):
+                editor._set_segment_start_to_playhead()
+
+            self.assertFalse(hasattr(editor, "_last_nle_block_surgery_operation"))
+            self.assertAlmostEqual(target.userData().start_sec, 4.0)
+            editor._redraw_timeline.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_segment_start_shortcut_keeps_legacy_gap_creation_when_gap_needed(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.media_path = "/tmp/shortcut-gap-create.mp4"
+        editor.video_player = SimpleNamespace(current_time=0.0, total_time=10.0)
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor._redraw_timeline = Mock()
+        editor._schedule_timeline = Mock()
+        editor._active_seg_start = None
+        editor._segment_queue = []
+        editor.timeline = SimpleNamespace(canvas=SimpleNamespace(active_seg_line=1, active_seg_start=5.0, playhead_sec=6.0), update_segments=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n대상 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            target = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=5.0, segment_id="caption_prev"))
+            target.setUserData(SubtitleBlockData("00", 5.0, False, end_sec=7.0, segment_id="caption_target"))
+
+            with patch("ui.editor.editor_segments_block_surgery.apply_caption_resize_dual_write_pilot") as nle_resize:
+                editor._set_segment_start_to_playhead()
+
+            nle_resize.assert_not_called()
+            inserted_gap = first.next()
+            self.assertTrue(inserted_gap.isValid())
+            self.assertTrue(inserted_gap.userData().is_gap)
+            self.assertAlmostEqual(inserted_gap.userData().start_sec, 5.0)
+            self.assertAlmostEqual(target.userData().start_sec, 6.0)
+            editor._redraw_timeline.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
     def test_tab_extends_nearest_previous_subtitle_end_to_playhead(self):
         editor = _TabTimingEditor()
         editor._undo_mgr = SimpleNamespace(push_immediate=Mock())

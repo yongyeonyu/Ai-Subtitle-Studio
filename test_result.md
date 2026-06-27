@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Shortcut Resize Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at shortcut start/end-to-playhead release commits; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_shortcut_resize_commit_sync_20260628/shortcut_resize_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_shortcut_resize_20260628`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-065025-watchdog-handoff-probe.md`
+  - Jammini guard scout: `.agents/sentinel/handoffs/20260628-062500-nle-shortcut-resize-guard-scout.md`
+- 수정 요약:
+  - `_set_segment_start_to_playhead` / `_set_segment_end_to_playhead` now attempt runtime NLE `caption_resize` for safe single-block explicit-gap absorption shapes.
+  - NLE operation metadata keeps `edge=square_left` / `square_right` and records shortcut provenance as `commit_source=shortcut_start_to_playhead` or `shortcut_end_to_playhead`.
+  - Legacy QTextBlock fallback remains active when a new gap must be created, a gap must be extended, NLE rejects the row, or the row is STT/live-preview/unsupported.
+  - Existing UI/UX, labels, menus, shortcuts, popups, save/export behavior, subtitle generation policy, packaging, and App Store behavior are unchanged.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/editor_segments_block_surgery.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "segment_start_shortcut or segment_end_shortcut or shortcut"` -> `6 passed, 178 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_resize"` -> `4 passed, 24 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "gap or magnet or center_reorder or center_drag or reorder"` -> `65 passed, 272 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "timeline_canvas or final_surface or global_canvas or save_export"` -> `7 passed, 3 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_shortcut_resize_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Final overlap projection stayed `0` with global max active `1` in the focused shortcut route tests.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - No named uncovered release/commit candidate is currently promoted. Next step is a fresh audit for remaining safe release/commit sources.
+  - Persisted NLE project fields remain gated.
+
 ## NLE Provisional Cut Boundary Marker Edit - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at provisional cut-boundary create/delete release commits; no drag-time per-pixel NLE write.

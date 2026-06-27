@@ -38,6 +38,37 @@
 ### Scope
 
 - Continued `ACTION_ITEMS.md` item `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.
+- Added runtime NLE `caption_resize` coverage for shortcut start/end-to-playhead release commits in `ui/editor/editor_segments_block_surgery.py`.
+- Routed safe single-block explicit-gap absorption shapes through NLE while preserving the existing QTextBlock fallback for gap creation, gap extension, STT/live preview rows, unsupported shapes, or NLE rejection.
+- Preserved existing UI/UX, labels, menus, shortcuts, popup behavior, subtitle generation policy, save/export behavior, packaging, and App Store behavior.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/editor/editor_segments_block_surgery.py tests/test_timeline_playhead_fit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "segment_start_shortcut or segment_end_shortcut or shortcut"` -> `6 passed, 178 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_resize"` -> `4 passed, 24 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "gap or magnet or center_reorder or center_drag or reorder"` -> `65 passed, 272 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "timeline_canvas or final_surface or global_canvas or save_export"` -> `7 passed, 3 deselected`.
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_shortcut_resize_20260628` -> pass, `failed_count=0`.
+
+### Artifacts
+
+- NLE shortcut resize report: `output/manual_verification/latest/nle_shortcut_resize_commit_sync_20260628/shortcut_resize_report.md`
+- Source-app quick QA: `output/manual_verification/latest/qa_suite_quick_nle_shortcut_resize_20260628`
+- Jammini probe: `.agents/sentinel/handoffs/20260628-065025-watchdog-handoff-probe.md`
+- Jammini shortcut guard scout: `.agents/sentinel/handoffs/20260628-062500-nle-shortcut-resize-guard-scout.md`
+
+### Next Recommended Action
+
+- Run a fresh audit for remaining safe release/commit sources that can move to NLE dual-write without per-pixel writes or Taption UX drift.
+- Keep `ACTION_ITEMS.md` as the active queue and `COMPLETED_ACTION_ITEMS.md` as the only completed-slice archive.
+- Re-run Taption gap/magnet/reorder plus NLE projection guards after any next mutable-sync slice.
+
+## Previous Handoff - 2026-06-28 Marker Edit
+
+### Scope
+
+- Continued `ACTION_ITEMS.md` item `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.
 - Added runtime NLE `marker_edit` coverage for provisional cut-boundary create/delete in `core/project/nle_dual_write.py`.
 - Wired `_on_provisional_cut_boundary_requested(...)` and `_on_provisional_cut_boundary_delete_requested(...)` in `ui/editor/editor_scan_cut_core.py` to record release-commit marker operations after the existing source-app scan-boundary row commit succeeds.
 - Preserved existing UI/UX, labels, menus, scan-boundary rows, info-label text, subtitle generation policy, save format, packaging, and App Store behavior.
