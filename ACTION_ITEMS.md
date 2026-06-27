@@ -50,7 +50,7 @@ Owner signal and current pointers:
 - 2026-06-27: "지금 자막 생성이 너무 늦어지는데..."
 - Latest strict generated-video pass: `output/manual_verification/latest/generated_video_tail_collapse_fix_20260628/tail_collapse_fix_report.md`
 - Latest NAS-off stage/memory variance review: `output/manual_verification/latest/stt_latency_stage_variance_20260628/stage_variance_summary.md`; Jammini/서린 verdict is `HOLD` for algorithm/default changes while NAS remains unavailable.
-- Latest strict synthetic collect-cache write/hit replay: `output/manual_verification/latest/strict_synthetic_collect_cache_replay_20260628/strict_replay_report.md`; write run `20260628_081537` and hit run `20260628_081711` both passed strict acceptance, with hit elapsed `1.131s`, raw/final/reference `54/54/54`, quality/text/timing `93.411/91.676/0.1391s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.12/180.584`, global max active `1`, STT1/STT2/word collect cache hits `true` with provider calls `false`, and macro provider group `0`.
+- Archived generated-fixture strict collect-cache replay: `COMPLETED_ACTION_ITEMS.md#stt2--word-precision-generation-latency-profiling-and-accuracy-preserving-trim`.
 - Latest STT collect-cache backfill readiness audit after strict replay: `output/manual_verification/latest/stt_cache_backfill_readiness_after_strict_replay_20260628/stt_cache_backfill_readiness.md`; result `production_default_recommendation=hold_default_off`, current collect-cache defaults `false/false`, current real inputs unavailable, strict generated cache-hit runs `1`, strict real-media cache-hit runs `0`, and production status `hold_real_media_backfill_required`.
 - Latest owner-required NAS HeyDealer accepted real-media proof, for use when NAS returns: `output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215/reference_benchmark_report.md`
 - Latest X5 short-loop reference smoke: `output/manual_verification/latest/x5_local_reference_fixture_20260627/reference_benchmark_report.md`; short-loop evidence cannot approve broad latency trims.
@@ -71,7 +71,7 @@ Execution order:
 
 1. Keep the separated profiling method: non-profile repeat elapsed for speed truth, cProfile only for ownership diagnosis, reference benchmark for quality/timing truth.
 2. Keep both `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default. When NAS is available again, run a representative HeyDealer first-180s backfill for STT1 plus STT2/word collect caches before using cache speed deltas as production evidence. If NAS remains off, stay in analysis/measurement-only work such as scheduling, memory-pressure variance, readiness audit, or rerunning the strict synthetic replay only after cache/timing logic changes; do not skip STT1/STT2, downgrade models, shrink windows, remove word precision coverage, or loosen final stability gates.
-3. Treat the tail-collapse-fixed strict synthetic write/hit replay as completed generated-fixture evidence only. It does not promote collect-cache defaults; the next promotion gate remains representative real-media HeyDealer write plus cache-hit replay when NAS is available.
+3. Use the archived tail-collapse-fixed strict synthetic write/hit replay as generated-fixture evidence only. It does not promote collect-cache defaults; the next promotion gate remains representative real-media HeyDealer write plus cache-hit replay when NAS is available.
 
 Acceptance gates:
 
