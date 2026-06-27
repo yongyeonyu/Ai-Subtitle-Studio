@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Smart Split Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at timeline smart split release commit; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_smart_split_commit_sync_20260628/smart_split_sync_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_smart_split_commit_20260628`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-061052-watchdog-handoff-probe.md`
+  - Jammini retry scout: `.agents/sentinel/handoffs/20260628-061200-nle-speaker-change-scout.md`
+- 수정 요약:
+  - Timeline smart split now attempts NLE `caption_split` for stable final captions before mutating the QTextDocument.
+  - The NLE operation records `commit_boundary=release` and `commit_source=timeline_smart_split`.
+  - New-left and new-right smart split flows preserve the existing Taption/source-app visible result and final row timing.
+  - NLE rejection keeps the existing QTextDocument fallback path.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/ux/editor_timeline_gap_split.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "smart_split or caption_split"` -> `2 passed, 175 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_timeline_hit_targets.py -k "smart_split or split or drag or gap or magnet or center_reorder or center_drag or diamond"` -> `113 passed, 216 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_runtime_cutover.py -k "caption_split or caption_text_edit or timeline_canvas or final_surface or global_canvas"` -> `8 passed, 28 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_smart_split_commit_20260628` -> pass, `failed_count=0`.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - Final split rows keep shared-boundary timing with final overlap `0` and max active `1` in the NLE projection.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - `_change_speaker_for_line` remains an uncovered release/commit candidate and needs a separate QTextBlock/UI-shape guard before NLE sync is safe.
+  - Persisted NLE project fields remain gated.
+
 ## NLE Speaker Drop Commit Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at same-caption speaker-circle drag/drop release commit; no drag-time per-pixel NLE write.

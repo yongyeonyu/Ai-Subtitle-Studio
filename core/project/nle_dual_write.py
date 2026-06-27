@@ -610,6 +610,8 @@ def apply_caption_split_dual_write_pilot(
     left_text: str,
     right_text: str,
     new_caption_id: str = "",
+    commit_boundary: str = "",
+    commit_source: str = "",
     project_path: str = "",
 ) -> NLEDualWritePilotResult:
     if not isinstance(project, dict):
@@ -660,6 +662,8 @@ def apply_caption_split_dual_write_pilot(
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
     after_projection = build_project_nle_projection_parity_report(shadow_after, project_path=project_path)
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
     undo = build_nle_undo_snapshot(
         operation_id=f"dual_write_caption_split:{target_id}:{right_id}",
         editor_rows=before_rows,
@@ -670,9 +674,24 @@ def apply_caption_split_dual_write_pilot(
             "target_id": target_id,
             "new_caption_id": right_id,
             "split_sec": split_at,
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
         },
         metadata={"pilot": "dual_write_caption_split"},
     )
+    metadata = {
+        "pilot": "dual_write",
+        "operation_family": "caption_split",
+        "caption_id": target_id,
+        "new_caption_id": right_id,
+        "split_sec": split_at,
+        "left_text": left,
+        "right_text": right,
+    }
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_split",
@@ -681,15 +700,7 @@ def apply_caption_split_dual_write_pilot(
         after_projection=after_projection,
         time_domain="sequence",
         undo_snapshot=undo,
-        metadata={
-            "pilot": "dual_write",
-            "operation_family": "caption_split",
-            "caption_id": target_id,
-            "new_caption_id": right_id,
-            "split_sec": split_at,
-            "left_text": left,
-            "right_text": right,
-        },
+        metadata=metadata,
     )
 
     state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)

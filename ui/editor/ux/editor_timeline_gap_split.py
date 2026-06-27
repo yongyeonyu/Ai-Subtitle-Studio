@@ -464,6 +464,77 @@ class EditorTimelineGapSplitMixin:
         full_lines = [doc.findBlockByNumber(idx).text() for idx in sub_indices]
         original_text = "\u2028".join(full_lines)
 
+        nle_split = getattr(self, "_nle_live_editor_caption_split_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if callable(nle_split) and callable(reloader):
+            try:
+                current_segments = list(self._get_current_segments(force_rebuild=True))
+            except Exception:
+                current_segments = []
+            seg_end = getattr(ud, "end_sec", None)
+            try:
+                seg_end = float(seg_end) if seg_end is not None else None
+            except Exception:
+                seg_end = None
+            if seg_end is None or split_sec >= self._snap_to_frame(seg_end):
+                for seg in current_segments:
+                    if not isinstance(seg, dict):
+                        continue
+                    try:
+                        if int(seg.get("line", -1)) != int(line_num):
+                            continue
+                        seg_end = float(seg.get("end", seg_start) or seg_start)
+                        break
+                    except Exception:
+                        continue
+            left_text = "새자막" if new_on_left else original_text.replace("\u2028", "\n")
+            right_text = original_text.replace("\u2028", "\n") if new_on_left else "새자막"
+            if seg_end is not None and split_sec < self._snap_to_frame(seg_end):
+                nle_result = nle_split(
+                    current_segments=current_segments,
+                    line_num=int(line_num),
+                    start_sec=float(seg_start),
+                    end_sec=float(seg_end),
+                    split_sec=float(split_sec),
+                    left_text=left_text,
+                    right_text=right_text,
+                    commit_source="timeline_smart_split",
+                )
+                if nle_result is not None:
+                    self._last_nle_live_editor_operation = nle_result.operation.to_dict()
+                    self._last_nle_live_editor_projection = nle_result.after_projection.to_dict()
+                    reloader(list(nle_result.projected_rows), preserve_view=True, mark_dirty=True)
+                    self._sync_lock = True
+                    try:
+                        self._active_seg_start = split_sec
+                        target_line = None
+                        for row in nle_result.projected_rows:
+                            if not isinstance(row, dict) or bool(row.get("is_gap")):
+                                continue
+                            try:
+                                if abs(float(row.get("start", 0.0) or 0.0) - float(split_sec)) < 0.05:
+                                    target_line = int(row.get("line", 0) or 0)
+                                    break
+                            except Exception:
+                                continue
+                        if target_line is not None:
+                            target_block = self.text_edit.document().findBlockByNumber(target_line)
+                            if target_block.isValid():
+                                cur = QTextCursor(target_block)
+                                cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                                self.text_edit.setTextCursor(cur)
+                        if hasattr(self, "timeline"):
+                            self.timeline.set_active(self._active_seg_start)
+                            self.timeline.center_to_sec(split_sec, smooth=True)
+                    finally:
+                        self._sync_lock = False
+                    if hasattr(self.text_edit, "update_margins"):
+                        self.text_edit.update_margins()
+                    if hasattr(self.text_edit, "timestampArea"):
+                        self.text_edit.timestampArea.update()
+                    self._arm_gap_snapshot_undo_routing()
+                    return
+
         cur = QTextCursor(doc)
         cur.beginEditBlock()
 

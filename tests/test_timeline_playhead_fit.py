@@ -2490,6 +2490,110 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_smart_split_routes_release_commit_through_nle_caption_split(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor._active_seg_start = 1.0
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(
+            update_segments=Mock(),
+            set_active=Mock(),
+            center_to_sec=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("원본 자막\n다음 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+        editor._schedule_timeline = Mock()
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor._arm_gap_snapshot_undo_routing = Mock()
+        editor._mark_dirty = Mock()
+
+        try:
+            doc = editor.text_edit.document()
+            doc.findBlockByNumber(0).setUserData(SubtitleBlockData("00", 1.0, False, end_sec=4.0, segment_id="caption_a"))
+            doc.findBlockByNumber(1).setUserData(SubtitleBlockData("00", 4.0, False, end_sec=5.0, segment_id="caption_b"))
+
+            editor._on_smart_split(0, 2.5, False)
+
+            operation = getattr(editor, "_last_nle_live_editor_operation", {})
+            projection = getattr(editor, "_last_nle_live_editor_projection", {})
+            self.assertEqual(operation.get("kind"), "caption_split")
+            self.assertEqual(operation.get("metadata", {}).get("commit_boundary"), "release")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "timeline_smart_split")
+            self.assertEqual(operation.get("metadata", {}).get("left_text"), "원본 자막")
+            self.assertEqual(operation.get("metadata", {}).get("right_text"), "새자막")
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["원본 자막", "새자막", "다음 자막"])
+            segments = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(
+                [(seg["start"], seg["end"], seg["text"]) for seg in segments],
+                [(1.0, 2.5, "원본 자막"), (2.5, 4.0, "새자막"), (4.0, 5.0, "다음 자막")],
+            )
+            editor.timeline.update_segments.assert_called()
+            editor.timeline.set_active.assert_called_once_with(2.5)
+            editor.timeline.center_to_sec.assert_called_once_with(2.5, smooth=True)
+            editor._arm_gap_snapshot_undo_routing.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_smart_split_keeps_qtextdocument_fallback_when_nle_rejects(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor._active_seg_start = 1.0
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(
+            update_segments=Mock(),
+            set_active=Mock(),
+            center_to_sec=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("원본 자막\n다음 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+        editor._schedule_timeline = Mock()
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor._arm_gap_snapshot_undo_routing = Mock()
+        editor._mark_dirty = Mock()
+
+        try:
+            doc = editor.text_edit.document()
+            doc.findBlockByNumber(0).setUserData(SubtitleBlockData("00", 1.0, False, end_sec=4.0, segment_id="caption_a"))
+            doc.findBlockByNumber(1).setUserData(SubtitleBlockData("00", 4.0, False, end_sec=5.0, segment_id="caption_b"))
+
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_split_dual_write_pilot",
+                side_effect=ValueError("forced_nle_reject"),
+            ):
+                editor._on_smart_split(0, 2.5, True)
+
+            self.assertFalse(hasattr(editor, "_last_nle_live_editor_operation"))
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["새자막", "원본 자막", "다음 자막"])
+            segments = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(
+                [(seg["start"], seg["end"], seg["text"]) for seg in segments],
+                [(1.0, 2.5, "새자막"), (2.5, 4.0, "원본 자막"), (4.0, 5.0, "다음 자막")],
+            )
+            editor.timeline.set_active.assert_called_once_with(2.5)
+            editor.timeline.center_to_sec.assert_called_once_with(2.5, smooth=True)
+        finally:
+            editor.text_edit.close()
+
     def test_diamond_merge_extends_left_segment_to_right_segment_end(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0

@@ -1545,6 +1545,7 @@ class EditorTimelineVideoMixin(
         split_sec: float,
         left_text: str,
         right_text: str,
+        commit_source: str = "",
     ):
         if not current_segments:
             return None
@@ -1576,6 +1577,8 @@ class EditorTimelineVideoMixin(
                 split_sec=float(split_sec),
                 left_text=str(left_text or ""),
                 right_text=str(right_text or ""),
+                commit_boundary="release" if commit_source else "",
+                commit_source=str(commit_source or ""),
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
         except Exception:
