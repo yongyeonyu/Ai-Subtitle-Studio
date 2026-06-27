@@ -1,5 +1,34 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Timeline Canvas Projection Cutover - 2026-06-28 KST
+
+- 실행 모드: source-app NLE runtime projection for the main timeline canvas read path; no drag-time mutable write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_timeline_canvas_projection_cutover_20260628/timeline_canvas_projection_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_timeline_canvas_projection_20260628`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-042200-nle-timeline-canvas-state-scout.md`
+- 수정 요약:
+  - Added `nle_timeline_canvas_segments_from_editor_rows(...)` to project final caption rows through NLE caption state for the `timeline_canvas` surface.
+  - `TimelineCanvas.update_segments(...)` now uses that projection before building `self.segments`, gap rows, render caches, and hit-test indexes.
+  - STT1/STT2/live subtitle preview rows remain visible on the main timeline canvas as editor/diagnostic lanes.
+  - Explicit silence gaps remain gap rows and still flow through the existing canvas gap rebuild logic.
+  - Global canvas still receives its separate final-only NLE projection.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py ui/timeline/timeline_canvas.py tests/test_project_nle_runtime_cutover.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py` -> `10 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "project_final_only_rows_to_global_canvas or global_canvas or stt_candidate"` -> `8 passed, 154 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_render_cache.py -k "update_segments_invalidates_render_cache or visible_segment_lane_cache or stt_candidate or gap_cache"` -> `6 passed, 42 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate or save_project_command"` -> `66 passed, 162 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py -k "nle or persistence or candidate_confirm or caption_split or caption_merge or gap_generate or save_export or final_overlay or timeline_canvas or overlap"` -> `55 passed, 4 subtests passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_timeline_canvas_projection_20260628` -> pass, `failed_count=0`, `editor_compact_macau: ok`.
+- 자막 품질 영향:
+  - Positive guard/read-path only. Final caption rows on the main timeline canvas now share the NLE final-surface no-overlap projection policy.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, model selection, save format, render/export behavior, UI layout, packaging, release, commit, and push behavior were not changed.
+- 남은 위험:
+  - This is not full drag-time mutable NLE ownership. Commit/release-boundary mutable sync remains active in `ACTION_ITEMS.md`.
+  - Per-pixel drag movement must not write NLE mutable state.
+
 ## NLE Operation Identity Preservation - 2026-06-28 KST
 
 - 실행 모드: source-app runtime NLE dual-write identity preservation; no disk-format cutover.

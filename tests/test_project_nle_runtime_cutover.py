@@ -5,6 +5,7 @@ from core.project.nle_runtime_cutover import (
     nle_final_overlay_segments_from_editor_rows,
     nle_global_canvas_segments_from_editor_rows,
     nle_save_export_segments_from_editor_rows,
+    nle_timeline_canvas_segments_from_editor_rows,
 )
 
 
@@ -71,6 +72,41 @@ class ProjectNleRuntimeCutoverTests(unittest.TestCase):
         self.assertFalse(any(row.get("_live_stt_preview") or row.get("_live_subtitle_preview") for row in global_rows))
         self.assertEqual([row["start_frame"] for row in global_rows], [0, 3000])
 
+    def test_timeline_canvas_cutover_preserves_preview_and_gap_rows(self):
+        rows = [
+            {
+                "id": "caption_1",
+                "line": 5,
+                "start": 0.0,
+                "end": 1.0,
+                "text": "final",
+                "stt_candidates": [{"source": "STT1", "text": "candidate"}],
+            },
+            {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+            {
+                "id": "stt_1",
+                "line": 9,
+                "start": 1.1,
+                "end": 1.8,
+                "text": "raw",
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+            },
+        ]
+
+        timeline_rows = nle_timeline_canvas_segments_from_editor_rows(rows, primary_fps=30.0)
+
+        self.assertEqual([row["id"] for row in timeline_rows], ["caption_1", "gap_1", "stt_1"])
+        self.assertEqual(timeline_rows[0]["line"], 5)
+        self.assertEqual(timeline_rows[0]["_nle_runtime_surface"], "timeline_canvas")
+        self.assertEqual(timeline_rows[0]["_nle_runtime_schema"], NLE_RUNTIME_CUTOVER_SCHEMA)
+        self.assertEqual(timeline_rows[0]["stt_candidates"][0]["source"], "STT1")
+        self.assertTrue(timeline_rows[1]["is_gap"])
+        self.assertEqual(timeline_rows[1]["_nle_runtime_surface"], "timeline_canvas_gap")
+        self.assertTrue(timeline_rows[2]["_live_stt_preview"])
+        self.assertEqual(timeline_rows[2]["_nle_runtime_surface"], "timeline_canvas_preview")
+
     def test_save_export_cutover_projects_final_rows_without_candidates_or_gaps(self):
         rows = [
             {
@@ -119,6 +155,31 @@ class ProjectNleRuntimeCutoverTests(unittest.TestCase):
 
         self.assertEqual([row["text"] for row in global_rows], ["first", "third"])
         self.assertEqual([row["_nle_runtime_surface"] for row in global_rows], ["global_canvas", "global_canvas"])
+
+    def test_timeline_canvas_cutover_drops_unfixable_final_overlap_but_keeps_stt_preview(self):
+        rows = [
+            {"id": "caption_1", "start": 0.0, "end": 2.0, "text": "first"},
+            {"id": "caption_2", "start": 1.0, "end": 3.0, "text": "second"},
+            {
+                "id": "stt_1",
+                "start": 1.2,
+                "end": 1.8,
+                "text": "raw",
+                "stt_pending": True,
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT2",
+            },
+            {"id": "caption_3", "start": 3.0, "end": 4.0, "text": "third"},
+        ]
+
+        timeline_rows = nle_timeline_canvas_segments_from_editor_rows(rows, primary_fps=30.0)
+
+        self.assertEqual([row["id"] for row in timeline_rows], ["caption_1", "stt_1", "caption_3"])
+        self.assertEqual([row["text"] for row in timeline_rows if row.get("_live_stt_preview")], ["raw"])
+        self.assertEqual(
+            [row["_nle_runtime_surface"] for row in timeline_rows],
+            ["timeline_canvas", "timeline_canvas_preview", "timeline_canvas"],
+        )
 
     def test_save_export_cutover_rejects_unfixable_final_overlap(self):
         rows = [

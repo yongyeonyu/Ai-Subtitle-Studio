@@ -12,6 +12,7 @@ from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QSizePolicy, QScrollArea, QWidget
 
 from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
+from core.project.nle_runtime_cutover import nle_timeline_canvas_segments_from_editor_rows
 from core.timeline_time import segment_display_time_bounds
 
 from ui.timeline.timeline_constants import (
@@ -1119,7 +1120,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return list(self._roughcut_major_cache)
 
     def update_segments(self, segs, active_sec, total_dur):
-        rows = list(segs or [])
+        rows = nle_timeline_canvas_segments_from_editor_rows(
+            list(segs or []),
+            primary_fps=self._get_fps(),
+        )
         source_gaps = []
         segments = []
         geometry_checksum = 0

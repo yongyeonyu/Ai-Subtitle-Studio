@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-042200-nle-timeline-canvas-state-scout.md`
+- `.agents/sentinel/handoffs/20260628-041714-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-035500-quick-qa-save-project-overlap-fix-scout.md`
 - `.agents/sentinel/handoffs/20260628-035000-nle-identity-preservation-review.md`
 - `.agents/sentinel/handoffs/20260628-034513-watchdog-handoff-probe.md`

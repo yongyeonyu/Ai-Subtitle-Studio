@@ -204,6 +204,67 @@ def nle_global_canvas_segments_from_editor_rows(
     )
 
 
+def nle_timeline_canvas_segments_from_editor_rows(
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+    *,
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    fps = normalize_fps(primary_fps or 30.0)
+    source_rows = [row for row in list(rows or []) if isinstance(row, dict)]
+    final_rows: list[dict[str, Any]] = []
+    passthrough_by_ordinal: dict[int, dict[str, Any]] = {}
+    for ordinal, row in enumerate(source_rows):
+        if _is_final_overlay_row(row):
+            line_index = _as_float(row.get("line"), float(ordinal))
+            try:
+                line_index_int = int(line_index)
+            except (TypeError, ValueError):
+                line_index_int = ordinal
+            caption = NLECaptionState.from_editor_row(row, index=ordinal, fps=fps)
+            projected = caption.to_editor_row(index=line_index_int, fps=fps)
+            projected["_nle_timeline_source_ordinal"] = ordinal
+            projected["_nle_runtime_surface"] = "timeline_canvas"
+            projected["_nle_runtime_schema"] = NLE_RUNTIME_CUTOVER_SCHEMA
+            final_rows.append(projected)
+        else:
+            passthrough = dict(row)
+            passthrough["_nle_timeline_source_ordinal"] = ordinal
+            passthrough["_nle_runtime_surface"] = (
+                "timeline_canvas_gap" if bool(passthrough.get("is_gap")) else "timeline_canvas_preview"
+            )
+            passthrough["_nle_runtime_schema"] = NLE_RUNTIME_CUTOVER_SCHEMA
+            passthrough_by_ordinal[ordinal] = passthrough
+
+    final_rows.sort(
+        key=lambda item: (
+            _as_float(item.get("start", item.get("timeline_start", 0.0))),
+            int(item.get("_nle_timeline_source_ordinal", 0) or 0),
+        )
+    )
+    stable_final_rows = _final_surface_rows_without_overlap(
+        final_rows,
+        surface="timeline_canvas",
+        primary_fps=fps,
+        block_unfixable=False,
+    )
+    final_by_ordinal: dict[int, dict[str, Any]] = {}
+    for row in stable_final_rows:
+        try:
+            ordinal = int(row.get("_nle_timeline_source_ordinal", -1))
+        except (TypeError, ValueError):
+            ordinal = -1
+        final_by_ordinal[ordinal] = row
+    projected_rows: list[dict[str, Any]] = []
+    for ordinal, row in enumerate(source_rows):
+        if _is_final_overlay_row(row):
+            projected = final_by_ordinal.get(ordinal)
+            if projected is not None:
+                projected_rows.append(projected)
+        else:
+            projected_rows.append(passthrough_by_ordinal[ordinal])
+    return projected_rows
+
+
 def nle_save_export_segments_from_editor_rows(
     rows: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
     *,
@@ -221,5 +282,6 @@ __all__ = [
     "NLE_RUNTIME_CUTOVER_SCHEMA",
     "nle_final_overlay_segments_from_editor_rows",
     "nle_global_canvas_segments_from_editor_rows",
+    "nle_timeline_canvas_segments_from_editor_rows",
     "nle_save_export_segments_from_editor_rows",
 ]

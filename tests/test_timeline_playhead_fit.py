@@ -4675,6 +4675,10 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             )
 
             self.assertEqual([row["text"] for row in timeline.canvas.segments], ["final", "draft", "stt"])
+            self.assertEqual(
+                [row["_nle_runtime_surface"] for row in timeline.canvas.segments],
+                ["timeline_canvas", "timeline_canvas_preview", "timeline_canvas_preview"],
+            )
             self.assertEqual([row["text"] for row in timeline.global_canvas.segments], ["final"])
             self.assertEqual(
                 [row["lane"] for row in timeline.global_canvas._merged_minimap_subtitle_segments(420, 2.0)],

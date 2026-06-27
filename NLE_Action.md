@@ -19,8 +19,8 @@ This file is the execution source of truth for four connected workstreams:
 
 Current NLE status:
 
-- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, save/reopen compatibility guards, source-fps scout frame preservation, temp trace workspace, preview/skimming cache ownership, and the in-memory `NLEProjectState` editor/save owner pilot.
-- Not done yet: timeline canvas state ownership. This file has no remaining active execution slice for that future work.
+- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, save/reopen compatibility guards, source-fps scout frame preservation, temp trace workspace, preview/skimming cache ownership, the in-memory `NLEProjectState` editor/save owner pilot, and the main timeline canvas read/projection cutover.
+- Not done yet: commit-boundary mutable sync for timeline canvas drag/release flows. Per-pixel drag writes to NLE state remain explicitly out of scope.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
@@ -72,6 +72,8 @@ Required behavior:
 - Legacy project load hydrates a mutable `NLEProjectState`.
 - `NLEProjectState` starts as an in-memory editor/session owner; do not persist `nle` or `nle_snapshot` fields into `.aissproj` during the pilot slices.
 - Editor/timeline/save actions update NLE state first.
+- Main timeline canvas read rows pass through the NLE `timeline_canvas` projection before paint/hit-test state is built.
+- Timeline drag/release mutable sync must happen only at commit boundaries; do not write NLE state on every drag pixel.
 - Save/reopen projects keep existing `.aissproj` legacy fields intact.
 - Legacy payload projection is generated from NLE state.
 - Existing direct SRT open, roughcut sidecar restore, and rendered roughcut reopen compatibility remain intact.

@@ -36,7 +36,59 @@ Those standalone files were intentionally removed after consolidation.
 
 ## Active Execution Queue
 
-### 1. STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim
+### 1. NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync
+
+Goal: Continue the owner-directed NLE transition by moving the main timeline canvas from legacy-only display rows toward NLE-owned state while preserving Taption-derived segment editing behavior.
+
+Status: active. The read/projection cutover is complete and archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`. The open requirement is commit-boundary mutable sync: do not write NLE state on every drag pixel; reconcile at release/commit boundaries only, then prove Taption magnet/gap/reorder behavior and final subtitle no-overlap rules again.
+
+Current baseline:
+
+- `TimelineCanvas.update_segments(...)` now normalizes incoming rows through `nle_timeline_canvas_segments_from_editor_rows(...)`.
+- Final caption rows are NLE-projected on the `timeline_canvas` surface.
+- STT1/STT2/live subtitle preview rows remain visible on the main timeline canvas as editor/diagnostic lanes.
+- Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
+- Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
+- Latest evidence: `output/manual_verification/latest/nle_timeline_canvas_projection_cutover_20260628/timeline_canvas_projection_report.md`.
+
+Scope:
+
+- `core/project/nle_runtime_cutover.py`
+- `core/project/nle_dual_write.py`
+- `ui/timeline/timeline_canvas.py`
+- `ui/timeline/segment_store.py`
+- `ui/editor/editor_segments_timeline_context.py`
+- `ui/editor/ux/timeline_canvas_editing.py`
+- `ui/editor/ux/timeline_subtitle_segment_editing.py`
+- `tests/test_timeline_render_cache.py`
+- `tests/test_timeline_playhead_fit.py`
+- `tests/test_timeline_hit_targets.py`
+- `tests/test_project_nle_runtime_cutover.py`
+
+Execution order:
+
+1. Keep the current read/projection cutover as the baseline; do not remove Taption/source-app fallback paths.
+2. Add a commit/release-boundary sync path only after identifying the exact drag-finished, boundary-handle release, diamond release, split/merge, and candidate-confirm commit sources.
+3. Preserve STT candidate lane visibility in the main timeline canvas; do not mix those rows into final overlay/global canvas/save/export final surfaces.
+4. Re-run Taption-derived gap/magnet/reorder focused tests and NLE projection tests after each mutable-sync slice.
+5. Run source-app quick QA before marking a slice complete.
+
+Acceptance gates:
+
+- No visible UI/UX layout, label, color, shortcut, menu, or popup change unless the owner explicitly asks.
+- No per-pixel NLE mutable writes during drag/scrub/skimming.
+- Main timeline canvas may show STT preview/candidate lanes, but final caption rows must not be drawn as overlapping final captions.
+- Global canvas, video overlay, save/export, and rendered final SRT remain final-only where already cut over.
+- Taption rules remain intact: gap snap suppression, subtitle-boundary priority beyond silence gaps, magnet-off gap suppression, one-gap attach behavior, immediate neighbor reorder only after full crossing, and final overlap rejection.
+- Save/reopen operation identity stays preserved for all current NLE dual-write operation families.
+- Persisted top-level `nle`, `nle_snapshot`, or `_nle_project_state` fields remain blocked until a separate owner-approved compatibility gate exists.
+
+Rollback:
+
+- Revert the timeline-canvas mutable-sync slice first; keep the already-proven final-overlay/global/save-export NLE projection routes intact unless they are the direct regression source.
+- If drag latency, hit targets, or Taption magnet behavior regresses, fall back to read/projection-only timeline canvas rows and keep mutable sync disabled.
+
+### 2. STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim
 
 Goal: The latest cut-boundary profile did not confirm cut-boundary work as the generation bottleneck. Continue the owner's generation-speed concern by measuring the real wall-clock cost of STT2 rescue, selective word timestamps, and downstream quality cleanup before proposing any behavior-preserving trim.
 
@@ -93,7 +145,7 @@ Rollback:
 - Revert scheduling/cache/deferment changes before touching subtitle-generation algorithms or quality thresholds.
 - Keep old STT/word precision behavior as the default until a measured pass proves the new path.
 
-### 2. Mac App Store Submission Readiness
+### 3. Mac App Store Submission Readiness
 
 Goal: Track the work required to move the current macOS source app from development/QA state to a Mac App Store submission candidate.
 
@@ -138,6 +190,7 @@ Rollback:
 - Native migration is not an active direction for this repository.
 - Keep the current Python/PyQt6 source app as the working product line.
 - Completed source-app NLE runtime adoption evidence is archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`.
+- Timeline canvas read/projection cutover is complete; commit-boundary mutable timeline sync remains active.
 - Persisted NLE project fields remain gated; broader persistence/save/render/export ownership cleanup requires a fresh owner-approved item and compatibility gate.
 - Revisit migration only if the owner explicitly reopens it with a new scope and acceptance gate.
 
