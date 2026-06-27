@@ -11,9 +11,13 @@ This file keeps completed action-item history out of `ACTION_ITEMS.md`.
 `ACTION_ITEMS.md` remains the active execution queue and should contain only
 remaining work, active gates, and rollback rules.
 
+Archive source labels use stable action-item titles or source sections instead
+of active queue numbers, because the active queue order can change as completed
+items are removed.
+
 ## STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim
 
-Source item: `ACTION_ITEMS.md` active queue item 1.
+Source item: `ACTION_ITEMS.md` item `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`.
 
 1. Verifier repeat artifacts now expose STT2/word counts, final stability gates, global canvas stability, memory pressure, and generation-owner profile summaries.
 2. Same-fixture HeyDealer 180s baseline/profile/reference evidence was captured under `output/manual_verification/latest/stt2_word_precision_latency_20260627/`.
@@ -48,14 +52,14 @@ Source item: `ACTION_ITEMS.md` active queue item 1.
 
 ## Mac App Store Submission Readiness
 
-Source item: `ACTION_ITEMS.md` active queue item 2.
+Source item: `ACTION_ITEMS.md` item `Mac App Store Submission Readiness`.
 
 1. `tools/audit_app_store_readiness.py`, `tests/test_app_store_readiness_audit.py`, and `docs/APP_STORE_SUBMISSION_READINESS.md` were added to keep App Store submission readiness evidence separate from source-app pytest/QA.
 2. The submission target was locked to Mac App Store `.pkg`, and Developer ID beta `.dmg` was documented as a separate opt-in track that cannot count as App Store submission proof.
 
 ## Source-App NLE Runtime Adoption And Migration Status
 
-Source section: previous `ACTION_ITEMS.md` migration status.
+Source sections: previous `ACTION_ITEMS.md` migration status and completed slices from `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.
 
 1. The completed internal NLE baseline is a source-app domain/adapter layer only. It does not reopen native migration, Swift rewrite, QML migration, or a visible Premiere-style UI clone.
 2. Runtime NLE adoption evidence covers `gap_delete`, `gap_generate`, `caption_move`, `caption_resize`, `caption_split`, `caption_merge`, `caption_delete`, `candidate_confirm`, live editor `diamond` shared-boundary resize, live editor `square_left`/`square_right` boundary-handle resize, live editor segment delete-to-gap, live editor gap-generate, live editor diamond merge, live editor text/smart caption split, and live editor STT1/STT2 candidate-confirm routes through NLE dual-write.

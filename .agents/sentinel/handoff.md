@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-043000-nle-timeline-commit-boundary-sync-scout.md`
 - `.agents/sentinel/handoffs/20260628-042200-nle-timeline-canvas-state-scout.md`
 - `.agents/sentinel/handoffs/20260628-041714-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-035500-quick-qa-save-project-overlap-fix-scout.md`
