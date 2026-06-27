@@ -21,6 +21,7 @@ from core.native_swift_timeline import plan_subtitle_timing_edit_via_swift
 from core.project.nle_dual_write import (
     apply_caption_delete_dual_write_pilot,
     apply_caption_merge_dual_write_pilot,
+    apply_caption_move_commit_dual_write_pilot,
     apply_caption_move_dual_write_pilot,
     apply_caption_resize_dual_write_pilot,
     apply_caption_split_dual_write_pilot,
@@ -1224,6 +1225,222 @@ class EditorTimelineVideoMixin(
         except Exception:
             return None
 
+    def _nle_live_editor_rows_from_timing_plan(
+        self,
+        *,
+        current_segments: list[dict],
+        plan_rows: dict[int, tuple[float, float]],
+        deleted_lines: list[int],
+    ) -> list[dict]:
+        deleted = {int(line) for line in deleted_lines}
+        committed: list[dict] = []
+        for seg in list(current_segments or []):
+            if not isinstance(seg, dict):
+                continue
+            try:
+                seg_line = int(seg.get("line"))
+            except Exception:
+                continue
+            if seg_line in deleted:
+                continue
+            row = dict(seg)
+            if seg_line in plan_rows:
+                row_start, row_end = plan_rows[seg_line]
+                row["start"] = float(row_start)
+                row["end"] = float(row_end)
+                row["timeline_start"] = float(row_start)
+                row["timeline_end"] = float(row_end)
+                for key in (
+                    "start_frame",
+                    "end_frame",
+                    "timeline_start_frame",
+                    "timeline_end_frame",
+                    "frame_range",
+                ):
+                    row.pop(key, None)
+            committed.append(row)
+        return committed
+
+    def _nle_live_editor_retimed_row(self, row: dict, start_sec: float, end_sec: float) -> dict:
+        item = dict(row)
+        item["start"] = self._snap_to_frame(float(start_sec))
+        item["end"] = self._snap_to_frame(float(end_sec))
+        item["timeline_start"] = item["start"]
+        item["timeline_end"] = item["end"]
+        for key in (
+            "start_frame",
+            "end_frame",
+            "timeline_start_frame",
+            "timeline_end_frame",
+            "frame_range",
+        ):
+            item.pop(key, None)
+        return item
+
+    def _nle_live_editor_center_move_committed_rows(
+        self,
+        *,
+        current_segments: list[dict],
+        line_num: int,
+        new_start: float,
+        new_end: float,
+    ) -> tuple[list[dict], str] | None:
+        rows = [dict(seg) for seg in list(current_segments or []) if isinstance(seg, dict)]
+        target_index = None
+        for index, row in enumerate(rows):
+            try:
+                if int(row.get("line", -1)) == int(line_num):
+                    target_index = index
+                    break
+            except Exception:
+                continue
+        if target_index is None:
+            return None
+        eps = 0.001
+        min_span = max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps())))
+        target_start = self._snap_to_frame(float(new_start))
+        target_end = self._snap_to_frame(float(new_end))
+        out = [dict(row) for row in rows]
+        out[target_index] = self._nle_live_editor_retimed_row(out[target_index], target_start, target_end)
+        deleted: set[int] = set()
+        touched_gap = False
+        touched_subtitle = False
+
+        idx = target_index - 1
+        while idx >= 0:
+            row = out[idx]
+            row_start = float(row.get("start", 0.0) or 0.0)
+            row_end = float(row.get("end", row_start) or row_start)
+            if bool(row.get("is_gap")):
+                if row_end <= target_start + eps:
+                    break
+                touched_gap = True
+                if target_start <= row_start + 0.05:
+                    deleted.add(idx)
+                    idx -= 1
+                    continue
+                out[idx] = self._nle_live_editor_retimed_row(row, row_start, target_start)
+                break
+            if row_end <= target_start + eps:
+                break
+            touched_subtitle = True
+            if target_start <= row_start + min_span:
+                deleted.add(idx)
+                idx -= 1
+                continue
+            out[idx] = self._nle_live_editor_retimed_row(row, row_start, target_start)
+            break
+
+        idx = target_index + 1
+        while idx < len(out):
+            row = out[idx]
+            row_start = float(row.get("start", 0.0) or 0.0)
+            row_end = float(row.get("end", row_start) or row_start)
+            if bool(row.get("is_gap")):
+                if row_start >= target_end - eps:
+                    break
+                touched_gap = True
+                if target_end >= row_end - 0.05:
+                    deleted.add(idx)
+                    idx += 1
+                    continue
+                out[idx] = self._nle_live_editor_retimed_row(row, target_end, row_end)
+                break
+            if row_start >= target_end - eps:
+                break
+            touched_subtitle = True
+            if target_end >= row_end - min_span:
+                deleted.add(idx)
+                idx += 1
+                continue
+            out[idx] = self._nle_live_editor_retimed_row(row, target_end, row_end)
+            break
+
+        if not deleted and not touched_gap and not touched_subtitle:
+            return None
+        committed = [row for index, row in enumerate(out) if index not in deleted]
+        mode = "center_gap_absorb" if touched_gap else "center_overwrite_trim"
+        return committed, mode
+
+    def _nle_live_editor_commit_mode_from_timing_plan(
+        self,
+        *,
+        current_segments: list[dict],
+        line_num: int,
+        plan_rows: dict[int, tuple[float, float]],
+        deleted_lines: list[int],
+    ) -> str:
+        deleted = {int(line) for line in deleted_lines}
+        for seg in list(current_segments or []):
+            if not isinstance(seg, dict):
+                continue
+            try:
+                seg_line = int(seg.get("line"))
+            except Exception:
+                continue
+            if seg_line in deleted and bool(seg.get("is_gap")):
+                return "center_gap_absorb"
+        for seg in list(current_segments or []):
+            if not isinstance(seg, dict):
+                continue
+            try:
+                seg_line = int(seg.get("line"))
+            except Exception:
+                continue
+            if seg_line == int(line_num):
+                continue
+            if seg_line in deleted or seg_line in plan_rows:
+                return "center_overwrite_trim"
+        return "center_commit_plan"
+
+    def _nle_live_editor_caption_move_commit_result(
+        self,
+        *,
+        current_segments: list[dict],
+        committed_rows: list[dict],
+        line_num: int,
+        new_start: float,
+        new_end: float,
+        edge_type: str,
+        commit_mode: str,
+    ):
+        if edge_type != "center":
+            return None
+        if not current_segments or not committed_rows:
+            return None
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "update_segments"):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        for row in current_segments:
+            if not isinstance(row, dict):
+                return None
+            if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        project = self._nle_live_editor_project_from_rows(current_segments)
+        caption_id = self._nle_live_editor_caption_id_for_line(
+            project,
+            line_num=int(line_num),
+            start_sec=float(new_start),
+            end_sec=float(new_end),
+        )
+        if not caption_id:
+            return None
+        try:
+            return apply_caption_move_commit_dual_write_pilot(
+                project,
+                caption_id=caption_id,
+                committed_rows=committed_rows,
+                committed_caption_line=int(line_num),
+                commit_boundary="release",
+                commit_source="center",
+                commit_mode=str(commit_mode or "center_commit_plan"),
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return None
+
     def _nle_live_editor_caption_delete_result(
         self,
         *,
@@ -1589,6 +1806,38 @@ class EditorTimelineVideoMixin(
                 fps=float(self._current_frame_fps()),
             )
 
+        if not isinstance(native_timing_plan, dict) and edge_type == "center" and not editing_transient_stt:
+            center_commit_plan = self._nle_live_editor_center_move_committed_rows(
+                current_segments=current_segments,
+                line_num=int(line_num),
+                new_start=float(new_start),
+                new_end=float(new_end),
+            )
+            if center_commit_plan is not None:
+                committed_rows, commit_mode = center_commit_plan
+                nle_commit_result = self._nle_live_editor_caption_move_commit_result(
+                    current_segments=current_segments,
+                    committed_rows=committed_rows,
+                    line_num=int(line_num),
+                    new_start=float(new_start),
+                    new_end=float(new_end),
+                    edge_type=str(edge_type or ""),
+                    commit_mode=commit_mode,
+                )
+                if nle_commit_result is not None and callable(reloader):
+                    cur.endEditBlock()
+                    self._sync_lock = prev_sync_lock
+                    try:
+                        self._active_seg_start = float(new_start)
+                    except Exception:
+                        pass
+                    self._last_nle_live_editor_operation = nle_commit_result.operation.to_dict()
+                    self._last_nle_live_editor_projection = nle_commit_result.after_projection.to_dict()
+                    reloader([dict(row) for row in nle_commit_result.projected_rows], preserve_view=True, mark_dirty=True)
+                    if timeline is not None and hasattr(timeline, "_finish_subtitle_resize_keep_view"):
+                        timeline._finish_subtitle_resize_keep_view()
+                    return
+
         def _sub_indices_for_block(block_ref):
             block_ud = block_ref.userData()
             if not isinstance(block_ud, SubtitleBlockData):
@@ -1749,6 +1998,41 @@ class EditorTimelineVideoMixin(
                         block_ref.blockNumber(),
                         float(block_ud.start_sec),
                     )
+
+            if plan_rows and edge_type == "center" and not editing_transient_stt:
+                committed_rows = self._nle_live_editor_rows_from_timing_plan(
+                    current_segments=current_segments,
+                    plan_rows=plan_rows,
+                    deleted_lines=deleted_lines,
+                )
+                commit_mode = self._nle_live_editor_commit_mode_from_timing_plan(
+                    current_segments=current_segments,
+                    line_num=int(line_num),
+                    plan_rows=plan_rows,
+                    deleted_lines=deleted_lines,
+                )
+                nle_commit_result = self._nle_live_editor_caption_move_commit_result(
+                    current_segments=current_segments,
+                    committed_rows=committed_rows,
+                    line_num=int(line_num),
+                    new_start=float(new_start),
+                    new_end=float(new_end),
+                    edge_type=str(edge_type or ""),
+                    commit_mode=commit_mode,
+                )
+                if nle_commit_result is not None and callable(reloader):
+                    cur.endEditBlock()
+                    self._sync_lock = prev_sync_lock
+                    try:
+                        self._active_seg_start = float(new_start)
+                    except Exception:
+                        pass
+                    self._last_nle_live_editor_operation = nle_commit_result.operation.to_dict()
+                    self._last_nle_live_editor_projection = nle_commit_result.after_projection.to_dict()
+                    reloader([dict(row) for row in nle_commit_result.projected_rows], preserve_view=True, mark_dirty=True)
+                    if timeline is not None and hasattr(timeline, "_finish_subtitle_resize_keep_view"):
+                        timeline._finish_subtitle_resize_keep_view()
+                    return
 
             for row_line, (row_start, row_end) in plan_rows.items():
                 indices = list(group_indices_by_line.get(int(row_line)) or [])

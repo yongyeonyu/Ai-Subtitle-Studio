@@ -8,6 +8,7 @@ from core.project.nle_dual_write import (
     apply_candidate_confirm_dual_write_pilot,
     apply_caption_delete_dual_write_pilot,
     apply_caption_merge_dual_write_pilot,
+    apply_caption_move_commit_dual_write_pilot,
     apply_caption_move_dual_write_pilot,
     apply_caption_resize_dual_write_pilot,
     apply_caption_split_dual_write_pilot,
@@ -212,6 +213,69 @@ class NLEDualWritePilotTests(unittest.TestCase):
             ("subtitle_vector_0001", 0.0, 1.0),
             ("subtitle_vector_0002", 1.0, 2.0),
             ("subtitle_vector_0003", 2.0, 3.0),
+        ])
+
+    def test_caption_move_commit_dual_write_adopts_center_gap_absorption_plan(self):
+        project = _project_with_gap()
+        committed_rows = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "first", "speaker": "00"},
+            {"line": 2, "start": 1.0, "end": 2.0, "text": "second", "speaker": "01"},
+        ]
+
+        result = apply_caption_move_commit_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0002",
+            committed_rows=committed_rows,
+            committed_caption_line=2,
+            commit_boundary="release",
+            commit_source="center",
+            commit_mode="center_gap_absorb",
+        )
+
+        legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        self.assertEqual(result.operation.kind, "caption_move")
+        self.assertEqual(result.operation.target_ids, ("subtitle_vector_0002",))
+        self.assertEqual(result.operation.metadata["commit_boundary"], "release")
+        self.assertEqual(result.operation.metadata["commit_source"], "center")
+        self.assertEqual(result.operation.metadata["commit_mode"], "center_gap_absorb")
+        self.assertEqual(result.operation.metadata["deleted_row_count"], 1)
+        self.assertEqual(result.operation.metadata["silence_gap_deleted_count"], 1)
+        self.assert_final_projection_is_release_stable(result)
+        self.assert_rows_match_frames(legacy_rows, [
+            ("subtitle_vector_0001", "first", 0, 30),
+            ("subtitle_vector_0002", "second", 30, 60),
+        ])
+        self.assertFalse(any(row.get("is_gap") for row in legacy_rows))
+        self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_caption_move_commit_mode"], "center_gap_absorb")
+
+    def test_caption_move_commit_dual_write_adopts_center_overwrite_trim_plan(self):
+        project = _project_with_three_captions()
+        committed_rows = [
+            {"line": 0, "start": 0.0, "end": 0.5, "text": "first", "speaker": "00"},
+            {"line": 1, "start": 0.5, "end": 1.5, "text": "second", "speaker": "01"},
+            {"line": 2, "start": 2.0, "end": 3.0, "text": "third", "speaker": "02"},
+        ]
+
+        result = apply_caption_move_commit_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0002",
+            committed_rows=committed_rows,
+            committed_caption_line=1,
+            commit_boundary="release",
+            commit_source="center",
+            commit_mode="center_overwrite_trim",
+        )
+
+        legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        self.assertEqual(result.operation.kind, "caption_move")
+        self.assertEqual(result.operation.metadata["commit_mode"], "center_overwrite_trim")
+        self.assertEqual(result.operation.metadata["deleted_row_count"], 0)
+        self.assertGreaterEqual(result.operation.metadata["changed_row_count"], 2)
+        self.assert_final_projection_is_release_stable(result)
+        self.assert_rows_match_frames(legacy_rows, [
+            ("subtitle_vector_0001", "first", 0, 15),
+            ("subtitle_vector_0002", "second", 15, 45),
+            ("subtitle_vector_0003", "third", 60, 90),
         ])
 
     def test_caption_resize_dual_write_trims_neighbor_and_preserves_disk_shape(self):

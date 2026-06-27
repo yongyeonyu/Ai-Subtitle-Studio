@@ -1162,6 +1162,194 @@ def apply_caption_move_dual_write_pilot(
     )
 
 
+def _committed_target_row_index(
+    rows: list[dict[str, Any]],
+    *,
+    target_id: str,
+    committed_caption_line: int | None,
+    moving_row: dict[str, Any],
+) -> int:
+    for index, row in enumerate(rows):
+        if _is_final_caption_row(row) and _caption_identity(row, index) == target_id:
+            return index
+    if committed_caption_line is not None:
+        for index, row in enumerate(rows):
+            if not _is_final_caption_row(row):
+                continue
+            try:
+                if int(row.get("line", -1)) == int(committed_caption_line):
+                    return index
+            except Exception:
+                continue
+    best_index = -1
+    best_overlap = 0.0
+    moving_start = _row_start(moving_row)
+    moving_end = _row_end(moving_row, moving_start)
+    for index, row in enumerate(rows):
+        if not _is_final_caption_row(row):
+            continue
+        row_start = _row_start(row)
+        row_end = _row_end(row, row_start)
+        overlap = max(0.0, min(row_end, moving_end) - max(row_start, moving_start))
+        if overlap > best_overlap:
+            best_index = index
+            best_overlap = overlap
+    return best_index
+
+
+def _editor_row_identity(row: dict[str, Any], index: int) -> str:
+    return _gap_identity(row, index) if bool(row.get("is_gap")) else _caption_identity(row, index)
+
+
+def _changed_row_count(before_rows: list[dict[str, Any]], after_rows: list[dict[str, Any]]) -> int:
+    after_by_id = {
+        _editor_row_identity(row, index): row
+        for index, row in enumerate(after_rows)
+        if isinstance(row, dict)
+    }
+    changed = 0
+    for index, row in enumerate(before_rows):
+        if not isinstance(row, dict):
+            continue
+        row_id = _editor_row_identity(row, index)
+        after = after_by_id.get(row_id)
+        if after is None:
+            continue
+        if (
+            _row_start(row) != _row_start(after)
+            or _row_end(row, _row_start(row)) != _row_end(after, _row_start(after))
+            or bool(row.get("is_gap")) != bool(after.get("is_gap"))
+        ):
+            changed += 1
+    return changed
+
+
+def apply_caption_move_commit_dual_write_pilot(
+    project: dict[str, Any],
+    *,
+    caption_id: str,
+    committed_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    committed_caption_line: int | None = None,
+    commit_boundary: str = "",
+    commit_source: str = "",
+    commit_mode: str = "",
+    project_path: str = "",
+) -> NLEDualWritePilotResult:
+    if not isinstance(project, dict):
+        raise TypeError("project_required")
+    before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+    moving_index, moving_row = _find_row_by_identity(
+        before_rows,
+        caption_id,
+        final_only=True,
+        missing_prefix="nle_caption_move_commit_target_missing",
+    )
+    target_id = _caption_identity(moving_row, moving_index)
+    after_rows = _sorted_editor_rows([dict(row) for row in list(committed_rows or []) if isinstance(row, dict)])
+    if not after_rows:
+        raise ValueError("nle_caption_move_commit_rows_required")
+
+    target_after_index = _committed_target_row_index(
+        after_rows,
+        target_id=target_id,
+        committed_caption_line=committed_caption_line,
+        moving_row=moving_row,
+    )
+    if target_after_index < 0:
+        raise ValueError(f"nle_caption_move_commit_target_missing:{target_id}")
+    for index, row in enumerate(after_rows):
+        if index != target_after_index and _is_final_caption_row(row) and _caption_identity(row, index) == target_id:
+            row.pop("id", None)
+    after_rows[target_after_index]["id"] = target_id
+    after_rows = _canonicalize_confirmed_caption_identities(before_rows, after_rows)
+    after_rows = _sorted_editor_rows(after_rows)
+
+    after_ids = {
+        _editor_row_identity(row, index)
+        for index, row in enumerate(after_rows)
+        if isinstance(row, dict)
+    }
+    deleted_ids = [
+        _editor_row_identity(row, index)
+        for index, row in enumerate(before_rows)
+        if isinstance(row, dict) and _editor_row_identity(row, index) not in after_ids
+    ]
+    silence_gap_deleted_count = sum(
+        1
+        for index, row in enumerate(before_rows)
+        if isinstance(row, dict)
+        and bool(row.get("is_gap"))
+        and _editor_row_identity(row, index) not in after_ids
+    )
+    changed_count = _changed_row_count(before_rows, after_rows)
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
+    commit_mode = str(commit_mode or "center_commit_plan").strip()
+
+    before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
+    shadow_after = _shadow_project_with_rows(project, after_rows)
+    after_projection = build_project_nle_projection_parity_report(shadow_after, project_path=project_path)
+    undo = build_nle_undo_snapshot(
+        operation_id=f"dual_write_caption_move_commit:{target_id}",
+        editor_rows=before_rows,
+        candidate_lanes=_candidate_lanes(project, before_rows),
+        silence_gaps=[row for row in before_rows if isinstance(row, dict) and bool(row.get("is_gap"))],
+        ui_state_ref={
+            "operation_family": "caption_move",
+            "target_id": target_id,
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
+            "commit_mode": commit_mode,
+        },
+        metadata={"pilot": "dual_write_caption_move_commit"},
+    )
+    metadata: dict[str, Any] = {
+        "pilot": "dual_write",
+        "operation_family": "caption_move",
+        "caption_id": target_id,
+        "commit_boundary": commit_boundary,
+        "commit_source": commit_source,
+        "commit_mode": commit_mode,
+        "taption_reorder": False,
+        "committed_row_count": len(after_rows),
+        "deleted_row_count": len(deleted_ids),
+        "changed_row_count": changed_count,
+        "silence_gap_deleted_count": silence_gap_deleted_count,
+    }
+    operation = build_nle_editor_operation(
+        operation_id=undo.operation_id,
+        kind="caption_move",
+        target_ids=[target_id],
+        before_projection=before_projection,
+        after_projection=after_projection,
+        time_domain="sequence",
+        undo_snapshot=undo,
+        metadata=metadata,
+    )
+
+    state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)
+    state.metadata = {
+        **dict(state.metadata or {}),
+        "dual_write_pilot_family": "caption_move",
+        "dual_write_last_operation_id": operation.operation_id,
+        "dual_write_projected_count": len(after_rows),
+        "dual_write_taption_reorder": False,
+        "dual_write_caption_move_commit_mode": commit_mode,
+        "dual_write_deleted_row_count": len(deleted_ids),
+        "dual_write_silence_gap_deleted_count": silence_gap_deleted_count,
+    }
+    projected_rows = project_segments_from_nle_state(project, project_path=project_path)
+    assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
+    project["editor_state"] = shadow_after["editor_state"]
+    return NLEDualWritePilotResult(
+        operation_family="caption_move",
+        operation=operation,
+        before_projection=before_projection,
+        after_projection=after_projection,
+        projected_rows=tuple(dict(row) for row in projected_rows),
+    )
+
+
 def apply_gap_delete_dual_write_pilot(
     project: dict[str, Any],
     *,
@@ -1239,6 +1427,7 @@ __all__ = [
     "apply_candidate_confirm_dual_write_pilot",
     "apply_caption_delete_dual_write_pilot",
     "apply_caption_merge_dual_write_pilot",
+    "apply_caption_move_commit_dual_write_pilot",
     "apply_caption_move_dual_write_pilot",
     "apply_caption_resize_dual_write_pilot",
     "apply_caption_split_dual_write_pilot",

@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Complex Center Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at Taption-style complex body `center` release; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_complex_center_commit_sync_20260628/complex_center_sync_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_complex_center_commit_20260628`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-050000-nle-complex-center-move-scout.md`
+- 수정 요약:
+  - Added `apply_caption_move_commit_dual_write_pilot(...)` to adopt an already-computed Taption/source-app center commit result as runtime NLE `caption_move`.
+  - Live editor complex body `center` release commits now route explicit silence gap absorption as `commit_mode=center_gap_absorb`.
+  - Previous/next overwrite trim now routes as `commit_mode=center_overwrite_trim`.
+  - STT pending/live preview rows remain rejected for this NLE route, and NLE rejection falls back to the existing Taption/source-app document edit path.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_move"` -> `6 passed, 17 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_drag or center_reorder"` -> `9 passed, 158 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_runtime_cutover.py tests/test_timeline_render_cache.py` -> `81 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate or nle"` -> `94 passed, 301 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_complex_center_commit_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Final subtitle projection remains `overlap_count=0` and global max active `1` in the new live editor coverage.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, save format, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - Remaining uncovered release/commit sources still need audit before claiming full timeline mutable ownership. Persisted NLE project fields remain gated.
+
 ## NLE Center Move Commit Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at safe pure body `center` move release only; no drag-time per-pixel NLE write.
@@ -11,7 +37,7 @@
 - 수정 요약:
   - Live editor `center` release commits now attempt NLE `caption_move` only when the moved final caption stays between its existing previous/next final captions and does not overlap a final caption or explicit silence gap.
   - Pure center shift records `caption_move`, `commit_boundary=release`, `commit_source=center`, and `taption_reorder=false`.
-  - Explicit gap absorption and previous/next overwrite trim do not call NLE `caption_move`; they keep the existing Taption/source-app timing path.
+  - At this earlier slice boundary, explicit gap absorption and previous/next overwrite trim still used the Taption/source-app timing path. They are superseded by the newer `NLE Complex Center Commit Sync - 2026-06-28 KST` section above.
 - 검증:
   - `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
   - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_move"` -> `4 passed, 17 deselected`.
@@ -24,7 +50,7 @@
   - Positive ownership/provenance guard only. Final subtitle projection remains `overlap_count=0` and global max active `1` in the new live editor coverage.
   - STT2, word precision, LLM, LoRA, VAD, timing policy, save format, visible UI layout, packaging, and App Store behavior were not changed.
 - 남은 위험:
-  - Complex center overwrite/trim and gap absorption still need a richer NLE operation model or a deliberate decision to keep them under legacy Taption/source-app timing planning. Persisted NLE project fields remain gated.
+  - Superseded by `NLE Complex Center Commit Sync - 2026-06-28 KST` for complex center overwrite/trim and gap absorption. Persisted NLE project fields remain gated.
 
 ## NLE Commit-Boundary Reorder Sync - 2026-06-28 KST
 
