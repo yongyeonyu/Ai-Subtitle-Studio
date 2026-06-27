@@ -116,6 +116,8 @@ class NLEDualWritePilotTests(unittest.TestCase):
             caption_id="subtitle_vector_0002",
             new_start=3.0,
             new_end=4.0,
+            commit_boundary="release",
+            commit_source="center",
         )
 
         legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
@@ -126,6 +128,8 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assertEqual(result.operation.target_ids, ("subtitle_vector_0002",))
         self.assertEqual(result.after_projection.overlap_count, 0)
         self.assertEqual(result.after_projection.max_active_segments, 1)
+        self.assertEqual(result.operation.metadata["commit_boundary"], "release")
+        self.assertEqual(result.operation.metadata["commit_source"], "center")
         self.assertEqual([(row.get("id"), row["start_frame"], row["end_frame"]) for row in legacy_rows], [
             ("subtitle_vector_0001", 0, 30),
             ("gap_1", 30, 60),

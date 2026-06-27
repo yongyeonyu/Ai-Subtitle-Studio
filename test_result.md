@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Center Move Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at safe pure body `center` move release only; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_center_move_commit_sync_20260628/center_move_sync_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_center_move_commit_20260628`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-044700-nle-center-body-move-sync-scout.md`
+- 수정 요약:
+  - Live editor `center` release commits now attempt NLE `caption_move` only when the moved final caption stays between its existing previous/next final captions and does not overlap a final caption or explicit silence gap.
+  - Pure center shift records `caption_move`, `commit_boundary=release`, `commit_source=center`, and `taption_reorder=false`.
+  - Explicit gap absorption and previous/next overwrite trim do not call NLE `caption_move`; they keep the existing Taption/source-app timing path.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_move"` -> `4 passed, 17 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_drag or center_reorder"` -> `7 passed, 158 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_reorder or center_drag or diamond or gap or magnet"` -> `34 passed, 131 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_app_command_bridge.py -k "drag or gap or magnet or stt_candidate or save_project_command"` -> `66 passed, 162 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py -k "nle or persistence or candidate_confirm or caption_split or caption_merge or caption_move or gap_generate or save_export or final_overlay or timeline_canvas or overlap"` -> `56 passed, 4 subtests passed`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_center_move_commit_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Positive ownership/provenance guard only. Final subtitle projection remains `overlap_count=0` and global max active `1` in the new live editor coverage.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, save format, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - Complex center overwrite/trim and gap absorption still need a richer NLE operation model or a deliberate decision to keep them under legacy Taption/source-app timing planning. Persisted NLE project fields remain gated.
+
 ## NLE Commit-Boundary Reorder Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at Taption immediate-neighbor center-reorder release only; no drag-time per-pixel NLE write.

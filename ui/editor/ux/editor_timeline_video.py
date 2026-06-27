@@ -1119,7 +1119,7 @@ class EditorTimelineVideoMixin(
         reorder_neighbor_start: float | None = None,
         reorder_neighbor_end: float | None = None,
     ):
-        if edge_type not in {"center_reorder_left", "center_reorder_right"}:
+        if edge_type not in {"center", "center_reorder_left", "center_reorder_right"}:
             return None
         if not current_segments:
             return None
@@ -1129,13 +1129,27 @@ class EditorTimelineVideoMixin(
         if not callable(getattr(self, "_reload_segments_from_list", None)):
             return None
         fps = float(self._current_frame_fps())
-        for row in current_segments:
+        target_start = float(new_start)
+        target_end = float(new_end)
+        target_start_frame = sec_to_frame(target_start, fps)
+        target_end_frame = sec_to_frame(target_end, fps)
+        if target_end_frame <= target_start_frame:
+            return None
+        moving_index: int | None = None
+        final_row_indices: list[int] = []
+        for idx, row in enumerate(current_segments):
             if not isinstance(row, dict):
                 return None
             if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
                 return None
             if bool(row.get("is_gap")):
                 continue
+            final_row_indices.append(idx)
+            try:
+                if int(row.get("line", -1)) == int(line_num):
+                    moving_index = idx
+            except Exception:
+                pass
             try:
                 row_start = float(row.get("start", 0.0) or 0.0)
                 row_end = float(row.get("end", row_start) or row_start)
@@ -1143,6 +1157,38 @@ class EditorTimelineVideoMixin(
                 return None
             if sec_to_frame(row_end, fps) <= sec_to_frame(row_start, fps):
                 return None
+        if moving_index is None:
+            return None
+        if edge_type == "center":
+            try:
+                final_position = final_row_indices.index(moving_index)
+            except ValueError:
+                return None
+            previous_row = current_segments[final_row_indices[final_position - 1]] if final_position > 0 else None
+            next_row = current_segments[final_row_indices[final_position + 1]] if final_position + 1 < len(final_row_indices) else None
+            try:
+                if previous_row is not None:
+                    previous_end = float(previous_row.get("end", previous_row.get("start", 0.0)) or 0.0)
+                    if target_start_frame < sec_to_frame(previous_end, fps):
+                        return None
+                if next_row is not None:
+                    next_start = float(next_row.get("start", 0.0) or 0.0)
+                    if target_end_frame > sec_to_frame(next_start, fps):
+                        return None
+            except Exception:
+                return None
+            for idx, row in enumerate(current_segments):
+                if idx == moving_index or not isinstance(row, dict):
+                    continue
+                try:
+                    row_start = float(row.get("start", 0.0) or 0.0)
+                    row_end = float(row.get("end", row_start) or row_start)
+                except Exception:
+                    return None
+                row_start_frame = sec_to_frame(row_start, fps)
+                row_end_frame = sec_to_frame(row_end, fps)
+                if target_start_frame < row_end_frame and target_end_frame > row_start_frame:
+                    return None
         project = self._nle_live_editor_project_from_rows(current_segments)
         caption_id = self._nle_live_editor_caption_id_for_line(
             project,
@@ -1491,6 +1537,27 @@ class EditorTimelineVideoMixin(
                 if timeline is not None and hasattr(timeline, "_finish_subtitle_resize_keep_view"):
                     timeline._finish_subtitle_resize_keep_view()
                 return
+        nle_move_result = self._nle_live_editor_caption_move_result(
+            current_segments=current_segments,
+            line_num=int(line_num),
+            new_start=float(new_start),
+            new_end=float(new_end),
+            edge_type=str(edge_type or ""),
+        ) if (not editing_transient_stt and edge_type == "center") else None
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if nle_move_result is not None and callable(reloader):
+            cur.endEditBlock()
+            self._sync_lock = prev_sync_lock
+            try:
+                self._active_seg_start = float(new_start)
+            except Exception:
+                pass
+            self._last_nle_live_editor_operation = nle_move_result.operation.to_dict()
+            self._last_nle_live_editor_projection = nle_move_result.after_projection.to_dict()
+            reloader([dict(row) for row in nle_move_result.projected_rows], preserve_view=True, mark_dirty=True)
+            if timeline is not None and hasattr(timeline, "_finish_subtitle_resize_keep_view"):
+                timeline._finish_subtitle_resize_keep_view()
+            return
         nle_resize_result = self._nle_live_editor_caption_resize_result(
             current_segments=current_segments,
             line_num=int(line_num),
@@ -1498,7 +1565,6 @@ class EditorTimelineVideoMixin(
             new_end=float(new_end),
             edge_type=str(edge_type or ""),
         ) if not editing_transient_stt else None
-        reloader = getattr(self, "_reload_segments_from_list", None)
         if nle_resize_result is not None and callable(reloader):
             cur.endEditBlock()
             self._sync_lock = prev_sync_lock

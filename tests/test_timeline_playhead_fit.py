@@ -1525,6 +1525,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor.timeline = SimpleNamespace(
             _begin_subtitle_resize_keep_view=Mock(),
             _finish_subtitle_resize_keep_view=Mock(),
+            update_segments=Mock(),
         )
         editor.video_player = SimpleNamespace(total_time=10.0)
         editor.text_edit = QTextEdit()
@@ -1542,10 +1543,12 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             second.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=3.0))
             third.setUserData(SubtitleBlockData("00", 3.0, False, end_sec=4.0))
 
-            editor._on_seg_time_changed(2, 1.0, 2.0, "center")
-            self.app.processEvents()
+            with patch("ui.editor.ux.editor_timeline_video.apply_caption_move_dual_write_pilot") as nle_move:
+                editor._on_seg_time_changed(2, 1.0, 2.0, "center")
+                self.app.processEvents()
 
             resized = editor._get_current_segments(force_rebuild=True)
+            nle_move.assert_not_called()
             self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막", "메인 자막", "뒤 자막"])
             self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in resized], [
                 (0.0, 1.0, "앞 자막"),
@@ -1558,6 +1561,57 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_center_drag_free_space_routes_through_nle_caption_move(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._snapshot_timeline_view_for_resize = Mock(return_value={})
+        editor._redraw_timeline_preserve_resize_view = Mock()
+        editor._timeline_timer = SimpleNamespace(start=Mock())
+        editor.timeline = SimpleNamespace(
+            _begin_subtitle_resize_keep_view=Mock(),
+            _finish_subtitle_resize_keep_view=Mock(),
+            update_segments=Mock(),
+        )
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n메인 자막\n뒤 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            third = editor.text_edit.document().findBlockByNumber(2)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=3.0))
+            third.setUserData(SubtitleBlockData("00", 5.0, False, end_sec=6.0))
+
+            editor._on_seg_time_changed(1, 3.0, 4.0, "center")
+            self.app.processEvents()
+
+            resized = editor._get_current_segments(force_rebuild=True)
+            operation = getattr(editor, "_last_nle_live_editor_operation", {})
+            projection = getattr(editor, "_last_nle_live_editor_projection", {})
+            self.assertEqual(operation.get("kind"), "caption_move")
+            self.assertFalse(operation.get("metadata", {}).get("taption_reorder"))
+            self.assertEqual(operation.get("metadata", {}).get("commit_boundary"), "release")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "center")
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막", "메인 자막", "뒤 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in resized], [
+                (0.0, 1.0, "앞 자막"),
+                (3.0, 4.0, "메인 자막"),
+                (5.0, 6.0, "뒤 자막"),
+            ])
+            editor.timeline.update_segments.assert_called()
+        finally:
+            editor.text_edit.close()
+
     def test_center_drag_right_preserves_duration_and_trims_overwritten_next_subtitle(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0
@@ -1566,6 +1620,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor.timeline = SimpleNamespace(
             _begin_subtitle_resize_keep_view=Mock(),
             _finish_subtitle_resize_keep_view=Mock(),
+            update_segments=Mock(),
         )
         editor.video_player = SimpleNamespace(total_time=10.0)
         editor.text_edit = QTextEdit()
@@ -1581,10 +1636,12 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0))
             third.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=3.0))
 
-            editor._on_seg_time_changed(1, 1.5, 2.5, "center")
-            self.app.processEvents()
+            with patch("ui.editor.ux.editor_timeline_video.apply_caption_move_dual_write_pilot") as nle_move:
+                editor._on_seg_time_changed(1, 1.5, 2.5, "center")
+                self.app.processEvents()
 
             resized = editor._get_current_segments(force_rebuild=True)
+            nle_move.assert_not_called()
             self.assertEqual(editor.text_edit.document().blockCount(), 3)
             self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in resized], [
                 (0.0, 1.0, "앞 자막"),
@@ -1602,6 +1659,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor.timeline = SimpleNamespace(
             _begin_subtitle_resize_keep_view=Mock(),
             _finish_subtitle_resize_keep_view=Mock(),
+            update_segments=Mock(),
         )
         editor.video_player = SimpleNamespace(total_time=10.0)
         editor.text_edit = QTextEdit()
@@ -1617,10 +1675,12 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0))
             third.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=3.0))
 
-            editor._on_seg_time_changed(1, 0.5, 1.5, "center")
-            self.app.processEvents()
+            with patch("ui.editor.ux.editor_timeline_video.apply_caption_move_dual_write_pilot") as nle_move:
+                editor._on_seg_time_changed(1, 0.5, 1.5, "center")
+                self.app.processEvents()
 
             resized = editor._get_current_segments(force_rebuild=True)
+            nle_move.assert_not_called()
             self.assertEqual(editor.text_edit.document().blockCount(), 3)
             self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in resized], [
                 (0.0, 0.5, "앞 자막"),
