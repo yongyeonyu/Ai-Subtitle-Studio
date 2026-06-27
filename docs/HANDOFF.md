@@ -33,7 +33,41 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 STT Cache Backfill Readiness Audit
+## Current Handoff - 2026-06-28 STT Strict Synthetic Collect-Cache Replay And Completed-Item Split
+
+### Scope
+
+- Continued `ACTION_ITEMS.md` item `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`.
+- Ran the owner-required NAS-off fallback as a tail-collapse-fixed strict synthetic collect-cache write/hit replay.
+- Moved the completed strict synthetic replay slice into `COMPLETED_ACTION_ITEMS.md`; `ACTION_ITEMS.md` now keeps only the remaining real-media NAS backfill/default-review gate for this cache track.
+- Updated `test_result.md`, `docs/VALIDATION.md`, and Sentinel handoffs with the new evidence.
+- No runtime behavior, STT/STT2 policy, word precision policy, cache defaults, subtitle timing, save/load, render/export, UI, packaging, or App Store behavior changed.
+
+### Verification
+
+- Write run: `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media output/manual_verification/latest/high_context_keep_cache_20260627/synthetic_fixture/synthetic_high_context_keep_cache.mp4 --reference-srt output/manual_verification/latest/high_context_keep_cache_20260627/synthetic_fixture/synthetic_high_context_keep_cache.srt --start-sec 0 --duration-sec 180 --setting ... --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_081537/benchmark_results.json`.
+- Write acceptance: `./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_081537/benchmark_results.json --output-dir output/manual_verification/latest/strict_synthetic_collect_cache_replay_20260628/acceptance_write` -> accepted `true`.
+- Hit replay: same command and cache paths -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_081711/benchmark_results.json`.
+- Hit acceptance: `./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_081711/benchmark_results.json --output-dir output/manual_verification/latest/strict_synthetic_collect_cache_replay_20260628/acceptance_hit` -> accepted `true`.
+- Readiness re-audit: `./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/20260627_*/benchmark_results.json' --glob '.codex_work/benchmarks/subtitle_pipeline_variants/20260628_*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_readiness_after_strict_replay_20260628` -> pass.
+
+### Results
+
+- Strict replay report: `output/manual_verification/latest/strict_synthetic_collect_cache_replay_20260628/strict_replay_report.md`
+- Write acceptance: elapsed `79.948s`, raw/final/reference `54/54/54`, quality/text/timing `93.411/91.676/0.1391s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.12/180.584`, global max active `1`.
+- Hit acceptance: elapsed `1.131s`, raw/final/reference `54/54/54`, quality/text/timing `93.411/91.676/0.1391s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.12/180.584`, global max active `1`.
+- Hit replay cache proof: STT1/STT2/word collect cache hits `true`, STT1/STT2/word provider calls `false`, macro cache hit/write/provider groups `1/0/0`.
+- Readiness after strict replay: `output/manual_verification/latest/stt_cache_backfill_readiness_after_strict_replay_20260628/stt_cache_backfill_readiness.md`; strict generated cache-hit runs `1`, strict real-media cache-hit runs `0`, production recommendation `hold_default_off`, family status `hold_real_media_backfill_required`.
+- Jammini probe: `.agents/sentinel/handoffs/20260628-081437-watchdog-handoff-probe.md`
+- Jammini prep: `.agents/sentinel/handoffs/20260628-082000-strict-synthetic-cache-replay-prep.md`
+- Dex closeout handoff: `.agents/sentinel/handoffs/20260628-084500-strict-synthetic-cache-replay.md`
+
+### Next Recommended Action
+
+- When NAS is available, run representative HeyDealer first-180s write plus cache-hit replay before any owner review of STT collect-cache defaults.
+- If NAS remains unavailable, keep this track analysis-only; do not skip STT1/STT2, disable word precision, shrink windows, promote Fast defaults, or loosen final subtitle gates.
+
+## Previous Handoff - 2026-06-28 STT Cache Backfill Readiness Audit
 
 ### Scope
 

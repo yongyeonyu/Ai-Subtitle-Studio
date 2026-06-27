@@ -1,5 +1,8 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-084500-strict-synthetic-cache-replay.md`
+- `.agents/sentinel/handoffs/20260628-082000-strict-synthetic-cache-replay-prep.md`
+- `.agents/sentinel/handoffs/20260628-081437-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-083000-stt-cache-readiness-audit.md`
 - `.agents/sentinel/handoffs/20260628-081500-stt-cache-readiness-support-audit.md`
 - `.agents/sentinel/handoffs/20260628-080428-watchdog-handoff-probe.md`

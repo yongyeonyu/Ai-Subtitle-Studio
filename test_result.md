@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## STT Strict Synthetic Collect-Cache Replay And Completed-Item Split - 2026-06-28 KST
+
+- 실행 모드: NAS-off strict synthetic collect-cache write/hit replay after the tail-collapse fix.
+- 결과: pass for generated-fixture evidence; production collect-cache defaults remain blocked by real-media backfill.
+- 저장 위치:
+  - Strict replay report: `output/manual_verification/latest/strict_synthetic_collect_cache_replay_20260628/strict_replay_report.md`
+  - Write benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_081537/benchmark_results.json`
+  - Hit benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_081711/benchmark_results.json`
+  - Write acceptance: `output/manual_verification/latest/strict_synthetic_collect_cache_replay_20260628/acceptance_write/reference_benchmark_acceptance.md`
+  - Hit acceptance: `output/manual_verification/latest/strict_synthetic_collect_cache_replay_20260628/acceptance_hit/reference_benchmark_acceptance.md`
+  - Readiness after strict replay: `output/manual_verification/latest/stt_cache_backfill_readiness_after_strict_replay_20260628/stt_cache_backfill_readiness.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-081437-watchdog-handoff-probe.md`
+  - Jammini prep: `.agents/sentinel/handoffs/20260628-082000-strict-synthetic-cache-replay-prep.md`
+  - Dex closeout handoff: `.agents/sentinel/handoffs/20260628-084500-strict-synthetic-cache-replay.md`
+- 실제 검증 결과:
+  - Write run accepted: elapsed `79.948s`, raw/final/reference `54/54/54`, quality/text/timing `93.411/91.676/0.1391s`.
+  - Hit run accepted: elapsed `1.131s`, raw/final/reference `54/54/54`, quality/text/timing `93.411/91.676/0.1391s`.
+  - Both runs kept final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.12/180.584`, final short/long segment counts `0/0`, global max active `1`, and global stable `true`.
+  - Hit replay showed STT1/STT2/word collect cache hit/provider-call `true/false`, macro cache hit/write/provider groups `1/0/0`, and macro proofread elapsed `0.319095s`.
+  - Readiness re-audit now reports strict generated cache-hit runs `1`, strict real-media cache-hit runs `0`, family status `hold_real_media_backfill_required`, and production recommendation `hold_default_off`.
+- 완료 항목 분리:
+  - The completed strict synthetic replay slice moved to `COMPLETED_ACTION_ITEMS.md`.
+  - `ACTION_ITEMS.md` now keeps only the remaining representative NAS HeyDealer first-180s write plus hit replay/default-review gate for collect-cache promotion.
+- 자막 품질 영향:
+  - No runtime behavior, STT/STT2 policy, word precision policy, cache default, subtitle timing, save/load, render/export, packaging, App Store behavior, or UI changed.
+
 ## STT Cache Backfill Readiness Audit - 2026-06-28 KST
 
 - 실행 모드: NAS-off analysis-only readiness audit for STT collect-cache default promotion.

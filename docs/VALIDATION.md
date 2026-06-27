@@ -157,6 +157,8 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_
 
 The readiness report must keep `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default unless representative real-media write and cache-hit replay evidence pass the strict final gates.
 
+After timing or tail-collapse fixes, refresh generated-fixture cache-hit evidence with a write run and a hit replay using dedicated STT1, STT2/word, macro, and High-context cache paths. Evaluate both benchmark outputs with `tools/evaluate_reference_benchmark_acceptance.py`; the generated replay is current only if both runs pass strict final gates and the hit replay shows STT1/STT2/word collect cache hit/provider-call `true/false`, macro provider group `0`, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`. This generated replay still cannot promote collect-cache defaults without representative real-media backfill.
+
 ## Real-media latency profiling validation
 
 When diagnosing generation latency, keep three evidence surfaces separate:
