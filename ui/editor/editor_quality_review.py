@@ -8,7 +8,11 @@ from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QMessageBox
 
 from core.runtime.logger import get_logger
-from ui.editor.ux.subtitle_text_edit import SubtitleBlockData
+from ui.editor.ux.subtitle_text_edit import (
+    SubtitleBlockData,
+    subtitle_block_data_from_meta,
+    subtitle_block_data_to_meta,
+)
 
 
 class EditorQualityReviewMixin:
@@ -311,21 +315,14 @@ class EditorQualityReviewMixin:
                 break
         self._mark_dirty()
 
-    def _replace_segment_text_by_line(self, line: int, text: str, candidate: dict | None = None):
-        block = self.text_edit.document().findBlockByNumber(int(line))
-        if not block.isValid():
-            return
-        data = block.userData()
-        if not isinstance(data, SubtitleBlockData) or data.is_gap:
-            return
-        current_seg = self._segment_for_line(line) or {}
-        if hasattr(self, "_undo_mgr"):
-            self._undo_mgr.push_immediate()
-        cur = QTextCursor(block)
-        cur.beginEditBlock()
-        cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
-        cur.insertText(text)
+    def _quality_text_commit_metadata(
+        self,
+        line: int,
+        text: str,
+        data: SubtitleBlockData,
+        current_seg: dict,
+        candidate: dict | None,
+    ) -> tuple[dict, list[dict], str]:
         quality = dict(getattr(data, "quality", {}) or {})
         previous_quality = dict(quality)
         flags = list(quality.get("flags") or [])
@@ -340,6 +337,137 @@ class EditorQualityReviewMixin:
         history = list(getattr(data, "quality_history", []) or [])
         if quality_changed and previous_quality and previous_quality != quality:
             history.append(dict(previous_quality))
+        signature = self._segment_quality_signature({
+            "start": data.start_sec,
+            "end": current_seg.get("end", data.start_sec),
+            "text": text,
+            "speaker": data.spk_id,
+        })
+        return quality, history, signature
+
+    def _apply_quality_text_commit_metadata(
+        self,
+        line: int,
+        data: SubtitleBlockData,
+        *,
+        quality: dict,
+        history: list[dict],
+        signature: str,
+    ) -> None:
+        block = self.text_edit.document().findBlockByNumber(int(line))
+        if not block.isValid():
+            return
+        updated_data = block.userData()
+        if not isinstance(updated_data, SubtitleBlockData):
+            updated_data = data
+        meta = subtitle_block_data_to_meta(updated_data)
+        meta["quality"] = dict(quality or {})
+        meta["quality_history"] = list(history or [])
+        if not meta.get("quality_candidates"):
+            meta["quality_candidates"] = list(getattr(data, "quality_candidates", []) or [])
+        meta["quality_signature"] = str(signature or "")
+        block.setUserData(subtitle_block_data_from_meta(meta))
+        updater = getattr(self, "_update_subtitle_memory_line_quality", None)
+        if callable(updater):
+            updater(
+                int(line),
+                dict(quality or {}),
+                quality_history=list(history or []),
+                quality_signature=str(signature or ""),
+            )
+        timeline_updater = getattr(self, "_update_timeline_segment_quality_line", None)
+        if callable(timeline_updater):
+            timeline_updater(int(line), dict(quality or {}), quality_signature=str(signature or ""))
+
+    def _try_nle_quality_text_commit(
+        self,
+        line: int,
+        text: str,
+        data: SubtitleBlockData,
+        current_seg: dict,
+        *,
+        quality: dict,
+        history: list[dict],
+        signature: str,
+    ) -> bool:
+        nle_text_edit = getattr(self, "_nle_live_editor_caption_text_edit_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if not callable(nle_text_edit) or not callable(reloader):
+            return False
+        try:
+            current_segments = list(self._get_current_segments(force_rebuild=True))
+        except Exception:
+            return False
+        if not current_segments:
+            return False
+        try:
+            old_text = str(self.text_edit.document().findBlockByNumber(int(line)).text() or "").replace("\u2028", "\n")
+        except Exception:
+            old_text = ""
+        if old_text == str(text or "").replace("\u2028", "\n"):
+            return False
+        try:
+            end_sec = float(current_seg.get("end", getattr(data, "end_sec", data.start_sec)) or data.start_sec)
+            result = nle_text_edit(
+                current_segments=current_segments,
+                line_num=int(line),
+                start_sec=float(data.start_sec),
+                end_sec=end_sec,
+                new_text=str(text or ""),
+                new_speaker=str(getattr(data, "spk_id", "") or ""),
+                commit_source="quality_candidate_text",
+            )
+        except Exception:
+            return False
+        if result is None:
+            return False
+        self._last_nle_live_editor_operation = result.operation.to_dict()
+        self._last_nle_live_editor_projection = result.after_projection.to_dict()
+        self._last_nle_quality_text_commit_operation = result.operation.to_dict()
+        reloader(list(result.projected_rows), preserve_view=True, mark_dirty=True)
+        self._apply_quality_text_commit_metadata(
+            int(line),
+            data,
+            quality=dict(quality or {}),
+            history=list(history or []),
+            signature=str(signature or ""),
+        )
+        self._mark_dirty()
+        self._finalize_edit()
+        return True
+
+    def _replace_segment_text_by_line(self, line: int, text: str, candidate: dict | None = None):
+        block = self.text_edit.document().findBlockByNumber(int(line))
+        if not block.isValid():
+            return
+        data = block.userData()
+        if not isinstance(data, SubtitleBlockData) or data.is_gap:
+            return
+        current_seg = self._segment_for_line(line) or {}
+        if hasattr(self, "_undo_mgr"):
+            self._undo_mgr.push_immediate()
+        quality, history, signature = self._quality_text_commit_metadata(
+            int(line),
+            str(text or ""),
+            data,
+            current_seg,
+            candidate,
+        )
+        if self._try_nle_quality_text_commit(
+            int(line),
+            str(text or ""),
+            data,
+            current_seg,
+            quality=quality,
+            history=history,
+            signature=signature,
+        ):
+            return
+        cur = QTextCursor(block)
+        cur.beginEditBlock()
+        cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        cur.insertText(text)
         cur.block().setUserData(
             SubtitleBlockData(
                 data.spk_id,
@@ -352,12 +480,7 @@ class EditorQualityReviewMixin:
                 quality=quality,
                 quality_history=history,
                 quality_candidates=list(getattr(data, "quality_candidates", []) or []),
-                quality_signature=self._segment_quality_signature({
-                    "start": data.start_sec,
-                    "end": current_seg.get("end", data.start_sec),
-                    "text": text,
-                    "speaker": data.spk_id,
-                }),
+                quality_signature=signature,
             )
         )
         cur.endEditBlock()

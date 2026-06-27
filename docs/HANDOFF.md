@@ -33,7 +33,40 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28
+## Current Handoff - 2026-06-28 Quality Review Text Commit
+
+### Scope
+
+- Continued `ACTION_ITEMS.md` item `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.
+- Added runtime NLE `caption_text_edit` coverage for quality-review candidate / one-click text replacement commits in `ui/editor/editor_quality_review.py`.
+- Restored quality-review metadata after NLE projection reload so `candidate_applied`, `manual_confirmed`, candidate reason, and quality candidates remain visible.
+- Preserved existing UI/UX, labels, menus, shortcuts, popup behavior, subtitle generation policy, save/export behavior, packaging, and App Store behavior.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/editor/editor_quality_review.py tests/test_timeline_playhead_fit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "quality_candidate_text_commit"` -> `2 passed, 187 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "quality_candidate_text_commit or replace_text_in_all_subtitles or manual_confirmed or inline_text"` -> `6 passed, 183 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_text_edit"` -> `2 passed, 26 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "gap or magnet or reorder"` -> `58 passed, 284 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_timeline_render_cache.py -k "timeline_canvas or projection or final_surface or save_export"` -> `5 passed, 53 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "caption_text_edit or identity or reload"` -> `88 passed`.
+- `git diff --check -- .` -> pass.
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_quality_text_commit_20260628` -> pass, `failed_count=0`.
+
+### Artifacts
+
+- NLE quality review text commit report: `output/manual_verification/latest/nle_quality_review_text_commit_sync_20260628/quality_text_commit_report.md`
+- Source-app quick QA: `output/manual_verification/latest/qa_suite_quick_nle_quality_text_commit_20260628`
+- Jammini probe: `.agents/sentinel/handoffs/20260628-071837-watchdog-handoff-probe.md`
+- Jammini fresh audit scout: `.agents/sentinel/handoffs/20260628-062700-nle-final-exclusions-audit.md`
+
+### Next Recommended Action
+
+- Treat `clear_segments_in_range(...)` / `insert_partial_segments(...)` as the remaining known NLE editing candidate, but do not chain existing pilots blindly; it needs a scoped range-replace/transaction operation-family design.
+- Re-run Taption gap/magnet/reorder plus NLE projection guards after any next mutable-sync slice.
+
+## Previous Handoff - 2026-06-28 Popup Replace-All
 
 ### Scope
 

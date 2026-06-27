@@ -20,6 +20,7 @@ from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_helpers import build_segment_lookup
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_pipeline_playhead_actions import EditorPipelinePlayheadActionsMixin
+from ui.editor.editor_quality_review import EditorQualityReviewMixin
 from ui.editor.editor_speaker_ops import EditorSpeakerOpsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
@@ -81,6 +82,11 @@ class _DummyTimelineVideoEditor(EditorTimelineVideoMixin):
 
 
 class _ResizeTimelineEditor(EditorTimelineVideoMixin, EditorSegmentsMixin):
+    def _multiclip_active_offset(self) -> float:
+        return 0.0
+
+
+class _QualityReviewNLEEditor(EditorQualityReviewMixin, EditorTimelineVideoMixin, EditorSegmentsMixin):
     def _multiclip_active_offset(self) -> float:
         return 0.0
 
@@ -226,6 +232,47 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0, segment_id="caption_first"))
         gap.setUserData(SubtitleBlockData("00", 1.0, True, end_sec=2.0, segment_id="gap_middle"))
         last.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=3.0, segment_id="caption_last"))
+        return editor
+
+    def _make_quality_review_nle_editor(self):
+        editor = _QualityReviewNLEEditor()
+        editor.video_fps = 30.0
+        editor.media_path = "/tmp/quality-review.mp4"
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_player = SimpleNamespace(total_time=5.0)
+        editor._active_seg_start = None
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor._schedule_timeline = Mock()
+        editor._finalize_edit = Mock()
+        editor._mark_dirty = Mock()
+        editor._refresh_visible_quality_map = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("원문\n다음")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+        first = editor.text_edit.document().findBlockByNumber(0)
+        second = editor.text_edit.document().findBlockByNumber(1)
+        first.setUserData(
+            SubtitleBlockData(
+                "00",
+                1.0,
+                False,
+                end_sec=2.0,
+                segment_id="caption_quality",
+                quality={"confidence_label": "red", "flags": ["high_cps"], "confidence_score": 40},
+                quality_history=[{"flags": ["old"]}],
+                quality_candidates=[{"text": "교정문"}],
+                quality_signature="old",
+            )
+        )
+        second.setUserData(SubtitleBlockData("00", 3.0, False, end_sec=4.0, segment_id="caption_next"))
         return editor
 
     def test_segment_start_shortcut_prefers_active_canvas_segment_over_cursor_block(self):
@@ -523,6 +570,56 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["비엠랑 비엠", "", "끝 비엠"])
             self.assertEqual(editor._highlighter.mark_edited.call_count, 2)
             editor._refresh_video_subtitle_context.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_quality_candidate_text_commit_routes_through_nle_caption_text_edit(self):
+        editor = self._make_quality_review_nle_editor()
+        try:
+            editor._replace_segment_text_by_line(0, "교정문", {"reason": "품질 후보"})
+
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["교정문", "다음"])
+            operation = getattr(editor, "_last_nle_quality_text_commit_operation", {})
+            self.assertEqual(operation.get("kind"), "caption_text_edit")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "quality_candidate_text")
+            projection = getattr(editor, "_last_nle_live_editor_projection", {})
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            data = editor.text_edit.document().findBlockByNumber(0).userData()
+            self.assertEqual(data.quality["confidence_label"], "green")
+            self.assertTrue(data.quality["manual_confirmed"])
+            self.assertIn("candidate_applied", data.quality["flags"])
+            self.assertIn("manual_confirmed", data.quality["flags"])
+            self.assertNotIn("high_cps", data.quality["flags"])
+            self.assertEqual(data.quality["candidate_applied_reason"], "품질 후보")
+            self.assertEqual(data.quality_candidates, [{"text": "교정문"}])
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(rows[0]["text"], "교정문")
+            self.assertEqual(rows[0]["quality"]["confidence_label"], "green")
+            editor.timeline.update_segments.assert_called()
+            editor._undo_mgr.push_immediate.assert_called_once()
+            editor._finalize_edit.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_quality_candidate_text_commit_falls_back_when_nle_rejects(self):
+        editor = self._make_quality_review_nle_editor()
+        try:
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_text_edit_dual_write_pilot",
+                side_effect=ValueError("forced-nle-reject"),
+            ):
+                editor._replace_segment_text_by_line(0, "교정문", {"reason": "품질 후보"})
+
+            self.assertFalse(hasattr(editor, "_last_nle_quality_text_commit_operation"))
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["교정문", "다음"])
+            data = editor.text_edit.document().findBlockByNumber(0).userData()
+            self.assertEqual(data.quality["confidence_label"], "green")
+            self.assertTrue(data.quality["manual_confirmed"])
+            self.assertIn("candidate_applied", data.quality["flags"])
+            self.assertNotIn("high_cps", data.quality["flags"])
+            editor._undo_mgr.push_immediate.assert_called_once()
+            editor._finalize_edit.assert_called_once()
         finally:
             editor.text_edit.close()
 
