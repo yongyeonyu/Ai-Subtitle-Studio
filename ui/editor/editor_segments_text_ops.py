@@ -355,6 +355,114 @@ class EditorSegmentsTextOpsMixin:
     def _trigger_editor_popup(self, word, anchor, end_c, gpos):
         self.editor_popup.trigger(word, anchor, end_c, gpos)
 
+    def _restore_replace_text_cursor(
+        self,
+        *,
+        selected_line: int,
+        selected_offset: int,
+        matches_by_line: dict[int, list[int]],
+        new_text: str,
+        old_text: str,
+    ) -> None:
+        if selected_line < 0:
+            return
+        try:
+            doc = self.text_edit.document()
+            selected_block = doc.findBlockByNumber(selected_line)
+            if not selected_block.isValid():
+                return
+            before_selected = sum(1 for offset in matches_by_line.get(selected_line, []) if offset < selected_offset)
+            adjusted_offset = selected_offset + before_selected * (len(new_text) - len(old_text))
+            cur = QTextCursor(selected_block)
+            cur.setPosition(selected_block.position() + max(0, adjusted_offset) + len(new_text))
+            self.text_edit.setTextCursor(cur)
+        except Exception:
+            pass
+
+    def _try_nle_replace_text_in_all_subtitles(
+        self,
+        *,
+        old_text: str,
+        new_text: str,
+        matches_by_line: dict[int, list[int]],
+    ) -> bool:
+        nle_text_edit = getattr(self, "_nle_live_editor_caption_text_edit_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if not callable(nle_text_edit) or not callable(reloader):
+            return False
+        doc = self.text_edit.document()
+        block = doc.begin()
+        while block.isValid():
+            data = block.userData()
+            if isinstance(data, SubtitleBlockData) and bool(getattr(data, "is_gap", False)) and block.text().strip():
+                return False
+            block = block.next()
+
+        try:
+            current_segments = list(self._get_current_segments(force_rebuild=True))
+        except Exception:
+            return False
+        if not current_segments:
+            return False
+
+        projected_rows = [dict(row) for row in current_segments if isinstance(row, dict)]
+        operations: list[dict] = []
+        projections: list[dict] = []
+        for line_num in sorted(matches_by_line.keys()):
+            block = doc.findBlockByNumber(int(line_num))
+            if not block.isValid():
+                return False
+            line_text = block.text().replace("\u2028", "\n")
+            replacement_text = line_text.replace(old_text, new_text)
+            target_row = None
+            for row in projected_rows:
+                if not isinstance(row, dict):
+                    return False
+                if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                    return False
+                if bool(row.get("is_gap")):
+                    continue
+                try:
+                    if int(row.get("line", -1)) == int(line_num):
+                        target_row = row
+                        break
+                except Exception:
+                    continue
+            if not isinstance(target_row, dict):
+                return False
+            try:
+                start_sec = float(target_row.get("start", 0.0) or 0.0)
+                end_sec = float(target_row.get("end", start_sec) or start_sec)
+            except Exception:
+                return False
+            if end_sec <= start_sec:
+                return False
+
+            nle_result = nle_text_edit(
+                current_segments=projected_rows,
+                line_num=int(line_num),
+                start_sec=start_sec,
+                end_sec=end_sec,
+                new_text=replacement_text,
+                commit_source="popup_replace_all",
+            )
+            if nle_result is None:
+                return False
+            projected_rows = [dict(row) for row in nle_result.projected_rows]
+            operations.append(nle_result.operation.to_dict())
+            projections.append(nle_result.after_projection.to_dict())
+
+        if not operations:
+            return False
+        reloader(projected_rows, preserve_view=True, mark_dirty=True)
+        cache_rows = getattr(self, "_cache_current_segments", None)
+        if callable(cache_rows):
+            cache_rows(projected_rows)
+        self._last_nle_text_replace_operations = operations
+        self._last_nle_live_editor_operation = operations[-1]
+        self._last_nle_live_editor_projection = projections[-1]
+        return True
+
     def _replace_text_in_all_subtitles(self, old_text: str, new_text: str, *, anchor=None, end_cursor=None) -> int:
         old_text = str(old_text or "")
         new_text = str(new_text or "")
@@ -399,6 +507,26 @@ class EditorSegmentsTextOpsMixin:
         except Exception:
             pass
 
+        if self._try_nle_replace_text_in_all_subtitles(
+            old_text=old_text,
+            new_text=new_text,
+            matches_by_line=matches_by_line,
+        ):
+            self._restore_replace_text_cursor(
+                selected_line=selected_line,
+                selected_offset=selected_offset,
+                matches_by_line=matches_by_line,
+                new_text=new_text,
+                old_text=old_text,
+            )
+            hl = getattr(self, "_highlighter", None)
+            if hl and hasattr(hl, "mark_edited"):
+                for line_num in matches_by_line:
+                    hl.mark_edited(line_num)
+            if hasattr(self, "_refresh_video_subtitle_context"):
+                self._refresh_video_subtitle_context()
+            return replace_count
+
         prev_inline = bool(getattr(self, "_inline_updating", False))
         self._inline_updating = True
         cur = QTextCursor(doc)
@@ -417,17 +545,13 @@ class EditorSegmentsTextOpsMixin:
             cur.endEditBlock()
             self._inline_updating = prev_inline
 
-        if selected_line >= 0:
-            try:
-                selected_block = doc.findBlockByNumber(selected_line)
-                if selected_block.isValid():
-                    before_selected = sum(1 for offset in matches_by_line.get(selected_line, []) if offset < selected_offset)
-                    adjusted_offset = selected_offset + before_selected * (len(new_text) - len(old_text))
-                    cur = QTextCursor(selected_block)
-                    cur.setPosition(selected_block.position() + max(0, adjusted_offset) + len(new_text))
-                    self.text_edit.setTextCursor(cur)
-            except Exception:
-                pass
+        self._restore_replace_text_cursor(
+            selected_line=selected_line,
+            selected_offset=selected_offset,
+            matches_by_line=matches_by_line,
+            new_text=new_text,
+            old_text=old_text,
+        )
 
         hl = getattr(self, "_highlighter", None)
         if hl and hasattr(hl, "mark_edited"):

@@ -1,9 +1,11 @@
 # Sentinel Handoffs Index
 
-- `.agents/sentinel/handoffs/20260628-070200-nle-shortcut-resize-commit-sync.md`
+- `.agents/sentinel/handoffs/20260628-071250-nle-popup-replace-all-commit-sync.md`
+- `.agents/sentinel/handoffs/20260628-062600-nle-remaining-fresh-audit.md`
+- `.agents/sentinel/handoffs/20260628-070530-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-062500-nle-shortcut-resize-guard-scout.md`
-- `.agents/sentinel/handoffs/20260628-065025-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-061300-nle-next-slice-recommendation.md`
+- `.agents/sentinel/handoffs/20260628-065025-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-063735-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-063200-nle-fresh-audit-report.md`
 - `.agents/sentinel/handoffs/20260628-063145-watchdog-handoff-probe.md`

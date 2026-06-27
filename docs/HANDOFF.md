@@ -38,6 +38,39 @@
 ### Scope
 
 - Continued `ACTION_ITEMS.md` item `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.
+- Added runtime NLE `caption_text_edit` coverage for popup replace-all subtitle text commits in `ui/editor/editor_segments_text_ops.py`.
+- Routed safe final-caption replacements through sequential NLE text-edit operations while preserving legacy QTextDocument fallback for visible gap text, STT/live preview rows, unsupported row sets, or NLE rejection.
+- Preserved existing UI/UX, labels, menus, shortcuts, popup behavior, subtitle generation policy, save/export behavior, packaging, and App Store behavior.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/editor/editor_segments_text_ops.py tests/test_timeline_playhead_fit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "replace_text_in_all_subtitles"` -> `3 passed, 184 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "replace_text_in_all_subtitles"` -> `1 passed, 87 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_project_segment_reload.py -k "replace_text_in_all_subtitles or inline_text or text_edit or change_speaker_for_line"` -> `12 passed, 263 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_text_edit"` -> `2 passed, 26 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "gap or magnet or center_reorder or center_drag or reorder"` -> `66 passed, 274 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "timeline_canvas or final_surface or global_canvas or save_export"` -> `7 passed, 3 deselected`.
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_popup_replace_all_20260628` -> pass, `failed_count=0`.
+
+### Artifacts
+
+- NLE popup replace-all report: `output/manual_verification/latest/nle_popup_replace_all_commit_sync_20260628/popup_replace_all_report.md`
+- Source-app quick QA: `output/manual_verification/latest/qa_suite_quick_nle_popup_replace_all_20260628`
+- Jammini probe: `.agents/sentinel/handoffs/20260628-070530-watchdog-handoff-probe.md`
+- Jammini fresh audit scout: `.agents/sentinel/handoffs/20260628-062600-nle-remaining-fresh-audit.md`
+
+### Next Recommended Action
+
+- Continue the fresh audit for remaining safe release/commit sources that can move to NLE dual-write without per-pixel writes or Taption UX drift.
+- Do not reuse the latest Jammini scout's first three candidates as next work without rechecking, because they are already completed in `COMPLETED_ACTION_ITEMS.md`.
+- Re-run Taption gap/magnet/reorder plus NLE projection guards after any next mutable-sync slice.
+
+## Previous Handoff - 2026-06-28 Shortcut Resize
+
+### Scope
+
+- Continued `ACTION_ITEMS.md` item `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.
 - Added runtime NLE `caption_resize` coverage for shortcut start/end-to-playhead release commits in `ui/editor/editor_segments_block_surgery.py`.
 - Routed safe single-block explicit-gap absorption shapes through NLE while preserving the existing QTextBlock fallback for gap creation, gap extension, STT/live preview rows, unsupported shapes, or NLE rejection.
 - Preserved existing UI/UX, labels, menus, shortcuts, popup behavior, subtitle generation policy, save/export behavior, packaging, and App Store behavior.

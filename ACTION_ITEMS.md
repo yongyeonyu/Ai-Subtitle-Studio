@@ -52,7 +52,7 @@ Current baseline:
 - STT1/STT2/live subtitle preview rows remain visible on the main timeline canvas as editor/diagnostic lanes.
 - Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
 - Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
-- Completed NLE release-sync/evidence details, including shortcut start/end-to-playhead coverage, live only in the archive pointer above; do not duplicate completed slice summaries in this active queue.
+- Completed NLE release-sync/evidence details, including shortcut start/end-to-playhead and popup replace-all coverage, live only in the archive pointer above; do not duplicate completed slice summaries in this active queue.
 - No named uncovered release/commit candidate is currently promoted. Next step is a fresh audit for remaining safe release/commit sources that can move to NLE dual-write without per-pixel writes or Taption UX drift.
 
 Scope:

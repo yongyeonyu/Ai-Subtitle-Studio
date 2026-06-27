@@ -199,6 +199,35 @@ class TimelinePlayheadFitTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def _make_replace_all_nle_editor(self, *, gap_text: str = ""):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.media_path = "/tmp/replace-all.mp4"
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor._active_seg_start = None
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor._schedule_timeline = Mock()
+        editor._refresh_video_subtitle_context = Mock()
+        editor._highlighter = SimpleNamespace(mark_edited=Mock())
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText(f"BMW랑 BMW\n{gap_text}\n끝 BMW")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+        first = editor.text_edit.document().findBlockByNumber(0)
+        gap = editor.text_edit.document().findBlockByNumber(1)
+        last = editor.text_edit.document().findBlockByNumber(2)
+        first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0, segment_id="caption_first"))
+        gap.setUserData(SubtitleBlockData("00", 1.0, True, end_sec=2.0, segment_id="gap_middle"))
+        last.setUserData(SubtitleBlockData("00", 2.0, False, end_sec=3.0, segment_id="caption_last"))
+        return editor
+
     def test_segment_start_shortcut_prefers_active_canvas_segment_over_cursor_block(self):
         editor = _DummyEditor()
         editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
@@ -415,6 +444,85 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertAlmostEqual(inserted_gap.userData().start_sec, 5.0)
             self.assertAlmostEqual(target.userData().start_sec, 6.0)
             editor._redraw_timeline.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_replace_text_in_all_subtitles_routes_through_nle_caption_text_edit(self):
+        editor = self._make_replace_all_nle_editor()
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            anchor = QTextCursor(block)
+            anchor.setPosition(block.position())
+            end = QTextCursor(block)
+            end.setPosition(block.position() + 3)
+
+            replaced = editor._replace_text_in_all_subtitles("BMW", "비엠", anchor=anchor, end_cursor=end)
+
+            self.assertEqual(replaced, 3)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["비엠랑 비엠", "", "끝 비엠"])
+            operations = getattr(editor, "_last_nle_text_replace_operations", [])
+            self.assertEqual(len(operations), 2)
+            self.assertTrue(all(operation.get("kind") == "caption_text_edit" for operation in operations))
+            self.assertEqual(
+                [operation.get("metadata", {}).get("commit_source") for operation in operations],
+                ["popup_replace_all", "popup_replace_all"],
+            )
+            projection = getattr(editor, "_last_nle_live_editor_projection", {})
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual([(row["text"], bool(row.get("is_gap"))) for row in rows], [
+                ("비엠랑 비엠", False),
+                ("", True),
+                ("끝 비엠", False),
+            ])
+            editor.timeline.update_segments.assert_called()
+            editor._refresh_video_subtitle_context.assert_called_once()
+            self.assertEqual(editor._highlighter.mark_edited.call_count, 2)
+        finally:
+            editor.text_edit.close()
+
+    def test_replace_text_in_all_subtitles_uses_legacy_when_gap_has_visible_text(self):
+        editor = self._make_replace_all_nle_editor(gap_text="BMW 쉬는중")
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            anchor = QTextCursor(block)
+            anchor.setPosition(block.position())
+            end = QTextCursor(block)
+            end.setPosition(block.position() + 3)
+
+            with patch("ui.editor.ux.editor_timeline_video.apply_caption_text_edit_dual_write_pilot") as nle_text_edit:
+                replaced = editor._replace_text_in_all_subtitles("BMW", "비엠", anchor=anchor, end_cursor=end)
+
+            self.assertEqual(replaced, 3)
+            nle_text_edit.assert_not_called()
+            self.assertFalse(hasattr(editor, "_last_nle_text_replace_operations"))
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["비엠랑 비엠", "BMW 쉬는중", "끝 비엠"])
+            self.assertEqual(editor._highlighter.mark_edited.call_count, 2)
+            editor._refresh_video_subtitle_context.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_replace_text_in_all_subtitles_falls_back_when_nle_rejects(self):
+        editor = self._make_replace_all_nle_editor()
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            anchor = QTextCursor(block)
+            anchor.setPosition(block.position())
+            end = QTextCursor(block)
+            end.setPosition(block.position() + 3)
+
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_text_edit_dual_write_pilot",
+                side_effect=ValueError("forced-nle-reject"),
+            ):
+                replaced = editor._replace_text_in_all_subtitles("BMW", "비엠", anchor=anchor, end_cursor=end)
+
+            self.assertEqual(replaced, 3)
+            self.assertFalse(hasattr(editor, "_last_nle_text_replace_operations"))
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["비엠랑 비엠", "", "끝 비엠"])
+            self.assertEqual(editor._highlighter.mark_edited.call_count, 2)
+            editor._refresh_video_subtitle_context.assert_called_once()
         finally:
             editor.text_edit.close()
 
