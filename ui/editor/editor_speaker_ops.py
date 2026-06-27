@@ -48,6 +48,8 @@ class EditorSpeakerOpsMixin:
         ud = block.userData()
         if not isinstance(ud, SubtitleBlockData):
             return
+        if self._try_nle_change_speaker_for_line_commit(line_num, new_spk_id, ud):
+            return
 
         ud.spk_id = new_spk_id
         for idx in get_sub_block_indices(doc, line_num, ud.start_sec)[1:]:
@@ -57,6 +59,89 @@ class EditorSpeakerOpsMixin:
 
         self._highlighter.rehighlight()
         self._finalize_edit()
+
+    def _try_nle_change_speaker_for_line_commit(self, line_num: int, new_spk_id: str, ud: SubtitleBlockData) -> bool:
+        nle_text_edit = getattr(self, "_nle_live_editor_caption_text_edit_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if not callable(nle_text_edit) or not callable(reloader):
+            return False
+        if bool(
+            getattr(ud, "is_gap", False)
+            or getattr(ud, "stt_pending", False)
+            or getattr(ud, "stt_mode", False)
+            or getattr(ud, "live_preview", False)
+        ):
+            return False
+        doc = self.text_edit.document()
+        try:
+            sub_indices = list(get_sub_block_indices(doc, int(line_num), float(getattr(ud, "start_sec"))))
+        except Exception:
+            return False
+        if len(sub_indices) != 1 or int(sub_indices[0]) != int(line_num):
+            return False
+        block = doc.findBlockByNumber(int(line_num))
+        if not block.isValid():
+            return False
+        raw_text = block.text()
+        if "\u2028" in raw_text:
+            return False
+        text = raw_text.replace("\u2028", "\n").strip()
+        if not text:
+            return False
+        try:
+            start_sec = float(getattr(ud, "start_sec"))
+        except Exception:
+            return False
+        end_sec = getattr(ud, "end_sec", None)
+        try:
+            end_sec = float(end_sec) if end_sec is not None else None
+        except Exception:
+            end_sec = None
+        try:
+            current_segments = list(self._get_current_segments(force_rebuild=True))
+        except Exception:
+            return False
+        if end_sec is None or end_sec <= start_sec:
+            for seg in current_segments:
+                if not isinstance(seg, dict):
+                    continue
+                try:
+                    if int(seg.get("line", -1)) != int(line_num):
+                        continue
+                    if abs(float(seg.get("start", 0.0) or 0.0) - start_sec) >= 0.05:
+                        continue
+                    end_sec = float(seg.get("end", start_sec) or start_sec)
+                    text = str(seg.get("text", text) or text).replace("\u2028", "\n").strip()
+                    break
+                except Exception:
+                    continue
+        if end_sec is None or end_sec <= start_sec or not text:
+            return False
+        speaker = str(new_spk_id or "").strip()
+        if not speaker:
+            return False
+        nle_result = nle_text_edit(
+            current_segments=current_segments,
+            line_num=int(line_num),
+            start_sec=float(start_sec),
+            end_sec=float(end_sec),
+            new_text=text,
+            new_speaker=speaker,
+            new_speaker_list=[speaker],
+            commit_source="timeline_speaker_change",
+        )
+        if nle_result is None:
+            return False
+
+        self._last_nle_live_editor_operation = nle_result.operation.to_dict()
+        self._last_nle_live_editor_projection = nle_result.after_projection.to_dict()
+        reloader(list(nle_result.projected_rows), preserve_view=True, mark_dirty=True)
+        finalizer = getattr(self, "_finalize_manual_edit_snapshot", None)
+        if callable(finalizer):
+            finalizer(allow_revision_drift=True)
+        else:
+            self._finalize_edit()
+        return True
 
     def _speaker_drop_group_bounds(self, from_line: int, to_line: int):
         doc = self.text_edit.document()

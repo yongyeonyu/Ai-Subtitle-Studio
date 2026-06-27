@@ -3443,6 +3443,140 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_change_speaker_for_line_routes_single_caption_through_nle_text_edit(self):
+        editor = _SpeakerDropTimelineEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor._active_seg_start = 1.0
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("화자 변경")
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._schedule_timeline = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._highlighter = SimpleNamespace(rehighlight=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0, segment_id="caption_a"))
+
+            editor._change_speaker_for_line(0, "01")
+
+            operation = editor._last_nle_live_editor_operation
+            self.assertEqual(operation["kind"], "caption_text_edit")
+            self.assertEqual(operation["metadata"]["commit_boundary"], "release")
+            self.assertEqual(operation["metadata"]["commit_source"], "timeline_speaker_change")
+            self.assertEqual(operation["metadata"]["old_speaker"], "00")
+            self.assertEqual(operation["metadata"]["new_speaker"], "01")
+            self.assertEqual(operation["metadata"]["new_speaker_list"], ["01"])
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["화자 변경"])
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["text"], "화자 변경")
+            self.assertEqual(rows[0].get("speaker", rows[0].get("spk")), "01")
+            self.assertAlmostEqual(rows[0]["start"], 1.0)
+            self.assertAlmostEqual(rows[0]["end"], 2.0)
+            editor.timeline.update_segments.assert_called()
+            editor._finalize_edit.assert_called_once()
+            editor._highlighter.rehighlight.assert_not_called()
+        finally:
+            editor.text_edit.close()
+
+    def test_change_speaker_for_line_keeps_qtextdocument_fallback_when_nle_rejects(self):
+        editor = _SpeakerDropTimelineEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor._active_seg_start = 1.0
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("화자 변경")
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._schedule_timeline = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._highlighter = SimpleNamespace(rehighlight=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0, segment_id="caption_a"))
+
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_text_edit_dual_write_pilot",
+                side_effect=ValueError("forced_nle_reject"),
+            ):
+                editor._change_speaker_for_line(0, "01")
+
+            self.assertFalse(hasattr(editor, "_last_nle_live_editor_operation"))
+            changed_ud = editor.text_edit.document().findBlockByNumber(0).userData()
+            self.assertEqual(changed_ud.spk_id, "01")
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(rows[0].get("speaker", rows[0].get("spk")), "01")
+            editor._highlighter.rehighlight.assert_called_once()
+            editor._finalize_edit.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_change_speaker_for_line_keeps_multiblock_shape_on_qtextdocument_path(self):
+        editor = _SpeakerDropTimelineEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor._active_seg_start = 1.0
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("- 첫 줄\n- 둘째 줄")
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._schedule_timeline = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._highlighter = SimpleNamespace(rehighlight=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0, segment_id="caption_a"))
+            second.setUserData(SubtitleBlockData("01", 1.0, False, end_sec=2.0, segment_id="caption_a"))
+
+            with patch("ui.editor.ux.editor_timeline_video.apply_caption_text_edit_dual_write_pilot") as nle_text_edit:
+                editor._change_speaker_for_line(0, "02")
+
+            nle_text_edit.assert_not_called()
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["- 첫 줄", "- 둘째 줄"])
+            self.assertEqual(first.userData().spk_id, "02")
+            self.assertEqual(second.userData().spk_id, "02")
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["text"], "- 첫 줄\n- 둘째 줄")
+            self.assertEqual(rows[0]["speaker_list"], ["02"])
+            editor._highlighter.rehighlight.assert_called_once()
+            editor._finalize_edit.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
     def test_live_canvas_inline_edit_skips_editor_document_rewrite(self):
         editor = _InlineEditEditor()
         editor.text_edit = QTextEdit()

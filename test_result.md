@@ -1,5 +1,34 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Speaker Change Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at direct speaker menu change release commit; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_speaker_change_commit_sync_20260628/speaker_change_sync_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_speaker_change_commit_20260628`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-062324-watchdog-handoff-probe.md`
+  - Jammini guard scout: `.agents/sentinel/handoffs/20260628-062400-nle-speaker-change-guard-scout.md`
+- 수정 요약:
+  - Direct speaker menu changes now attempt NLE `caption_text_edit` on single-block stable final captions.
+  - The NLE operation records `commit_boundary=release` and `commit_source=timeline_speaker_change`.
+  - Text and timing stay unchanged; only `speaker` / `speaker_list` metadata changes.
+  - Multi-block captions keep the existing QTextDocument path to preserve visible QTextBlock shape.
+  - NLE rejection keeps the existing rehighlight/finalize fallback path.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/editor_speaker_ops.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "change_speaker_for_line or speaker_circle_drop or speaker_split"` -> `10 passed, 170 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_text_edit"` -> `2 passed, 24 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_timeline_hit_targets.py -k "speaker or drag or gap or magnet or center_reorder or center_drag or diamond"` -> `115 passed, 217 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_runtime_cutover.py -k "caption_text_edit or timeline_canvas or final_surface or global_canvas"` -> `6 passed, 30 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_speaker_change_commit_20260628` -> pass, `failed_count=0`.
+  - `git diff --check -- .` -> pass.
+- 자막 품질 영향:
+  - Final text, start/end timing, frame bounds, overlap count, STT2, word precision, LLM, LoRA, VAD, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - Remaining NLE timeline mutable-sync work is now a fresh audit problem; no currently named `_change_speaker_for_line` follow-up remains.
+  - Persisted NLE project fields remain gated.
+
 ## NLE Smart Split Commit Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at timeline smart split release commit; no drag-time per-pixel NLE write.
