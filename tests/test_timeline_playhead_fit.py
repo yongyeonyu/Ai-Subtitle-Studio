@@ -20,6 +20,7 @@ from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_helpers import build_segment_lookup
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_pipeline_playhead_actions import EditorPipelinePlayheadActionsMixin
+from ui.editor.editor_speaker_ops import EditorSpeakerOpsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.ux.editor_tab_timing import EditorTabTimingMixin
@@ -80,6 +81,11 @@ class _DummyTimelineVideoEditor(EditorTimelineVideoMixin):
 
 
 class _ResizeTimelineEditor(EditorTimelineVideoMixin, EditorSegmentsMixin):
+    def _multiclip_active_offset(self) -> float:
+        return 0.0
+
+
+class _SpeakerDropTimelineEditor(EditorSpeakerOpsMixin, EditorTimelineVideoMixin, EditorSegmentsMixin):
     def _multiclip_active_offset(self) -> float:
         return 0.0
 
@@ -3201,6 +3207,135 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertEqual(rows[0]["speaker_list"], ["00", "01"])
             editor.timeline.set_active.assert_called_once_with(1.2)
             editor.timeline.center_to_sec.assert_called_once_with(1.2, smooth=True)
+        finally:
+            editor.text_edit.close()
+
+    def test_speaker_circle_drop_routes_same_caption_reorder_through_nle_text_edit(self):
+        editor = _SpeakerDropTimelineEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor._active_seg_start = 1.2
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("- 안녕하세요\n- 반갑습니다")
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._schedule_timeline = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._highlighter = SimpleNamespace(rehighlight=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 1.2, False, end_sec=3.4, segment_id="caption_a"))
+            second.setUserData(SubtitleBlockData("01", 1.2, False, end_sec=3.4, segment_id="caption_a"))
+
+            editor._on_speaker_circle_dropped(0, 1)
+
+            operation = editor._last_nle_live_editor_operation
+            self.assertEqual(operation["kind"], "caption_text_edit")
+            self.assertEqual(operation["metadata"]["commit_boundary"], "release")
+            self.assertEqual(operation["metadata"]["commit_source"], "timeline_speaker_drop")
+            self.assertEqual(operation["metadata"]["new_speaker_list"], ["01", "00"])
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["- 반갑습니다", "- 안녕하세요"])
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["text"], "- 반갑습니다\n- 안녕하세요")
+            self.assertEqual(rows[0]["speaker_list"], ["01", "00"])
+            self.assertAlmostEqual(rows[0]["start"], 1.2)
+            self.assertAlmostEqual(rows[0]["end"], 3.4)
+            editor.timeline.update_segments.assert_called()
+        finally:
+            editor.text_edit.close()
+
+    def test_speaker_circle_drop_keeps_qtextdocument_fallback_when_nle_rejects(self):
+        editor = _SpeakerDropTimelineEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor._active_seg_start = 1.2
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("- 안녕하세요\n- 반갑습니다")
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._schedule_timeline = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._highlighter = SimpleNamespace(rehighlight=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 1.2, False, end_sec=3.4, segment_id="caption_a"))
+            second.setUserData(SubtitleBlockData("01", 1.2, False, end_sec=3.4, segment_id="caption_a"))
+
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_text_edit_dual_write_pilot",
+                side_effect=ValueError("forced_nle_reject"),
+            ):
+                editor._on_speaker_circle_dropped(0, 1)
+
+            self.assertFalse(hasattr(editor, "_last_nle_live_editor_operation"))
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["- 반갑습니다", "- 안녕하세요"])
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["speaker_list"], ["01", "00"])
+            editor._highlighter.rehighlight.assert_called_once()
+            editor._finalize_edit.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_speaker_circle_drop_does_not_nle_reorder_distinct_captions(self):
+        editor = _SpeakerDropTimelineEditor()
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_fps = 30.0
+        editor._sync_lock = False
+        editor._active_seg_start = 0.0
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 자막\n둘째 자막")
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor._mark_dirty = Mock()
+        editor._finalize_edit = Mock()
+        editor._schedule_timeline = Mock()
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._highlighter = SimpleNamespace(rehighlight=Mock())
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0, segment_id="caption_a"))
+            second.setUserData(SubtitleBlockData("01", 3.0, False, end_sec=4.0, segment_id="caption_b"))
+
+            with patch("ui.editor.ux.editor_timeline_video.apply_caption_text_edit_dual_write_pilot") as nle_text_edit:
+                editor._on_speaker_circle_dropped(0, 1)
+
+            nle_text_edit.assert_not_called()
+            self.assertFalse(hasattr(editor, "_last_nle_live_editor_operation"))
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["둘째 자막", "첫 자막"])
+            editor._highlighter.rehighlight.assert_called_once()
+            editor._finalize_edit.assert_called_once()
         finally:
             editor.text_edit.close()
 

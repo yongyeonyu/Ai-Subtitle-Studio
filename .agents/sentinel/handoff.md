@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-060000-nle-remaining-release-source-scout.md`
+- `.agents/sentinel/handoffs/20260628-055956-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-054900-nle-diamond-delete-scout.md`
 - `.agents/sentinel/handoffs/20260628-054833-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-053800-nle-speaker-split-scout.md`

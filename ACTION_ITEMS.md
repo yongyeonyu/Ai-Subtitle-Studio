@@ -52,6 +52,7 @@ Current baseline:
 - Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
 - Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
 - Completed release-sync/evidence details live only in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`.
+- Current known uncovered release/commit candidates from the latest scout are `_change_speaker_for_line` and `_on_smart_split`; `_change_speaker_for_line` needs a separate QTextBlock/UI-shape guard before NLE sync is safe.
 
 Scope:
 
