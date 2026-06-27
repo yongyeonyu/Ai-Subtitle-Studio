@@ -1808,11 +1808,19 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             canvas.close()
 
-    def test_scan_boundary_delete_removes_requested_boundary_from_editor_state(self):
+    def test_scan_boundary_create_records_nle_marker_edit_operation(self):
         class DummyTimeline:
             def __init__(self):
                 self.scan_boundary_times = None
-                self.canvas = type("Canvas", (), {"_hover_scan_boundary_idx": 0, "update": lambda _self: None})()
+                self.canvas = type(
+                    "Canvas",
+                    (),
+                    {
+                        "_hover_scan_boundary_idx": None,
+                        "segments": [{"id": "caption_1", "start": 0.0, "end": 3.0, "text": "one"}],
+                        "update": lambda _self: None,
+                    },
+                )()
 
             def set_scan_boundary_times(self, times):
                 self.scan_boundary_times = list(times or [])
@@ -1820,12 +1828,67 @@ class TimelineHitTargetTests(unittest.TestCase):
         class DummyEditor(EditorScanCutCoreMixin):
             def __init__(self):
                 self.timeline = DummyTimeline()
-                self.video_player = None
+                self.video_player = SimpleNamespace(total_time=8.0, info_label=SimpleNamespace(setText=lambda _text: None))
+                self.dirty = False
+                self._auto_cut_boundary_scan_lines = []
+                self._project_boundary_times = []
+                self._current_project_path = ""
+                self.media_path = ""
+
+            def _current_frame_fps(self):
+                return 30.0
+
+            def _snap_to_frame(self, sec):
+                return round(float(sec), 3)
+
+            def _mark_dirty(self):
+                self.dirty = True
+
+        editor = DummyEditor()
+
+        editor._on_provisional_cut_boundary_requested(5.0)
+
+        operation = getattr(editor, "_last_nle_cut_boundary_operation", {})
+        self.assertEqual(operation.get("kind"), "marker_edit")
+        self.assertEqual(operation.get("metadata", {}).get("action"), "create")
+        self.assertEqual(operation.get("metadata", {}).get("commit_source"), "provisional_cut_boundary_create")
+        self.assertEqual(operation.get("metadata", {}).get("after_marker_count"), 1)
+        self.assertEqual([row["timeline_sec"] for row in editor._auto_cut_boundary_scan_lines], [5.0])
+        self.assertEqual([row["timeline_sec"] for row in editor.timeline.scan_boundary_times], [5.0])
+        self.assertTrue(editor.dirty)
+
+    def test_scan_boundary_delete_removes_requested_boundary_from_editor_state(self):
+        class DummyTimeline:
+            def __init__(self):
+                self.scan_boundary_times = None
+                self.canvas = type(
+                    "Canvas",
+                    (),
+                    {
+                        "_hover_scan_boundary_idx": 0,
+                        "segments": [{"id": "caption_1", "start": 0.0, "end": 3.0, "text": "one"}],
+                        "update": lambda _self: None,
+                    },
+                )()
+
+            def set_scan_boundary_times(self, times):
+                self.scan_boundary_times = list(times or [])
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.timeline = DummyTimeline()
+                self.video_player = SimpleNamespace(total_time=12.0, info_label=SimpleNamespace(setText=lambda _text: None))
                 self.dirty = False
                 self._auto_cut_boundary_scan_lines = [
                     {"timeline_sec": 5.0, "status": "provisional"},
                     {"timeline_sec": 10.0, "status": "provisional"},
                 ]
+                self._project_boundary_times = []
+                self._current_project_path = ""
+                self.media_path = ""
+
+            def _current_frame_fps(self):
+                return 30.0
 
             def _snap_to_frame(self, sec):
                 return round(float(sec), 3)
@@ -1839,6 +1902,12 @@ class TimelineHitTargetTests(unittest.TestCase):
 
         self.assertEqual([row["timeline_sec"] for row in editor._auto_cut_boundary_scan_lines], [10.0])
         self.assertEqual([row["timeline_sec"] for row in editor.timeline.scan_boundary_times], [10.0])
+        operation = getattr(editor, "_last_nle_cut_boundary_operation", {})
+        self.assertEqual(operation.get("kind"), "marker_edit")
+        self.assertEqual(operation.get("metadata", {}).get("action"), "delete")
+        self.assertEqual(operation.get("metadata", {}).get("commit_source"), "provisional_cut_boundary_delete")
+        self.assertEqual(operation.get("metadata", {}).get("before_marker_count"), 2)
+        self.assertEqual(operation.get("metadata", {}).get("after_marker_count"), 1)
         self.assertTrue(editor.dirty)
 
     def test_scan_boundary_ignores_stale_auto_rows_after_backend_completion(self):

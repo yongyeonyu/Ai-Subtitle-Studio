@@ -10,11 +10,91 @@ import time
 from PyQt6.QtCore import QTimer
 
 from core.cut_boundary_jump import nearest_boundary_second, normalize_boundary_seconds
+from core.project.nle_dual_write import apply_marker_edit_dual_write_pilot
+from core.project.project_context import build_editor_state
 from core.runtime.logger import get_logger
 from ui.editor.editor_scan_cut_project import EditorScanCutProjectMixin
 
 
 class EditorScanCutCoreMixin(EditorScanCutProjectMixin):
+    def _nle_provisional_cut_boundary_project(self, provisional_rows: list[dict]) -> dict:
+        try:
+            fps = float(self._current_frame_fps())
+        except Exception:
+            fps = 30.0
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None)
+        segments = [
+            dict(row)
+            for row in list(getattr(canvas, "segments", []) or [])
+            if isinstance(row, dict)
+        ]
+        duration = 0.0
+        for row in segments:
+            try:
+                duration = max(duration, float(row.get("end", row.get("start", 0.0)) or 0.0))
+            except Exception:
+                pass
+        for row in provisional_rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                duration = max(duration, float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0))
+            except Exception:
+                pass
+        try:
+            duration = max(duration, float(getattr(getattr(self, "video_player", None), "total_time", 0.0) or 0.0))
+        except Exception:
+            pass
+        media_path = str(getattr(self, "media_path", "") or "")
+        media_files = [media_path] if media_path else []
+        return {
+            "project_name": "provisional_cut_boundary_nle_commit",
+            "mode": "single",
+            "video": {"duration_sec": duration, "primary_fps": fps},
+            "editor_state": build_editor_state(
+                mode="single",
+                media_files=media_files,
+                segments=segments,
+                cut_boundaries=[
+                    dict(row)
+                    for row in list(getattr(self, "_project_boundary_times", []) or [])
+                    if isinstance(row, dict)
+                ],
+                provisional_cut_boundaries=[
+                    dict(row)
+                    for row in list(provisional_rows or [])
+                    if isinstance(row, dict)
+                ],
+                primary_fps=fps,
+                preserve_segment_identity=True,
+            ),
+        }
+
+    def _record_nle_provisional_cut_boundary_commit(
+        self,
+        *,
+        action: str,
+        marker: dict,
+        before_markers: list[dict],
+        after_markers: list[dict],
+    ) -> None:
+        try:
+            project = self._nle_provisional_cut_boundary_project(before_markers)
+            result = apply_marker_edit_dual_write_pilot(
+                project,
+                action=action,
+                marker=dict(marker),
+                before_markers=[dict(row) for row in before_markers if isinstance(row, dict)],
+                after_markers=[dict(row) for row in after_markers if isinstance(row, dict)],
+                commit_source=f"provisional_cut_boundary_{action}",
+                project_path=str(getattr(self, "_current_project_path", "") or ""),
+            )
+        except Exception:
+            return
+        self._last_nle_cut_boundary_operation = result.operation.to_dict()
+        self._last_nle_cut_boundary_projection = result.after_projection.to_dict()
+
     def _scan_normalize_cut_boundary_level(self, value) -> str:
         raw = str(value or "").strip().lower()
         aliases = {
@@ -804,6 +884,12 @@ class EditorScanCutCoreMixin(EditorScanCutProjectMixin):
         }
         existing = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
         self._set_auto_cut_boundary_scan_lines([*existing, row])
+        self._record_nle_provisional_cut_boundary_commit(
+            action="create",
+            marker=row,
+            before_markers=existing,
+            after_markers=list(getattr(self, "_auto_cut_boundary_scan_lines", []) or []),
+        )
         try:
             if hasattr(self, "_mark_dirty"):
                 self._mark_dirty()
@@ -823,6 +909,7 @@ class EditorScanCutCoreMixin(EditorScanCutProjectMixin):
             sec = float(global_sec or 0.0)
         existing = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
         removed = False
+        removed_row = None
         kept = []
         for row in existing:
             try:
@@ -832,6 +919,7 @@ class EditorScanCutCoreMixin(EditorScanCutProjectMixin):
                 continue
             if abs(row_sec - sec) <= 0.055:
                 removed = True
+                removed_row = row if isinstance(row, dict) else {"timeline_sec": row_sec, "time": row_sec}
                 continue
             kept.append(row)
 
@@ -841,12 +929,18 @@ class EditorScanCutCoreMixin(EditorScanCutProjectMixin):
             idx = -1
         if not removed and 0 <= idx < len(existing):
             kept = list(existing)
-            kept.pop(idx)
+            removed_row = kept.pop(idx)
             removed = True
         if not removed:
             return
         self._auto_cut_boundary_scan_lines = []
         self._set_auto_cut_boundary_scan_lines(kept)
+        self._record_nle_provisional_cut_boundary_commit(
+            action="delete",
+            marker=removed_row if isinstance(removed_row, dict) else {"timeline_sec": sec, "time": sec},
+            before_markers=existing,
+            after_markers=list(getattr(self, "_auto_cut_boundary_scan_lines", []) or []),
+        )
         try:
             canvas = getattr(getattr(self, "timeline", None), "canvas", None)
             if canvas is not None:

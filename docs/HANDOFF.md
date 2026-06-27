@@ -33,6 +33,39 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28
+
+### Scope
+
+- Continued `ACTION_ITEMS.md` item `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.
+- Added runtime NLE `marker_edit` coverage for provisional cut-boundary create/delete in `core/project/nle_dual_write.py`.
+- Wired `_on_provisional_cut_boundary_requested(...)` and `_on_provisional_cut_boundary_delete_requested(...)` in `ui/editor/editor_scan_cut_core.py` to record release-commit marker operations after the existing source-app scan-boundary row commit succeeds.
+- Preserved existing UI/UX, labels, menus, scan-boundary rows, info-label text, subtitle generation policy, save format, packaging, and App Store behavior.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/editor_scan_cut_core.py tests/test_project_nle_dual_write.py tests/test_timeline_hit_targets.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "marker_edit or gap_delete"` -> `5 passed, 23 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "scan_boundary_create_records_nle_marker_edit_operation or scan_boundary_delete_removes_requested_boundary_from_editor_state"` -> `2 passed, 151 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py` -> `33 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "scan_boundary or provisional_cut_boundary or playhead_auto_cut_magnet or gap_generate"` -> `24 passed, 129 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "gap or magnet or center_reorder or center_drag or reorder"` -> `62 passed, 271 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "timeline_canvas or final_surface or global_canvas or save_export"` -> `7 passed, 3 deselected`.
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_marker_edit_20260628` -> pass, `failed_count=0`.
+
+### Artifacts
+
+- NLE marker edit report: `output/manual_verification/latest/nle_provisional_cut_boundary_marker_edit_20260628/marker_edit_report.md`
+- Source-app quick QA: `output/manual_verification/latest/qa_suite_quick_nle_marker_edit_20260628`
+- Jammini probe: `.agents/sentinel/handoffs/20260628-063735-watchdog-handoff-probe.md`
+- Jammini next-slice scout: `.agents/sentinel/handoffs/20260628-061300-nle-next-slice-recommendation.md`
+
+### Next Recommended Action
+
+- Continue item 1 with the latest named uncovered release/commit candidate: `_set_segment_start_to_playhead` / `_set_segment_end_to_playhead` in `ui/editor/editor_segments_block_surgery.py`.
+- Reuse NLE `caption_resize` only if the QTextBlock-shape guard and legacy fallback prove safe.
+- Keep no per-pixel NLE writes and rerun Taption gap/magnet/reorder plus NLE projection guards after the next slice.
+
 ## Current Handoff - 2026-06-27
 
 ### Scope

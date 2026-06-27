@@ -15,6 +15,7 @@ from core.project.nle_dual_write import (
     apply_caption_text_edit_dual_write_pilot,
     apply_gap_delete_dual_write_pilot,
     apply_gap_generate_dual_write_pilot,
+    apply_marker_edit_dual_write_pilot,
 )
 from core.project.nle_operations import NLEOperationValidationError
 from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY, project_segments_from_nle_state
@@ -793,6 +794,63 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assertNotIn("nle_snapshot", storage)
         self.assertFalse(any(row.get("is_gap") for row in reopened_rows))
         self.assertEqual([row.get("text", "") for row in reopened_rows], ["first", "second"])
+
+    def test_marker_edit_dual_write_records_provisional_cut_boundary_create(self):
+        project = _project_with_gap()
+        marker = {"timeline_sec": 1.5, "timeline_frame": 45, "fps": 30.0, "status": "provisional"}
+
+        result = apply_marker_edit_dual_write_pilot(
+            project,
+            action="create",
+            marker=marker,
+            before_markers=[],
+            after_markers=[marker],
+            commit_source="provisional_cut_boundary_create",
+        )
+
+        self.assertEqual(result.operation_family, "marker_edit")
+        self.assertEqual(result.operation.kind, "marker_edit")
+        self.assertEqual(result.operation.metadata["action"], "create")
+        self.assertEqual(result.operation.metadata["marker_kind"], "cut_boundary")
+        self.assertEqual(result.operation.metadata["commit_boundary"], "release")
+        self.assertEqual(result.operation.metadata["commit_source"], "provisional_cut_boundary_create")
+        self.assertEqual(result.operation.metadata["before_marker_count"], 0)
+        self.assertEqual(result.operation.metadata["after_marker_count"], 1)
+        self.assertEqual(len(result.operation.undo_snapshot.markers), 0)
+        self.assertEqual(len(project["editor_state"]["analysis"]["cut_boundary_provisional_boundaries"]), 1)
+        self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "marker_edit")
+        self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_marker_action"], "create")
+        self.assertEqual(len(result.projected_rows), len(project_segments_to_editor(project, include_analysis_candidates=False)))
+
+    def test_marker_edit_dual_write_records_provisional_cut_boundary_delete(self):
+        marker = {"timeline_sec": 1.5, "timeline_frame": 45, "fps": 30.0, "status": "provisional"}
+        project = _project_with_gap()
+        project["editor_state"] = build_editor_state(
+            mode="single",
+            media_files=[],
+            segments=project_segments_to_editor(project, include_analysis_candidates=False),
+            cut_boundaries=[{"time": 2.0, "source": "visual", "status": "confirmed"}],
+            provisional_cut_boundaries=[marker],
+            primary_fps=30.0,
+            preserve_segment_identity=True,
+        )
+
+        result = apply_marker_edit_dual_write_pilot(
+            project,
+            action="delete",
+            marker=marker,
+            before_markers=[marker],
+            after_markers=[],
+            commit_source="provisional_cut_boundary_delete",
+        )
+
+        self.assertEqual(result.operation.kind, "marker_edit")
+        self.assertEqual(result.operation.metadata["action"], "delete")
+        self.assertEqual(result.operation.metadata["before_marker_count"], 1)
+        self.assertEqual(result.operation.metadata["after_marker_count"], 0)
+        self.assertEqual(len(result.operation.undo_snapshot.markers), 1)
+        self.assertEqual(project["editor_state"]["analysis"]["cut_boundary_provisional_boundaries"], [])
+        self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_marker_action"], "delete")
 
     def test_gap_delete_dual_write_rejects_missing_gap_target(self):
         project = _project_with_gap()

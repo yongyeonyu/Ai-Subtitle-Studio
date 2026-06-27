@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-061300-nle-next-slice-recommendation.md`
+- `.agents/sentinel/handoffs/20260628-063735-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-063200-nle-fresh-audit-report.md`
 - `.agents/sentinel/handoffs/20260628-063145-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-062400-nle-speaker-change-guard-scout.md`

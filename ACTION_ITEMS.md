@@ -53,7 +53,8 @@ Current baseline:
 - Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
 - Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
 - Release-sync/evidence details live only in the archive pointer above.
-- The latest named uncovered release/commit candidate, `_change_speaker_for_line`, is now covered by a guarded NLE `caption_text_edit` release-commit route. The open requirement is to run a fresh audit for any remaining safe release/commit sources before the next mutable-sync slice.
+- Provisional cut-boundary create/delete is now covered by NLE `marker_edit` release-commit metadata while preserving the existing scan-boundary UI rows.
+- The latest named uncovered release/commit candidate is `_set_segment_start_to_playhead` / `_set_segment_end_to_playhead`; use the existing NLE `caption_resize` family only with legacy fallback and QTextBlock-shape guards.
 
 Scope:
 

@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Provisional Cut Boundary Marker Edit - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at provisional cut-boundary create/delete release commits; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_provisional_cut_boundary_marker_edit_20260628/marker_edit_report.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-063735-watchdog-handoff-probe.md`
+  - Jammini next-slice scout: `.agents/sentinel/handoffs/20260628-061300-nle-next-slice-recommendation.md`
+- 수정 요약:
+  - `apply_marker_edit_dual_write_pilot(...)` records runtime NLE `marker_edit` operations for provisional cut-boundary create/delete.
+  - `_on_provisional_cut_boundary_requested(...)` records `action=create` after the existing scan-boundary row commit.
+  - `_on_provisional_cut_boundary_delete_requested(...)` records `action=delete` after the existing scan-boundary row removal.
+  - Existing UI/UX, right-click behavior, scan-boundary rows, and info-label text are unchanged.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/editor_scan_cut_core.py tests/test_project_nle_dual_write.py tests/test_timeline_hit_targets.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "marker_edit or gap_delete"` -> `5 passed, 23 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "scan_boundary_create_records_nle_marker_edit_operation or scan_boundary_delete_removes_requested_boundary_from_editor_state"` -> `2 passed, 151 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py` -> `33 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "scan_boundary or provisional_cut_boundary or playhead_auto_cut_magnet or gap_generate"` -> `24 passed, 129 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "gap or magnet or center_reorder or center_drag or reorder"` -> `62 passed, 271 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "timeline_canvas or final_surface or global_canvas or save_export"` -> `7 passed, 3 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_marker_edit_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Final caption text/timing, STT2, word precision, LLM, LoRA, VAD, cut-boundary detection policy, save/export final surfaces, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - `_set_segment_start_to_playhead` / `_set_segment_end_to_playhead` remains the next named uncovered release/commit candidate and needs a separate QTextBlock-shape guard before NLE `caption_resize` sync is accepted.
+
 ## NLE Speaker Change Commit Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at direct speaker menu change release commit; no drag-time per-pixel NLE write.

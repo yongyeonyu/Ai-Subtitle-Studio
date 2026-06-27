@@ -21,6 +21,7 @@ from core.project.nle_projection_parity import (
 from core.project.project_context import (
     build_editor_state,
     project_clip_boundaries,
+    project_cut_boundary_provisional_segments,
     project_media_files,
     project_segments_to_editor,
 )
@@ -57,6 +58,33 @@ def _analysis_cut_boundaries(project: dict[str, Any]) -> list[dict[str, Any]]:
         project_analysis = project.get("analysis") if isinstance(project.get("analysis"), dict) else {}
         rows = project_analysis.get("cut_boundaries") if isinstance(project_analysis.get("cut_boundaries"), list) else []
     return [dict(row) for row in rows or [] if isinstance(row, dict)]
+
+
+def _shadow_project_with_rows_and_provisional_markers(
+    project: dict[str, Any],
+    rows: list[dict[str, Any]],
+    markers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    shadow = _shadow_project_with_rows(project, rows)
+    editor_state = _editor_state_dict(shadow)
+    media_files = project_media_files(shadow)
+    if not media_files:
+        media_files = list(editor_state.get("media_files") or [])
+    mode = str(editor_state.get("mode") or shadow.get("mode") or "single")
+    shadow["editor_state"] = build_editor_state(
+        mode=mode,
+        media_files=media_files,
+        segments=[dict(row) for row in rows],
+        workspace=editor_state.get("workspace") if isinstance(editor_state.get("workspace"), dict) else shadow.get("workspace"),
+        clip_boundaries=project_clip_boundaries(shadow),
+        stt_preview_segments=_stt_preview_segments(shadow),
+        cut_boundaries=_analysis_cut_boundaries(shadow),
+        provisional_cut_boundaries=[dict(row) for row in markers if isinstance(row, dict)],
+        primary_fps=project_primary_fps(shadow),
+        preserve_segment_identity=True,
+    )
+    shadow["analysis"] = dict((shadow["editor_state"].get("analysis") or {}))
+    return shadow
 
 
 def _stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -113,6 +141,25 @@ def _gap_identity(row: dict[str, Any], index: int) -> str:
 
 def _caption_identity(row: dict[str, Any], index: int) -> str:
     return str(row.get("id") or f"caption_{index + 1:04d}")
+
+
+def _marker_identity(row: dict[str, Any], index: int) -> str:
+    raw = row if isinstance(row, dict) else {}
+    marker_id = str(raw.get("id") or raw.get("marker_id") or "").strip()
+    if marker_id:
+        return marker_id
+    frame = raw.get("timeline_frame", raw.get("frame"))
+    try:
+        frame_num = int(frame)
+    except (TypeError, ValueError):
+        frame_num = -1
+    if frame_num >= 0:
+        return f"cut_marker_{frame_num:08d}"
+    try:
+        millis = int(round(float(raw.get("timeline_sec", raw.get("time", raw.get("start", 0.0))) or 0.0) * 1000.0))
+    except (TypeError, ValueError):
+        millis = index + 1
+    return f"cut_marker_ms_{max(0, millis):010d}"
 
 
 def _is_final_caption_row(row: dict[str, Any]) -> bool:
@@ -1561,6 +1608,100 @@ def apply_gap_delete_dual_write_pilot(
     )
 
 
+def apply_marker_edit_dual_write_pilot(
+    project: dict[str, Any],
+    *,
+    action: str,
+    marker: dict[str, Any],
+    before_markers: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    after_markers: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    commit_source: str = "",
+    project_path: str = "",
+) -> NLEDualWritePilotResult:
+    if not isinstance(project, dict):
+        raise TypeError("project_required")
+    action_key = str(action or "").strip().lower()
+    if action_key not in {"create", "delete"}:
+        raise ValueError("nle_marker_edit_action_invalid")
+    marker_row = dict(marker or {})
+    if not marker_row:
+        raise ValueError("nle_marker_edit_marker_required")
+    before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+    before_marker_rows = [
+        dict(row)
+        for row in (before_markers if before_markers is not None else project_cut_boundary_provisional_segments(project))
+        if isinstance(row, dict)
+    ]
+    after_marker_rows = [
+        dict(row)
+        for row in (after_markers if after_markers is not None else before_marker_rows)
+        if isinstance(row, dict)
+    ]
+    marker_id = _marker_identity(marker_row, len(before_marker_rows))
+
+    before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
+    shadow_after = _shadow_project_with_rows_and_provisional_markers(project, before_rows, after_marker_rows)
+    after_projection = build_project_nle_projection_parity_report(shadow_after, project_path=project_path)
+    commit_source_key = str(commit_source or f"provisional_cut_boundary_{action_key}")
+    undo = build_nle_undo_snapshot(
+        operation_id=f"dual_write_marker_edit:{marker_id}:{action_key}",
+        editor_rows=before_rows,
+        candidate_lanes=_candidate_lanes(project, before_rows),
+        silence_gaps=[row for row in before_rows if isinstance(row, dict) and bool(row.get("is_gap"))],
+        markers=before_marker_rows,
+        ui_state_ref={
+            "operation_family": "marker_edit",
+            "target_id": marker_id,
+            "action": action_key,
+            "commit_boundary": "release",
+            "commit_source": commit_source_key,
+        },
+        metadata={"pilot": "dual_write_marker_edit"},
+    )
+    metadata: dict[str, Any] = {
+        "pilot": "dual_write",
+        "operation_family": "marker_edit",
+        "marker_id": marker_id,
+        "marker_kind": "cut_boundary",
+        "action": action_key,
+        "commit_boundary": "release",
+        "commit_source": commit_source_key,
+        "before_marker_count": len(before_marker_rows),
+        "after_marker_count": len(after_marker_rows),
+        "marker_status": str(marker_row.get("status") or ""),
+    }
+    operation = build_nle_editor_operation(
+        operation_id=undo.operation_id,
+        kind="marker_edit",
+        target_ids=[marker_id],
+        before_projection=before_projection,
+        after_projection=after_projection,
+        time_domain="sequence",
+        undo_snapshot=undo,
+        metadata=metadata,
+    )
+
+    state = sync_project_nle_state_from_editor_rows(project, before_rows, project_path=project_path)
+    state.metadata = {
+        **dict(state.metadata or {}),
+        "dual_write_pilot_family": "marker_edit",
+        "dual_write_last_operation_id": operation.operation_id,
+        "dual_write_marker_action": action_key,
+        "dual_write_marker_count": len(after_marker_rows),
+    }
+    project["editor_state"] = shadow_after["editor_state"]
+    project["analysis"] = dict(shadow_after.get("analysis") or {})
+    projected_rows = project_segments_from_nle_state(project, project_path=project_path)
+    assert_nle_editor_rows_consistent(before_rows, projected_rows, primary_fps=project_primary_fps(project))
+    return NLEDualWritePilotResult(
+        operation_family="marker_edit",
+        operation=operation,
+        before_projection=before_projection,
+        after_projection=after_projection,
+        projected_rows=tuple(dict(row) for row in projected_rows),
+    )
+
+
 __all__ = [
     "NLEDualWritePilotResult",
     "apply_candidate_confirm_dual_write_pilot",
@@ -1573,4 +1714,5 @@ __all__ = [
     "apply_caption_text_edit_dual_write_pilot",
     "apply_gap_delete_dual_write_pilot",
     "apply_gap_generate_dual_write_pilot",
+    "apply_marker_edit_dual_write_pilot",
 ]
