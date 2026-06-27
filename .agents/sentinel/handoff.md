@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-053000-nle-remaining-timeline-release-scout.md`
+- `.agents/sentinel/handoffs/20260628-052951-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-051400-nle-inline-text-commit-scout.md`
 - `.agents/sentinel/handoffs/20260628-051323-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-050000-nle-complex-center-move-scout.md`

@@ -42,7 +42,7 @@ Those standalone files were intentionally removed after consolidation.
 
 Goal: Continue the owner-directed NLE transition by moving the main timeline canvas from legacy-only display rows toward NLE-owned state while preserving Taption-derived segment editing behavior.
 
-Status: active. The read/projection cutover, Taption immediate-neighbor center-reorder release sync, safe pure center-move release sync, complex center gap-absorption/overwrite-trim release sync, and timeline inline text commit sync are complete and archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`. The open requirement is to audit and cover any remaining safe release/commit sources not already owned by NLE dual-write; do not write NLE state on every drag pixel, and prove Taption magnet/gap/reorder behavior plus final subtitle no-overlap rules again after each slice.
+Status: active. Completed NLE adoption slices are archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`. The open requirement is to audit and cover any remaining safe release/commit sources not already owned by NLE dual-write; do not write NLE state on every drag pixel, and prove Taption magnet/gap/reorder behavior plus final subtitle no-overlap rules again after each slice.
 
 Current baseline:
 
@@ -51,12 +51,7 @@ Current baseline:
 - STT1/STT2/live subtitle preview rows remain visible on the main timeline canvas as editor/diagnostic lanes.
 - Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
 - Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
-- Taption immediate-neighbor `center_reorder_left` / `center_reorder_right` release commits now route through NLE `caption_move` dual-write with `commit_boundary=release`, `commit_source=<edge>`, final overlap `0`, and legacy fallback on NLE rejection.
-- Safe pure body `center` move release commits now route through NLE `caption_move` dual-write with `commit_boundary=release`, `commit_source=center`, final overlap `0`, and legacy fallback on NLE rejection.
-- Complex body `center` release commits for explicit silence gap absorption and previous/next overwrite trim now route through NLE `caption_move` commit adoption with `commit_mode=center_gap_absorb` or `center_overwrite_trim`, final overlap `0`, and legacy fallback on NLE rejection.
-- Timeline inline text commits now route stable final-caption text changes through NLE `caption_text_edit` with `commit_boundary=release`, `commit_source=timeline_inline_text`, save/reopen text roundtrip coverage, and legacy fallback on NLE rejection.
-- Latest evidence: `output/manual_verification/latest/nle_inline_text_commit_sync_20260628/inline_text_commit_report.md`; previous complex center evidence: `output/manual_verification/latest/nle_complex_center_commit_sync_20260628/complex_center_sync_report.md`; previous center evidence: `output/manual_verification/latest/nle_center_move_commit_sync_20260628/center_move_sync_report.md`; previous reorder evidence: `output/manual_verification/latest/nle_commit_boundary_reorder_sync_20260628/reorder_sync_report.md`; previous read/projection evidence: `output/manual_verification/latest/nle_timeline_canvas_projection_cutover_20260628/timeline_canvas_projection_report.md`.
-- Latest save/reopen identity audit: `output/manual_verification/latest/nle_persistence_identity_preservation_inline_text_20260628/nle_persistence_cutover_audit.md`; all 9 current NLE dual-write operation families, including `caption_text_edit`, reopen with identity preserved and no unapproved NLE disk fields.
+- Completed release-sync/evidence details live only in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`.
 
 Scope:
 
@@ -104,7 +99,6 @@ Status: active. Completed execution history is archived in `COMPLETED_ACTION_ITE
 Owner signal and current pointers:
 
 - 2026-06-27: "지금 자막 생성이 너무 늦어지는데..."
-- Completed execution history and rejected/accepted experiment details are archived in `COMPLETED_ACTION_ITEMS.md#stt2--word-precision-generation-latency-profiling-and-accuracy-preserving-trim`.
 - Latest strict generated-video pass: `output/manual_verification/latest/generated_video_tail_collapse_fix_20260628/tail_collapse_fix_report.md`
 - Latest NAS-off stage/memory variance review: `output/manual_verification/latest/stt_latency_stage_variance_20260628/stage_variance_summary.md`; Jammini/서린 verdict is `HOLD` for algorithm/default changes while NAS remains unavailable.
 - Latest owner-required NAS HeyDealer accepted real-media proof, for use when NAS returns: `output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215/reference_benchmark_report.md`
@@ -196,8 +190,7 @@ Rollback:
 
 - Native migration is not an active direction for this repository.
 - Keep the current Python/PyQt6 source app as the working product line.
-- Completed source-app NLE runtime adoption evidence is archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`.
-- Timeline canvas read/projection cutover and center/reorder commit-boundary sync are complete; commit-boundary mutable timeline sync remains active only for uncovered release/commit sources.
+- Completed source-app NLE runtime adoption evidence is archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`; commit-boundary mutable timeline sync remains active only for uncovered release/commit sources.
 - Persisted NLE project fields remain gated; broader persistence/save/render/export ownership cleanup requires a fresh owner-approved item and compatibility gate.
 - Revisit migration only if the owner explicitly reopens it with a new scope and acceptance gate.
 
