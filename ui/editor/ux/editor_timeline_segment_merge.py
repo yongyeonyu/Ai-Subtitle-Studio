@@ -413,6 +413,102 @@ class EditorTimelineSegmentMergeMixin:
                 return drag_line
         return int(left_line)
 
+    def _retimed_diamond_delete_row(self, row: dict, start_sec: float, end_sec: float) -> dict:
+        item = dict(row)
+        snap_to_frame = getattr(self, "_snap_to_frame", None)
+        start = float(start_sec)
+        end = float(end_sec)
+        if callable(snap_to_frame):
+            try:
+                start = float(snap_to_frame(start))
+                end = float(snap_to_frame(end))
+            except Exception:
+                start = float(start_sec)
+                end = float(end_sec)
+        item["start"] = start
+        item["end"] = max(start, end)
+        item["timeline_start"] = item["start"]
+        item["timeline_end"] = item["end"]
+        for key in ("start_frame", "end_frame", "timeline_start_frame", "timeline_end_frame", "frame_range"):
+            item.pop(key, None)
+        return item
+
+    def _nle_diamond_delete_commit_plan(self, ctx: dict, *, keep_raw_line: int) -> dict | None:
+        get_current_segments = getattr(self, "_get_current_segments", None)
+        if not callable(get_current_segments):
+            return None
+        try:
+            current_segments = list(get_current_segments(force_rebuild=True))
+        except TypeError:
+            current_segments = list(get_current_segments())
+        except Exception:
+            current_segments = []
+        if not current_segments:
+            return None
+
+        keep_right = int(keep_raw_line) == int(ctx["right_raw_line"])
+        keep_line = int(ctx["right_line"] if keep_right else ctx["left_line"])
+        remove_line = int(ctx["left_line"] if keep_right else ctx["right_line"])
+        new_start = float(ctx["left_start_sec"])
+        new_end = float(ctx["right_end_sec"])
+        committed: list[dict] = []
+        found_keep = False
+        found_remove = False
+        for seg in current_segments:
+            if not isinstance(seg, dict):
+                continue
+            try:
+                seg_line = int(seg.get("line", -1))
+            except Exception:
+                committed.append(dict(seg))
+                continue
+            if seg_line == remove_line:
+                found_remove = True
+                continue
+            if seg_line == keep_line:
+                found_keep = True
+                committed.append(self._retimed_diamond_delete_row(seg, new_start, new_end))
+                continue
+            committed.append(dict(seg))
+        if not found_keep or not found_remove:
+            return None
+        return {
+            "current_segments": current_segments,
+            "committed_rows": committed,
+            "keep_line": keep_line,
+            "new_start": new_start,
+            "new_end": new_end,
+            "commit_mode": "diamond_delete_keep_right" if keep_right else "diamond_delete_keep_left",
+        }
+
+    def _try_nle_diamond_delete(self, ctx: dict, *, keep_raw_line: int) -> bool:
+        nle_commit = getattr(self, "_nle_live_editor_caption_move_commit_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if not callable(nle_commit) or not callable(reloader):
+            return False
+        plan = self._nle_diamond_delete_commit_plan(ctx, keep_raw_line=int(keep_raw_line))
+        if not isinstance(plan, dict):
+            return False
+        nle_result = nle_commit(
+            current_segments=list(plan["current_segments"]),
+            committed_rows=list(plan["committed_rows"]),
+            line_num=int(plan["keep_line"]),
+            new_start=float(plan["new_start"]),
+            new_end=float(plan["new_end"]),
+            edge_type="diamond_delete",
+            commit_source="diamond_delete",
+            commit_mode=str(plan["commit_mode"]),
+        )
+        if nle_result is None:
+            return False
+        undo_mgr = getattr(self, "_undo_mgr", None)
+        if undo_mgr is not None and hasattr(undo_mgr, "push_immediate"):
+            undo_mgr.push_immediate()
+        self._last_nle_live_editor_operation = nle_result.operation.to_dict()
+        self._last_nle_live_editor_projection = nle_result.after_projection.to_dict()
+        reloader([dict(row) for row in nle_result.projected_rows], preserve_view=True, mark_dirty=True)
+        return True
+
     def _on_diamond_merge(self, left_line: int, right_line: int) -> None:
         ctx = self._resolve_diamond_merge_context(int(left_line), int(right_line))
         if ctx is None:
@@ -485,6 +581,8 @@ class EditorTimelineSegmentMergeMixin:
             keep_raw_line = int(keep_line)
         except Exception:
             keep_raw_line = int(ctx["left_raw_line"])
+        if self._try_nle_diamond_delete(ctx, keep_raw_line=int(keep_raw_line)):
+            return
         self._undo_mgr.push_immediate()
         cur = QTextCursor(ctx["doc"])
         cur.beginEditBlock()

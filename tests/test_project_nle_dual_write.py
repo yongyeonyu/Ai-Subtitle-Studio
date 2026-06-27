@@ -279,6 +279,51 @@ class NLEDualWritePilotTests(unittest.TestCase):
             ("subtitle_vector_0003", "third", 60, 90),
         ])
 
+    def test_caption_move_commit_dual_write_adopts_diamond_delete_keep_left_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "caption-move-diamond-delete.aissproj"
+            project = _project_with_three_captions()
+            committed_rows = [
+                {"line": 0, "start": 0.0, "end": 2.0, "text": "first", "speaker": "00"},
+                {"line": 2, "start": 2.0, "end": 3.0, "text": "third", "speaker": "02"},
+            ]
+
+            result = apply_caption_move_commit_dual_write_pilot(
+                project,
+                caption_id="subtitle_vector_0001",
+                committed_rows=committed_rows,
+                committed_caption_line=0,
+                commit_boundary="release",
+                commit_source="diamond_delete",
+                commit_mode="diamond_delete_keep_left",
+                project_path=str(project_path),
+            )
+
+            legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+            nle_rows = project_segments_from_nle_state(project)
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            reopened = read_project_file(str(project_path))
+            reopened_rows = project_segments_to_editor(reopened, include_analysis_candidates=False)
+
+        self.assertEqual(result.operation.kind, "caption_move")
+        self.assertEqual(result.operation.metadata["commit_source"], "diamond_delete")
+        self.assertEqual(result.operation.metadata["commit_mode"], "diamond_delete_keep_left")
+        self.assertEqual(result.operation.metadata["deleted_row_count"], 1)
+        self.assertEqual(result.operation.metadata["changed_row_count"], 1)
+        self.assert_final_projection_is_release_stable(result)
+        self.assert_rows_match_frames(legacy_rows, [
+            ("subtitle_vector_0001", "first", 0, 60),
+            ("subtitle_vector_0003", "third", 60, 90),
+        ])
+        self.assert_rows_match_frames(nle_rows, [
+            ("subtitle_vector_0001", "first", 0, 60),
+            ("subtitle_vector_0003", "third", 60, 90),
+        ])
+        self.assertRowsAlmostEqual(reopened_rows, legacy_rows)
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+
     def test_caption_text_edit_dual_write_updates_text_without_timing_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_path = Path(tmp) / "caption-text-edit.aissproj"

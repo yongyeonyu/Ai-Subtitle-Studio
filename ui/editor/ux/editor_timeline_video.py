@@ -1404,8 +1404,9 @@ class EditorTimelineVideoMixin(
         new_end: float,
         edge_type: str,
         commit_mode: str,
+        commit_source: str = "center",
     ):
-        if edge_type != "center":
+        if edge_type not in {"center", "diamond_delete"}:
             return None
         if not current_segments or not committed_rows:
             return None
@@ -1435,7 +1436,7 @@ class EditorTimelineVideoMixin(
                 committed_rows=committed_rows,
                 committed_caption_line=int(line_num),
                 commit_boundary="release",
-                commit_source="center",
+                commit_source=str(commit_source or edge_type or "center"),
                 commit_mode=str(commit_mode or "center_commit_plan"),
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )

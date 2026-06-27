@@ -2644,6 +2644,127 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_diamond_delete_routes_keep_left_through_nle_move_commit(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor._active_seg_start = 0.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n삭제될 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+        editor._schedule_timeline = Mock()
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.5))
+
+            editor._on_diamond_delete(0, 1)
+            self.app.processEvents()
+
+            operation = getattr(editor, "_last_nle_live_editor_operation", {})
+            projection = getattr(editor, "_last_nle_live_editor_projection", {})
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(operation.get("kind"), "caption_move")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "diamond_delete")
+            self.assertEqual(operation.get("metadata", {}).get("commit_mode"), "diamond_delete_keep_left")
+            self.assertEqual(operation.get("metadata", {}).get("deleted_row_count"), 1)
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [(0.0, 2.5, "앞 자막")])
+            editor.timeline.update_segments.assert_called()
+            editor._schedule_timeline.assert_called()
+            editor._undo_mgr.push_immediate.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_diamond_delete_routes_keep_right_through_nle_move_commit(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor._active_seg_start = 0.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("삭제될 앞 자막\n현재 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+        editor._schedule_timeline = Mock()
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._diamond_delete_keep_line_override = 1
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.5))
+
+            editor._on_diamond_delete(0, 1)
+            self.app.processEvents()
+
+            operation = getattr(editor, "_last_nle_live_editor_operation", {})
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(operation.get("kind"), "caption_move")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "diamond_delete")
+            self.assertEqual(operation.get("metadata", {}).get("commit_mode"), "diamond_delete_keep_right")
+            self.assertEqual(operation.get("metadata", {}).get("deleted_row_count"), 1)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["현재 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [(0.0, 2.5, "현재 자막")])
+            editor.timeline.update_segments.assert_called()
+            editor._undo_mgr.push_immediate.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
+    def test_diamond_delete_falls_back_when_nle_move_commit_rejects(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor.video_player = SimpleNamespace(total_time=10.0)
+        editor._active_seg_start = 0.0
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("앞 자막\n삭제될 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+        editor._schedule_timeline = Mock()
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+
+        try:
+            first = editor.text_edit.document().findBlockByNumber(0)
+            second = editor.text_edit.document().findBlockByNumber(1)
+            first.setUserData(SubtitleBlockData("00", 0.0, False, end_sec=1.0))
+            second.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.5))
+
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_move_commit_dual_write_pilot",
+                side_effect=ValueError("forced-nle-reject"),
+            ):
+                editor._on_diamond_delete(0, 1)
+                self.app.processEvents()
+
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertFalse(hasattr(editor, "_last_nle_live_editor_operation"))
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞 자막"])
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in rows], [(0.0, 2.5, "앞 자막")])
+            editor._undo_mgr.push_immediate.assert_called_once()
+        finally:
+            editor.text_edit.close()
+
     def test_diamond_delete_resolves_timeline_row_line_to_document_block(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0

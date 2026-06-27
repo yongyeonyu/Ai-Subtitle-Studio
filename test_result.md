@@ -1,5 +1,37 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Diamond Delete Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at diamond drag delete release commit; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_diamond_delete_commit_sync_20260628/diamond_delete_sync_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_diamond_delete_commit_20260628`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-054900-nle-diamond-delete-scout.md`
+- 수정 요약:
+  - Diamond delete now builds the source-app final row set before QTextDocument mutation and attempts NLE `caption_move` commit adoption.
+  - NLE operation metadata records `commit_boundary=release`, `commit_source=diamond_delete`, and keep-left/keep-right `commit_mode`.
+  - Keep-left and keep-right delete-plus-resize are validated as one final NLE projection with final overlap `0`.
+  - Line-mismatch resolution still uses the existing Taption/source-app canvas/document mapping.
+  - STT/live preview rows and NLE rejection keep the existing QTextDocument fallback path.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/ux/editor_timeline_segment_merge.py ui/editor/ux/editor_timeline_video.py tests/test_timeline_playhead_fit.py tests/test_project_nle_dual_write.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "diamond_delete"` -> `7 passed, 165 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "diamond or merge or delete or center_drag or center_reorder"` -> `35 passed, 137 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_move or caption_delete or caption_resize"` -> `12 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "diamond_delete or caption_move_commit"` -> `3 passed, 23 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "diamond or magnet"` -> `22 passed, 150 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "diamond_delete or diamond or merge or delete or drag or gap or magnet or center_reorder or center_drag"` -> `114 passed, 210 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `26 passed`.
+  - `git diff --check -- .` -> pass.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_diamond_delete_commit_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Diamond delete no longer depends on a separate NLE delete plus resize sequence; it adopts the already-computed final rows atomically.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, save format, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - Remaining uncovered release/commit sources still need audit before claiming full mutable timeline ownership.
+  - Persisted NLE project fields remain gated.
+
 ## NLE Speaker Split Text Commit Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at speaker split release commit; no drag-time per-pixel NLE write.
