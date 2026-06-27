@@ -9,7 +9,8 @@ Purpose: Consolidated active execution queue for the current source-app line.
 
 This file is now the single source of truth for active performance ideas,
 action items, execution order, QA gates, and rollback rules. Completed action
-item history lives in `COMPLETED_ACTION_ITEMS.md`.
+item history is archived only in `COMPLETED_ACTION_ITEMS.md`; do not duplicate
+completed-item summaries back into this active queue.
 
 Former sources merged into this file:
 
@@ -42,7 +43,7 @@ Those standalone files were intentionally removed after consolidation.
 
 Goal: Continue the owner-directed NLE transition by moving the main timeline canvas from legacy-only display rows toward NLE-owned state while preserving Taption-derived segment editing behavior.
 
-Status: active. Completed NLE adoption slices are archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`. The open requirement is to audit and cover any remaining safe release/commit sources not already owned by NLE dual-write; do not write NLE state on every drag pixel, and prove Taption magnet/gap/reorder behavior plus final subtitle no-overlap rules again after each slice.
+Status: active. Archive pointer: `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`. The open requirement is to audit and cover any remaining safe release/commit sources not already owned by NLE dual-write; do not write NLE state on every drag pixel, and prove Taption magnet/gap/reorder behavior plus final subtitle no-overlap rules again after each slice.
 
 Current baseline:
 
@@ -51,7 +52,7 @@ Current baseline:
 - STT1/STT2/live subtitle preview rows remain visible on the main timeline canvas as editor/diagnostic lanes.
 - Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
 - Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
-- Completed release-sync/evidence details live only in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`.
+- Release-sync/evidence details live only in the archive pointer above.
 - The latest named uncovered release/commit candidate, `_change_speaker_for_line`, is now covered by a guarded NLE `caption_text_edit` release-commit route. The open requirement is to run a fresh audit for any remaining safe release/commit sources before the next mutable-sync slice.
 
 Scope:
@@ -95,7 +96,7 @@ Rollback:
 
 Goal: The latest cut-boundary profile did not confirm cut-boundary work as the generation bottleneck. Continue the owner's generation-speed concern by measuring the real wall-clock cost of STT2 rescue, selective word timestamps, and downstream quality cleanup before proposing any behavior-preserving trim.
 
-Status: active. Completed execution history is archived in `COMPLETED_ACTION_ITEMS.md#stt2--word-precision-generation-latency-profiling-and-accuracy-preserving-trim`. The open requirement is to keep `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default, then run representative HeyDealer first-180s backfill for STT1 plus STT2/word collect caches when NAS is available again. If NAS remains off, stay in analysis/measurement-only work such as scheduling or memory-pressure variance.
+Status: active. Archive pointer: `COMPLETED_ACTION_ITEMS.md#stt2--word-precision-generation-latency-profiling-and-accuracy-preserving-trim`. The open requirement is to keep `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default, then run representative HeyDealer first-180s backfill for STT1 plus STT2/word collect caches when NAS is available again. If NAS remains off, stay in analysis/measurement-only work such as scheduling or memory-pressure variance.
 
 Owner signal and current pointers:
 
@@ -151,7 +152,7 @@ Rollback:
 
 Goal: Track the work required to move the current macOS source app from development/QA state to a Mac App Store submission candidate.
 
-Status: active planning item. Completed execution history is archived in `COMPLETED_ACTION_ITEMS.md#mac-app-store-submission-readiness`. Do not execute packaging/signing/upload/notarization/DMG steps until the owner explicitly asks.
+Status: active planning item. Archive pointer: `COMPLETED_ACTION_ITEMS.md#mac-app-store-submission-readiness`. Do not execute packaging/signing/upload/notarization/DMG steps until the owner explicitly asks.
 
 Current baseline:
 
@@ -191,7 +192,7 @@ Rollback:
 
 - Native migration is not an active direction for this repository.
 - Keep the current Python/PyQt6 source app as the working product line.
-- Completed source-app NLE runtime adoption evidence is archived in `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`; commit-boundary mutable timeline sync remains active only for uncovered release/commit sources.
+- Source-app NLE runtime adoption archive: `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`; commit-boundary mutable timeline sync remains active only for uncovered release/commit sources.
 - Persisted NLE project fields remain gated; broader persistence/save/render/export ownership cleanup requires a fresh owner-approved item and compatibility gate.
 - Revisit migration only if the owner explicitly reopens it with a new scope and acceptance gate.
 

@@ -11,6 +11,10 @@ This file keeps completed action-item history out of `ACTION_ITEMS.md`.
 `ACTION_ITEMS.md` remains the active execution queue and should contain only
 remaining work, active gates, and rollback rules.
 
+When an active item or sub-slice is completed, move its concise completion
+summary here and remove that completed body from `ACTION_ITEMS.md`. The active
+queue may keep only a short archive pointer back to the relevant heading here.
+
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
