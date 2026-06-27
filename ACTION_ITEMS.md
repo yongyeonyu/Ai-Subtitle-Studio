@@ -52,8 +52,8 @@ Current baseline:
 - STT1/STT2/live subtitle preview rows remain visible on the main timeline canvas as editor/diagnostic lanes.
 - Explicit silence gap rows remain gap rows and are still rebuilt by the existing canvas gap logic.
 - Global canvas, final overlay, save/export, and roughcut render-plan projection keep their separate NLE routes.
-- Completed NLE release-sync/evidence details, including shortcut start/end-to-playhead, popup replace-all, and quality-review text commit coverage, live only in the archive pointer above; do not duplicate completed slice summaries in this active queue.
-- No named safe existing-family release/commit candidate is currently promoted. Partial range replacement through `clear_segments_in_range(...)` / `insert_partial_segments(...)` remains a deferred design candidate because it needs a richer NLE range-replace/transaction operation family rather than a simple chain of existing pilots.
+- Completed NLE release-sync/evidence details, including shortcut start/end-to-playhead, popup replace-all, quality-review text commit, and partial range replacement coverage, live only in the archive pointer above; do not duplicate completed slice summaries in this active queue.
+- No named safe existing-family release/commit candidate is currently promoted. Continue with a fresh audit for remaining release/commit sources; if a source needs more than an existing pilot, design a scoped operation family first and prove fallback before adopting it.
 
 Scope:
 

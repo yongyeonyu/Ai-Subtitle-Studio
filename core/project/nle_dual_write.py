@@ -1294,6 +1294,188 @@ def _changed_row_count(before_rows: list[dict[str, Any]], after_rows: list[dict[
     return changed
 
 
+def _row_in_start_range(row: dict[str, Any], range_start: float, range_end: float, *, tolerance: float) -> bool:
+    start = _row_start(row)
+    return start >= range_start - tolerance and start < range_end - 1e-9
+
+
+def _row_preservation_signature(row: dict[str, Any]) -> tuple[float, float, bool, str]:
+    start = round(_row_start(row), 6)
+    end = round(_row_end(row, _row_start(row)), 6)
+    is_gap = bool(row.get("is_gap"))
+    text = "" if is_gap else str(row.get("text", "") or "")
+    return start, end, is_gap, text
+
+
+def _assert_rows_preserve_before_outside_range(
+    before_rows: list[dict[str, Any]],
+    after_rows: list[dict[str, Any]],
+    *,
+    range_start: float,
+    range_end: float,
+    tolerance: float,
+) -> None:
+    remaining: dict[tuple[float, float, bool, str], int] = {}
+    for row in after_rows:
+        signature = _row_preservation_signature(row)
+        remaining[signature] = remaining.get(signature, 0) + 1
+    for row in before_rows:
+        if _row_in_start_range(row, range_start, range_end, tolerance=tolerance):
+            continue
+        signature = _row_preservation_signature(row)
+        count = remaining.get(signature, 0)
+        if count <= 0:
+            raise ValueError("nle_caption_range_replace_outside_drift")
+        remaining[signature] = count - 1
+
+
+def _ensure_unique_range_replace_row_identities(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    used: set[str] = set()
+    for index, row in enumerate(rows):
+        item = dict(row)
+        row_id = _editor_row_identity(item, index)
+        explicit_id = str(item.get("id") or item.get("gap_id") or "").strip()
+        if not explicit_id or row_id in used:
+            prefix = "gap_range_replace" if bool(item.get("is_gap")) else "caption_range_replace"
+            next_id = f"{prefix}_{index + 1:04d}"
+            counter = index + 1
+            while next_id in used:
+                counter += 1
+                next_id = f"{prefix}_{counter:04d}"
+            item["id"] = next_id
+            if bool(item.get("is_gap")):
+                item["gap_id"] = next_id
+            row_id = next_id
+        used.add(row_id)
+        out.append(item)
+    return out
+
+
+def apply_caption_range_replace_dual_write_pilot(
+    project: dict[str, Any],
+    *,
+    target_start: float,
+    target_end: float,
+    committed_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    commit_boundary: str = "",
+    commit_source: str = "",
+    project_path: str = "",
+) -> NLEDualWritePilotResult:
+    if not isinstance(project, dict):
+        raise TypeError("project_required")
+    before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+    try:
+        range_start = float(target_start)
+        range_end = float(target_end)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("nle_caption_range_replace_target_time_invalid") from exc
+    if range_end <= range_start:
+        raise ValueError("nle_caption_range_replace_target_duration_invalid")
+    tolerance = max(0.05, 1.5 / max(1.0, project_primary_fps(project)))
+    target_ids = [
+        _editor_row_identity(row, index)
+        for index, row in enumerate(before_rows)
+        if isinstance(row, dict) and _row_in_start_range(row, range_start, range_end, tolerance=tolerance)
+    ]
+    if not target_ids:
+        raise ValueError("nle_caption_range_replace_target_missing")
+
+    after_rows = _sorted_editor_rows([dict(row) for row in list(committed_rows or []) if isinstance(row, dict)])
+    if not after_rows:
+        raise ValueError("nle_caption_range_replace_rows_required")
+    for row in after_rows:
+        if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+            raise ValueError("nle_caption_range_replace_preview_rows_unsupported")
+    _assert_rows_preserve_before_outside_range(
+        before_rows,
+        after_rows,
+        range_start=range_start,
+        range_end=range_end,
+        tolerance=tolerance,
+    )
+    after_rows = _canonicalize_confirmed_caption_identities(before_rows, after_rows)
+    after_rows = _sorted_editor_rows(after_rows)
+    after_rows = _ensure_unique_range_replace_row_identities(after_rows)
+
+    after_ids = {
+        _editor_row_identity(row, index)
+        for index, row in enumerate(after_rows)
+        if isinstance(row, dict)
+    }
+    deleted_ids = [
+        _editor_row_identity(row, index)
+        for index, row in enumerate(before_rows)
+        if isinstance(row, dict) and _editor_row_identity(row, index) not in after_ids
+    ]
+    changed_count = _changed_row_count(before_rows, after_rows)
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
+
+    before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
+    shadow_after = _shadow_project_with_rows(project, after_rows)
+    after_projection = build_project_nle_projection_parity_report(shadow_after, project_path=project_path)
+    undo = build_nle_undo_snapshot(
+        operation_id=f"dual_write_caption_range_replace:{range_start:.3f}:{range_end:.3f}",
+        editor_rows=before_rows,
+        candidate_lanes=_candidate_lanes(project, before_rows),
+        silence_gaps=[row for row in before_rows if isinstance(row, dict) and bool(row.get("is_gap"))],
+        ui_state_ref={
+            "operation_family": "caption_range_replace",
+            "target_start": range_start,
+            "target_end": range_end,
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
+            "target_ids": list(target_ids),
+        },
+        metadata={"pilot": "dual_write_caption_range_replace"},
+    )
+    metadata: dict[str, Any] = {
+        "pilot": "dual_write",
+        "operation_family": "caption_range_replace",
+        "target_start": range_start,
+        "target_end": range_end,
+        "commit_boundary": commit_boundary,
+        "commit_source": commit_source,
+        "replaced_target_ids": list(target_ids),
+        "replaced_row_count": len(target_ids),
+        "committed_row_count": len(after_rows),
+        "deleted_row_count": len(deleted_ids),
+        "changed_row_count": changed_count,
+    }
+    operation = build_nle_editor_operation(
+        operation_id=undo.operation_id,
+        kind="caption_range_replace",
+        target_ids=target_ids,
+        before_projection=before_projection,
+        after_projection=after_projection,
+        time_domain="sequence",
+        undo_snapshot=undo,
+        metadata=metadata,
+    )
+
+    state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)
+    state.metadata = {
+        **dict(state.metadata or {}),
+        "dual_write_pilot_family": "caption_range_replace",
+        "dual_write_last_operation_id": operation.operation_id,
+        "dual_write_projected_count": len(after_rows),
+        "dual_write_range_replace_target_start": range_start,
+        "dual_write_range_replace_target_end": range_end,
+        "dual_write_range_replace_target_count": len(target_ids),
+    }
+    projected_rows = project_segments_from_nle_state(project, project_path=project_path)
+    assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
+    project["editor_state"] = shadow_after["editor_state"]
+    return NLEDualWritePilotResult(
+        operation_family="caption_range_replace",
+        operation=operation,
+        before_projection=before_projection,
+        after_projection=after_projection,
+        projected_rows=tuple(dict(row) for row in projected_rows),
+    )
+
+
 def apply_caption_move_commit_dual_write_pilot(
     project: dict[str, Any],
     *,
@@ -1709,6 +1891,7 @@ __all__ = [
     "apply_caption_merge_dual_write_pilot",
     "apply_caption_move_commit_dual_write_pilot",
     "apply_caption_move_dual_write_pilot",
+    "apply_caption_range_replace_dual_write_pilot",
     "apply_caption_resize_dual_write_pilot",
     "apply_caption_split_dual_write_pilot",
     "apply_caption_text_edit_dual_write_pilot",

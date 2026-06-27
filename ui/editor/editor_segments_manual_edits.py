@@ -111,6 +111,17 @@ class EditorSegmentsManualEditsMixin:
 
     def clear_segments_in_range(self, target_start: float, target_end: float):
         self._undo_mgr.push_immediate()
+        self._partial_range_replace_nle_context = None
+        try:
+            before_segments = list(self._get_current_segments(force_rebuild=True))
+            if before_segments:
+                self._partial_range_replace_nle_context = {
+                    "target_start": float(target_start),
+                    "target_end": float(target_end),
+                    "before_segments": before_segments,
+                }
+        except Exception:
+            self._partial_range_replace_nle_context = None
         doc, start_block, end_block = self._partial_insert_target_blocks(target_start, target_end)
         cur = QTextCursor(doc)
         cur.beginEditBlock()
@@ -187,10 +198,39 @@ class EditorSegmentsManualEditsMixin:
         cur.insertBlock()
         cur.block().setUserData(SubtitleBlockData("00", gap_start, is_gap=True, end_sec=gap_end))
 
+    def _try_nle_partial_range_replace_commit(self) -> bool:
+        context = getattr(self, "_partial_range_replace_nle_context", None)
+        self._partial_range_replace_nle_context = None
+        if not isinstance(context, dict):
+            return False
+        nle_range_replace = getattr(self, "_nle_live_editor_caption_range_replace_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if not callable(nle_range_replace) or not callable(reloader):
+            return False
+        try:
+            committed_rows = list(self._get_current_segments(force_rebuild=True))
+            result = nle_range_replace(
+                before_segments=list(context.get("before_segments") or []),
+                target_start=float(context.get("target_start", 0.0) or 0.0),
+                target_end=float(context.get("target_end", 0.0) or 0.0),
+                committed_rows=committed_rows,
+                commit_source="partial_insert_range_replace",
+            )
+        except Exception:
+            return False
+        if result is None:
+            return False
+        self._last_nle_partial_range_replace_operation = result.operation.to_dict()
+        self._last_nle_live_editor_operation = result.operation.to_dict()
+        self._last_nle_live_editor_projection = result.after_projection.to_dict()
+        reloader(list(result.projected_rows), preserve_view=True, mark_dirty=True)
+        return True
+
     def insert_partial_segments(self, new_segments: list[dict]):
         try:
             new_segments = self._clamp_segments_to_clip_duration(new_segments, log_changes=False)
             if not new_segments:
+                self._partial_range_replace_nle_context = None
                 return
             self._undo_mgr.push_immediate()
             doc = self.text_edit.document()
@@ -228,6 +268,8 @@ class EditorSegmentsManualEditsMixin:
             self._mark_dirty()
             self.text_edit.update_margins()
             cur.endEditBlock()
+            if self._try_nle_partial_range_replace_commit():
+                return
             self._schedule_timeline()
         except Exception as exc:
             get_logger().log(f"⚠️ 정밀 삽입 오류: {exc}")

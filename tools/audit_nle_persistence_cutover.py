@@ -24,6 +24,7 @@ from core.project.nle_dual_write import (
     apply_caption_delete_dual_write_pilot,
     apply_caption_merge_dual_write_pilot,
     apply_caption_move_dual_write_pilot,
+    apply_caption_range_replace_dual_write_pilot,
     apply_caption_resize_dual_write_pilot,
     apply_caption_split_dual_write_pilot,
     apply_caption_text_edit_dual_write_pilot,
@@ -247,6 +248,25 @@ def _operation_roundtrip_matrix(work_dir: Path) -> list[dict[str, Any]]:
             left_text="left",
             right_text="right",
             new_caption_id="subtitle_vector_0002_split_right",
+        ),
+    ))
+
+    project = _three_caption_project()
+    cases.append((
+        "caption_range_replace",
+        project,
+        apply_caption_range_replace_dual_write_pilot(
+            project,
+            target_start=1.0,
+            target_end=2.0,
+            committed_rows=[
+                {"line": 0, "start": 0.0, "end": 1.0, "text": "first", "speaker": "00"},
+                {"line": 1, "start": 1.0, "end": 1.5, "text": "second-a", "speaker": "01"},
+                {"line": 2, "start": 1.5, "end": 2.0, "text": "second-b", "speaker": "01"},
+                {"line": 3, "start": 2.0, "end": 3.0, "text": "third", "speaker": "02"},
+            ],
+            commit_boundary="release",
+            commit_source="partial_insert_range_replace",
         ),
     ))
 

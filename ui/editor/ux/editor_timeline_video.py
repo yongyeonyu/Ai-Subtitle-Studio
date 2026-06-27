@@ -23,6 +23,7 @@ from core.project.nle_dual_write import (
     apply_caption_merge_dual_write_pilot,
     apply_caption_move_commit_dual_write_pilot,
     apply_caption_move_dual_write_pilot,
+    apply_caption_range_replace_dual_write_pilot,
     apply_caption_resize_dual_write_pilot,
     apply_caption_split_dual_write_pilot,
     apply_caption_text_edit_dual_write_pilot,
@@ -1628,6 +1629,43 @@ class EditorTimelineVideoMixin(
                 new_speaker_list=new_speaker_list,
                 commit_boundary="release",
                 commit_source=str(commit_source or "live_editor_text_edit"),
+                project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
+            )
+        except Exception:
+            return None
+
+    def _nle_live_editor_caption_range_replace_result(
+        self,
+        *,
+        before_segments: list[dict],
+        target_start: float,
+        target_end: float,
+        committed_rows: list[dict],
+        commit_source: str = "partial_insert_range_replace",
+    ):
+        if not before_segments or not committed_rows:
+            return None
+        if getattr(self, "_live_stt_preview_segments", None):
+            return None
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "update_segments"):
+            return None
+        if not callable(getattr(self, "_reload_segments_from_list", None)):
+            return None
+        for row in [*list(before_segments or []), *list(committed_rows or [])]:
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        project = self._nle_live_editor_project_from_rows(before_segments)
+        try:
+            return apply_caption_range_replace_dual_write_pilot(
+                project,
+                target_start=float(target_start),
+                target_end=float(target_end),
+                committed_rows=[dict(row) for row in list(committed_rows or []) if isinstance(row, dict)],
+                commit_boundary="release",
+                commit_source=str(commit_source or "partial_insert_range_replace"),
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
         except Exception:

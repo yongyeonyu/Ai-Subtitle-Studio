@@ -19,6 +19,7 @@ NLE_OPERATION_KINDS = frozenset(
         "caption_split",
         "caption_merge",
         "caption_delete",
+        "caption_range_replace",
         "gap_generate",
         "gap_delete",
         "candidate_confirm",
@@ -35,6 +36,7 @@ _FINAL_CAPTION_KINDS = frozenset(
         "caption_split",
         "caption_merge",
         "caption_delete",
+        "caption_range_replace",
         "candidate_confirm",
     }
 )
@@ -46,6 +48,7 @@ _KIND_TIME_DOMAINS = {
     "caption_split": frozenset({"sequence"}),
     "caption_merge": frozenset({"sequence"}),
     "caption_delete": frozenset({"sequence"}),
+    "caption_range_replace": frozenset({"sequence"}),
     "gap_generate": frozenset({"sequence"}),
     "gap_delete": frozenset({"sequence"}),
     "candidate_confirm": frozenset({"sequence"}),

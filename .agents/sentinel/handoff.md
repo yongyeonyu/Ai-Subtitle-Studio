@@ -1,5 +1,8 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-073800-nle-range-replace-commit-sync.md`
+- `.agents/sentinel/handoffs/20260628-062800-nle-range-replace-audit.md`
+- `.agents/sentinel/handoffs/20260628-073020-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-072500-nle-quality-review-text-commit-sync.md`
 - `.agents/sentinel/handoffs/20260628-062700-nle-final-exclusions-audit.md`
 - `.agents/sentinel/handoffs/20260628-071837-watchdog-handoff-probe.md`

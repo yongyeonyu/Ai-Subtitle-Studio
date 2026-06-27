@@ -1424,6 +1424,101 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_partial_insert_routes_range_replace_through_nle_transaction(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.media_path = "/tmp/partial-range-replace.mp4"
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_player = SimpleNamespace(total_time=2.0)
+        editor._active_seg_start = None
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor._schedule_timeline = Mock()
+        editor._mark_dirty = Mock()
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("기존 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0, segment_id="caption_original"))
+
+            editor._get_current_segments(force_rebuild=True)
+            editor.clear_segments_in_range(1.0, 2.0)
+            editor.insert_partial_segments([
+                {"start": 1.0, "end": 2.0, "text": "새 자막", "speaker": "00"}
+            ])
+
+            operation = getattr(editor, "_last_nle_partial_range_replace_operation", {})
+            projection = getattr(editor, "_last_nle_live_editor_projection", {})
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual(operation.get("kind"), "caption_range_replace")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "partial_insert_range_replace")
+            self.assertEqual(operation.get("metadata", {}).get("target_start"), 1.0)
+            self.assertEqual(operation.get("metadata", {}).get("target_end"), 2.0)
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            self.assertEqual([(row["start"], row["end"], row["text"]) for row in rows if not row.get("is_gap")], [
+                (1.0, 2.0, "새 자막"),
+            ])
+            editor.timeline.update_segments.assert_called()
+        finally:
+            editor.text_edit.close()
+
+    def test_partial_insert_keeps_legacy_result_when_nle_range_replace_rejects(self):
+        editor = _ResizeTimelineEditor()
+        editor.video_fps = 30.0
+        editor.media_path = "/tmp/partial-range-reject.mp4"
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor._snap_to_frame = lambda sec: float(sec)
+        editor.settings = {"spk1_id": "00", "spk2_id": "01"}
+        editor.video_player = SimpleNamespace(total_time=2.0)
+        editor._active_seg_start = None
+        editor._segment_queue = []
+        editor._live_editor_preview_queue = []
+        editor._live_editor_preview_segments = []
+        editor._live_editor_preview_keys = set()
+        editor._live_stt_preview_segments = []
+        editor._linked_project_path_for_srt = ""
+        editor._schedule_timeline = Mock()
+        editor._mark_dirty = Mock()
+        editor.timeline = SimpleNamespace(update_segments=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("기존 자막")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock(), setUpdatesEnabled=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("00", 1.0, False, end_sec=2.0, segment_id="caption_original"))
+
+            editor._get_current_segments(force_rebuild=True)
+            editor.clear_segments_in_range(1.0, 2.0)
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_range_replace_dual_write_pilot",
+                side_effect=ValueError("forced-nle-reject"),
+            ):
+                editor.insert_partial_segments([
+                    {"start": 1.0, "end": 2.0, "text": "새 자막", "speaker": "00"}
+                ])
+
+            self.assertFalse(hasattr(editor, "_last_nle_partial_range_replace_operation"))
+            rows = editor._get_current_segments(force_rebuild=True)
+            self.assertEqual([(row["start"], row["end"], row["text"]) for row in rows if not row.get("is_gap")], [
+                (1.0, 2.0, "새 자막"),
+            ])
+            editor._schedule_timeline.assert_called()
+        finally:
+            editor.text_edit.close()
+
     def test_partial_inserted_segments_can_resize_without_dropping_following_segments(self):
         editor = _ResizeTimelineEditor()
         editor.video_fps = 30.0

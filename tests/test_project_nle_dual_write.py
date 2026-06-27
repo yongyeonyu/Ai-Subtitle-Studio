@@ -10,6 +10,7 @@ from core.project.nle_dual_write import (
     apply_caption_merge_dual_write_pilot,
     apply_caption_move_commit_dual_write_pilot,
     apply_caption_move_dual_write_pilot,
+    apply_caption_range_replace_dual_write_pilot,
     apply_caption_resize_dual_write_pilot,
     apply_caption_split_dual_write_pilot,
     apply_caption_text_edit_dual_write_pilot,
@@ -279,6 +280,62 @@ class NLEDualWritePilotTests(unittest.TestCase):
             ("subtitle_vector_0002", "second", 15, 45),
             ("subtitle_vector_0003", "third", 60, 90),
         ])
+
+    def test_caption_range_replace_dual_write_adopts_partial_insert_transaction(self):
+        project = _project_with_three_captions()
+        committed_rows = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "first", "speaker": "00"},
+            {"line": 1, "start": 1.0, "end": 1.5, "text": "second-a", "speaker": "01"},
+            {"line": 2, "start": 1.5, "end": 2.0, "text": "second-b", "speaker": "01"},
+            {"line": 3, "start": 2.0, "end": 3.0, "text": "third", "speaker": "02"},
+        ]
+
+        result = apply_caption_range_replace_dual_write_pilot(
+            project,
+            target_start=1.0,
+            target_end=2.0,
+            committed_rows=committed_rows,
+            commit_boundary="release",
+            commit_source="partial_insert_range_replace",
+        )
+
+        legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        self.assertEqual(result.operation_family, "caption_range_replace")
+        self.assertEqual(result.operation.kind, "caption_range_replace")
+        self.assertEqual(result.operation.target_ids, ("subtitle_vector_0002",))
+        self.assertEqual(result.operation.metadata["commit_source"], "partial_insert_range_replace")
+        self.assertEqual(result.operation.metadata["replaced_row_count"], 1)
+        self.assert_final_projection_is_release_stable(result)
+        self.assert_rows_match_frames(legacy_rows, [
+            ("subtitle_vector_0001", "first", 0, 30),
+            ("subtitle_vector_0002", "second-a", 30, 45),
+            ("caption_range_replace_0003", "second-b", 45, 60),
+            ("subtitle_vector_0003", "third", 60, 90),
+        ])
+        self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_range_replace")
+
+    def test_caption_range_replace_dual_write_rejects_outside_drift_without_mutating_project(self):
+        project = _project_with_three_captions()
+        before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        committed_rows = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "first changed", "speaker": "00"},
+            {"line": 1, "start": 1.0, "end": 2.0, "text": "second fixed", "speaker": "01"},
+            {"line": 2, "start": 2.0, "end": 3.0, "text": "third", "speaker": "02"},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "nle_caption_range_replace_outside_drift"):
+            apply_caption_range_replace_dual_write_pilot(
+                project,
+                target_start=1.0,
+                target_end=2.0,
+                committed_rows=committed_rows,
+                commit_boundary="release",
+                commit_source="partial_insert_range_replace",
+            )
+
+        after_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        self.assertRowsAlmostEqual(after_rows, before_rows)
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, project)
 
     def test_caption_move_commit_dual_write_adopts_diamond_delete_keep_left_plan(self):
         with tempfile.TemporaryDirectory() as tmp:

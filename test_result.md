@@ -1,5 +1,37 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Partial Range Replace Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at partial subtitle replacement commit; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_partial_range_replace_commit_sync_20260628/range_replace_report.md`
+  - Persistence audit: `output/manual_verification/latest/nle_persistence_identity_preservation_range_replace_20260628/nle_persistence_cutover_audit.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_range_replace_20260628`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-073020-watchdog-handoff-probe.md`
+  - Jammini support audit: `.agents/sentinel/handoffs/20260628-062800-nle-range-replace-audit.md`
+- 수정 요약:
+  - Added `caption_range_replace` to the NLE operation model and persistence audit matrix.
+  - `clear_segments_in_range(...)` / `insert_partial_segments(...)` now attempts runtime NLE range replacement after the source-app edit commits final rows.
+  - The NLE route preserves rows outside the target range, assigns unique identities to inserted rows, rejects STT/live preview or unsupported rows, and reloads projected rows only when safe.
+  - Existing QTextDocument/source-app fallback remains active for NLE rejection or unsupported states.
+  - Existing UI/UX, labels, menus, shortcuts, popups, save/export behavior, subtitle generation policy, packaging, and App Store behavior are unchanged.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_operations.py core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/editor_segments_manual_edits.py tests/test_project_nle_dual_write.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_nle_persistence_cutover_audit.py` -> `39 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "partial_insert or gap or magnet or reorder"` -> `25 passed, 166 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_project_segment_reload.py -k "gap or magnet or reorder or caption_range_replace or identity or reload"` -> `125 passed, 116 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_timeline_render_cache.py -k "timeline_canvas or projection or final_surface or save_export"` -> `5 passed, 53 deselected`.
+  - `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_identity_preservation_range_replace_20260628` -> pass; `operation_roundtrip_family_count=10`, `operation_roundtrip_all_passed=true`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_range_replace_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Final overlap stayed `0` and global max active stayed `1` in focused NLE route/audit checks.
+  - Save/reopen operation identity is preserved for all 10 current NLE dual-write operation families.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, visible UI layout, packaging, and App Store behavior were not changed.
+- 완료 항목 분리:
+  - Completed slice summary moved to `COMPLETED_ACTION_ITEMS.md`.
+  - `ACTION_ITEMS.md` keeps the NLE item active only for future uncovered release/commit sources, gates, and rollback.
+
 ## NLE Quality Review Text Commit Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at quality-review candidate / one-click subtitle text commits; no drag-time per-pixel NLE write.
@@ -29,7 +61,7 @@
   - Final overlap projection stayed `0` with global max active `1` in the focused NLE quality text route test.
   - STT2, word precision, LLM, LoRA, VAD, timing policy, visible UI layout, packaging, and App Store behavior were not changed.
 - 남은 위험:
-  - `clear_segments_in_range(...)` / `insert_partial_segments(...)` remains deferred because partial range replacement needs a richer NLE range-replace/transaction operation family.
+  - This checkpoint predates the later `caption_range_replace` slice; the current active queue no longer treats partial range replacement as deferred.
   - Persisted NLE project fields remain gated.
 
 ## NLE Popup Replace-All Commit Sync - 2026-06-28 KST
@@ -271,14 +303,14 @@
   - JSON: `output/manual_verification/latest/nle_persistence_identity_preservation_inline_text_20260628/nle_persistence_cutover_audit.json`
 - 수정 요약:
   - Extended `tools/audit_nle_persistence_cutover.py` so the operation roundtrip matrix includes `caption_text_edit`.
-  - Updated the persistence cutover audit test to expect all 9 current NLE dual-write operation families.
+  - Updated the persistence cutover audit test to expect all 9 then-current NLE dual-write operation families.
   - Kept completed action-item history in `COMPLETED_ACTION_ITEMS.md`; `ACTION_ITEMS.md` remains active work, current gates, and rollback only.
 - 검증:
   - `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py` -> pass.
   - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `4 passed`.
   - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_identity_preservation_inline_text_20260628` -> pass; `operation_roundtrip_family_count=9`, `operation_roundtrip_all_passed=true`.
 - 핵심 결과:
-  - All 9 current NLE dual-write operation families reopen with `reopened_identity_preserved=true`.
+  - All 9 then-current NLE dual-write operation families reopen with `reopened_identity_preserved=true`.
   - `caption_text_edit` reports `reopened_matches_projected=true`, `reopened_identity_preserved=true`, final overlap `0`, and max active `1`.
   - Disk storage still stays clean of unapproved top-level `nle`, `nle_snapshot`, and `_nle_project_state` fields.
 
