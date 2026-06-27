@@ -139,6 +139,24 @@ When the owner asks to limit real-media validation to the NAS HeyDealer first th
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts
 ```
 
+## STT collect-cache readiness validation
+
+When NAS is unavailable and STT collect-cache defaults are under review, use the read-only readiness audit before any production/default claim. This reads existing benchmark artifacts only.
+
+```bash
+./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/20260627_*/benchmark_results.json' --glob '.codex_work/benchmarks/subtitle_pipeline_variants/20260628_*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_readiness_YYYYMMDD
+```
+
+Focused guards:
+
+```bash
+./venv/bin/python -m py_compile tools/audit_stt_cache_backfill_readiness.py tests/test_stt_cache_backfill_readiness.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_backfill_readiness.py tests/test_stage_variance_summary.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py tests/test_media_processor_overlap.py tests/test_subtitle_engine_settings.py -k "collect_cache or macro_response_cache"
+```
+
+The readiness report must keep `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default unless representative real-media write and cache-hit replay evidence pass the strict final gates.
+
 ## Real-media latency profiling validation
 
 When diagnosing generation latency, keep three evidence surfaces separate:

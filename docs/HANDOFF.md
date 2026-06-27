@@ -33,7 +33,42 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 Shortcut Split Commit And NLE Item Closeout
+## Current Handoff - 2026-06-28 STT Cache Backfill Readiness Audit
+
+### Scope
+
+- Continued `ACTION_ITEMS.md` item `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`.
+- Added read-only STT collect-cache backfill readiness tooling in `tools/audit_stt_cache_backfill_readiness.py`.
+- Added focused tests in `tests/test_stt_cache_backfill_readiness.py`.
+- Ran the audit over existing 2026-06-27/2026-06-28 benchmark artifacts without changing runtime behavior, STT/STT2 policy, word precision policy, cache defaults, subtitle timing, save/load, render/export, UI, packaging, or App Store behavior.
+- Updated `ACTION_ITEMS.md` so the active STT item now records the new blocker: existing generated cache-hit artifacts fail the strict duration-bound final gate and must be refreshed after the tail-collapse fix before any real-media default-review backfill.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_stt_cache_backfill_readiness.py tests/test_stt_cache_backfill_readiness.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_backfill_readiness.py tests/test_stage_variance_summary.py` -> `7 passed`.
+- `./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/20260627_*/benchmark_results.json' --glob '.codex_work/benchmarks/subtitle_pipeline_variants/20260628_*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_readiness_20260628` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py tests/test_media_processor_overlap.py tests/test_subtitle_engine_settings.py -k "collect_cache or macro_response_cache"` -> `4 passed, 228 deselected`.
+
+### Results
+
+- Readiness artifact: `output/manual_verification/latest/stt_cache_backfill_readiness_20260628/stt_cache_backfill_readiness.md`
+- `run_count=36`, `real_media_run_count=10`, `generated_or_local_run_count=26`.
+- `current_real_inputs_available=false`.
+- Collect-cache defaults remain `stt_primary_collect_cache_enabled=false`, `stt_recheck_collect_cache_enabled=false`.
+- Production recommendation remains `hold_default_off`.
+- Strict real-media cache-hit replay count is `0` for STT1, STT2/word, and combined collect-cache families.
+- Existing generated cache-hit artifacts are now classified as strict final-gate failures because they fail the duration-bound gate.
+- Jammini probe: `.agents/sentinel/handoffs/20260628-080428-watchdog-handoff-probe.md`
+- Jammini support audit: `.agents/sentinel/handoffs/20260628-081500-stt-cache-readiness-support-audit.md`
+
+### Next Recommended Action
+
+- While NAS remains unavailable, run a tail-collapse-fixed synthetic collect-cache write/hit replay and require strict final gates before using generated cache-hit speed deltas as current strict evidence.
+- When NAS is available, run representative HeyDealer first-180s write plus cache-hit replay before any owner review of STT collect-cache defaults.
+- Do not skip STT1/STT2, disable word precision, shrink windows, promote Fast defaults, or loosen final subtitle gates.
+
+## Previous Handoff - 2026-06-28 Shortcut Split Commit And NLE Item Closeout
 
 ### Scope
 

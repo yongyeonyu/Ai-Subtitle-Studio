@@ -50,6 +50,7 @@ Owner signal and current pointers:
 - 2026-06-27: "지금 자막 생성이 너무 늦어지는데..."
 - Latest strict generated-video pass: `output/manual_verification/latest/generated_video_tail_collapse_fix_20260628/tail_collapse_fix_report.md`
 - Latest NAS-off stage/memory variance review: `output/manual_verification/latest/stt_latency_stage_variance_20260628/stage_variance_summary.md`; Jammini/서린 verdict is `HOLD` for algorithm/default changes while NAS remains unavailable.
+- Latest STT collect-cache backfill readiness audit: `output/manual_verification/latest/stt_cache_backfill_readiness_20260628/stt_cache_backfill_readiness.md`; result `production_default_recommendation=hold_default_off`, current collect-cache defaults `false/false`, current real inputs unavailable, strict real-media cache-hit runs `0`, and old cache-hit artifacts fail the strict duration-bound final gate.
 - Latest owner-required NAS HeyDealer accepted real-media proof, for use when NAS returns: `output/manual_verification/latest/heydealer_nas_reference_180s_20260627_2215/reference_benchmark_report.md`
 - Latest X5 short-loop reference smoke: `output/manual_verification/latest/x5_local_reference_fixture_20260627/reference_benchmark_report.md`; short-loop evidence cannot approve broad latency trims.
 - Latest X5 project-reference 180s evidence: `output/manual_verification/latest/x5_project_reference_180s_20260627/reference_benchmark_report.md`; media/SRT semantic mismatch must still be rejected by scored acceptance.
@@ -68,7 +69,8 @@ Scope:
 Execution order:
 
 1. Keep the separated profiling method: non-profile repeat elapsed for speed truth, cProfile only for ownership diagnosis, reference benchmark for quality/timing truth.
-2. Keep both `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default. When NAS is available again, run a representative HeyDealer first-180s backfill for STT1 plus STT2/word collect caches before using cache speed deltas as production evidence. If NAS remains off, stay in analysis/measurement-only work such as scheduling or memory-pressure variance; do not skip STT1/STT2, downgrade models, shrink windows, remove word precision coverage, or loosen final stability gates.
+2. Keep both `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default. When NAS is available again, run a representative HeyDealer first-180s backfill for STT1 plus STT2/word collect caches before using cache speed deltas as production evidence. If NAS remains off, stay in analysis/measurement-only work such as scheduling, memory-pressure variance, strict synthetic replay refresh, or readiness audit; do not skip STT1/STT2, downgrade models, shrink windows, remove word precision coverage, or loosen final stability gates.
+3. Before treating the generated-fixture cache-hit speed deltas as current strict evidence, rerun a tail-collapse-fixed synthetic cache write/hit pair and require strict final gates. The existing cache-hit artifacts predate the strict tail-collapse fix and are now classified as strict duration-bound failures.
 
 Acceptance gates:
 

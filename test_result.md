@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## STT Cache Backfill Readiness Audit - 2026-06-28 KST
+
+- 실행 모드: NAS-off analysis-only readiness audit for STT collect-cache default promotion.
+- 결과: pass; production recommendation remains `hold_default_off`.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_cache_backfill_readiness_20260628/stt_cache_backfill_readiness.md`
+  - JSON: `output/manual_verification/latest/stt_cache_backfill_readiness_20260628/stt_cache_backfill_readiness.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-080428-watchdog-handoff-probe.md`
+  - Jammini support audit: `.agents/sentinel/handoffs/20260628-081500-stt-cache-readiness-support-audit.md`
+- 수정 요약:
+  - Added `tools/audit_stt_cache_backfill_readiness.py`.
+  - Added focused tests in `tests/test_stt_cache_backfill_readiness.py`.
+  - The audit reads existing `benchmark_results.json` artifacts, checks collect-cache hit/provider flags, strict final gates, real-media availability, and config defaults.
+  - No runtime behavior, STT/STT2 policy, word precision policy, cache default, subtitle timing, save/load, render/export, packaging, App Store behavior, or UI changed.
+- 실제 감사 결과:
+  - `run_count=36`, `real_media_run_count=10`, `generated_or_local_run_count=26`.
+  - `current_real_inputs_available=false`.
+  - `stt_primary_collect_cache_enabled=false`, `stt_recheck_collect_cache_enabled=false`.
+  - strict real-media cache-hit replay count is `0` for STT1, STT2/word, and combined collect-cache families.
+  - existing generated cache-hit artifacts are classified as strict final-gate failures because they fail the duration-bound gate.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_stt_cache_backfill_readiness.py tests/test_stt_cache_backfill_readiness.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_backfill_readiness.py tests/test_stage_variance_summary.py` -> `7 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py tests/test_media_processor_overlap.py tests/test_subtitle_engine_settings.py -k "collect_cache or macro_response_cache"` -> `4 passed, 228 deselected`.
+- 다음 gate:
+  - Before real NAS backfill can be used for default review, refresh a tail-collapse-fixed synthetic cache write/hit pair and require strict final gates.
+  - When NAS is available, run representative HeyDealer first-180s write plus cache-hit replay before any owner review of collect-cache defaults.
+
 ## NLE Shortcut Split Commit Sync And Completed-Item Split - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at shortcut split-at-playhead release commit; no drag-time per-pixel NLE write.

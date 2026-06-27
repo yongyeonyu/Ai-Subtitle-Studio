@@ -1,5 +1,8 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-083000-stt-cache-readiness-audit.md`
+- `.agents/sentinel/handoffs/20260628-081500-stt-cache-readiness-support-audit.md`
+- `.agents/sentinel/handoffs/20260628-080428-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-081000-nle-shortcut-split-commit-sync.md`
 - `.agents/sentinel/handoffs/20260628-075500-nle-remaining-release-source-audit.md`
 - `.agents/sentinel/handoffs/20260628-075011-watchdog-handoff-probe.md`
