@@ -18,10 +18,11 @@ from core.native_json import dumps_json_bytes
 from core.runtime import config
 from core.runtime.json_utils import json_safe
 from core.runtime.memory_manager import process_rss_bytes
-from core.runtime.temp_workspace import ensure_temp_workspace, temp_workspace_root, workspace_usage
+from core.runtime.temp_workspace import ensure_temp_workspace, prune_trace_run_directories, temp_workspace_root, workspace_usage
 
 TRACE_SCHEMA = "ai_subtitle_studio.trace.v1"
 TRACE_MANIFEST_SCHEMA = "ai_subtitle_studio.trace_manifest.v1"
+TRACE_RUN_RETENTION_LIMIT = 20
 _APP_TRACE_LOGGER: "TraceLogger | None" = None
 _APP_TRACE_LOCK = threading.Lock()
 _STOP_WRITER = object()
@@ -201,6 +202,7 @@ class TraceLogger:
         self._disabled = False
         self._drop_counts: dict[str, int] = {}
         self._last_error = ""
+        self.retention_report: dict[str, Any] = {}
         self.started_ts = _utc_now_text()
         self.manifest = self._build_manifest(
             media_path=media_path,
@@ -214,6 +216,10 @@ class TraceLogger:
         )
         try:
             ensure_temp_workspace(self.root)
+            self.retention_report = prune_trace_run_directories(
+                self.root,
+                max_runs=max(0, TRACE_RUN_RETENTION_LIMIT - 1),
+            )
             self.run_dir.mkdir(parents=True, exist_ok=True)
             _atomic_write_json(self.manifest_path, self.manifest)
         except Exception as exc:

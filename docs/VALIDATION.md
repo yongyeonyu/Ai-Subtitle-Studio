@@ -80,8 +80,9 @@ AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/path/to/audi
 Trace/temp-workspace changes should first prove syntax, focused trace behavior, then the startup/app-command diagnostic guard.
 
 ```bash
-./venv/bin/python -m py_compile main.py core/runtime/temp_workspace.py core/runtime/trace_logger.py tools/collect_trace_package.py tests/test_trace_logger.py tests/test_startup_diagnostics.py
-QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py
+./venv/bin/python -m py_compile main.py core/runtime/temp_workspace.py core/runtime/trace_logger.py tools/collect_trace_package.py tools/audit_trace_log_bundle.py tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py tests/test_startup_diagnostics.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_trace_log_bundle.py --output-dir output/manual_verification/latest/trace_log_bundle_audit_YYYYMMDD
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_startup_diagnostics.py tests/test_app_command_bridge.py -k "trace or diagnostic or open_media or open_project"
 ```
 
@@ -90,6 +91,8 @@ Trace packages are collected with:
 ```bash
 ./venv/bin/python tools/collect_trace_package.py --run-id <trace-run-id>
 ```
+
+The trace audit must prove required temp directories, manifest/latest/events JSONL, bounded media fingerprinting, exact-frame `fps_num`/`fps_den`, package collection, trace failure isolation, and run-directory retention. Current retention policy keeps at most 20 trace run directories after a new trace run starts.
 
 ## Cut-boundary source-fps scout validation
 

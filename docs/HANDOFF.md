@@ -33,7 +33,38 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Marker Edit Persistence Gate
+## Current Handoff - 2026-06-28 Trace Log Bundle Contract And Retention
+
+### Scope
+
+- Continued the owner goal to move AI Subtitle Studio toward a video-editor/NLE structure by hardening the diagnostic Trace Log Bundle from `NLE_Action.md`.
+- Added `tools/audit_trace_log_bundle.py` so the trace contract can be verified as an artifact, not only inferred from focused tests.
+- Added trace run-directory retention in `core/runtime/temp_workspace.py` and invoked it from `core/runtime/trace_logger.py`; a new trace run keeps the newest 19 existing run directories, then creates itself so the post-start count stays at most 20.
+- No UI/UX, subtitle generation, STT/STT2, word precision, `.aissproj` save format, packaging, or App Store behavior changed.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/runtime/temp_workspace.py core/runtime/trace_logger.py tools/audit_trace_log_bundle.py tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py` -> `16 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_trace_log_bundle.py --output-dir output/manual_verification/latest/trace_log_bundle_retention_audit_20260628` -> pass.
+
+### Results
+
+- Audit artifact: `output/manual_verification/latest/trace_log_bundle_retention_audit_20260628/trace_log_bundle_audit.md`
+- `passed=true`, required dirs `true`, manifest missing fields `none`, event missing fields `none`.
+- Exact-frame precision: `frame_precision_ok=true` with `fps_num=60000`, `fps_den=1001` in the frame-sensitive event path.
+- Bounded media fingerprint: `true`; media fingerprint keys exclude full-file hashes.
+- Package complete: `true`; package files include latest JSONL, run manifest, run events, and package manifest.
+- Retention: `retention_ok=true`, retained run count `20/20`, retention removed count `5`.
+- Jammini route probe: `.agents/sentinel/handoffs/20260628-084655-watchdog-handoff-probe.md`
+- Jammini scout: `.agents/sentinel/handoffs/20260628-084700-trace-retention-next-gap-scout.md`
+
+### Next Recommended Action
+
+- Continue active `ACTION_ITEMS.md` item 1 only when NAS real-media backfill is available, or keep it analysis-only while NAS is unavailable.
+- For NLE, persisted `nle`, `nle_snapshot`, and `_nle_project_state` fields remain blocked until a separate owner-approved compatibility gate exists.
+
+## Previous Handoff - 2026-06-28 NLE Marker Edit Persistence Gate
 
 ### Scope
 

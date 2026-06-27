@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Trace Log Bundle Contract And Retention - 2026-06-28 KST
+
+- 실행 모드: source-app Trace Log Bundle contract/retention audit; no runtime editor behavior change.
+- 결과: pass for Trace Log Bundle required directories, manifest/latest/events JSONL, exact-frame fps rational fields, bounded media fingerprint, trace package collection, and run-directory retention.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/trace_log_bundle_retention_audit_20260628/trace_log_bundle_audit.md`
+  - Audit JSON: `output/manual_verification/latest/trace_log_bundle_retention_audit_20260628/trace_log_bundle_audit.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-084655-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-084700-trace-retention-next-gap-scout.md`
+- 수정 요약:
+  - Added `tools/audit_trace_log_bundle.py` and `tests/test_trace_log_bundle_audit.py`.
+  - Added `prune_trace_run_directories(...)` and `trace_runs_workspace_dir(...)` to `core/runtime/temp_workspace.py`.
+  - `TraceLogger` now prunes old trace run directories before creating a new run; the current post-start retention limit is 20 run directories.
+  - No UI/UX, subtitle generation, STT/STT2, word precision, save-file format, packaging, App Store, or runtime editor behavior changed.
+- 실제 감사 결과:
+  - `passed=true`.
+  - Required dirs created `true`; manifest missing fields `none`; event missing fields `none`.
+  - Event count `4`, latest event count `1`.
+  - Frame precision `true`; bounded media fingerprint `true`.
+  - Package complete `true`; package event count `3`.
+  - Retention `true`; retained run count `20/20`; retention removed count `5`.
+  - Trace disabled `false`; trace drop counts `{}`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/temp_workspace.py core/runtime/trace_logger.py tools/audit_trace_log_bundle.py tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py` -> `16 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_trace_log_bundle.py --output-dir output/manual_verification/latest/trace_log_bundle_retention_audit_20260628` -> pass.
+
 ## NLE Marker Edit Persistence Gate - 2026-06-28 KST
 
 - 실행 모드: source-app NLE persistence cutover audit strengthening; legacy `.aissproj` disk shape remains unchanged.

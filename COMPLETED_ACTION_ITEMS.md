@@ -63,6 +63,14 @@ Source item: `ACTION_ITEMS.md` item `Mac App Store Submission Readiness`.
 1. `tools/audit_app_store_readiness.py`, `tests/test_app_store_readiness_audit.py`, and `docs/APP_STORE_SUBMISSION_READINESS.md` were added to keep App Store submission readiness evidence separate from source-app pytest/QA.
 2. The submission target was locked to Mac App Store `.pkg`, and Developer ID beta `.dmg` was documented as a separate opt-in track that cannot count as App Store submission proof.
 
+## Trace Log Bundle Diagnostics
+
+Source section: `NLE_Action.md` Trace Log Bundle.
+
+1. Trace Log Bundle contract audit tooling was added. `tools/audit_trace_log_bundle.py` creates a bounded temporary trace run, verifies required temp directories, manifest/latest/events JSONL, exact-frame `fps_num`/`fps_den`, bounded media fingerprinting, trace package collection, and non-disabled trace status, then writes JSON/Markdown evidence.
+2. Trace run-directory retention was added under `core/runtime/temp_workspace.py` and invoked by `core/runtime/trace_logger.py` before creating a new trace run. The current policy keeps at most 20 trace run directories after a new run starts.
+3. Evidence: `output/manual_verification/latest/trace_log_bundle_retention_audit_20260628/trace_log_bundle_audit.md`; result `passed=true`, required dirs `true`, frame precision `true`, bounded media fingerprint `true`, package complete `true`, retention ok `true`, retained run count `20/20`, retention removed count `5`, trace disabled `false`, drop counts `{}`.
+
 ## Source-App NLE Runtime Adoption And Migration Status
 
 Source sections: previous `ACTION_ITEMS.md` migration status and completed slices from `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.

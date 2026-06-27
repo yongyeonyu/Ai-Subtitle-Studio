@@ -54,6 +54,10 @@ def package_workspace_dir(root: str | Path | None = None) -> Path:
     return ensure_temp_workspace(root)["Diagnostics/Packages"]
 
 
+def trace_runs_workspace_dir(root: str | Path | None = None) -> Path:
+    return ensure_temp_workspace(root)["Diagnostics/Trace/runs"]
+
+
 def preview_workspace_dir(root: str | Path | None = None) -> Path:
     return ensure_temp_workspace(root)["Preview"]
 
@@ -158,4 +162,49 @@ def prune_temp_workspace(
         "removed_bytes": removed_bytes,
         "before": before,
         "after": after,
+    }
+
+
+def prune_trace_run_directories(
+    root: str | Path | None = None,
+    *,
+    max_runs: int = 20,
+) -> dict[str, Any]:
+    runs_dir = trace_runs_workspace_dir(root)
+    try:
+        keep_count = max(0, int(max_runs))
+    except (TypeError, ValueError):
+        keep_count = 20
+    run_dirs: list[tuple[float, str, Path]] = []
+    if runs_dir.exists():
+        for candidate in runs_dir.iterdir():
+            try:
+                if not candidate.is_dir():
+                    continue
+                stat = candidate.stat()
+            except OSError:
+                continue
+            run_dirs.append((float(stat.st_mtime or 0.0), candidate.name, candidate))
+    before_count = len(run_dirs)
+    removed: list[str] = []
+    for _, _, path in sorted(run_dirs, key=lambda item: (item[0], item[1]))[: max(0, before_count - keep_count)]:
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            continue
+        if not path.exists():
+            removed.append(path.name)
+    after_count = 0
+    try:
+        after_count = sum(1 for candidate in runs_dir.iterdir() if candidate.is_dir())
+    except OSError:
+        after_count = 0
+    return {
+        "root": str(temp_workspace_root(root)),
+        "runs_dir": str(runs_dir),
+        "max_runs": keep_count,
+        "before_run_count": before_count,
+        "after_run_count": after_count,
+        "removed_count": len(removed),
+        "removed_runs": removed,
     }

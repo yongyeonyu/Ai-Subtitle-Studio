@@ -13,6 +13,7 @@ from core.runtime.temp_workspace import (
     cleanup_temp_workspace,
     ensure_temp_workspace,
     prune_temp_workspace,
+    prune_trace_run_directories,
     temp_workspace_root,
     workspace_usage,
 )
@@ -77,6 +78,41 @@ class TraceLoggerTests(unittest.TestCase):
             self.assertGreaterEqual(result["removed_files"], 1)
             self.assertFalse(old_file.exists())
             self.assertTrue(new_file.exists())
+
+    def test_trace_logger_prunes_old_run_directories_before_creating_new_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = ensure_temp_workspace(tmp)
+            runs_dir = paths["Diagnostics/Trace/runs"]
+            for index in range(24):
+                run_dir = runs_dir / f"old-run-{index:02d}"
+                run_dir.mkdir(parents=True)
+                (run_dir / "events.jsonl").write_text("{}\n", encoding="utf-8")
+                os.utime(run_dir, (100 + index, 100 + index))
+
+            logger = TraceLogger(root=tmp, run_id="new-run")
+            self.assertTrue(logger.close())
+            run_dirs = sorted(path.name for path in runs_dir.iterdir() if path.is_dir())
+
+        self.assertLessEqual(len(run_dirs), 20)
+        self.assertIn("new-run", run_dirs)
+        self.assertNotIn("old-run-00", run_dirs)
+        self.assertIn("old-run-23", run_dirs)
+        self.assertGreater(logger.retention_report["removed_count"], 0)
+
+    def test_prune_trace_run_directories_keeps_newest_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = ensure_temp_workspace(tmp)
+            runs_dir = paths["Diagnostics/Trace/runs"]
+            for index in range(5):
+                run_dir = runs_dir / f"run-{index}"
+                run_dir.mkdir(parents=True)
+                os.utime(run_dir, (100 + index, 100 + index))
+
+            result = prune_trace_run_directories(tmp, max_runs=2)
+            remaining = sorted(path.name for path in runs_dir.iterdir() if path.is_dir())
+
+        self.assertEqual(result["removed_count"], 3)
+        self.assertEqual(remaining, ["run-3", "run-4"])
 
     def test_media_fingerprint_uses_bounded_identity_without_file_hashing(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -40,7 +40,7 @@
 
 ## Trace and temporary workspace boundary
 
-Trace diagnostics live under `core/runtime/` and must stay independent from product logging and subtitle generation. `core/runtime/temp_workspace.py` owns the per-user temporary workspace root and required subdirectories for trace, packages, exports, voice, and preview artifacts. `core/runtime/trace_logger.py` owns manifest/latest JSONL trace events and writes them through a bounded asynchronous writer so UI, playback, and editor hot paths do not perform synchronous trace file I/O. `tools/collect_trace_package.py` copies stable trace/package evidence for handoff and QA.
+Trace diagnostics live under `core/runtime/` and must stay independent from product logging and subtitle generation. `core/runtime/temp_workspace.py` owns the per-user temporary workspace root, required subdirectories, and trace run-directory retention for trace, packages, exports, voice, and preview artifacts. `core/runtime/trace_logger.py` owns manifest/latest JSONL trace events and writes them through a bounded asynchronous writer so UI, playback, and editor hot paths do not perform synchronous trace file I/O. `tools/collect_trace_package.py` copies stable trace/package evidence for handoff and QA, and `tools/audit_trace_log_bundle.py` verifies the Trace Log Bundle contract without changing app behavior.
 
 Trace files are diagnostic evidence only. They must not become subtitle timing, cut-boundary, save-file, or UI state owners. Failure modes such as disk full, permission denied, JSON serialization failure, queue overflow, and shutdown flush failure must stay isolated from `AppLogger`, UI logging, and subtitle generation. Forked child processes must not inherit a parent app trace singleton.
 

@@ -1,5 +1,8 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-085200-trace-log-bundle-retention.md`
+- `.agents/sentinel/handoffs/20260628-084700-trace-retention-next-gap-scout.md`
+- `.agents/sentinel/handoffs/20260628-084655-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-084200-nle-marker-edit-persistence-gate.md`
 - `.agents/sentinel/handoffs/20260628-083600-nle-next-safe-slice-scout.md`
 - `.agents/sentinel/handoffs/20260628-083545-watchdog-handoff-probe.md`
