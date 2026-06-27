@@ -235,7 +235,11 @@ Completed item rule:
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `ACTION_ITEMS.md`, section `Active Execution Queue`.
-- Current active item: Post-Generation Editor Readiness And Verification Index.
+- Current active item: none. The previous `Post-Generation Editor Readiness And Verification Index` item was completed on 2026-06-27 and removed from `ACTION_ITEMS.md`.
+- Latest post-generation editor readiness closeout:
+  - verification index: `output/manual_verification/latest/post_generation_editor_readiness_index_20260627/verification_index.md`
+  - focused guard result: `7 passed, 190 deselected`
+  - NAS HeyDealer first 180s `mode_high`: elapsed `65.383s`, raw/final `58/56`, quality `81.335`, `stable_for_save_reopen=true`, `stable_for_global_canvas=true`
 
 ## Current Risks
 
@@ -249,18 +253,15 @@ Completed item rule:
 
 ## Narrow Next Item
 
-Use `ACTION_ITEMS.md` as the executable queue. The current narrow target is:
+Use `ACTION_ITEMS.md` as the executable queue. There is currently no active execution item.
 
-1. Map current generation completion, autosave, editor idle-ready, roughcut follow-up, and cleanup timing.
-2. Add or verify tests proving playback/edit/status commands can proceed before heavier cleanup completes.
-3. Keep the first slice owner-map/doc/test oriented before changing runtime behavior.
+When the owner gives a new scope, add a fresh, concrete item to `ACTION_ITEMS.md` before implementation. Do not revive completed post-generation readiness work unless a new verified regression creates a specific follow-up.
 
 QA gate for that item:
 
 - No UI/UX labels, layout, colors, shortcuts, popup behavior, or visible workflow changes without explicit owner approval.
 - No subtitle quality policy, STT2, LLM, LoRA, VAD, timing, or model-selection changes.
-- Generation completion must return the editor to a trustworthy interactive state before heavy cleanup can stall playback/editing.
-- Subtitle time editing, timeline zoom/fit/time-window, subtitle magnet, playback controls, save, and bottom/global menu buttons must stay responsive.
+- If the new item touches editor readiness, preserve the completed closeout guarantees: generation completion must return the editor to a trustworthy interactive state, and subtitle time editing, timeline zoom/fit/time-window, subtitle magnet, playback controls, save, and bottom/global menu buttons must stay responsive.
 
 ## Fixtures
 
