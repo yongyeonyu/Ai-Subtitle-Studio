@@ -1,5 +1,8 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-081000-nle-shortcut-split-commit-sync.md`
+- `.agents/sentinel/handoffs/20260628-075500-nle-remaining-release-source-audit.md`
+- `.agents/sentinel/handoffs/20260628-075011-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-073800-nle-range-replace-commit-sync.md`
 - `.agents/sentinel/handoffs/20260628-062800-nle-range-replace-audit.md`
 - `.agents/sentinel/handoffs/20260628-073020-watchdog-handoff-probe.md`

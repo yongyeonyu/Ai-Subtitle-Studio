@@ -1,5 +1,35 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Shortcut Split Commit Sync And Completed-Item Split - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at shortcut split-at-playhead release commit; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_shortcut_split_commit_sync_20260628/shortcut_split_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_shortcut_split_20260628`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-075011-watchdog-handoff-probe.md`
+  - Jammini remaining-source audit: `.agents/sentinel/handoffs/20260628-075500-nle-remaining-release-source-audit.md`
+  - Dex closeout handoff: `.agents/sentinel/handoffs/20260628-081000-nle-shortcut-split-commit-sync.md`
+- 수정 요약:
+  - `_split_at_playhead_or_cut(...)` now attempts runtime NLE `caption_split` for stable final-caption playhead insert/split commits.
+  - NLE operation metadata records `commit_boundary=release` and `commit_source=shortcut_split_at_playhead`.
+  - Existing QTextDocument/source-app fallback remains active for selection cuts, STT/live preview rows, gap rows, unsupported rows, invalid split positions, and NLE rejection.
+  - Completed NLE mutable-sync details now live in `COMPLETED_ACTION_ITEMS.md`; `ACTION_ITEMS.md` contains only remaining active work.
+  - Existing UI/UX, labels, menus, shortcuts, popups, save/export behavior, subtitle generation policy, packaging, and App Store behavior are unchanged.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/ux/editor_video_controls.py tests/test_timeline_playhead_fit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "split_shortcut"` -> `2 passed, 191 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "split_shortcut or smart_split or gap or magnet or reorder"` -> `25 passed, 168 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_split"` -> `2 passed, 28 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_timeline_render_cache.py -k "timeline_canvas or projection or final_surface or save_export"` -> `5 passed, 53 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_shortcut_split_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Final overlap projection stayed `0` with global max active `1` in the focused shortcut split route test.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, visible UI layout, packaging, and App Store behavior were not changed.
+- 완료 항목 분리:
+  - `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync` completed status was moved out of the active queue and into `COMPLETED_ACTION_ITEMS.md`.
+  - `ACTION_ITEMS.md` now starts with the remaining STT2 / word precision latency item and keeps App Store submission readiness as the second active item.
+
 ## NLE Partial Range Replace Commit Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at partial subtitle replacement commit; no drag-time per-pixel NLE write.

@@ -325,6 +325,8 @@ class EditorVideoControlsMixin:
         block = cur.block()
         ud = block.userData()
         spk = ud.spk_id if isinstance(ud, SubtitleBlockData) else "00"
+        if self._try_nle_split_at_playhead(block, sec, spk):
+            return
         cur.beginEditBlock()
         cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
         cur.insertText("\n새자막")
@@ -332,6 +334,75 @@ class EditorVideoControlsMixin:
         self.text_edit.update_margins()
         cur.endEditBlock()
         self._redraw_timeline()
+
+    def _try_nle_split_at_playhead(self, block, sec: float, spk: str) -> bool:
+        nle_split = getattr(self, "_nle_live_editor_caption_split_result", None)
+        reloader = getattr(self, "_reload_segments_from_list", None)
+        if not callable(nle_split) or not callable(reloader):
+            return False
+        if getattr(self, "_live_stt_preview_segments", None):
+            return False
+        ud = block.userData()
+        if not isinstance(ud, SubtitleBlockData) or getattr(ud, "is_gap", False):
+            return False
+        if bool(getattr(ud, "stt_pending", False)):
+            return False
+        try:
+            current_segments = list(self._get_current_segments(force_rebuild=True))
+        except Exception:
+            return False
+        line_num = int(block.blockNumber())
+        start_sec = self._snap_to_frame(float(getattr(ud, "start_sec", 0.0) or 0.0))
+        split_sec = self._snap_to_frame(float(sec))
+        end_sec = getattr(ud, "end_sec", None)
+        try:
+            end_sec = self._snap_to_frame(float(end_sec)) if end_sec is not None else None
+        except Exception:
+            end_sec = None
+        if end_sec is None:
+            for seg in current_segments:
+                if not isinstance(seg, dict):
+                    continue
+                try:
+                    if int(seg.get("line", -1)) == line_num:
+                        end_sec = self._snap_to_frame(float(seg.get("end", start_sec) or start_sec))
+                        break
+                except Exception:
+                    continue
+        if end_sec is None or split_sec <= start_sec + 0.05 or split_sec >= end_sec - 0.05:
+            return False
+        text = block.text().replace("\u2028", "\n")
+        if not text.strip():
+            return False
+        nle_result = nle_split(
+            current_segments=current_segments,
+            line_num=line_num,
+            start_sec=float(start_sec),
+            end_sec=float(end_sec),
+            split_sec=float(split_sec),
+            left_text=text,
+            right_text="새자막",
+            commit_source="shortcut_split_at_playhead",
+        )
+        if nle_result is None:
+            return False
+        self._last_nle_live_editor_operation = nle_result.operation.to_dict()
+        self._last_nle_live_editor_projection = nle_result.after_projection.to_dict()
+        reloader(list(nle_result.projected_rows), preserve_view=True, mark_dirty=True)
+        focus_split = getattr(self, "_focus_split_result_row", None)
+        if callable(focus_split):
+            focus_split(split_sec=float(split_sec), preferred_line=line_num + 1)
+        else:
+            self._active_seg_start = float(split_sec)
+            if hasattr(self, "timeline"):
+                if hasattr(self.timeline, "set_active"):
+                    self.timeline.set_active(float(split_sec))
+                if hasattr(self.timeline, "center_to_sec"):
+                    self.timeline.center_to_sec(float(split_sec), smooth=True)
+        finalize_snapshot = getattr(self, "_finalize_manual_edit_snapshot", None)
+        if callable(finalize_snapshot):
+            finalize_snapshot(allow_revision_drift=True)
+        return True
 
     def _on_timeline_seg_right_clicked(self, start_sec: float, gpos: QPoint):
         seg = self._segment_for_start_sec(start_sec)

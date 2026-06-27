@@ -33,7 +33,39 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 Partial Range Replace Commit
+## Current Handoff - 2026-06-28 Shortcut Split Commit And NLE Item Closeout
+
+### Scope
+
+- Completed the final promoted slice of `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.
+- Added runtime NLE `caption_split` coverage for `_split_at_playhead_or_cut(...)` stable final-caption playhead insert/split commits.
+- Preserved source-app/Taption fallback for selection cuts, STT/live preview rows, gap rows, unsupported rows, invalid split positions, or NLE rejection.
+- Moved completed NLE mutable-sync status into `COMPLETED_ACTION_ITEMS.md`; `ACTION_ITEMS.md` now contains only active remaining work.
+- Preserved existing UI/UX, labels, menus, shortcuts, popup behavior, subtitle generation policy, save/export behavior, packaging, and App Store behavior.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/editor/ux/editor_video_controls.py tests/test_timeline_playhead_fit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "split_shortcut"` -> `2 passed, 191 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "split_shortcut or smart_split or gap or magnet or reorder"` -> `25 passed, 168 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py -k "caption_split"` -> `2 passed, 28 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_timeline_render_cache.py -k "timeline_canvas or projection or final_surface or save_export"` -> `5 passed, 53 deselected`.
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_shortcut_split_20260628` -> pass, `failed_count=0`.
+
+### Artifacts
+
+- NLE shortcut split report: `output/manual_verification/latest/nle_shortcut_split_commit_sync_20260628/shortcut_split_report.md`
+- Source-app quick QA: `output/manual_verification/latest/qa_suite_quick_nle_shortcut_split_20260628`
+- Jammini probe: `.agents/sentinel/handoffs/20260628-075011-watchdog-handoff-probe.md`
+- Jammini remaining-source audit: `.agents/sentinel/handoffs/20260628-075500-nle-remaining-release-source-audit.md`
+- Dex closeout handoff: `.agents/sentinel/handoffs/20260628-081000-nle-shortcut-split-commit-sync.md`
+
+### Next Recommended Action
+
+- Continue with `ACTION_ITEMS.md` item 1: STT2 / word precision generation latency profiling. NAS remains the required representative real-media backfill for cache/default promotion; without NAS, stay in analysis/measurement-only work.
+- For `Mac App Store Submission Readiness`, do not run packaging/signing/upload/notarization/DMG work until the owner explicitly asks.
+
+## Previous Handoff - 2026-06-28 Partial Range Replace Commit
 
 ### Scope
 
@@ -647,7 +679,7 @@
 - Phase 10 is verification proof only. It did not remove legacy paths, approve persisted NLE fields, or switch timeline/global-canvas/save/render/export ownership.
 - Phase 11 is a no-op cleanup closeout only. It did not approve persisted NLE fields or switch timeline/global-canvas/save/render/export ownership.
 - One quick QA attempt failed at `open_project` with `app_unreachable`, but the immediate rerun passed. Treat the failed artifact as command-channel flake evidence, not final-overlay behavior proof.
-- NLE adoption remains incremental under the owner's video-editor goal. Current runtime write/projection coverage is `gap_delete`, `gap_generate`, `caption_move`, `caption_resize`, `caption_text_edit`, `caption_split`, `caption_range_replace`, `caption_merge`, `caption_delete`, `candidate_confirm`, live editor `diamond`, live editor `square_left`/`square_right` boundary resize, live editor segment delete-to-gap, live editor gap-generate routes, live editor diamond merge route, live editor text/smart split route, live editor STT1/STT2 candidate-confirm route, timeline inline text commit route, partial range replacement route, final overlay, global canvas final lane, save/export final SRT rows, roughcut saved-candidate render plans, and save/reopen identity preservation for all 10 current dual-write operation families; persisted NLE project-field approval remains open for future items.
+- NLE adoption remains incremental under the owner's video-editor goal. Current runtime write/projection coverage is `gap_delete`, `gap_generate`, `caption_move`, `caption_resize`, `caption_text_edit`, `caption_split`, `caption_range_replace`, `caption_merge`, `caption_delete`, `candidate_confirm`, live editor `diamond`, live editor `square_left`/`square_right` boundary resize, live editor segment delete-to-gap, live editor gap-generate routes, live editor diamond merge route, live editor text/smart split route, live editor STT1/STT2 candidate-confirm route, timeline inline text commit route, shortcut split-at-playhead route, partial range replacement route, final overlay, global canvas final lane, save/export final SRT rows, roughcut saved-candidate render plans, and save/reopen identity preservation for all 10 current dual-write operation families. The known safe existing-family release/commit source audit is complete for now; persisted NLE project-field approval remains open for future items.
 - Generation latency remains open. Current cut-boundary evidence points away from cut-boundary work. The zero-candidate LLM defer trim is safe but not a total latency closeout; High context-boundary batching was rejected for quality drift. Current wall-clock evidence still points toward STT primary transcription, selective STT2 recheck, word precision, and subtitle postprocess. New substage timing says STT2/word precision prepare/annotation are not the target on local smoke; High context-boundary diagnostics show cached X5 audio spent `32.230357s` on `4` pair calls with `0` changed pairs, but that non-reference run cannot approve skipping or batching. cProfile rows remain diagnostic only and must not be treated as elapsed truth.
 - NAS was unavailable because the owner turned it off. The generated 3-minute fixture proves cache mechanics and scored stability, but it is not production-wide real-footage proof. Backfill on NAS HeyDealer or another representative owner fixture before claiming broad speed.
 - App Store submission is not ready until a signed sandboxed app bundle, signed App Store package, sandbox smoke, App Store Connect validation, and owner-approved App Store Connect metadata are produced.
