@@ -16,6 +16,7 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert report["persistence_cutover_ready"] is False
     assert report["operation_roundtrip_all_passed"] is True
     assert report["operation_roundtrip_family_count"] == 10
+    assert report["render_export_parity_passed"] is True
     assert "persisted_nle_project_fields_not_approved" in report["blockers"]
     runtime = report["checks"]["runtime_roundtrip"]
     assert runtime["loaded_runtime_state"] is True
@@ -25,6 +26,38 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert runtime["storage_has_nle"] is False
     assert runtime["storage_has_nle_snapshot"] is False
     assert runtime["storage_has_quarantine"] is False
+
+
+def test_nle_persistence_cutover_audit_includes_render_export_parity_gate():
+    with tempfile.TemporaryDirectory() as tmp:
+        report = build_nle_persistence_cutover_report(output_dir=Path(tmp))
+
+    parity = report["checks"]["render_export_parity"]
+    assert parity["stable"] is True
+    assert parity["storage_clean"] is True
+    assert parity["caption_count"] == 2
+    assert parity["gap_count"] == 1
+    assert parity["candidate_count"] == 2
+    assert parity["render_segment_count"] == 2
+    assert parity["manifest_count"] == 2
+    assert parity["stitched_boundary_count"] == 1
+    assert parity["invalid_duration_count"] == 0
+    assert parity["non_monotonic_count"] == 0
+    assert parity["overlap_count"] == 0
+    assert parity["max_active_segments"] == 1
+    surfaces = {surface["target_surface"]: surface for surface in parity["surface_reports"]}
+    assert set(surfaces) == {
+        "source_subtitles",
+        "final_overlay",
+        "global_canvas",
+        "roughcut_sidecar",
+        "exported_assets",
+    }
+    assert all(surface["stable"] for surface in surfaces.values())
+    assert surfaces["final_overlay"]["gap_count"] == 0
+    assert surfaces["global_canvas"]["gap_count"] == 1
+    assert surfaces["global_canvas"]["candidate_count"] == 2
+    assert surfaces["exported_assets"]["render_segment_count"] == 2
 
 
 def test_nle_persistence_cutover_audit_records_future_payload_quarantine():
@@ -83,6 +116,8 @@ def test_nle_persistence_cutover_audit_writes_json_and_markdown_reports():
 
         assert saved["schema"] == report["schema"]
         assert markdown.startswith("# NLE Persistence Cutover Audit")
+        assert "## Render / Export Parity" in markdown
+        assert "| exported_assets | True | 2 | 0 | 0 | 2 | 2 | 1 |" in markdown
         assert "## Operation Roundtrip Matrix" in markdown
         assert "| caption_text_edit | True | True | True | True | 0 | 1 |" in markdown
         assert "| caption_range_replace | True | True | True | True | 0 | 1 |" in markdown

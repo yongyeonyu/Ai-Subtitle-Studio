@@ -32,6 +32,7 @@ from core.project.nle_dual_write import (
     apply_gap_generate_dual_write_pilot,
 )
 from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
+from core.project.nle_render_export_parity import assert_project_nle_render_export_parity
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_io import (
     clear_project_file_cache,
@@ -90,6 +91,131 @@ def _three_caption_project() -> dict[str, Any]:
     }
 
 
+def _render_export_project(root: Path) -> dict[str, Any]:
+    media_path = root / "source.mov"
+    media_path.write_bytes(b"media")
+    segment_rows = [
+        {
+            "segment_id": "chapter_0001",
+            "source_path": str(media_path),
+            "source_start": 0.0,
+            "source_end": 2.0,
+            "output_start": 0.0,
+            "output_end": 2.0,
+            "chapter_id": "chapter_0001",
+        },
+        {
+            "segment_id": "chapter_0002",
+            "source_path": str(media_path),
+            "source_start": 3.0,
+            "source_end": 6.0,
+            "output_start": 2.0,
+            "output_end": 5.0,
+            "chapter_id": "chapter_0002",
+        },
+    ]
+    manifest_rows = [
+        {
+            "segment_id": row["segment_id"],
+            "source_path": row["source_path"],
+            "source_start": row["source_start"],
+            "source_end": row["source_end"],
+            "output_start": row["output_start"],
+            "output_end": row["output_end"],
+        }
+        for row in segment_rows
+    ]
+    stitched = [
+        {
+            "time": 2.0,
+            "timeline_sec": 2.0,
+            "source": "roughcut_concat_join",
+            "segment_before_id": "chapter_0001",
+            "segment_after_id": "chapter_0002",
+        }
+    ]
+    return {
+        "project_name": "nle_persistence_render_export_parity",
+        "mode": "single",
+        "video": {"duration_sec": 6.0, "primary_fps": 30.0},
+        "timeline": {
+            "total_duration": 6.0,
+            "timebase": {"primary_fps": 30.0},
+            "tracks": [
+                {
+                    "clips": [
+                        {
+                            "id": "clip_main",
+                            "source_path": str(media_path),
+                            "type": "video",
+                            "source_duration": 6.0,
+                            "timeline_start": 0.0,
+                            "timeline_end": 6.0,
+                            "fps": 30.0,
+                            "order": 0,
+                        }
+                    ]
+                }
+            ],
+        },
+        "editor_state": build_editor_state(
+            mode="single",
+            media_files=[str(media_path)],
+            segments=[
+                {
+                    "id": "caption_1",
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "first",
+                    "speaker": "00",
+                    "stt_candidates": [
+                        {"source": "STT1", "start": 0.0, "end": 1.0, "text": "first raw", "score": 0.8}
+                    ],
+                },
+                {"id": "gap_1", "start": 1.0, "end": 2.0, "text": "", "is_gap": True},
+                {
+                    "id": "caption_2",
+                    "start": 2.0,
+                    "end": 3.0,
+                    "text": "second",
+                    "speaker": "01",
+                    "stt_candidates": [
+                        {"source": "STT2", "start": 2.0, "end": 3.0, "text": "second raw", "score": 0.7}
+                    ],
+                },
+            ],
+            stt_preview_segments=[
+                {"start": 4.0, "end": 5.0, "text": "diagnostic only", "stt_preview_source": "STT1"}
+            ],
+            cut_boundaries=[{"time": 2.0, "source": "visual", "status": "confirmed"}],
+            primary_fps=30.0,
+        ),
+        "analysis": {"cut_boundaries": [{"time": 2.0, "source": "visual", "status": "confirmed"}]},
+        "roughcut_state": {
+            "selected_candidate_id": "roughcut_a",
+            "candidates": [
+                {
+                    "candidate_id": "roughcut_a",
+                    "name": "roughcut A",
+                    "outputs": {
+                        "edl": {
+                            "duration": 5.0,
+                            "segments": segment_rows,
+                            "stitched_cut_boundaries": stitched,
+                        },
+                        "render_plan": {
+                            "output_path": str(root / "roughcut.mov"),
+                            "render_mode": "sync_safe",
+                            "segment_manifest": manifest_rows,
+                            "stitched_cut_boundaries": stitched,
+                        },
+                    },
+                }
+            ],
+        },
+    }
+
+
 def _storage_has_unapproved_nle_fields(storage: dict[str, Any]) -> bool:
     if not isinstance(storage, dict):
         return True
@@ -119,6 +245,36 @@ def _runtime_roundtrip_check(work_dir: Path) -> dict[str, Any]:
         "storage_has_nle_snapshot": "nle_snapshot" in storage,
         "storage_has_quarantine": NLE_PERSISTENCE_QUARANTINE_KEY in storage,
         "storage_schema": str(storage.get("storage_schema", "") or ""),
+    }
+
+
+def _render_export_parity_check(work_dir: Path) -> dict[str, Any]:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    project_path = work_dir / "nle-render-export-parity.aissproj"
+    project = _render_export_project(work_dir)
+    write_project_file(str(project_path), project)
+    storage = read_project_storage_payload(str(project_path))
+    assert_no_unapproved_nle_persistence_fields(storage, surface="render_export_parity_storage")
+    clear_project_file_cache(str(project_path))
+    loaded = read_project_file(str(project_path))
+    report = assert_project_nle_render_export_parity(loaded, project_path=str(project_path))
+    surfaces = [surface.to_dict() for surface in report.surface_reports]
+    return {
+        "project_path": str(project_path),
+        "stable": report.diff_summary == "ok" and all(bool(surface.get("stable")) for surface in surfaces),
+        "storage_clean": not _storage_has_unapproved_nle_fields(storage),
+        "projection_hash": report.final_projection_hash,
+        "caption_count": report.caption_count,
+        "gap_count": report.gap_count,
+        "candidate_count": report.candidate_count,
+        "render_segment_count": report.render_segment_count,
+        "manifest_count": report.manifest_count,
+        "stitched_boundary_count": report.stitched_boundary_count,
+        "invalid_duration_count": report.invalid_duration_count,
+        "non_monotonic_count": report.non_monotonic_count,
+        "overlap_count": report.overlap_count,
+        "max_active_segments": report.max_active_segments,
+        "surface_reports": surfaces,
     }
 
 
@@ -328,6 +484,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     runtime_roundtrip = _runtime_roundtrip_check(out_dir / "roundtrip_fixture")
     future_payload = _future_payload_quarantine_check()
     operation_roundtrip_matrix = _operation_roundtrip_matrix(out_dir / "operation_roundtrip_matrix")
+    render_export_parity = _render_export_parity_check(out_dir / "render_export_parity")
     operation_roundtrip_all_passed = all(
         bool(row.get("runtime_state_hydrated"))
         and bool(row.get("storage_clean"))
@@ -343,6 +500,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "runtime_roundtrip": runtime_roundtrip,
         "future_payload_quarantine": future_payload,
         "operation_roundtrip_matrix": operation_roundtrip_matrix,
+        "render_export_parity": render_export_parity,
     }
     prep_ready = (
         runtime_roundtrip["loaded_runtime_state"]
@@ -350,6 +508,8 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and future_payload["quarantine_recorded"]
         and not future_payload["remaining_unapproved_fields"]
         and operation_roundtrip_all_passed
+        and render_export_parity["stable"]
+        and render_export_parity["storage_clean"]
     )
     return {
         "schema": SCHEMA,
@@ -360,6 +520,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "checks": checks,
         "operation_roundtrip_all_passed": operation_roundtrip_all_passed,
         "operation_roundtrip_family_count": len(operation_roundtrip_matrix),
+        "render_export_parity_passed": bool(render_export_parity["stable"]),
         "owner_approval_required_before": [
             "persisting top-level nle payloads",
             "persisting nle_snapshot payloads",
@@ -384,6 +545,10 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     runtime = checks.get("runtime_roundtrip") if isinstance(checks.get("runtime_roundtrip"), dict) else {}
     future = checks.get("future_payload_quarantine") if isinstance(checks.get("future_payload_quarantine"), dict) else {}
     operations = checks.get("operation_roundtrip_matrix") if isinstance(checks.get("operation_roundtrip_matrix"), list) else []
+    render_export = checks.get("render_export_parity") if isinstance(checks.get("render_export_parity"), dict) else {}
+    render_surfaces = (
+        render_export.get("surface_reports") if isinstance(render_export.get("surface_reports"), list) else []
+    )
     lines = [
         "# NLE Persistence Cutover Audit",
         "",
@@ -400,6 +565,37 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Disk storage clean of NLE runtime fields: `{bool(runtime.get('storage_clean'))}`",
         f"- Storage schema: `{runtime.get('storage_schema')}`",
         "",
+        "## Render / Export Parity",
+        "",
+        f"- Stable: `{bool(render_export.get('stable'))}`",
+        f"- Storage clean of NLE runtime fields: `{bool(render_export.get('storage_clean'))}`",
+        f"- Captions/gaps/candidates: `{render_export.get('caption_count')}/{render_export.get('gap_count')}/{render_export.get('candidate_count')}`",
+        f"- Render segments/manifest/stitched: `{render_export.get('render_segment_count')}/{render_export.get('manifest_count')}/{render_export.get('stitched_boundary_count')}`",
+        f"- Final invalid/non-monotonic/overlap: `{render_export.get('invalid_duration_count')}/{render_export.get('non_monotonic_count')}/{render_export.get('overlap_count')}`",
+        f"- Global max active: `{render_export.get('max_active_segments')}`",
+        "",
+        "| Surface | Stable | Captions | Gaps | Candidates | Render Segments | Manifest | Stitched |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for surface in render_surfaces:
+        if not isinstance(surface, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join([
+                str(surface.get("target_surface") or ""),
+                str(bool(surface.get("stable"))),
+                str(surface.get("caption_count")),
+                str(surface.get("gap_count")),
+                str(surface.get("candidate_count")),
+                str(surface.get("render_segment_count")),
+                str(surface.get("manifest_count")),
+                str(surface.get("stitched_boundary_count")),
+            ])
+            + " |"
+        )
+    lines.extend([
+        "",
         "## Future Payload Quarantine",
         "",
         f"- Quarantine recorded: `{bool(future.get('quarantine_recorded'))}`",
@@ -410,7 +606,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "",
         "| Operation | Runtime NLE | Storage Clean | Reopened Matches | ID Preserved | Final Overlap | Max Active |",
         "| --- | --- | --- | --- | --- | --- | --- |",
-    ]
+    ])
     for row in operations:
         if not isinstance(row, dict):
             continue

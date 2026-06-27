@@ -1,5 +1,8 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-084900-nle-persistence-render-export-gate.md`
+- `.agents/sentinel/handoffs/20260628-083300-nle-persistence-next-gap-scout.md`
+- `.agents/sentinel/handoffs/20260628-082348-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-084500-strict-synthetic-cache-replay.md`
 - `.agents/sentinel/handoffs/20260628-082000-strict-synthetic-cache-replay-prep.md`
 - `.agents/sentinel/handoffs/20260628-081437-watchdog-handoff-probe.md`

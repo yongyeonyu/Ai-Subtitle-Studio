@@ -125,6 +125,8 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py -k "persistence or cutover or dual_write or gap_delete or caption_move or caption_resize or caption_split or caption_range_replace or caption_merge or caption_delete or candidate_confirm"
 ```
 
+The persistence cutover audit must also report render/export parity before any future persisted NLE format proposal: stable `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, and `exported_assets` surfaces; final invalid/non-monotonic/overlap `0/0/0`; global max active `1`; and disk storage clean of unapproved NLE runtime fields.
+
 ## Post-generation editor readiness validation
 
 Post-generation editor readiness changes should prove command responsiveness, subtitle-time-edit interaction recovery, editor shell geometry stability, and any requested bottom-menu affordance.

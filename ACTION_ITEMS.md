@@ -143,7 +143,7 @@ Rollback:
 - Native migration is not an active direction for this repository.
 - Keep the current Python/PyQt6 source app as the working product line.
 - Source-app NLE runtime adoption archive: `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`; the current commit-boundary mutable timeline sync item is complete for known safe existing-family release/commit sources.
-- Persisted NLE project fields remain gated; broader persistence/save/render/export ownership cleanup requires a fresh owner-approved item and compatibility gate.
+- Persisted NLE project fields remain gated. The latest safe persistence/save/render/export cleanup strengthened the cutover audit with render/export parity gates at `output/manual_verification/latest/nle_persistence_render_export_gate_20260628/nle_persistence_cutover_audit.md`; any actual persisted NLE disk-format change still requires a fresh compatibility gate and explicit owner approval.
 - Revisit migration only if the owner explicitly reopens it with a new scope and acceptance gate.
 
 ## Parked Candidates

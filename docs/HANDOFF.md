@@ -33,7 +33,39 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 STT Strict Synthetic Collect-Cache Replay And Completed-Item Split
+## Current Handoff - 2026-06-28 NLE Persistence Render/Export Gate
+
+### Scope
+
+- Continued the owner goal to move AI Subtitle Studio toward a video-editor/NLE structure while preserving the current source-app and legacy `.aissproj` compatibility.
+- Strengthened `tools/audit_nle_persistence_cutover.py` so persistence cutover readiness now includes a render/export parity fixture and gate.
+- The new audit fixture writes and reopens a roughcut/export project through legacy project I/O, then verifies the same NLE final projection across `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, and `exported_assets`.
+- No UI/UX, subtitle generation, STT/STT2, word precision, save file format, packaging, or App Store behavior changed.
+- Persisted NLE project fields remain blocked until a separate owner-approved disk-format compatibility gate exists.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_render_export_parity.py` -> `7 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_render_export_gate_20260628` -> pass.
+
+### Results
+
+- Audit artifact: `output/manual_verification/latest/nle_persistence_render_export_gate_20260628/nle_persistence_cutover_audit.md`
+- `prep_ready=true`, `persistence_cutover_ready=false`.
+- Operation roundtrip families: `10`, all passed.
+- Render/export parity: stable `true`, storage clean `true`, captions/gaps/candidates `2/1/2`, render segments/manifest/stitched `2/2/1`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`.
+- Stable surfaces: `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, `exported_assets`.
+- Jammini route probe: `.agents/sentinel/handoffs/20260628-082348-watchdog-handoff-probe.md`
+- Jammini scout: `.agents/sentinel/handoffs/20260628-083300-nle-persistence-next-gap-scout.md`
+- Dex closeout handoff: `.agents/sentinel/handoffs/20260628-084900-nle-persistence-render-export-gate.md`
+
+### Next Recommended Action
+
+- Continue active `ACTION_ITEMS.md` item 1 only when NAS real-media backfill is available, or keep it analysis-only while NAS is unavailable.
+- For NLE, do not persist `nle`, `nle_snapshot`, or `_nle_project_state` to `.aissproj` until a separate compatibility gate is approved.
+
+## Previous Handoff - 2026-06-28 STT Strict Synthetic Collect-Cache Replay And Completed-Item Split
 
 ### Scope
 

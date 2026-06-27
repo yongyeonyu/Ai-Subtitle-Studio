@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Persistence Render/Export Gate - 2026-06-28 KST
+
+- 실행 모드: source-app NLE persistence cutover audit strengthening; legacy `.aissproj` disk shape remains unchanged.
+- 결과: pass for the new save/render/export parity gate; persisted NLE project fields remain blocked.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/nle_persistence_render_export_gate_20260628/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_persistence_render_export_gate_20260628/nle_persistence_cutover_audit.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-082348-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-083300-nle-persistence-next-gap-scout.md`
+  - Dex closeout handoff: `.agents/sentinel/handoffs/20260628-084900-nle-persistence-render-export-gate.md`
+- 수정 요약:
+  - `tools/audit_nle_persistence_cutover.py` now writes and reopens a render/export fixture through legacy project I/O, then requires NLE render/export parity before reporting `prep_ready=true`.
+  - `tests/test_nle_persistence_cutover_audit.py` now verifies the new `render_export_parity` check, surface list, final overlap/max-active gates, and markdown output.
+  - No UI/UX, subtitle generation, STT/STT2, word precision, save-file format, packaging, App Store, or runtime editor behavior changed.
+- 실제 감사 결과:
+  - `prep_ready=true`, `persistence_cutover_ready=false`.
+  - Operation roundtrip families `10`, all passed.
+  - Render/export parity stable `true`, storage clean `true`.
+  - Stable surfaces: `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, `exported_assets`.
+  - Captions/gaps/candidates `2/1/2`; render segments/manifest/stitched `2/2/1`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; global max active `1`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_render_export_parity.py` -> `7 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_render_export_gate_20260628` -> pass.
+- 남은 gate:
+  - Do not persist `nle`, `nle_snapshot`, or `_nle_project_state` to `.aissproj` until a separate compatibility gate is explicitly approved.
+
 ## STT Strict Synthetic Collect-Cache Replay And Completed-Item Split - 2026-06-28 KST
 
 - 실행 모드: NAS-off strict synthetic collect-cache write/hit replay after the tail-collapse fix.
