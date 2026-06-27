@@ -16,6 +16,8 @@ from PyQt6.QtGui import QFont, QTextCursor
 from PyQt6.QtWidgets import QApplication
 
 from core.native_swift_timeline import apply_timing_drag_via_swift
+from core.project.nle_dual_write import apply_caption_text_edit_dual_write_pilot
+from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.runtime import config
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.ux.timeline_inline_text_editor import TimelineInlineTextEdit
@@ -708,6 +710,90 @@ class TimelineInlineEditMixin:
             self._sync_inline_editor_geometry()
         self._request_inline_edit_fast_refresh(line_num)
 
+    def _nle_inline_text_edit_project_from_rows(self, rows: list[dict]) -> dict:
+        fps = 30.0
+        getter = getattr(self, "_get_fps", None)
+        if callable(getter):
+            try:
+                fps = float(getter())
+            except Exception:
+                fps = 30.0
+        duration = 0.0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                duration = max(duration, float(row.get("end", row.get("start", 0.0)) or 0.0))
+            except Exception:
+                pass
+        try:
+            duration = max(duration, float(getattr(self, "total_duration", 0.0) or 0.0))
+        except Exception:
+            pass
+        return {
+            "project_name": "timeline_inline_text_nle_commit",
+            "mode": "single",
+            "video": {"duration_sec": duration, "primary_fps": fps},
+            "editor_state": build_editor_state(
+                mode="single",
+                media_files=[],
+                segments=[dict(row) for row in rows if isinstance(row, dict)],
+                primary_fps=fps,
+                preserve_segment_identity=True,
+            ),
+        }
+
+    def _nle_inline_text_caption_id_for_line(self, project: dict, line_num: int) -> str:
+        rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("is_gap") or row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                continue
+            try:
+                if int(row.get("line", -1)) == int(line_num):
+                    return str(row.get("id") or "")
+            except Exception:
+                continue
+        return ""
+
+    def _nle_inline_text_edit_commit_result(self, *, line_num: int, old_text: str, new_text: str):
+        rows = [dict(row) for row in list(getattr(self, "segments", []) or []) if isinstance(row, dict)]
+        if not rows:
+            return None
+        for row in rows:
+            if bool(row.get("stt_pending") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                return None
+        target = None
+        for row in rows:
+            try:
+                if int(row.get("line", -1)) == int(line_num):
+                    target = row
+                    break
+            except Exception:
+                continue
+        if not isinstance(target, dict) or bool(target.get("is_gap")):
+            return None
+        visible_old_text = str(old_text or "").replace("\u2028", "\n")
+        visible_new_text = str(new_text or "").replace("\u2028", "\n")
+        if visible_old_text == visible_new_text:
+            return None
+        target["text"] = visible_old_text
+        project = self._nle_inline_text_edit_project_from_rows(rows)
+        caption_id = self._nle_inline_text_caption_id_for_line(project, int(line_num))
+        if not caption_id:
+            return None
+        try:
+            return apply_caption_text_edit_dual_write_pilot(
+                project,
+                caption_id=caption_id,
+                new_text=str(new_text or ""),
+                commit_boundary="release",
+                commit_source="timeline_inline_text",
+            )
+        except Exception:
+            return None
+
     def _set_pending_split_from_playhead(self, seg: dict | None, *, enabled: bool) -> None:
         if hasattr(self, "_pending_split_sec"):
             del self._pending_split_sec
@@ -825,11 +911,21 @@ class TimelineInlineEditMixin:
 
         safe_for_editor = self._edit_text.replace("\n", "\u2028")
         line = self._edit_line
+        nle_text_result = self._nle_inline_text_edit_commit_result(
+            line_num=int(line),
+            old_text=str(getattr(self, "_edit_orig", "") or ""),
+            new_text=str(self._edit_text or ""),
+        )
 
-        for seg in self.segments:
-            if seg.get("line") == line:
-                seg["text"] = self._edit_text
-                break
+        if nle_text_result is not None:
+            self._last_nle_timeline_operation = nle_text_result.operation.to_dict()
+            self._last_nle_timeline_projection = nle_text_result.after_projection.to_dict()
+            self.segments = [dict(row) for row in nle_text_result.projected_rows]
+        else:
+            for seg in self.segments:
+                if seg.get("line") == line:
+                    seg["text"] = self._edit_text
+                    break
 
         self._inline_commit_in_progress = True
         try:

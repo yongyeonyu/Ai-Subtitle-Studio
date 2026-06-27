@@ -723,6 +723,71 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             canvas.deleteLater()
 
+    def test_inline_text_commit_routes_through_nle_caption_text_edit(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(640, canvas.height())
+            canvas.frame_rate = 30.0
+            canvas.pps = 120.0
+            canvas.total_duration = 3.0
+            canvas.segments = [
+                {"start": 0.0, "end": 2.0, "text": "원본", "line": 0},
+            ]
+            emitted = []
+            canvas.sig_inline_text_changed.connect(
+                lambda line, text: emitted.append((line, text, getattr(canvas, "_inline_commit_in_progress", False)))
+            )
+            canvas.show()
+            self.app.processEvents()
+
+            canvas.start_inline_edit(0, 0.0)
+            editor = canvas._inline_editor
+            editor.setPlainText("수정")
+            canvas._commit_inline_edit()
+
+            operation = getattr(canvas, "_last_nle_timeline_operation", {})
+            projection = getattr(canvas, "_last_nle_timeline_projection", {})
+            self.assertEqual(operation.get("kind"), "caption_text_edit")
+            self.assertEqual(operation.get("metadata", {}).get("commit_boundary"), "release")
+            self.assertEqual(operation.get("metadata", {}).get("commit_source"), "timeline_inline_text")
+            self.assertEqual(operation.get("metadata", {}).get("old_text"), "원본")
+            self.assertEqual(operation.get("metadata", {}).get("new_text"), "수정")
+            self.assertEqual(projection.get("overlap_count"), 0)
+            self.assertEqual(projection.get("max_active_segments"), 1)
+            self.assertEqual(canvas.segments[0]["text"], "수정")
+            self.assertEqual(emitted[-1], (0, "수정", True))
+            self.assertFalse(canvas._edit_active)
+        finally:
+            canvas.deleteLater()
+
+    def test_inline_text_commit_falls_back_when_nle_rejects(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.resize(640, canvas.height())
+            canvas.frame_rate = 30.0
+            canvas.pps = 120.0
+            canvas.total_duration = 3.0
+            canvas.segments = [
+                {"start": 0.0, "end": 2.0, "text": "원본", "line": 0},
+            ]
+            canvas.show()
+            self.app.processEvents()
+
+            canvas.start_inline_edit(0, 0.0)
+            editor = canvas._inline_editor
+            editor.setPlainText("수정")
+            with patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_caption_text_edit_dual_write_pilot",
+                side_effect=ValueError("forced-nle-text-reject"),
+            ):
+                canvas._commit_inline_edit()
+
+            self.assertFalse(hasattr(canvas, "_last_nle_timeline_operation"))
+            self.assertEqual(canvas.segments[0]["text"], "수정")
+            self.assertFalse(canvas._edit_active)
+        finally:
+            canvas.deleteLater()
+
     def test_inline_edit_fast_refresh_schedules_followup_repaints(self):
         canvas = TimelineCanvas()
         try:

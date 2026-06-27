@@ -1350,6 +1350,94 @@ def apply_caption_move_commit_dual_write_pilot(
     )
 
 
+def apply_caption_text_edit_dual_write_pilot(
+    project: dict[str, Any],
+    *,
+    caption_id: str,
+    new_text: str,
+    commit_boundary: str = "",
+    commit_source: str = "",
+    project_path: str = "",
+) -> NLEDualWritePilotResult:
+    if not isinstance(project, dict):
+        raise TypeError("project_required")
+    before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+    target_index, target_row = _find_row_by_identity(
+        before_rows,
+        caption_id,
+        final_only=True,
+        missing_prefix="nle_caption_text_edit_target_missing",
+    )
+    target_id = _caption_identity(target_row, target_index)
+    text = str(new_text or "").replace("\u2028", "\n")
+    old_text = str(target_row.get("text", "") or "")
+    if old_text == text:
+        raise ValueError("nle_caption_text_edit_unchanged")
+
+    after_rows = [dict(row) for row in before_rows]
+    after_rows[target_index]["text"] = text
+    after_rows = _sorted_editor_rows(after_rows)
+
+    before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
+    shadow_after = _shadow_project_with_rows(project, after_rows)
+    after_projection = build_project_nle_projection_parity_report(shadow_after, project_path=project_path)
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
+    undo = build_nle_undo_snapshot(
+        operation_id=f"dual_write_caption_text_edit:{target_id}",
+        editor_rows=before_rows,
+        candidate_lanes=_candidate_lanes(project, before_rows),
+        silence_gaps=[row for row in before_rows if isinstance(row, dict) and bool(row.get("is_gap"))],
+        ui_state_ref={
+            "operation_family": "caption_text_edit",
+            "target_id": target_id,
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
+        },
+        metadata={"pilot": "dual_write_caption_text_edit"},
+    )
+    metadata: dict[str, Any] = {
+        "pilot": "dual_write",
+        "operation_family": "caption_text_edit",
+        "caption_id": target_id,
+        "old_text": old_text,
+        "new_text": text,
+    }
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
+    operation = build_nle_editor_operation(
+        operation_id=undo.operation_id,
+        kind="caption_text_edit",
+        target_ids=[target_id],
+        before_projection=before_projection,
+        after_projection=after_projection,
+        time_domain="sequence",
+        undo_snapshot=undo,
+        metadata=metadata,
+    )
+
+    state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)
+    state.metadata = {
+        **dict(state.metadata or {}),
+        "dual_write_pilot_family": "caption_text_edit",
+        "dual_write_last_operation_id": operation.operation_id,
+        "dual_write_projected_count": len(after_rows),
+        "dual_write_caption_text_edit_target": target_id,
+    }
+    projected_rows = project_segments_from_nle_state(project, project_path=project_path)
+    assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
+    project["editor_state"] = shadow_after["editor_state"]
+    return NLEDualWritePilotResult(
+        operation_family="caption_text_edit",
+        operation=operation,
+        before_projection=before_projection,
+        after_projection=after_projection,
+        projected_rows=tuple(dict(row) for row in projected_rows),
+    )
+
+
 def apply_gap_delete_dual_write_pilot(
     project: dict[str, Any],
     *,
@@ -1431,6 +1519,7 @@ __all__ = [
     "apply_caption_move_dual_write_pilot",
     "apply_caption_resize_dual_write_pilot",
     "apply_caption_split_dual_write_pilot",
+    "apply_caption_text_edit_dual_write_pilot",
     "apply_gap_delete_dual_write_pilot",
     "apply_gap_generate_dual_write_pilot",
 ]

@@ -1,5 +1,51 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Persistence Identity Matrix Refresh - 2026-06-28 KST
+
+- 실행 모드: source-app NLE persistence identity audit refresh after `caption_text_edit`; no disk-format cutover.
+- 결과: pass for audit/prep; blocked for persisted NLE format cutover.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_persistence_identity_preservation_inline_text_20260628/nle_persistence_cutover_audit.md`
+  - JSON: `output/manual_verification/latest/nle_persistence_identity_preservation_inline_text_20260628/nle_persistence_cutover_audit.json`
+- 수정 요약:
+  - Extended `tools/audit_nle_persistence_cutover.py` so the operation roundtrip matrix includes `caption_text_edit`.
+  - Updated the persistence cutover audit test to expect all 9 current NLE dual-write operation families.
+  - Kept completed action-item history in `COMPLETED_ACTION_ITEMS.md`; `ACTION_ITEMS.md` remains active work, current gates, and rollback only.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `4 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_identity_preservation_inline_text_20260628` -> pass; `operation_roundtrip_family_count=9`, `operation_roundtrip_all_passed=true`.
+- 핵심 결과:
+  - All 9 current NLE dual-write operation families reopen with `reopened_identity_preserved=true`.
+  - `caption_text_edit` reports `reopened_matches_projected=true`, `reopened_identity_preserved=true`, final overlap `0`, and max active `1`.
+  - Disk storage still stays clean of unapproved top-level `nle`, `nle_snapshot`, and `_nle_project_state` fields.
+
+## NLE Inline Text Commit Sync - 2026-06-28 KST
+
+- 실행 모드: source-app NLE mutable sync at timeline inline text commit release; no drag-time per-pixel NLE write.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_inline_text_commit_sync_20260628/inline_text_commit_report.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_nle_inline_text_commit_20260628`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-051400-nle-inline-text-commit-scout.md`
+- 수정 요약:
+  - Added NLE operation kind `caption_text_edit`.
+  - Added `apply_caption_text_edit_dual_write_pilot(...)` with final projection stability and save/reopen text roundtrip coverage.
+  - Timeline inline editor commits now attempt NLE `caption_text_edit` with `commit_boundary=release` and `commit_source=timeline_inline_text`.
+  - STT pending/live preview rows and NLE rejection keep the existing source-app fallback path.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_operations.py core/project/nle_dual_write.py ui/editor/ux/timeline_canvas_editing.py tests/test_project_nle_dual_write.py tests/test_timeline_hit_targets.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py` -> `29 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "inline_text_commit or inline_editor_speaker_split or new_subtitle_placeholder"` -> `4 passed, 148 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_timeline_playhead_fit.py -k "inline_text_commit or inline_editor_speaker_split or new_subtitle_placeholder or line_text_edit or drag or gap or magnet or center_reorder or center_drag"` -> `85 passed, 234 deselected`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_inline_text_commit_20260628` -> pass, `failed_count=0`.
+- 자막 품질 영향:
+  - Timing/frame bounds remain unchanged; only final-caption text changes are adopted into NLE state.
+  - Empty inline text still uses the existing gap conversion path.
+  - STT2, word precision, LLM, LoRA, VAD, timing policy, save format, visible UI layout, packaging, and App Store behavior were not changed.
+- 남은 위험:
+  - Remaining uncovered release/commit sources still need audit before claiming full timeline mutable ownership. Persisted NLE project fields remain gated.
+
 ## NLE Complex Center Commit Sync - 2026-06-28 KST
 
 - 실행 모드: source-app NLE mutable sync at Taption-style complex body `center` release; no drag-time per-pixel NLE write.
@@ -129,7 +175,7 @@
   - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_persistence_cutover_audit.py tests/test_project_context.py -k "identity or nle or build_editor_state or subtitle_canvas or vector"` -> `30 passed, 80 deselected`.
   - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py tests/test_timeline_playhead_fit.py tests/test_editor_split_undo.py -k "caption_split or caption_merge or candidate_confirm or gap_generate or undo or nle"` -> `17 passed, 236 deselected`.
   - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py -k "nle or persistence or candidate_confirm or caption_split or caption_merge or gap_generate or save_export or final_overlay or overlap"` -> `53 passed, 4 subtests passed`.
-  - `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_identity_preservation_20260628` -> pass; all 8 operation families report `reopened_identity_preserved=true`.
+  - `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_identity_preservation_20260628` -> pass; the then-current 8 operation families report `reopened_identity_preserved=true`.
   - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_identity_save_project_fix_20260628` -> pass, `failed_count=0`, `editor_compact_macau: ok`.
 - 자막 품질 영향:
   - None intended. This changes runtime/project identity preservation and explicit project-save row ownership only. STT2, word precision, LLM, LoRA, VAD, timing policy, final overlap gates, visible UI/UX, and persisted NLE disk fields were not changed.
@@ -148,7 +194,7 @@
   - Added `tools/audit_nle_persistence_cutover.py`.
   - Added `tests/test_nle_persistence_cutover_audit.py`.
   - The audit writes a temp project fixture, verifies runtime `NLEProjectState` hydration, confirms disk storage stays clean of `nle`, `nle_snapshot`, `_nle_project_state`, and quarantine runtime keys, and records future-payload quarantine behavior.
-  - Extended the audit to run all eight current NLE dual-write operation families through save/reopen roundtrip while keeping the legacy disk shape unchanged.
+  - Extended the audit to run the then-current eight NLE dual-write operation families through save/reopen roundtrip while keeping the legacy disk shape unchanged.
   - The operation matrix separates semantic row roundtrip from ID preservation, exposing legacy ID renumbering where it still exists without approving persisted NLE fields.
 - 검증:
   - `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py` -> pass.
@@ -158,7 +204,7 @@
 - 핵심 결과:
   - `prep_ready=true`.
   - `persistence_cutover_ready=false`.
-  - Operation roundtrip families: `8`; operation roundtrip all passed: `true`.
+  - Historical operation roundtrip families at this checkpoint: `8`; operation roundtrip all passed: `true`.
   - ID preserved: `true` for `gap_delete`, `caption_move`, `caption_resize`, `caption_delete`; `false` for `gap_generate`, `caption_split`, `caption_merge`, `candidate_confirm` under the legacy disk projection.
   - Blockers: `persisted_nle_project_fields_not_approved`, `legacy_disk_shape_required_for_compatibility`, `owner_approval_required_before_disk_format_change`.
 - 자막 품질 영향:

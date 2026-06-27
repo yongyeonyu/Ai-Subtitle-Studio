@@ -15,6 +15,7 @@ NLE_OPERATION_KINDS = frozenset(
     {
         "caption_move",
         "caption_resize",
+        "caption_text_edit",
         "caption_split",
         "caption_merge",
         "caption_delete",
@@ -30,6 +31,7 @@ _FINAL_CAPTION_KINDS = frozenset(
     {
         "caption_move",
         "caption_resize",
+        "caption_text_edit",
         "caption_split",
         "caption_merge",
         "caption_delete",
@@ -40,6 +42,7 @@ _FINAL_CAPTION_KINDS = frozenset(
 _KIND_TIME_DOMAINS = {
     "caption_move": frozenset({"sequence"}),
     "caption_resize": frozenset({"sequence"}),
+    "caption_text_edit": frozenset({"sequence"}),
     "caption_split": frozenset({"sequence"}),
     "caption_merge": frozenset({"sequence"}),
     "caption_delete": frozenset({"sequence"}),

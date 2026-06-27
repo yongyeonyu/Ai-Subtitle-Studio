@@ -15,7 +15,7 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert report["prep_ready"] is True
     assert report["persistence_cutover_ready"] is False
     assert report["operation_roundtrip_all_passed"] is True
-    assert report["operation_roundtrip_family_count"] == 8
+    assert report["operation_roundtrip_family_count"] == 9
     assert "persisted_nle_project_fields_not_approved" in report["blockers"]
     runtime = report["checks"]["runtime_roundtrip"]
     assert runtime["loaded_runtime_state"] is True
@@ -51,6 +51,7 @@ def test_nle_persistence_cutover_audit_roundtrips_dual_write_operation_families(
         "caption_move",
         "caption_resize",
         "caption_split",
+        "caption_text_edit",
         "gap_delete",
         "gap_generate",
     }
@@ -82,4 +83,5 @@ def test_nle_persistence_cutover_audit_writes_json_and_markdown_reports():
         assert saved["schema"] == report["schema"]
         assert markdown.startswith("# NLE Persistence Cutover Audit")
         assert "## Operation Roundtrip Matrix" in markdown
+        assert "| caption_text_edit | True | True | True | True | 0 | 1 |" in markdown
         assert "| candidate_confirm | True | True | True | True | 0 | 1 |" in markdown

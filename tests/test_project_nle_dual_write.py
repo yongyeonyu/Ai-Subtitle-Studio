@@ -12,6 +12,7 @@ from core.project.nle_dual_write import (
     apply_caption_move_dual_write_pilot,
     apply_caption_resize_dual_write_pilot,
     apply_caption_split_dual_write_pilot,
+    apply_caption_text_edit_dual_write_pilot,
     apply_gap_delete_dual_write_pilot,
     apply_gap_generate_dual_write_pilot,
 )
@@ -277,6 +278,43 @@ class NLEDualWritePilotTests(unittest.TestCase):
             ("subtitle_vector_0002", "second", 15, 45),
             ("subtitle_vector_0003", "third", 60, 90),
         ])
+
+    def test_caption_text_edit_dual_write_updates_text_without_timing_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "caption-text-edit.aissproj"
+            project = _project_with_three_captions()
+            result = apply_caption_text_edit_dual_write_pilot(
+                project,
+                caption_id="subtitle_vector_0002",
+                new_text="second\u2028edited",
+                commit_boundary="release",
+                commit_source="timeline_inline_text",
+                project_path=str(project_path),
+            )
+
+            legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+            nle_rows = project_segments_from_nle_state(project)
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            reopened = read_project_file(str(project_path))
+            reopened_rows = project_segments_to_editor(reopened, include_analysis_candidates=False)
+
+        self.assertEqual(result.operation_family, "caption_text_edit")
+        self.assertEqual(result.operation.kind, "caption_text_edit")
+        self.assertEqual(result.operation.target_ids, ("subtitle_vector_0002",))
+        self.assertEqual(result.operation.metadata["old_text"], "second")
+        self.assertEqual(result.operation.metadata["new_text"], "second\nedited")
+        self.assertEqual(result.operation.metadata["commit_boundary"], "release")
+        self.assertEqual(result.operation.metadata["commit_source"], "timeline_inline_text")
+        self.assert_final_projection_is_release_stable(result)
+        self.assertEqual([row.get("text") for row in legacy_rows], ["first", "second\nedited", "third"])
+        self.assertEqual([(row["start_frame"], row["end_frame"]) for row in legacy_rows], [(0, 30), (30, 60), (60, 90)])
+        self.assertEqual([row.get("text") for row in nle_rows], ["first", "second\nedited", "third"])
+        self.assertRowsAlmostEqual(reopened_rows, legacy_rows)
+        self.assertEqual(reopened_rows[1]["text"], "second\nedited")
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_text_edit")
 
     def test_caption_resize_dual_write_trims_neighbor_and_preserves_disk_shape(self):
         with tempfile.TemporaryDirectory() as tmp:

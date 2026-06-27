@@ -26,6 +26,7 @@ from core.project.nle_dual_write import (
     apply_caption_move_dual_write_pilot,
     apply_caption_resize_dual_write_pilot,
     apply_caption_split_dual_write_pilot,
+    apply_caption_text_edit_dual_write_pilot,
     apply_gap_delete_dual_write_pilot,
     apply_gap_generate_dual_write_pilot,
 )
@@ -220,6 +221,19 @@ def _operation_roundtrip_matrix(work_dir: Path) -> list[dict[str, Any]]:
         "caption_resize",
         project,
         apply_caption_resize_dual_write_pilot(project, caption_id="subtitle_vector_0002", new_start=0.5, new_end=2.0, edge="square_left"),
+    ))
+
+    project = _three_caption_project()
+    cases.append((
+        "caption_text_edit",
+        project,
+        apply_caption_text_edit_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0002",
+            new_text="second\nedited",
+            commit_boundary="release",
+            commit_source="timeline_inline_text",
+        ),
     ))
 
     project = _three_caption_project()
