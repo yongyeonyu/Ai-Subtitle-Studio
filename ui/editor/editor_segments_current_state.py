@@ -47,6 +47,8 @@ class EditorSegmentsCurrentStateMixin:
             "stt_selected_source": getattr(data, "stt_selected_source", "") or "",
             "stt_ensemble_llm_selected_source": getattr(data, "stt_ensemble_llm_selected_source", "") or "",
         }
+        if getattr(data, "segment_id", ""):
+            item["id"] = str(getattr(data, "segment_id", "") or "")
         for attr in (
             "stt_segment_id",
             "stt_mode_status",

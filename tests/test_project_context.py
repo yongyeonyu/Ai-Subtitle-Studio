@@ -465,6 +465,40 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(vector_segment["time"]["start_frame"], 48)
         self.assertEqual(vector_segment["time"]["end_frame"], 72)
 
+    def test_build_editor_state_preserves_segment_identity_only_when_opted_in(self):
+        default_state = build_editor_state(
+            mode="single",
+            media_files=["/tmp/a.mp4"],
+            segments=[
+                {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "첫 줄", "speaker": "00"},
+            ],
+            primary_fps=30.0,
+        )
+        nle_shadow_state = build_editor_state(
+            mode="single",
+            media_files=["/tmp/a.mp4"],
+            segments=[
+                {
+                    "id": "subtitle_vector_0002_split_right",
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "분할 오른쪽",
+                    "speaker": "00",
+                },
+            ],
+            primary_fps=30.0,
+            preserve_segment_identity=True,
+        )
+
+        self.assertEqual(
+            default_state["rendering"]["subtitle_canvas"]["segments"][0]["id"],
+            "subtitle_vector_0001",
+        )
+        self.assertEqual(
+            nle_shadow_state["rendering"]["subtitle_canvas"]["segments"][0]["id"],
+            "subtitle_vector_0002_split_right",
+        )
+
     def test_build_editor_state_reuses_segment_signature_for_vector_canvas(self):
         with patch("core.project.project_context.segment_signature", wraps=segment_signature) as signature_mock:
             state = build_editor_state(

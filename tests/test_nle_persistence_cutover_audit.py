@@ -61,7 +61,7 @@ def test_nle_persistence_cutover_audit_roundtrips_dual_write_operation_families(
         assert row["storage_has_nle"] is False
         assert row["storage_has_nle_snapshot"] is False
         assert row["reopened_matches_projected"] is True
-        assert isinstance(row["reopened_identity_preserved"], bool)
+        assert row["reopened_identity_preserved"] is True
         assert row["invalid_duration_count"] == 0
         assert row["non_monotonic_count"] == 0
         assert row["overlap_count"] == 0
@@ -82,4 +82,4 @@ def test_nle_persistence_cutover_audit_writes_json_and_markdown_reports():
         assert saved["schema"] == report["schema"]
         assert markdown.startswith("# NLE Persistence Cutover Audit")
         assert "## Operation Roundtrip Matrix" in markdown
-        assert "| candidate_confirm | True | True | True | False | 0 | 1 |" in markdown
+        assert "| candidate_confirm | True | True | True | True | 0 | 1 |" in markdown

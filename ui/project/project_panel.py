@@ -384,7 +384,28 @@ class ProjectUIMixin:
         if not filepath:
             return
 
-        aux_state = collect_editor_project_aux_state(getattr(self, "_editor_widget", None))
+        editor = getattr(self, "_editor_widget", None)
+        if segments is None and editor is not None:
+            flush_queue = getattr(editor, "_flush_pending_segment_queue_now", None)
+            if callable(flush_queue):
+                try:
+                    flush_queue()
+                except Exception:
+                    pass
+            getter = getattr(editor, "_get_current_segments", None)
+            if callable(getter):
+                try:
+                    segments = [dict(seg) for seg in list(getter() or []) if isinstance(seg, dict)]
+                except Exception:
+                    segments = None
+        discard_deferred = getattr(editor, "_discard_pending_deferred_project_save", None) if editor is not None else None
+        if callable(discard_deferred):
+            try:
+                discard_deferred(reason="explicit_project_save")
+            except Exception:
+                pass
+
+        aux_state = collect_editor_project_aux_state(editor)
 
         save_project(
             filepath,
@@ -397,7 +418,6 @@ class ProjectUIMixin:
             persist_analysis_artifacts=False,
             rewrite_stt_reference_tracks=False,
         )
-        editor = getattr(self, "_editor_widget", None)
         restorer = getattr(editor, "_restore_editor_time_tags_after_save", None)
         if callable(restorer):
             try:

@@ -102,6 +102,7 @@ def _shadow_project_with_rows(project: dict[str, Any], rows: list[dict[str, Any]
         stt_preview_segments=_stt_preview_segments(project),
         cut_boundaries=_analysis_cut_boundaries(project),
         primary_fps=project_primary_fps(project),
+        preserve_segment_identity=True,
     )
     return shadow
 
@@ -709,6 +710,49 @@ def _candidate_confirm_id(candidate: dict[str, Any], source: str) -> str:
     return f"candidate_confirm:{str(source or '').strip().upper()}:{start:.3f}:{end:.3f}"
 
 
+def _canonicalize_confirmed_caption_identities(
+    before_rows: list[dict[str, Any]],
+    confirmed_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    before_candidates = [
+        (index, dict(row))
+        for index, row in enumerate(before_rows)
+        if isinstance(row, dict) and _is_final_caption_row(row)
+    ]
+    used_before: set[int] = set()
+    out: list[dict[str, Any]] = []
+    for row in confirmed_rows:
+        item = dict(row)
+        if not _is_final_caption_row(item):
+            out.append(item)
+            continue
+        current_id = str(item.get("id", "") or "").strip()
+        if current_id.startswith("subtitle_vector_"):
+            out.append(item)
+            continue
+        row_start = _row_start(item)
+        row_end = _row_end(item, row_start)
+        best_index = -1
+        best_overlap = 0.0
+        for before_index, before in before_candidates:
+            if before_index in used_before:
+                continue
+            before_start = _row_start(before)
+            before_end = _row_end(before, before_start)
+            overlap = max(0.0, min(row_end, before_end) - max(row_start, before_start))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_index = before_index
+        if best_index >= 0 and best_overlap > 0.0:
+            before = next(before for index, before in before_candidates if index == best_index)
+            item["id"] = _caption_identity(before, best_index)
+            used_before.add(best_index)
+        elif current_id.startswith("caption_") and current_id[8:].isdigit():
+            item.pop("id", None)
+        out.append(item)
+    return out
+
+
 def _overlapping_caption_ids_for_candidate(
     rows: list[dict[str, Any]],
     candidate: dict[str, Any],
@@ -744,11 +788,12 @@ def apply_candidate_confirm_dual_write_pilot(
         raise ValueError("nle_candidate_confirm_source_required")
     if not isinstance(candidate, dict):
         raise TypeError("candidate_required")
+    before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
     after_rows = _sorted_editor_rows([dict(row) for row in list(confirmed_rows or []) if isinstance(row, dict)])
+    after_rows = _canonicalize_confirmed_caption_identities(before_rows, after_rows)
     if not after_rows:
         raise ValueError("nle_candidate_confirm_rows_required")
 
-    before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
     candidate_id = _candidate_confirm_id(candidate, source)
     target_ids = _overlapping_caption_ids_for_candidate(before_rows, candidate)
     if not target_ids:

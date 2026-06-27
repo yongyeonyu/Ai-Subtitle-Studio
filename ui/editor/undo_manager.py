@@ -264,6 +264,7 @@ class UndoManager:
     @staticmethod
     def _block_meta(ud: SubtitleBlockData) -> dict:
         return {
+            "segment_id": getattr(ud, "segment_id", ""),
             "spk_id": ud.spk_id,
             "start_sec": ud.start_sec,
             "end_sec": getattr(ud, "end_sec", None),
@@ -303,6 +304,7 @@ class UndoManager:
             meta.get("start_sec", 0.0),
             meta.get("is_gap", False),
             end_sec=meta.get("end_sec"),
+            segment_id=meta.get("segment_id", ""),
             stt_mode=meta.get("stt_mode", False),
             stt_pending=meta.get("stt_pending", False),
             original_text=meta.get("original_text", ""),

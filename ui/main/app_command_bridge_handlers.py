@@ -788,7 +788,21 @@ def _handle_save_export_command(
             saver = getattr(owner, "_save_current_project", None)
             if not callable(saver):
                 return fail("project_save_unavailable")
-            saver()
+            editor = getattr(owner, "_editor_widget", None)
+            segments = None
+            flush_queue = getattr(editor, "_flush_pending_segment_queue_now", None) if editor is not None else None
+            if callable(flush_queue):
+                try:
+                    flush_queue()
+                except Exception:
+                    pass
+            getter = getattr(editor, "_get_current_segments", None) if editor is not None else None
+            if callable(getter):
+                try:
+                    segments = [dict(seg) for seg in list(getter() or []) if isinstance(seg, dict)]
+                except Exception:
+                    segments = None
+            saver(segments=segments)
             return ok(message="project_saved", data={"path": project_path})
         editor = getattr(owner, "_editor_widget", None)
         save_handler = getattr(editor, "_on_save", None) if editor is not None else None

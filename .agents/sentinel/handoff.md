@@ -1,5 +1,8 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-035500-quick-qa-save-project-overlap-fix-scout.md`
+- `.agents/sentinel/handoffs/20260628-035000-nle-identity-preservation-review.md`
+- `.agents/sentinel/handoffs/20260628-034513-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-034500-completed-action-nle-persistence-audit.md`
 - `.agents/sentinel/handoffs/20260628-033000-next-safe-action-review.md`
 - `.agents/sentinel/handoffs/20260628-031000-app-store-readiness-next-step-review.md`

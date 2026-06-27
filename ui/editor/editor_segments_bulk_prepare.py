@@ -170,7 +170,15 @@ class EditorSegmentsBulkPrepareMixin:
     ) -> None:
         first_line = len(block_texts)
         block_texts.append("")
-        block_meta.append(SubtitleBlockData("00", start_sec, is_gap=True, end_sec=end_sec))
+        block_meta.append(
+            SubtitleBlockData(
+                "00",
+                start_sec,
+                is_gap=True,
+                end_sec=end_sec,
+                segment_id=str(seg.get("id", "") or ""),
+            )
+        )
         display = dict(seg)
         display["line"] = first_line
         display["start"] = start_sec
@@ -198,6 +206,7 @@ class EditorSegmentsBulkPrepareMixin:
         current_spk = str((spk_list[0] if spk_list else seg.get("speaker", seg.get("spk", spk1_id))) or spk1_id)
         stt_kwargs = self._bulk_segment_stt_kwargs(seg)
         clip_idx, clip_kwargs = self._bulk_segment_clip_kwargs(seg)
+        identity_kwargs = {"segment_id": str(seg.get("id", "") or "")}
         quality_kwargs = self._segment_document_quality_kwargs(
             seg,
             start_sec=start_sec,
@@ -220,19 +229,19 @@ class EditorSegmentsBulkPrepareMixin:
                     current_spk = spk2_id if current_spk == spk1_id else spk1_id
                 block_texts.append(str(block_plan.get("text", "") or ""))
                 block_meta.append(
-                    SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
+                    SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **identity_kwargs, **stt_kwargs, **quality_kwargs, **clip_kwargs)
                 )
         else:
             block_texts.append(parts[0])
             block_meta.append(
-                SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
+                SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **identity_kwargs, **stt_kwargs, **quality_kwargs, **clip_kwargs)
             )
             for part in parts[1:]:
                 if should_split_multiline_part_into_block(seg, part):
                     current_spk = spk2_id if current_spk == spk1_id else spk1_id
                     block_texts.append(part)
                     block_meta.append(
-                        SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
+                        SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **identity_kwargs, **stt_kwargs, **quality_kwargs, **clip_kwargs)
                     )
                 else:
                     block_texts[-1] = block_texts[-1] + "\u2028" + part

@@ -351,7 +351,7 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assert_final_projection_is_release_stable(result)
         self.assert_rows_match_frames(legacy_rows, [
             ("subtitle_vector_0001", "first second", 0, 60),
-            ("subtitle_vector_0002", "third", 60, 90),
+            ("subtitle_vector_0003", "third", 60, 90),
         ])
         self.assertEqual([(row["start_frame"], row["end_frame"]) for row in nle_rows], [(0, 60), (60, 90)])
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_merge")
@@ -393,8 +393,8 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assert_rows_match_frames(legacy_rows, [
             ("subtitle_vector_0001", "first", 0, 30),
             ("subtitle_vector_0002", "sec", 30, 42),
-            ("subtitle_vector_0003", "ond", 42, 60),
-            ("subtitle_vector_0004", "third", 60, 90),
+            ("subtitle_vector_0002_split_right", "ond", 42, 60),
+            ("subtitle_vector_0003", "third", 60, 90),
         ])
         self.assertEqual([(row["start_frame"], row["end_frame"]) for row in nle_rows], [(0, 30), (30, 42), (42, 60), (60, 90)])
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_split")

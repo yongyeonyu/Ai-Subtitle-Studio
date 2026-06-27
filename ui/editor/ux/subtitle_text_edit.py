@@ -95,8 +95,10 @@ class SubtitleBlockData(QTextBlockUserData):
         live_preview: bool = False,
         live_preview_source: str = "",
         live_preview_stage: str = "",
+        segment_id: str = "",
     ):
         super().__init__()
+        self.segment_id = str(segment_id or "")
         self.spk_id = spk_id
         self.start_sec = start_sec
         self.end_sec = end_sec
@@ -134,6 +136,7 @@ class SubtitleBlockData(QTextBlockUserData):
 
 def subtitle_block_data_to_meta(ud: SubtitleBlockData) -> dict:
     return {
+        "segment_id": str(getattr(ud, "segment_id", "") or ""),
         "spk_id": getattr(ud, "spk_id", "00"),
         "start_sec": getattr(ud, "start_sec", 0.0),
         "end_sec": getattr(ud, "end_sec", None),
@@ -205,6 +208,7 @@ def subtitle_block_data_from_meta(meta: dict) -> SubtitleBlockData:
         live_preview=bool(meta.get("live_preview", False)),
         live_preview_source=str(meta.get("live_preview_source", "") or ""),
         live_preview_stage=str(meta.get("live_preview_stage", "") or ""),
+        segment_id=str(meta.get("segment_id", "") or ""),
     )
 
 class SubtitleHighlighter(QSyntaxHighlighter):

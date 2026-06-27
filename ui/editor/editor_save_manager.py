@@ -1214,6 +1214,20 @@ class EditorSaveManagerMixin:
             or getattr(self, "_deferred_project_save_running", False)
         )
 
+    def _discard_pending_deferred_project_save(self, *, reason: str = "manual") -> bool:
+        if not bool(getattr(self, "_deferred_project_save_pending", False)):
+            return True
+        if bool(getattr(self, "_deferred_project_save_running", False)):
+            return False
+        generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0) + 1
+        self._deferred_project_save_generation = generation
+        self._deferred_project_save_pending = False
+        self._deferred_project_save_segments = []
+        self._deferred_project_save_options = {}
+        self._set_deferred_project_save_status("에디터 | 프로젝트 저장 대기 갱신")
+        get_logger().log(f"💾 프로젝트 지연 저장 예약 무효화: {reason}")
+        return True
+
     def _schedule_deferred_project_save(
         self,
         segs: list | None,

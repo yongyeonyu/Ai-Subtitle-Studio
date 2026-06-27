@@ -202,6 +202,7 @@ class EditorSegmentsRuntimeCacheMixin:
             start_sec,
             bool(seg.get("is_gap", False)),
             end_sec=end_sec,
+            segment_id=str(seg.get("id", "") or ""),
             stt_mode=bool(seg.get("stt_mode", False)),
             stt_pending=bool(seg.get("stt_pending", False)),
             original_text=str(seg.get("original_text", "") or ""),

@@ -42,6 +42,8 @@ class _DummyEditor:
         self._stt_recording = False
         self._stt_vad_running = False
         self._last_saved_srt_outputs = []
+        self.flush_calls = 0
+        self._pending_flush_segments = None
         self._segments = [
             {"line": 0, "start": 0.0, "end": 1.0, "text": "첫 줄", "is_gap": False},
             {"line": 1, "start": 1.0, "end": 2.0, "text": "둘째 줄", "is_gap": False},
@@ -63,6 +65,12 @@ class _DummyEditor:
 
     def _get_current_segments(self):
         return list(self._segments)
+
+    def _flush_pending_segment_queue_now(self):
+        self.flush_calls += 1
+        if self._pending_flush_segments is not None:
+            self._segments = [dict(seg) for seg in list(self._pending_flush_segments or [])]
+            self._pending_flush_segments = None
 
     def _segments_for_srt_output(self, segs):
         return list(segs or [])
@@ -431,6 +439,7 @@ class _DummyOwner:
         self.queue_calls = []
         self.opened_project = ""
         self.saved_project = 0
+        self.saved_project_segments = None
         self.guided_runs = []
         self.guided_snapshots = []
         self.async_snapshot_requests = []
@@ -479,6 +488,7 @@ class _DummyOwner:
 
     def _save_current_project(self, segments=None):
         self.saved_project += 1
+        self.saved_project_segments = list(segments or []) if segments is not None else None
 
     def open_editor_for_file_and_wait(self, target_file, *_args):
         self.last_open_args = (target_file, *_args)
@@ -835,6 +845,38 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(owner._editor_widget.save_calls, 1)
         self.assertEqual(owner.saved_project, 0)
+
+    def test_save_project_command_passes_current_editor_segments_for_open_project(self):
+        owner = _DummyOwner()
+        owner._current_project_path = "/tmp/project.json"
+        owner._editor_widget._segments = [
+            {"line": 0, "start": 1.0, "end": 2.2, "text": "merged row", "is_gap": False},
+            {"line": 1, "start": 3.0, "end": 4.3, "text": "next row", "is_gap": False},
+        ]
+
+        result = execute_app_command(owner, {"command": "save-project"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(owner.saved_project, 1)
+        self.assertEqual(owner._editor_widget.save_calls, 0)
+        self.assertEqual([row["text"] for row in owner.saved_project_segments], ["merged row", "next row"])
+
+    def test_save_project_command_flushes_pending_editor_rows_before_project_save(self):
+        owner = _DummyOwner()
+        owner._current_project_path = "/tmp/project.json"
+        owner._editor_widget._pending_flush_segments = [
+            {"line": 0, "start": 1.0, "end": 2.2, "text": "flushed merged row", "is_gap": False},
+            {"line": 1, "start": 3.0, "end": 4.3, "text": "flushed next row", "is_gap": False},
+        ]
+
+        result = execute_app_command(owner, {"command": "save-project"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(owner._editor_widget.flush_calls, 1)
+        self.assertEqual(
+            [row["text"] for row in owner.saved_project_segments],
+            ["flushed merged row", "flushed next row"],
+        )
 
     def test_save_subtitles_command_returns_saved_outputs(self):
         owner = _DummyOwner()

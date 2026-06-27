@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Operation Identity Preservation - 2026-06-28 KST
+
+- 실행 모드: source-app runtime NLE dual-write identity preservation; no disk-format cutover.
+- 결과: pass.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_persistence_identity_preservation_20260628/nle_persistence_cutover_audit.md`
+  - JSON: `output/manual_verification/latest/nle_persistence_identity_preservation_20260628/nle_persistence_cutover_audit.json`
+- 수정 요약:
+  - `build_editor_state(...)` gained an opt-in `preserve_segment_identity` flag; default remains `false`, so general legacy import/canonicalization still emits `subtitle_vector_*` IDs as before.
+  - NLE dual-write shadow projection enables the flag so generated operation identities such as gap-generated captions, split children, and merge survivors persist through save/reopen.
+  - `candidate_confirm` canonicalizes generic confirmed-row IDs such as `caption_1` / `caption_2` back to the existing `subtitle_vector_*` identity when rows overlap existing final captions.
+  - Live editor `SubtitleBlockData` now carries `segment_id` through bulk load, queue flush, runtime cache, current-state serialization, and undo metadata so NLE operation identities survive document reload/edit cycles.
+  - Explicit automation `save-project` now flushes pending editor segment queues, passes the current editor rows into project save, and invalidates stale deferred project-save snapshots so pre-merge rows cannot be saved after a diamond merge.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/main/app_command_bridge_handlers.py ui/project/project_panel.py ui/editor/editor_save_manager.py tests/test_app_command_bridge.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "save_project_command"` -> `3 passed, 75 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k "save_project_externalize or save_project_persists_editor or build_editor_state"` -> `7 passed, 79 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_persistence_cutover_audit.py tests/test_project_context.py -k "identity or nle or build_editor_state or subtitle_canvas or vector"` -> `30 passed, 80 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py tests/test_timeline_playhead_fit.py tests/test_editor_split_undo.py -k "caption_split or caption_merge or candidate_confirm or gap_generate or undo or nle"` -> `17 passed, 236 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_dual_write.py tests/test_project_nle_runtime_cutover.py tests/test_project_nle_render_export_parity.py -k "nle or persistence or candidate_confirm or caption_split or caption_merge or gap_generate or save_export or final_overlay or overlap"` -> `53 passed, 4 subtests passed`.
+  - `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_persistence_identity_preservation_20260628` -> pass; all 8 operation families report `reopened_identity_preserved=true`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_nle_identity_save_project_fix_20260628` -> pass, `failed_count=0`, `editor_compact_macau: ok`.
+- 자막 품질 영향:
+  - None intended. This changes runtime/project identity preservation and explicit project-save row ownership only. STT2, word precision, LLM, LoRA, VAD, timing policy, final overlap gates, visible UI/UX, and persisted NLE disk fields were not changed.
+- 남은 위험:
+  - Persisted top-level `nle`, `nle_snapshot`, or `_nle_project_state` fields remain blocked until a separate owner-approved compatibility gate exists.
+
 ## NLE Persistence Cutover Audit - 2026-06-28 KST
 
 - 실행 모드: source-app NLE persistence cutover readiness audit; no disk-format cutover.

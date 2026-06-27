@@ -997,6 +997,7 @@ def build_editor_state(
     provisional_cut_boundaries: list[dict[str, Any]] | None = None,
     primary_fps: float | None = None,
     status_threshold: float | None = None,
+    preserve_segment_identity: bool = False,
 ) -> dict[str, Any]:
     mode = "multiclip" if mode == "multiclip" or len(media_files) > 1 else "single"
     fps = normalize_fps(primary_fps or 30.0)
@@ -1005,6 +1006,7 @@ def build_editor_state(
         segments,
         primary_fps=fps,
         status_threshold=status_threshold,
+        preserve_segment_identity=preserve_segment_identity,
     )
     normalized_gap_segments = _normalize_gap_segments(segments, primary_fps=fps)
     segment_signature_value = segment_signature(normalized_segments)
@@ -1474,6 +1476,7 @@ def _normalize_editor_segments(
     *,
     primary_fps: float = 30.0,
     status_threshold: float | None = None,
+    preserve_segment_identity: bool = False,
 ) -> list[dict[str, Any]]:
     fps = normalize_fps(primary_fps or 30.0)
     resolved_status_threshold = status_threshold
@@ -1520,6 +1523,12 @@ def _normalize_editor_segments(
                 "timeline_frame_rate": fps,
             },
         }
+        if preserve_segment_identity:
+            segment_id = str(seg.get("id", "") or "").strip()
+            if segment_id and not (segment_id.startswith("caption_") and segment_id[8:].isdigit()):
+                item["id"] = segment_id
+            if seg.get("index") is not None:
+                item["index"] = seg.get("index")
         for key in (
             "_clip_idx",
             "_clip_file",

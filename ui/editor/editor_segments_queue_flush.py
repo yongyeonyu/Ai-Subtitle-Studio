@@ -342,6 +342,7 @@ class EditorSegmentsQueueFlushMixin:
         source_segment = dict(payload.get("source_segment") or {})
         start_sec = float(payload.get("start_sec", 0.0) or 0.0)
         end_sec = float(payload.get("end_sec", start_sec) or start_sec)
+        identity_kwargs = {"segment_id": str(source_segment.get("id", "") or "")}
         stt_kwargs = dict(payload.get("stt_kwargs") or {})
         clip_kwargs = dict(payload.get("clip_kwargs") or {})
         quality_kwargs = dict(payload.get("quality_kwargs") or {})
@@ -349,7 +350,7 @@ class EditorSegmentsQueueFlushMixin:
         cur.setCharFormat(QTextCharFormat())
         cur.insertText(parts[0], QTextCharFormat())
         cur.block().setUserData(
-            SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
+            SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **identity_kwargs, **stt_kwargs, **quality_kwargs, **clip_kwargs)
         )
         focused_payload = {
             "line": cur.block().blockNumber(),
@@ -362,7 +363,7 @@ class EditorSegmentsQueueFlushMixin:
                 current_spk = spk2_id if current_spk == spk1_id else spk1_id
                 cur.insertText("\n" + line_text, QTextCharFormat())
                 cur.block().setUserData(
-                    SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs)
+                    SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **identity_kwargs, **stt_kwargs, **quality_kwargs, **clip_kwargs)
                 )
             else:
                 cur.insertText("\u2028" + line_text, QTextCharFormat())
