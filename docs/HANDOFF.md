@@ -33,7 +33,38 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 Documentation Relocation And App Store Launch Plan
+## Current Handoff - 2026-06-28 G1 NAS Collect-Cache Backfill Refresh
+
+### Scope
+
+- The owner reported NAS was connected at `192.168.0.5`; Dex verified SMB mounts and found `/Volumes/photo` mounted.
+- Refreshed the G1 HeyDealer first-180s real-media collect-cache backfill on the current source-app head.
+- No runtime code, UI/UX, STT/default-cache policy, App Store packaging/signing/upload, DMG, or persisted NLE disk-format change was made.
+
+### Verification
+
+- `git status --short --branch` before execution -> `## main...origin/main`.
+- `ping -c 1 -W 1000 192.168.0.5` -> reachable.
+- `smbutil statshares -a` -> `action6` and `photo` SMB shares mounted; `/Volumes/photo` contains the required HeyDealer MP4/SRT.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media /Volumes/photo/.../헤이딜러_최종.MP4 --reference-srt /Volumes/photo/.../헤이딜러_최종.srt --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/preflight` -> `ready_for_reference_scored_benchmark=true`, clipped reference rows `89`.
+- Cache write benchmark `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_220327/benchmark_results.json` -> elapsed `177.888s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, STT1/STT2/word collect provider calls `true`.
+- Cache hit benchmark `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_220718/benchmark_results.json` -> elapsed `1.183s`, same quality/final gates, STT1/STT2/word collect hits `true`, provider calls `false`, collect elapsed `0.0s`.
+- Acceptance write/hit: `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/acceptance_write/reference_benchmark_acceptance.md` and `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/acceptance_hit/reference_benchmark_acceptance.md` -> both `Accepted: True`.
+- Readiness refresh: `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/readiness_refresh/stt_cache_backfill_readiness.md` -> `current_real_inputs_available=true`, strict real hits `2`, defaults `false/false`, production recommendation `hold_default_off`.
+- Timeout audit: `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/timeout_audit/stt_worker_timeout_audit.md` -> `timeout_detected=false`.
+
+### Jammini Review
+
+- Route status and handoff probe were verified before dispatching support work.
+- `한결`, `서린`, and `유진` review-prep handoffs were read directly by Dex and folded into the gate: default policy remains false, write/hit must both be accepted, final gates must stay `0/0/0`, global max active must stay `1`, save/reopen/global-canvas stability must remain true, and UI/UX must remain unchanged.
+
+### Next Recommended Action
+
+- Do not enable `stt_primary_collect_cache_enabled` or `stt_recheck_collect_cache_enabled` by default without explicit owner review.
+- If the owner approves default promotion, promote one cache at a time with a rollback boundary and focused proof.
+- If the owner asks for the next non-G1 item, return to `docs/planning_queue/ACTION_ITEMS.md` and pick from G0/G2 without treating this G1 evidence as App Store or persisted NLE approval.
+
+## Previous Handoff - 2026-06-28 Documentation Relocation And App Store Launch Plan
 
 ### Scope
 

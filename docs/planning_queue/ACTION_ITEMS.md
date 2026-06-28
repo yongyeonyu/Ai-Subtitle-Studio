@@ -104,7 +104,7 @@ Current baseline:
 
 - Representative HeyDealer first-180s STT1 plus STT2/word collect-cache write/hit backfill is strict-accepted.
 - `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` remain production defaults until explicit owner approval.
-- Latest strict real-media collect-cache backfill: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/`; write/hit accepted, elapsed `46.073s -> 1.266s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, provider calls `true -> false`.
+- Latest strict real-media collect-cache backfill refresh: `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/`; preflight passed, write/hit accepted, elapsed `177.888s -> 1.183s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, global max active `1`, STT1/STT2/word provider calls `true -> false`, and timeout audit reported `timeout_detected=false`.
 - NAS HeyDealer first 180 seconds remains the owner-level gate for production-facing latency/default decisions.
 
 Detailed plan:
