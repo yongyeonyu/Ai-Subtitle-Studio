@@ -1,5 +1,28 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Final/Preview Isolation - 2026-06-28 KST
+
+- 실행 모드: Taption-style final subtitle surface isolation for video overlay/global canvas/save-style feeds while keeping STT/subtitle drafts in timeline/editor candidate lanes.
+- 결과: pass for final-only video subtitle overlay, final-only NLE/global surfaces, diagnostic-only combined live feed, strict NAS HeyDealer first-180s acceptance, and no STT worker timeout. UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, and per-pixel NLE writes did not change.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_final_preview_isolation_20260628/nle_final_preview_isolation.md`
+  - NAS preflight: `output/manual_verification/latest/nle_final_preview_isolation_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_195502/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_final_preview_isolation_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_final_preview_isolation_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-104950-next-nle-taption-runtime-contract-scout.md` (rejected as duplicate playhead-jump scope)
+- 실제 결과:
+  - Audit `ready=true`; final overlay/global canvas/save-style surfaces are `confirmed_final_rows_only`; combined live feed is `diagnostic_candidate_lane_only`.
+  - Checks passed: feed final surface confirmed-only, preview lane keeps candidates, combined feed diagnostic-only, final overlay filters preview rows, global canvas filters preview rows, video overlay ignores live preview context.
+  - NAS acceptance `accepted=true`, elapsed `46.228s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - STT1/STT2/word selected `21/37/7`; timeout audit `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/engine/subtitle_live_editor_feed.py ui/editor/editor_segments_timeline_context.py tools/audit_nle_final_preview_isolation.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_project_segment_reload.py` -> `92 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_timeline_playhead_fit.py -k "stt_preview or final_overlay or global_canvas or video_subtitle_context"` -> `18 passed, 185 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_final_preview_isolation.py --output-dir output/manual_verification/latest/nle_final_preview_isolation_20260628` -> ready `true`.
+
 ## NLE Relink Parity Verification - 2026-06-28 KST
 
 - 실행 모드: source-app project-load/media relink parity validation between editor media files and runtime `NLEProjectState` snapshot assets/clips.

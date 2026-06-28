@@ -21,10 +21,19 @@ def test_live_editor_feed_sorts_and_counts_rows_without_mutating_inputs():
     payload = feed.to_dict()
     assert payload["schema"] == SUBTITLE_LIVE_EDITOR_FEED_SCHEMA
     assert [row["text"] for row in payload["combined_segments"]] == ["stt", "draft", "final"]
+    assert [row["text"] for row in payload["final_surface_segments"]] == ["final"]
+    assert [row["text"] for row in payload["preview_lane_segments"]] == ["stt", "draft"]
+    assert payload["surface_contract"] == {
+        "final_surface": "confirmed_segments_only",
+        "preview_lane": "subtitle_preview_plus_stt_preview",
+        "combined_segments": "diagnostic_candidate_lane_only_not_final_overlay_or_save",
+    }
     assert payload["counts"] == {
         "confirmed": 1,
         "stt_preview": 1,
         "subtitle_preview": 1,
+        "final_surface": 1,
+        "preview_lane": 2,
         "combined": 3,
     }
     assert payload["confirmed_segments"][0]["text"] == "final"

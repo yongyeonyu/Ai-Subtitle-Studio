@@ -1807,7 +1807,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_processing_locked_live_stt_preview_still_feeds_video_subtitle_context(self):
+    def test_processing_locked_live_stt_preview_stays_out_of_video_subtitle_context(self):
         editor = _ActualSelectionEditor()
         editor.sm = type("State", (), {"is_locked": True, "state": "ST_PROC"})()
         try:
@@ -1825,8 +1825,11 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             ]
 
             live_context = editor._video_subtitle_live_preview_context(center_sec=134.9)
-            self.assertIsNotNone(live_context)
-            self.assertIn("-", [seg["text"] for seg in live_context])
+            self.assertIsNone(live_context)
+            self.assertEqual(
+                [seg["text"] for seg in editor._video_subtitle_context_for_player()],
+                ["이런거 다 가네"],
+            )
         finally:
             editor.text_edit.close()
 
@@ -1954,7 +1957,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             subtitle_drafts = [seg for seg in editor.timeline.updated[0] if seg.get("_live_subtitle_preview")]
             self.assertEqual([seg["text"] for seg in subtitle_drafts], ["문맥 보정 초안"])
             self.assertFalse(any(seg.get("_live_stt_preview") for seg in editor.timeline.updated[0]))
-            self.assertIn("문맥 보정 초안", [seg.get("text", "") for seg in editor.video_player.context_segments])
+            self.assertNotIn("문맥 보정 초안", [seg.get("text", "") for seg in editor.video_player.context_segments])
         finally:
             editor.text_edit.close()
 

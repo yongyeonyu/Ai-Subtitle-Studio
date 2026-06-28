@@ -72,38 +72,10 @@ class EditorSegmentsTimelineContextMixin:
             or list(getattr(self, "_live_editor_preview_segments", []) or [])
         ):
             return None
-        preview_sync_active = False
-        checker = getattr(self, "_live_subtitle_preview_sync_active", None)
-        if callable(checker):
-            try:
-                preview_sync_active = bool(checker())
-            except Exception:
-                preview_sync_active = False
-        if not preview_sync_active:
-            # 변경 금지:
-            # 비디오 overlay는 editor와 같은 draft만 보여줘야 한다. idle 상태에서
-            # raw STT preview만 남아 있으면 editor에는 row가 없는데 overlay만 "-"
-            # 를 띄우는 불일치가 생긴다. 이 경우는 final subtitle context로
-            # 내려가서 editor/overlay/timeline subtitle row가 같은 기준을 보게 한다.
-            return None
-        combiner = getattr(self, "_combined_timeline_segments_with_live_preview", None)
-        if not callable(combiner):
-            return None
-        try:
-            confirmed_segments = [seg for seg in self._get_current_segments() if not seg.get("is_gap")]
-        except Exception:
-            confirmed_segments = [seg for seg in list(getattr(self, "_cached_segs", []) or []) if not seg.get("is_gap")]
-        try:
-            confirmed, preview, subtitle_preview, _total_dur = combiner(confirmed_segments)
-        except Exception:
-            return None
-        if not preview and not subtitle_preview:
-            return None
-        combined = sorted(
-            confirmed + subtitle_preview + preview,
-            key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
-        )
-        return self._subtitle_context_window_from_segments(combined, center_sec=center_sec)
+        # Taption parity:
+        # STT/subtitle drafts may stay visible in timeline/editor candidate lanes,
+        # but the video subtitle overlay must keep using the confirmed final surface.
+        return None
 
     def _apply_initial_timeline_fit_if_needed(self, segs: list[dict]) -> None:
         if not (getattr(self, "_needs_fit_view", False) and segs and hasattr(self.timeline, "fit_to_view")):

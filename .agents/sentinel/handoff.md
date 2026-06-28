@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-104950-next-nle-taption-runtime-contract-scout.md`
+- `.agents/sentinel/handoffs/20260628-194923-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-103348-next-nle-taption-runtime-contract-scout.md`
 - `.agents/sentinel/handoffs/20260628-193247-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-101805-next-nle-taption-runtime-contract-scout.md`
