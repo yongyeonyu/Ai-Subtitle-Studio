@@ -33,6 +33,45 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Adapter Cache Consistency Audit
+
+### Scope
+
+- Responded to the owner signal that NAS is back online by refreshing the current HeyDealer first-180s MP4/SRT preflight.
+- Continued the source-app NLE editor-structure goal with a non-destructive NLE adapter/cache consistency audit: `tools/audit_nle_adapter_consistency.py`.
+- Added focused tests: `tests/test_nle_adapter_consistency_audit.py`.
+- No runtime editor behavior, UI/UX, STT/STT2, subtitle timing, save file format, persisted NLE disk fields, per-pixel NLE writes, packaging, signing, upload, notarization, App Store Connect, or DMG behavior changed.
+
+### Results
+
+- NLE evidence: `output/manual_verification/latest/nle_adapter_consistency_audit_20260628/nle_adapter_consistency_audit.md`
+- NAS preflight: `output/manual_verification/latest/heydealer_nas_preflight_current_20260628/reference_fixture_availability.md`
+- Audit ready: `true`.
+- Runtime change applied: `false`.
+- Repeated save/reopen cycles: `6/6`.
+- Runtime state schema: `ai_subtitle_studio.nle_project_state.v1`; runtime caption count `4`.
+- All cycles kept storage clean, row signature stable, runtime marker visible before cache clear, runtime marker absent after cache clear/reopen, final invalid/non-monotonic/overlap `0/0/0`, and global max-active `1`.
+- LRU cache owner: `core.project.project_io._PROJECT_FILE_CACHE`; max entries `4`, paths written `6`, cache entry count `4`.
+- NAS current preflight is ready: media exists `true`, reference SRT exists `true`, clipped reference rows `89`. This is availability evidence only and does not approve collect-cache default promotion.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-110737-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-110800-nle-adapter-cache-consistency-scout.md`
+- Dex classification: accept with a narrower proof surface. The scout's GC-release concern was not converted into a brittle hard gate; this slice proves LRU bound, cache identity, cache-clear rehydration, storage stripping, and projection stability instead.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_adapter_consistency.py tests/test_nle_adapter_consistency_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_adapter_consistency_audit.py` -> `3 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_adapter_consistency.py --output-dir output/manual_verification/latest/nle_adapter_consistency_audit_20260628` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/heydealer_nas_preflight_current_20260628` -> pass.
+
+### Next Recommended Action
+
+- Keep persisted NLE disk fields, per-pixel NLE writes, and UI/QML default changes blocked until explicit owner approval and compatibility proof exist.
+- STT collect-cache default promotion remains explicit-owner-review only. The NAS is reachable now, but the strict real-media write/hit proof remains owner-review gated in `ACTION_ITEMS.md`.
+
 ## Current Handoff - 2026-06-28 NLE Runtime Owner Map Audit
 
 ### Scope

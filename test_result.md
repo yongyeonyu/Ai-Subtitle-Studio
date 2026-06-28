@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Adapter Cache Consistency Audit - 2026-06-28 KST
+
+- 실행 모드: source-app NLE adapter/cache consistency audit plus current NAS HeyDealer preflight.
+- 결과: pass; runtime-only NLE state remains cache/session scoped across repeated save/reopen, and NAS HeyDealer MP4/SRT are currently reachable.
+- 저장 위치:
+  - NLE report: `output/manual_verification/latest/nle_adapter_consistency_audit_20260628/nle_adapter_consistency_audit.md`
+  - NLE JSON: `output/manual_verification/latest/nle_adapter_consistency_audit_20260628/nle_adapter_consistency_audit.json`
+  - NAS preflight: `output/manual_verification/latest/heydealer_nas_preflight_current_20260628/reference_fixture_availability.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-110737-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-110800-nle-adapter-cache-consistency-scout.md`
+- 수정 요약:
+  - Added `tools/audit_nle_adapter_consistency.py`.
+  - Added `tests/test_nle_adapter_consistency_audit.py`.
+  - The audit checks repeated save/reopen cycles, same-cache runtime-state identity, cache-clear rehydration, runtime marker non-persistence, storage stripping, projection parity, and `_PROJECT_FILE_CACHE` LRU limit.
+  - No runtime editor behavior, UI/UX, STT/STT2, subtitle timing, save-file format, persisted NLE disk fields, packaging, signing, upload, notarization, App Store Connect, or DMG behavior changed.
+- 실제 감사 결과:
+  - `ready=true`, `runtime_change_applied=false`, cycles `6/6`.
+  - Runtime state schema `ai_subtitle_studio.nle_project_state.v1`, runtime caption count `4`.
+  - All repeated cycles: storage clean `true`, marker before clear `true`, marker after clear `false`, row signature stable `true`.
+  - Final projection gates: invalid/non-monotonic/overlap `0/0/0`, max active `1`, global canvas stable `true`, save/reload stable `true`.
+  - LRU cache owner `core.project.project_io._PROJECT_FILE_CACHE`, max entries `4`, paths written `6`, cache entry count `4`.
+  - NAS current preflight: ready `true`, media exists `true`, reference SRT exists `true`, clipped reference rows `89`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_adapter_consistency.py tests/test_nle_adapter_consistency_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_adapter_consistency_audit.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_adapter_consistency.py --output-dir output/manual_verification/latest/nle_adapter_consistency_audit_20260628` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/heydealer_nas_preflight_current_20260628` -> pass.
+
 ## NLE Runtime Owner Map Audit - 2026-06-28 KST
 
 - 실행 모드: source-app NLE runtime mutation owner-map audit; no runtime behavior change.
