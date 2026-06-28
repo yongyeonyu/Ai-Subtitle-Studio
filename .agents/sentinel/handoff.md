@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-095359-smart-split-undo-route-scout.md`
+- `.agents/sentinel/handoffs/20260628-185328-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-093842-next-nle-taption-runtime-contract-scout.md`
 - `.agents/sentinel/handoffs/20260628-183813-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-092700-timeline-view-state-isolation-scout.md`

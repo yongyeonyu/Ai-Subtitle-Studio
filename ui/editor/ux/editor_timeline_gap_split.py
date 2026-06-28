@@ -9,11 +9,14 @@ from ui.editor.editor_helpers import delete_block_safely, get_sub_block_indices,
 
 
 class EditorTimelineGapSplitMixin:
-    def _arm_gap_snapshot_undo_routing(self) -> None:
+    def _arm_gap_snapshot_undo_routing(self, *, allow_revision_drift: bool = False) -> None:
         arm_snapshot_undo = getattr(self, "_arm_snapshot_undo_routing", None)
         if callable(arm_snapshot_undo):
             # 갭/자막 생성은 QTextEdit 내부 undo가 아니라 앱 스냅샷 undo로 한 번에 되돌린다.
-            arm_snapshot_undo()
+            try:
+                arm_snapshot_undo(allow_revision_drift=bool(allow_revision_drift))
+            except TypeError:
+                arm_snapshot_undo()
 
     def _on_seg_to_gap(self, line_num: int):
         """Convert a subtitle segment into an editable silence gap."""
@@ -532,7 +535,7 @@ class EditorTimelineGapSplitMixin:
                         self.text_edit.update_margins()
                     if hasattr(self.text_edit, "timestampArea"):
                         self.text_edit.timestampArea.update()
-                    self._arm_gap_snapshot_undo_routing()
+                    self._arm_gap_snapshot_undo_routing(allow_revision_drift=True)
                     return
 
         cur = QTextCursor(doc)

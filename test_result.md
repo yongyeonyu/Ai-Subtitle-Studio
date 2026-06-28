@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Smart Split Undo Route - 2026-06-28 KST
+
+- 실행 모드: source-app Taption-style smart split snapshot undo routing under text-editor focus.
+- 결과: pass for structural smart split undo/redo using the app snapshot route instead of the focused `QTextEdit` local undo stack, plus strict NAS HeyDealer first-180s acceptance and no STT worker timeout. UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, and per-pixel NLE writes did not change.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_smart_split_undo_route_20260628/smart_split_undo_route.md`
+  - NAS preflight: `output/manual_verification/latest/nle_smart_split_undo_route_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_185643/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_smart_split_undo_route_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_smart_split_undo_route_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-095359-smart-split-undo-route-scout.md`
+- 실제 결과:
+  - Smart split repro `1 passed`; full split undo file `3 passed`; smart/gap timeline subset `4 passed, 189 deselected`.
+  - NAS acceptance `accepted=true`, elapsed `45.752s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - STT1/STT2/word selected `21/37/7`; timeout audit `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/ux/editor_timeline_gap_split.py tests/test_editor_split_undo.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_split_undo.py::EditorSplitUndoTests::test_smart_split_undo_and_redo_follow_snapshot_history_with_text_focus -vv` -> `1 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_split_undo.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "smart_split or gap_generate or seg_to_gap"` -> `4 passed, 189 deselected`.
+
 ## NLE Undo/Redo Runtime-State Restore - 2026-06-28 KST
 
 - 실행 모드: source-app NLE undo/redo restored-row runtime-state sync contract.

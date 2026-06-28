@@ -382,6 +382,19 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_undo_red
 
 Acceptance requires audit `ready=true`, undo restore sync source `undo_redo_restore`, before/after runtime NLE signatures matching restored editor rows, operation journal count `0`, storage clean of `_nle_project_state`/`nle`/`nle_snapshot`, and focused PyQt proof that live preview rows stay outside restored runtime NLE state. NAS HeyDealer generation validation is not required for the contract itself unless subtitle generation/final rows change; if NAS is available and a current-head regression is run, it must be accepted by `tools/evaluate_reference_benchmark_acceptance.py` and report final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`, and timeout audit `timeout_detected=false`.
 
+## NLE smart split undo-route validation
+
+Timeline smart split changes must prove structural subtitle undo/redo uses the app snapshot history even when the text editor has focus. This guards the Taption-style contract that split, smart split, gap generation, and delete-to-gap are one-step structural edits rather than local `QTextEdit` typing edits.
+
+```bash
+./venv/bin/python -m py_compile ui/editor/ux/editor_timeline_gap_split.py tests/test_editor_split_undo.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_split_undo.py::EditorSplitUndoTests::test_smart_split_undo_and_redo_follow_snapshot_history_with_text_focus -vv
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_split_undo.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "smart_split or gap_generate or seg_to_gap"
+```
+
+Acceptance requires smart split undo and redo to restore the visible block snapshot while `text_edit.hasFocus()` remains true, the full split undo file to pass, and related smart/gap timeline paths to keep their existing behavior. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows; if NAS is available and a current-head regression is run, it must be accepted by `tools/evaluate_reference_benchmark_acceptance.py` and report final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`, and timeout audit `timeout_detected=false`.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.
