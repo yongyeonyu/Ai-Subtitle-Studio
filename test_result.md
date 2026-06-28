@@ -1,5 +1,34 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## STT Cache Backfill Command Plan Gate - 2026-06-28 KST
+
+- 실행 모드: NAS-off analysis-only readiness audit hardening for STT collect-cache real-media backfill.
+- 결과: pass; production collect-cache defaults remain `hold_default_off`.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/stt_cache_backfill_command_plan_20260628/stt_cache_backfill_readiness.md`
+  - JSON: `output/manual_verification/latest/stt_cache_backfill_command_plan_20260628/stt_cache_backfill_readiness.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-085829-watchdog-handoff-probe.md`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-085900-stt-cache-backfill-readiness-plan-review.md`
+- 수정 요약:
+  - `tools/audit_stt_cache_backfill_readiness.py` now requires both strict real-media cache-write and cache-hit evidence before reporting owner-review readiness.
+  - The readiness JSON/Markdown now includes `next_run_plan` with preflight, cache-write, cache-hit, write acceptance, hit acceptance, and readiness-refresh commands for the NAS HeyDealer first-180s gate.
+  - The report now lists forbidden substitutes: generated/local fixtures, X5/project-reference fixtures, fallback cached audio without matching SRT, preflight-only proof, real-media write without matching hit replay, and profiler elapsed as speed truth.
+  - No runtime behavior, STT/STT2 policy, word precision policy, cache default, subtitle timing, save/load, render/export, packaging, App Store behavior, or UI changed.
+- 실제 감사 결과:
+  - `run_count=739`, `real_media_run_count=288`, `generated_or_local_run_count=451`.
+  - `current_real_inputs_available=false`.
+  - `stt_primary_collect_cache_enabled=false`, `stt_recheck_collect_cache_enabled=false`.
+  - strict real-media cache-write/cache-hit counts are `0/0` for STT1, STT2/word, and combined collect-cache families.
+  - each family remains `hold_real_media_backfill_required` with blockers `representative_real_media_currently_unavailable`, `missing_strict_real_media_cache_write_run`, and `missing_strict_real_media_cache_hit_replay`.
+  - generated strict cache-hit evidence remains context only and does not promote defaults.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_stt_cache_backfill_readiness.py tests/test_stt_cache_backfill_readiness.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_backfill_readiness.py tests/test_stage_variance_summary.py` -> `8 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_command_plan_20260628 --representative-media '/Volumes/photo/.../헤이딜러_최종.MP4' --representative-reference-srt '/Volumes/photo/.../헤이딜러_최종.srt'` -> pass.
+- 다음 gate:
+  - When the NAS HeyDealer MP4 and matching SRT are mounted, run the report's `preflight`, `cache_write`, `cache_hit`, `accept_write`, `accept_hit`, and `readiness_refresh` commands in order before any owner review of collect-cache defaults.
+  - Do not substitute generated fixtures, X5/project-reference fixtures, fallback cached audio, preflight-only proof, or profiler elapsed for this gate.
+
 ## Trace Log Bundle Contract And Retention - 2026-06-28 KST
 
 - 실행 모드: source-app Trace Log Bundle contract/retention audit; no runtime editor behavior change.

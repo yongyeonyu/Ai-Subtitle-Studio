@@ -33,7 +33,39 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 Trace Log Bundle Contract And Retention
+## Current Handoff - 2026-06-28 STT Cache Backfill Command Plan Gate
+
+### Scope
+
+- Continued active `ACTION_ITEMS.md` item 1 while NAS is unavailable, staying inside the allowed analysis/measurement-only scope.
+- Tightened `tools/audit_stt_cache_backfill_readiness.py` so representative real-media collect-cache promotion evidence requires both a strict cache-write run and a strict cache-hit replay before owner review.
+- Added `next_run_plan` to the readiness JSON/Markdown: preflight, cache-write, cache-hit, write acceptance, hit acceptance, and readiness-refresh commands for the NAS HeyDealer first-180s gate.
+- Added forbidden-substitute and owner-review gate sections to prevent X5/project-reference, generated/local fixture, fallback cached-audio, preflight-only, write-only, or profiler-only evidence from being misused as production speed proof.
+- No runtime behavior, STT/STT2 policy, word precision policy, cache default, subtitle timing, save/load, render/export, packaging, App Store behavior, or UI changed.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_stt_cache_backfill_readiness.py tests/test_stt_cache_backfill_readiness.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_backfill_readiness.py tests/test_stage_variance_summary.py` -> `8 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_command_plan_20260628 --representative-media '/Volumes/photo/.../헤이딜러_최종.MP4' --representative-reference-srt '/Volumes/photo/.../헤이딜러_최종.srt'` -> pass.
+
+### Results
+
+- Audit artifact: `output/manual_verification/latest/stt_cache_backfill_command_plan_20260628/stt_cache_backfill_readiness.md`
+- `production_default_recommendation=hold_default_off`.
+- `current_real_inputs_available=false`.
+- Defaults remain `stt_primary_collect_cache_enabled=false`, `stt_recheck_collect_cache_enabled=false`.
+- Strict real-media cache-write/cache-hit counts are `0/0` for STT1, STT2/word, and combined collect-cache families.
+- Family blocker set now includes `representative_real_media_currently_unavailable`, `missing_strict_real_media_cache_write_run`, and `missing_strict_real_media_cache_hit_replay`.
+- Jammini route probe: `.agents/sentinel/handoffs/20260628-085829-watchdog-handoff-probe.md`
+- Jammini review: `.agents/sentinel/handoffs/20260628-085900-stt-cache-backfill-readiness-plan-review.md`
+
+### Next Recommended Action
+
+- When the NAS HeyDealer MP4 and matching SRT are mounted, run the audit report's `preflight`, `cache_write`, `cache_hit`, `accept_write`, `accept_hit`, and `readiness_refresh` commands in order.
+- Do not use generated/local fixtures, X5/project-reference fixtures, fallback cached audio, preflight-only proof, real-media cache-write without matching hit replay, or profiler elapsed to approve collect-cache defaults.
+
+## Previous Handoff - 2026-06-28 Trace Log Bundle Contract And Retention
 
 ### Scope
 

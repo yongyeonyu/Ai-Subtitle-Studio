@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-085900-stt-cache-backfill-readiness-plan-review.md`
+- `.agents/sentinel/handoffs/20260628-085829-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-085200-trace-log-bundle-retention.md`
 - `.agents/sentinel/handoffs/20260628-084700-trace-retention-next-gap-scout.md`
 - `.agents/sentinel/handoffs/20260628-084655-watchdog-handoff-probe.md`

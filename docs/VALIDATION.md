@@ -149,7 +149,7 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_va
 When NAS is unavailable and STT collect-cache defaults are under review, use the read-only readiness audit before any production/default claim. This reads existing benchmark artifacts only.
 
 ```bash
-./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/20260627_*/benchmark_results.json' --glob '.codex_work/benchmarks/subtitle_pipeline_variants/20260628_*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_readiness_YYYYMMDD
+./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_readiness_YYYYMMDD --representative-media '<NAS_HEYDEALER_MP4>' --representative-reference-srt '<NAS_HEYDEALER_SRT>'
 ```
 
 Focused guards:
@@ -160,7 +160,7 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_ba
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_recheck_service.py tests/test_media_processor_overlap.py tests/test_subtitle_engine_settings.py -k "collect_cache or macro_response_cache"
 ```
 
-The readiness report must keep `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default unless representative real-media write and cache-hit replay evidence pass the strict final gates.
+The readiness report must keep `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` by default unless representative real-media cache-write and cache-hit replay evidence both pass the strict final gates. When NAS returns, run the report's generated `preflight`, `cache_write`, `cache_hit`, `accept_write`, `accept_hit`, and `readiness_refresh` commands in order before any owner review.
 
 After timing or tail-collapse fixes, refresh generated-fixture cache-hit evidence with a write run and a hit replay using dedicated STT1, STT2/word, macro, and High-context cache paths. Evaluate both benchmark outputs with `tools/evaluate_reference_benchmark_acceptance.py`; the generated replay is current only if both runs pass strict final gates and the hit replay shows STT1/STT2/word collect cache hit/provider-call `true/false`, macro provider group `0`, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`. This generated replay still cannot promote collect-cache defaults without representative real-media backfill.
 

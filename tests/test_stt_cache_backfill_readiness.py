@@ -101,6 +101,7 @@ def test_generated_cache_hit_keeps_collect_cache_defaults_on_hold(tmp_path: Path
     assert readiness["current_real_inputs_available"] is False
     assert readiness["families"]["combined_collect_cache"]["status"] == "hold_real_media_backfill_required"
     assert readiness["families"]["combined_collect_cache"]["strict_generated_cache_hit_runs"]
+    assert "missing_strict_real_media_cache_write_run" in readiness["families"]["combined_collect_cache"]["blockers"]
     assert "missing_strict_real_media_cache_hit_replay" in readiness["families"]["combined_collect_cache"]["blockers"]
 
 
@@ -127,15 +128,33 @@ def test_real_media_cache_hit_is_review_evidence_not_auto_default(tmp_path: Path
     reference = tmp_path / "real.srt"
     media.write_bytes(b"placeholder")
     reference.write_text("1\n00:00:00,000 --> 00:00:01,000\n테스트\n", encoding="utf-8")
-    path = tmp_path / "real_run" / "benchmark_results.json"
-    _write_result(path, media=str(media), reference_srt=str(reference), cache_hit=True)
+    write_path = tmp_path / "real_write" / "benchmark_results.json"
+    hit_path = tmp_path / "real_hit" / "benchmark_results.json"
+    _write_result(write_path, media=str(media), reference_srt=str(reference), cache_hit=False)
+    _write_result(hit_path, media=str(media), reference_srt=str(reference), cache_hit=True)
 
-    readiness = build_readiness(load_runs([path]))
+    readiness = build_readiness(load_runs([write_path, hit_path]))
 
     assert readiness["current_real_inputs_available"] is True
     assert readiness["production_default_recommendation"] == "hold_default_off"
     assert readiness["families"]["combined_collect_cache"]["status"] == "real_backfill_present_owner_review_required"
     assert readiness["families"]["combined_collect_cache"]["strict_real_cache_hit_runs"]
+    assert readiness["families"]["combined_collect_cache"]["strict_real_cache_write_runs"]
+
+
+def test_real_media_cache_hit_without_write_stays_on_hold(tmp_path: Path) -> None:
+    media = tmp_path / "real.mp4"
+    reference = tmp_path / "real.srt"
+    media.write_bytes(b"placeholder")
+    reference.write_text("1\n00:00:00,000 --> 00:00:01,000\n테스트\n", encoding="utf-8")
+    path = tmp_path / "real_hit" / "benchmark_results.json"
+    _write_result(path, media=str(media), reference_srt=str(reference), cache_hit=True)
+
+    readiness = build_readiness(load_runs([path]))
+
+    family = readiness["families"]["combined_collect_cache"]
+    assert family["status"] == "hold_real_media_cache_write_required"
+    assert "missing_strict_real_media_cache_write_run" in family["blockers"]
 
 
 def test_render_markdown_records_default_hold_guard(tmp_path: Path) -> None:
@@ -152,3 +171,9 @@ def test_render_markdown_records_default_hold_guard(tmp_path: Path) -> None:
     assert "STT Cache Backfill Readiness Audit" in markdown
     assert "Production default recommendation: `hold_default_off`" in markdown
     assert "Do not enable `stt_recheck_collect_cache_enabled`" in markdown
+    assert "Next Real-Media Backfill Plan" in markdown
+    assert "cache_write" in markdown
+    assert "cache_hit" in markdown
+    assert "Forbidden Substitutes" in markdown
+    assert "real_media_cache_write_without_matching_cache_hit_replay" in markdown
+    assert "Owner Review Gate" in markdown

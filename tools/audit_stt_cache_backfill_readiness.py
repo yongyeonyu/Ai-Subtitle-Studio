@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,11 @@ FAMILY_RULES = {
         "cache_keys": ("stt_primary", "stt2_recheck", "word_precision"),
     },
 }
+
+DEFAULT_REPRESENTATIVE_MEDIA = "<REPRESENTATIVE_MEDIA>"
+DEFAULT_REPRESENTATIVE_REFERENCE_SRT = "<REPRESENTATIVE_REFERENCE_SRT>"
+DEFAULT_BACKFILL_OUTPUT_DIR = "output/manual_verification/latest/stt_collect_cache_real_backfill"
+DEFAULT_BENCHMARK_GLOB = ".codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json"
 
 
 def _expand_inputs(inputs: list[str], globs: list[str]) -> list[Path]:
@@ -126,7 +132,124 @@ def _run_ref(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_readiness(runs: list[dict[str, Any]], *, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+def _quote(value: str | Path) -> str:
+    return shlex.quote(str(value))
+
+
+def _benchmark_command(
+    *,
+    media: str,
+    reference_srt: str,
+    primary_cache_path: str,
+    recheck_cache_path: str,
+    macro_cache_path: str,
+) -> str:
+    settings = [
+        ("stt_primary_collect_cache_enabled", "true"),
+        ("stt_primary_collect_cache_path", primary_cache_path),
+        ("stt_recheck_collect_cache_enabled", "true"),
+        ("stt_recheck_collect_cache_path", recheck_cache_path),
+        ("subtitle_llm_macro_response_cache_enabled", "true"),
+        ("subtitle_llm_macro_response_cache_path", macro_cache_path),
+    ]
+    setting_args = " ".join(
+        f"--setting {_quote(f'{key}={value}')}" for key, value in settings
+    )
+    return (
+        "QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py "
+        f"--suite modes --variants mode_high --media {_quote(media)} "
+        f"--reference-srt {_quote(reference_srt)} --start-sec 0 --duration-sec 180 "
+        f"--keep-artifacts {setting_args}"
+    )
+
+
+def build_next_run_plan(
+    *,
+    representative_media: str = DEFAULT_REPRESENTATIVE_MEDIA,
+    representative_reference_srt: str = DEFAULT_REPRESENTATIVE_REFERENCE_SRT,
+    output_dir: str = DEFAULT_BACKFILL_OUTPUT_DIR,
+    benchmark_glob: str = DEFAULT_BENCHMARK_GLOB,
+) -> dict[str, Any]:
+    cache_dir = f"{output_dir}/collect_cache"
+    primary_cache_path = f"{cache_dir}/stt_primary_collect.json"
+    recheck_cache_path = f"{cache_dir}/stt_recheck_collect.json"
+    macro_cache_path = f"{cache_dir}/macro_response.json"
+    benchmark_command = _benchmark_command(
+        media=representative_media,
+        reference_srt=representative_reference_srt,
+        primary_cache_path=primary_cache_path,
+        recheck_cache_path=recheck_cache_path,
+        macro_cache_path=macro_cache_path,
+    )
+    return {
+        "representative_media": representative_media,
+        "representative_reference_srt": representative_reference_srt,
+        "start_sec": 0,
+        "duration_sec": 180,
+        "same_cache_paths_required": True,
+        "cache_paths": {
+            "stt_primary_collect": primary_cache_path,
+            "stt_recheck_collect": recheck_cache_path,
+            "macro_response": macro_cache_path,
+        },
+        "commands": {
+            "preflight": (
+                "QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py "
+                f"--media {_quote(representative_media)} "
+                f"--reference-srt {_quote(representative_reference_srt)} "
+                f"--start-sec 0 --duration-sec 180 --output-dir {_quote(f'{output_dir}/preflight')}"
+            ),
+            "cache_write": benchmark_command,
+            "cache_hit": benchmark_command,
+            "accept_write": (
+                "QT_QPA_PLATFORM=offscreen ./venv/bin/python "
+                "tools/evaluate_reference_benchmark_acceptance.py "
+                ".codex_work/benchmarks/subtitle_pipeline_variants/<write_run>/benchmark_results.json "
+                f"--output-dir {_quote(f'{output_dir}/acceptance_write')}"
+            ),
+            "accept_hit": (
+                "QT_QPA_PLATFORM=offscreen ./venv/bin/python "
+                "tools/evaluate_reference_benchmark_acceptance.py "
+                ".codex_work/benchmarks/subtitle_pipeline_variants/<hit_run>/benchmark_results.json "
+                f"--output-dir {_quote(f'{output_dir}/acceptance_hit')}"
+            ),
+            "readiness_refresh": (
+                "QT_QPA_PLATFORM=offscreen ./venv/bin/python "
+                "tools/audit_stt_cache_backfill_readiness.py "
+                f"--glob {_quote(benchmark_glob)} --output-dir {_quote(output_dir)} "
+                f"--representative-media {_quote(representative_media)} "
+                f"--representative-reference-srt {_quote(representative_reference_srt)}"
+            ),
+        },
+        "forbidden_substitutes": [
+            "generated_or_local_fixture",
+            "X5_or_project_reference_fixture",
+            "fallback_cached_audio_without_matching_srt",
+            "preflight_only_without_reference_scored_benchmark",
+            "real_media_cache_write_without_matching_cache_hit_replay",
+            "profiler_or_cprofile_elapsed_as_speed_truth",
+        ],
+        "owner_review_gate": [
+            "current_real_inputs_available=true",
+            "strict real-media cache write run exists for each collect-cache family",
+            "strict real-media cache hit replay exists for each collect-cache family",
+            "accepted=true from evaluate_reference_benchmark_acceptance.py on write and hit runs",
+            "final invalid/non-monotonic/overlap remains 0/0/0",
+            "global canvas max active remains <=1",
+            "collect-cache defaults remain false until explicit owner review",
+        ],
+    }
+
+
+def build_readiness(
+    runs: list[dict[str, Any]],
+    *,
+    defaults: dict[str, Any] | None = None,
+    representative_media: str = DEFAULT_REPRESENTATIVE_MEDIA,
+    representative_reference_srt: str = DEFAULT_REPRESENTATIVE_REFERENCE_SRT,
+    output_dir: str = DEFAULT_BACKFILL_OUTPUT_DIR,
+    benchmark_glob: str = DEFAULT_BENCHMARK_GLOB,
+) -> dict[str, Any]:
     defaults = dict(DEFAULT_ADV_SETTINGS if defaults is None else defaults)
     real_runs = [run for run in runs if _is_real_media(run.get("media"))]
     generated_runs = [run for run in runs if not _is_real_media(run.get("media"))]
@@ -167,6 +290,8 @@ def build_readiness(runs: list[dict[str, Any]], *, defaults: dict[str, Any] | No
             blockers.append("collect_cache_default_enabled")
         if not current_real_inputs_available:
             blockers.append("representative_real_media_currently_unavailable")
+        if not strict_real_write:
+            blockers.append("missing_strict_real_media_cache_write_run")
         if not strict_real_hit:
             blockers.append("missing_strict_real_media_cache_hit_replay")
         if failed_hit and not strict_generated_hit:
@@ -174,8 +299,10 @@ def build_readiness(runs: list[dict[str, Any]], *, defaults: dict[str, Any] | No
         status = "hold_default_off"
         if default_violations:
             status = "blocked_default_enabled"
-        elif strict_real_hit:
+        elif strict_real_write and strict_real_hit:
             status = "real_backfill_present_owner_review_required"
+        elif strict_real_hit:
+            status = "hold_real_media_cache_write_required"
         elif strict_generated_hit:
             status = "hold_real_media_backfill_required"
         elif failed_hit:
@@ -202,6 +329,12 @@ def build_readiness(runs: list[dict[str, Any]], *, defaults: dict[str, Any] | No
         "next_required_evidence": (
             "Run representative real-media first-180s backfill with cache write and cache-hit replay, "
             "then require strict final gates before any owner review of collect-cache defaults."
+        ),
+        "next_run_plan": build_next_run_plan(
+            representative_media=representative_media,
+            representative_reference_srt=representative_reference_srt,
+            output_dir=output_dir,
+            benchmark_glob=benchmark_glob,
         ),
     }
 
@@ -267,6 +400,38 @@ def render_markdown(readiness: dict[str, Any]) -> str:
         "- Real-media write evidence without a matching cache-hit replay is not enough for default promotion.",
         "",
     ]
+    next_run_plan = dict(readiness.get("next_run_plan") or {})
+    if next_run_plan:
+        commands = dict(next_run_plan.get("commands") or {})
+        lines.extend([
+            "## Next Real-Media Backfill Plan",
+            "",
+            f"- Representative media: `{next_run_plan.get('representative_media')}`",
+            f"- Representative reference SRT: `{next_run_plan.get('representative_reference_srt')}`",
+            f"- Start/duration: `{next_run_plan.get('start_sec')}` / `{next_run_plan.get('duration_sec')}` seconds",
+            f"- Same cache paths required for write and hit: `{next_run_plan.get('same_cache_paths_required')}`",
+            f"- Cache paths: `{next_run_plan.get('cache_paths')}`",
+            "",
+            "Run these only after the representative media and matching SRT are mounted:",
+            "",
+        ])
+        for label in ("preflight", "cache_write", "cache_hit", "accept_write", "accept_hit", "readiness_refresh"):
+            command = str(commands.get(label) or "").strip()
+            if not command:
+                continue
+            lines.extend([f"### {label}", "", "```bash", command, "```", ""])
+        lines.extend([
+            "## Forbidden Substitutes",
+            "",
+        ])
+        lines.extend(f"- `{item}`" for item in list(next_run_plan.get("forbidden_substitutes") or []))
+        lines.extend([
+            "",
+            "## Owner Review Gate",
+            "",
+        ])
+        lines.extend(f"- {item}" for item in list(next_run_plan.get("owner_review_gate") or []))
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -275,13 +440,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", action="append", default=[], help="benchmark_results.json path")
     parser.add_argument("--glob", action="append", default=[], help="glob for benchmark_results.json files")
     parser.add_argument("--output-dir", required=True, help="directory for readiness JSON and Markdown")
+    parser.add_argument("--representative-media", default=DEFAULT_REPRESENTATIVE_MEDIA)
+    parser.add_argument("--representative-reference-srt", default=DEFAULT_REPRESENTATIVE_REFERENCE_SRT)
     args = parser.parse_args(argv)
 
     paths = _expand_inputs(args.input, args.glob)
     if not paths:
         parser.error("at least one existing --input or --glob match is required")
-    readiness = build_readiness(load_runs(paths))
     output_dir = Path(args.output_dir)
+    readiness = build_readiness(
+        load_runs(paths),
+        representative_media=args.representative_media,
+        representative_reference_srt=args.representative_reference_srt,
+        output_dir=str(output_dir),
+        benchmark_glob=args.glob[-1] if args.glob else DEFAULT_BENCHMARK_GLOB,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "stt_cache_backfill_readiness.json").write_text(
         json.dumps(readiness, ensure_ascii=False, indent=2) + "\n",
