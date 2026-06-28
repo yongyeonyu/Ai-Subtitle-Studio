@@ -7,6 +7,7 @@ from core.timeline_time import segment_display_time_bounds
 
 SUBTITLE_LIVE_EDITOR_FEED_SCHEMA = "ai_subtitle_studio.subtitle_live_editor_feed.v1"
 SUBTITLE_LIVE_EDITOR_RUNTIME_TRACKS_SCHEMA = "ai_subtitle_studio.subtitle_live_editor_runtime_tracks.v1"
+SUBTITLE_LIVE_EDITOR_RUNTIME_STATUS_SCHEMA = "ai_subtitle_studio.subtitle_live_editor_runtime_status.v1"
 
 _RUNTIME_TRACK_ORDER = ("VAD", "STT1", "STT2", "subtitle_preview", "final")
 _RUNTIME_TRACK_ROLES = {
@@ -69,6 +70,35 @@ def _build_runtime_tracks(
     return {track: tuple(_sort_rows(rows)) for track, rows in tracks.items()}
 
 
+def _compact_runtime_tracks_status(
+    runtime_tracks: dict[str, tuple[dict[str, Any], ...]],
+) -> dict[str, Any]:
+    tracks: dict[str, dict[str, Any]] = {}
+    counts: dict[str, int] = {}
+    active_tracks: list[str] = []
+    for track in _RUNTIME_TRACK_ORDER:
+        rows = tuple(runtime_tracks.get(track) or ())
+        count = len(rows)
+        counts[track] = count
+        if count > 0:
+            active_tracks.append(track)
+        tracks[track] = {
+            "role": _RUNTIME_TRACK_ROLES.get(track, "runtime_reference_only"),
+            "count": count,
+            "active": count > 0,
+            "authoritative_for_save_export": track == "final",
+        }
+    return {
+        "schema": SUBTITLE_LIVE_EDITOR_RUNTIME_STATUS_SCHEMA,
+        "tracks": tracks,
+        "counts": counts,
+        "active_tracks": active_tracks,
+        "total_count": sum(counts.values()),
+        "final_authority_track": "final",
+        "compact_payload": True,
+    }
+
+
 @dataclass(frozen=True)
 class SubtitleLiveEditorFeed:
     schema: str
@@ -82,6 +112,9 @@ class SubtitleLiveEditorFeed:
     runtime_tracks: dict[str, tuple[dict[str, Any], ...]]
     runtime_track_segments: tuple[dict[str, Any], ...]
     total_duration: float
+
+    def runtime_status(self) -> dict[str, Any]:
+        return _compact_runtime_tracks_status(self.runtime_tracks)
 
     def to_dict(self) -> dict[str, Any]:
         runtime_tracks = {
@@ -104,6 +137,7 @@ class SubtitleLiveEditorFeed:
             "combined_segments": [dict(row) for row in self.combined_segments],
             "vad_segments": [dict(row) for row in self.vad_segments],
             "runtime_tracks": runtime_tracks,
+            "runtime_track_status": self.runtime_status(),
             "runtime_track_segments": [dict(row) for row in self.runtime_track_segments],
             "total_duration": self.total_duration,
             "surface_contract": {
@@ -185,6 +219,7 @@ def build_subtitle_live_editor_feed(
 __all__ = [
     "SUBTITLE_LIVE_EDITOR_FEED_SCHEMA",
     "SUBTITLE_LIVE_EDITOR_RUNTIME_TRACKS_SCHEMA",
+    "SUBTITLE_LIVE_EDITOR_RUNTIME_STATUS_SCHEMA",
     "SubtitleLiveEditorFeed",
     "build_subtitle_live_editor_feed",
 ]

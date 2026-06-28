@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.03-source-app
+Document-Version: 04.01.04-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,20 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.04 G3 Compact Live Status Feed
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.04"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.04`.
+3. `SubtitleLiveEditorFeed.runtime_status()` now exposes compact runtime lane status for `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` without raw segment payloads.
+4. `ui/editor/editor_automation.py` and `ui/main/app_command_bridge.py` wire compact `nle_runtime_tracks` and `nle_runtime_track_counts` into `status`, `ping`, and `guided-subtitle-status`; raw STT/VAD/subtitle-preview text is not included.
+5. `core/automation/app_command_server.py` preserves `nle_runtime_track_counts` when oversized UDP status responses are compacted.
+6. VAD status counting uses `vad_segments` as canonical and falls back to `voice_activity_segments` only when VAD rows are absent, avoiding duplicate VAD counts.
+7. No UI layout/label/color/menu/shortcut change, new minimap strip, scheduler change, persisted NLE disk-format cutover, STT2 skip, VAD visual-cut override, App Store package/upload/submission, or cache default promotion was performed.
+8. Jammini route proof, Jammini compact-feed review, and three sub-agent reviews were collected. Jammini's signature-mismatch finding was rejected as stale because the current `build_subtitle_live_editor_feed` signature accepts `vad_segments` and the focused tests exercise that path.
+9. Focused verification passed: compile check, `tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_project_nle_runtime_cutover.py` -> `106 passed`.
 
 ## v04.01.03 G3 Runtime NLE Lane Owner Map / Final Authority Guard
 

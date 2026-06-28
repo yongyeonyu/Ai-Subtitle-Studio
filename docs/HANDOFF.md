@@ -33,7 +33,45 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.03 / G3 Runtime NLE Lane Owner Map
+## Current Handoff - 2026-06-29 v04.01.04 / G3 Compact Live Status Feed
+
+### Scope
+
+- Completed the compact live status/feed slice for `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`.
+- Bumped source-app version and project schema from `04.01.03` to `04.01.04`.
+- Added `docs/release_notes/RELEASE_v04.01.04.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.04`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.04`.
+- `status`, `ping`, and `guided-subtitle-status` now expose compact `nle_runtime_tracks` and `nle_runtime_track_counts`.
+- Compact runtime status includes count/active/role/authority fields only; raw STT/VAD/subtitle-preview text and segment arrays are not sent.
+- UDP status compaction preserves `nle_runtime_track_counts`.
+- VAD status counting uses `vad_segments` first and falls back to `voice_activity_segments` only when VAD rows are absent, avoiding duplicate VAD counts.
+- No UI layout/label/color/menu/shortcut change, new minimap/global-canvas strip, scheduler change, persisted NLE disk-format cutover, STT2 skip, cache default promotion, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/engine/subtitle_live_editor_feed.py ui/editor/editor_automation.py ui/main/app_command_bridge.py core/automation/app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py` -> pass.
+- Focused status/feed guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_project_nle_runtime_cutover.py` -> `106 passed`.
+- Direct version assertion -> `APP_VERSION=04.01.04`, `PROJECT_SCHEMA_VERSION=04.01.04`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- `git diff --check -- .` -> pass.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-012024-watchdog-handoff-probe.md`.
+- Jammini compact-feed review: `.agents/sentinel/handoffs/20260628-232716-g3-compact-status-feed-review-jammini.md`.
+- Three sub-agent reviews were collected for status/feed owner map, QE final-authority/payload guards, and editor workflow constraints.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G3, next bounded slice is scheduler budget enforcement or visual/runtime proof. Do not add visible UI strips, persisted disk-format ownership, STT2 skip, cache default promotion, or VAD visual-cut override without a new acceptance gate.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+## Previous Handoff - 2026-06-29 v04.01.03 / G3 Runtime NLE Lane Owner Map
 
 ### Scope
 

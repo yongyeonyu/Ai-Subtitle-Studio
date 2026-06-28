@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from core.engine.subtitle_live_editor_feed import (
     SUBTITLE_LIVE_EDITOR_FEED_SCHEMA,
+    SUBTITLE_LIVE_EDITOR_RUNTIME_STATUS_SCHEMA,
     SUBTITLE_LIVE_EDITOR_RUNTIME_TRACKS_SCHEMA,
     build_subtitle_live_editor_feed,
 )
@@ -53,6 +54,47 @@ def test_live_editor_feed_sorts_and_counts_rows_without_mutating_inputs():
     }
     assert list(payload["runtime_tracks"]) == ["VAD", "STT1", "STT2", "subtitle_preview", "final"]
     assert payload["runtime_tracks"]["final"]["schema"] == SUBTITLE_LIVE_EDITOR_RUNTIME_TRACKS_SCHEMA
+    assert payload["runtime_track_status"] == {
+        "schema": SUBTITLE_LIVE_EDITOR_RUNTIME_STATUS_SCHEMA,
+        "tracks": {
+            "VAD": {
+                "role": "runtime_reference_only",
+                "count": 1,
+                "active": True,
+                "authoritative_for_save_export": False,
+            },
+            "STT1": {
+                "role": "runtime_reference_only",
+                "count": 1,
+                "active": True,
+                "authoritative_for_save_export": False,
+            },
+            "STT2": {
+                "role": "runtime_reference_only",
+                "count": 0,
+                "active": False,
+                "authoritative_for_save_export": False,
+            },
+            "subtitle_preview": {
+                "role": "runtime_reference_only",
+                "count": 1,
+                "active": True,
+                "authoritative_for_save_export": False,
+            },
+            "final": {
+                "role": "save_export_render_authority",
+                "count": 1,
+                "active": True,
+                "authoritative_for_save_export": True,
+            },
+        },
+        "counts": {"VAD": 1, "STT1": 1, "STT2": 0, "subtitle_preview": 1, "final": 1},
+        "active_tracks": ["VAD", "STT1", "subtitle_preview", "final"],
+        "total_count": 4,
+        "final_authority_track": "final",
+        "compact_payload": True,
+    }
+    assert "segments" not in payload["runtime_track_status"]["tracks"]["STT1"]
     assert payload["runtime_tracks"]["final"]["authoritative_for_save_export"] is True
     assert payload["runtime_tracks"]["STT1"]["authoritative_for_save_export"] is False
     assert payload["runtime_tracks"]["VAD"]["authoritative_for_save_export"] is False

@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.03-source-app
+Document-Version: 04.01.04-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.03`.
+- App version: `04.01.04`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -190,8 +190,10 @@ Status: active planning item. This is a runtime/session visualization and schedu
 Current baseline:
 
 - First runtime owner-map/read-only projection slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040103-g3-runtime-nle-lane-owner-map--final-authority-guard`.
+- Compact live status/feed wiring slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040104-g3-compact-live-status-feed`.
 - Existing runtime surfaces already preserve live STT preview rows through `_live_stt_preview_segments`, `stt_preview_source=STT1/STT2`, and global-canvas STT lane tests.
 - `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` track metadata. Only `final` carries save/export authority; VAD/STT/subtitle-preview tracks are reference-only.
+- `status`, `ping`, and `guided-subtitle-status` now expose compact `nle_runtime_track_counts` / `nle_runtime_tracks` metadata without raw STT/VAD/subtitle-preview row text or large segment payloads, and UDP compaction preserves the count summary.
 - `core/project/nle_runtime_cutover.py` rejects `_nle_runtime_role=runtime_reference_only`, non-final `_nle_runtime_track`, and `_nle_save_export_authority=false` rows from final overlay, global canvas, and save/export projection even if those rows carry text.
 - Existing project state can store STT candidate tracks and VAD/voice activity as separate diagnostic/reference rows, while final subtitle rows remain the save/export authority.
 - Existing Apple Silicon worker planning lives under `core/runtime/multi_process.py` and `core/runtime/subtitle_resource_manager.py`, with `RuntimeResourceCoordinator`, `apply_apple_m_subtitle_pipeline_plan(...)`, active runtime labels, memory pressure snapshots, and benchmark-locked cut-boundary worker counts.
@@ -203,9 +205,7 @@ Detailed plan:
    - Completed for the read-only feed/authority contract. Continue from the next slice only if it widens live status/feed wiring without changing final authority.
 
 2. Live projection and status feed
-   - Route incremental VAD spans, STT1 preview rows, and STT2 recheck rows into an NLE runtime projection surface that can update the timeline/global canvas progressively.
-   - Use compact progress/status events for automation and logs; do not put unbounded stage history or large candidate payloads into `status`/`ping` responses.
-   - Preserve existing UI/UX labels/layout unless the owner explicitly asks for a visible redesign. Any new lane visibility must be feature-gated and provable by screenshots or automation snapshots.
+   - Completed for compact automation/status feed counts. Continue from the next slice only if it adds visual/runtime proof without raw payload leakage or final-authority changes.
 
 3. Resource-balanced parallel scheduling
    - Create a shared generation scheduler budget before launching VAD/STT work: reserve at least one interactive core for UI, app commands, cancel/quit, and save; assign bounded CPU workers to VAD/audio prep; keep STT1 on the current high-quality native path; run STT2/word precision only within selective, quality-preserving budgets.
@@ -243,8 +243,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.03"
-document_version: "04.01.03-source-app"
+app_version: "04.01.04"
+document_version: "04.01.04-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

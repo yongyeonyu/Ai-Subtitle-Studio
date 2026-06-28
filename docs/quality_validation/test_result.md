@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.04 G3 Compact Live Status Feed - 2026-06-29 KST
+
+- 실행 모드: source-app G3 compact live status/feed wiring, UDP compact count preservation, and version/schema bump.
+- 결과: pass for compact runtime lane status, status/ping/guided-subtitle-status count exposure, UDP compact preservation, and final-authority guard coverage.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.04.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-012024-watchdog-handoff-probe.md`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-232716-g3-compact-status-feed-review-jammini.md`
+- 실제 결과:
+  - App version updated to `04.01.04`.
+  - Project schema version updated to `04.01.04`.
+  - `status`, `ping`, and `guided-subtitle-status` now expose compact `nle_runtime_track_counts`.
+  - Raw STT/VAD/subtitle-preview segment text is not included in the compact runtime status payload.
+  - UDP status compaction preserves `nle_runtime_track_counts`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/engine/subtitle_live_editor_feed.py ui/editor/editor_automation.py ui/main/app_command_bridge.py core/automation/app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_project_nle_runtime_cutover.py` -> `106 passed`.
+  - Direct version assertion -> `APP_VERSION=04.01.04`, `PROJECT_SCHEMA_VERSION=04.01.04`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.03 G3 Runtime NLE Lane Owner Map / Final Authority Guard - 2026-06-29 KST
 
 - 실행 모드: source-app G3 runtime NLE lane owner-map, final authority guard, and version/schema bump.

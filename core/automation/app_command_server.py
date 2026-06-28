@@ -162,6 +162,9 @@ def _compact_status_data(value: Any, *, encoded_bytes: int, send_fallback: bool 
         "roughcut_runtime": _compact_roughcut_runtime(data.get("roughcut_runtime")),
         "runtime_timestamp": data.get("runtime_timestamp"),
         "editor_runtime": _compact_editor_runtime(data.get("editor_runtime")),
+        "nle_runtime_track_counts": dict(data.get("nle_runtime_track_counts") or {})
+        if isinstance(data.get("nle_runtime_track_counts"), dict)
+        else {},
         "editor_aux_counts": dict(data.get("editor_aux_counts") or {}) if isinstance(data.get("editor_aux_counts"), dict) else {},
         "editor_stt": dict(data.get("editor_stt") or {}) if isinstance(data.get("editor_stt"), dict) else {},
         "queue_runtime": {

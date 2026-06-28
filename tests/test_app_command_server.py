@@ -161,6 +161,19 @@ class LocalAppCommandServerTests(unittest.TestCase):
                     "editor_open": True,
                     "editor_state": "ST_EDITING",
                     "editor_runtime": {"segment_count": 3},
+                    "nle_runtime_tracks": {
+                        "tracks": {
+                            "STT1": {"count": 1, "segments": [{"text": "raw should be dropped"}]},
+                            "final": {"count": 3, "segments": [{"text": "final should be dropped"}]},
+                        }
+                    },
+                    "nle_runtime_track_counts": {
+                        "VAD": 1,
+                        "STT1": 1,
+                        "STT2": 0,
+                        "subtitle_preview": 0,
+                        "final": 3,
+                    },
                     "runtime_resource": {"pressure_stage": "normal", "rss_gb": 0.42},
                     "recent_logs": huge_logs,
                     "recent_stage_logs": huge_logs,
@@ -176,6 +189,13 @@ class LocalAppCommandServerTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["data"]["status_response_truncated"])
         self.assertEqual(result["data"]["editor_state"], "ST_EDITING")
+        self.assertEqual(
+            result["data"]["nle_runtime_track_counts"],
+            {"VAD": 1, "STT1": 1, "STT2": 0, "subtitle_preview": 0, "final": 3},
+        )
+        self.assertNotIn("nle_runtime_tracks", result["data"])
+        self.assertNotIn("raw should be dropped", str(result["data"]))
+        self.assertLess(len(encode_command_result(result)), 8192)
         self.assertLess(len(result["data"]["recent_logs"]), len(huge_logs))
 
     def test_medium_status_payload_is_compacted_before_send(self):

@@ -10,6 +10,7 @@ from PyQt6.QtCore import QThread
 from PyQt6.QtWidgets import QApplication
 
 from core.automation.app_command_protocol import build_command_result, normalize_command_payload
+from core.engine.subtitle_live_editor_feed import build_subtitle_live_editor_feed
 from core.media_queue_order import media_entry_allowed, ordered_media_files
 from core.mode_policy import normalize_mode
 from core.project.project_runtime_capture import count_editor_project_aux_state
@@ -643,6 +644,88 @@ def _roughcut_widget_runtime_snapshot(owner: Any) -> dict[str, Any]:
     )
 
 
+def _compact_nle_runtime_track_status(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    source_tracks = value.get("tracks") if isinstance(value.get("tracks"), dict) else {}
+    tracks: dict[str, dict[str, Any]] = {}
+    counts: dict[str, int] = {}
+    for track in ("VAD", "STT1", "STT2", "subtitle_preview", "final"):
+        raw = source_tracks.get(track) if isinstance(source_tracks, dict) else {}
+        raw_track = dict(raw or {}) if isinstance(raw, dict) else {}
+        try:
+            count = int(raw_track.get("count", (value.get("counts") or {}).get(track, 0)) or 0)
+        except Exception:
+            count = 0
+        counts[track] = max(0, count)
+        tracks[track] = {
+            "role": str(raw_track.get("role") or ("save_export_render_authority" if track == "final" else "runtime_reference_only")),
+            "count": counts[track],
+            "active": bool(raw_track.get("active", counts[track] > 0)),
+            "authoritative_for_save_export": bool(raw_track.get("authoritative_for_save_export", track == "final")),
+        }
+    return {
+        "schema": str(value.get("schema") or "ai_subtitle_studio.subtitle_live_editor_runtime_status.v1"),
+        "tracks": tracks,
+        "counts": counts,
+        "active_tracks": [track for track, count in counts.items() if count > 0],
+        "total_count": sum(counts.values()),
+        "final_authority_track": "final",
+        "compact_payload": True,
+    }
+
+
+def _editor_runtime_track_status_snapshot(editor: Any, editor_runtime: dict[str, Any]) -> dict[str, Any]:
+    existing = _compact_nle_runtime_track_status(editor_runtime.get("nle_runtime_tracks"))
+    if existing:
+        return existing
+    if editor is None:
+        return {}
+    canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
+    vad_segments: list[dict[str, Any]] = []
+    source_rows = list(getattr(canvas, "vad_segments", []) or [])
+    source = "VAD"
+    if not source_rows:
+        source_rows = list(getattr(canvas, "voice_activity_segments", []) or [])
+        source = "voice_activity"
+    for row in source_rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item.setdefault("source", source)
+        vad_segments.append(item)
+    getter = getattr(editor, "_get_current_segments", None)
+    confirmed: list[dict[str, Any]] = []
+    if callable(getter):
+        try:
+            rows = getter(force_rebuild=True)
+        except TypeError:
+            rows = getter()
+        except Exception:
+            rows = []
+        for row in list(rows or []):
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("is_gap") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                continue
+            if bool(row.get("stt_pending")) or row.get("_nle_save_export_authority") is False:
+                continue
+            if str(row.get("_nle_runtime_role") or "") == "runtime_reference_only":
+                continue
+            confirmed.append(dict(row))
+    try:
+        feed = build_subtitle_live_editor_feed(
+            confirmed_segments=confirmed,
+            stt_preview_segments=list(getattr(editor, "_live_stt_preview_segments", []) or []),
+            subtitle_preview_segments=list(getattr(editor, "_live_editor_preview_segments", []) or []),
+            vad_segments=vad_segments,
+            total_duration_floor=float(editor_runtime.get("total_duration", 0.0) or 0.0),
+        )
+        return feed.runtime_status()
+    except Exception:
+        return {}
+
+
 def _status_current_generation_fields(owner: Any, data: dict[str, Any] | None) -> dict[str, Any]:
     out = dict(data or {})
     editor = getattr(owner, "_editor_widget", None)
@@ -693,6 +776,14 @@ def _status_current_generation_fields(owner: Any, data: dict[str, Any] | None) -
     out["subtitle_count"] = subtitle_count
     out["roughcut_state"] = roughcut
     out["runtime_timestamp"] = timestamp
+    nle_runtime_tracks = _compact_nle_runtime_track_status(out.get("nle_runtime_tracks"))
+    if not nle_runtime_tracks:
+        nle_runtime_tracks = _editor_runtime_track_status_snapshot(editor, editor_runtime)
+    if nle_runtime_tracks:
+        editor_runtime["nle_runtime_tracks"] = nle_runtime_tracks
+        out["editor_runtime"] = editor_runtime
+        out["nle_runtime_tracks"] = nle_runtime_tracks
+        out["nle_runtime_track_counts"] = dict(nle_runtime_tracks.get("counts") or {})
     return out
 
 

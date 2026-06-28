@@ -41,6 +41,8 @@ class _DummyEditor:
         self._stt_state = "disabled"
         self._stt_recording = False
         self._stt_vad_running = False
+        self._live_stt_preview_segments = []
+        self._live_editor_preview_segments = []
         self._last_saved_srt_outputs = []
         self.flush_calls = 0
         self._pending_flush_segments = None
@@ -48,6 +50,12 @@ class _DummyEditor:
             {"line": 0, "start": 0.0, "end": 1.0, "text": "첫 줄", "is_gap": False},
             {"line": 1, "start": 1.0, "end": 2.0, "text": "둘째 줄", "is_gap": False},
         ]
+        self.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(
+                vad_segments=[],
+                voice_activity_segments=[],
+            )
+        )
 
     def _on_start_clicked(self):
         self.start_clicks += 1
@@ -1207,6 +1215,64 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["event_count"], 1)
         self.assertIn("automation", metrics["resources"])
         self.assertEqual(metrics["resources"]["automation"]["max_queue_depth"], 1)
+
+    def test_status_command_reports_compact_nle_runtime_track_counts(self):
+        owner = _DummyOwner()
+        owner._editor_widget._live_stt_preview_segments = [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "raw stt1 should not leak",
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+            },
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "raw stt2 should not leak",
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT2",
+            },
+        ]
+        owner._editor_widget._live_editor_preview_segments = [
+            {"start": 2.0, "end": 3.0, "text": "draft should not leak", "_live_subtitle_preview": True}
+        ]
+        owner._editor_widget.timeline.canvas.vad_segments = [
+            {"start": 3.0, "end": 4.0, "text": "voice should not leak", "kind": "speech"}
+        ]
+        owner._editor_widget.timeline.canvas.voice_activity_segments = [
+            {"start": 3.0, "end": 4.0, "text": "duplicate voice should not double count"}
+        ]
+
+        result = execute_app_command(owner, {"command": "status"})
+        ping = execute_app_command(owner, {"command": "ping"})
+
+        self.assertTrue(result["ok"])
+        runtime_tracks = result["data"]["nle_runtime_tracks"]
+        self.assertTrue(runtime_tracks["compact_payload"])
+        self.assertEqual(
+            result["data"]["nle_runtime_track_counts"],
+            {"VAD": 1, "STT1": 1, "STT2": 1, "subtitle_preview": 1, "final": 2},
+        )
+        self.assertEqual(runtime_tracks["active_tracks"], ["VAD", "STT1", "STT2", "subtitle_preview", "final"])
+        self.assertTrue(runtime_tracks["tracks"]["final"]["authoritative_for_save_export"])
+        self.assertFalse(runtime_tracks["tracks"]["STT1"]["authoritative_for_save_export"])
+        self.assertNotIn("segments", runtime_tracks["tracks"]["STT1"])
+        self.assertNotIn("raw stt1 should not leak", str(result["data"]["nle_runtime_tracks"]))
+        self.assertNotIn("voice should not leak", str(result["data"]["editor_runtime"]["nle_runtime_tracks"]))
+        self.assertEqual(ping["data"]["nle_runtime_track_counts"], result["data"]["nle_runtime_track_counts"])
+
+    def test_status_command_uses_voice_activity_as_vad_fallback_without_double_counting(self):
+        owner = _DummyOwner()
+        owner._editor_widget.timeline.canvas.voice_activity_segments = [
+            {"start": 3.0, "end": 4.0, "text": "voice fallback should not leak"}
+        ]
+
+        result = execute_app_command(owner, {"command": "status"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["nle_runtime_track_counts"]["VAD"], 1)
+        self.assertNotIn("voice fallback should not leak", str(result["data"]["nle_runtime_tracks"]))
 
     def test_status_command_reuses_short_ttl_snapshot_for_polling(self):
         owner = _DummyOwner()

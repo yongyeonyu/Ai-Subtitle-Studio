@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.engine.subtitle_live_editor_feed import build_subtitle_live_editor_feed
 from ui.editor.editor_helpers import find_segment_at
 
 
@@ -102,6 +103,61 @@ class EditorAutomationMixin:
             return ""
         text = str(seg.get("text", "") or "").strip()
         return text[:limit] if len(text) > limit else text
+
+    def _automation_confirmed_runtime_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        confirmed: list[dict[str, Any]] = []
+        for row in list(rows or []):
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("is_gap") or row.get("_live_stt_preview") or row.get("_live_subtitle_preview")):
+                continue
+            if bool(row.get("stt_pending")) or row.get("_nle_save_export_authority") is False:
+                continue
+            if str(row.get("_nle_runtime_role") or "") == "runtime_reference_only":
+                continue
+            confirmed.append(dict(row))
+        return confirmed
+
+    def _automation_runtime_vad_rows(self) -> list[dict[str, Any]]:
+        canvas = self._automation_canvas()
+        rows: list[dict[str, Any]] = []
+        if canvas is None:
+            return rows
+        source_rows = list(getattr(canvas, "vad_segments", []) or [])
+        source = "VAD"
+        if not source_rows:
+            source_rows = list(getattr(canvas, "voice_activity_segments", []) or [])
+            source = "voice_activity"
+        for row in source_rows:
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            item.setdefault("source", source)
+            rows.append(item)
+        return rows
+
+    def _automation_runtime_track_status(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        total_duration: float,
+    ) -> dict[str, Any]:
+        try:
+            feed = build_subtitle_live_editor_feed(
+                confirmed_segments=self._automation_confirmed_runtime_rows(rows),
+                stt_preview_segments=list(getattr(self, "_live_stt_preview_segments", []) or []),
+                subtitle_preview_segments=list(getattr(self, "_live_editor_preview_segments", []) or []),
+                vad_segments=self._automation_runtime_vad_rows(),
+                total_duration_floor=float(total_duration or 0.0),
+            )
+        except Exception:
+            feed = build_subtitle_live_editor_feed(
+                confirmed_segments=[],
+                stt_preview_segments=[],
+                subtitle_preview_segments=[],
+                vad_segments=[],
+            )
+        return feed.runtime_status()
 
     def _automation_locate_segment(
         self,
@@ -460,6 +516,10 @@ class EditorAutomationMixin:
             "video_media_source_loaded": bool(getattr(video_player, "_media_source_loaded", False)) if video_player is not None else False,
             "video_position_ms": video_position_ms,
             "video_duration_ms": video_duration_ms,
+            "nle_runtime_tracks": self._automation_runtime_track_status(
+                rows=rows,
+                total_duration=total_duration,
+            ),
             "active_footer_menu_id": str(getattr(self, "_active_footer_menu_id", "") or ""),
         }
 
