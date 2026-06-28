@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-092700-timeline-view-state-isolation-scout.md`
 - `.agents/sentinel/handoffs/20260628-091806-trace-bundle-retention-scout.md`
 - `.agents/sentinel/handoffs/20260628-090453-srt-precedence-contract-scout.md`
 - `.agents/sentinel/handoffs/20260628-085515-next-nle-taption-runtime-contract-scout.md`

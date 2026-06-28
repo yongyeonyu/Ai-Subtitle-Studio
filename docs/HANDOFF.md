@@ -33,7 +33,47 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 Trace Package Retention Contract
+## Current Handoff - 2026-06-28 NLE Selection View-State Isolation
+
+### Scope
+
+- Continued the owner goal to move AI Subtitle Studio toward a video-editor/NLE structure by hardening the Taption-style rule that selection/highlight/current-segment state is view-only, not an edit commit.
+- Added focused PyQt tests for text selection, `TimelineCanvas.set_active` / `clear_active_visual`, and `TimelineWidget.set_active`.
+- Added `tools/audit_nle_selection_view_state_isolation.py` and audit test coverage for the same owner paths.
+- No UI layout/labels/colors/menus/popups, subtitle generation, STT/STT2/default-cache policy, `.aissproj` persisted NLE fields, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_selection_view_state_isolation_20260628/nle_selection_view_state_isolation.md`
+- `ready=true`; selection view-state-only contract `true`; model validation/project save/NLE writes allowed `false/false/false`; primary row rewrite allowed `false`; forbidden calls/assignments `0`.
+- NAS HeyDealer preflight: `output/manual_verification/latest/nle_selection_view_state_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`, media/SRT exist `true/true`, clipped reference rows `89`.
+- NAS HeyDealer current-head regression: `output/manual_verification/latest/nle_selection_view_state_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_183048/benchmark_results.json`: accepted `true`, elapsed `45.999s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`, STT1/STT2/word selected `21/37/7`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_selection_view_state_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-092700-timeline-view-state-isolation-scout.md`
+- Dex classification: accepted the view-state isolation direction and implemented it as focused test/audit hardening, while leaving UI flow changes, persisted NLE fields, STT/default-cache policy, App Store packaging, DMG, and per-pixel writes deferred.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tests/test_nle_selection_view_state_isolation.py tests/test_nle_selection_view_state_isolation_audit.py tools/audit_nle_selection_view_state_isolation.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_selection_view_state_isolation.py tests/test_nle_selection_view_state_isolation_audit.py` -> `4 passed`.
+- `./venv/bin/python tools/audit_nle_selection_view_state_isolation.py --output-dir output/manual_verification/latest/nle_selection_view_state_isolation_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_wheel_zoom_decoupling.py tests/test_timeline_playhead_jump_isolation.py tests/test_timeline_time_window_decoupling.py tests/test_nle_selection_view_state_isolation.py tests/test_nle_selection_view_state_isolation_audit.py` -> `11 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_selection_view_state_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_183048/benchmark_results.json`.
+- `./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_183048/benchmark_results.json --media-duration-sec 180 --output-dir output/manual_verification/latest/nle_selection_view_state_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_183048/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_selection_view_state_nas_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`.
+- For generation-affecting or performance/default-cache work, use the available NAS HeyDealer first-180s MP4/SRT preflight plus strict acceptance and timeout audit again.
+- Treat persisted NLE disk fields, UI flow changes, project-storage relink schemas, per-pixel writes, QML/GPU default surfaces, detector-threshold changes, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes as blocked until explicit owner approval and compatibility proof exist.
+
+## Previous Handoff - 2026-06-28 Trace Package Retention Contract
 
 ### Scope
 

@@ -358,6 +358,18 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_tim
 
 Acceptance requires audit `ready=true`, view-window-only contract `true`, model validation/project save/NLE writes allowed `false/false/false`, forbidden method calls/assignments `0`, and focused tests proving canvas/global subtitle rows are unchanged after fit/time-window interactions. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows.
 
+## NLE selection view-state isolation validation
+
+Text selection, canvas active highlight, and timeline active-segment selection changes must prove they update only view state. They must not validate/finalize edits, rewrite primary canvas/global rows, append runtime NLE operation journals, save projects, run STT/LLM/backend model checks, or change UI layout/labels/menus.
+
+```bash
+./venv/bin/python -m py_compile tools/audit_nle_selection_view_state_isolation.py tests/test_nle_selection_view_state_isolation.py tests/test_nle_selection_view_state_isolation_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_selection_view_state_isolation.py tests/test_nle_selection_view_state_isolation_audit.py
+./venv/bin/python tools/audit_nle_selection_view_state_isolation.py --output-dir output/manual_verification/latest/nle_selection_view_state_isolation_YYYYMMDD
+```
+
+Acceptance requires audit `ready=true`, selection view-state-only contract `true`, model validation/project save/NLE writes allowed `false/false/false`, primary row rewrite allowed `false`, forbidden method calls/assignments `0`, and focused tests proving canvas/global subtitle rows are unchanged after selection/highlight interactions. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows; if NAS is available and a current-head regression is run, it must be accepted by `tools/evaluate_reference_benchmark_acceptance.py` and report final invalid/non-monotonic/overlap `0/0/0` plus global max-active `1`.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.
