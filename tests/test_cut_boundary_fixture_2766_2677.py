@@ -14,7 +14,7 @@ PIPE_MAX_FPS_ENV = "AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS"
 
 
 def _expected_frames() -> list[int]:
-    raw = os.environ.get(EXPECT_ENV, "2766,2677")
+    raw = os.environ.get(EXPECT_ENV, "2766,2676")
     frames: list[int] = []
     for chunk in raw.split(","):
         text = chunk.strip()
@@ -39,7 +39,7 @@ def test_source_fps_scout_metadata_only_fallback_preserves_frame_grid(tmp_path):
 
     manifest = verify_source_fps_scout(
         media,
-        pairs=[(2765, 2766), (2676, 2677)],
+        pairs=[(2765, 2766), (2675, 2676)],
         width=320,
         height=180,
         output_dir=tmp_path / "report",
@@ -53,7 +53,7 @@ def test_source_fps_scout_metadata_only_fallback_preserves_frame_grid(tmp_path):
     assert manifest["media"]["probe_source"] == "spotlight_fps_override"
     assert manifest["pipe_fps_num"] == 60000
     assert manifest["pipe_fps_den"] == 1001
-    assert [row["candidate_frame"] for row in manifest["pairs"]] == [2766, 2677]
+    assert [row["candidate_frame"] for row in manifest["pairs"]] == [2766, 2676]
     assert all(row["acceptance_basis"] == "metadata_frame_grid_preserved" for row in manifest["pairs"])
     assert all(row["visual_candidate_status"] == "metadata_only" for row in manifest["pairs"])
     summary = manifest["visual_detection_summary"]
@@ -94,14 +94,14 @@ def test_source_fps_scout_visual_summary_flags_preserved_only_candidate(tmp_path
         {
             2765: dark,
             2766: dark.copy(),
+            2675: dark.copy(),
             2676: dark.copy(),
-            2677: dark.copy(),
         },
     )
 
     manifest = verify_source_fps_scout(
         tmp_path / "fake.mp4",
-        pairs=[(2765, 2766), (2676, 2677)],
+        pairs=[(2765, 2766), (2675, 2676)],
         width=320,
         height=180,
         output_dir=tmp_path / "report",
@@ -218,11 +218,11 @@ def test_confirmed_fixture_cut_frames_split_snap_without_crossing_rows():
                 "text": "before after cut",
             },
             {
-                "id": "snap-2677",
-                "segment_id": "stt-snap-2677",
-                "start_frame": 2676,
+                "id": "snap-2676",
+                "segment_id": "stt-snap-2676",
+                "start_frame": 2675,
                 "end_frame": 2690,
-                "start": 2676 / fps,
+                "start": 2675 / fps,
                 "end": 2690 / fps,
                 "text": "one frame early",
             },
@@ -232,6 +232,6 @@ def test_confirmed_fixture_cut_frames_split_snap_without_crossing_rows():
     )
 
     assert any(row.get("cut_boundary_forced_split") and row.get("start_frame") == 2766 for row in rows)
-    assert any(row.get("cut_boundary_edge_snapped") and row.get("start_frame") == 2677 for row in rows)
+    assert any(row.get("cut_boundary_edge_snapped") and row.get("start_frame") == 2676 for row in rows)
     for frame in expected:
         assert all(not (row["start_frame"] < frame < row["end_frame"]) for row in rows)

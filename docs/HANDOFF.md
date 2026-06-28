@@ -33,6 +33,59 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Cut-Boundary Fixture Target Correction
+
+### Scope
+
+- Corrected the fixed cut-boundary QA target convention from historical `2677` to `2676`.
+- Added `tools/audit_cut_boundary_fixture_target_correction.py`.
+- Added `tests/test_cut_boundary_fixture_target_correction.py`.
+- Updated fixed fixture defaults in `tools/verify_cut_boundary_source_fps_scout.py`, `tools/audit_cut_boundary_visual_window.py`, and `tests/test_cut_boundary_fixture_2766_2677.py`.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Target correction audit: `output/manual_verification/latest/nle_cut_boundary_fixture_target_correction_20260628/cut_boundary_fixture_target_correction.md`
+- Corrected source-fps scout: `output/manual_verification/latest/nle_corrected_target_source_fps_scout_20260628/source_fps_scout.md`
+- Corrected visual-window audit: `output/manual_verification/latest/nle_corrected_target_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`
+- Corrected frame-semantics audit: `output/manual_verification/latest/nle_corrected_target_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`
+- Corrected fixture convention audit: `output/manual_verification/latest/nle_corrected_target_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.md`
+- Corrected target frames `2766,2676`; corrected source-fps pairs `2765:2766,2675:2676`.
+- Frame `2676`: detected `true`, target-best, score `71.932`, expected pair `2675->2676`, convention review required `false`.
+- Frame `2766`: still `preserved_only` / `target_detection_gap`, score `2.059`; this remains the open detector-evidence target before threshold tuning.
+- Corrected frame-semantics audit reports semantic mismatch count `0` and target detection gap count `1`.
+- Corrected fixture convention audit exits `0` with fixture label/boundary convention review required `false`.
+
+### NAS
+
+- NAS preflight: `output/manual_verification/latest/nle_target_correction_nas_preflight_20260628/reference_fixture_availability.md`
+- Ready `true`; media and reference SRT exist; clipped reference rows `89`.
+- No new subtitle-generation benchmark was run because this slice changes QA target convention/default audit inputs only, not runtime generation behavior.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-135221-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-133200-cut-boundary-target-correction.md`
+- Dex classification: accept the `2677 -> 2676` target correction. Defer the scout's runtime offset-logic suggestion because this slice is QA target/default-audit correction only.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_cut_boundary_fixture_target_correction.py tests/test_cut_boundary_fixture_target_correction.py tools/verify_cut_boundary_source_fps_scout.py tools/audit_cut_boundary_visual_window.py tests/test_cut_boundary_fixture_2766_2677.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_target_correction.py tests/test_cut_boundary_fixture_convention_audit.py tests/test_cut_boundary_frame_semantics_audit.py tests/test_cut_boundary_fixture_2766_2677.py` -> `13 passed, 1 skipped`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_target_correction.py output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.json --output-dir output/manual_verification/latest/nle_cut_boundary_fixture_target_correction_20260628` -> pass, corrected frames `2766,2676`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py ... --output-dir output/manual_verification/latest/nle_corrected_target_source_fps_scout_20260628` -> pass.
+- `AI_SUBTITLE_STUDIO_CUT_BOUNDARY_FIXTURE=... AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2676" AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `6 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_window.py ... --output-dir output/manual_verification/latest/nle_corrected_target_visual_window_audit_20260628` -> expected fail, exit `1`, because frame `2766` remains not detected.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_frame_semantics.py ... --output-dir output/manual_verification/latest/nle_corrected_target_frame_semantics_audit_20260628` -> expected fail, exit `1`, because frame `2766` remains a target detection gap.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_convention.py ... --output-dir output/manual_verification/latest/nle_corrected_target_fixture_convention_audit_20260628` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_target_correction_nas_preflight_20260628` -> pass, ready `true`.
+
+### Next Recommended Action
+
+- Continue detector-evidence work for frame `2766`, which remains a target detection gap without a strong target/neighbor delta.
+- Do not relax thresholds, change STT policy, promote cache defaults, alter UI, persist NLE disk fields, or perform App Store work from this slice.
+
 ## Current Handoff - 2026-06-28 NLE Cut-Boundary Fixture Convention Contact Sheet Audit
 
 ### Scope

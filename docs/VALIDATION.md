@@ -100,13 +100,13 @@ For the fixed 60000/1001fps NLE Slice 2 fixture, use the narrow verifier before 
 
 ```bash
 AI_SUBTITLE_STUDIO_CUT_BOUNDARY_FIXTURE="/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2677" \
+AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2676" \
 AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" \
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py
 
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
   "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-  --pairs 2765:2766,2676:2677 \
+  --pairs 2765:2766,2675:2676 \
   --pipe-max-fps 60 \
   --fps-override 60000/1001 \
   --allow-metadata-only \
@@ -114,14 +114,14 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
   --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_YYYYMMDD
 ```
 
-This verifier records whether target frames `2766` and `2677` are newly detected or at least preserved on the exact source-fps frame grid. If `candidate_detected=false`, report that as a remaining false-negative tuning risk even when `frame_preserved=true`. The `--allow-metadata-only` path is allowed only when decoder access to the fixed fixture stalls; it proves frame-grid preservation and split/snap guardability, not visual cut detection.
+This verifier records whether target frames `2766` and `2676` are newly detected or at least preserved on the exact source-fps frame grid. The old `2677` target is superseded by corrected frame `2676`. If `candidate_detected=false`, report that as a remaining false-negative tuning risk even when `frame_preserved=true`. The `--allow-metadata-only` path is allowed only when decoder access to the fixed fixture stalls; it proves frame-grid preservation and split/snap guardability, not visual cut detection.
 
 When decoder access is available, run the visual-evidence path without `--allow-metadata-only` and keep the strict detector gate separate:
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
   "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-  --pairs 2765:2766,2676:2677 \
+  --pairs 2765:2766,2675:2676 \
   --pipe-max-fps 60 \
   --fps-override 60000/1001 \
   --probe-timeout-sec 5 \
@@ -130,7 +130,7 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
 
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
   "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-  --pairs 2765:2766,2676:2677 \
+  --pairs 2765:2766,2675:2676 \
   --pipe-max-fps 60 \
   --fps-override 60000/1001 \
   --probe-timeout-sec 5 \
@@ -139,14 +139,14 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
   --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_YYYYMMDD_strict
 ```
 
-The strict command must fail while the frames are only `preserved_only`; that failure is useful evidence and blocks visual-detection claims until detector tuning is separately proven.
+The strict command must fail while any current target frame is only `preserved_only`; that failure is useful evidence and blocks full visual-detection claims until detector tuning is separately proven. Current evidence detects corrected frame `2676` and keeps frame `2766` open.
 
 Before changing detector thresholds, rank the target frame against its neighboring transitions:
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_window.py \
   "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-  --targets 2766,2677 \
+  --targets 2766,2676 \
   --radius 3 \
   --pipe-max-fps 60 \
   --fps-override 60000/1001 \
@@ -176,6 +176,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_con
 ```
 
 This command materializes PNG contact sheets for the target and strongest neighbor transitions, then exits `1` while fixture label/boundary-frame convention review remains required. The report is visual evidence only; it must not approve threshold relaxation, subtitle/STT policy changes, UI/QML work, persisted NLE fields, or App Store work.
+
+If the convention audit proves a requested target is one frame late, run the read-only target-correction audit before updating future fixed-fixture QA inputs:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_target_correction.py \
+  output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_YYYYMMDD/cut_boundary_fixture_convention_audit.json \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_fixture_target_correction_YYYYMMDD
+```
+
+This command may correct QA target frames such as historical `2677 -> 2676`, but it must not approve threshold relaxation, subtitle/STT policy changes, UI/QML work, persisted NLE fields, or App Store work.
 
 ## Preview frame cache validation
 

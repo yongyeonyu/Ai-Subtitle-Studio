@@ -253,7 +253,7 @@ def _write_markdown(path: Path, manifest: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Rank visual transition evidence around target cut-boundary frames.")
     parser.add_argument("media", type=Path)
-    parser.add_argument("--targets", default="2766,2677")
+    parser.add_argument("--targets", default="2766,2676")
     parser.add_argument("--radius", type=int, default=3)
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=180)

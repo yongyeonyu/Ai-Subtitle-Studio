@@ -473,7 +473,7 @@ def _write_markdown_report(path: Path, manifest: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify source-fps low-res cut-boundary scout on exact target frames.")
     parser.add_argument("media", type=Path)
-    parser.add_argument("--pairs", default="2765:2766,2676:2677")
+    parser.add_argument("--pairs", default="2765:2766,2675:2676")
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=180)
     parser.add_argument("--pipe-max-fps", type=float, default=60.0)

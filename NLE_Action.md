@@ -29,10 +29,10 @@ Current NLE status:
 - Latest preview/skimming cache contract audit: `output/manual_verification/latest/nle_preview_skimming_cache_audit_20260628/nle_preview_skimming_cache_audit.md`; preview cache files remain under the temp `Preview/FrameThumbnails` workspace, carry `user_preview_only` manifest provenance, are explicitly not cut-boundary evidence, and cache miss continues to schedule async preparation instead of sync UI-thread decode.
 - Latest preview/skimming trace-event audit: `output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628/nle_preview_skimming_cache_audit.md`; preview cache hit/miss/schedule/ready events now flow through the async `TraceLogger` queue with `editor_preview_skimming`, `user_preview_only`, `cut_boundary_evidence=false`, exact `fps_num/fps_den`, and the existing preview seek throttle preserved.
 - Latest confirmed cut-boundary decision trace audit: `output/manual_verification/latest/nle_confirmed_cut_trace_audit_20260628/trace_log_bundle_audit.md`; confirmed visual-cut split/snap/drop decisions now emit async `confirmed_cut_split_snap` events with `event_type=cut_boundary_decision`, `decision`, `provisional_frame`, `drop_reason`, exact `fps_num/fps_den`, and no detector-threshold, UI, or persisted-NLE behavior change. NAS HeyDealer first-180s regression after this slice is accepted at `output/manual_verification/latest/nle_confirmed_cut_trace_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`.
-- Latest fixed cut-boundary visual evidence gate: `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628/source_fps_scout.md`; decoder-based frame extraction now succeeds on the local 60000/1001fps fixture, target frames `2766` and `2677` are preserved on the exact frame grid, and the verifier separates `preserved_only` from `detected`. Current evidence reports `strict_visual_detection_passed=false`, `visual_candidate_missing_count=2`, and the strict `--require-visual-detection` artifact at `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628_strict/source_fps_scout.md` fails as expected, so visual detector tuning remains open.
-- Latest cut-boundary visual window audit: `output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`; the read-only ±3 frame ranking keeps runtime behavior unchanged and shows target frames `2766` and `2677` are not the strongest visual transitions in their local windows. Frame `2766` ranks `4` with score `2.059` and best nearby frame `2769` score `2.715`; frame `2677` ranks `2` with score `1.997`, while frame `2676` scores `71.932` and is detected. Treat this as frame-semantics/detector-tuning evidence, not a threshold-change approval.
-- Latest cut-boundary frame-semantics audit: `output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`; the read-only classifier reports `frame_semantics_review_required=true`, semantic mismatch count `1`, target detection gaps `2`, detected-neighbor conflict count `1`, detector-tuning candidate count `1`, and `runtime_change_allowed=false`. Frame `2766` remains a target detection gap, while frame `2677` is classified as `detected_neighbor_before_target` because the strongest detected transition is `2675 -> 2676`; verify fixture label/boundary-frame convention before threshold tuning. NAS HeyDealer first-180s regression after this slice accepted at `output/manual_verification/latest/nle_frame_semantics_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`, but elapsed `179.579s` is a slow STT1 collect run, not a speed approval.
-- Latest cut-boundary fixture convention/contact-sheet audit: `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.md`; the read-only verifier materialized actual fixed-fixture frames into `target_2677_frame_contact_sheet.png` and `target_2766_frame_contact_sheet.png`. Frame `2677` remains a label/boundary-frame convention review gate because expected pair `2676 -> 2677` has mean delta `2.381499`, while strongest pair `2675 -> 2676` has mean delta `72.849699` and ratio `30.589851`. Frame `2766` remains detector-evidence work, not a convention correction. Current NAS fixture preflight after the slice is ready at `output/manual_verification/latest/nle_fixture_convention_nas_preflight_20260628/reference_fixture_availability.md`; runtime generation behavior was not changed.
+- Latest cut-boundary fixture target correction audit: `output/manual_verification/latest/nle_cut_boundary_fixture_target_correction_20260628/cut_boundary_fixture_target_correction.md`; the fixed fixture QA target is corrected from historical `2677` to `2676`, with current target frames `2766,2676` and source-fps pairs `2765:2766,2675:2676`. Runtime detector thresholds, subtitle policy, STT policy, UI, App Store work, and persisted NLE disk fields remain unchanged.
+- Latest corrected source-fps scout: `output/manual_verification/latest/nle_corrected_target_source_fps_scout_20260628/source_fps_scout.md`; decoder extraction succeeds, frame `2676` is visually detected with score `71.932`, and frame `2766` remains `preserved_only` with score `2.059`, so `strict_visual_detection_passed=false` still blocks visual-detection claims for the full pair.
+- Latest corrected visual window / frame-semantics / convention audits: `output/manual_verification/latest/nle_corrected_target_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`, `output/manual_verification/latest/nle_corrected_target_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`, and `output/manual_verification/latest/nle_corrected_target_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.md`; the corrected `2676` target is target-best and convention-clean, semantic mismatch count is now `0`, and only frame `2766` remains detector-evidence work. The frame-semantics audit exits `1` while `2766` is not detected; the convention audit exits `0`.
+- Current NAS fixture preflight after the target-correction slice is ready at `output/manual_verification/latest/nle_target_correction_nas_preflight_20260628/reference_fixture_availability.md`; media and reference SRT exist and clipped reference rows are `89`. Runtime generation behavior was not changed, so no new subtitle-generation benchmark was run for this QA-target correction.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
@@ -49,7 +49,11 @@ Primary cut-boundary fixture:
 Target cut-boundary frames:
 
 - `2765 -> 2766` (`frame 2766`, approx `46.1461s`)
-- `2676 -> 2677` (`frame 2677`, approx `44.6613s`)
+- `2675 -> 2676` (`frame 2676`, approx `44.6446s`)
+
+Historical correction note:
+
+- The old `2676 -> 2677` / `frame 2677` fixture target is superseded. Contact-sheet evidence shows the hard visual transition is `2675 -> 2676`; frame `2677` is one frame late for this fixed fixture's QA target.
 
 Boundary semantics:
 
@@ -109,7 +113,7 @@ Goal: stop missing short visual cuts caused by coarse stride plus rollback-only 
 Implementation direction:
 
 - In High mode, run a low-resolution source-fps frame scout in parallel.
-- For exact-frame fixture proof, the scout must be allowed to sample the fixture at source fps (`60000/1001`) or an explicit `60fps` test override; the previous `30fps` cap is not enough to prove 1-frame hard cuts at `2766` and `2677`.
+- For exact-frame fixture proof, the scout must be allowed to sample the fixture at source fps (`60000/1001`) or an explicit `60fps` test override; the previous `30fps` cap is not enough to prove 1-frame hard cuts at `2766` and `2676`.
 - Compute per-frame visual evidence:
   - luma delta,
   - HSV histogram delta,
@@ -125,9 +129,9 @@ Implementation direction:
 
 Primary fixture acceptance:
 
-- High-mode scan must find or preserve cut evidence at frames `2766` and `2677` on the fixed fixture.
+- High-mode scan must find or preserve cut evidence at frames `2766` and `2676` on the fixed fixture.
 - Final subtitle rows must not cross those confirmed visual cuts.
-- If a subtitle starts at frame `2676` and the visual boundary is frame `2677`, it must snap to `2677` when the cut is confirmed.
+- If a subtitle starts at frame `2675` and the visual boundary is frame `2676`, it must snap to `2676` when the cut is confirmed.
 - Split/snap must not create an invalid subtitle shorter than the minimum duration policy; if a forced split would violate minimum duration, it must be recorded as an explicit trim/drop candidate with trace evidence.
 
 ### NLE Marker Contract
@@ -217,7 +221,7 @@ Event fields:
 Exact frame trace rule:
 
 - For frame-sensitive events, store `fps_num` and `fps_den` alongside any float `fps`.
-- The `2766` and `2677` fixture gates must not depend on float-only frame math.
+- The `2766` and `2676` fixture gates must not depend on float-only frame math.
 
 Trace scope:
 
@@ -300,7 +304,7 @@ Responsibility:
 - frame scout,
 - local verifier,
 - preview cache/skimming,
-- target fixture frames `2766` and `2677`.
+- target fixture frames `2766` and `2676`.
 
 Output:
 
@@ -375,7 +379,7 @@ Fixed fixture cut-boundary proof:
 
 ```bash
 AI_SUBTITLE_STUDIO_CUT_BOUNDARY_FIXTURE="/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2677" \
+AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2676" \
 AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" \
 QT_QPA_PLATFORM=offscreen \
 ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py
@@ -386,7 +390,7 @@ When the local iCloud fixture is present but FFmpeg/OpenCV decoder access stalls
 ```bash
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
   "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-  --pairs 2765:2766,2676:2677 \
+  --pairs 2765:2766,2675:2676 \
   --pipe-max-fps 60 \
   --fps-override 60000/1001 \
   --allow-metadata-only \
@@ -401,7 +405,7 @@ When decoder access is available, run the visual-evidence verifier without metad
 ```bash
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
   "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-  --pairs 2765:2766,2676:2677 \
+  --pairs 2765:2766,2675:2676 \
   --pipe-max-fps 60 \
   --fps-override 60000/1001 \
   --probe-timeout-sec 5 \
@@ -410,7 +414,7 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
 
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
   "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-  --pairs 2765:2766,2676:2677 \
+  --pairs 2765:2766,2675:2676 \
   --pipe-max-fps 60 \
   --fps-override 60000/1001 \
   --probe-timeout-sec 5 \
@@ -419,14 +423,14 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
   --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_YYYYMMDD_strict
 ```
 
-The second command is expected to fail until the detector itself finds frames `2766` and `2677`. A preserved-only pass must not be reported as visual detection proof.
+The second command is expected to fail while frame `2766` remains `preserved_only`. The corrected frame `2676` is the detected target; a partial preserved-only pass must not be reported as full visual detection proof.
 
 To inspect whether the target frame or a neighbor owns the strongest visual transition before tuning detector thresholds, run the read-only window audit:
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_window.py \
   "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
-  --targets 2766,2677 \
+  --targets 2766,2676 \
   --radius 3 \
   --pipe-max-fps 60 \
   --fps-override 60000/1001 \
@@ -457,6 +461,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_con
 
 This command also returns exit `1` while fixture label/boundary convention review remains required. Treat that as visual evidence that blocks threshold tuning until the target-frame convention is decided.
 
+If a convention audit proves a requested target is one frame late, write the corrected QA target map before changing detector thresholds:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_target_correction.py \
+  output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_YYYYMMDD/cut_boundary_fixture_convention_audit.json \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_fixture_target_correction_YYYYMMDD
+```
+
+This command is read-only for runtime behavior. It may update future QA target inputs, but it must not approve threshold relaxation, subtitle/STT policy changes, UI/QML work, persisted NLE fields, or App Store work.
+
 Trace:
 
 ```bash
@@ -470,7 +484,7 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q \
 Fixture proof:
 
 - Run the fixed fixture in High mode.
-- Verify frame `2766` and `2677` cut detection/split/snap.
+- Verify frame `2766` and `2676` cut detection/split/snap.
 - Verify X5/Macau subtitle count, first/last time, output duration, and sidecar metadata do not drift.
 - If affected, run:
 
