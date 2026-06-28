@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.01.01-source-app
+Document-Version: 04.01.02-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-Last-Updated: 2026-06-28
+Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Completed action item archive separated from docs/planning_queue/ACTION_ITEMS.md.
 -->
@@ -18,6 +18,18 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.02 NLE Close / Deferred-Save Boundary Fix
+
+Source request: owner approved persisted NLE/UI structure work, requested remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stopping after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.02"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.02`.
+3. `core/frame_time.py`, `core/project/nle_project_state.py`, and `core/project/nle_runtime_cutover.py` now normalize `subtitle_canvas.vector.v2` rows with nested `time.start_frame/end_frame/timeline_frame_rate` before NLE save/export projection, preserving source FPS conversion instead of collapsing raw vector rows to `0 -> 0`.
+4. `ui/editor/editor_save_manager.py` now treats close/exit forced deferred-save failures as non-retryable for that stale generation, clearing the pending snapshot and avoiding the 5-second retry loop while keeping background/manual deferred-save retry behavior unchanged.
+5. True final subtitle overlaps remain blocked by `nle_save_export_final_overlap`; the project-5 read-only probe now reaches that guard instead of `nle_save_export_invalid_duration`, confirming the vector-time collapse bug is closed without weakening final-overlap protection.
+6. Three sub-agents reviewed close/deferred save ownership, vector-canvas/NLE schema mismatch, and focused regression locations; Jammini scout and route probe were collected through physical handoff files.
+7. Focused verification passed: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py -q` -> `68 passed`.
 
 ## v04.01.01 Source-App Checkpoint / App Store Identity Blocker
 

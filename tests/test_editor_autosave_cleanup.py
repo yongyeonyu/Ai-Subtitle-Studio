@@ -632,6 +632,28 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor._show_confirm_dialog.assert_not_called()
         self.assertFalse(editor._deferred_project_save_pending)
 
+    def test_close_flush_failure_does_not_reschedule_stale_deferred_project_save(self):
+        editor = _QObjectDeferredProjectSaveEditor("/tmp/worker-project.aissproj")
+        editor._has_unsaved_changes = Mock(return_value=False)
+        editor._schedule_deferred_project_save(
+            editor._get_current_segments(),
+            schedule_analysis_refresh=False,
+        )
+
+        with patch(
+            "ui.editor.editor_save_manager._write_project_save_snapshot",
+            side_effect=ValueError("nle_save_export_final_overlap"),
+        ), patch("ui.editor.editor_save_manager.QTimer.singleShot") as single_shot:
+            result = editor._confirm_close_before_exit("종료 확인")
+
+        self.assertTrue(result)
+        self.assertFalse(editor._deferred_project_save_pending)
+        self.assertFalse(editor._deferred_project_save_running)
+        self.assertEqual(editor._deferred_project_save_segments, [])
+        self.assertEqual(editor._deferred_project_save_options, {})
+        self.assertEqual(editor._deferred_project_save_nonretryable_close_error, "nle_save_export_final_overlap")
+        single_shot.assert_not_called()
+
     def test_persist_editor_srts_prefers_opened_source_srt_path_for_direct_srt_mode(self):
         editor = _SourceSrtSaveEditor()
 

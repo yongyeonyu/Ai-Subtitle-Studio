@@ -176,6 +176,61 @@ class ProjectAssetsTests(unittest.TestCase):
         self.assertEqual(len(gap_rows), 1)
         self.assertEqual([row.get("_nle_runtime_surface") for row in metadata], ["save_export", "save_export"])
 
+    def test_externalize_project_text_assets_normalizes_vector_canvas_time_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project.json"
+            project = {
+                "project_path": str(project_path),
+                "video": {"primary_fps": 30.0},
+                "subtitles": {},
+                "editor_state": {"stt": {"candidate_tracks": {}}},
+                "analysis": {},
+            }
+
+            externalize_project_text_assets(
+                str(project_path),
+                project,
+                final_segments=[
+                    {
+                        "id": "caption_1",
+                        "kind": "subtitle_segment",
+                        "time": {
+                            "unit": "frame",
+                            "start_frame": 60,
+                            "end_frame": 120,
+                            "timeline_frame_rate": 60.0,
+                        },
+                        "text": "벡터 첫째",
+                        "speaker": "00",
+                    },
+                    {
+                        "id": "caption_2",
+                        "kind": "subtitle_segment",
+                        "time": {
+                            "unit": "frame",
+                            "start_frame": 120,
+                            "end_frame": 180,
+                            "timeline_frame_rate": 60.0,
+                        },
+                        "text": "벡터 둘째",
+                        "speaker": "01",
+                    },
+                ],
+                stt_tracks={},
+            )
+
+            final_srt = (Path(tmp) / "project.assets" / "subtitles" / "final.srt").read_text(encoding="utf-8")
+            hot_cache = project["_hot_open_subtitle_segments_cache"]
+            metadata = project["asset_storage"]["tracks"]["final"]["metadata"]
+
+        self.assertIn("00:00:01,000 --> 00:00:02,000", final_srt)
+        self.assertIn("00:00:02,000 --> 00:00:03,000", final_srt)
+        self.assertEqual([row["text"] for row in hot_cache], ["벡터 첫째", "벡터 둘째"])
+        self.assertEqual([row["start"] for row in hot_cache], [1.0, 2.0])
+        self.assertEqual([row["end"] for row in hot_cache], [2.0, 3.0])
+        self.assertEqual([row["start_frame"] for row in metadata], [30, 60])
+        self.assertEqual([row["end_frame"] for row in metadata], [60, 90])
+
 
 if __name__ == "__main__":
     unittest.main()

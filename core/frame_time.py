@@ -118,9 +118,30 @@ def segment_frame_bounds(
         if end_frame is None and item.get(key) is not None:
             end_frame = _coerce_frame_int(item.get(key))
 
+    vector_time = item.get("time")
+    if isinstance(vector_time, dict):
+        source_fps = normalize_fps(
+            vector_time.get("timeline_frame_rate")
+            or vector_time.get("frame_rate")
+            or vector_time.get("fps")
+            or normalized_fps
+        )
+        if start_frame is None and vector_time.get("start_frame") is not None:
+            source_start_frame = _coerce_frame_int(vector_time.get("start_frame"))
+            start_frame = sec_to_nearest_frame(frame_to_sec(source_start_frame, source_fps), normalized_fps)
+        if end_frame is None and vector_time.get("end_frame") is not None:
+            source_end_frame = _coerce_frame_int(vector_time.get("end_frame"))
+            end_frame = sec_to_nearest_frame(frame_to_sec(source_end_frame, source_fps), normalized_fps)
+
     start_sec = _coerce_nonnegative_sec(item.get("start", item.get("timeline_start", 0.0)))
     end_sec = _coerce_nonnegative_sec(item.get("end", item.get("timeline_end", start_sec)))
     end_sec = max(start_sec, end_sec)
+    if isinstance(vector_time, dict):
+        if start_frame is None and vector_time.get("start_sec") is not None:
+            start_sec = _coerce_nonnegative_sec(vector_time.get("start_sec"))
+        if end_frame is None and vector_time.get("end_sec") is not None:
+            end_sec = _coerce_nonnegative_sec(vector_time.get("end_sec"))
+            end_sec = max(start_sec, end_sec)
 
     if start_frame is None:
         start_frame = sec_to_nearest_frame(start_sec, normalized_fps)

@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 import os
 from typing import Any
 
-from core.frame_time import frame_to_sec, normalize_fps, sec_to_nearest_frame
+from core.frame_time import frame_to_sec, normalize_fps, sec_to_nearest_frame, segment_frame_bounds
 from core.project.nle_snapshot import NLESnapshot, build_project_nle_snapshot
 from core.project.project_context import project_media_files, project_segments_to_editor
 from core.project.project_format import project_primary_fps, project_total_duration
@@ -31,18 +31,7 @@ def _as_int(value: Any, default: int = 0) -> int:
 
 
 def _row_frame_bounds(row: dict[str, Any], *, fps: float) -> tuple[int, int]:
-    frame_range = row.get("frame_range", {}) if isinstance(row.get("frame_range"), dict) else {}
-    start_frame = row.get("start_frame", row.get("timeline_start_frame", frame_range.get("start")))
-    end_frame = row.get("end_frame", row.get("timeline_end_frame", frame_range.get("end")))
-    start = _as_float(row.get("start", row.get("timeline_start", 0.0)), 0.0)
-    end = _as_float(row.get("end", row.get("timeline_end", start)), start)
-    if start_frame is None:
-        start_frame = sec_to_nearest_frame(start, fps)
-    if end_frame is None:
-        end_frame = sec_to_nearest_frame(max(start, end), fps)
-    start_frame = _as_int(start_frame, 0)
-    end_frame = max(start_frame, _as_int(end_frame, start_frame))
-    return start_frame, end_frame
+    return segment_frame_bounds(row, fps, min_frames=0)
 
 
 def _caption_metadata(row: dict[str, Any]) -> dict[str, Any]:

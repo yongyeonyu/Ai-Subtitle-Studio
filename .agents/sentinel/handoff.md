@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260629-004654-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260628-234233-nle-close-deferred-save-blocker-scout-jammini.md`
 - `.agents/sentinel/handoffs/20260628-233050-app-store-identity-blocker-summary-jammini.md`
 - `.agents/sentinel/handoffs/20260629-002637-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-231205-top-level-nle-shadow-metadata-workflow-yujin.md`

@@ -1224,6 +1224,7 @@ class EditorSaveManagerMixin:
         self._deferred_project_save_pending = False
         self._deferred_project_save_segments = []
         self._deferred_project_save_options = {}
+        self._deferred_project_save_nonretryable_close_error = ""
         self._set_deferred_project_save_status("에디터 | 프로젝트 저장 대기 갱신")
         get_logger().log(f"💾 프로젝트 지연 저장 예약 무효화: {reason}")
         return True
@@ -1251,6 +1252,7 @@ class EditorSaveManagerMixin:
             "schedule_analysis_refresh": bool(schedule_analysis_refresh),
             "saved_segments_signature": str(getattr(self, "_saved_segments_signature", "") or ""),
         }
+        self._deferred_project_save_nonretryable_close_error = ""
         self._deferred_project_save_pending = True
         self._set_deferred_project_save_status("에디터 | SRT 저장 완료 · 프로젝트 저장 예약")
         get_logger().log("💾 SRT 저장 완료 · 프로젝트 파일은 지연 저장으로 예약했습니다.")
@@ -1260,7 +1262,13 @@ class EditorSaveManagerMixin:
         )
         return True
 
-    def _run_deferred_project_save(self, generation: int, *, force: bool = False) -> bool:
+    def _run_deferred_project_save(
+        self,
+        generation: int,
+        *,
+        force: bool = False,
+        force_reason: str = "",
+    ) -> bool:
         current_generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
         if int(generation or 0) != current_generation:
             return False
@@ -1277,9 +1285,22 @@ class EditorSaveManagerMixin:
                     and latest_generation
                     and latest_generation != running_generation
                 ):
-                    return bool(self._run_deferred_project_save(latest_generation, force=True))
+                    return bool(
+                        self._run_deferred_project_save(
+                            latest_generation,
+                            force=True,
+                            force_reason=str(force_reason or ""),
+                        )
+                    )
                 return True
-            QTimer.singleShot(1_000, lambda gen=current_generation: self._run_deferred_project_save(gen, force=force))
+            QTimer.singleShot(
+                1_000,
+                lambda gen=current_generation, reason=str(force_reason or ""): self._run_deferred_project_save(
+                    gen,
+                    force=force,
+                    force_reason=reason,
+                ),
+            )
             return False
         if not force:
             try:
@@ -1310,14 +1331,22 @@ class EditorSaveManagerMixin:
                 )
             except Exception as exc:
                 get_logger().log(f"⚠️ 프로젝트 지연 저장 실패: {exc}")
-                self._deferred_project_save_pending = True
-                QTimer.singleShot(5_000, lambda gen=current_generation: self._run_deferred_project_save(gen))
+                if bool(force) and str(force_reason or "") in {"close", "exit"}:
+                    self._deferred_project_save_pending = False
+                    self._deferred_project_save_segments = []
+                    self._deferred_project_save_options = {}
+                    self._deferred_project_save_nonretryable_close_error = str(exc)
+                    self._set_deferred_project_save_status("에디터 | 프로젝트 저장 실패")
+                else:
+                    self._deferred_project_save_pending = True
+                    QTimer.singleShot(5_000, lambda gen=current_generation: self._run_deferred_project_save(gen))
                 return False
             finally:
                 self._deferred_project_save_running = False
                 self._deferred_project_save_running_generation = 0
 
             if project_path:
+                self._deferred_project_save_nonretryable_close_error = ""
                 self._remember_saved_project_file(project_path)
                 if bool(options.get("schedule_analysis_refresh", True)):
                     try:
@@ -1370,6 +1399,7 @@ class EditorSaveManagerMixin:
         self._start_deferred_project_save_worker(
             current_generation,
             snapshot,
+            force_reason=str(force_reason or "") if bool(force) else "",
             snapshot_elapsed_ms=(time.perf_counter() - snapshot_started_at) * 1000.0,
         )
         if force:
@@ -1382,7 +1412,7 @@ class EditorSaveManagerMixin:
             return True
         generation = int(getattr(self, "_deferred_project_save_generation", 0) or 0)
         get_logger().log(f"💾 프로젝트 지연 저장 즉시 반영: {reason}")
-        return bool(self._run_deferred_project_save(generation, force=True))
+        return bool(self._run_deferred_project_save(generation, force=True, force_reason=str(reason or "")))
 
     def _capture_project_save_snapshot(
         self,
@@ -1501,10 +1531,12 @@ class EditorSaveManagerMixin:
         generation: int,
         snapshot: dict[str, Any],
         *,
+        force_reason: str = "",
         snapshot_elapsed_ms: float = 0.0,
     ) -> dict[str, Any]:
         state = {
             "generation": int(generation or 0),
+            "force_reason": str(force_reason or ""),
             "snapshot_elapsed_ms": float(snapshot_elapsed_ms or 0.0),
             "started_at": time.perf_counter(),
             "done_event": threading.Event(),
@@ -1577,8 +1609,15 @@ class EditorSaveManagerMixin:
         error = state.get("error")
         if error is not None:
             get_logger().log(f"⚠️ 프로젝트 지연 저장 실패: {error}")
-            self._deferred_project_save_pending = True
-            QTimer.singleShot(5_000, lambda gen=int(getattr(self, "_deferred_project_save_generation", 0) or 0): self._run_deferred_project_save(gen))
+            if str(state.get("force_reason") or "") in {"close", "exit"}:
+                self._deferred_project_save_pending = False
+                self._deferred_project_save_segments = []
+                self._deferred_project_save_options = {}
+                self._deferred_project_save_nonretryable_close_error = str(error)
+                self._set_deferred_project_save_status("에디터 | 프로젝트 저장 실패")
+            else:
+                self._deferred_project_save_pending = True
+                QTimer.singleShot(5_000, lambda gen=int(getattr(self, "_deferred_project_save_generation", 0) or 0): self._run_deferred_project_save(gen))
             return False
 
         result = dict(state.get("result") or {})
@@ -1588,6 +1627,7 @@ class EditorSaveManagerMixin:
         if result.get("stt_adapter_refs"):
             self._stt_adapter_refs = dict(result.get("stt_adapter_refs") or {})
         if project_path:
+            self._deferred_project_save_nonretryable_close_error = ""
             self._remember_saved_project_file(project_path)
             if bool(result.get("schedule_analysis_refresh", True)):
                 try:
@@ -1652,7 +1692,8 @@ class EditorSaveManagerMixin:
     def _confirm_close_before_exit(self, title: str = "종료 확인") -> bool:
         if self._has_deferred_project_save_pending():
             if not self._flush_deferred_project_save(reason="close"):
-                return False
+                if not str(getattr(self, "_deferred_project_save_nonretryable_close_error", "") or ""):
+                    return False
         is_dirty = False
         try:
             is_dirty = self._has_unsaved_changes()

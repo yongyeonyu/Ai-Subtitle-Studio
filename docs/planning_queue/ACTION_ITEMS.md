@@ -146,7 +146,7 @@ Rollback:
 
 Goal: Preserve the current source-app NLE runtime/session editing line while preventing accidental persisted disk-format cutover or native migration scope creep.
 
-Status: active approved-persistence guard plus live close-path blocker. Owner approval for persisted NLE/UI structure was granted on 2026-06-28; approved `nle_snapshot` compatibility metadata and top-level `nle` shadow metadata persistence are now available behind explicit `nle_persistence` flags plus `owner_approved_20260628`, while persisted `_nle_project_state`, canonical load ownership, and per-pixel drag writes remain gated.
+Status: active approved-persistence guard. Owner approval for persisted NLE/UI structure was granted on 2026-06-28; approved `nle_snapshot` compatibility metadata and top-level `nle` shadow metadata persistence are now available behind explicit `nle_persistence` flags plus `owner_approved_20260628`, while persisted `_nle_project_state`, canonical load ownership, and per-pixel drag writes remain gated. Close/deferred-save vector-time boundary blocker is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040102-nle-close--deferred-save-boundary-fix`.
 
 Current baseline:
 
@@ -158,7 +158,7 @@ Current baseline:
 - Persisted `_nle_project_state`, making `nle` or `nle_snapshot` the canonical load owner, and full NLE disk-format cutover remain gated.
 - Legacy save/reopen compatibility remains mandatory.
 - Latest top-level NLE shadow metadata proof: `output/manual_verification/latest/nle_top_level_shadow_metadata_20260629_0020/nle_persistence_cutover_audit.md`; `prep_ready=true`, `top_level_nle_shadow_ready=true`, storage has approved top-level `nle` plus `nle_snapshot`, `canonical_load_owner=legacy_editor_state`, legacy rows and read-back parity are stable, runtime report/runtime state/quarantine do not persist, operation roundtrip all passed across `11` families, render/export parity passed, and full cutover remains `persistence_cutover_ready=false`.
-- Live close blocker from 2026-06-29 KST: current app status for PID `18386` reports repeated recent logs `⚠️ 프로젝트 지연 저장 실패: nle_save_export_final_overlap` after owner-observed `💾 프로젝트 지연 저장 즉시 반영: close`, with `editor_open=true`, media `/Users/u_mo_c/Downloads/내 프로젝트 (5).MP4`, project `projects/내 프로젝트 (5).aissproj`, `editor_state=ST_SAVED`, `subtitle_count=0`, and roughcut done with `4` segments. Read-only project inspection shows `subtitles.segment_count=170` stored under `editor_state.rendering.subtitle_canvas`, where raw vector rows carry timing in `time.start_frame/end_frame`; feeding those raw rows directly to the NLE save/export projection fails as `nle_save_export_invalid_duration`. Treat this as a shutdown/deferred-save/NLE save-export boundary bug, not as approval to weaken final-overlap protection.
+- Completed close/deferred-save blocker proof: `output/manual_verification/latest/nle_close_deferred_save_v040102_20260629/close_deferred_save_report.md`; raw vector `time.start_frame/end_frame` rows no longer collapse into `nle_save_export_invalid_duration`, close-triggered deferred-save failures no longer reschedule stale retry loops, and true final overlaps still raise `nle_save_export_final_overlap`.
 
 Detailed plan:
 
@@ -167,19 +167,12 @@ Detailed plan:
 3. Require fresh compatibility proof before widening beyond approved `nle_snapshot` and top-level `nle` shadow metadata.
 4. Require final-overlap, global-canvas, save/reopen, render/export, and Taption rule parity proof for any new editing-owner cutover.
 5. Do not reopen native migration, Swift rewrite, QML/GPU timeline defaults, or per-pixel NLE writes unless the owner explicitly creates a new acceptance gate.
-6. Close-path deferred-save blocker fix
-   - Reproduce from the current live project/session with `tools/appctl.py status`, recent logs, and read-only project inspection before changing code.
-   - Localize why the close-triggered deferred project-save snapshot reaches `nle_save_export_final_overlap` while the persisted project has 170 vector subtitle rows and the running status reports `subtitle_count=0`.
-   - Compare live editor `_get_current_segments()` rows, vector-canvas `time` rows, and `nle_save_export_segments_from_editor_rows(...)` expectations before deciding whether the fix belongs in row normalization, deferred-save snapshot capture, or close-path retry handling.
-   - Preserve the save/export final-overlap guard for truly overlapped final rows. Do not silently write an overlapped final SRT or project asset.
-   - Prevent infinite close retry loops. A nonrecoverable deferred-save failure during `reason=close` must either become one stable actionable warning or an explicit safe-discard path when durable project/SRT state is already intact.
-   - Add focused regression coverage for `_flush_deferred_project_save(reason="close")`, `_confirm_close_before_exit`, vector-canvas timing normalization into save/export, and project save/reopen parity for a project-5-style roughcut-generated state.
+6. Continue only with a fresh, bounded owner-map for the next mutation or runtime-track slice; completed close/deferred-save blocker details stay in the completed archive.
 
 Acceptance gates:
 
 - Fresh owner-map plus focused tests before adopting any new mutation source.
 - Final subtitle surfaces must preserve `invalid=0`, `non_monotonic=0`, `overlap_count=0`, and no final/STT candidate lane mixing.
-- The owner-reported close path must no longer spam `프로젝트 지연 저장 즉시 반영: close` / `nle_save_export_final_overlap` or keep the app alive indefinitely. Current project subtitle rows must not be lost, roughcut `4`-segment state must survive save/reopen, and status/log proof must be recorded before and after the fix.
 - UI/UX labels, layout, shortcuts, menus, colors, and popup behavior stay unchanged without explicit owner scope.
 
 Rollback:

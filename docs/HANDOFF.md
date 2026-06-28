@@ -33,7 +33,37 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.01 / App Store Identity Blocker
+## Current Handoff - 2026-06-29 v04.01.02 / NLE Close Deferred-Save Boundary
+
+### Scope
+
+- Fixed the G2 close/deferred-save NLE save/export boundary blocker.
+- Bumped source-app version and project schema from `04.01.01` to `04.01.02`.
+- Added `docs/release_notes/RELEASE_v04.01.02.md`.
+- Moved the completed close/deferred-save blocker out of `docs/planning_queue/ACTION_ITEMS.md` and into `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`.
+- Used Jammini plus three sub-agents for route/scout/review support.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.02`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.02`.
+- Raw `subtitle_canvas.vector.v2` rows with nested `time.start_frame/end_frame/timeline_frame_rate` now normalize before NLE save/export projection.
+- Close/exit forced deferred-save failures no longer schedule a stale 5-second retry loop for the same generation.
+- `projects/내 프로젝트 (5).aissproj` still has true 2-frame final subtitle overlaps; those remain blocked by `nle_save_export_final_overlap`.
+
+### Evidence
+
+- Focused tests: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py -q` -> `68 passed`.
+- Close/deferred-save report: `output/manual_verification/latest/nle_close_deferred_save_v040102_20260629/close_deferred_save_report.md`.
+- Jammini route probe: `.agents/sentinel/handoffs/20260629-004654-watchdog-handoff-probe.md`.
+- Jammini blocker scout: `.agents/sentinel/handoffs/20260628-234233-nle-close-deferred-save-blocker-scout-jammini.md`.
+
+### Next Recommended Action
+
+- Because one action item was completed, stop this run after commit/push and clean-worktree confirmation.
+- Next session should choose the next active group from `docs/planning_queue/ACTION_ITEMS.md`: G0 App Store remains externally blocked, G1 remains owner-review/cache-default gated, G2 can continue only with a fresh bounded NLE owner-map, and G3 is the next realtime NLE/STT/VAD runtime-lane planning item.
+
+## Previous Handoff - 2026-06-29 v04.01.01 / App Store Identity Blocker
 
 ### Scope
 

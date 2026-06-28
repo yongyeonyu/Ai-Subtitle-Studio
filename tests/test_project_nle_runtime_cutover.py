@@ -130,6 +130,42 @@ class ProjectNleRuntimeCutoverTests(unittest.TestCase):
         self.assertFalse(any(row.get("_live_subtitle_preview") for row in export_rows))
         self.assertFalse(any("stt_candidates" in row for row in export_rows))
 
+    def test_save_export_cutover_accepts_vector_canvas_time_rows(self):
+        rows = [
+            {
+                "id": "caption_1",
+                "kind": "subtitle_segment",
+                "time": {
+                    "unit": "frame",
+                    "start_frame": 60,
+                    "end_frame": 120,
+                    "timeline_frame_rate": 60.0,
+                },
+                "text": "vector first",
+                "speaker": "00",
+            },
+            {
+                "id": "caption_2",
+                "kind": "subtitle_segment",
+                "time": {
+                    "unit": "frame",
+                    "start_frame": 120,
+                    "end_frame": 180,
+                    "timeline_frame_rate": 60.0,
+                },
+                "text": "vector second",
+                "speaker": "01",
+            },
+        ]
+
+        export_rows = nle_save_export_segments_from_editor_rows(rows, primary_fps=30.0)
+
+        self.assertEqual([row["text"] for row in export_rows], ["vector first", "vector second"])
+        self.assertEqual([row["start_frame"] for row in export_rows], [30, 60])
+        self.assertEqual([row["end_frame"] for row in export_rows], [60, 90])
+        self.assertEqual([row["start"] for row in export_rows], [1.0, 2.0])
+        self.assertEqual([row["end"] for row in export_rows], [2.0, 3.0])
+
     def test_final_overlay_cutover_repairs_one_frame_micro_overlap_to_shared_boundary(self):
         rows = [
             {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "first"},
@@ -189,6 +225,23 @@ class ProjectNleRuntimeCutoverTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "nle_save_export_final_overlap"):
             nle_save_export_segments_from_editor_rows(rows, primary_fps=30.0)
+
+    def test_save_export_cutover_preserves_vector_time_final_overlap_guard(self):
+        rows = [
+            {
+                "id": "caption_1",
+                "time": {"unit": "frame", "start_frame": 0, "end_frame": 120, "timeline_frame_rate": 60.0},
+                "text": "first",
+            },
+            {
+                "id": "caption_2",
+                "time": {"unit": "frame", "start_frame": 118, "end_frame": 180, "timeline_frame_rate": 60.0},
+                "text": "second",
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "nle_save_export_final_overlap"):
+            nle_save_export_segments_from_editor_rows(rows, primary_fps=60.0)
 
     def test_save_export_cutover_rejects_micro_overlap_that_would_collapse_segment(self):
         rows = [

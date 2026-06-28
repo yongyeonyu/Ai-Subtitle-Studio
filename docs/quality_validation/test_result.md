@@ -1,5 +1,24 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.02 NLE Close / Deferred-Save Boundary Fix - 2026-06-29 KST
+
+- 실행 모드: source-app NLE close/deferred-save boundary fix, vector-canvas time normalization, close retry-loop guard, and version/schema bump.
+- 결과: pass for focused NLE save/export projection, project text asset externalization, and editor deferred-save close regression coverage.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.02.md`
+  - Close/deferred-save report: `output/manual_verification/latest/nle_close_deferred_save_v040102_20260629/close_deferred_save_report.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-004654-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-234233-nle-close-deferred-save-blocker-scout-jammini.md`
+- 실제 결과:
+  - App version updated to `04.01.02`.
+  - Project schema version updated to `04.01.02`.
+  - Raw vector-canvas `time.start_frame/end_frame` rows no longer collapse to `nle_save_export_invalid_duration`.
+  - Close/exit forced deferred-save failures no longer reschedule stale deferred-save retries.
+  - True final subtitle overlaps remain blocked by `nle_save_export_final_overlap`.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py -q` -> `68 passed`.
+  - Read-only project-5 raw vector projection probe -> `ValueError nle_save_export_final_overlap`, confirming vector-time normalization works and strict final-overlap protection remains active.
+
 ## v04.01.01 Source-App Checkpoint / App Store Identity Blocker - 2026-06-29 KST
 
 - 실행 모드: source-app version/schema bump, owner-approved App Store packaging lane blocker refresh, NLE top-level shadow metadata closeout, and active G3 planning preservation.

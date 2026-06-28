@@ -3,7 +3,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from typing import Any
 
-from core.frame_time import frame_to_sec, normalize_fps
+from core.frame_time import frame_to_sec, normalize_fps, segment_frame_bounds
 from core.project.nle_project_state import NLECaptionState
 
 NLE_RUNTIME_CUTOVER_SCHEMA = "ai_subtitle_studio.nle_runtime_cutover.v1"
@@ -65,16 +65,8 @@ def _window_rows(
     return rows[trim_left:trim_right]
 
 
-def _row_frame_bounds(row: dict[str, Any]) -> tuple[int, int]:
-    try:
-        start_frame = int(row.get("start_frame", row.get("timeline_start_frame", 0)) or 0)
-    except (TypeError, ValueError):
-        start_frame = 0
-    try:
-        end_frame = int(row.get("end_frame", row.get("timeline_end_frame", start_frame)) or start_frame)
-    except (TypeError, ValueError):
-        end_frame = start_frame
-    return start_frame, end_frame
+def _row_frame_bounds(row: dict[str, Any], *, fps: float) -> tuple[int, int]:
+    return segment_frame_bounds(row, fps, min_frames=0)
 
 
 def _set_row_start_frame(row: dict[str, Any], *, start_frame: int, fps: float) -> dict[str, Any]:
@@ -101,7 +93,7 @@ def _final_surface_rows_without_overlap(
     stable: list[dict[str, Any]] = []
     previous_end_frame: int | None = None
     for row in rows:
-        start_frame, end_frame = _row_frame_bounds(row)
+        start_frame, end_frame = _row_frame_bounds(row, fps=primary_fps)
         if end_frame <= start_frame:
             if block_unfixable:
                 raise ValueError(f"nle_{surface}_invalid_duration")
