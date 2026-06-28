@@ -17,6 +17,7 @@ from core.project.project_runtime_capture import count_editor_project_aux_state
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.runtime.stage_metrics import snapshot_stage_metrics
+from core.runtime.subtitle_resource_manager import live_nle_projection_scheduler_budget
 from core.settings import load_settings, save_settings
 from core.settings_simplifier import apply_simple_operation_mode
 from ui.main.app_command_bridge_handlers import handle_command as _handle_bridge_command
@@ -460,6 +461,7 @@ def _recent_log_payload(
 def _runtime_resource_snapshot(owner: Any) -> dict[str, Any]:
     snapshot = getattr(owner, "_runtime_resource_snapshot", None)
     data = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
+    data = _with_live_nle_projection_budget(owner, data)
     if "stage_metrics" not in data:
         data["stage_metrics"] = snapshot_stage_metrics(max_events=8, include_stages=False)
     return data
@@ -468,9 +470,42 @@ def _runtime_resource_snapshot(owner: Any) -> dict[str, Any]:
 def _cached_runtime_resource_snapshot(owner: Any, *, include_stage_metrics: bool = True) -> dict[str, Any]:
     snapshot = getattr(owner, "_runtime_resource_snapshot", None)
     data = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
+    data = _with_live_nle_projection_budget(owner, data)
     if include_stage_metrics:
         data["stage_metrics"] = snapshot_stage_metrics(max_events=8, include_stages=False)
     return data
+
+
+def _with_live_nle_projection_budget(owner: Any, data: dict[str, Any]) -> dict[str, Any]:
+    out = dict(data or {})
+    existing = out.get("live_nle_projection_budget") if isinstance(out.get("live_nle_projection_budget"), dict) else {}
+    try:
+        labels = list(out.get("active_labels") or [])
+    except Exception:
+        labels = []
+    try:
+        if bool(getattr(getattr(owner, "backend", None), "_active", False)) and "pipeline" not in labels:
+            labels.append("pipeline")
+    except Exception:
+        pass
+    try:
+        if str(getattr(getattr(getattr(owner, "_editor_widget", None), "sm", None), "state", "") or "") == "ST_PROC" and "editor" not in labels:
+            labels.append("editor")
+    except Exception:
+        pass
+    try:
+        computed = live_nle_projection_scheduler_budget(
+            getattr(owner, "settings", {}) or {},
+            active_labels=labels,
+            runtime_resource=out,
+        )
+    except Exception:
+        computed = {}
+    if computed or existing:
+        merged = dict(computed or {})
+        merged.update(dict(existing or {}))
+        out["live_nle_projection_budget"] = merged
+    return out
 
 
 def _queue_runtime_snapshot(owner: Any) -> dict[str, Any]:

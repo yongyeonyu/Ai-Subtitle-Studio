@@ -33,7 +33,55 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.07 / G3 Live Runtime Observability Strong Evidence Gate
+## Current Handoff - 2026-06-29 v04.01.08 / G3 Real-Media Live Runtime Observability Proof
+
+### Scope
+
+- Completed the representative real-media runtime/status proof slice for `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`.
+- Bumped source-app version and project schema from `04.01.07` to `04.01.08`.
+- Added `docs/release_notes/RELEASE_v04.01.08.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.08`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.08`.
+- NAS HeyDealer MP4/SRT preflight passed at `output/manual_verification/latest/g3_live_nle_real_media_preflight_20260629/reference_fixture_availability.md`.
+- A source-derived first-180s MP4 from the NAS media was used because `tools/remote_verify.py live-nle-proof` accepts a media path but no start/duration window.
+- `core/engine/subtitle_live_editor_feed.py` now counts STT-source-tagged subtitle-preview rows as runtime-reference STT1/STT2 observations while keeping those rows non-authoritative for final save/export.
+- `ui/main/app_command_bridge.py` preserves compact `live_nle_projection_budget` telemetry in normal and busy/fallback status snapshots.
+- `tools/remote_verify.py live-nle-proof` records status timeout/cache/fallback/truncation diagnostics and avoids cached-timeout completion inference.
+- Representative live proof passed at `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md` with `status=passed`, `issues=[]`, `failed_sample_count=0`, `generation_completed=true`, pre-final VAD/STT1/STT2 observations `16/172/44`, no raw leak, no final-authority drift, no projection-budget drift, and `21` snapshots.
+- No visible UI layout/label/color/menu/shortcut change, actual worker fan-out change, STT/VAD algorithm change, STT2 skip, model downgrade, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/engine/subtitle_live_editor_feed.py ui/main/app_command_bridge.py tools/remote_verify.py tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_remote_verify_actions.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- Focused live status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_remote_verify_actions.py` -> `95 passed`.
+- Expanded app-command/NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `117 passed`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- NAS preflight: `output/manual_verification/latest/g3_live_nle_real_media_preflight_20260629/reference_fixture_availability.md`.
+- Live proof: `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`.
+- Direct version assertion -> `APP_VERSION=04.01.08`, `PROJECT_SCHEMA_VERSION=04.01.08`.
+- `git diff --check -- .` -> pass.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-023155-watchdog-handoff-probe.md`.
+- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints; all warned not to overclaim runtime/status proof as final quality/speed/save-reopen proof.
+
+### Remaining Risks
+
+- The same live run saved SRT successfully but then reported `nle_save_export_final_overlap`, repeated deferred-save retries, and needed process termination for cleanup. Keep this guard strict; do not bypass it to make final-export proof pass.
+- G3 still needs same-media quality/speed, save/reopen, final export, and global-canvas acceptance before the broader runtime-visibility gate can close.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G3/G2, first fix or isolate the `nle_save_export_final_overlap` save/export blocker from the NAS-derived live proof run, then rerun same-media save/reopen/final-export evidence.
+- If continuing proof-only work, run a same-media quality/speed benchmark and keep it separate from `live-nle-proof` runtime/status evidence.
+
+## Previous Handoff - 2026-06-29 v04.01.07 / G3 Live Runtime Observability Strong Evidence Gate
 
 ### Scope
 

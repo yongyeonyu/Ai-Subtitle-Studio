@@ -1371,6 +1371,11 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["data"]["status_snapshot_fallback"])
         self.assertEqual(result["data"]["editor_state"], "ST_PROC")
         self.assertIsInstance(result["data"]["guided_snapshot_run"], dict)
+        budget = result["data"]["runtime_resource"]["live_nle_projection_budget"]
+        self.assertEqual(budget["dedicated_worker_count"], 0)
+        self.assertFalse(budget["shares_subtitle_worker_pool"])
+        self.assertTrue(budget["uses_existing_row_snapshots"])
+        self.assertEqual(budget["quality_policy"], "final_authority_unchanged")
 
     def test_dispatch_status_busy_fallback_uses_cached_runtime_resource_only(self):
         owner = _DummyOwner()

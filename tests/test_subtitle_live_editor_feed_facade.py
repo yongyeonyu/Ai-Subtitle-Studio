@@ -187,3 +187,29 @@ def test_live_editor_feed_splits_runtime_stt_tracks_without_promoting_to_final_s
         for track in ("STT1", "STT2", "VAD")
         for row in payload["runtime_tracks"][track]["segments"]
     )
+
+
+def test_live_editor_feed_counts_stt2_source_preview_rows_as_runtime_stt2_track():
+    feed = build_subtitle_live_editor_feed(
+        confirmed_segments=[],
+        stt_preview_segments=[],
+        subtitle_preview_segments=[
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "selected by stt2",
+                "_live_subtitle_preview": True,
+                "stt_selected_source": "STT2",
+                "stt_ensemble_source": "STT2_SELECTIVE_RECHECK",
+            }
+        ],
+    )
+
+    payload = feed.to_dict()
+    status = payload["runtime_track_status"]
+
+    assert status["counts"]["subtitle_preview"] == 1
+    assert status["counts"]["STT2"] == 1
+    assert status["active_tracks"] == ["STT2", "subtitle_preview"]
+    assert payload["runtime_tracks"]["STT2"]["segments"][0]["_nle_save_export_authority"] is False
+    assert payload["final_surface_segments"] == []

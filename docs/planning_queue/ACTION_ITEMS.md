@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.07-source-app
+Document-Version: 04.01.08-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.07`.
+- App version: `04.01.08`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -185,7 +185,7 @@ Rollback:
 
 Goal: Show STT1, STT2, and VAD as live NLE runtime tracks while subtitle generation is running, without slowing the full subtitle conversion path or weakening final subtitle quality.
 
-Status: active planning item. This is a runtime/session visualization and scheduling plan only; it does not approve persisted NLE disk-format cutover, STT2 skipping, model downsizing, quality-gate loosening, UI/UX redesign, or production default cache promotion.
+Status: active quality/save-export gate. The representative real-media live runtime observability proof is complete, but G3 remains open until same-media quality/speed, save/reopen, final export, and UI/app-command responsiveness gates are accepted. This is a runtime/session visualization and scheduling plan only; it does not approve persisted NLE disk-format cutover, STT2 skipping, model downsizing, quality-gate loosening, UI/UX redesign, or production default cache promotion.
 
 Current baseline:
 
@@ -194,6 +194,9 @@ Current baseline:
 - Scheduler-budget telemetry slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040105-g3-live-nle-projection-scheduler-budget-telemetry`.
 - Live runtime observability proof harness slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040106-g3-live-runtime-observability-proof-harness`.
 - Live runtime observability strong-evidence gate slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040107-g3-live-runtime-observability-strong-evidence-gate`.
+- Representative real-media live runtime observability proof slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040108-g3-real-media-live-runtime-observability-proof`.
+- Latest real-media live proof: `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`; `status=passed`, `issues=[]`, `failed_sample_count=0`, `generation_completed=true`, pre-final VAD/STT1/STT2 observations `16/172/44`, no raw leak, no final-authority drift, no projection-budget drift, and `21` snapshots.
+- The same live proof run exposed an existing post-SRT-save `nle_save_export_final_overlap` save/export and deferred-save retry failure. This remains a separate G2/G3 blocker before claiming same-media save/reopen or final-export acceptance.
 - Existing runtime surfaces already preserve live STT preview rows through `_live_stt_preview_segments`, `stt_preview_source=STT1/STT2`, and global-canvas STT lane tests.
 - `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` track metadata. Only `final` carries save/export authority; VAD/STT/subtitle-preview tracks are reference-only.
 - `status`, `ping`, and `guided-subtitle-status` now expose compact `nle_runtime_track_counts` / `nle_runtime_tracks` metadata without raw STT/VAD/subtitle-preview row text or large segment payloads, and UDP compaction preserves the count summary.
@@ -214,7 +217,7 @@ Detailed plan:
 
 3. Resource-balanced parallel scheduling
    - Completed the read-only live projection budget telemetry slice: reserve at least one interactive core where applicable, expose foreground save/export/close and pressure labels, keep projection worker count at `0`, and prove the live display/status path does not take subtitle worker-pool threads.
-   - Continue from the next slice only with a real-media `live-nle-proof` run plus visual/runtime artifact review or a separately measured worker enforcement change; keep STT1 on the current high-quality native path and run STT2/word precision only within selective, quality-preserving budgets.
+   - Real-media `live-nle-proof` runtime/status/snapshot evidence is complete for the current slice. Continue from the next slice only with same-media quality/speed/save-reopen evidence or a separately measured worker enforcement change; keep STT1 on the current high-quality native path and run STT2/word precision only within selective, quality-preserving budgets.
    - On Apple Silicon, describe accelerator use as ANE/GPU/CPU in docs and logs where user-visible. Do not make PyTorch MPS a production default.
    - Avoid full-core aggressive scheduling as a default. Let worker counts ramp only when memory pressure is normal and active runtime labels show no competing foreground save/export/close action.
    - Prevent the live NLE display path from taking threads away from the actual subtitle conversion path. Projection and painting should coalesce updates, reuse existing row snapshots, and drop stale preview frames rather than blocking STT workers.
@@ -222,7 +225,7 @@ Detailed plan:
 4. Performance and quality proof
    - Measure baseline and candidate on the same representative media with non-profile elapsed truth, stage spans, memory pressure, active worker counts, and UI/app-command responsiveness.
    - Required proof includes raw/final/reference counts, quality/text/timing, final invalid/non-monotonic/overlap `0/0/0`, save/reopen stability, global canvas `max_active_segments=1`, and no increase in total subtitle conversion time beyond measurement noise.
-   - Record before/after artifacts under `output/manual_verification/latest/`, including timeline/global-canvas evidence that STT1/STT2/VAD appear progressively during generation.
+   - Record before/after artifacts under `output/manual_verification/latest/`. Runtime/status evidence that STT1/STT2/VAD appear progressively during generation is now available; the next proof must add final quality/speed, save/reopen, final export, and global-canvas acceptance on the same media.
 
 5. Implementation guardrails
    - Implement in narrow slices: first runtime owner-map and read-only projection, then live status feed, then scheduler budget telemetry, then visual/runtime proof.
@@ -249,8 +252,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.07"
-document_version: "04.01.07-source-app"
+app_version: "04.01.08"
+document_version: "04.01.08-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

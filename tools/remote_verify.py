@@ -170,8 +170,12 @@ def _live_nle_generation_completed(data: dict[str, Any]) -> bool:
     stage = str(data.get("generation_stage") or guided.get("last_stage") or guided.get("last_stage_label") or "").strip()
     if stage_key == "completed" or "완료" in stage or "completed" in stage.lower():
         return True
+    if bool(data.get("status_handler_timeout")) or bool(data.get("status_response_cached")):
+        return False
+    explicit_activity_fields = all(key in data for key in ("editor_state", "backend_active", "auto_processing_active"))
     return (
-        bool(guided)
+        explicit_activity_fields
+        and bool(guided)
         and not bool(guided.get("active", False))
         and not bool(data.get("backend_active", False))
         and not bool(data.get("auto_processing_active", False))
@@ -210,6 +214,11 @@ def _live_nle_sample_from_status(
         "latency_sec": round(float(latency_sec or 0.0), 3),
         "ok": bool(result.get("ok", False)) if isinstance(result, dict) else False,
         "error": str(result.get("error", "") or "") if isinstance(result, dict) else "",
+        "status_handler_timeout": bool(data.get("status_handler_timeout", False)),
+        "status_response_cached": bool(data.get("status_response_cached", False)),
+        "status_snapshot_fallback": bool(data.get("status_snapshot_fallback", False)),
+        "status_response_truncated": bool(data.get("status_response_truncated", False)),
+        "status_response_original_bytes": int(data.get("status_response_original_bytes", 0) or 0),
         "editor_state": str(data.get("editor_state") or ""),
         "backend_active": bool(data.get("backend_active", False)),
         "auto_processing_active": bool(data.get("auto_processing_active", False)),
@@ -310,6 +319,18 @@ def _build_live_nle_runtime_proof_report(
         if bool(sample.get("pre_final_active"))
         and not bool((sample.get("live_nle_projection_budget_contract") or {}).get("ok", False))
     ]
+    status_handler_timeout_elapsed = [
+        sample.get("elapsed_sec") for sample in samples if bool(sample.get("status_handler_timeout", False))
+    ]
+    status_response_cached_elapsed = [
+        sample.get("elapsed_sec") for sample in samples if bool(sample.get("status_response_cached", False))
+    ]
+    status_snapshot_fallback_elapsed = [
+        sample.get("elapsed_sec") for sample in samples if bool(sample.get("status_snapshot_fallback", False))
+    ]
+    status_response_truncated_elapsed = [
+        sample.get("elapsed_sec") for sample in samples if bool(sample.get("status_response_truncated", False))
+    ]
     snapshot_files = sorted(str(path.relative_to(output_dir)) for path in snapshot_dir.glob("*.png")) if snapshot_dir.is_dir() else []
     issues: list[str] = []
     if not bool(start_result.get("ok", False)):
@@ -354,6 +375,10 @@ def _build_live_nle_runtime_proof_report(
         "compact_payload_failure_elapsed_sec": compact_payload_failures,
         "final_authority_failure_elapsed_sec": final_authority_failures,
         "budget_failure_elapsed_sec": budget_failures,
+        "status_handler_timeout_elapsed_sec": status_handler_timeout_elapsed,
+        "status_response_cached_elapsed_sec": status_response_cached_elapsed,
+        "status_snapshot_fallback_elapsed_sec": status_snapshot_fallback_elapsed,
+        "status_response_truncated_elapsed_sec": status_response_truncated_elapsed,
         "snapshot_files": snapshot_files,
         "issues": issues,
         "samples": samples,
@@ -420,6 +445,10 @@ def _write_live_nle_runtime_proof(output_dir: Path, report: dict[str, Any]) -> N
             f"- Compact payload failure elapsed samples: `{report.get('compact_payload_failure_elapsed_sec')}`",
             f"- Final-authority failure elapsed samples: `{report.get('final_authority_failure_elapsed_sec')}`",
             f"- Live projection budget failure elapsed samples: `{report.get('budget_failure_elapsed_sec')}`",
+            f"- Status handler timeout elapsed samples: `{report.get('status_handler_timeout_elapsed_sec')}`",
+            f"- Cached status elapsed samples: `{report.get('status_response_cached_elapsed_sec')}`",
+            f"- Status fallback elapsed samples: `{report.get('status_snapshot_fallback_elapsed_sec')}`",
+            f"- Truncated status elapsed samples: `{report.get('status_response_truncated_elapsed_sec')}`",
             f"- Snapshot files: `{report.get('snapshot_files')}`",
             f"- JSONL samples: `observability_samples.jsonl`",
             "",

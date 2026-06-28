@@ -216,6 +216,41 @@ class RemoteVerifyActionTests(unittest.TestCase):
         self.assertTrue(report["generation_completed"])
         self.assertEqual(report["issues"], [])
 
+    def test_live_nle_sample_does_not_infer_completion_from_cached_timeout_status(self):
+        sample = remote_verify._live_nle_sample_from_status(
+            {
+                "ok": True,
+                "data": {
+                    "status_handler_timeout": True,
+                    "status_response_cached": True,
+                    "editor_state": "",
+                    "backend_active": False,
+                    "auto_processing_active": False,
+                    "guided_snapshot_run": {"active": False},
+                    "nle_runtime_track_counts": {"VAD": 1, "STT1": 1, "STT2": 0},
+                    "runtime_resource": {
+                        "live_nle_projection_budget": {
+                            "dedicated_worker_count": 0,
+                            "max_projection_workers": 0,
+                            "shares_subtitle_worker_pool": False,
+                            "uses_existing_row_snapshots": True,
+                            "coalesces_updates": True,
+                            "drops_stale_preview_frames": True,
+                            "quality_policy": "final_authority_unchanged",
+                        }
+                    },
+                },
+            },
+            elapsed_sec=4.0,
+            latency_sec=0.01,
+            poll_index=3,
+        )
+
+        self.assertFalse(sample["generation_completed"])
+        self.assertFalse(sample["pre_final_active"])
+        self.assertTrue(sample["status_handler_timeout"])
+        self.assertTrue(sample["status_response_cached"])
+
     def test_live_nle_proof_blocks_single_pre_final_observation_per_track(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)

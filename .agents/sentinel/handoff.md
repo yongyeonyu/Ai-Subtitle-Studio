@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260629-023155-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-272711-g3-observability-strong-evidence-gate-review-jammini.md`
 - `.agents/sentinel/handoffs/20260629-021822-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-270641-g3-live-runtime-observability-proof-review-jammini.md`

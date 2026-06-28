@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.07-source-app
+Document-Version: 04.01.08-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,23 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.08 G3 Real-Media Live Runtime Observability Proof
+
+Source request: continue remaining action-item execution after owner approval for App Store packaging/signing/upload/metadata work and persisted NLE/UI structure scope; distribute work through Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.08"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.08`.
+3. NAS HeyDealer MP4/SRT availability was refreshed with `tools/verify_reference_fixture_availability.py`; evidence: `output/manual_verification/latest/g3_live_nle_real_media_preflight_20260629/reference_fixture_availability.md`, with media and SRT present, SRT parse OK, `segment_count=615`, `clipped_segment_count=89`, and `ready_for_reference_scored_benchmark=true`.
+4. A first-180s source-derived MP4 was cut from the exact NAS media for `live-nle-proof`, because the live proof command accepts a media path but not a start/duration window. This did not substitute generated audio or fallback WAV.
+5. `core/engine/subtitle_live_editor_feed.py` now counts STT-source-tagged subtitle-preview rows as runtime-reference STT1/STT2 track observations while keeping those rows non-authoritative for final save/export.
+6. `ui/main/app_command_bridge.py` now preserves compact `live_nle_projection_budget` telemetry in normal and busy/fallback runtime-resource snapshots.
+7. `tools/remote_verify.py live-nle-proof` now records status timeout/cache/fallback/truncation diagnostics and refuses to infer generation completion from cached timeout status alone.
+8. The representative real-media live proof passed at `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`: schema `ai_subtitle_studio.live_nle_runtime_proof.v2`, `status=passed`, `issues=[]`, `failed_sample_count=0`, `generation_completed=true`, pre-final VAD/STT1/STT2 observations `16/172/44`, no missing or insufficient tracks, raw leak/final-authority/budget failures all empty, snapshot count `21`, and max runtime counts `VAD=1`, `STT1=146`, `STT2=39`, `subtitle_preview=46`, `final=64`.
+9. The completed proof is runtime/status/snapshot observability evidence only. Same-media quality/speed acceptance, save/reopen stability, and final export behavior remain separate gates.
+10. The same live run exposed an existing `nle_save_export_final_overlap` save/export and deferred-save retry failure after SRT save. That risk was not weakened or bypassed; it remains a follow-up G2/G3 blocker before broader save/reopen or final-export claims.
+11. Jammini route proof was refreshed at `.agents/sentinel/handoffs/20260629-023155-watchdog-handoff-probe.md`, and three sub-agent reviews were used as architecture/QE/editor-workflow guardrails.
+12. Focused verification passed: compile check for touched modules/tests, `tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_remote_verify_actions.py` -> `95 passed`, expanded app-command/NLE guard -> `117 passed`, App Store/bundle guard -> `9 passed`, project/status guard -> `66 passed, 79 deselected`, direct version assertion -> `APP_VERSION=04.01.08` / `PROJECT_SCHEMA_VERSION=04.01.08`, `git diff --check -- .` -> pass, and the representative real-media live proof above -> `passed`.
 
 ## v04.01.07 G3 Live Runtime Observability Strong Evidence Gate
 

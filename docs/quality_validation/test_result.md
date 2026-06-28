@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.08 G3 Real-Media Live Runtime Observability Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G3 representative real-media live runtime/status proof, STT-source preview-row runtime counting, status budget preservation, and version/schema bump.
+- 결과: pass for representative NAS-derived HeyDealer first-180s runtime/status observability. This is not final quality/speed, save/reopen, or final export acceptance.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.08.md`
+  - NAS preflight: `output/manual_verification/latest/g3_live_nle_real_media_preflight_20260629/reference_fixture_availability.md`
+  - Live proof: `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-023155-watchdog-handoff-probe.md`
+- 실제 결과:
+  - App version updated to `04.01.08`.
+  - Project schema version updated to `04.01.08`.
+  - `core/engine/subtitle_live_editor_feed.py` counts STT-source-tagged subtitle-preview rows as runtime-reference STT1/STT2 observations without making them final save/export authority.
+  - `ui/main/app_command_bridge.py` preserves compact `live_nle_projection_budget` telemetry in normal and busy/fallback status snapshots.
+  - `tools/remote_verify.py live-nle-proof` records status timeout/cache/fallback/truncation diagnostics and avoids cached-timeout completion inference.
+  - Live proof passed with `failed_sample_count=0`, `generation_completed=true`, pre-final VAD/STT1/STT2 observations `16/172/44`, no missing or insufficient tracks, no raw leak, no final-authority drift, no projection-budget drift, and `21` snapshots.
+  - The same run exposed post-SRT-save `nle_save_export_final_overlap` plus repeated deferred-save retry failures; this remains a separate blocker and was not bypassed.
+- 검증:
+  - `./venv/bin/python -m py_compile core/engine/subtitle_live_editor_feed.py ui/main/app_command_bridge.py tools/remote_verify.py tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_remote_verify_actions.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_remote_verify_actions.py` -> `95 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `117 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.08`, `PROJECT_SCHEMA_VERSION=04.01.08`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.07 G3 Live Runtime Observability Strong Evidence Gate - 2026-06-29 KST
 
 - 실행 모드: source-app G3 live NLE runtime observability harness guard, stronger pre-final observation gate, JSONL sample artifact, and version/schema bump.

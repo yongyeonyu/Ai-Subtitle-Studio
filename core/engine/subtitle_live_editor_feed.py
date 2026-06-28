@@ -17,6 +17,13 @@ _RUNTIME_TRACK_ROLES = {
     "subtitle_preview": "runtime_reference_only",
     "final": "save_export_render_authority",
 }
+_STT_SOURCE_KEYS = (
+    "stt_preview_source",
+    "stt_selected_source",
+    "stt_source",
+    "stt_ensemble_source",
+    "source",
+)
 
 
 def _copy_rows(rows: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None) -> list[dict[str, Any]]:
@@ -31,15 +38,16 @@ def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _stt_runtime_track(row: dict[str, Any]) -> str:
-    source = str(
-        row.get("stt_preview_source")
-        or row.get("stt_source")
-        or row.get("stt_ensemble_source")
-        or ""
-    ).strip().upper()
-    if source.startswith("STT2"):
+    return _explicit_stt_runtime_track(row) or "STT1"
+
+
+def _explicit_stt_runtime_track(row: dict[str, Any]) -> str | None:
+    source = str(next((row.get(key) for key in _STT_SOURCE_KEYS if row.get(key)), "")).strip().upper()
+    if "STT2" in source:
         return "STT2"
-    return "STT1"
+    if "STT1" in source or source == "STT":
+        return "STT1"
+    return None
 
 
 def _runtime_track_row(row: dict[str, Any], *, track: str) -> dict[str, Any]:
@@ -65,6 +73,9 @@ def _build_runtime_tracks(
         tracks[track].append(_runtime_track_row(row, track=track))
     for row in _sort_rows(subtitle_preview):
         tracks["subtitle_preview"].append(_runtime_track_row(row, track="subtitle_preview"))
+        track = _explicit_stt_runtime_track(row)
+        if track in {"STT1", "STT2"}:
+            tracks[track].append(_runtime_track_row(row, track=track))
     for row in _sort_rows(final_surface):
         tracks["final"].append(_runtime_track_row(row, track="final"))
     return {track: tuple(_sort_rows(rows)) for track, rows in tracks.items()}
