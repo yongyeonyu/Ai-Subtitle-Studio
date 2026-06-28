@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.01 Source-App Checkpoint / App Store Identity Blocker - 2026-06-29 KST
+
+- 실행 모드: source-app version/schema bump, owner-approved App Store packaging lane blocker refresh, NLE top-level shadow metadata closeout, and active G3 planning preservation.
+- 결과: pass for focused NLE persistence guards, render/export parity, snapshot subset, local Apple Development bundle validation, and App Store readiness blocked-state audit.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.01.md`
+  - App Store identity audit: `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`
+  - Current local signing evidence: `output/manual_verification/latest/app_store_owner_approval_identity_check_20260629_0026/current_app_codesign_identity.txt`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-002637-watchdog-handoff-probe.md`
+- 실제 결과:
+  - App version updated to `04.01.01`.
+  - Project schema version updated to `04.01.01`.
+  - App Store submission remains blocked: local keychain has Apple Development signing only; Apple Distribution and 3rd Party Mac Developer Installer identities are missing.
+  - Signed Mac App Store `.pkg`, sandbox smoke, App Store Connect validation, upload, and owner metadata are still missing.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py tools/audit_app_store_readiness.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - Direct version assertion for `APP_VERSION` and `PROJECT_SCHEMA_VERSION` -> `04.01.01` / `04.01.01`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py` -> `8 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `6 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_render_export_parity.py` -> `2 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "snapshot or editor_row_readback_parity"` -> `16 passed, 4 subtests passed`.
+  - `packaging/macos/validate_app_bundle.sh` -> pass for the existing Apple Development signed local bundle.
+  - `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036` -> `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `13`.
+  - `pkgutil --check-signature "dist/macos/AI Subtitle Studio.pkg"` -> blocked because the package does not exist.
+
 ## Documentation Relocation / App Store Launch Planning - 2026-06-28 KST
 
 - 실행 모드: root development-doc relocation, grouped action plan, Mac App Store launch plan, docs consolidation, and path-compatibility fix.

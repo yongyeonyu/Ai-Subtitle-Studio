@@ -103,9 +103,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.00-source-app
+Document-Version: 04.01.01-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-Last-Updated: 2026-06-28
+Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Agent bootstrap, operating rules, documentation map, and new-chat continuation prompt.
 -->
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.00`
-- Latest release checkpoint: `v04.01.00`
+- App version in code: `04.01.01`
+- Latest release checkpoint: `v04.01.01`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -234,19 +234,18 @@ Completed item rule:
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628`
   - result: pass, `failed_count=0`
 - Latest release checkpoint scope:
-  - `v04.01.00` - source-app NLE/Taption editing checkpoint, 04.01.00 version/schema bump, release docs, and code-review fixes.
+  - `v04.01.01` - source-app NLE top-level shadow metadata checkpoint, App Store identity blocker proof refresh, active G3 commercial-editor planning, 04.01.01 version/schema bump, and release docs.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths, but persisted NLE project fields remain gated and legacy save/reopen compatibility stays mandatory.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.00`:
-  - version/schema direct assert: `APP_VERSION=04.01.00`, `PROJECT_SCHEMA_VERSION=04.01.00`
-  - trace/App Store readiness tests: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_app_store_readiness_audit.py` -> `23 passed`
+- Latest focused guard set for `v04.01.01`:
+  - version/schema direct assert: `APP_VERSION=04.01.01`, `PROJECT_SCHEMA_VERSION=04.01.01`
+  - App Store readiness/macOS bundle tests: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`
   - project/status UI subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`
-  - NLE parity subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_render_export_parity.py` -> `67 passed, 4 subtests passed`
-  - timeline/playhead: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py` -> `193 passed`
-  - App Store readiness audit: `output/manual_verification/latest/app_store_readiness_v040100_20260628/app_store_readiness_audit.md` -> `status=blocked`, `app_store_submission_ready=false`
-  - source-app quick QA: `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`
+  - NLE top-level shadow subset: `tests/test_project_nle_persistence_guard.py`, `tests/test_nle_persistence_cutover_audit.py`, `tests/test_project_nle_render_export_parity.py`, and `tests/test_project_nle_snapshot.py -k "snapshot or editor_row_readback_parity"` -> passed in the current checkpoint.
+  - App Store readiness audit: `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md` -> `status=blocked`, `app_store_submission_ready=false`, blocker count `13`
+  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the identity-blocker-only `v04.01.01` checkpoint.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`

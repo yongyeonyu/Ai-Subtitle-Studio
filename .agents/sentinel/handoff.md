@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-233050-app-store-identity-blocker-summary-jammini.md`
+- `.agents/sentinel/handoffs/20260629-002637-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-231205-top-level-nle-shadow-metadata-workflow-yujin.md`
 - `.agents/sentinel/handoffs/20260628-231149-top-level-nle-shadow-metadata-qa-gates-seorin.md`
 - `.agents/sentinel/handoffs/20260628-231132-top-level-nle-shadow-metadata-architecture-hangyeol.md`

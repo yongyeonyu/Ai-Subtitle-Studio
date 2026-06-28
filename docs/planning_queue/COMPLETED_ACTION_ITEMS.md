@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.00-source-app
+Document-Version: 04.01.01-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-28
 Updated-By: Codex
@@ -18,6 +18,18 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.01 Source-App Checkpoint / App Store Identity Blocker
+
+Source request: owner approved App Store packaging/signing/upload/metadata execution, persisted NLE/UI structure changes, requested version increment by `00.00.01`, commit, main push, three agents, Jammini communication, and clean worktree after completed tasks.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.01"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.01`.
+3. `docs/release_notes/RELEASE_v04.01.01.md` was added as the source-app checkpoint note.
+4. Three read-only sub-agents reviewed App Store packaging/signing, owner metadata, and sandbox QA gates. All agreed that the current blocker is missing Apple Distribution and 3rd Party Mac Developer Installer identities, missing signed `.pkg`, missing sandbox smoke, missing App Store Connect validation, and missing owner metadata.
+5. Jammini communication was verified through `.agents/sentinel/handoffs/20260629-002637-watchdog-handoff-probe.md`; Jammini also produced `.agents/sentinel/handoffs/20260628-233050-app-store-identity-blocker-summary-jammini.md` for the App Store blocker summary.
+6. App Store readiness was refreshed at `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`; status remains `blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `13`.
+7. Existing local `.app` validation passed with Apple Development signing only. This is not App Store submission proof and the `.app` must be rebuilt/signed after Distribution identity is installed.
 
 ## Documentation Relocation And App Store Launch Planning
 

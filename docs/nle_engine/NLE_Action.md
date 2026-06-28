@@ -1,7 +1,7 @@
 # NLE_Action.md - Mutable NLE, Cut Boundary, Preview, Trace Execution Plan
 
 <!--
-Document-Version: 04.01.00-nle-action
+Document-Version: 04.01.01-nle-action
 Phase: NLE_MUTABLE_OWNER_AND_CUT_ACCURACY
 Last-Updated: 2026-06-28
 Owner: Dex / Codex

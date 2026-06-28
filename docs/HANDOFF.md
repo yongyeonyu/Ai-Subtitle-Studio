@@ -33,7 +33,39 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 Top-Level NLE Shadow Metadata
+## Current Handoff - 2026-06-29 v04.01.01 / App Store Identity Blocker
+
+### Scope
+
+- Bumped source-app version and project schema from `04.01.00` to `04.01.01`.
+- Added `docs/release_notes/RELEASE_v04.01.01.md`.
+- Refreshed Mac App Store readiness evidence after owner approval for packaging/signing/upload/metadata execution.
+- Created three read-only sub-agent checks for signing/package sequence, owner metadata, and sandbox QA gates.
+- Verified Jammini physical handoff route with `.agents/sentinel/handoffs/20260629-002637-watchdog-handoff-probe.md` and collected App Store blocker summary support.
+- Preserved the active `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling` planning item in `docs/planning_queue/ACTION_ITEMS.md`.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.01`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.01`.
+- App Store status remains `blocked`: local keychain currently exposes only `Apple Development: axony99@gmail.com (5M6F7NN5SW)`.
+- Missing App Store proof surfaces: Apple Distribution signed `.app`, 3rd Party Mac Developer Installer signed `.pkg`, `pkgutil` signature proof, sandbox workflow smoke, App Store Connect validation, upload, and owner metadata/privacy/review inputs.
+- Existing local `.app` validation is Apple Development proof only and must not be treated as a `04.01.01` App Store submission candidate; rebuild after Distribution identity is installed.
+
+### Evidence
+
+- App Store identity audit: `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`
+- Current-signing evidence: `output/manual_verification/latest/app_store_owner_approval_identity_check_20260629_0026/current_app_codesign_identity.txt`
+- Local bundle validation evidence: `output/manual_verification/latest/app_store_owner_approval_identity_check_20260629_0026/local_bundle_validation.txt`
+- Missing package proof: `output/manual_verification/latest/app_store_owner_approval_identity_check_20260629_0026/pkg_signature_check.txt`
+
+### Next Recommended Action
+
+- Install/configure Apple Distribution and 3rd Party Mac Developer Installer identities, then rebuild/sign the `.app`, build the `.pkg`, run package signature verification, run sandbox smoke, and run App Store Connect validation against that exact package.
+- Fill owner metadata: privacy policy URL, privacy answers, export compliance, screenshots, support URL, review notes, age rating, release notes, and broader App Store Connect product fields.
+- Continue NLE from `G3` only in narrow slices: runtime owner-map/read-only projection first, then live status feed, scheduler budget enforcement, and visual/runtime proof.
+
+## Previous Handoff - 2026-06-29 Top-Level NLE Shadow Metadata
 
 ### Scope
 

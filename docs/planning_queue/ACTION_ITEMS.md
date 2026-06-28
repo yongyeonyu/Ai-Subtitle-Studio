@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.00-source-app
+Document-Version: 04.01.01-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,14 +38,14 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.00`.
+- App version: `04.01.01`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
 - Current readiness doc: `docs/APP_STORE_SUBMISSION_READINESS.md`.
-- Latest audit artifact: `output/manual_verification/latest/app_store_owner_approval_readiness_after_packaging_fix_20260628_2250/app_store_readiness_audit.md`.
+- Latest audit artifact: `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`.
 - Latest packaging evidence: `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/`.
-- Current audit state: `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `13`; local Apple Development `.app` signing smoke passed, but App Store Distribution `.app`, signed `.pkg`, sandbox workflow smoke, App Store Connect validation, and owner metadata remain incomplete.
+- Current audit state: `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `13`; local Apple Development `.app` signing smoke passed, but the keychain currently exposes only Apple Development signing, so App Store Distribution `.app`, signed `.pkg`, sandbox workflow smoke, App Store Connect validation, and owner metadata remain incomplete.
 - Developer ID beta `.dmg` remains a separate opt-in track and is not App Store submission proof.
 
 Detailed plan:
@@ -188,6 +188,59 @@ Rollback:
 - If compatibility proof fails, keep legacy subtitle rows as the save/export source and archive the failed NLE attempt.
 - If the close-blocker fix risks weakening `nle_save_export_final_overlap`, rollback the close/deferred-save change first and keep the final-overlap guard strict.
 
+### G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling
+
+Goal: Show STT1, STT2, and VAD as live NLE runtime tracks while subtitle generation is running, without slowing the full subtitle conversion path or weakening final subtitle quality.
+
+Status: active planning item. This is a runtime/session visualization and scheduling plan only; it does not approve persisted NLE disk-format cutover, STT2 skipping, model downsizing, quality-gate loosening, UI/UX redesign, or production default cache promotion.
+
+Current baseline:
+
+- Existing runtime surfaces already preserve live STT preview rows through `_live_stt_preview_segments`, `stt_preview_source=STT1/STT2`, and global-canvas STT lane tests.
+- Existing project state can store STT candidate tracks and VAD/voice activity as separate diagnostic/reference rows, while final subtitle rows remain the save/export authority.
+- Existing Apple Silicon worker planning lives under `core/runtime/multi_process.py` and `core/runtime/subtitle_resource_manager.py`, with `RuntimeResourceCoordinator`, `apply_apple_m_subtitle_pipeline_plan(...)`, active runtime labels, memory pressure snapshots, and benchmark-locked cut-boundary worker counts.
+- Prior lessons prohibit treating full-parallel STT, forced smaller STT windows, or speed-only native adoption as safe defaults without quality parity and real-media proof.
+
+Detailed plan:
+
+1. Runtime track ownership map
+   - Define separate runtime-only NLE lanes for `VAD`, `STT1`, `STT2`, and `final`.
+   - Keep VAD/STT lanes as provisional/reference tracks; only final rows remain authoritative for save/export, render/export, and persisted project compatibility.
+   - Ensure STT1/STT2/VAD rows can be visible while generation is still running without mixing them into final overlay rows or subtitle save rows.
+
+2. Live projection and status feed
+   - Route incremental VAD spans, STT1 preview rows, and STT2 recheck rows into an NLE runtime projection surface that can update the timeline/global canvas progressively.
+   - Use compact progress/status events for automation and logs; do not put unbounded stage history or large candidate payloads into `status`/`ping` responses.
+   - Preserve existing UI/UX labels/layout unless the owner explicitly asks for a visible redesign. Any new lane visibility must be feature-gated and provable by screenshots or automation snapshots.
+
+3. Resource-balanced parallel scheduling
+   - Create a shared generation scheduler budget before launching VAD/STT work: reserve at least one interactive core for UI, app commands, cancel/quit, and save; assign bounded CPU workers to VAD/audio prep; keep STT1 on the current high-quality native path; run STT2/word precision only within selective, quality-preserving budgets.
+   - On Apple Silicon, describe accelerator use as ANE/GPU/CPU in docs and logs where user-visible. Do not make PyTorch MPS a production default.
+   - Avoid full-core aggressive scheduling as a default. Let worker counts ramp only when memory pressure is normal and active runtime labels show no competing foreground save/export/close action.
+   - Prevent the live NLE display path from taking threads away from the actual subtitle conversion path. Projection and painting should coalesce updates, reuse existing row snapshots, and drop stale preview frames rather than blocking STT workers.
+
+4. Performance and quality proof
+   - Measure baseline and candidate on the same representative media with non-profile elapsed truth, stage spans, memory pressure, active worker counts, and UI/app-command responsiveness.
+   - Required proof includes raw/final/reference counts, quality/text/timing, final invalid/non-monotonic/overlap `0/0/0`, save/reopen stability, global canvas `max_active_segments=1`, and no increase in total subtitle conversion time beyond measurement noise.
+   - Record before/after artifacts under `output/manual_verification/latest/`, including timeline/global-canvas evidence that STT1/STT2/VAD appear progressively during generation.
+
+5. Implementation guardrails
+   - Implement in narrow slices: first runtime owner-map and read-only projection, then live status feed, then scheduler budget enforcement, then visual/runtime proof.
+   - Keep caches opt-in unless representative real-media evidence and owner review approve default promotion.
+   - If the display path causes generation slowdown, command timeouts, memory pressure regression, or final subtitle drift, disable the live NLE track projection before changing STT/VAD quality policy.
+
+Acceptance gates:
+
+- During a live generation run, VAD, STT1, and STT2 progress must be observable as separate NLE runtime tracks or status-backed projected lanes before final generation completes.
+- Full subtitle conversion speed must not regress versus the same-media baseline; any extra display/projection overhead must be measured and bounded.
+- Final subtitle quality gates remain strict: no invalid durations, non-monotonic rows, final overlaps, final/STT lane mixing, or save/reopen drift.
+- UI/app command responsiveness must survive while workers are active: `status`, cancel/quit, save, and close-path checks must not starve behind STT/VAD preview updates.
+
+Rollback:
+
+- If resource sharing slows generation or raises memory pressure, disable live NLE track projection first and return to the prior generation scheduler.
+- If STT/VAD preview rows contaminate final save/export or render/export surfaces, revert the projection bridge and keep final rows as the only authoritative output.
+
 ## Parked Candidates
 
 No parked candidates are currently open. Any new candidate must create a fresh
@@ -196,8 +249,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.00"
-document_version: "04.01.00-source-app"
+app_version: "04.01.01"
+document_version: "04.01.01-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."
