@@ -33,6 +33,40 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 Active Queue Gate Refresh
+
+### Scope
+
+- Refreshed the two remaining active `ACTION_ITEMS.md` gates without changing runtime behavior.
+- Confirmed completed action-item history remains separated in `COMPLETED_ACTION_ITEMS.md`; `ACTION_ITEMS.md` keeps only active gates, owner blockers, and archive pointers.
+- No code, UI/UX, subtitle generation, STT/STT2, word precision, save/load, render/export, packaging, signing, upload, notarization, App Store Connect, or DMG behavior changed.
+
+### Results
+
+- STT collect-cache refresh: `output/manual_verification/latest/stt_cache_backfill_gate_refresh_20260628/stt_cache_backfill_readiness.md`
+- STT result: `production_default_recommendation=hold_default_off`, `current_real_inputs_available=false`, defaults remain `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false`.
+- STT blockers: all STT1, STT2/word, and combined collect-cache families still require representative real-media cache-write plus cache-hit replay on the NAS HeyDealer first-180s fixture.
+- App Store refresh: `output/manual_verification/latest/app_store_readiness_gate_refresh_20260628/app_store_readiness_audit.md`
+- App Store result: `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `14`, submission content status `blocked`, pending owner-input items `8/8`, Apple Distribution and installer signing identities not configured.
+- No parked candidates remain open.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-093036-watchdog-handoff-probe.md`
+- Blocker scout: `.agents/sentinel/handoffs/20260628-093300-active-queue-blocker-refresh.md`
+- Dex classification: accept the `block` verdict. There is no safe remaining implementation slice until the NAS HeyDealer media/reference SRT returns or the owner explicitly approves App Store packaging/signing/upload/metadata steps.
+
+### Verification
+
+- `find /Volumes -maxdepth 5 \( -iname '*헤이딜러*' -o -iname '*heydealer*' \) 2>/dev/null | head -40` -> no visible representative NAS HeyDealer media.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_gate_refresh_20260628 --representative-media '/Volumes/photo/헤이딜러_최종.MP4' --representative-reference-srt '/Volumes/photo/헤이딜러_최종.srt'` -> pass, blocked/hold report written.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_gate_refresh_20260628` -> pass, blocked readiness report written.
+
+### Next Recommended Action
+
+- If the NAS is turned back on, run the STT cache backfill report's preflight, cache-write, cache-hit, write acceptance, hit acceptance, and readiness-refresh sequence before considering collect-cache default promotion.
+- If the owner wants App Store progress, first provide/approve privacy policy URL, App Privacy answers, export compliance answers, screenshots, support URL, app review notes, age rating answers, and release notes, or explicitly approve packaging/signing/validation steps with the required Apple signing identities.
+
 ## Current Handoff - 2026-06-28 Playhead Dirty-Rect Candidate Gate
 
 ### Scope

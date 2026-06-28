@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-093300-active-queue-blocker-refresh.md`
+- `.agents/sentinel/handoffs/20260628-093036-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-092600-nle-playhead-dirty-rect-scout.md`
 - `.agents/sentinel/handoffs/20260628-092519-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-091900-app-command-ack-cleanup-scout.md`

@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Active Queue Gate Refresh - 2026-06-28 KST
+
+- 실행 모드: non-destructive active gate refresh after all parked candidates were closed.
+- 결과: blocked by external prerequisites; no implementation slice remains safe without NAS media/reference SRT or owner-approved App Store submission steps.
+- 저장 위치:
+  - STT cache backfill refresh: `output/manual_verification/latest/stt_cache_backfill_gate_refresh_20260628/stt_cache_backfill_readiness.md`
+  - App Store readiness refresh: `output/manual_verification/latest/app_store_readiness_gate_refresh_20260628/app_store_readiness_audit.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-093036-watchdog-handoff-probe.md`
+  - Jammini blocker scout: `.agents/sentinel/handoffs/20260628-093300-active-queue-blocker-refresh.md`
+- STT 실제 감사 결과:
+  - `production_default_recommendation=hold_default_off`.
+  - `current_real_inputs_available=false`.
+  - Defaults remain `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false`.
+  - STT1, STT2/word, and combined collect-cache families all remain `hold_real_media_backfill_required` with missing representative real-media cache-write and cache-hit replay.
+- App Store 실제 감사 결과:
+  - `status=blocked`.
+  - `local_packaging_ready=true`.
+  - `app_store_submission_ready=false`.
+  - blocker count `14`, `submission_content_audit.status=blocked`, pending owner-input items `8/8`, drafted item count `8`.
+  - Apple Distribution codesign identity and installer identity are not configured.
+- 검증:
+  - `find /Volumes -maxdepth 5 \( -iname '*헤이딜러*' -o -iname '*heydealer*' \) 2>/dev/null | head -40` -> no visible representative NAS HeyDealer media.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_backfill_gate_refresh_20260628 --representative-media '/Volumes/photo/헤이딜러_최종.MP4' --representative-reference-srt '/Volumes/photo/헤이딜러_최종.srt'` -> pass, blocked/hold report written.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_gate_refresh_20260628` -> pass, blocked readiness report written.
+
 ## Playhead Dirty-Rect Candidate Gate - 2026-06-28 KST
 
 - 실행 모드: parked candidate fresh quality gate; no runtime repaint behavior change.
