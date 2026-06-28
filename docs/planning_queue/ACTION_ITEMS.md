@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.10-source-app
+Document-Version: 04.01.11-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.10`.
+- App version: `04.01.11`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -199,8 +199,10 @@ Current baseline:
 - Representative real-media live runtime observability proof slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040108-g3-real-media-live-runtime-observability-proof`.
 - Final-overlap deferred-save retry guard slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040109-g3g2-final-overlap-deferred-save-retry-guard`.
 - Final save/export micro-overlap shared-boundary repair slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040110-g2g3-final-save-export-micro-overlap-shared-boundary-repair`.
+- Same-media benchmark acceptance and editor-sequence proof-harness guard slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040111-g3-same-media-benchmark-acceptance-and-editor-sequence-guard`.
 - Latest real-media live proof: `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`; `status=passed`, `issues=[]`, `failed_sample_count=0`, `generation_completed=true`, pre-final VAD/STT1/STT2 observations `16/172/44`, no raw leak, no final-authority drift, no projection-budget drift, and `21` snapshots.
 - The same live proof run exposed an existing post-SRT-save `nle_save_export_final_overlap` save/export failure. The `v04.01.09` guard stops that failure from causing repeated deferred-save retries, and the `v04.01.10` slice repairs the observed tiny live-SRT quantization overlap for final save/export projection. Full same-media save/reopen, final-export, quality/speed, and global-canvas acceptance remain separate G2/G3 proof gates.
+- The `v04.01.11` same-media benchmark proof accepted the NAS HeyDealer 0-180s High-mode run with final `0/0/0`, save/reopen stable `true`, and global max active `1`, but app-command save/export proof remains HOLD because the guarded `editor-sequence` attempt recorded `open_app_unreachable`.
 - Existing runtime surfaces already preserve live STT preview rows through `_live_stt_preview_segments`, `stt_preview_source=STT1/STT2`, and global-canvas STT lane tests.
 - `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` track metadata. Only `final` carries save/export authority; VAD/STT/subtitle-preview tracks are reference-only.
 - `status`, `ping`, and `guided-subtitle-status` now expose compact `nle_runtime_track_counts` / `nle_runtime_tracks` metadata without raw STT/VAD/subtitle-preview row text or large segment payloads, and UDP compaction preserves the count summary.
@@ -228,8 +230,8 @@ Detailed plan:
 
 4. Performance and quality proof
    - Measure baseline and candidate on the same representative media with non-profile elapsed truth, stage spans, memory pressure, active worker counts, and UI/app-command responsiveness.
-   - Required proof includes raw/final/reference counts, quality/text/timing, final invalid/non-monotonic/overlap `0/0/0`, save/reopen stability, global canvas `max_active_segments=1`, and no increase in total subtitle conversion time beyond measurement noise.
-   - Record before/after artifacts under `output/manual_verification/latest/`. Runtime/status evidence that STT1/STT2/VAD appear progressively during generation is now available; the next proof must add final quality/speed, save/reopen, final export, and global-canvas acceptance on the same media.
+   - Required proof includes raw/final/reference counts, quality/text/timing, final invalid/non-monotonic/overlap `0/0/0`, save/reopen stability, global canvas `max_active_segments=1`, and no increase in total subtitle conversion time beyond measurement noise. The same-media benchmark part passed in `v04.01.11`; the remaining proof must add app-command save/project/SRT/video export, reopened project state, export artifact bytes, and UI/app-command responsiveness on the same media.
+   - Record before/after artifacts under `output/manual_verification/latest/`. Runtime/status evidence that STT1/STT2/VAD appear progressively during generation is now available; same-media benchmark acceptance is now available; the next proof must add final app-command save/export/reopen evidence.
 
 5. Implementation guardrails
    - Implement in narrow slices: first runtime owner-map and read-only projection, then live status feed, then scheduler budget telemetry, then visual/runtime proof.
@@ -256,8 +258,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.10"
-document_version: "04.01.10-source-app"
+app_version: "04.01.11"
+document_version: "04.01.11-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

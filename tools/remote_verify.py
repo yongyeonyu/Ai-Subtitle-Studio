@@ -19,6 +19,14 @@ from tools.automation_command_client import send_app_command_with_readiness_retr
 _LIVE_NLE_TRACK_ORDER = ("VAD", "STT1", "STT2", "subtitle_preview", "final")
 _LIVE_NLE_REQUIRED_RUNTIME_TRACKS = ("VAD", "STT1", "STT2")
 _LIVE_NLE_DEFAULT_MIN_PRE_FINAL_OBSERVATIONS = 2
+_EDITOR_SEQUENCE_POST_STEP_STATUS_TIMEOUT_SEC = 4.0
+_EDITOR_SEQUENCE_SNAPSHOT_TIMEOUT_SEC = 8.0
+_EDITOR_SEQUENCE_ARTIFACT_COMMANDS = {
+    "capture-active-dialog",
+    "capture-dictionary-snapshot",
+    "export-subtitles",
+    "export-subtitle-video",
+}
 
 
 def _default_output_dir(label: str) -> Path:
@@ -60,6 +68,25 @@ def _capture_status(timeout: float) -> dict[str, Any]:
         return _send("status", timeout=timeout)
     except OSError as exc:
         return {"ok": False, "error": "app_unreachable", "message": str(exc), "data": {}}
+
+
+def _bounded_probe_timeout(timeout: float, *, cap: float) -> float:
+    return max(1.0, min(float(timeout or 1.0), float(cap)))
+
+
+def _result_artifact_paths(command: str, result: dict[str, Any] | None) -> list[str]:
+    if command != "export-subtitle-video" or not isinstance(result, dict):
+        return []
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    paths: list[str] = []
+    for row in list(data.get("outputs") or []):
+        if not isinstance(row, dict):
+            continue
+        mov_output = row.get("mov_output") if isinstance(row.get("mov_output"), dict) else {}
+        path = str(mov_output.get("path", "") or "").strip()
+        if path:
+            paths.append(path)
+    return paths
 
 
 def _result_data(result: dict[str, Any] | None) -> dict[str, Any]:
@@ -616,7 +643,7 @@ def _record_step(
     command: str | None = None,
     path: str = "",
     options: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "name": step_name,
         "command": command or "",
@@ -631,26 +658,51 @@ def _record_step(
             entry["result"] = _send(command, timeout=timeout, path=path, options=options)
         except OSError as exc:
             entry["result"] = {"ok": False, "error": "app_unreachable", "message": str(exc), "data": {}}
-        if path:
+        artifact_paths = [path] if path else []
+        artifact_paths.extend(_result_artifact_paths(command, entry.get("result")))
+        if artifact_paths:
             # QA hot path: command success is not enough for capture/export
             # steps; the artifact must exist so false passes do not hide UI loss.
-            if command in {"capture-active-dialog", "capture-dictionary-snapshot", "export-subtitles"}:
-                _wait_for_snapshot(path, timeout_sec=max(4.0, timeout))
-            artifact = _file_state(path)
-            entry.update(artifact)
-            if command in {"capture-active-dialog", "capture-dictionary-snapshot", "export-subtitles"}:
+            if command in _EDITOR_SEQUENCE_ARTIFACT_COMMANDS:
+                for artifact_path in artifact_paths:
+                    _wait_for_snapshot(artifact_path, timeout_sec=max(4.0, timeout))
+            artifacts = [_file_state(artifact_path) for artifact_path in artifact_paths]
+            if len(artifacts) == 1:
+                entry.update(artifacts[0])
+            entry["artifacts"] = artifacts
+            if command in _EDITOR_SEQUENCE_ARTIFACT_COMMANDS:
                 result = dict(entry.get("result") or {})
-                if bool(result.get("ok")) and (not artifact["path_exists"] or int(artifact["path_size"] or 0) <= 0):
+                missing = [
+                    artifact
+                    for artifact in artifacts
+                    if not artifact["path_exists"] or int(artifact["path_size"] or 0) <= 0
+                ]
+                if bool(result.get("ok")) and missing:
                     result["ok"] = False
                     result["error"] = "artifact_missing"
-                    result["message"] = artifact["path"]
+                    result["message"] = ", ".join(str(item.get("path", "")) for item in missing)
                     entry["result"] = result
     else:
         entry["result"] = {"ok": True, "message": "record_only", "data": {}}
-    entry["status"] = _capture_status(timeout)
+    entry["status"] = _capture_status(
+        _bounded_probe_timeout(timeout, cap=_EDITOR_SEQUENCE_POST_STEP_STATUS_TIMEOUT_SEC)
+    )
     if snapshot:
-        entry["snapshot"] = _capture_snapshot(output_dir, _safe_slug(step_name), timeout=timeout)
+        entry["snapshot"] = _capture_snapshot(
+            output_dir,
+            _safe_slug(step_name),
+            timeout=_bounded_probe_timeout(timeout, cap=_EDITOR_SEQUENCE_SNAPSHOT_TIMEOUT_SEC),
+        )
     report.setdefault("steps", []).append(entry)
+    _write_report_files(output_dir, report)
+    return entry
+
+
+def _step_app_unreachable(entry: dict[str, Any] | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
+    return str(result.get("error", "") or "") == "app_unreachable"
 
 
 def _selection_options(args: argparse.Namespace) -> dict[str, Any]:
@@ -841,7 +893,7 @@ def _run_editor_sequence(args: argparse.Namespace) -> int:
         open_command, open_target = "open-project", str(Path(args.open_project).resolve())
 
     if open_command:
-        _record_step(
+        open_entry = _record_step(
             report,
             output_dir,
             "open",
@@ -850,6 +902,26 @@ def _run_editor_sequence(args: argparse.Namespace) -> int:
             command=open_command,
             path=open_target,
         )
+        if _step_app_unreachable(open_entry):
+            report["aborted"] = True
+            report["abort_reason"] = "open_app_unreachable"
+            report["final_status"] = _capture_status(
+                _bounded_probe_timeout(args.timeout, cap=_EDITOR_SEQUENCE_POST_STEP_STATUS_TIMEOUT_SEC)
+            )
+            _write_report_files(output_dir, report)
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "output_dir": str(output_dir),
+                        "report_path": str(output_dir / "report.json"),
+                        "abort_reason": report["abort_reason"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
         time.sleep(max(0.0, float(args.settle_sec or 0.0)))
 
     _record_step(report, output_dir, "initial", timeout=args.timeout, snapshot=args.snapshot_each_step)

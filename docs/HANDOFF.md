@@ -33,7 +33,55 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.10 / G2-G3 Final Save-Export Micro-Overlap Shared-Boundary Repair
+## Current Handoff - 2026-06-29 v04.01.11 / G3 Same-Media Benchmark Acceptance And Editor-Sequence Guard
+
+### Scope
+
+- Completed the G3 same-media benchmark acceptance and editor-sequence proof-harness guard slice.
+- Bumped source-app version and project schema from `04.01.10` to `04.01.11`.
+- Added `docs/release_notes/RELEASE_v04.01.11.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.11`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.11`.
+- NAS HeyDealer original MP4/SRT preflight passed for the `0-180s` reference window.
+- Current-head High-mode benchmark was accepted with elapsed `45.671s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808`, final invalid/non-monotonic/overlap `0/0/0`, final stable `true`, final last end/duration bound `180.0/180.0`, final short/long `0/0`, global max active `1`, and global stable `true`.
+- STT worker timeout audit reported `timeout_detected=false`.
+- `tools/remote_verify.py editor-sequence` now flushes reports after each step, caps post-step status/snapshot probes, validates returned `export-subtitle-video` MOV artifacts, and aborts immediately after an `open-media` `app_unreachable` result.
+- Guarded app-command proof attempt produced `abort_reason=open_app_unreachable`; app-command save/export/reopen proof remains open.
+- No visible UI layout/label/color/menu/shortcut change, STT/VAD algorithm change, worker fan-out change, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- Focused remote-verify guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py -k "editor_sequence or export_subtitle_video_step or capture_snapshot"` -> `7 passed, 6 deselected`.
+- Full remote-verify guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `13 passed`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.11`, `PROJECT_SCHEMA_VERSION=04.01.11`.
+- Preflight: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629_preflight/reference_fixture_availability.md`.
+- Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260629_070403/benchmark_results.json`.
+- Acceptance: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/acceptance/reference_benchmark_acceptance.md` -> `accepted=true`.
+- Timeout audit: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/timeout_audit/stt_worker_timeout_audit.md` -> `timeout_detected=false`.
+- Guarded app-command proof attempt: `output/manual_verification/latest/g3_same_media_app_commands_v040111_20260629_guarded/report.md` -> `open-media ok=false`, `abort_reason=open_app_unreachable`.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md`.
+- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints; all warned not to overclaim benchmark/runtime proof as full app-command final export acceptance.
+
+### Remaining Risks
+
+- G3 still needs reachable app automation bridge proof for same-media `open-media`, `save-project`, `save-subtitles`, `export-subtitles`, `export-subtitle-video`, reopened project state, export artifact bytes, and UI/app-command responsiveness.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G3, first launch or connect the app automation bridge, rerun `tools/remote_verify.py editor-sequence` against the same live media, and require nonzero SRT/MOV artifact bytes plus status responsiveness before claiming app-command acceptance.
+- Keep `live-nle-proof`, same-media benchmark acceptance, and app-command save/export proof as separate evidence surfaces.
+
+## Previous Handoff - 2026-06-29 v04.01.10 / G2-G3 Final Save-Export Micro-Overlap Shared-Boundary Repair
 
 ### Scope
 

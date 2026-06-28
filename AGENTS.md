@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.10-source-app
+Document-Version: 04.01.11-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.10`
-- Latest release checkpoint: `v04.01.10`
+- App version in code: `04.01.11`
+- Latest release checkpoint: `v04.01.11`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -234,28 +234,27 @@ Completed item rule:
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628`
   - result: pass, `failed_count=0`
 - Latest release checkpoint scope:
-  - `v04.01.10` - source-app G2/G3 final save/export micro-overlap shared-boundary repair, direct SRT/export-subtitles projection routing, 04.01.10 version/schema bump, and release docs.
+  - `v04.01.11` - source-app G3 same-media benchmark acceptance, editor-sequence proof-harness guard, 04.01.11 version/schema bump, and release docs. Full app-command save/reopen/final-export proof remains open because the guarded app-command attempt recorded `open_app_unreachable`.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths, but persisted NLE project fields remain gated and legacy save/reopen compatibility stays mandatory.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.10`:
-  - micro-overlap compile: `./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py ui/editor/editor_save_manager.py ui/main/app_command_bridge_handlers.py tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py tests/test_app_command_bridge.py tests/test_macos_bundle_runtime_paths.py` -> pass
-  - focused save/export micro-overlap guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "save_export_cutover or micro_overlap"` -> `8 passed, 7 deselected`
-  - focused project asset guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_assets.py -k "externalize_project_text_assets"` -> `5 passed, 3 deselected`
-  - focused autosave/SRT guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_autosave_cleanup.py -k "persist_editor_srts or deferred_project_save or close_flush_failure"` -> `9 passed, 43 deselected`
-  - focused app-command export guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "export_subtitles_command or save_subtitles_command or status"` -> `22 passed, 59 deselected`
-  - combined NLE save/export/autosave/app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py tests/test_app_command_bridge.py` -> `156 passed`
+- Latest focused guard set for `v04.01.11`:
+  - editor-sequence guard compile: `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py tests/test_macos_bundle_runtime_paths.py` -> pass
+  - focused remote-verify guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py -k "editor_sequence or export_subtitle_video_step or capture_snapshot"` -> `7 passed, 6 deselected`
+  - full remote-verify guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `13 passed`
+  - same-media NAS preflight: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629_preflight/reference_fixture_availability.md` -> ready `true`
+  - same-media benchmark artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260629_070403/benchmark_results.json`
+  - same-media acceptance: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/acceptance/reference_benchmark_acceptance.md` -> `accepted=true`, elapsed `45.671s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808`, final invalid/non-monotonic/overlap `0/0/0`, final stable `true`, final last end/duration bound `180.0/180.0`, global max active `1`, global stable `true`
+  - timeout audit: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/timeout_audit/stt_worker_timeout_audit.md` -> `timeout_detected=false`
+  - guarded app-command attempt: `output/manual_verification/latest/g3_same_media_app_commands_v040111_20260629_guarded/report.md` -> `aborted=true`, `abort_reason=open_app_unreachable`
   - App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`
   - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`
-  - direct version assertion: `APP_VERSION=04.01.10`, `PROJECT_SCHEMA_VERSION=04.01.10`
+  - direct version assertion: `APP_VERSION=04.01.11`, `PROJECT_SCHEMA_VERSION=04.01.11`
   - `git diff --check -- .` -> pass
-  - Jammini probe: `.agents/sentinel/handoffs/20260629-032124-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
-  - real SRT projection artifact: `output/manual_verification/latest/nle_save_export_micro_overlap_v040110_20260629/micro_overlap_report.md` -> source/projected `64/64`, overlap `1 -> 0`, repaired row count `1`
-  - project-5 projection artifact: `output/manual_verification/latest/nle_save_export_micro_overlap_v040110_20260629/project5_micro_overlap_report.md` -> source/projected `170/170`, repair count `2`, projected overlap count `0`
-  - three sub-agent reviews converged on a narrow fix: repair only tiny SRT/frame-quantization final save/export overlaps, keep `nle_save_export_final_overlap` strict for broader or collapse-risk overlaps, do not drop rows, and do not add visible UI changes.
-  - full same-media save/reopen/final-export acceptance remains HOLD until quality/speed, final export, global-canvas, and app-command responsiveness are reproved on the same media.
-  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused micro-overlap `v04.01.10` checkpoint.
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
+  - three sub-agent reviews converged on a narrow proof boundary: accept the same-media benchmark/timeout proof, keep app-command final export acceptance on HOLD until the bridge is reachable and save/project/SRT/video export plus reopened state and artifact bytes are proven.
+  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused editor-sequence `v04.01.11` checkpoint.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`
@@ -269,7 +268,7 @@ Completed item rule:
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
 - Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, and `G3 Realtime NLE STT/VAD`.
-- Latest completed action-item slice: `v04.01.10 G2/G3 Final Save-Export Micro-Overlap Shared-Boundary Repair`.
+- Latest completed action-item slice: `v04.01.11 G3 Same-Media Benchmark Acceptance And Editor-Sequence Guard`.
 - Current G1 latency evidence snapshot:
   - latest generated-video direct validation evidence: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
   - strict duration-bound follow-up: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`
@@ -469,7 +468,7 @@ Completed item rule:
 - The completed internal NLE baseline is a source-app domain/adapter layer only. It must not reopen native migration, Swift rewrite, QML migration, or visible Premiere-style UI work without explicit owner approval.
 - App Store submission is still blocked despite the local packaging skeleton passing audit; signed `.app`, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner-provided metadata are missing.
 - The latest G3 real-media live proof passed as runtime/status observability only. It is not same-media quality/speed, save/reopen, or final export proof.
-- The latest G3 live run exposed `nle_save_export_final_overlap` after SRT save. The `v04.01.09` slice stops that nonretryable final-overlap failure from causing repeated deferred-save retries, and the `v04.01.10` slice repairs the observed tiny live-SRT quantization overlap for final save/export projection. Same-media quality/speed, save/reopen, final export, global-canvas, and app-command responsiveness proof remain open blockers.
+- The latest G3 live run exposed `nle_save_export_final_overlap` after SRT save. The `v04.01.09` slice stops that nonretryable final-overlap failure from causing repeated deferred-save retries, the `v04.01.10` slice repairs the observed tiny live-SRT quantization overlap for final save/export projection, and the `v04.01.11` slice accepts same-media benchmark/timeout proof while hardening the editor-sequence harness. App-command save/reopen/final-export proof remains open because the guarded attempt recorded `open_app_unreachable`.
 - Always re-check `git status` before widening a follow-up patch.
 
 ## Narrow Next Item
@@ -480,7 +479,7 @@ Use `docs/planning_queue/ACTION_ITEMS.md` as the executable queue. The current n
 2. Also read `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040104-g3-compact-live-status-feed`.
 3. Also read `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040105-g3-live-nle-projection-scheduler-budget-telemetry`.
 4. The completed first three G3 slices establish read-only runtime track metadata, final-authority guards, compact status/ping count exposure, and zero-worker live projection budget telemetry. They do not add visible UI strips, actual worker fan-out changes, persisted disk-format cutover, STT2 skipping, or cache default promotion.
-5. The real-media runtime/status proof slice is complete at `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`, the deferred-save retry churn for nonretryable `nle_save_export_final_overlap` is closed in `v04.01.09`, and the observed tiny live-SRT save/export quantization overlap is repaired in `v04.01.10`. Next safe slice is same-media quality/speed/save-reopen/final-export/global-canvas proof or another strictly bounded final-surface defect, with app command responsiveness, no raw status payload leakage, no conversion-time regression, and no final-authority weakening as hard gates.
+5. The real-media runtime/status proof slice is complete at `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`, the deferred-save retry churn for nonretryable `nle_save_export_final_overlap` is closed in `v04.01.09`, the observed tiny live-SRT save/export quantization overlap is repaired in `v04.01.10`, and same-media benchmark/timeout proof plus editor-sequence harness hardening is complete in `v04.01.11`. Next safe slice is app-command save/project/SRT/video export, reopened project state, export artifact bytes, and responsiveness proof on the same media, or another strictly bounded final-surface defect, with no raw status payload leakage, no conversion-time regression, and no final-authority weakening as hard gates.
 6. Preserve final authority: VAD/STT runtime rows must not enter final overlay, global canvas final rows, save/export rows, or persisted compatibility rows.
 7. If widening into visible timeline/global-canvas UI, require a fresh owner-approved UI scope, screenshots or automation snapshots, and proof that app commands, cancel/quit, save, and close do not starve behind preview updates.
 8. G0 App Store remains externally blocked on Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata. G1 cache/default promotion remains owner-review gated.

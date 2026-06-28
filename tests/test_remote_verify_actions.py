@@ -134,6 +134,88 @@ class RemoteVerifyActionTests(unittest.TestCase):
         self.assertFalse(result["path_exists"])
         self.assertEqual(result["path_size"], 0)
 
+    def test_editor_sequence_step_caps_post_status_and_snapshot_probe_timeouts(self):
+        report: dict = {"steps": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            with patch("tools.remote_verify._capture_status", return_value={"ok": True}) as status_mock:
+                with patch("tools.remote_verify._send", return_value={"ok": True, "data": {}}) as send_mock:
+                    with patch(
+                        "tools.remote_verify._capture_snapshot",
+                        return_value={"ok": False, "path_exists": False, "path_size": 0},
+                    ) as snapshot_mock:
+                        with patch("tools.remote_verify._write_report_files") as write_mock:
+                            remote_verify._record_step(
+                                report,
+                                output_dir,
+                                "export-video",
+                                timeout=240.0,
+                                snapshot=True,
+                                command="export-subtitle-video",
+                            )
+
+        self.assertEqual(send_mock.call_args.kwargs["timeout"], 240.0)
+        self.assertEqual([call.args[0] for call in status_mock.call_args_list], [4.0, 4.0])
+        self.assertEqual(snapshot_mock.call_args.kwargs["timeout"], 8.0)
+        write_mock.assert_called_once()
+
+    def test_editor_sequence_aborts_after_open_media_app_unreachable(self):
+        recorded: list[str] = []
+
+        def _fake_record_step(report, output_dir, step_name, **kwargs):
+            recorded.append(step_name)
+            entry = {
+                "name": step_name,
+                "command": kwargs.get("command", ""),
+                "result": {"ok": False, "error": "app_unreachable"},
+            }
+            report.setdefault("steps", []).append(entry)
+            return entry
+
+        with tempfile.TemporaryDirectory() as tmp:
+            args = _args(tmp, ["save-subtitles", "export-subtitles"])
+            args.open_media = "/tmp/media.mp4"
+            with patch("tools.remote_verify._record_step", side_effect=_fake_record_step):
+                with patch("tools.remote_verify._capture_status", return_value={"ok": False}):
+                    with patch("tools.remote_verify._write_report_files") as write_mock:
+                        exit_code = remote_verify._run_editor_sequence(args)
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(recorded, ["open"])
+        write_mock.assert_called_once()
+
+    def test_export_subtitle_video_step_validates_returned_mov_artifact(self):
+        report: dict = {"steps": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            mov_path = output_dir / "manual_export.mov"
+            mov_path.write_bytes(b"mov")
+
+            def _fake_send(command, **kwargs):
+                if command == "export-subtitle-video":
+                    return {
+                        "ok": True,
+                        "data": {"outputs": [{"mov_output": {"path": str(mov_path)}}]},
+                    }
+                return {"ok": True, "data": {}}
+
+            with patch("tools.remote_verify._capture_status", return_value={"ok": True}):
+                with patch("tools.remote_verify._send", side_effect=_fake_send):
+                    with patch("tools.remote_verify._write_report_files"):
+                        remote_verify._record_step(
+                            report,
+                            output_dir,
+                            "export-subtitle-video",
+                            timeout=1.0,
+                            snapshot=False,
+                            command="export-subtitle-video",
+                        )
+
+        entry = report["steps"][0]
+        self.assertTrue(entry["result"]["ok"])
+        self.assertEqual(entry["artifacts"][0]["path"], str(mov_path))
+        self.assertEqual(entry["artifacts"][0]["path_size"], 3)
+
     def test_live_nle_proof_accepts_pre_final_compact_runtime_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)

@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.10-source-app
+Document-Version: 04.01.11-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,22 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.11 G3 Same-Media Benchmark Acceptance And Editor-Sequence Guard
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.11"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.11`.
+3. NAS HeyDealer original MP4/SRT availability was refreshed at `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629_preflight/reference_fixture_availability.md`; media and SRT were present, SRT parse was OK, clipped reference rows were `89`, and `ready_for_reference_scored_benchmark=true`.
+4. Current-head High-mode same-media reference benchmark ran at `.codex_work/benchmarks/subtitle_pipeline_variants/20260629_070403/benchmark_results.json`; acceptance artifact: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/acceptance/reference_benchmark_acceptance.md`.
+5. The benchmark was accepted with elapsed `45.671s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808`, final invalid/non-monotonic/overlap `0/0/0`, final stable `true`, final last end/duration bound `180.0/180.0`, final short/long segment counts `0/0`, global max active `1`, and global stable `true`.
+6. STT worker timeout audit for the same benchmark passed at `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/timeout_audit/stt_worker_timeout_audit.md` with `timeout_detected=false`.
+7. `tools/remote_verify.py editor-sequence` now flushes `report.json` / `report.md` after each step, caps post-step `status` probes at `4s`, caps step snapshots at `8s`, validates returned `export-subtitle-video` MOV artifacts, and aborts immediately after an `open-media` `app_unreachable` result instead of spending later save/export timeouts on impossible follow-up steps.
+8. Guarded app-command proof attempt at `output/manual_verification/latest/g3_same_media_app_commands_v040111_20260629_guarded/report.md` now records the blocker as `open_app_unreachable` with one `open-media` step instead of hanging or losing the report.
+9. Jammini route proof was refreshed at `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md`, and three sub-agent reviews were used as architecture/QE/editor-workflow guardrails.
+10. The three review viewpoints all warned not to treat runtime/status proof or benchmark acceptance alone as full G3 completion. App-command save/project/SRT/video export, reopened project state, final export artifact bytes, and UI/app-command responsiveness remain active proof requirements.
+11. Focused verification passed: compile check for `tools/remote_verify.py`, `tests/test_remote_verify_actions.py`, and version files; `tests/test_remote_verify_actions.py -k "editor_sequence or export_subtitle_video_step or capture_snapshot"` -> `7 passed, 6 deselected`; full `tests/test_remote_verify_actions.py` -> `13 passed`; App Store/bundle guard -> `9 passed`; project/status guard -> `66 passed, 79 deselected`; direct version assertion -> `APP_VERSION=04.01.11` / `PROJECT_SCHEMA_VERSION=04.01.11`; same-media benchmark acceptance -> `accepted=true`; STT timeout audit -> `timeout_detected=false`.
 
 ## v04.01.10 G2/G3 Final Save-Export Micro-Overlap Shared-Boundary Repair
 

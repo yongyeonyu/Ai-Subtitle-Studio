@@ -1,5 +1,35 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.11 G3 Same-Media Benchmark Acceptance And Editor-Sequence Guard - 2026-06-29 KST
+
+- 실행 모드: source-app G3 same-media NAS HeyDealer benchmark acceptance, STT timeout audit, editor-sequence proof-harness guard, and version/schema bump.
+- 결과: pass for same-media benchmark acceptance and proof-harness guard. This is not full G3 app-command save/export acceptance because the guarded app-command proof attempt recorded `open_app_unreachable`.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.11.md`
+  - Preflight: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629_preflight/reference_fixture_availability.md`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260629_070403/benchmark_results.json`
+  - Acceptance: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/acceptance/reference_benchmark_acceptance.md`
+  - Timeout audit: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/timeout_audit/stt_worker_timeout_audit.md`
+  - Guarded app-command proof attempt: `output/manual_verification/latest/g3_same_media_app_commands_v040111_20260629_guarded/report.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md`
+- 실제 결과:
+  - App version updated to `04.01.11`.
+  - Project schema version updated to `04.01.11`.
+  - Same-media NAS HeyDealer preflight passed with media/SRT present, SRT parse OK, and clipped reference rows `89`.
+  - Same-media High-mode benchmark was accepted: elapsed `45.671s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808`, final invalid/non-monotonic/overlap `0/0/0`, final stable `true`, final last end/duration bound `180.0/180.0`, final short/long `0/0`, global max active `1`, and global stable `true`.
+  - STT worker timeout audit reported `timeout_detected=false`.
+  - `tools/remote_verify.py editor-sequence` now writes partial reports step-by-step, caps post-step probes, validates returned video export artifacts, and aborts immediately when `open-media` is app-unreachable.
+  - Guarded app-command proof attempt produced a durable report with `abort_reason=open_app_unreachable`; app-command final export proof remains HOLD.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py -k "editor_sequence or export_subtitle_video_step or capture_snapshot"` -> `7 passed, 6 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `13 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.11`, `PROJECT_SCHEMA_VERSION=04.01.11`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260629_070403/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/acceptance` -> `accepted=true`.
+  - `./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260629_070403/benchmark_results.json --output-dir output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/timeout_audit` -> `timeout_detected=false`.
+
 ## v04.01.10 G2/G3 Final Save-Export Micro-Overlap Shared-Boundary Repair - 2026-06-29 KST
 
 - 실행 모드: source-app G2/G3 final save/export micro-overlap repair, direct SRT/export-subtitles projection routing, and version/schema bump.
