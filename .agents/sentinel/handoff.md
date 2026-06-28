@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-114700-nle-preview-skimming-contract-scout.md`
+- `.agents/sentinel/handoffs/20260628-114704-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-113300-in-memory-nle-transaction-journal-scout.md`
 - `.agents/sentinel/handoffs/20260628-113253-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-111900-nle-operation-journal-undo-scout.md`

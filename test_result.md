@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Preview Skimming Cache Contract - 2026-06-28 KST
+
+- 실행 모드: source-app NLE preview/skimming frame-cache provenance contract audit.
+- 결과: pass; preview frame cache is isolated under the temp Preview workspace, writes user-preview-only manifests, and remains separated from cut-boundary evidence.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/nle_preview_skimming_cache_audit_20260628/nle_preview_skimming_cache_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_preview_skimming_cache_audit_20260628/nle_preview_skimming_cache_audit.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-114704-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-114700-nle-preview-skimming-contract-scout.md`
+- 수정 요약:
+  - `core/runtime/preview_frame_cache.py` now writes sidecar manifests for preview frame thumbnails.
+  - Manifest provenance marks `purpose=editor_preview_skimming`, `evidence_role=user_preview_only`, `cut_boundary_evidence=false`, and `ui_thread_decode_allowed=false`.
+  - `tools/audit_nle_preview_skimming_cache.py` verifies Preview workspace isolation, nearest-frame cache lookup, source-fps frame-grid metadata, and video surface non-blocking preview miss routing.
+  - No UI layout/labels/colors/menus/popups, QML/GPU timeline surface, cut-boundary policy, STT/STT2 policy, App Store packaging/signing/upload, DMG behavior, persisted NLE disk fields, or timeline interaction behavior changed.
+- 실제 감사 결과:
+  - `ready=true`, `ui_runtime_change_applied=false`, `preview_cache_contract_applied=true`.
+  - Preview workspace isolated `true`; cache dir uses `Preview/FrameThumbnails`.
+  - Nearest cached preview frame hit `true`.
+  - Manifest purpose/evidence/cut-boundary/UI-thread-decode fields: `editor_preview_skimming/user_preview_only/false/false`.
+  - Source-fps grid ok `true` with manifest frame `60` at `59.94005994005994fps`.
+  - Video surface contract: nearest lookup before worker scheduling `true`, worker scheduling present `true`, worker uses `ensure_preview_frame` `true`, legacy sync cached-thumbnail helper not called by unprimed preview `true`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/preview_frame_cache.py tools/audit_nle_preview_skimming_cache.py tests/test_preview_frame_cache.py tests/test_nle_preview_skimming_cache_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_frame_cache.py tests/test_nle_preview_skimming_cache_audit.py` -> `5 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_preview_skimming_cache.py --output-dir output/manual_verification/latest/nle_preview_skimming_cache_audit_20260628` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player_widget.py -k "preview_frame_cache or paused_preview_seek or processing_thumbnail"` -> `5 passed, 75 deselected`.
+
 ## NLE Runtime Operation Journal - 2026-06-28 KST
 
 - 실행 모드: source-app NLE runtime operation journal recording plus NAS HeyDealer first-180s regression.

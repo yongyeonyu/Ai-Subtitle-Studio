@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import core.runtime.preview_frame_cache as preview_cache
+from core.frame_time import frame_to_sec, sec_to_nearest_frame
+
+
+SCHEMA = "ai_subtitle_studio.nle_preview_skimming_cache_contract.v1"
+AUDIT_ID = "nle_preview_skimming_cache_contract_20260628"
+BLOCKED_SCOPE = (
+    "preview_cache_not_cut_boundary_evidence",
+    "ui_thread_sync_decode_on_preview_miss_not_allowed",
+    "qml_or_gpu_timeline_default_surface_not_allowed",
+    "layout_label_menu_popup_changes_not_allowed",
+)
+
+
+def _video_surface_contract() -> dict[str, Any]:
+    source_path = ROOT / "ui" / "editor" / "video_player_surface.py"
+    text = source_path.read_text(encoding="utf-8")
+    nearest = "_show_nearest_preview_frame_at(source_path, sec, width=width)"
+    schedule = "_schedule_preview_frame_cache_prepare(source_path, sec, width=width)"
+    nearest_index = text.find(nearest)
+    schedule_index = text.find(schedule)
+    return {
+        "owner": "ui.editor.video_player_surface.VideoPlayerSurfaceMixin",
+        "nearest_lookup_before_worker_schedule": nearest_index >= 0 and schedule_index > nearest_index,
+        "cache_miss_worker_schedule_present": schedule_index >= 0,
+        "preview_worker_uses_ensure_preview_frame": "result = ensure_preview_frame(" in text
+        and "name=\"video-preview-frame-cache\"" in text,
+        "legacy_sync_thumbnail_helper_not_called_by_unprimed_preview": "show_cached_thumbnail_at(source_path, sec" not in text,
+    }
+
+
+def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, Any]:
+    work_dir = output_dir / "_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    source = work_dir / "source.mp4"
+    source.write_bytes(b"media")
+    fps = 60000 / 1001
+    width = 320
+    snapped_sec = frame_to_sec(sec_to_nearest_frame(1.0, fps), fps)
+    frame_cache_dir = preview_cache.preview_frame_cache_dir(work_dir)
+    cached_path = preview_cache.preview_frame_cache_path(str(source), snapped_sec, width=width, root=work_dir)
+    cached_path.parent.mkdir(parents=True, exist_ok=True)
+    cached_path.write_bytes(b"jpg")
+    nearest = preview_cache.nearest_cached_preview_frame(
+        str(source),
+        1.03,
+        fps=fps,
+        width=width,
+        tolerance_frames=3,
+        root=work_dir,
+    )
+
+    original_ensure_thumbnail = preview_cache.ensure_thumbnail
+    try:
+        preview_cache.ensure_thumbnail = lambda *args, **kwargs: SimpleNamespace(  # type: ignore[assignment]
+            status="cached",
+            path=str(cached_path),
+            timestamp=1.0,
+            reason="",
+        )
+        ensure_result = preview_cache.ensure_preview_frame(str(source), 1.0, fps=fps, width=width, root=work_dir)
+    finally:
+        preview_cache.ensure_thumbnail = original_ensure_thumbnail  # type: ignore[assignment]
+
+    manifest = preview_cache.read_preview_frame_manifest(cached_path)
+    manifest_path = preview_cache.preview_frame_manifest_path(cached_path)
+    video_surface = _video_surface_contract()
+    preview_workspace_isolated = (
+        "Preview" in str(frame_cache_dir)
+        and "FrameThumbnails" in str(frame_cache_dir)
+        and "Diagnostics/Trace" not in str(frame_cache_dir)
+    )
+    manifest_ok = (
+        manifest.get("schema") == preview_cache.PREVIEW_FRAME_CACHE_SCHEMA
+        and manifest.get("purpose") == preview_cache.PREVIEW_FRAME_CACHE_PURPOSE
+        and manifest.get("source") == preview_cache.PREVIEW_FRAME_CACHE_SOURCE
+        and manifest.get("cache_kind") == "nle_preview_skimming_frame"
+        and manifest.get("evidence_role") == "user_preview_only"
+        and manifest.get("cut_boundary_evidence") is False
+        and manifest.get("ui_thread_decode_allowed") is False
+    )
+    source_fps_grid_ok = manifest.get("frame") == 60 and abs(float(manifest.get("fps", 0.0) or 0.0) - fps) < 1e-9
+    all_passed = (
+        preview_workspace_isolated
+        and str(nearest) == str(cached_path)
+        and getattr(ensure_result, "status", "") in ("cached", "created")
+        and manifest_ok
+        and source_fps_grid_ok
+        and all(bool(value) for key, value in video_surface.items() if key != "owner")
+    )
+    return {
+        "schema": SCHEMA,
+        "audit_id": AUDIT_ID,
+        "ready": all_passed,
+        "ui_runtime_change_applied": False,
+        "preview_cache_contract_applied": True,
+        "preview_workspace_isolated": preview_workspace_isolated,
+        "preview_cache_dir": str(frame_cache_dir),
+        "nearest_cached_preview_frame_hit": str(nearest) == str(cached_path),
+        "manifest_path": str(manifest_path),
+        "manifest_schema": manifest.get("schema"),
+        "manifest_purpose": manifest.get("purpose"),
+        "manifest_evidence_role": manifest.get("evidence_role"),
+        "manifest_cut_boundary_evidence": manifest.get("cut_boundary_evidence"),
+        "manifest_ui_thread_decode_allowed": manifest.get("ui_thread_decode_allowed"),
+        "source_fps_grid_ok": source_fps_grid_ok,
+        "manifest_frame": manifest.get("frame"),
+        "manifest_fps": manifest.get("fps"),
+        "video_surface_contract": video_surface,
+        "blocked_scope": list(BLOCKED_SCOPE),
+    }
+
+
+def write_nle_preview_skimming_cache_report(output_dir: Path, report: dict[str, Any]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "nle_preview_skimming_cache_audit.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    lines = [
+        "# NLE Preview Skimming Cache Contract Audit",
+        "",
+        f"- Schema: `{report['schema']}`",
+        f"- Ready: `{report['ready']}`",
+        f"- UI runtime change applied: `{report['ui_runtime_change_applied']}`",
+        f"- Preview cache contract applied: `{report['preview_cache_contract_applied']}`",
+        f"- Preview workspace isolated: `{report['preview_workspace_isolated']}`",
+        f"- Nearest cached preview frame hit: `{report['nearest_cached_preview_frame_hit']}`",
+        f"- Manifest purpose: `{report['manifest_purpose']}`",
+        f"- Manifest evidence role: `{report['manifest_evidence_role']}`",
+        f"- Manifest cut-boundary evidence: `{report['manifest_cut_boundary_evidence']}`",
+        f"- Source-fps grid ok: `{report['source_fps_grid_ok']}`",
+        "",
+        "## Video Surface Contract",
+        "",
+        "| owner | nearest_before_worker | worker_schedule | worker_ensure_preview | no_legacy_sync_cached_thumb |",
+        "| --- | --- | --- | --- | --- |",
+        "| {owner} | {nearest} | {schedule} | {worker} | {legacy} |".format(
+            owner=report["video_surface_contract"]["owner"],
+            nearest=report["video_surface_contract"]["nearest_lookup_before_worker_schedule"],
+            schedule=report["video_surface_contract"]["cache_miss_worker_schedule_present"],
+            worker=report["video_surface_contract"]["preview_worker_uses_ensure_preview_frame"],
+            legacy=report["video_surface_contract"]["legacy_sync_thumbnail_helper_not_called_by_unprimed_preview"],
+        ),
+        "",
+        "## Blocked Scope",
+        "",
+    ]
+    lines.extend(f"- `{item}`" for item in report["blocked_scope"])
+    (output_dir / "nle_preview_skimming_cache_audit.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Audit NLE preview/skimming frame-cache contract.")
+    parser.add_argument(
+        "--output-dir",
+        default="output/manual_verification/latest/nle_preview_skimming_cache_audit_20260628",
+    )
+    args = parser.parse_args()
+    output_dir = Path(args.output_dir)
+    report = build_nle_preview_skimming_cache_report(output_dir=output_dir)
+    write_nle_preview_skimming_cache_report(output_dir, report)
+    print(json.dumps(report, ensure_ascii=False))
+    return 0 if report.get("ready") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

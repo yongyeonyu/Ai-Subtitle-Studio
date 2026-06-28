@@ -33,6 +33,47 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Preview Skimming Cache Contract
+
+### Scope
+
+- Continued the source-app NLE preview/skimming workstream by adding preview frame-cache provenance manifests.
+- Modified `core/runtime/preview_frame_cache.py`.
+- Added `tools/audit_nle_preview_skimming_cache.py` and `tests/test_nle_preview_skimming_cache_audit.py`.
+- Updated `tests/test_preview_frame_cache.py`.
+- No UI layout, labels, colors, menus, popups, QML/GPU timeline surface, cut-boundary detection policy, STT/STT2 policy, App Store packaging/signing/upload, DMG, persisted NLE disk fields, or timeline interaction behavior changed.
+
+### Results
+
+- Evidence: `output/manual_verification/latest/nle_preview_skimming_cache_audit_20260628/nle_preview_skimming_cache_audit.md`
+- Audit ready: `true`.
+- Preview cache contract applied: `true`.
+- Preview workspace isolated: `true`; cache dir uses `Preview/FrameThumbnails`, not `Diagnostics/Trace`.
+- Manifest purpose: `editor_preview_skimming`.
+- Manifest evidence role: `user_preview_only`.
+- Manifest cut-boundary evidence: `false`.
+- Manifest UI-thread decode allowed: `false`.
+- Source-fps grid ok: `true` at `60000/1001` style fps.
+- Video surface contract: nearest cached preview frame lookup happens before async worker scheduling, and unprimed preview seek does not call the legacy sync cached-thumbnail helper.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-114704-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-114700-nle-preview-skimming-contract-scout.md`
+- Dex classification: accept the non-blocking preview/skimming contract direction, but revise the scout wording that implied the Preview workspace lives under `Diagnostics/Trace`; the actual accepted path is `Preview/FrameThumbnails`.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/runtime/preview_frame_cache.py tools/audit_nle_preview_skimming_cache.py tests/test_preview_frame_cache.py tests/test_nle_preview_skimming_cache_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_frame_cache.py tests/test_nle_preview_skimming_cache_audit.py` -> `5 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_preview_skimming_cache.py --output-dir output/manual_verification/latest/nle_preview_skimming_cache_audit_20260628` -> pass, `ready=true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player_widget.py -k "preview_frame_cache or paused_preview_seek or processing_thumbnail"` -> `5 passed, 75 deselected`.
+
+### Next Recommended Action
+
+- Continue NLE preview/skimming only through the existing Qt Widgets video preview surface unless the owner explicitly approves UI surface changes.
+- Do not use preview frame-cache thumbnails as cut-boundary evidence; confirmed cut-boundary proof stays in the cut-boundary scorer/trace path.
+
 ## Current Handoff - 2026-06-28 NLE Runtime Operation Journal
 
 ### Scope
