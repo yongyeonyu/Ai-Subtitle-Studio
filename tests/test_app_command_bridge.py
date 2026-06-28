@@ -47,6 +47,8 @@ class _DummyEditor:
         self._last_saved_srt_outputs = []
         self.flush_calls = 0
         self._pending_flush_segments = None
+        self.stop_pipeline_calls = 0
+        self.stop_pipeline_callback = None
         self._segments = [
             {"line": 0, "start": 0.0, "end": 1.0, "text": "첫 줄", "is_gap": False},
             {"line": 1, "start": 1.0, "end": 2.0, "text": "둘째 줄", "is_gap": False},
@@ -61,6 +63,13 @@ class _DummyEditor:
     def _on_start_clicked(self):
         self.start_clicks += 1
         callback = getattr(self, "_on_start_callback", None)
+        if callable(callback):
+            callback()
+
+    def _stop_pipeline(self):
+        self.stop_pipeline_calls += 1
+        self.sm.state = "ST_IDLE"
+        callback = getattr(self, "stop_pipeline_callback", None)
         if callable(callback):
             callback()
 
@@ -471,6 +480,7 @@ class _DummyOwner:
             _active=False,
             start_pipeline=self._start_pipeline,
             start_multiclip_pipeline=self._start_multiclip_pipeline,
+            stop=lambda **_kwargs: setattr(self.backend, "_active", False),
             _force_no_reuse_once=False,
             _force_reuse_existing_multiclip_subtitles_once=False,
         )
@@ -480,6 +490,8 @@ class _DummyOwner:
         self.global_menu_bar = _DummyGlobalMenuBar(self)
         self.last_open_args = None
         self.roughcut_open_calls = 0
+        self.close_calls = 0
+        self.quick_exit_calls = 0
 
     def show_home(self, allow_home_idle_learning: bool = False):
         self.home_calls += 1
@@ -586,6 +598,12 @@ class _DummyOwner:
     def _resume_personalization_idle_jobs(self):
         self.personalization_actions.append("resume")
         return {"resumed": True}
+
+    def close(self):
+        self.close_calls += 1
+
+    def _quick_exit(self):
+        self.quick_exit_calls += 1
 
 
 class _DummyGlobalMenuBar:
@@ -1005,6 +1023,40 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "already_processing")
         self.assertEqual(owner._editor_widget.start_clicks, 0)
+
+    def test_cancel_current_pipeline_uses_editor_stop_path(self):
+        owner = _DummyOwner()
+        owner._editor_widget = _DummyEditor(state="ST_PROC")
+        owner.backend._active = True
+
+        def _mark_backend_inactive():
+            owner.backend._active = False
+
+        owner._editor_widget.stop_pipeline_callback = _mark_backend_inactive
+
+        result = execute_app_command(owner, {"command": "cancel-current-pipeline"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "current_pipeline_cancel_requested")
+        self.assertEqual(owner._editor_widget.stop_pipeline_calls, 1)
+        self.assertTrue(result["data"]["active_before"])
+        self.assertFalse(result["data"]["active_after"])
+
+    def test_app_close_and_quit_requests_are_explicit_automation_commands(self):
+        owner = _DummyOwner()
+
+        with patch("ui.main.app_command_bridge_handlers._schedule_ui_callback", side_effect=lambda callback: callback() or True):
+            close_result = execute_app_command(owner, {"command": "app-close-request"})
+            quit_result = execute_app_command(owner, {"command": "app-quit-request"})
+
+        self.assertTrue(close_result["ok"])
+        self.assertTrue(close_result["queued"])
+        self.assertEqual(close_result["message"], "app_close_requested")
+        self.assertEqual(owner.close_calls, 1)
+        self.assertTrue(quit_result["ok"])
+        self.assertTrue(quit_result["queued"])
+        self.assertEqual(quit_result["message"], "app_quit_requested")
+        self.assertEqual(owner.quick_exit_calls, 1)
 
     def test_start_current_roughcut_triggers_post_generation_followup(self):
         owner = _DummyOwner()

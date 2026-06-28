@@ -54,6 +54,52 @@ class RemoteVerifyActionTests(unittest.TestCase):
         self.assertEqual(commands[1]["options"], {"action": "pause"})
         self.assertEqual(commands[2].get("options", {}), {})
 
+    def test_editor_sequence_maps_active_worker_control_actions(self):
+        recorded: list[dict] = []
+
+        def _fake_record_step(report, output_dir, step_name, **kwargs):
+            recorded.append({"name": step_name, **kwargs})
+            report.setdefault("steps", []).append({"name": step_name, "result": {"ok": True}})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.remote_verify._record_step", side_effect=_fake_record_step):
+                with patch("tools.remote_verify._capture_status", return_value={"ok": True, "data": {}}):
+                    with patch("tools.remote_verify._write_report_files", return_value=None):
+                        exit_code = remote_verify._run_editor_sequence(
+                            _args(tmp, ["cancel-current-pipeline", "app-close-request", "app-quit-request"])
+                        )
+
+        self.assertEqual(exit_code, 0)
+        commands = [item for item in recorded if item.get("command")]
+        self.assertEqual(
+            [item["command"] for item in commands],
+            ["cancel-current-pipeline", "app-close-request", "app-quit-request"],
+        )
+
+    def test_editor_sequence_maps_generation_status_and_wait_actions(self):
+        recorded: list[dict] = []
+
+        def _fake_record_step(report, output_dir, step_name, **kwargs):
+            recorded.append({"name": step_name, **kwargs})
+            report.setdefault("steps", []).append({"name": step_name, "result": {"ok": True}})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.remote_verify._record_step", side_effect=_fake_record_step):
+                with patch("tools.remote_verify.time.sleep", return_value=None) as sleep_mock:
+                    with patch("tools.remote_verify._capture_status", return_value={"ok": True, "data": {}}):
+                        with patch("tools.remote_verify._write_report_files", return_value=None):
+                            exit_code = remote_verify._run_editor_sequence(
+                                _args(tmp, ["start-current-pipeline", "wait-1.5", "status-probe", "guided-status-probe"])
+                            )
+
+        self.assertEqual(exit_code, 0)
+        sleep_mock.assert_called_once_with(1.5)
+        commands = [item for item in recorded if item.get("command")]
+        self.assertEqual(
+            [item["command"] for item in commands],
+            ["start-current-pipeline", "status", "guided-subtitle-status"],
+        )
+
     def test_editor_sequence_maps_menu_dialog_stt_and_lora_actions(self):
         recorded: list[dict] = []
 

@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.13 G3 Open-Media Generation And Active-Worker Responsiveness Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G3 same-media app-command open/start/status/cancel/close/quit responsiveness proof and version/schema bump.
+- 결과: pass for the bounded active-worker responsiveness slice. This is not full G3 completion because broader global-canvas responsiveness and any additional active-worker final-surface proof remain separate gates.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.13.md`
+  - Cancel proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_cancel_20260629_083050/report.md`
+  - Close proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json`
+  - Quit proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040113-g3-open-media-generation-and-active-worker-responsiveness-proof`
+- 실제 결과:
+  - App version updated to `04.01.13`.
+  - Project schema version updated to `04.01.13`.
+  - `cancel-current-pipeline`, `app-close-request`, and `app-quit-request` are available as automation-only app commands.
+  - `tools/remote_verify.py editor-sequence` can now record `start-current-pipeline`, active status probes, guided-status probes, `wait-N`, and command elapsed timings.
+  - Cancel proof: `open-media` and `start-current-pipeline` succeeded, active samples reported `ST_PROC/backend_active=true`, status/guided-status command elapsed samples stayed below `0.01s`, and cancel returned `current_pipeline_cancel_requested` before post-cancel `ST_IDLE/backend_active=false`.
+  - Close proof: `app-close-request` returned while active in `0.009954s`, then bridge became `app_unreachable` after app exit.
+  - Quit proof: `app-quit-request` returned while active in `0.001577s`, then bridge became `app_unreachable` after app exit.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/main/app_command_bridge_handlers.py tools/appctl.py tools/remote_verify.py tests/test_app_command_bridge.py tests/test_appctl.py tests/test_remote_verify_actions.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_appctl.py tests/test_remote_verify_actions.py -k "active_worker_control or generation_status_and_wait or editor_sequence_maps_play_pause"` -> `4 passed, 18 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "cancel_current_pipeline or app_close_and_quit_requests or global_menu_action_rejects_unsafe_action or start_current_pipeline"` -> `4 passed, 80 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.13`, `PROJECT_SCHEMA_VERSION=04.01.13`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.12 G3 Direct-SRT App-Command Save/Reopen/Export Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G3 direct-SRT app-command save/project/SRT/video export, reopened project export proof, and version/schema bump.

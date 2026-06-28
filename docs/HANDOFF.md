@@ -33,49 +33,49 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.12 / G3 Direct-SRT App-Command Save/Reopen/Export Proof
+## Current Handoff - 2026-06-29 v04.01.13 / G3 Open-Media Generation And Active-Worker Responsiveness Proof
 
 ### Scope
 
-- Completed the G3 direct-SRT app-command save/reopen/export proof slice.
-- Bumped source-app version and project schema from `04.01.11` to `04.01.12`.
-- Added `docs/release_notes/RELEASE_v04.01.12.md`.
+- Completed the G3 same-media open-media generation and active-worker responsiveness proof slice.
+- Bumped source-app version and project schema from `04.01.12` to `04.01.13`.
+- Added `docs/release_notes/RELEASE_v04.01.13.md`.
 - Updated current docs and active queue/archive pointers.
 
 ### Result
 
-- Current code version: `APP_VERSION=04.01.12`.
-- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.12`.
-- App-command `save-project` now uses the same SRT-output segment authority as `save-subtitles` and `export-subtitles`.
-- Direct SRT edit mode skips project-save cut-boundary re-splitting, so opened SRT rows are preserved in saved project rows and the external `final.srt`.
-- Direct proof held `64` final rows/SRT blocks through save-project, export-subtitles, saved project rows, project final SRT, and editor/runtime status; MOV output was nonzero.
-- Reopen proof held `64` final rows/SRT blocks through reopened editor status, export-subtitles, manual export SRT, and NLE runtime final track; MOV output was nonzero.
+- Current code version: `APP_VERSION=04.01.13`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.13`.
+- Automation-only `cancel-current-pipeline`, `app-close-request`, and `app-quit-request` are now available through the app-command bridge and `tools/appctl.py`.
+- `tools/remote_verify.py editor-sequence` can now run `start-current-pipeline`, `status-probe`, `guided-status-probe`, `wait-N`, and records per-command elapsed timings.
+- Same-media app-command proof showed `open-media` and `start-current-pipeline` success, active `ST_PROC/backend_active=true` status samples, cancel returning to `ST_IDLE/backend_active=false`, and close/quit requests returning before app exit made the bridge unreachable.
 - No full G3 completion claim, visible UI layout/label/color/menu/shortcut change, STT/VAD algorithm change, worker fan-out change, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
 
 ### Evidence
 
-- Compile check: `./venv/bin/python -m py_compile core/project/project_manager.py ui/project/project_panel.py ui/editor/editor_save_manager.py ui/main/app_command_bridge_handlers.py tests/test_project_context.py tests/test_app_command_bridge.py` -> pass.
-- Focused project guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k "skip_cut_boundary_snap_for_direct_srt_rows or cut_boundary_fit_prevents"` -> `2 passed, 85 deselected`.
-- Focused app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "save_project_command"` -> `4 passed, 78 deselected`.
-- Combined direct-SRT/app-command/NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py tests/test_project_context.py tests/test_editor_autosave_cleanup.py tests/test_project_segment_reload.py tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py -k "save_project_command or skip_cut_boundary_snap_for_direct_srt_rows or direct_srt or deferred_project_save or save_export_cutover or externalize"` -> `37 passed, 297 deselected`.
+- Compile check: `./venv/bin/python -m py_compile ui/main/app_command_bridge_handlers.py tools/appctl.py tools/remote_verify.py tests/test_app_command_bridge.py tests/test_appctl.py tests/test_remote_verify_actions.py` -> pass.
+- Focused appctl/remote-verify guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_appctl.py tests/test_remote_verify_actions.py -k "active_worker_control or generation_status_and_wait or editor_sequence_maps_play_pause"` -> `4 passed, 18 deselected`.
+- Focused app-command active-worker guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "cancel_current_pipeline or app_close_and_quit_requests or global_menu_action_rejects_unsafe_action or start_current_pipeline"` -> `4 passed, 80 deselected`.
 - App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
 - Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
-- Direct version assertion -> `APP_VERSION=04.01.12`, `PROJECT_SCHEMA_VERSION=04.01.12`.
-- Direct SRT proof: `output/manual_verification/latest/g3_same_media_app_commands_srt_fixed_v2_20260629/report.md`.
-- Reopen/export proof: `output/manual_verification/latest/g3_same_media_app_commands_reopen_fixed_v2_20260629/report.md`.
-- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints. The current Jammini `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+- Direct version assertion -> `APP_VERSION=04.01.13`, `PROJECT_SCHEMA_VERSION=04.01.13`.
+- `git diff --check -- .` -> pass.
+- Cancel proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_cancel_20260629_083050/report.md`.
+- Close proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json`.
+- Quit proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json`.
+- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints. The current Jammini `--handoff-probe` packet timed out without a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
 
 ### Remaining Risks
 
-- G3 still needs `open-media` generation app-command proof, active-worker cancel/quit/close responsiveness, and broader same-media global-canvas responsiveness.
+- G3 still needs broader same-media global-canvas responsiveness and any additional active-worker final-surface proof selected by the queue.
 - G0 App Store has owner approval for packaging/signing/upload/metadata execution, but remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata values.
 - G1 collect-cache/default promotion remains owner-review gated.
 
 ### Next Recommended Action
 
 - Stop after this completed action item unless the owner explicitly continues.
-- If continuing G3, run same-media `open-media` generation through the app-command bridge, then prove cancel/quit/close responsiveness while workers are active.
-- Keep live-NLE proof, same-media benchmark acceptance, direct-SRT app-command proof, and App Store submission proof as separate evidence surfaces.
+- If continuing G3, pick the next remaining bounded gate from `docs/planning_queue/ACTION_ITEMS.md`, likely broader same-media global-canvas responsiveness or an additional active-worker final-surface proof.
+- Keep live-NLE proof, same-media benchmark acceptance, direct-SRT app-command proof, active-worker responsiveness proof, and App Store submission proof as separate evidence surfaces.
 
 ## Previous Handoff - 2026-06-29 v04.01.11 / G3 Same-Media Benchmark Acceptance And Editor-Sequence Guard
 

@@ -654,10 +654,12 @@ def _record_step(
         # 편집 명령은 UI 상태를 바꾸므로 재시도하지 않는다.
         # 대신 직전에 status fast-path로 app bridge 준비 상태를 확인해 중복 실행 위험을 피한다.
         entry["preflight_status"] = _capture_status(max(1.0, min(float(timeout or 1.0), 4.0)))
+        command_started = time.monotonic()
         try:
             entry["result"] = _send(command, timeout=timeout, path=path, options=options)
         except OSError as exc:
             entry["result"] = {"ok": False, "error": "app_unreachable", "message": str(exc), "data": {}}
+        entry["command_elapsed_sec"] = round(time.monotonic() - command_started, 6)
         artifact_paths = [path] if path else []
         artifact_paths.extend(_result_artifact_paths(command, entry.get("result")))
         if artifact_paths:
@@ -743,8 +745,20 @@ def _editor_action_spec(
         return {"command": "editor-playback", "options": {"action": "play"}, "snapshot": False, "path": ""}
     if action in {"pause", "playback-pause"}:
         return {"command": "editor-playback", "options": {"action": "pause"}, "snapshot": False, "path": ""}
+    if action in {"start-current-pipeline", "start-pipeline", "start-generation"}:
+        return {"command": "start-current-pipeline", "options": {}, "snapshot": False, "path": ""}
+    if action in {"status", "status-probe"}:
+        return {"command": "status", "options": {}, "snapshot": False, "path": ""}
+    if action in {"guided-status", "guided-status-probe", "guided-subtitle-status"}:
+        return {"command": "guided-subtitle-status", "options": {}, "snapshot": False, "path": ""}
     if action in {"save", "save-project"}:
         return {"command": "save-project", "options": {}, "snapshot": False, "path": ""}
+    if action in {"cancel-current-pipeline", "cancel-pipeline"}:
+        return {"command": "cancel-current-pipeline", "options": {}, "snapshot": False, "path": ""}
+    if action in {"app-close-request", "close-window", "close-app"}:
+        return {"command": "app-close-request", "options": {}, "snapshot": False, "path": ""}
+    if action in {"app-quit-request", "quit-app"}:
+        return {"command": "app-quit-request", "options": {}, "snapshot": False, "path": ""}
     if action == "save-subtitles":
         return {"command": "save-subtitles", "options": {}, "snapshot": False, "path": "", "timeout": max(float(args.timeout or 0.0), 60.0)}
     if action == "export-subtitles":
@@ -803,6 +817,51 @@ def _editor_action_spec(
     return None
 
 
+def _editor_wait_seconds(action: str, args: argparse.Namespace) -> float | None:
+    normalized = str(action or "").strip().lower()
+    if normalized in {"wait", "sleep"}:
+        return max(0.0, float(args.settle_sec or 0.0))
+    for prefix in ("wait-", "sleep-"):
+        if normalized.startswith(prefix):
+            raw = normalized[len(prefix) :].strip()
+            try:
+                return max(0.0, float(raw))
+            except ValueError:
+                return None
+    return None
+
+
+def _record_wait_action(
+    report: dict[str, Any],
+    output_dir: Path,
+    action: str,
+    *,
+    args: argparse.Namespace,
+) -> None:
+    wait_sec = _editor_wait_seconds(action, args)
+    if wait_sec is None:
+        return
+    started = time.monotonic()
+    time.sleep(wait_sec)
+    entry: dict[str, Any] = {
+        "name": action,
+        "command": "",
+        "path": "",
+        "options": {"duration_sec": wait_sec},
+        "result": {"ok": True, "message": "waited", "data": {"duration_sec": wait_sec}},
+        "elapsed_sec": round(time.monotonic() - started, 6),
+        "status": _capture_status(_bounded_probe_timeout(args.timeout, cap=_EDITOR_SEQUENCE_POST_STEP_STATUS_TIMEOUT_SEC)),
+    }
+    if args.snapshot_each_step:
+        entry["snapshot"] = _capture_snapshot(
+            output_dir,
+            _safe_slug(action),
+            timeout=_bounded_probe_timeout(args.timeout, cap=_EDITOR_SEQUENCE_SNAPSHOT_TIMEOUT_SEC),
+        )
+    report.setdefault("steps", []).append(entry)
+    _write_report_files(output_dir, report)
+
+
 def _record_editor_action(
     report: dict[str, Any],
     output_dir: Path,
@@ -811,6 +870,9 @@ def _record_editor_action(
     args: argparse.Namespace,
     selection: dict[str, Any],
 ) -> None:
+    if _editor_wait_seconds(action, args) is not None:
+        _record_wait_action(report, output_dir, action, args=args)
+        return
     spec = _editor_action_spec(action, args, selection, output_dir)
     if spec is None:
         report.setdefault("steps", []).append(
@@ -995,7 +1057,7 @@ def _parser() -> argparse.ArgumentParser:
         "--actions",
         nargs="*",
         default=[],
-        help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split play pause save-project save-subtitles export-subtitles export-subtitle-video move-segment-left move-segment-right move-diamond merge-diamond video-show video-hide video-toggle stt-enable stt-disable stt-toggle open-dictionary open-settings open-speaker-settings capture-active-dialog capture-dictionary close-active-dialog lora-run-now lora-pause lora-resume snapshot",
+        help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split play pause start-current-pipeline status-probe guided-status-probe wait-N save-project cancel-current-pipeline app-close-request app-quit-request save-subtitles export-subtitles export-subtitle-video move-segment-left move-segment-right move-diamond merge-diamond video-show video-hide video-toggle stt-enable stt-disable stt-toggle open-dictionary open-settings open-speaker-settings capture-active-dialog capture-dictionary close-active-dialog lora-run-now lora-pause lora-resume snapshot",
     )
     editor.add_argument("--snapshot-each-step", action="store_true")
 

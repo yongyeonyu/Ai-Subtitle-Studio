@@ -44,13 +44,13 @@ The repository root intentionally keeps no active development docs other than
 
 ## Version / Release
 
-- App version: `04.01.12` from `core/runtime/config.py`
-- Project schema version: `04.01.12` from `core/project/project_format.py`
-- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.12.md`
+- App version: `04.01.13` from `core/runtime/config.py`
+- Project schema version: `04.01.13` from `core/project/project_format.py`
+- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.13.md`
 - Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040100_20260628`
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`
 
-`v04.01.12` is a source-app release checkpoint, not App Store submission proof.
+`v04.01.13` is a source-app release checkpoint, not App Store submission proof.
 
 ## Active Groups
 
@@ -59,7 +59,7 @@ The active queue is `docs/planning_queue/ACTION_ITEMS.md`.
 - `G0. Mac App Store Launch Program`: close owner metadata, sandbox, signing, package, App Store Connect validation, upload/submission, review, and release gates. Current state remains blocked with `app_store_submission_ready=false`.
 - `G1. STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`: reduce generation latency only with same-fixture proof and no quality/timing/final-surface regression. Collect-cache defaults remain off until owner approval.
 - `G2. Source-App NLE / Taption Editing Continuity`: monitor and preserve the current source-app NLE/Taption editing contracts while keeping full persisted NLE disk-format cutover and native migration gated. Owner-approved `nle_snapshot` and top-level `nle` shadow metadata remain compatibility metadata only until separate proof promotes them.
-- `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`: runtime lane owner-map, compact live status/feed, scheduler-budget telemetry, live runtime observability proof-harness, strong-evidence gate, representative real-media runtime/status proof, final-overlap deferred-save retry guard, final save/export micro-overlap repair, same-media benchmark acceptance, editor-sequence guard, and direct-SRT app-command save/reopen/export slices are complete; continue with `open-media` generation app-command proof plus active-worker cancel/quit/close and global-canvas responsiveness only in bounded slices without weakening final authority, slowing generation, mixing final surfaces, or changing UI defaults without owner-approved proof.
+- `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`: runtime lane owner-map, compact live status/feed, scheduler-budget telemetry, live runtime observability proof-harness, strong-evidence gate, representative real-media runtime/status proof, final-overlap deferred-save retry guard, final save/export micro-overlap repair, same-media benchmark acceptance, editor-sequence guard, direct-SRT app-command save/reopen/export, and open-media generation active-worker status/cancel/close/quit responsiveness slices are complete; continue with broader global-canvas responsiveness or additional active-worker final-surface gates only in bounded slices without weakening final authority, slowing generation, mixing final surfaces, or changing UI defaults without owner-approved proof.
 
 ## Completed Evidence Policy
 
@@ -75,7 +75,7 @@ locations instead:
 High-value completed evidence families include Taption subtitle segment parity,
 final/preview isolation, voice-silence magnet parity, neighbor-collision guard,
 NLE runtime/session mutation adoption, save/reopen compatibility, render/export
-parity, trace-bundle retention, and `v04.01.12` source release proof.
+parity, trace-bundle retention, and `v04.01.13` source release proof.
 
 ## Must Not Break
 

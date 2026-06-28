@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.12-source-app
+Document-Version: 04.01.13-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,21 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.13 G3 Open-Media Generation And Active-Worker Responsiveness Proof
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.13"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.13`.
+3. `ui/main/app_command_bridge_handlers.py` now exposes automation-only `cancel-current-pipeline`, `app-close-request`, and `app-quit-request` commands. These do not widen the global menu allowlist and do not change visible UI labels, layout, shortcuts, colors, or popups.
+4. `tools/appctl.py` and `tools/remote_verify.py` now support those active-worker control commands. `tools/remote_verify.py editor-sequence` also supports `start-current-pipeline`, `status-probe`, `guided-status-probe`, `wait-N`, and per-command elapsed timing for responsiveness proof.
+5. Same-media cancel proof passed at `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_cancel_20260629_083050/report.md`: `open-media` returned `media_opened`, `start-current-pipeline` returned `pipeline_started`, active samples reported `ST_PROC` with `backend_active=true`, status/guided-status command elapsed samples stayed below `0.01s`, and `cancel-current-pipeline` returned `current_pipeline_cancel_requested` before post-cancel status reported `ST_IDLE/backend_active=false`.
+6. Same-media close proof passed at `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json`: active samples reported `ST_PROC/backend_active=true`, `app-close-request` returned `app_close_requested` in `0.009954s`, and after the 2-second wait the bridge reported `app_unreachable` because the source app exited.
+7. Same-media quit proof passed at `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json`: active samples reported `ST_PROC/backend_active=true`, `app-quit-request` returned `app_quit_requested` in `0.001577s`, and after the 2-second wait the bridge reported `app_unreachable` because the source app exited.
+8. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. The current Jammini `--handoff-probe` packet timed out without a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+9. Focused verification passed: compile check for touched modules/tests; `tests/test_appctl.py tests/test_remote_verify_actions.py -k "active_worker_control or generation_status_and_wait or editor_sequence_maps_play_pause"` -> `4 passed, 18 deselected`; `tests/test_app_command_bridge.py -k "cancel_current_pipeline or app_close_and_quit_requests or global_menu_action_rejects_unsafe_action or start_current_pipeline"` -> `4 passed, 80 deselected`; App Store/bundle guard -> `9 passed`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.13` / `PROJECT_SCHEMA_VERSION=04.01.13`; `git diff --check -- .` -> pass; direct runtime proof for cancel/close/quit above passed.
+10. This slice does not claim full G3 completion. Broader global-canvas responsiveness, additional active-worker save proof if required, App Store submission proof, cache default promotion, persisted NLE disk-format cutover, and visible UI changes remain outside this completed item.
 
 ## v04.01.12 G3 Direct-SRT App-Command Save/Reopen/Export Proof
 

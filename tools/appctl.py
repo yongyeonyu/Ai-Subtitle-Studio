@@ -160,6 +160,9 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("export-subtitle-video")
     sub.add_parser("start-current-pipeline")
     sub.add_parser("start-current-roughcut")
+    sub.add_parser("cancel-current-pipeline")
+    sub.add_parser("app-close-request")
+    sub.add_parser("app-quit-request")
     editor_set_playhead = sub.add_parser("editor-set-playhead")
     editor_set_playhead.add_argument("sec", type=float)
     editor_set_playhead.add_argument("--center", action="store_true")
@@ -310,6 +313,9 @@ def _payload_from_args(args: argparse.Namespace) -> dict:
         "close-active-dialog",
         "save-subtitles",
         "export-subtitle-video",
+        "cancel-current-pipeline",
+        "app-close-request",
+        "app-quit-request",
     }:
         return build_command_payload(command)
     if command == "guided-subtitle-run":

@@ -51,6 +51,43 @@ _GLOBAL_MENU_ACTION_ALIASES = {
 _ALLOWED_GLOBAL_MENU_ACTIONS = frozenset(_GLOBAL_MENU_ACTION_ALIASES.values())
 
 
+def _runtime_action_snapshot(owner: Any, editor: Any | None = None) -> dict[str, Any]:
+    editor = editor if editor is not None else getattr(owner, "_editor_widget", None)
+    state = ""
+    if editor is not None:
+        try:
+            state = str(getattr(getattr(editor, "sm", None), "state", "") or "")
+        except Exception:
+            state = ""
+    backend = getattr(owner, "backend", None)
+    return {
+        "editor_open": editor is not None,
+        "editor_state": state,
+        "backend_active": bool(getattr(backend, "_active", False)),
+        "auto_processing_active": bool(getattr(owner, "_auto_processing_active", False)),
+        "editor_media_path": str(getattr(editor, "media_path", "") or "") if editor is not None else "",
+    }
+
+
+def _runtime_is_active(snapshot: dict[str, Any]) -> bool:
+    return (
+        str(snapshot.get("editor_state") or "") == "ST_PROC"
+        or bool(snapshot.get("backend_active", False))
+        or bool(snapshot.get("auto_processing_active", False))
+    )
+
+
+def _schedule_ui_callback(callback) -> bool:
+    try:
+        from PyQt6.QtCore import QTimer
+
+        QTimer.singleShot(0, callback)
+        return True
+    except Exception:
+        callback()
+        return False
+
+
 def _normalize_global_menu_action(action: str) -> str:
     normalized = str(action or "").strip()
     if not normalized:
@@ -1077,6 +1114,56 @@ def _handle_pipeline_command(
             starter(force=True)
         helpers.bring_to_front(owner)
         return ok(message="roughcut_started", data={"state_before": state, "media_path": str(getattr(editor, "media_path", "") or "")})
+    if command == "cancel-current-pipeline":
+        logger.log("🤖 자동화 명령 수신: cancel-current-pipeline")
+        editor = getattr(owner, "_editor_widget", None)
+        if editor is None:
+            return fail("editor_missing")
+        stopper = getattr(editor, "_stop_pipeline", None)
+        if not callable(stopper):
+            return fail("pipeline_cancel_unavailable")
+        before = _runtime_action_snapshot(owner, editor)
+        stopper()
+        after = _runtime_action_snapshot(owner, editor)
+        helpers.bring_to_front(owner)
+        return ok(
+            message="current_pipeline_cancel_requested",
+            data={
+                "active_before": _runtime_is_active(before),
+                "active_after": _runtime_is_active(after),
+                "before": before,
+                "after": after,
+            },
+        )
+    if command in {"app-close-request", "app-quit-request"}:
+        logger.log(f"🤖 자동화 명령 수신: {command}")
+        before = _runtime_action_snapshot(owner)
+        if command == "app-quit-request":
+            runner = getattr(owner, "_quick_exit", None)
+            if not callable(runner):
+                try:
+                    from PyQt6.QtWidgets import QApplication
+
+                    runner = QApplication.quit
+                except Exception:
+                    runner = None
+            if not callable(runner):
+                return fail("app_quit_unavailable")
+            scheduled = _schedule_ui_callback(runner)
+            return ok(
+                message="app_quit_requested",
+                queued=True,
+                data={"active_before": _runtime_is_active(before), "before": before, "scheduled": bool(scheduled)},
+            )
+        closer = getattr(owner, "close", None)
+        if not callable(closer):
+            return fail("app_close_unavailable")
+        scheduled = _schedule_ui_callback(closer)
+        return ok(
+            message="app_close_requested",
+            queued=True,
+            data={"active_before": _runtime_is_active(before), "before": before, "scheduled": bool(scheduled)},
+        )
     return None
 
 

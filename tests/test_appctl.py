@@ -8,6 +8,14 @@ from tools.appctl import _finalize_appctl_result, _parser, _payload_from_args
 
 
 class AppCtlTests(unittest.TestCase):
+    def test_active_worker_control_commands_build_plain_payloads(self):
+        for command in ("cancel-current-pipeline", "app-close-request", "app-quit-request"):
+            args = _parser().parse_args([command])
+            payload = _payload_from_args(args)
+            self.assertEqual(payload["command"], command)
+            self.assertEqual(payload.get("path", ""), "")
+            self.assertEqual(payload.get("options", {}), {})
+
     def test_start_multiclip_folder_expands_local_media_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
