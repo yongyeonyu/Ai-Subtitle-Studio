@@ -887,6 +887,28 @@ class AppCommandBridgeTests(unittest.TestCase):
             ["flushed merged row", "flushed next row"],
         )
 
+    def test_save_project_command_uses_srt_output_segments_for_direct_srt(self):
+        owner = _DummyOwner()
+        owner._current_project_path = "/tmp/project.json"
+        owner._editor_widget._segments = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "raw old row", "is_gap": False},
+            {"line": 1, "start": 1.0, "end": 2.0, "text": "direct srt row", "is_gap": False},
+            {"line": 2, "start": 2.0, "end": 3.0, "text": "raw analysis row", "is_gap": False},
+        ]
+
+        def _srt_output_segments(_rows):
+            return [
+                {"line": 0, "start": 1.0, "end": 2.0, "text": "direct srt row", "is_gap": False}
+            ]
+
+        owner._editor_widget._segments_for_srt_output = _srt_output_segments
+
+        result = execute_app_command(owner, {"command": "save-project"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(owner.saved_project, 1)
+        self.assertEqual([row["text"] for row in owner.saved_project_segments], ["direct srt row"])
+
     def test_save_subtitles_command_returns_saved_outputs(self):
         owner = _DummyOwner()
 

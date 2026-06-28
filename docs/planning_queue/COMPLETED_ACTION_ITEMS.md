@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.11-source-app
+Document-Version: 04.01.12-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,21 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.12 G3 Direct-SRT App-Command Save/Reopen/Export Proof
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.12"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.12`.
+3. `ui/main/app_command_bridge_handlers.py` now makes `save-project` use the same SRT-output segment authority as `save-subtitles` and `export-subtitles`, and returns `segment_count` in the proof response.
+4. `core/project/project_manager.py` now supports `snap_subtitles_to_cut_boundaries=False`; default project save behavior remains unchanged.
+5. `ui/project/project_panel.py` and `ui/editor/editor_save_manager.py` pass that flag only for direct SRT edit mode, preventing opened SRT rows from being re-split at project cut boundaries during project save.
+6. Direct SRT app-command proof passed at `output/manual_verification/latest/g3_same_media_app_commands_srt_fixed_v2_20260629/report.md`: `save-project segment_count=64`, `export-subtitles segment_count=64`, manual export SRT `64` blocks, editor/runtime final count `64`, saved project rows `64`, project final SRT `64` blocks, and MOV output `6764026` bytes.
+7. Reopen/export proof passed at `output/manual_verification/latest/g3_same_media_app_commands_reopen_fixed_v2_20260629/report.md`: reopened editor final count `64`, export-subtitles `segment_count=64`, manual export SRT `64` blocks, NLE runtime final track `64`, and MOV output `6764026` bytes.
+8. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. The current Jammini `--handoff-probe` packet did not produce a fresh physical probe file, so only the prior `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains physical route proof.
+9. Focused verification passed: compile check for touched modules/tests; `tests/test_project_context.py -k "skip_cut_boundary_snap_for_direct_srt_rows or cut_boundary_fit_prevents"` -> `2 passed, 85 deselected`; `tests/test_app_command_bridge.py -k "save_project_command"` -> `4 passed, 78 deselected`; combined direct-SRT/app-command/NLE guard -> `37 passed, 297 deselected`; App Store/bundle guard -> `9 passed`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.12` / `PROJECT_SCHEMA_VERSION=04.01.12`; `git diff --check -- .` -> pass.
+10. This slice does not claim full G3 completion. `open-media` generation app-command proof, active-worker cancel/quit/close responsiveness, and broader global-canvas responsiveness remain active proof requirements.
 
 ## v04.01.11 G3 Same-Media Benchmark Acceptance And Editor-Sequence Guard
 

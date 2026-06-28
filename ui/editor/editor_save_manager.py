@@ -233,6 +233,7 @@ def _write_project_save_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         persist_analysis_artifacts=bool(snapshot.get("persist_analysis_artifacts", False)),
         rewrite_stt_reference_tracks=bool(snapshot.get("rewrite_stt_reference_tracks", False)),
         preliminary_middle_segments=_copy_dict_rows(snapshot.get("preliminary_middle_segments")),
+        snap_subtitles_to_cut_boundaries=bool(snapshot.get("snap_subtitles_to_cut_boundaries", True)),
     )
     return {
         "project_path": project_path,
@@ -1533,6 +1534,7 @@ class EditorSaveManagerMixin:
             "persist_analysis_artifacts": bool(persist_analysis_artifacts),
             "rewrite_stt_reference_tracks": bool(rewrite_stt_reference_tracks),
             "preliminary_middle_segments": _copy_dict_rows(aux_state.get("preliminary_middle_segments")),
+            "snap_subtitles_to_cut_boundaries": not bool(getattr(self, "_direct_srt_edit_mode", False)),
             "schedule_analysis_refresh": bool(schedule_analysis_refresh),
             "saved_segments_signature": str(saved_segments_signature or ""),
             "primary_fps": getattr(getattr(self, "timeline", None), "fps", 30.0),

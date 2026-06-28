@@ -1375,6 +1375,7 @@ def save_project(
     rewrite_stt_reference_tracks: bool = True,
     preliminary_middle_segments: Optional[List[dict]] = None,
     recover_external_assets_on_empty: bool = True,
+    snap_subtitles_to_cut_boundaries: bool = True,
 ):
     """기존 프로젝트 JSON 업데이트"""
     if not os.path.exists(filepath):
@@ -1453,13 +1454,16 @@ def save_project(
     if segments is not None:
         from core.cut_boundary import magnetize_segments_to_cut_boundaries
 
-        segments = magnetize_segments_to_cut_boundaries(
-            segments,
-            confirmed_boundaries=existing_cut_boundaries,
-            provisional_boundaries=existing_provisional_cut_boundaries,
-            enabled=cut_enabled,
-            primary_fps=primary_fps,
-        )
+        if bool(snap_subtitles_to_cut_boundaries):
+            segments = magnetize_segments_to_cut_boundaries(
+                segments,
+                confirmed_boundaries=existing_cut_boundaries,
+                provisional_boundaries=existing_provisional_cut_boundaries,
+                enabled=cut_enabled,
+                primary_fps=primary_fps,
+            )
+        else:
+            segments = list(segments or [])
         new_segs = []
         existing_by_id: dict[str, dict] = {}
         existing_by_time: dict[tuple[float, float], dict] = {}

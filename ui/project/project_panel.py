@@ -417,6 +417,7 @@ class ProjectUIMixin:
             provisional_cut_boundaries=aux_state["provisional_cut_boundaries"],
             persist_analysis_artifacts=False,
             rewrite_stt_reference_tracks=False,
+            snap_subtitles_to_cut_boundaries=not bool(getattr(editor, "_direct_srt_edit_mode", False)),
         )
         restorer = getattr(editor, "_restore_editor_time_tags_after_save", None)
         if callable(restorer):

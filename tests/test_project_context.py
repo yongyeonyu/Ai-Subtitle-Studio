@@ -2156,6 +2156,113 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(split[0]["stt_candidates"][0]["end"], 3.0)
         self.assertEqual(split[1]["stt_candidates"][0]["start"], 3.0)
 
+    def test_save_project_can_skip_cut_boundary_snap_for_direct_srt_rows(self):
+        def _write_project(path: Path) -> None:
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {
+                            "timebase": {"primary_fps": 60.0},
+                            "tracks": [
+                                {
+                                    "clips": [
+                                        {
+                                            "id": "clip_a",
+                                            "source_path": "/tmp/clip.mp4",
+                                            "timeline_start": 0.0,
+                                            "timeline_end": 20.0,
+                                            "timeline_start_frame": 0,
+                                            "timeline_end_frame": 1200,
+                                            "fps": 60.0,
+                                            "order": 0,
+                                        }
+                                    ]
+                                }
+                            ],
+                        },
+                        "media": [{"order": 0, "path": "/tmp/clip.mp4", "fps": 60.0}],
+                        "analysis": {
+                            "cut_boundary_schema": "cut_boundaries.v1",
+                            "cut_boundary_settings": {
+                                "enabled": True,
+                                "detector": "opencv-gray-pyramid60",
+                            },
+                            "cut_boundaries": [
+                                {"timeline_sec": 6.9, "timeline_frame": 414, "fps": 60.0}
+                            ],
+                        },
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+        segment = {
+            "start": 6.516667,
+            "end": 10.3,
+            "start_frame": 391,
+            "end_frame": 618,
+            "timeline_start_frame": 391,
+            "timeline_end_frame": 618,
+            "frame_rate": 60.0,
+            "timeline_frame_rate": 60.0,
+            "frame_range": {"unit": "frame", "start": 391, "end": 618, "timeline_frame_rate": 60.0},
+            "text": "직접 SRT 행",
+            "speaker": "00",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            default_path = Path(tmp) / "default.aissproj"
+            direct_srt_path = Path(tmp) / "direct_srt.aissproj"
+            _write_project(default_path)
+            _write_project(direct_srt_path)
+
+            def _split_at_boundary(rows, **_kwargs):
+                source = dict(list(rows)[0])
+                left = dict(source)
+                right = dict(source)
+                left.update({
+                    "end": 6.9,
+                    "end_frame": 414,
+                    "timeline_end_frame": 414,
+                    "frame_range": {"unit": "frame", "start": 391, "end": 414, "timeline_frame_rate": 60.0},
+                    "text": "직접 SRT",
+                })
+                right.update({
+                    "start": 6.9,
+                    "start_frame": 414,
+                    "timeline_start_frame": 414,
+                    "frame_range": {"unit": "frame", "start": 414, "end": 618, "timeline_frame_rate": 60.0},
+                    "text": "행",
+                })
+                return [left, right]
+
+            with patch("core.cut_boundary.magnetize_segments_to_cut_boundaries", side_effect=_split_at_boundary) as magnetize:
+                save_project(
+                    str(default_path),
+                    segments=[dict(segment)],
+                    user_settings={"cut_boundary_detection_enabled": True},
+                )
+                save_project(
+                    str(direct_srt_path),
+                    segments=[dict(segment)],
+                    user_settings={"cut_boundary_detection_enabled": True},
+                    snap_subtitles_to_cut_boundaries=False,
+                )
+
+            default_rows = project_segments_to_editor(load_project(str(default_path)))
+            direct_srt_rows = project_segments_to_editor(load_project(str(direct_srt_path)))
+
+        self.assertEqual(magnetize.call_count, 1)
+        self.assertEqual(len(default_rows), 2)
+        self.assertEqual(len(direct_srt_rows), 1)
+        self.assertAlmostEqual(direct_srt_rows[0]["start"], 391 / 60.0, places=6)
+        self.assertAlmostEqual(direct_srt_rows[0]["end"], 618 / 60.0, places=6)
+        self.assertEqual(direct_srt_rows[0]["text"], "직접 SRT 행")
+
     def test_save_project_can_preserve_existing_stt_reference_assets_without_rewriting(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"

@@ -6,9 +6,10 @@ all active plans, release notes, validation notes, reference maps, and workflow
 docs live under `docs/`.
 
 The current product line remains the macOS Apple Silicon first Python/PyQt6
-source app. Native migration, Swift rewrite, QML/GPU timeline defaults, App
-Store packaging/signing/upload, and DMG release work stay opt-in unless the
-owner explicitly reopens that scope.
+source app. Native migration, Swift rewrite, QML/GPU timeline defaults, and DMG
+release work stay opt-in unless the owner explicitly reopens that scope. Mac
+App Store packaging/signing/upload/metadata execution has owner approval for the
+G0 lane, but signed package, validation, upload, and metadata proof remain open.
 
 ## Start Here
 
@@ -27,7 +28,7 @@ owner explicitly reopens that scope.
 
 ## Current Snapshot
 
-- App checkpoint: `04.01.11` / `v04.01.11`
+- App checkpoint: `04.01.12` / `v04.01.12`
 - Active queue: `planning_queue/ACTION_ITEMS.md`
 - Completed archive: `planning_queue/COMPLETED_ACTION_ITEMS.md`
 - Handoff: `HANDOFF.md`

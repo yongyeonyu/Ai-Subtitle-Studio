@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.11-source-app
+Document-Version: 04.01.12-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.11`
-- Latest release checkpoint: `v04.01.11`
+- App version in code: `04.01.12`
+- Latest release checkpoint: `v04.01.12`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -234,27 +234,25 @@ Completed item rule:
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628`
   - result: pass, `failed_count=0`
 - Latest release checkpoint scope:
-  - `v04.01.11` - source-app G3 same-media benchmark acceptance, editor-sequence proof-harness guard, 04.01.11 version/schema bump, and release docs. Full app-command save/reopen/final-export proof remains open because the guarded app-command attempt recorded `open_app_unreachable`.
+  - `v04.01.12` - source-app G3 direct-SRT app-command save/reopen/export proof, direct-SRT project save row-preservation fix, 04.01.12 version/schema bump, and release docs. Full G3 remains open for `open-media` generation app-command proof plus active-worker cancel/quit/close responsiveness.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
-  - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths, but persisted NLE project fields remain gated and legacy save/reopen compatibility stays mandatory.
+  - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths. Owner-approved `nle_snapshot` and top-level `nle` shadow metadata remain compatibility metadata only; persisted `_nle_project_state`, canonical NLE load ownership, and legacy save/reopen replacement remain gated.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.11`:
-  - editor-sequence guard compile: `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py tests/test_macos_bundle_runtime_paths.py` -> pass
-  - focused remote-verify guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py -k "editor_sequence or export_subtitle_video_step or capture_snapshot"` -> `7 passed, 6 deselected`
-  - full remote-verify guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `13 passed`
-  - same-media NAS preflight: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629_preflight/reference_fixture_availability.md` -> ready `true`
-  - same-media benchmark artifact: `.codex_work/benchmarks/subtitle_pipeline_variants/20260629_070403/benchmark_results.json`
-  - same-media acceptance: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/acceptance/reference_benchmark_acceptance.md` -> `accepted=true`, elapsed `45.671s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808`, final invalid/non-monotonic/overlap `0/0/0`, final stable `true`, final last end/duration bound `180.0/180.0`, global max active `1`, global stable `true`
-  - timeout audit: `output/manual_verification/latest/g3_same_media_quality_speed_v040111_20260629/timeout_audit/stt_worker_timeout_audit.md` -> `timeout_detected=false`
-  - guarded app-command attempt: `output/manual_verification/latest/g3_same_media_app_commands_v040111_20260629_guarded/report.md` -> `aborted=true`, `abort_reason=open_app_unreachable`
+- Latest focused guard set for `v04.01.12`:
+  - compile check: `./venv/bin/python -m py_compile core/project/project_manager.py ui/project/project_panel.py ui/editor/editor_save_manager.py ui/main/app_command_bridge_handlers.py tests/test_project_context.py tests/test_app_command_bridge.py` -> pass
+  - focused direct-SRT project-save guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k "skip_cut_boundary_snap_for_direct_srt_rows or cut_boundary_fit_prevents"` -> `2 passed, 85 deselected`
+  - focused app-command save-project guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "save_project_command"` -> `4 passed, 78 deselected`
+  - combined direct-SRT/app-command/NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py tests/test_project_context.py tests/test_editor_autosave_cleanup.py tests/test_project_segment_reload.py tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py -k "save_project_command or skip_cut_boundary_snap_for_direct_srt_rows or direct_srt or deferred_project_save or save_export_cutover or externalize"` -> `37 passed, 297 deselected`
   - App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`
-  - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`
-  - direct version assertion: `APP_VERSION=04.01.11`, `PROJECT_SCHEMA_VERSION=04.01.11`
+  - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`
+  - direct SRT app-command save/export proof: `output/manual_verification/latest/g3_same_media_app_commands_srt_fixed_v2_20260629/report.md` -> save-project/export-subtitles `64`, saved project rows `64`, project final SRT `64` blocks, MOV `6764026` bytes
+  - reopened project export proof: `output/manual_verification/latest/g3_same_media_app_commands_reopen_fixed_v2_20260629/report.md` -> reopened final count `64`, export-subtitles `64`, manual export SRT `64` blocks, NLE runtime final track `64`, MOV `6764026` bytes
+  - direct version assertion: `APP_VERSION=04.01.12`, `PROJECT_SCHEMA_VERSION=04.01.12`
   - `git diff --check -- .` -> pass
-  - Jammini probe: `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
-  - three sub-agent reviews converged on a narrow proof boundary: accept the same-media benchmark/timeout proof, keep app-command final export acceptance on HOLD until the bridge is reachable and save/project/SRT/video export plus reopened state and artifact bytes are proven.
-  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused editor-sequence `v04.01.11` checkpoint.
+  - prior physical Jammini probe remains `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`; current `--handoff-probe` packet did not produce a fresh physical handoff file, so do not overclaim a new physical route proof from it.
+  - three sub-agent reviews converged on requiring bridge preflight, direct SRT save/export, reopened project state, actual SRT/MOV bytes, and no save/reopen row-count drift.
+  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused direct-SRT app-command `v04.01.12` checkpoint.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`
@@ -268,7 +266,7 @@ Completed item rule:
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
 - Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, and `G3 Realtime NLE STT/VAD`.
-- Latest completed action-item slice: `v04.01.11 G3 Same-Media Benchmark Acceptance And Editor-Sequence Guard`.
+- Latest completed action-item slice: `v04.01.12 G3 Direct-SRT App-Command Save/Reopen/Export Proof`.
 - Current G1 latency evidence snapshot:
   - latest generated-video direct validation evidence: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
   - strict duration-bound follow-up: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`
@@ -295,7 +293,7 @@ Completed item rule:
   - latest variance result over 10 generated/cache artifacts: elapsed avg/min/max/range `41.66/1.312/82.433/81.121s`; stage ranges STT1 `20.134950s`, STT2 `15.939524s`, word precision `20.271760s`, subtitle postprocess `30.410655s`; worst memory pressure counts `unknown=4`, `normal=4`, `critical=2`; old tail-collapse generated runs are still flagged as duration-bound failures.
   - Jammini/서린 NAS-off variance review: `.agents/sentinel/handoffs/20260628-025200-stt-latency-nas-off-variance-review.md`; verdict `HOLD` for algorithm/default changes while NAS is unavailable, analysis-only work accepted.
 - Other active queue items:
-  - `Mac App Store Submission Readiness`; non-destructive readiness audit exists at `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.md`; latest target-lock audit is `output/manual_verification/latest/app_store_readiness_target_lock_20260628/app_store_readiness_audit.md` with `submission_target=mac_app_store_pkg`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `14`; Developer ID beta `.dmg` remains a separate opt-in track and packaging/signing/upload/notarization/DMG work remains opt-in until the owner explicitly asks.
+  - `Mac App Store Submission Readiness`; non-destructive readiness audit exists at `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.md`; latest target-lock audit is `output/manual_verification/latest/app_store_readiness_target_lock_20260628/app_store_readiness_audit.md` with `submission_target=mac_app_store_pkg`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `14`; owner approval for App Store packaging/signing/upload/metadata execution exists, but Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata values remain incomplete. Developer ID beta `.dmg` remains a separate opt-in track.
 - Latest post-generation editor readiness closeout:
   - verification index: `output/manual_verification/latest/post_generation_editor_readiness_index_20260627/verification_index.md`
   - focused guard result: `7 passed, 190 deselected`
@@ -468,7 +466,7 @@ Completed item rule:
 - The completed internal NLE baseline is a source-app domain/adapter layer only. It must not reopen native migration, Swift rewrite, QML migration, or visible Premiere-style UI work without explicit owner approval.
 - App Store submission is still blocked despite the local packaging skeleton passing audit; signed `.app`, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner-provided metadata are missing.
 - The latest G3 real-media live proof passed as runtime/status observability only. It is not same-media quality/speed, save/reopen, or final export proof.
-- The latest G3 live run exposed `nle_save_export_final_overlap` after SRT save. The `v04.01.09` slice stops that nonretryable final-overlap failure from causing repeated deferred-save retries, the `v04.01.10` slice repairs the observed tiny live-SRT quantization overlap for final save/export projection, and the `v04.01.11` slice accepts same-media benchmark/timeout proof while hardening the editor-sequence harness. App-command save/reopen/final-export proof remains open because the guarded attempt recorded `open_app_unreachable`.
+- The latest G3 live run exposed `nle_save_export_final_overlap` after SRT save. The `v04.01.09` slice stops that nonretryable final-overlap failure from causing repeated deferred-save retries, the `v04.01.10` slice repairs the observed tiny live-SRT quantization overlap for final save/export projection, `v04.01.11` accepts same-media benchmark/timeout proof while hardening the editor-sequence harness, and `v04.01.12` proves direct-SRT app-command save/reopen/export without row-count drift. `open-media` generation app-command proof plus active-worker cancel/quit/close responsiveness remain open.
 - Always re-check `git status` before widening a follow-up patch.
 
 ## Narrow Next Item
@@ -479,7 +477,7 @@ Use `docs/planning_queue/ACTION_ITEMS.md` as the executable queue. The current n
 2. Also read `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040104-g3-compact-live-status-feed`.
 3. Also read `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040105-g3-live-nle-projection-scheduler-budget-telemetry`.
 4. The completed first three G3 slices establish read-only runtime track metadata, final-authority guards, compact status/ping count exposure, and zero-worker live projection budget telemetry. They do not add visible UI strips, actual worker fan-out changes, persisted disk-format cutover, STT2 skipping, or cache default promotion.
-5. The real-media runtime/status proof slice is complete at `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`, the deferred-save retry churn for nonretryable `nle_save_export_final_overlap` is closed in `v04.01.09`, the observed tiny live-SRT save/export quantization overlap is repaired in `v04.01.10`, and same-media benchmark/timeout proof plus editor-sequence harness hardening is complete in `v04.01.11`. Next safe slice is app-command save/project/SRT/video export, reopened project state, export artifact bytes, and responsiveness proof on the same media, or another strictly bounded final-surface defect, with no raw status payload leakage, no conversion-time regression, and no final-authority weakening as hard gates.
+5. The real-media runtime/status proof slice is complete at `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`, the deferred-save retry churn for nonretryable `nle_save_export_final_overlap` is closed in `v04.01.09`, the observed tiny live-SRT save/export quantization overlap is repaired in `v04.01.10`, same-media benchmark/timeout proof plus editor-sequence harness hardening is complete in `v04.01.11`, and direct-SRT app-command save/reopen/export proof is complete in `v04.01.12`. Next safe slice is `open-media` generation app-command proof plus active-worker cancel/quit/close responsiveness on the same media, or another strictly bounded final-surface defect, with no raw status payload leakage, no conversion-time regression, and no final-authority weakening as hard gates.
 6. Preserve final authority: VAD/STT runtime rows must not enter final overlay, global canvas final rows, save/export rows, or persisted compatibility rows.
 7. If widening into visible timeline/global-canvas UI, require a fresh owner-approved UI scope, screenshots or automation snapshots, and proof that app commands, cancel/quit, save, and close do not starve behind preview updates.
 8. G0 App Store remains externally blocked on Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata. G1 cache/default promotion remains owner-review gated.
@@ -541,7 +539,7 @@ QA gate for that item:
 - Use `core/runtime/config.py` as version source of truth.
 - Read only the immediately previous release note when drafting a new release note.
 - Keep release history out of `docs/planning_queue/ACTION_ITEMS.md` and `AGENTS.md`.
-- DMG/installer/App Store packaging is not part of default release work. Run it only when explicitly requested.
+- Mac App Store packaging/signing/upload/metadata execution is owner-approved for the current G0 lane, but signed package, validation, upload, and metadata proof remain required before any submission claim. DMG/Developer ID distribution remains a separate explicit request.
 
 ## Report Format
 

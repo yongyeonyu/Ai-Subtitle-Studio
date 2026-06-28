@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.12 G3 Direct-SRT App-Command Save/Reopen/Export Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G3 direct-SRT app-command save/project/SRT/video export, reopened project export proof, and version/schema bump.
+- 결과: pass for direct-SRT app-command save/reopen/export stability. This is not full G3 completion because `open-media` generation proof and active-worker cancel/quit/close responsiveness remain separate gates.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.12.md`
+  - Direct SRT save/export proof: `output/manual_verification/latest/g3_same_media_app_commands_srt_fixed_v2_20260629/report.md`
+  - Reopen/export proof: `output/manual_verification/latest/g3_same_media_app_commands_reopen_fixed_v2_20260629/report.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040112-g3-direct-srt-app-command-savereopenexport-proof`
+- 실제 결과:
+  - App version updated to `04.01.12`.
+  - Project schema version updated to `04.01.12`.
+  - `save-project` app command now uses the same final SRT segment authority as `save-subtitles` / `export-subtitles` and reports `segment_count`.
+  - Direct SRT project save skips cut-boundary re-splitting, preserving opened SRT rows for save/reopen.
+  - Direct proof: `save-project segment_count=64`, `export-subtitles segment_count=64`, manual export SRT `64` blocks, editor/runtime final count `64`, project saved row count `64`, project final SRT `64` blocks, MOV output `6764026` bytes.
+  - Reopen proof: reopened editor final count `64`, export-subtitles `segment_count=64`, manual export SRT `64` blocks, NLE runtime final track `64`, MOV output `6764026` bytes.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/project_manager.py ui/project/project_panel.py ui/editor/editor_save_manager.py ui/main/app_command_bridge_handlers.py tests/test_project_context.py tests/test_app_command_bridge.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py -k "skip_cut_boundary_snap_for_direct_srt_rows or cut_boundary_fit_prevents"` -> `2 passed, 85 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "save_project_command"` -> `4 passed, 78 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py tests/test_project_context.py tests/test_editor_autosave_cleanup.py tests/test_project_segment_reload.py tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py -k "save_project_command or skip_cut_boundary_snap_for_direct_srt_rows or direct_srt or deferred_project_save or save_export_cutover or externalize"` -> `37 passed, 297 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.12`, `PROJECT_SCHEMA_VERSION=04.01.12`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.11 G3 Same-Media Benchmark Acceptance And Editor-Sequence Guard - 2026-06-29 KST
 
 - 실행 모드: source-app G3 same-media NAS HeyDealer benchmark acceptance, STT timeout audit, editor-sequence proof-harness guard, and version/schema bump.

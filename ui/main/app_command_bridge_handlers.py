@@ -802,14 +802,20 @@ def _handle_save_export_command(
                     flush_queue()
                 except Exception:
                     pass
-            getter = getattr(editor, "_get_current_segments", None) if editor is not None else None
-            if callable(getter):
+            if editor is not None:
                 try:
-                    segments = [dict(seg) for seg in list(getter() or []) if isinstance(seg, dict)]
+                    segments = [
+                        dict(seg)
+                        for seg in list(helpers.current_editor_srt_segments(editor) or [])
+                        if isinstance(seg, dict)
+                    ]
                 except Exception:
                     segments = None
             saver(segments=segments)
-            return ok(message="project_saved", data={"path": project_path})
+            return ok(
+                message="project_saved",
+                data={"path": project_path, "segment_count": len(list(segments or []))},
+            )
         editor = getattr(owner, "_editor_widget", None)
         save_handler = getattr(editor, "_on_save", None) if editor is not None else None
         if not callable(save_handler):
