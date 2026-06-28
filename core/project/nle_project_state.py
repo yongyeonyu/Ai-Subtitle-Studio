@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_nearest_frame
@@ -11,6 +11,8 @@ from core.project.project_format import project_primary_fps
 
 NLE_PROJECT_STATE_SCHEMA = "ai_subtitle_studio.nle_project_state.v1"
 NLE_PROJECT_STATE_RUNTIME_KEY = "_nle_project_state"
+NLE_OPERATION_JOURNAL_ENTRY_SCHEMA = "ai_subtitle_studio.nle_operation_journal_entry.v1"
+NLE_OPERATION_JOURNAL_MAX_ENTRIES = 128
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -132,12 +134,36 @@ class NLECaptionState:
 
 
 @dataclass(slots=True)
+class NLEOperationJournalEntry:
+    sequence: int
+    operation_id: str
+    operation_kind: str
+    operation_family: str
+    target_ids: tuple[str, ...]
+    commit_boundary: str = ""
+    commit_source: str = ""
+    undo_snapshot_id: str = ""
+    projected_count: int = 0
+    after_invalid_duration_count: int = 0
+    after_non_monotonic_count: int = 0
+    after_overlap_count: int = 0
+    after_max_active_segments: int = 0
+    schema: str = NLE_OPERATION_JOURNAL_ENTRY_SCHEMA
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["target_ids"] = list(self.target_ids)
+        return payload
+
+
+@dataclass(slots=True)
 class NLEProjectState:
     schema: str
     source_project_path: str
     primary_fps: float
     snapshot: NLESnapshot
     captions: list[NLECaptionState] = field(default_factory=list)
+    operation_journal: list[NLEOperationJournalEntry] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def editor_rows(self) -> list[dict[str, Any]]:
@@ -145,6 +171,9 @@ class NLEProjectState:
             caption.to_editor_row(index=index, fps=self.primary_fps)
             for index, caption in enumerate(self.captions)
         ]
+
+    def operation_journal_rows(self) -> list[dict[str, Any]]:
+        return [entry.to_dict() for entry in self.operation_journal]
 
 
 def build_project_nle_state(project: dict[str, Any], *, project_path: str = "") -> NLEProjectState:
@@ -211,6 +240,49 @@ def sync_project_nle_state_from_editor_rows(
     return state
 
 
+def record_nle_operation_journal_entry(
+    state: NLEProjectState,
+    operation: Any,
+    *,
+    projected_count: int = 0,
+    max_entries: int = NLE_OPERATION_JOURNAL_MAX_ENTRIES,
+) -> NLEOperationJournalEntry:
+    if not isinstance(state, NLEProjectState):
+        raise TypeError("nle_project_state_required")
+    if not getattr(operation, "operation_id", "") or not getattr(operation, "kind", ""):
+        raise TypeError("nle_operation_required")
+    limit = max(1, int(max_entries or NLE_OPERATION_JOURNAL_MAX_ENTRIES))
+    metadata = dict(operation.metadata or {})
+    after_projection = dict(operation.after_projection or {})
+    next_sequence = (state.operation_journal[-1].sequence + 1) if state.operation_journal else 1
+    entry = NLEOperationJournalEntry(
+        sequence=next_sequence,
+        operation_id=str(operation.operation_id or ""),
+        operation_kind=str(operation.kind or ""),
+        operation_family=str(metadata.get("operation_family") or operation.kind or ""),
+        target_ids=tuple(str(item) for item in tuple(operation.target_ids or ())),
+        commit_boundary=str(metadata.get("commit_boundary") or ""),
+        commit_source=str(metadata.get("commit_source") or ""),
+        undo_snapshot_id=str(getattr(operation.undo_snapshot, "snapshot_id", "") or ""),
+        projected_count=max(0, _as_int(projected_count, 0)),
+        after_invalid_duration_count=max(0, _as_int(after_projection.get("invalid_duration_count"), 0)),
+        after_non_monotonic_count=max(0, _as_int(after_projection.get("non_monotonic_count"), 0)),
+        after_overlap_count=max(0, _as_int(after_projection.get("overlap_count"), 0)),
+        after_max_active_segments=max(0, _as_int(after_projection.get("max_active_segments"), 0)),
+    )
+    state.operation_journal.append(entry)
+    if len(state.operation_journal) > limit:
+        state.operation_journal = state.operation_journal[-limit:]
+    state.metadata = {
+        **dict(state.metadata or {}),
+        "operation_journal_runtime_only": True,
+        "operation_journal_count": len(state.operation_journal),
+        "operation_journal_last_operation_id": entry.operation_id,
+        "operation_journal_max_entries": limit,
+    }
+    return entry
+
+
 def project_segments_from_nle_state(project: dict[str, Any], *, project_path: str = "") -> list[dict[str, Any]]:
     return project_nle_state(project, project_path=project_path).editor_rows()
 
@@ -239,7 +311,10 @@ def assert_nle_editor_rows_consistent(
 
 __all__ = [
     "NLECaptionState",
+    "NLEOperationJournalEntry",
     "NLEProjectState",
+    "NLE_OPERATION_JOURNAL_ENTRY_SCHEMA",
+    "NLE_OPERATION_JOURNAL_MAX_ENTRIES",
     "NLE_PROJECT_STATE_RUNTIME_KEY",
     "NLE_PROJECT_STATE_SCHEMA",
     "attach_project_nle_state",
@@ -247,5 +322,6 @@ __all__ = [
     "build_project_nle_state",
     "project_nle_state",
     "project_segments_from_nle_state",
+    "record_nle_operation_journal_entry",
     "sync_project_nle_state_from_editor_rows",
 ]

@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-113300-in-memory-nle-transaction-journal-scout.md`
+- `.agents/sentinel/handoffs/20260628-113253-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-111900-nle-operation-journal-undo-scout.md`
 - `.agents/sentinel/handoffs/20260628-111733-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-110800-nle-adapter-cache-consistency-scout.md`

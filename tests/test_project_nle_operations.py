@@ -11,6 +11,7 @@ from core.project.nle_operations import (
 )
 from core.project.nle_projection_parity import build_project_nle_projection_parity_report
 from core.project.project_context import build_editor_state, project_segments_to_editor
+from core.project.nle_project_state import build_project_nle_state, record_nle_operation_journal_entry
 
 
 def _project_with_segments(segments):
@@ -233,6 +234,51 @@ class NLEOperationModelTests(unittest.TestCase):
                 time_domain="sequence",
                 undo_snapshot=undo,
             )
+
+    def test_operation_journal_records_bounded_runtime_tail(self):
+        project = _stable_project()
+        state = build_project_nle_state(project)
+        report = build_project_nle_projection_parity_report(project)
+        rows = project_segments_to_editor(project, include_analysis_candidates=False)
+
+        for index in range(5):
+            operation_id = f"op_caption_move_{index}"
+            undo = build_nle_undo_snapshot(
+                operation_id=operation_id,
+                editor_rows=rows,
+                ui_state_ref={"commit_boundary": "release", "commit_source": "center"},
+            )
+            operation = build_nle_editor_operation(
+                operation_id=operation_id,
+                kind="caption_move",
+                target_ids=["caption_1"],
+                before_projection=report,
+                after_projection=report,
+                time_domain="sequence",
+                undo_snapshot=undo,
+                metadata={
+                    "operation_family": "caption_move",
+                    "commit_boundary": "release",
+                    "commit_source": "center",
+                },
+            )
+            record_nle_operation_journal_entry(state, operation, projected_count=len(rows), max_entries=3)
+
+        self.assertEqual([entry.sequence for entry in state.operation_journal], [3, 4, 5])
+        self.assertEqual([entry.operation_id for entry in state.operation_journal], [
+            "op_caption_move_2",
+            "op_caption_move_3",
+            "op_caption_move_4",
+        ])
+        self.assertEqual(state.operation_journal[-1].operation_kind, "caption_move")
+        self.assertEqual(state.operation_journal[-1].operation_family, "caption_move")
+        self.assertEqual(state.operation_journal[-1].commit_boundary, "release")
+        self.assertEqual(state.operation_journal[-1].commit_source, "center")
+        self.assertEqual(state.operation_journal[-1].projected_count, len(rows))
+        self.assertEqual(state.operation_journal[-1].after_overlap_count, 0)
+        self.assertEqual(state.metadata["operation_journal_runtime_only"], True)
+        self.assertEqual(state.metadata["operation_journal_count"], 3)
+        self.assertEqual(state.metadata["operation_journal_max_entries"], 3)
 
 
 if __name__ == "__main__":

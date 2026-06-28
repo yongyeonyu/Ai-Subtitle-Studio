@@ -19,7 +19,11 @@ from core.project.nle_dual_write import (
     apply_marker_edit_dual_write_pilot,
 )
 from core.project.nle_operations import NLEOperationValidationError
-from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY, project_segments_from_nle_state
+from core.project.nle_project_state import (
+    NLE_OPERATION_JOURNAL_ENTRY_SCHEMA,
+    NLE_PROJECT_STATE_RUNTIME_KEY,
+    project_segments_from_nle_state,
+)
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_io import (
     clear_project_file_cache,
@@ -146,6 +150,50 @@ class NLEDualWritePilotTests(unittest.TestCase):
         ])
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_move")
         self.assertFalse(result.operation.metadata["taption_reorder"])
+
+    def test_dual_write_records_runtime_operation_journal_without_persisting_it(self):
+        project = _project_with_gap()
+        move = apply_caption_move_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0002",
+            new_start=3.0,
+            new_end=4.0,
+            commit_boundary="release",
+            commit_source="center",
+        )
+        edit = apply_caption_text_edit_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0002",
+            new_text="second edited",
+            commit_boundary="release",
+            commit_source="timeline_inline_text",
+        )
+
+        state = project[NLE_PROJECT_STATE_RUNTIME_KEY]
+        self.assertEqual([entry.sequence for entry in state.operation_journal], [1, 2])
+        self.assertEqual(state.operation_journal[0].operation_id, move.operation.operation_id)
+        self.assertEqual(state.operation_journal[0].operation_kind, "caption_move")
+        self.assertEqual(state.operation_journal[0].operation_family, "caption_move")
+        self.assertEqual(state.operation_journal[0].commit_boundary, "release")
+        self.assertEqual(state.operation_journal[0].commit_source, "center")
+        self.assertEqual(state.operation_journal[0].after_overlap_count, 0)
+        self.assertEqual(state.operation_journal[1].operation_id, edit.operation.operation_id)
+        self.assertEqual(state.operation_journal[1].operation_kind, "caption_text_edit")
+        self.assertEqual(state.operation_journal[1].schema, NLE_OPERATION_JOURNAL_ENTRY_SCHEMA)
+        self.assertEqual(state.metadata["operation_journal_runtime_only"], True)
+        self.assertEqual(state.metadata["operation_journal_count"], 2)
+        self.assertEqual(state.metadata["operation_journal_last_operation_id"], edit.operation.operation_id)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "journal_runtime_only.aissproj"
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            storage_text = str(storage)
+
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertNotIn(NLE_OPERATION_JOURNAL_ENTRY_SCHEMA, storage_text)
+        self.assertNotIn(move.operation.operation_id, storage_text)
+        self.assertNotIn(edit.operation.operation_id, storage_text)
 
     def test_caption_move_dual_write_supports_taption_neighbor_reorder_contract(self):
         project = _project_with_three_captions()

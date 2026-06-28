@@ -12,6 +12,7 @@ from core.project.nle_operations import (
 from core.project.nle_project_state import (
     assert_nle_editor_rows_consistent,
     project_segments_from_nle_state,
+    record_nle_operation_journal_entry,
     sync_project_nle_state_from_editor_rows,
 )
 from core.project.nle_projection_parity import (
@@ -530,6 +531,7 @@ def apply_gap_generate_dual_write_pilot(
         "dual_write_projected_count": len(after_rows),
         "dual_write_generated_caption_id": caption_id,
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -659,6 +661,7 @@ def apply_caption_merge_dual_write_pilot(
         "dual_write_kept_caption_id": keep_id,
         "dual_write_removed_caption_id": remove_id,
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -781,6 +784,7 @@ def apply_caption_split_dual_write_pilot(
         "dual_write_split_caption_id": target_id,
         "dual_write_new_caption_id": right_id,
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -952,6 +956,7 @@ def apply_candidate_confirm_dual_write_pilot(
         "dual_write_candidate_id": candidate_id,
         "dual_write_candidate_source": source,
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -1037,6 +1042,7 @@ def apply_caption_delete_dual_write_pilot(
         "dual_write_projected_count": len(after_rows),
         "dual_write_replacement_gap_id": gap_id,
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -1165,6 +1171,7 @@ def apply_caption_resize_dual_write_pilot(
         "dual_write_trimmed_neighbor_count": trimmed_count,
         "dual_write_deleted_neighbor_count": deleted_count,
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -1274,6 +1281,7 @@ def apply_caption_move_dual_write_pilot(
         "dual_write_projected_count": len(after_rows),
         "dual_write_taption_reorder": bool(reorder_neighbor_id),
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -1518,6 +1526,7 @@ def apply_caption_range_replace_dual_write_pilot(
         "dual_write_range_replace_target_end": range_end,
         "dual_write_range_replace_target_count": len(target_ids),
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -1644,6 +1653,7 @@ def apply_caption_move_commit_dual_write_pilot(
         "dual_write_deleted_row_count": len(deleted_ids),
         "dual_write_silence_gap_deleted_count": silence_gap_deleted_count,
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -1760,6 +1770,7 @@ def apply_caption_text_edit_dual_write_pilot(
         "dual_write_projected_count": len(after_rows),
         "dual_write_caption_text_edit_target": target_id,
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -1846,6 +1857,7 @@ def apply_gap_delete_dual_write_pilot(
         "dual_write_last_operation_id": operation.operation_id,
         "dual_write_projected_count": len(after_rows),
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
     assert_nle_editor_rows_consistent(after_rows, projected_rows, primary_fps=project_primary_fps(project))
     project["editor_state"] = shadow_after["editor_state"]
@@ -1939,6 +1951,7 @@ def apply_marker_edit_dual_write_pilot(
         "dual_write_marker_action": action_key,
         "dual_write_marker_count": len(after_marker_rows),
     }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(before_rows))
     project["editor_state"] = shadow_after["editor_state"]
     project["analysis"] = dict(shadow_after.get("analysis") or {})
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)

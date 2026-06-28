@@ -37,6 +37,7 @@ from core.project.nle_persistence_guard import (
     assert_no_unapproved_nle_persistence_fields,
 )
 from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY
+from core.project.nle_project_state import NLE_OPERATION_JOURNAL_ENTRY_SCHEMA, NLEProjectState
 from core.project.project_io import (
     clear_project_file_cache,
     read_project_storage_payload,
@@ -255,6 +256,9 @@ def _audit_case(work_dir: Path, family: str, project: dict[str, Any], result: An
     undo = getattr(op, "undo_snapshot", None)
     metadata = dict(getattr(op, "metadata", {}) or {}) if op is not None else {}
     undo_ui = dict(getattr(undo, "ui_state_ref", {}) or {}) if undo is not None else {}
+    state = project.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    journal_rows = list(getattr(state, "operation_journal", ()) or ()) if isinstance(state, NLEProjectState) else []
+    latest_journal = journal_rows[-1] if journal_rows else None
     project_path = work_dir / f"{family}.aissproj"
     write_project_file(str(project_path), deepcopy(project))
     storage = read_project_storage_payload(str(project_path))
@@ -285,6 +289,15 @@ def _audit_case(work_dir: Path, family: str, project: dict[str, Any], result: An
         "undo_silence_gap_count": len(tuple(getattr(undo, "silence_gaps", ()) or ())) if undo is not None else 0,
         "undo_marker_count": len(tuple(getattr(undo, "markers", ()) or ())) if undo is not None else 0,
         "undo_release_metadata": undo_release_metadata,
+        "runtime_journal_count": len(journal_rows),
+        "runtime_journal_latest_schema_ok": getattr(latest_journal, "schema", "") == NLE_OPERATION_JOURNAL_ENTRY_SCHEMA,
+        "runtime_journal_latest_operation_id": str(getattr(latest_journal, "operation_id", "") or ""),
+        "runtime_journal_latest_kind": str(getattr(latest_journal, "operation_kind", "") or ""),
+        "runtime_journal_latest_release_metadata": (
+            getattr(latest_journal, "commit_boundary", "") == "release"
+            and bool(getattr(latest_journal, "commit_source", ""))
+        ),
+        "runtime_journal_latest_overlap_count": int(getattr(latest_journal, "after_overlap_count", 0) or 0),
         "invalid_duration_count": invalid,
         "non_monotonic_count": non_monotonic,
         "overlap_count": overlap,
@@ -292,6 +305,7 @@ def _audit_case(work_dir: Path, family: str, project: dict[str, Any], result: An
         "storage_clean": not _storage_has_unapproved_nle_fields(storage),
         "operation_schema_persisted": _contains_value(storage, NLE_OPERATION_SCHEMA),
         "undo_schema_persisted": _contains_value(storage, NLE_UNDO_SNAPSHOT_SCHEMA),
+        "journal_schema_persisted": _contains_value(storage, NLE_OPERATION_JOURNAL_ENTRY_SCHEMA),
         "runtime_state_persisted": NLE_PROJECT_STATE_RUNTIME_KEY in storage,
     }
 
@@ -310,6 +324,12 @@ def build_nle_operation_journal_report(*, output_dir: Path) -> dict[str, Any]:
         and row["undo_snapshot_schema_ok"]
         and row["undo_editor_row_count"] > 0
         and row["undo_release_metadata"]
+        and row["runtime_journal_count"] == 1
+        and row["runtime_journal_latest_schema_ok"]
+        and row["runtime_journal_latest_operation_id"] == row["operation_id"]
+        and row["runtime_journal_latest_kind"] == row["operation_kind"]
+        and row["runtime_journal_latest_release_metadata"]
+        and row["runtime_journal_latest_overlap_count"] == 0
         and row["invalid_duration_count"] == 0
         and row["non_monotonic_count"] == 0
         and row["overlap_count"] == 0
@@ -317,6 +337,7 @@ def build_nle_operation_journal_report(*, output_dir: Path) -> dict[str, Any]:
         and row["storage_clean"]
         and not row["operation_schema_persisted"]
         and not row["undo_schema_persisted"]
+        and not row["journal_schema_persisted"]
         and not row["runtime_state_persisted"]
         for row in rows
     )
@@ -324,10 +345,12 @@ def build_nle_operation_journal_report(*, output_dir: Path) -> dict[str, Any]:
         "schema": SCHEMA,
         "audit_id": AUDIT_ID,
         "runtime_change_applied": False,
+        "runtime_nle_journal_applied": all(row["runtime_journal_count"] == 1 for row in rows),
         "ready": all_passed,
         "operation_family_count": len(rows),
         "release_metadata_count": sum(1 for row in rows if row["release_metadata"] and row["undo_release_metadata"]),
         "undo_snapshot_count": sum(1 for row in rows if row["undo_snapshot_schema_ok"]),
+        "runtime_journal_count": sum(1 for row in rows if row["runtime_journal_count"] == 1),
         "storage_clean_count": sum(1 for row in rows if row["storage_clean"]),
         "checks": rows,
         "blocked_scope": list(BLOCKED_SCOPE),
@@ -346,23 +369,26 @@ def _markdown_report(report: dict[str, Any]) -> str:
         f"- Schema: `{report['schema']}`",
         f"- Ready: `{report['ready']}`",
         f"- Runtime change applied: `{report['runtime_change_applied']}`",
+        f"- Runtime NLE journal applied: `{report['runtime_nle_journal_applied']}`",
         f"- Operation families: `{report['operation_family_count']}`",
         f"- Release metadata count: `{report['release_metadata_count']}`",
         f"- Undo snapshot count: `{report['undo_snapshot_count']}`",
+        f"- Runtime journal count: `{report['runtime_journal_count']}`",
         f"- Storage clean count: `{report['storage_clean_count']}`",
         "",
         "## Operation Matrix",
         "",
-        "| family | kind | release | undo_release | undo_rows | invalid | non_monotonic | overlap | max_active | storage_clean |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| family | kind | release | undo_release | runtime_journal | undo_rows | invalid | non_monotonic | overlap | max_active | storage_clean |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in report["checks"]:
         lines.append(
-            "| {family} | {kind} | {release} | {undo_release} | {undo_rows} | {invalid} | {non_monotonic} | {overlap} | {max_active} | {storage_clean} |".format(
+            "| {family} | {kind} | {release} | {undo_release} | {runtime_journal} | {undo_rows} | {invalid} | {non_monotonic} | {overlap} | {max_active} | {storage_clean} |".format(
                 family=row["operation_family"],
                 kind=row["operation_kind"],
                 release=row["release_metadata"],
                 undo_release=row["undo_release_metadata"],
+                runtime_journal=row["runtime_journal_latest_schema_ok"],
                 undo_rows=row["undo_editor_row_count"],
                 invalid=row["invalid_duration_count"],
                 non_monotonic=row["non_monotonic_count"],

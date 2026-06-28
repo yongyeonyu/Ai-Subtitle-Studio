@@ -1,5 +1,41 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Runtime Operation Journal - 2026-06-28 KST
+
+- 실행 모드: source-app NLE runtime operation journal recording plus NAS HeyDealer first-180s regression.
+- 결과: pass; all current NLE dual-write operation families append bounded runtime-only journal entries without persisting journal schemas.
+- 저장 위치:
+  - NLE report: `output/manual_verification/latest/nle_runtime_operation_journal_20260628/nle_operation_journal_audit.md`
+  - NLE JSON: `output/manual_verification/latest/nle_runtime_operation_journal_20260628/nle_operation_journal_audit.json`
+  - NAS preflight: `output/manual_verification/latest/nle_runtime_operation_journal_nas_heydealer_20260628/preflight/reference_fixture_availability.md`
+  - NAS acceptance: `output/manual_verification/latest/nle_runtime_operation_journal_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-113253-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-113300-in-memory-nle-transaction-journal-scout.md`
+- 수정 요약:
+  - Added runtime-only `NLEOperationJournalEntry` records to `NLEProjectState`.
+  - Every successful NLE dual-write commit boundary now records operation id, family/kind, target ids, commit boundary/source, undo snapshot id, projected count, and final projection stability counts.
+  - The journal is bounded and session/runtime only; legacy project storage remains clean of operation/undo/journal/runtime NLE schemas.
+  - No persisted NLE disk fields, runtime undo/redo UI behavior, per-pixel drag writes, QML/GPU timeline defaults, App Store packaging/signing/upload, DMG behavior, STT/STT2 policy, or user-visible UI/UX behavior changed.
+- 실제 감사 결과:
+  - `ready=true`, `runtime_change_applied=false`, `runtime_nle_journal_applied=true`.
+  - Operation families `11`, release metadata count `11`, undo snapshot count `11`, runtime journal count `11`, storage clean count `11`.
+  - Every audited operation had final invalid/non-monotonic/overlap `0/0/0`, max active `1`, clean legacy storage, and no persisted operation/undo/journal/runtime NLE schema.
+  - Blocked scope remains persisted operation journal, runtime undo/redo UI behavior changes, per-pixel NLE writes, and QML/GPU timeline defaults.
+- NAS HeyDealer regression:
+  - Preflight ready `true`; media and reference SRT exist; clipped reference rows `89`.
+  - Acceptance `true`; elapsed `45.491s`; raw/final/reference `58/56/89`.
+  - Quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; final short/long `0/0`; global max active `1`.
+  - STT1/STT2/word selected `21/37/7`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_project_state.py core/project/nle_dual_write.py tools/audit_nle_operation_journal.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_nle_operation_journal_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py` -> `39 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py tests/test_nle_adapter_consistency_audit.py tests/test_nle_persistence_cutover_audit.py` -> `47 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_operation_journal.py --output-dir output/manual_verification/latest/nle_runtime_operation_journal_20260628` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json --output-dir output/manual_verification/latest/nle_runtime_operation_journal_nas_heydealer_20260628/acceptance` -> `accepted=true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py tests/test_native_subtitle_segments.py tests/test_native_subtitle_stt_segments.py` -> `203 passed`.
+
 ## NLE Operation Journal Contract Audit - 2026-06-28 KST
 
 - 실행 모드: source-app NLE operation journal/undo contract audit plus NAS HeyDealer first-180s regression.

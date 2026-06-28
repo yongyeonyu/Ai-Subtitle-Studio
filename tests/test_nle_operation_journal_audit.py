@@ -14,9 +14,11 @@ def test_nle_operation_journal_audit_covers_release_undo_contracts():
 
     assert report["ready"] is True
     assert report["runtime_change_applied"] is False
+    assert report["runtime_nle_journal_applied"] is True
     assert report["operation_family_count"] == 11
     assert report["release_metadata_count"] == 11
     assert report["undo_snapshot_count"] == 11
+    assert report["runtime_journal_count"] == 11
     assert report["storage_clean_count"] == 11
     families = {row["operation_family"] for row in report["checks"]}
     assert families == {
@@ -42,6 +44,12 @@ def test_nle_operation_journal_audit_covers_release_undo_contracts():
         assert row["undo_snapshot_schema_ok"] is True
         assert row["undo_editor_row_count"] > 0
         assert row["undo_release_metadata"] is True
+        assert row["runtime_journal_count"] == 1
+        assert row["runtime_journal_latest_schema_ok"] is True
+        assert row["runtime_journal_latest_operation_id"] == row["operation_id"]
+        assert row["runtime_journal_latest_kind"] == row["operation_kind"]
+        assert row["runtime_journal_latest_release_metadata"] is True
+        assert row["runtime_journal_latest_overlap_count"] == 0
         assert row["invalid_duration_count"] == 0
         assert row["non_monotonic_count"] == 0
         assert row["overlap_count"] == 0
@@ -49,6 +57,7 @@ def test_nle_operation_journal_audit_covers_release_undo_contracts():
         assert row["storage_clean"] is True
         assert row["operation_schema_persisted"] is False
         assert row["undo_schema_persisted"] is False
+        assert row["journal_schema_persisted"] is False
         assert row["runtime_state_persisted"] is False
 
 
@@ -66,5 +75,7 @@ def test_nle_operation_journal_audit_writes_json_and_markdown_reports():
         assert saved["schema"] == report["schema"]
         assert markdown.startswith("# NLE Operation Journal Contract Audit")
         assert "## Operation Matrix" in markdown
-        assert "| caption_move | caption_move | True | True |" in markdown
-        assert "| marker_edit | marker_edit | True | True |" in markdown
+        assert "Runtime NLE journal applied: `True`" in markdown
+        assert "Runtime journal count: `11`" in markdown
+        assert "| caption_move | caption_move | True | True | True |" in markdown
+        assert "| marker_edit | marker_edit | True | True | True |" in markdown
