@@ -33,6 +33,48 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Projection Metadata Preservation
+
+### Scope
+
+- Added runtime dual-write projection metadata preservation for existing AI Subtitle Studio product metadata.
+- Updated `core/project/nle_dual_write.py`, `core/project/nle_operations.py`, `tests/test_project_nle_dual_write.py`, `tools/audit_nle_projection_metadata_preservation.py`, `tests/test_nle_projection_metadata_preservation_audit.py`, NLE/status docs, completed action history, and the Jammini scout handoff classification.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, arbitrary legacy custom schema expansion, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_projection_metadata_preservation_20260628/nle_projection_metadata_preservation.md`
+- `ready=true`; static deepcopy contract covers retime, manual-edit, sorted projection rows, shadow rebuild rows, and operation serialization.
+- Dynamic checks prove caption move preserves quality/STT candidate metadata, caption merge preserves kept-row metadata, and caption split preserves child speaker/words metadata while keeping existing manual-quality removal policy for edited split text.
+- Storage check confirms legacy project storage stays clean of `_nle_project_state`, `nle`, and `nle_snapshot`.
+- NAS HeyDealer acceptance: `output/manual_verification/latest/nle_projection_metadata_preservation_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_171508/benchmark_results.json`: accepted `true`, elapsed `45.188s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_projection_metadata_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Route status/probe passed before delegation; probe pointer was removed from the Sentinel index.
+- Scout: `.agents/sentinel/handoffs/20260628-080426-next-nle-taption-runtime-contract-scout.md`
+- Dex classification: accepted the NLE-to-legacy metadata preservation direction with scope narrowed to existing product metadata and runtime projection deepcopy. Arbitrary legacy custom schema expansion remains out of scope.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_dual_write.py core/project/nle_operations.py tools/audit_nle_projection_metadata_preservation.py tests/test_project_nle_dual_write.py tests/test_nle_projection_metadata_preservation_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_projection_metadata_preservation_audit.py -k "metadata_preservation or projection_metadata"` -> `5 passed, 34 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_projection_metadata_preservation_audit.py` -> `39 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_editor_srt_open_refresh.py -k "runtime_nle or direct_srt or project_file_roundtrip or metadata or save_project_routes"` -> `20 passed, 98 deselected`.
+- `./venv/bin/python tools/audit_nle_projection_metadata_preservation.py --output-dir output/manual_verification/latest/nle_projection_metadata_preservation_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_projection_metadata_preservation_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_171508/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_171508/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_projection_metadata_preservation_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_165443/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_171508/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_projection_metadata_nas_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`.
+- Treat any future arbitrary custom metadata persistence or persisted NLE disk-field adoption as a separate compatibility-gated schema change.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Gap-Delete Sequence Policy
 
 ### Scope

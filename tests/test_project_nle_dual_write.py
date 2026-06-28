@@ -97,6 +97,55 @@ def _project_with_three_captions():
     }
 
 
+def _project_with_nested_caption_metadata():
+    return {
+        "project_name": "nle_projection_metadata_preservation",
+        "mode": "single",
+        "video": {"duration_sec": 8.0, "primary_fps": 30.0},
+        "editor_state": build_editor_state(
+            mode="single",
+            media_files=[],
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "first",
+                    "speaker": "00",
+                    "speaker_list": ["00", "host"],
+                    "words": [{"word": "first", "start": 0.1, "end": 0.7, "score": 0.91}],
+                    "quality": {"confidence_label": "high", "components": {"text": 0.93, "timing": 0.88}},
+                    "quality_history": [{"stage": "initial", "score": 0.91}],
+                    "quality_candidates": [{"source": "llm", "score": 0.92}],
+                    "stt_candidates": [
+                        {"source": "STT1", "start": 0.0, "end": 1.0, "text": "first raw", "score": 0.8}
+                    ],
+                },
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "second",
+                    "speaker": "01",
+                    "speaker_list": ["01", "guest"],
+                    "words": [{"word": "second", "start": 1.1, "end": 1.7, "score": 0.89}],
+                    "quality": {"confidence_label": "medium", "components": {"text": 0.83, "timing": 0.79}},
+                    "quality_history": [{"stage": "initial", "score": 0.81}],
+                    "quality_candidates": [{"source": "stt2", "score": 0.84}],
+                },
+                {
+                    "start": 2.0,
+                    "end": 3.0,
+                    "text": "third",
+                    "speaker": "02",
+                    "speaker_list": ["02"],
+                    "words": [{"word": "third", "start": 2.1, "end": 2.7, "score": 0.9}],
+                    "quality": {"confidence_label": "high", "components": {"text": 0.95, "timing": 0.9}},
+                },
+            ],
+            primary_fps=30.0,
+        ),
+    }
+
+
 def _raw_vector_segments(project):
     return list(
         (
@@ -208,6 +257,18 @@ class NLEDualWritePilotTests(unittest.TestCase):
         ]
         self.assertEqual(actual, expected)
 
+    def row_by_id(self, rows, row_id):
+        for row in rows:
+            if row.get("id") == row_id:
+                return row
+        self.fail(f"row missing: {row_id}")
+
+    def raw_vector_by_id(self, project, row_id):
+        for row in _raw_vector_segments(project):
+            if row.get("id") == row_id:
+                return row
+        self.fail(f"raw vector missing: {row_id}")
+
     def test_caption_move_dual_write_routes_through_nle_state_and_projects_legacy_rows(self):
         project = _project_with_gap()
         result = apply_caption_move_dual_write_pilot(
@@ -241,6 +302,34 @@ class NLEDualWritePilotTests(unittest.TestCase):
         ])
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_move")
         self.assertFalse(result.operation.metadata["taption_reorder"])
+
+    def test_caption_move_dual_write_preserves_nested_projection_metadata(self):
+        project = _project_with_nested_caption_metadata()
+        result = apply_caption_move_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0001",
+            new_start=3.0,
+            new_end=4.0,
+            commit_boundary="release",
+            commit_source="metadata_preservation_move",
+        )
+
+        legacy_row = self.row_by_id(project_segments_to_editor(project, include_analysis_candidates=False), "subtitle_vector_0001")
+        nle_row = self.row_by_id(project_segments_from_nle_state(project), "subtitle_vector_0001")
+        raw_row = self.raw_vector_by_id(project, "subtitle_vector_0001")
+
+        self.assert_final_projection_is_release_stable(result)
+        self.assertEqual(legacy_row["quality"]["components"]["text"], 0.93)
+        self.assertEqual(nle_row["quality"]["components"]["timing"], 0.88)
+        self.assertEqual(raw_row["meta"]["quality"]["confidence_label"], "high")
+        self.assertEqual(legacy_row["quality_history"], [{"stage": "initial", "score": 0.91}])
+        self.assertEqual(nle_row["quality_candidates"], [{"source": "llm", "score": 0.92}])
+        self.assertEqual(legacy_row["stt_candidates"][0]["source"], "STT1")
+
+        payload = result.to_dict()
+        payload["projected_rows"][2]["quality"]["components"]["text"] = -1.0
+        fresh_row = self.row_by_id(project_segments_from_nle_state(project), "subtitle_vector_0001")
+        self.assertEqual(fresh_row["quality"]["components"]["text"], 0.93)
 
     def test_caption_move_dual_write_clamps_tail_before_raw_storage_and_nle_sync(self):
         project = _project_with_three_captions()
@@ -927,6 +1016,28 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assertEqual([(row["start_frame"], row["end_frame"]) for row in nle_rows], [(0, 60), (60, 90)])
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_merge")
 
+    def test_caption_merge_dual_write_preserves_kept_row_projection_metadata(self):
+        project = _project_with_nested_caption_metadata()
+        result = apply_caption_merge_dual_write_pilot(
+            project,
+            left_caption_id="subtitle_vector_0001",
+            right_caption_id="subtitle_vector_0002",
+            merged_text="first second",
+            commit_boundary="release",
+            commit_source="metadata_preservation_merge",
+        )
+
+        legacy_row = self.row_by_id(project_segments_to_editor(project, include_analysis_candidates=False), "subtitle_vector_0001")
+        nle_row = self.row_by_id(project_segments_from_nle_state(project), "subtitle_vector_0001")
+        raw_row = self.raw_vector_by_id(project, "subtitle_vector_0001")
+
+        self.assert_final_projection_is_release_stable(result)
+        self.assertEqual(legacy_row["speaker_list"], ["00", "host"])
+        self.assertEqual(nle_row["words"], [{"word": "first", "start": 0.1, "end": 0.7, "score": 0.91}])
+        self.assertEqual(raw_row["meta"]["quality"]["components"]["text"], 0.93)
+        self.assertEqual(legacy_row["quality_history"], [{"stage": "initial", "score": 0.91}])
+        self.assertEqual(nle_row["merged_caption_ids"], ["subtitle_vector_0001", "subtitle_vector_0002"])
+
     def test_caption_merge_dual_write_rejects_gap_or_missing_target_without_mutating_project(self):
         project = _project_with_gap()
         before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
@@ -969,6 +1080,33 @@ class NLEDualWritePilotTests(unittest.TestCase):
         ])
         self.assertEqual([(row["start_frame"], row["end_frame"]) for row in nle_rows], [(0, 30), (30, 42), (42, 60), (60, 90)])
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_split")
+
+    def test_caption_split_dual_write_preserves_child_projection_metadata(self):
+        project = _project_with_nested_caption_metadata()
+        result = apply_caption_split_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0002",
+            split_sec=1.4,
+            left_text="sec",
+            right_text="ond",
+            commit_boundary="release",
+            commit_source="metadata_preservation_split",
+        )
+
+        legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        nle_rows = project_segments_from_nle_state(project)
+        left_legacy = self.row_by_id(legacy_rows, "subtitle_vector_0002")
+        right_legacy = self.row_by_id(legacy_rows, "subtitle_vector_0002_split_right")
+        left_nle = self.row_by_id(nle_rows, "subtitle_vector_0002")
+        right_nle = self.row_by_id(nle_rows, "subtitle_vector_0002_split_right")
+
+        self.assert_final_projection_is_release_stable(result)
+        self.assertEqual(left_legacy["speaker_list"], ["01", "guest"])
+        self.assertEqual(right_legacy["speaker_list"], ["01", "guest"])
+        self.assertEqual(left_nle["words"], [{"word": "second", "start": 1.1, "end": 1.7, "score": 0.89}])
+        self.assertEqual(right_nle["words"], [{"word": "second", "start": 1.1, "end": 1.7, "score": 0.89}])
+        self.assertNotIn("quality", left_legacy)
+        self.assertNotIn("quality", right_legacy)
 
     def test_caption_split_dual_write_rejects_gap_or_edge_split_without_mutating_project(self):
         project = _project_with_gap()

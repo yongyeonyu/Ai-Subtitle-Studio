@@ -77,7 +77,7 @@ class NLEUndoSnapshot:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         for key in ("editor_rows", "candidate_lanes", "silence_gaps", "markers"):
-            payload[key] = [dict(row) for row in payload[key]]
+            payload[key] = [deepcopy(row) for row in payload[key]]
         return payload
 
 

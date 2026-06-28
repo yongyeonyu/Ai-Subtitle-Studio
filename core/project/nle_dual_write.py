@@ -47,7 +47,7 @@ class NLEDualWritePilotResult:
         payload["operation"] = self.operation.to_dict()
         payload["before_projection"] = self.before_projection.to_dict()
         payload["after_projection"] = self.after_projection.to_dict()
-        payload["projected_rows"] = [dict(row) for row in self.projected_rows]
+        payload["projected_rows"] = [deepcopy(row) for row in self.projected_rows]
         return payload
 
 
@@ -63,7 +63,7 @@ def _analysis_cut_boundaries(project: dict[str, Any]) -> list[dict[str, Any]]:
     if rows is None:
         project_analysis = project.get("analysis") if isinstance(project.get("analysis"), dict) else {}
         rows = project_analysis.get("cut_boundaries") if isinstance(project_analysis.get("cut_boundaries"), list) else []
-    return [dict(row) for row in rows or [] if isinstance(row, dict)]
+    return [deepcopy(row) for row in rows or [] if isinstance(row, dict)]
 
 
 def _shadow_project_with_rows_and_provisional_markers(
@@ -80,12 +80,12 @@ def _shadow_project_with_rows_and_provisional_markers(
     shadow["editor_state"] = build_editor_state(
         mode=mode,
         media_files=media_files,
-        segments=[dict(row) for row in rows],
+        segments=[deepcopy(row) for row in rows],
         workspace=editor_state.get("workspace") if isinstance(editor_state.get("workspace"), dict) else shadow.get("workspace"),
         clip_boundaries=project_clip_boundaries(shadow),
         stt_preview_segments=_stt_preview_segments(shadow),
         cut_boundaries=_analysis_cut_boundaries(shadow),
-        provisional_cut_boundaries=[dict(row) for row in markers if isinstance(row, dict)],
+        provisional_cut_boundaries=[deepcopy(row) for row in markers if isinstance(row, dict)],
         primary_fps=project_primary_fps(shadow),
         preserve_segment_identity=True,
     )
@@ -98,7 +98,7 @@ def _stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(stt_state, dict):
         return []
     rows = stt_state.get("preview_segments")
-    return [dict(row) for row in rows or [] if isinstance(row, dict)]
+    return [deepcopy(row) for row in rows or [] if isinstance(row, dict)]
 
 
 def _candidate_lanes(project: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
@@ -130,7 +130,7 @@ def _shadow_project_with_rows(project: dict[str, Any], rows: list[dict[str, Any]
     shadow["editor_state"] = build_editor_state(
         mode=mode,
         media_files=media_files,
-        segments=[dict(row) for row in rows],
+        segments=[deepcopy(row) for row in rows],
         workspace=editor_state.get("workspace") if isinstance(editor_state.get("workspace"), dict) else project.get("workspace"),
         clip_boundaries=project_clip_boundaries(project),
         stt_preview_segments=_stt_preview_segments(project),
@@ -194,7 +194,7 @@ def _row_end(row: dict[str, Any], default: float = 0.0) -> float:
 
 
 def _retime_row(row: dict[str, Any], start: float, end: float) -> dict[str, Any]:
-    updated = dict(row)
+    updated = deepcopy(row)
     updated["start"] = float(start)
     updated["end"] = max(float(start), float(end))
     updated["timeline_start"] = updated["start"]
@@ -205,7 +205,7 @@ def _retime_row(row: dict[str, Any], start: float, end: float) -> dict[str, Any]
 
 
 def _caption_row_to_gap(row: dict[str, Any], *, caption_id: str, gap_id: str) -> dict[str, Any]:
-    updated = dict(row)
+    updated = deepcopy(row)
     updated["id"] = gap_id
     updated["gap_id"] = gap_id
     updated["deleted_caption_id"] = caption_id
@@ -253,7 +253,7 @@ def _caption_row_from_gap(
 
 
 def _manual_caption_edit_row(row: dict[str, Any]) -> dict[str, Any]:
-    updated = dict(row)
+    updated = deepcopy(row)
     for key in (
         "stt_candidates",
         "stt_pending",
@@ -323,7 +323,7 @@ def _find_row_by_identity(
 
 def _sorted_editor_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        dict(row)
+        deepcopy(row)
         for row in sorted(
             rows,
             key=lambda item: (_row_start(item), bool(item.get("is_gap")), int(item.get("line", 0) or 0)),

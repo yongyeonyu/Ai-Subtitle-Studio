@@ -271,6 +271,19 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_
 
 Acceptance requires audit `ready=true`, sequence policy `remove_gap_row_no_ripple`, adjacent caption bounds preserved in legacy rows, runtime NLE rows, and raw vector storage, clean legacy project storage, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`. Run NAS HeyDealer first-180s regression when this runtime dual-write contract changes.
 
+## NLE projection metadata preservation validation
+
+Runtime dual-write projection metadata changes must prove existing product metadata survives NLE-to-legacy projection without adding new persisted NLE fields or arbitrary legacy custom schema expansion.
+
+```bash
+./venv/bin/python -m py_compile core/project/nle_dual_write.py core/project/nle_operations.py tools/audit_nle_projection_metadata_preservation.py tests/test_project_nle_dual_write.py tests/test_nle_projection_metadata_preservation_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_projection_metadata_preservation_audit.py -k "metadata_preservation or projection_metadata"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_context.py tests/test_editor_srt_open_refresh.py -k "runtime_nle or direct_srt or project_file_roundtrip or metadata or save_project_routes"
+./venv/bin/python tools/audit_nle_projection_metadata_preservation.py --output-dir output/manual_verification/latest/nle_projection_metadata_preservation_YYYYMMDD
+```
+
+Acceptance requires audit `ready=true`, static deepcopy contract true for retime/manual/sort/shadow/operation serialization, caption move preserving quality/STT candidate metadata, caption merge preserving kept-row metadata, caption split preserving child speaker/words metadata while keeping manual-quality removal policy, clean legacy project storage, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`. Run NAS HeyDealer first-180s regression when this runtime dual-write projection contract changes.
+
 ## NLE drag commit-boundary validation
 
 Timeline body drag changes must prove Taption-style preview-only behavior until release. Mouse-move previews may update the canvas insertion/neighbor preview, but runtime NLE dual-write must stay at `0` calls until the release commit.
