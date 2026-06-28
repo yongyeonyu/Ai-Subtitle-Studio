@@ -395,6 +395,20 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_pla
 
 Acceptance requires smart split undo and redo to restore the visible block snapshot while `text_edit.hasFocus()` remains true, the full split undo file to pass, and related smart/gap timeline paths to keep their existing behavior. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows; if NAS is available and a current-head regression is run, it must be accepted by `tools/evaluate_reference_benchmark_acceptance.py` and report final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`, and timeout audit `timeout_detected=false`.
 
+## NLE roughcut sidecar compatibility validation
+
+Roughcut sidecar compatibility changes must prove `_render_plan.json` / `_edl.json` sidecar restore, NLE render/export parity, and legacy project storage cleanliness without approving persisted NLE disk fields, UI flow changes, or roughcut schema changes.
+
+```bash
+./venv/bin/python -m py_compile tools/audit_nle_roughcut_sidecar_compat.py tests/test_nle_roughcut_sidecar_compat_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_roughcut_sidecar_compat_audit.py
+./venv/bin/python tools/audit_nle_roughcut_sidecar_compat.py --output-dir output/manual_verification/latest/nle_roughcut_sidecar_compat_YYYYMMDD
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_v2_output_compat.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_snapshot.py -k "roughcut or render_export_parity or sidecar"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "sidecar or render_plan_builders_route_through_nle_snapshot_adapter_with_legacy_parity"
+```
+
+Acceptance requires audit `ready=true`, sidecar restore matches `true`, parity diff summary `ok`, final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`, roughcut sidecar and exported-assets stable `true`, sidecar/storage forbidden key counts `0/0`, and persisted NLE fields still blocked. If NAS is available and a current-head regression is run, it must be accepted by `tools/evaluate_reference_benchmark_acceptance.py` and report final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`, and timeout audit `timeout_detected=false`.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.

@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Roughcut Sidecar Compatibility - 2026-06-28 KST
+
+- 실행 모드: source-app roughcut `_render_plan.json` / `_edl.json` sidecar restore plus NLE render/export parity compatibility audit.
+- 결과: pass for stitched cut-boundary sidecar restore, roughcut sidecar/exported-assets parity, clean sidecar/storage payloads, strict NAS HeyDealer first-180s acceptance, and no STT worker timeout. UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, and per-pixel NLE writes did not change.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_roughcut_sidecar_compat_20260628/nle_roughcut_sidecar_compat.md`
+  - NAS preflight: `output/manual_verification/latest/nle_roughcut_sidecar_compat_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_191031/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_roughcut_sidecar_compat_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_roughcut_sidecar_compat_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-100359-roughcut-sidecar-nle-compatibility-scout.md`
+- 실제 결과:
+  - Audit `ready=true`; sidecar restore matches `true`; parity diff summary `ok`.
+  - Roughcut sidecar stable `true`; exported assets stable `true`; render/manifest/stitched counts `2/2/1`.
+  - Sidecar forbidden key count `0`; storage forbidden key count `0`.
+  - NAS acceptance `accepted=true`, elapsed `45.103s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - Timeout audit `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_roughcut_sidecar_compat.py tests/test_nle_roughcut_sidecar_compat_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_roughcut_sidecar_compat_audit.py` -> `2 passed`.
+  - `./venv/bin/python tools/audit_nle_roughcut_sidecar_compat.py --output-dir output/manual_verification/latest/nle_roughcut_sidecar_compat_20260628` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_v2_output_compat.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_snapshot.py -k "roughcut or render_export_parity or sidecar"` -> `12 passed, 9 deselected, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "sidecar or render_plan_builders_route_through_nle_snapshot_adapter_with_legacy_parity"` -> `3 passed, 35 deselected`.
+
 ## NLE Smart Split Undo Route - 2026-06-28 KST
 
 - 실행 모드: source-app Taption-style smart split snapshot undo routing under text-editor focus.

@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-100359-roughcut-sidecar-nle-compatibility-scout.md`
+- `.agents/sentinel/handoffs/20260628-190326-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-095359-smart-split-undo-route-scout.md`
 - `.agents/sentinel/handoffs/20260628-185328-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-093842-next-nle-taption-runtime-contract-scout.md`

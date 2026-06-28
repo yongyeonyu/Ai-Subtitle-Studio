@@ -33,7 +33,52 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Smart Split Undo Route
+## Current Handoff - 2026-06-28 NLE Roughcut Sidecar Compatibility
+
+### Scope
+
+- Continued the owner goal to move AI Subtitle Studio toward a video-editor/NLE structure by proving roughcut sidecar compatibility at the NLE render/export boundary.
+- Added `tools/audit_nle_roughcut_sidecar_compat.py` and `tests/test_nle_roughcut_sidecar_compat_audit.py`.
+- The audit writes a real roughcut `_render_plan.json` and `_edl.json`, verifies stitched cut-boundary restore for SRT open, checks NLE render/export parity across roughcut sidecar and exported-assets surfaces, and confirms raw project storage stays clean of `_nle_project_state`, `nle`, and `nle_snapshot`.
+- No UI layout/labels/colors/menus/popups, subtitle generation policy, STT/STT2/default-cache policy, persisted `.aissproj` NLE fields, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_roughcut_sidecar_compat_20260628/nle_roughcut_sidecar_compat.md`
+- `ready=true`; sidecar restore matches `true`; parity diff summary `ok`; final invalid/non-monotonic/overlap `0/0/0`; global max-active `1`; sidecar/storage forbidden key counts `0/0`.
+- NAS HeyDealer preflight: `output/manual_verification/latest/nle_roughcut_sidecar_compat_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`, media/SRT exist `true/true`, clipped reference rows `89`.
+- NAS HeyDealer current-head regression: `output/manual_verification/latest/nle_roughcut_sidecar_compat_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_191031/benchmark_results.json`: accepted `true`, elapsed `45.103s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_roughcut_sidecar_compat_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-100359-roughcut-sidecar-nle-compatibility-scout.md`
+- Dex classification: accepted the compatibility-proof direction and kept the slice narrowed to test/audit evidence. Deferred UI, persisted NLE fields, STT/default, App Store, and per-pixel write scopes.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_roughcut_sidecar_compat.py tests/test_nle_roughcut_sidecar_compat_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_roughcut_sidecar_compat_audit.py` -> `2 passed`.
+- `./venv/bin/python tools/audit_nle_roughcut_sidecar_compat.py --output-dir output/manual_verification/latest/nle_roughcut_sidecar_compat_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_v2_output_compat.py tests/test_project_nle_render_export_parity.py tests/test_project_nle_snapshot.py -k "roughcut or render_export_parity or sidecar"` -> `12 passed, 9 deselected, 4 subtests passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "sidecar or render_plan_builders_route_through_nle_snapshot_adapter_with_legacy_parity"` -> `3 passed, 35 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_roughcut_sidecar_compat_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_191031/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_191031/benchmark_results.json --output-dir output/manual_verification/latest/nle_roughcut_sidecar_compat_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_185643/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_191031/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_roughcut_sidecar_compat_nas_20260628` -> timeout detected `false`.
+
+### Known Notes
+
+- The previous deferred Jammini roughcut sidecar compatibility proposal is now resolved as a focused compatibility audit/test slice.
+- Persisted NLE disk fields, roughcut UI/schema changes, runtime undo/redo UI surface redesign, per-pixel writes, QML/GPU default timeline surfaces, detector-threshold changes, App Store packaging/submission work, and STT/default-cache policy changes remain blocked until explicit owner approval and compatibility proof exist.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`. Good candidates should be bounded to existing source-app owner paths, prove Taption release-commit/no-overlap behavior, and avoid persisted NLE fields or UI redesign unless the owner explicitly asks.
+- For generation-affecting or performance/default-cache work, keep using the available NAS HeyDealer first-180s MP4/SRT preflight plus strict acceptance and timeout audit.
+
+## Previous Handoff - 2026-06-28 NLE Smart Split Undo Route
 
 ### Scope
 
