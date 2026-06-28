@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.05-source-app
+Document-Version: 04.01.06-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,19 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.06 G3 Live Runtime Observability Proof Harness
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.06"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.06`.
+3. `tools/remote_verify.py` now exposes `live-nle-proof`, a G3 proof harness that starts `guided-subtitle-run`, polls compact `guided-subtitle-status`, and writes `live_nle_runtime_proof.md`, `live_nle_runtime_proof.json`, and `status_samples.json`.
+4. The proof requires pre-final active samples where `VAD`, `STT1`, and `STT2` each have positive `nle_runtime_track_counts`.
+5. The proof blocks raw runtime payload leakage, non-final save/export authority drift, and live projection budget drift on active pre-final samples.
+6. Optional snapshots use the existing app snapshot route; no visible UI lane, label, layout, color, shortcut, menu, or popup change was introduced.
+7. The slice did not perform actual real-media proof, final quality/speed acceptance, STT/VAD algorithm changes, worker fan-out changes, cache default promotion, persisted NLE disk-format cutover, App Store package/upload/submission, or metadata submission.
+8. Focused verification passed: compile check and `tests/test_remote_verify_actions.py` -> `7 passed`.
 
 ## v04.01.05 G3 Live NLE Projection Scheduler Budget Telemetry
 

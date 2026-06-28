@@ -33,7 +33,46 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.05 / G3 Live NLE Projection Scheduler Budget Telemetry
+## Current Handoff - 2026-06-29 v04.01.06 / G3 Live Runtime Observability Proof Harness
+
+### Scope
+
+- Completed the proof-harness slice for `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`.
+- Bumped source-app version and project schema from `04.01.05` to `04.01.06`.
+- Added `docs/release_notes/RELEASE_v04.01.06.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.06`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.06`.
+- `tools/remote_verify.py live-nle-proof` now starts `guided-subtitle-run`, polls compact `guided-subtitle-status`, optionally captures existing-window snapshots, and writes `live_nle_runtime_proof.md`, `live_nle_runtime_proof.json`, and `status_samples.json`.
+- The harness passes only when `VAD`, `STT1`, and `STT2` have positive `nle_runtime_track_counts` in active pre-final samples.
+- The harness blocks raw runtime payload leakage, non-final save/export authority drift, and live projection budget drift on active pre-final samples.
+- No visible UI layout/label/color/menu/shortcut change, actual worker fan-out change, STT/VAD algorithm change, STT2 skip, model downgrade, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py` -> pass.
+- Focused proof-harness guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `7 passed`.
+- Expanded app-command/NLE status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `113 passed`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.06`, `PROJECT_SCHEMA_VERSION=04.01.06`.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-020008-watchdog-handoff-probe.md`.
+- Jammini proof-harness review: `.agents/sentinel/handoffs/20260628-270641-g3-live-runtime-observability-proof-review-jammini.md`.
+- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints; all recommended compact status time-series proof plus existing screenshots before any visible UI lane.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G3, run the harness against a fixture that actually exercises selective STT2, preferably the NAS HeyDealer first-180s path when available:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/remote_verify.py --timeout 4 live-nle-proof --media "/path/to/media.mp4" --poll-sec 1.0 --max-duration-sec 240 --capture-snapshots --output-dir output/manual_verification/latest/g3_live_runtime_observability_YYYYMMDD_HHMM`
+- Treat the harness pass as runtime/status/visual-observability evidence only. Same-media final quality/speed proof remains separate and must still cover raw/final/reference counts, quality/text/timing, final invalid/non-monotonic/overlap, save/reopen stability, and global canvas max-active.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+## Previous Handoff - 2026-06-29 v04.01.05 / G3 Live NLE Projection Scheduler Budget Telemetry
 
 ### Scope
 

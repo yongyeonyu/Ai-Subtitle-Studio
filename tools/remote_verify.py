@@ -16,6 +16,9 @@ if str(ROOT) not in sys.path:
 from core.automation.app_command_protocol import build_command_payload
 from tools.automation_command_client import send_app_command_with_readiness_retry
 
+_LIVE_NLE_TRACK_ORDER = ("VAD", "STT1", "STT2", "subtitle_preview", "final")
+_LIVE_NLE_REQUIRED_RUNTIME_TRACKS = ("VAD", "STT1", "STT2")
+
 
 def _default_output_dir(label: str) -> Path:
     stamp = time.strftime("%Y%m%d_%H%M%S")
@@ -56,6 +59,423 @@ def _capture_status(timeout: float) -> dict[str, Any]:
         return _send("status", timeout=timeout)
     except OSError as exc:
         return {"ok": False, "error": "app_unreachable", "message": str(exc), "data": {}}
+
+
+def _result_data(result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    data = result.get("data")
+    return dict(data or {}) if isinstance(data, dict) else {}
+
+
+def _live_nle_track_counts(data: dict[str, Any]) -> dict[str, int]:
+    raw_counts = data.get("nle_runtime_track_counts")
+    if not isinstance(raw_counts, dict):
+        tracks = data.get("nle_runtime_tracks")
+        if isinstance(tracks, dict) and isinstance(tracks.get("counts"), dict):
+            raw_counts = tracks.get("counts")
+        elif isinstance(data.get("editor_runtime"), dict):
+            editor_tracks = data["editor_runtime"].get("nle_runtime_tracks")
+            if isinstance(editor_tracks, dict) and isinstance(editor_tracks.get("counts"), dict):
+                raw_counts = editor_tracks.get("counts")
+    counts: dict[str, int] = {}
+    for track in _LIVE_NLE_TRACK_ORDER:
+        try:
+            counts[track] = max(0, int((raw_counts or {}).get(track, 0) or 0))
+        except Exception:
+            counts[track] = 0
+    return counts
+
+
+def _contains_raw_runtime_payload(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, raw in value.items():
+            normalized = str(key or "").strip().lower()
+            if normalized in {
+                "segments",
+                "runtime_track_segments",
+                "stt_preview_segments",
+                "subtitle_preview_segments",
+                "vad_segments",
+                "voice_activity_segments",
+            }:
+                return True
+            if normalized == "text":
+                return True
+            if _contains_raw_runtime_payload(raw):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_raw_runtime_payload(item) for item in value)
+    return False
+
+
+def _compact_runtime_track_contract(data: dict[str, Any]) -> dict[str, Any]:
+    tracks = data.get("nle_runtime_tracks")
+    if not isinstance(tracks, dict) and isinstance(data.get("editor_runtime"), dict):
+        tracks = data["editor_runtime"].get("nle_runtime_tracks")
+    tracks = dict(tracks or {}) if isinstance(tracks, dict) else {}
+    source_tracks = tracks.get("tracks") if isinstance(tracks.get("tracks"), dict) else {}
+    authority: dict[str, bool] = {}
+    role: dict[str, str] = {}
+    for track in _LIVE_NLE_TRACK_ORDER:
+        raw = source_tracks.get(track) if isinstance(source_tracks, dict) else {}
+        raw_track = dict(raw or {}) if isinstance(raw, dict) else {}
+        authority[track] = bool(raw_track.get("authoritative_for_save_export", track == "final"))
+        role[track] = str(raw_track.get("role") or ("save_export_render_authority" if track == "final" else "runtime_reference_only"))
+    return {
+        "compact_payload": bool(tracks.get("compact_payload", True)),
+        "raw_payload_leak": _contains_raw_runtime_payload(tracks),
+        "authority": authority,
+        "role": role,
+        "final_authority_ok": authority.get("final") is True
+        and all(authority.get(track) is False for track in _LIVE_NLE_TRACK_ORDER if track != "final"),
+    }
+
+
+def _live_nle_budget_contract(data: dict[str, Any]) -> dict[str, Any]:
+    runtime_resource = data.get("runtime_resource") if isinstance(data.get("runtime_resource"), dict) else {}
+    budget = (
+        runtime_resource.get("live_nle_projection_budget")
+        if isinstance(runtime_resource.get("live_nle_projection_budget"), dict)
+        else {}
+    )
+    budget = dict(budget or {})
+    if not budget:
+        return {"present": False, "ok": False, "fields": {}}
+    fields = {
+        "dedicated_worker_count": budget.get("dedicated_worker_count"),
+        "max_projection_workers": budget.get("max_projection_workers"),
+        "shares_subtitle_worker_pool": budget.get("shares_subtitle_worker_pool"),
+        "uses_existing_row_snapshots": budget.get("uses_existing_row_snapshots"),
+        "coalesces_updates": budget.get("coalesces_updates"),
+        "drops_stale_preview_frames": budget.get("drops_stale_preview_frames"),
+        "quality_policy": budget.get("quality_policy"),
+    }
+    ok = (
+        fields["dedicated_worker_count"] == 0
+        and fields["max_projection_workers"] == 0
+        and fields["shares_subtitle_worker_pool"] is False
+        and fields["uses_existing_row_snapshots"] is True
+        and fields["coalesces_updates"] is True
+        and fields["drops_stale_preview_frames"] is True
+        and fields["quality_policy"] == "final_authority_unchanged"
+    )
+    return {"present": True, "ok": ok, "fields": fields}
+
+
+def _live_nle_generation_completed(data: dict[str, Any]) -> bool:
+    guided = data.get("guided_snapshot_run") if isinstance(data.get("guided_snapshot_run"), dict) else {}
+    stage_key = str(data.get("last_stage_key") or guided.get("last_stage_key") or "").strip().lower()
+    stage = str(data.get("generation_stage") or guided.get("last_stage") or guided.get("last_stage_label") or "").strip()
+    if stage_key == "completed" or "완료" in stage or "completed" in stage.lower():
+        return True
+    return (
+        bool(guided)
+        and not bool(guided.get("active", False))
+        and not bool(data.get("backend_active", False))
+        and not bool(data.get("auto_processing_active", False))
+        and str(data.get("editor_state") or "") != "ST_PROC"
+    )
+
+
+def _live_nle_sample_from_status(
+    result: dict[str, Any],
+    *,
+    elapsed_sec: float,
+    latency_sec: float,
+) -> dict[str, Any]:
+    data = _result_data(result)
+    guided = data.get("guided_snapshot_run") if isinstance(data.get("guided_snapshot_run"), dict) else {}
+    counts = _live_nle_track_counts(data)
+    compact_contract = _compact_runtime_track_contract(data)
+    budget_contract = _live_nle_budget_contract(data)
+    active = (
+        bool(guided.get("active", False))
+        or bool(data.get("backend_active", False))
+        or bool(data.get("auto_processing_active", False))
+        or str(data.get("editor_state") or "") == "ST_PROC"
+    )
+    completed = _live_nle_generation_completed(data)
+    try:
+        subtitle_count = int(data.get("subtitle_count") or 0)
+    except Exception:
+        subtitle_count = 0
+    return {
+        "elapsed_sec": round(float(elapsed_sec or 0.0), 3),
+        "latency_sec": round(float(latency_sec or 0.0), 3),
+        "ok": bool(result.get("ok", False)) if isinstance(result, dict) else False,
+        "error": str(result.get("error", "") or "") if isinstance(result, dict) else "",
+        "editor_state": str(data.get("editor_state") or ""),
+        "backend_active": bool(data.get("backend_active", False)),
+        "auto_processing_active": bool(data.get("auto_processing_active", False)),
+        "guided_active": bool(guided.get("active", False)),
+        "last_stage_key": str(data.get("last_stage_key") or guided.get("last_stage_key") or ""),
+        "generation_stage": str(data.get("generation_stage") or guided.get("last_stage") or guided.get("last_stage_label") or ""),
+        "subtitle_count": subtitle_count,
+        "nle_runtime_track_counts": counts,
+        "pre_final_active": bool(active and not completed),
+        "generation_completed": bool(completed),
+        "compact_runtime_track_contract": compact_contract,
+        "live_nle_projection_budget_contract": budget_contract,
+    }
+
+
+def _build_live_nle_runtime_proof_report(
+    *,
+    media_path: str,
+    output_dir: Path,
+    start_result: dict[str, Any],
+    samples: list[dict[str, Any]],
+    snapshot_dir: Path,
+    started_at: str,
+    ended_at: str,
+) -> dict[str, Any]:
+    observed: dict[str, dict[str, Any]] = {}
+    for track in _LIVE_NLE_REQUIRED_RUNTIME_TRACKS:
+        for sample in samples:
+            counts = sample.get("nle_runtime_track_counts") if isinstance(sample.get("nle_runtime_track_counts"), dict) else {}
+            if bool(sample.get("pre_final_active")) and int(counts.get(track, 0) or 0) > 0:
+                observed[track] = {
+                    "elapsed_sec": sample.get("elapsed_sec"),
+                    "count": int(counts.get(track, 0) or 0),
+                    "stage": sample.get("generation_stage"),
+                }
+                break
+    missing = [track for track in _LIVE_NLE_REQUIRED_RUNTIME_TRACKS if track not in observed]
+    failed_samples = [sample for sample in samples if not bool(sample.get("ok", False))]
+    raw_payload_leaks = [
+        sample.get("elapsed_sec")
+        for sample in samples
+        if bool((sample.get("compact_runtime_track_contract") or {}).get("raw_payload_leak", False))
+    ]
+    final_authority_failures = [
+        sample.get("elapsed_sec")
+        for sample in samples
+        if not bool((sample.get("compact_runtime_track_contract") or {}).get("final_authority_ok", True))
+    ]
+    budget_failures = [
+        sample.get("elapsed_sec")
+        for sample in samples
+        if bool(sample.get("pre_final_active"))
+        and not bool((sample.get("live_nle_projection_budget_contract") or {}).get("ok", False))
+    ]
+    snapshot_files = sorted(str(path.relative_to(output_dir)) for path in snapshot_dir.glob("*.png")) if snapshot_dir.is_dir() else []
+    issues: list[str] = []
+    if not bool(start_result.get("ok", False)):
+        issues.append("guided_subtitle_run_start_failed")
+    if missing:
+        issues.append("missing_pre_final_tracks:" + ",".join(missing))
+    if failed_samples:
+        issues.append("status_poll_failed")
+    if raw_payload_leaks:
+        issues.append("raw_runtime_payload_leak")
+    if final_authority_failures:
+        issues.append("final_authority_contract_failed")
+    if budget_failures:
+        issues.append("live_projection_budget_contract_failed")
+    status = "passed" if not issues else "blocked"
+    return {
+        "schema": "ai_subtitle_studio.live_nle_runtime_proof.v1",
+        "status": status,
+        "media_path": str(media_path or ""),
+        "output_dir": str(output_dir),
+        "snapshot_dir": str(snapshot_dir),
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "start_result_ok": bool(start_result.get("ok", False)),
+        "sample_count": len(samples),
+        "failed_sample_count": len(failed_samples),
+        "generation_completed": any(bool(sample.get("generation_completed")) for sample in samples),
+        "required_tracks": list(_LIVE_NLE_REQUIRED_RUNTIME_TRACKS),
+        "observed_pre_final_tracks": observed,
+        "missing_pre_final_tracks": missing,
+        "raw_payload_leak_elapsed_sec": raw_payload_leaks,
+        "final_authority_failure_elapsed_sec": final_authority_failures,
+        "budget_failure_elapsed_sec": budget_failures,
+        "snapshot_files": snapshot_files,
+        "issues": issues,
+        "samples": samples,
+        "notes": [
+            "This proof records runtime/status observability only.",
+            "It does not by itself approve subtitle quality, conversion-speed regression, App Store packaging, or persisted NLE disk-format cutover.",
+        ],
+    }
+
+
+def _write_live_nle_runtime_proof(output_dir: Path, report: dict[str, Any]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "live_nle_runtime_proof.json").write_text(
+        json.dumps({key: value for key, value in report.items() if key != "samples"}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (output_dir / "status_samples.json").write_text(
+        json.dumps(report.get("samples", []), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    lines = [
+        "# Live NLE Runtime Proof",
+        "",
+        f"- status: `{report.get('status')}`",
+        f"- media_path: `{report.get('media_path')}`",
+        f"- sample_count: `{report.get('sample_count')}`",
+        f"- generation_completed: `{report.get('generation_completed')}`",
+        f"- issues: `{', '.join(report.get('issues') or []) or 'none'}`",
+        "",
+        "## Required Runtime Tracks",
+        "",
+        "| Track | Observed before final | First elapsed | Count | Stage |",
+        "| --- | --- | ---: | ---: | --- |",
+    ]
+    observed = report.get("observed_pre_final_tracks") if isinstance(report.get("observed_pre_final_tracks"), dict) else {}
+    for track in report.get("required_tracks") or []:
+        item = observed.get(track) if isinstance(observed, dict) else None
+        lines.append(
+            "| {track} | {ok} | {elapsed} | {count} | {stage} |".format(
+                track=track,
+                ok="yes" if isinstance(item, dict) else "no",
+                elapsed=(item or {}).get("elapsed_sec", ""),
+                count=(item or {}).get("count", ""),
+                stage=(item or {}).get("stage", ""),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Guard Summary",
+            "",
+            f"- Raw runtime payload leak elapsed samples: `{report.get('raw_payload_leak_elapsed_sec')}`",
+            f"- Final-authority failure elapsed samples: `{report.get('final_authority_failure_elapsed_sec')}`",
+            f"- Live projection budget failure elapsed samples: `{report.get('budget_failure_elapsed_sec')}`",
+            f"- Snapshot files: `{report.get('snapshot_files')}`",
+            "",
+            "## Notes",
+            "",
+        ]
+    )
+    for note in list(report.get("notes") or []):
+        lines.append(f"- {note}")
+    (output_dir / "live_nle_runtime_proof.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _run_live_nle_proof(args: argparse.Namespace) -> int:
+    label = args.label or "live_nle_runtime_proof"
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else _default_output_dir(label)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_dir = output_dir / "snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    media_path = str(Path(args.media).resolve()) if str(args.media or "").strip() else ""
+    poll_sec = max(0.1, float(args.poll_sec or 1.0))
+    max_duration_sec = max(poll_sec, float(args.max_duration_sec or 120.0))
+    status_timeout = max(0.5, float(args.timeout or 8.0))
+
+    start_result: dict[str, Any] = {"ok": False, "error": "media_missing", "data": {}}
+    if media_path and os.path.isfile(media_path):
+        try:
+            start_result = _send(
+                "guided-subtitle-run",
+                timeout=max(status_timeout, float(args.start_timeout or status_timeout)),
+                path=media_path,
+                options={"snapshot_dir": str(snapshot_dir)},
+            )
+        except OSError as exc:
+            start_result = {"ok": False, "error": "app_unreachable", "message": str(exc), "data": {}}
+
+    samples: list[dict[str, Any]] = []
+    start_error = str(start_result.get("error") or "")
+    if start_error in {"media_missing", "app_unreachable"}:
+        ended_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        report = _build_live_nle_runtime_proof_report(
+            media_path=media_path,
+            output_dir=output_dir,
+            start_result=start_result,
+            samples=samples,
+            snapshot_dir=snapshot_dir,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+        _write_live_nle_runtime_proof(output_dir, report)
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "status": report.get("status"),
+                    "output_dir": str(output_dir),
+                    "report_path": str(output_dir / "live_nle_runtime_proof.json"),
+                    "markdown_path": str(output_dir / "live_nle_runtime_proof.md"),
+                    "issues": report.get("issues", []),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+
+    deadline = time.monotonic() + max_duration_sec
+    started_monotonic = time.monotonic()
+    next_snapshot_at = started_monotonic
+    snapshot_index = 0
+    while time.monotonic() < deadline:
+        before = time.monotonic()
+        try:
+            status = _send("guided-subtitle-status", timeout=status_timeout)
+        except OSError as exc:
+            status = {"ok": False, "error": "app_unreachable", "message": str(exc), "data": {}}
+        now = time.monotonic()
+        sample = _live_nle_sample_from_status(
+            status,
+            elapsed_sec=now - started_monotonic,
+            latency_sec=now - before,
+        )
+        samples.append(sample)
+
+        if bool(args.capture_snapshots) and now >= next_snapshot_at:
+            snapshot_label = f"live_nle_{snapshot_index:02d}_{int(sample['elapsed_sec'] * 1000):06d}ms"
+            _capture_snapshot(snapshot_dir, snapshot_label, timeout=status_timeout)
+            snapshot_index += 1
+            next_snapshot_at = now + max(1.0, float(args.snapshot_interval_sec or 5.0))
+
+        required_seen = all(
+            any(
+                bool(candidate.get("pre_final_active"))
+                and int((candidate.get("nle_runtime_track_counts") or {}).get(track, 0) or 0) > 0
+                for candidate in samples
+            )
+            for track in _LIVE_NLE_REQUIRED_RUNTIME_TRACKS
+        )
+        completed = bool(sample.get("generation_completed"))
+        if completed and required_seen:
+            break
+        if completed and not bool(args.wait_after_completion):
+            break
+        time.sleep(poll_sec)
+
+    ended_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    report = _build_live_nle_runtime_proof_report(
+        media_path=media_path,
+        output_dir=output_dir,
+        start_result=start_result,
+        samples=samples,
+        snapshot_dir=snapshot_dir,
+        started_at=started_at,
+        ended_at=ended_at,
+    )
+    _write_live_nle_runtime_proof(output_dir, report)
+    print(
+        json.dumps(
+            {
+                "ok": report.get("status") == "passed",
+                "status": report.get("status"),
+                "output_dir": str(output_dir),
+                "report_path": str(output_dir / "live_nle_runtime_proof.json"),
+                "markdown_path": str(output_dir / "live_nle_runtime_proof.md"),
+                "issues": report.get("issues", []),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if report.get("status") == "passed" else 1
 
 
 def _capture_snapshot(output_dir: Path, label: str, *, timeout: float) -> dict[str, Any]:
@@ -398,6 +818,17 @@ def _parser() -> argparse.ArgumentParser:
         help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split play pause save-project save-subtitles export-subtitles export-subtitle-video move-segment-left move-segment-right move-diamond merge-diamond video-show video-hide video-toggle stt-enable stt-disable stt-toggle open-dictionary open-settings open-speaker-settings capture-active-dialog capture-dictionary close-active-dialog lora-run-now lora-pause lora-resume snapshot",
     )
     editor.add_argument("--snapshot-each-step", action="store_true")
+
+    live_nle = sub.add_parser("live-nle-proof")
+    live_nle.add_argument("--label", default="live_nle_runtime_proof")
+    live_nle.add_argument("--output-dir", default="")
+    live_nle.add_argument("--media", required=True)
+    live_nle.add_argument("--start-timeout", type=float, default=30.0)
+    live_nle.add_argument("--poll-sec", type=float, default=1.0)
+    live_nle.add_argument("--max-duration-sec", type=float, default=180.0)
+    live_nle.add_argument("--capture-snapshots", action="store_true")
+    live_nle.add_argument("--snapshot-interval-sec", type=float, default=5.0)
+    live_nle.add_argument("--wait-after-completion", action="store_true")
     return parser
 
 
@@ -418,6 +849,8 @@ def main() -> int:
         return 0
     if args.command == "editor-sequence":
         return _run_editor_sequence(args)
+    if args.command == "live-nle-proof":
+        return _run_live_nle_proof(args)
     return 1
 
 

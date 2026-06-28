@@ -75,6 +75,28 @@ AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/path/to/audi
 ./venv/bin/python -m pytest -q tests/test_roughcut_*.py
 ```
 
+## G3 live NLE observability proof
+
+For `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`,
+use the live proof harness after the app is running and a fixture that exercises
+VAD, STT1, and selective STT2 is available:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/remote_verify.py --timeout 4 live-nle-proof \
+  --media "/path/to/media.mp4" \
+  --poll-sec 1.0 \
+  --max-duration-sec 240 \
+  --capture-snapshots \
+  --output-dir output/manual_verification/latest/g3_live_runtime_observability_YYYYMMDD_HHMM
+```
+
+The harness writes `live_nle_runtime_proof.md`, `live_nle_runtime_proof.json`,
+and `status_samples.json`. A pass means compact status samples observed `VAD`,
+`STT1`, and `STT2` before final generation completed while preserving compact
+payload, final-authority, and live projection budget contracts. It does not by
+itself approve subtitle quality, conversion-speed regression, App Store
+packaging, or persisted NLE disk-format cutover.
+
 ## NLE preview-cache relink validation
 
 Preview/skimming frame-cache relink or proxy-switch contract changes should prove same-media relink reuse, proxy/different-media blocking, and unchanged preview-cache worker behavior before any broader QA.

@@ -17,7 +17,7 @@ from core.project.nle_persistence_guard import (
     strip_unapproved_nle_persistence_fields,
 )
 
-PROJECT_SCHEMA_VERSION = "04.01.05"
+PROJECT_SCHEMA_VERSION = "04.01.06"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v5"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 

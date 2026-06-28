@@ -134,6 +134,163 @@ class RemoteVerifyActionTests(unittest.TestCase):
         self.assertFalse(result["path_exists"])
         self.assertEqual(result["path_size"], 0)
 
+    def test_live_nle_proof_accepts_pre_final_compact_runtime_tracks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            samples = [
+                remote_verify._live_nle_sample_from_status(
+                    {
+                        "ok": True,
+                        "data": {
+                            "editor_state": "ST_PROC",
+                            "backend_active": True,
+                            "nle_runtime_track_counts": {
+                                "VAD": 2,
+                                "STT1": 1,
+                                "STT2": 1,
+                                "subtitle_preview": 1,
+                                "final": 0,
+                            },
+                            "nle_runtime_tracks": {
+                                "compact_payload": True,
+                                "counts": {"VAD": 2, "STT1": 1, "STT2": 1, "subtitle_preview": 1, "final": 0},
+                                "tracks": {
+                                    "VAD": {"count": 2, "authoritative_for_save_export": False},
+                                    "STT1": {"count": 1, "authoritative_for_save_export": False},
+                                    "STT2": {"count": 1, "authoritative_for_save_export": False},
+                                    "subtitle_preview": {"count": 1, "authoritative_for_save_export": False},
+                                    "final": {"count": 0, "authoritative_for_save_export": True},
+                                },
+                            },
+                            "runtime_resource": {
+                                "live_nle_projection_budget": {
+                                    "dedicated_worker_count": 0,
+                                    "max_projection_workers": 0,
+                                    "shares_subtitle_worker_pool": False,
+                                    "uses_existing_row_snapshots": True,
+                                    "coalesces_updates": True,
+                                    "drops_stale_preview_frames": True,
+                                    "quality_policy": "final_authority_unchanged",
+                                }
+                            },
+                        },
+                    },
+                    elapsed_sec=1.25,
+                    latency_sec=0.03,
+                )
+            ]
+
+            report = remote_verify._build_live_nle_runtime_proof_report(
+                media_path="/tmp/demo.mp4",
+                output_dir=output_dir,
+                start_result={"ok": True},
+                samples=samples,
+                snapshot_dir=output_dir / "snapshots",
+                started_at="start",
+                ended_at="end",
+            )
+
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(sorted(report["observed_pre_final_tracks"]), ["STT1", "STT2", "VAD"])
+        self.assertEqual(report["issues"], [])
+
+    def test_live_nle_proof_blocks_raw_payload_and_final_authority_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            sample = remote_verify._live_nle_sample_from_status(
+                {
+                    "ok": True,
+                    "data": {
+                        "editor_state": "ST_PROC",
+                        "backend_active": True,
+                        "nle_runtime_track_counts": {
+                            "VAD": 1,
+                            "STT1": 1,
+                            "STT2": 0,
+                            "subtitle_preview": 0,
+                            "final": 0,
+                        },
+                        "nle_runtime_tracks": {
+                            "compact_payload": False,
+                            "tracks": {
+                                "STT1": {
+                                    "count": 1,
+                                    "authoritative_for_save_export": True,
+                                    "segments": [{"text": "raw stt leaked"}],
+                                },
+                                "final": {"count": 0, "authoritative_for_save_export": True},
+                            },
+                        },
+                        "runtime_resource": {
+                            "live_nle_projection_budget": {
+                                "dedicated_worker_count": 1,
+                                "max_projection_workers": 1,
+                                "shares_subtitle_worker_pool": True,
+                                "uses_existing_row_snapshots": False,
+                                "coalesces_updates": False,
+                                "drops_stale_preview_frames": False,
+                                "quality_policy": "changed",
+                            }
+                        },
+                    },
+                },
+                elapsed_sec=2.0,
+                latency_sec=0.04,
+            )
+
+            report = remote_verify._build_live_nle_runtime_proof_report(
+                media_path="/tmp/demo.mp4",
+                output_dir=output_dir,
+                start_result={"ok": True},
+                samples=[sample],
+                snapshot_dir=output_dir / "snapshots",
+                started_at="start",
+                ended_at="end",
+            )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("missing_pre_final_tracks:STT2", report["issues"])
+        self.assertIn("raw_runtime_payload_leak", report["issues"])
+        self.assertIn("final_authority_contract_failed", report["issues"])
+        self.assertIn("live_projection_budget_contract_failed", report["issues"])
+
+    def test_live_nle_proof_writes_redacted_summary_and_samples_separately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            report = {
+                "status": "passed",
+                "media_path": "/tmp/demo.mp4",
+                "output_dir": str(output_dir),
+                "snapshot_dir": str(output_dir / "snapshots"),
+                "started_at": "start",
+                "ended_at": "end",
+                "sample_count": 1,
+                "generation_completed": True,
+                "required_tracks": ["VAD", "STT1", "STT2"],
+                "observed_pre_final_tracks": {
+                    "VAD": {"elapsed_sec": 1.0, "count": 1, "stage": "vad"},
+                    "STT1": {"elapsed_sec": 1.0, "count": 1, "stage": "stt"},
+                    "STT2": {"elapsed_sec": 1.0, "count": 1, "stage": "stt2"},
+                },
+                "issues": [],
+                "raw_payload_leak_elapsed_sec": [],
+                "final_authority_failure_elapsed_sec": [],
+                "budget_failure_elapsed_sec": [],
+                "snapshot_files": [],
+                "samples": [{"large": "sample"}],
+                "notes": ["runtime proof only"],
+            }
+
+            remote_verify._write_live_nle_runtime_proof(output_dir, report)
+
+            summary = (output_dir / "live_nle_runtime_proof.json").read_text(encoding="utf-8")
+            samples = (output_dir / "status_samples.json").read_text(encoding="utf-8")
+            md = (output_dir / "live_nle_runtime_proof.md").read_text(encoding="utf-8")
+
+        self.assertNotIn('"samples"', summary)
+        self.assertIn('"large": "sample"', samples)
+        self.assertIn("| VAD | yes | 1.0 | 1 | vad |", md)
+
 
 if __name__ == "__main__":
     unittest.main()

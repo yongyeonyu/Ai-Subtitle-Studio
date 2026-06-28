@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.05-source-app
+Document-Version: 04.01.06-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.05`
-- Latest release checkpoint: `v04.01.05`
+- App version in code: `04.01.06`
+- Latest release checkpoint: `v04.01.06`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -234,17 +234,21 @@ Completed item rule:
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628`
   - result: pass, `failed_count=0`
 - Latest release checkpoint scope:
-  - `v04.01.05` - source-app G3 live NLE projection scheduler-budget telemetry, runtime resource status preservation, 04.01.05 version/schema bump, and release docs.
+  - `v04.01.06` - source-app G3 live NLE runtime observability proof harness, redaction/authority/budget gates, 04.01.06 version/schema bump, and release docs.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths, but persisted NLE project fields remain gated and legacy save/reopen compatibility stays mandatory.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.05`:
-  - scheduler-budget telemetry subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_resource_manager.py tests/test_runtime_multi_process.py tests/test_app_command_bridge.py tests/test_app_command_server.py` -> `135 passed`
-  - expanded G3 guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_project_nle_runtime_cutover.py tests/test_runtime_multi_process.py tests/test_subtitle_resource_manager.py tests/test_action_item_runtime_services.py tests/test_runtime_stage_metrics.py tests/test_project_nle_render_export_parity.py tests/test_subtitle_global_canvas_facade.py` -> `171 passed`
-  - Jammini probe: `.agents/sentinel/handoffs/20260629-013822-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
-  - Jammini scheduler-budget review: `.agents/sentinel/handoffs/20260628-234452-nle-g3-scheduler-budget-telemetry-review-jammini.md` -> `DEX_REVIEW_READY`
-  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused scheduler-budget `v04.01.05` checkpoint.
+- Latest focused guard set for `v04.01.06`:
+  - live NLE proof harness compile: `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py` -> pass
+  - live NLE proof harness unit guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `7 passed`
+  - expanded app-command/NLE status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `113 passed`
+  - App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`
+  - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-020008-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
+  - Jammini proof-harness review: `.agents/sentinel/handoffs/20260628-270641-g3-live-runtime-observability-proof-review-jammini.md` -> `DEX_REVIEW_READY`
+  - three sub-agent reviews agreed that the next G3 proof should be compact `guided-subtitle-status` time-series plus existing screenshots, not a new UI lane or raw runtime payload.
+  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused proof-harness `v04.01.06` checkpoint.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`
@@ -258,7 +262,7 @@ Completed item rule:
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
 - Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, and `G3 Realtime NLE STT/VAD`.
-- Latest completed action-item slice: `v04.01.05 G3 Live NLE Projection Scheduler Budget Telemetry`.
+- Latest completed action-item slice: `v04.01.06 G3 Live Runtime Observability Proof Harness`.
 - Current G1 latency evidence snapshot:
   - latest generated-video direct validation evidence: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
   - strict duration-bound follow-up: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`

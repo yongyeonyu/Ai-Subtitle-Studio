@@ -115,6 +115,8 @@ UI는 이 결과를 소비하고 편집해야 하며, 알고리즘 정책 자체
 
 G3 live STT/VAD track visibility stays runtime/session-only. `core/runtime/subtitle_resource_manager.py` owns the live NLE projection scheduler-budget telemetry, and `RuntimeResourceCoordinator` attaches that compact report to runtime-resource snapshots. The report proves zero dedicated projection workers, no subtitle worker-pool sharing, coalesced updates, stale preview-frame dropping, foreground save/export/close awareness, and critical/exit projection disablement without changing visible UI, final caption authority, project persistence, or actual worker fan-out.
 
+`tools/remote_verify.py live-nle-proof` owns the current G3 proof harness for runtime observability. It consumes compact `guided-subtitle-status` snapshots, optional existing-window screenshots, and the live projection budget report to prove whether `VAD`, `STT1`, and `STT2` were observed before final completion. It must not become a raw runtime-row transport, final subtitle owner, project persistence path, or replacement for same-media quality/speed validation.
+
 ### Current owner map
 
 | Area | Current owner | Existing source of truth | NLE snapshot rule |

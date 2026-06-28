@@ -90,7 +90,7 @@ def test_validate_app_bundle_rejects_external_symlinks(tmp_path):
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>com.soseolgayumossi.aisubtitlestudio</string>
-  <key>CFBundleShortVersionString</key><string>04.01.05</string>
+  <key>CFBundleShortVersionString</key><string>04.01.06</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
 </dict>
@@ -140,7 +140,7 @@ def test_validate_app_bundle_rejects_broken_symlinks(tmp_path):
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>com.soseolgayumossi.aisubtitlestudio</string>
-  <key>CFBundleShortVersionString</key><string>04.01.05</string>
+  <key>CFBundleShortVersionString</key><string>04.01.06</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
 </dict>

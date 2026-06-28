@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.05-codemap
+Document-Version: 04.01.06-codemap
 Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
@@ -20,7 +20,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `ui/main/main_window.py`: top-level application window and runtime wiring.
 - `ui/main/app_command_bridge.py`: automation/appctl command execution inside the running app.
 - `tools/appctl.py`: external command-line entry point for remote app control.
-- `tools/remote_verify.py`: higher-level remote verification runner and artifact capture.
+- `tools/remote_verify.py`: higher-level remote verification runner, artifact capture, and G3 live NLE runtime observability proof harness.
 - `tools/qa_suite_runner.py`: official one-command QA runner for `quick`, `major`, and `full` profiles.
 - `tools/automation_command_client.py`: retry-aware command client used by appctl and verification helpers for read-only status/ping surfaces.
 - `tools/debug_guided_subtitle_memory.py`: guided subtitle repeat-run memory/status debugger for Macau/X5/Tinyping performance investigations.

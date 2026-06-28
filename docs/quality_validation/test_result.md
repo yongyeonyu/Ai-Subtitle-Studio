@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.06 G3 Live Runtime Observability Proof Harness - 2026-06-29 KST
+
+- 실행 모드: source-app G3 live NLE runtime observability proof harness, compact status time-series gate, and version/schema bump.
+- 결과: pass for harness parser/gate unit coverage, pre-final VAD/STT1/STT2 count acceptance, raw runtime payload leak rejection, final-authority drift rejection, live projection budget drift rejection, and redacted summary/sample artifact separation.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.06.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-020008-watchdog-handoff-probe.md`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-270641-g3-live-runtime-observability-proof-review-jammini.md`
+- 실제 결과:
+  - App version updated to `04.01.06`.
+  - Project schema version updated to `04.01.06`.
+  - `tools/remote_verify.py live-nle-proof` can start `guided-subtitle-run`, poll compact `guided-subtitle-status`, and write `live_nle_runtime_proof.md/json` plus `status_samples.json`.
+  - The harness requires pre-final active samples for `VAD`, `STT1`, and `STT2`, and rejects raw runtime payload leakage, non-final save/export authority drift, and live projection budget drift.
+  - No real-media live proof, final quality/speed acceptance, UI layout/label change, STT/VAD algorithm change, worker fan-out change, cache default promotion, App Store package/upload/submission, or persisted NLE disk-format change was performed.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `7 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `113 passed`.
+  - Direct version assertion -> `APP_VERSION=04.01.06`, `PROJECT_SCHEMA_VERSION=04.01.06`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+
 ## v04.01.05 G3 Live NLE Projection Scheduler Budget Telemetry - 2026-06-29 KST
 
 - 실행 모드: source-app G3 live NLE projection scheduler-budget telemetry, runtime resource status preservation, and version/schema bump.
