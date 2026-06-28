@@ -33,6 +33,49 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Inline Edit Entry Contract
+
+### Scope
+
+- Added Taption-style inline edit entry trace/isolation for subtitle segment double-click/edit entry.
+- Updated `ui/editor/ux/timeline_canvas_editing.py`, `tests/test_timeline_hit_targets.py`, `tools/audit_nle_inline_edit_entry_contract.py`, `tests/test_nle_inline_edit_entry_contract_audit.py`, NLE/status docs, completed action history, and Sentinel handoff index.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, collect-cache defaults, final rows, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_inline_edit_entry_contract_20260628/nle_inline_edit_entry_contract.md`
+- `ready=true`; Taption contract `inline_edit_entry_preview_only_until_text_commit`.
+- Inline-edit entry trace event: `timeline_inline_edit_entry`.
+- Entry trace includes no caption text payload, no raw target IDs, no NLE write, no project save, and no primary subtitle validation/rescan.
+- Existing text change commit remains the `caption_text_edit` release commit.
+- NAS HeyDealer acceptance: `output/manual_verification/latest/nle_inline_edit_entry_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_162124/benchmark_results.json`: accepted `true`, elapsed `46.481s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_inline_entry_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Route status/probe passed; probe file was removed from the worktree.
+- Scout: `.agents/sentinel/handoffs/20260628-071656-next-concrete-nle-taption-slice.md`
+- Dex classification: deferred the scout's duration-bound trim enforcement candidate to a future mutable-edit owner-map slice. It is broader than this inline-edit entry trace/isolation change and needs dedicated dual-write tests before adoption.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/editor/ux/timeline_canvas_editing.py tools/audit_nle_inline_edit_entry_contract.py tests/test_timeline_hit_targets.py tests/test_nle_inline_edit_entry_contract_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py tests/test_nle_inline_edit_entry_contract_audit.py -k "inline_edit_entry or inline_text_commit_routes_through_nle_caption_text_edit or stt_candidate_is_not_edit_or_drag_target"` -> `5 passed, 151 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "double_click or lock_edit_allows_canvas_inline_edit"` -> `2 passed, 191 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_log_bundle_audit.py tests/test_trace_logger.py tests/test_nle_operation_journal_audit.py -k "trace or operation"` -> `20 passed`.
+- `./venv/bin/python tools/audit_nle_inline_edit_entry_contract.py --output-dir output/manual_verification/latest/nle_inline_edit_entry_contract_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_inline_edit_entry_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> wrote `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_162124/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_162124/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_inline_edit_entry_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_153555/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_162124/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_inline_entry_nas_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`.
+- The Jammini duration-bound trim enforcement candidate is a plausible next slice, but treat it as a mutable dual-write behavior change: first add owner-map coverage, focused tests, strict final duration-bound acceptance, and NAS HeyDealer proof.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Time Window View Decoupling Guard
 
 ### Scope

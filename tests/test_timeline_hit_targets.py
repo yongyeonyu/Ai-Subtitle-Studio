@@ -2628,6 +2628,71 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas.close()
             canvas.deleteLater()
 
+    def test_inline_edit_entry_traces_preview_without_nle_commit_or_row_rewrite(self):
+        canvas = TimelineCanvas()
+
+        class FakeTraceLogger:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event, **fields):
+                self.events.append({"event": event, **fields})
+                return True
+
+        fake_logger = FakeTraceLogger()
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.frame_rate = 30.0
+            canvas.pps = 120.0
+            canvas.total_duration = 4.0
+            canvas.playhead_sec = 1.4
+            canvas.segments = [
+                {"start": 1.0, "end": 2.8, "text": "원본", "line": 0, "id": "subtitle_vector_1"},
+            ]
+            before_rows = [dict(row) for row in canvas.segments]
+            emitted = []
+            canvas.sig_inline_text_changed.connect(lambda line, text: emitted.append((line, text)))
+            canvas.show()
+            self.app.processEvents()
+
+            with patch(
+                "ui.editor.ux.timeline_canvas_editing.current_app_trace_logger",
+                return_value=fake_logger,
+            ), patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_caption_text_edit_dual_write_pilot"
+            ) as nle_text_edit, patch(
+                "core.project.nle_project_state.record_nle_operation_journal_entry"
+            ) as record_journal:
+                canvas.start_inline_edit(0, 1.0)
+
+            self.assertTrue(canvas._edit_active)
+            self.assertEqual(canvas.segments, before_rows)
+            self.assertEqual(emitted, [])
+            nle_text_edit.assert_not_called()
+            record_journal.assert_not_called()
+            self.assertFalse(hasattr(canvas, "_last_nle_timeline_operation"))
+
+            self.assertEqual(len(fake_logger.events), 1)
+            event = fake_logger.events[0]
+            self.assertEqual(event["event"], "timeline_inline_edit_entry")
+            self.assertEqual(event["stage"], "ui-ux")
+            self.assertEqual(event["event_type"], "inline_edit_entry")
+            self.assertEqual(event["action"], "inline_edit_entry")
+            self.assertEqual(event["commit_boundary"], "none")
+            self.assertEqual(event["commit_source"], "timeline_inline_edit_entry")
+            self.assertFalse(event["nle_write_allowed"])
+            self.assertFalse(event["normal_caption_row_rewrite_allowed"])
+            self.assertFalse(event["placeholder_clear_applied"])
+            self.assertFalse(event["caption_payload_included"])
+            self.assertTrue(event["visible"])
+            self.assertNotIn("text", event)
+            self.assertNotIn("old_text", event)
+            self.assertNotIn("new_text", event)
+            self.assertNotIn("target_ids", event)
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
     def test_native_inline_editor_backspace_clears_segment_text_live(self):
         canvas = TimelineCanvas()
         try:

@@ -19,6 +19,7 @@ from core.native_swift_timeline import apply_timing_drag_via_swift
 from core.project.nle_dual_write import apply_caption_text_edit_dual_write_pilot
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.runtime import config
+from core.runtime.trace_logger import current_app_trace_logger
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.ux.timeline_inline_text_editor import TimelineInlineTextEdit
 from ui.timeline.timeline_segment_style import subtitle_segment_visual_style
@@ -794,6 +795,53 @@ class TimelineInlineEditMixin:
         except Exception:
             return None
 
+    def _trace_inline_edit_entry(
+        self,
+        *,
+        line_num: int,
+        seg: dict,
+        split_at_playhead: bool,
+        old_line: int,
+        placeholder_clear: bool = False,
+    ) -> None:
+        try:
+            logger = current_app_trace_logger()
+        except Exception:
+            logger = None
+        if logger is None:
+            return
+        try:
+            start_sec = float(seg.get("start", 0.0) or 0.0)
+            end_sec = float(seg.get("end", start_sec) or start_sec)
+            editor = getattr(self, "_inline_editor", None)
+            logger.log_event(
+                "timeline_inline_edit_entry",
+                stage="ui-ux",
+                level="INFO",
+                event_type="inline_edit_entry",
+                widget="TimelineCanvas",
+                action="inline_edit_entry",
+                line=int(line_num),
+                start_sec=start_sec,
+                end_sec=end_sec,
+                duration_sec=max(0.0, end_sec - start_sec),
+                playhead_sec=float(getattr(self, "playhead_sec", 0.0) or 0.0),
+                old_line=int(old_line),
+                split_at_playhead=bool(split_at_playhead),
+                pending_split=bool(hasattr(self, "_pending_split_sec")),
+                cursor_position=int(getattr(self, "_edit_cursor", 0) or 0),
+                visible=bool(editor is not None and editor.isVisible()),
+                focused=bool(editor is not None and editor.hasFocus()),
+                commit_boundary="none",
+                commit_source="timeline_inline_edit_entry",
+                nle_write_allowed=False,
+                normal_caption_row_rewrite_allowed=False,
+                placeholder_clear_applied=bool(placeholder_clear),
+                caption_payload_included=False,
+            )
+        except Exception:
+            return
+
     def _set_pending_split_from_playhead(self, seg: dict | None, *, enabled: bool) -> None:
         if hasattr(self, "_pending_split_sec"):
             del self._pending_split_sec
@@ -888,6 +936,13 @@ class TimelineInlineEditMixin:
         editor.raise_()
         editor.setFocus(Qt.FocusReason.MouseFocusReason if click_x is not None else Qt.FocusReason.OtherFocusReason)
         self._request_inline_edit_fast_refresh(line_num, immediate=True)
+        self._trace_inline_edit_entry(
+            line_num=int(line_num),
+            seg=seg,
+            split_at_playhead=bool(split_at_playhead),
+            old_line=int(old_line),
+            placeholder_clear=bool(clear_placeholder),
+        )
         if old_line >= 0:
             self._request_inline_edit_fast_refresh(old_line)
 
