@@ -33,7 +33,57 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Neighbor Collision Guard
+## Current Handoff - 2026-06-28 Documentation Organization And Active Queue Hygiene
+
+### Scope
+
+- Cleaned `ACTION_ITEMS.md` so completed NLE proof history no longer lives inside the active queue.
+- Added Taption-style development-documentation role folders as navigation buckets while keeping root canonical files in place for automation compatibility.
+- Added AGENTS rules for docs organization, root queue preservation, physical Jammini handoff priority, and clean-room Taption reference handling.
+- Accepted Jammini doc-scout input with modification: root `ACTION_ITEMS.md` was not moved.
+- No runtime code, UI/UX, subtitle generation policy, STT/default-cache policy, persisted NLE disk format, App Store packaging/signing/upload, or DMG behavior changed.
+
+### Modified Files
+
+- `ACTION_ITEMS.md`
+- `COMPLETED_ACTION_ITEMS.md`
+- `AGENTS.md`
+- `docs/README.md`
+- `docs/planning_queue/README.md`
+- `docs/workflow_operations/README.md`
+- `docs/project_reference/README.md`
+- `docs/quality_validation/README.md`
+- `docs/product_behavior/README.md`
+- `docs/nle_engine/README.md`
+- `docs/speech_stt/README.md`
+- `docs/validation_evidence/README.md`
+- `docs/release_notes/README.md`
+- `docs/archive_legacy/README.md`
+- `.agents/sentinel/handoff.md`
+- `.agents/sentinel/handoffs/20260628-113530-taption-docs-parity-scout.md`
+- `.agents/sentinel/handoffs/20260628-203439-watchdog-handoff-probe.md`
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-203439-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-113530-taption-docs-parity-scout.md`
+- Dex classification: accepted role-folder navigation, validation-evidence separation, physical handoff priority, and UI/UX/doc-proof guardrails; rejected moving root `ACTION_ITEMS.md` because it risks automation/Jammini compatibility.
+
+### Verification
+
+- `for f in docs/README.md docs/planning_queue/README.md docs/workflow_operations/README.md docs/project_reference/README.md docs/quality_validation/README.md docs/product_behavior/README.md docs/nle_engine/README.md docs/speech_stt/README.md docs/validation_evidence/README.md docs/release_notes/README.md docs/archive_legacy/README.md; do test -f "$f" || exit 1; done` -> `docs_readme_presence=pass`.
+- `rg -n "Latest NAS HeyDealer first-180s regression after the NLE|NLE operation-journal slice|nle_neighbor_collision|nle_voice_silence|nle_final_preview_isolation" ACTION_ITEMS.md || true` -> no matches.
+- `tools/jammini_watchdog.sh --status` -> active/canonical conversation `d2075935-3595-4188-baed-4ee0b45cb7a8`.
+- Existing role cards confirmed: `.agents/sentinel/agents/hangyeol.md`, `.agents/sentinel/agents/seorin.md`, `.agents/sentinel/agents/yujin.md`.
+- `git diff --check -- .` -> pass.
+
+### Known Notes
+
+- `docs/*/README.md` files are navigation docs. They do not move canonical owner files.
+- Completed proof history remains in `COMPLETED_ACTION_ITEMS.md`, `test_result.md`, release notes, and `output/manual_verification/latest/`.
+- The next actionable queue still starts from `ACTION_ITEMS.md`: STT2/word precision owner-review gate or Mac App Store submission readiness, depending on the next owner request.
+
+## Previous Handoff - 2026-06-28 NLE Neighbor Collision Guard
 
 ### Scope
 

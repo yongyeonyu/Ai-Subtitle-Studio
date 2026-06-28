@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-113530-taption-docs-parity-scout.md`
+- `.agents/sentinel/handoffs/20260628-203439-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-112236-neighbor-collision-validation-scout.md`
 - `.agents/sentinel/handoffs/20260628-202149-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-110359-next-nle-taption-runtime-contract-scout.md`

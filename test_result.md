@@ -1,5 +1,35 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Development Documentation Organization And Active Queue Hygiene - 2026-06-28 KST
+
+- 실행 모드: Taption-style docs organization adapted to AI Subtitle Studio, plus active queue cleanup.
+- 결과: pass for docs role-bucket presence, active queue cleanup grep, Jammini route status, existing 3-agent role-card confirmation, and whitespace diff validation.
+- 저장 위치:
+  - Docs hub: `docs/README.md`
+  - Planning bucket: `docs/planning_queue/README.md`
+  - Workflow bucket: `docs/workflow_operations/README.md`
+  - Project reference bucket: `docs/project_reference/README.md`
+  - Validation bucket: `docs/quality_validation/README.md`
+  - Product behavior bucket: `docs/product_behavior/README.md`
+  - NLE bucket: `docs/nle_engine/README.md`
+  - STT bucket: `docs/speech_stt/README.md`
+  - Evidence bucket: `docs/validation_evidence/README.md`
+  - Release bucket: `docs/release_notes/README.md`
+  - Legacy bucket: `docs/archive_legacy/README.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-113530-taption-docs-parity-scout.md`
+- 실제 결과:
+  - `ACTION_ITEMS.md` now keeps completed NLE regression proof as archive pointers instead of duplicating completed histories in the active STT2 item.
+  - `docs/README.md` is now the development-documentation hub and preserves root canonical document locations.
+  - `AGENTS.md` now records development-documentation organization rules, active-only queue policy, physical Jammini handoff priority, and clean-room Taption reference handling.
+  - Existing role cards confirmed: `.agents/sentinel/agents/hangyeol.md`, `.agents/sentinel/agents/seorin.md`, and `.agents/sentinel/agents/yujin.md`.
+  - Jammini route status confirmed active/canonical conversation `d2075935-3595-4188-baed-4ee0b45cb7a8`; route probe and scout were delivered as physical handoff files.
+  - Runtime code, UI/UX, STT/default-cache policy, App Store packaging/signing/upload, and persisted NLE disk format did not change.
+- 검증:
+  - `for f in docs/README.md docs/planning_queue/README.md docs/workflow_operations/README.md docs/project_reference/README.md docs/quality_validation/README.md docs/product_behavior/README.md docs/nle_engine/README.md docs/speech_stt/README.md docs/validation_evidence/README.md docs/release_notes/README.md docs/archive_legacy/README.md; do test -f "$f" || exit 1; done` -> `docs_readme_presence=pass`.
+  - `rg -n "Latest NAS HeyDealer first-180s regression after the NLE|NLE operation-journal slice|nle_neighbor_collision|nle_voice_silence|nle_final_preview_isolation" ACTION_ITEMS.md || true` -> no matches.
+  - `tools/jammini_watchdog.sh --status` -> active/canonical conversation matched.
+  - `git diff --check -- .` -> pass.
+
 ## NLE Neighbor Collision Guard - 2026-06-28 KST
 
 - 실행 모드: Taption-style subtitle neighbor-collision guard for NLE release/commit paths.

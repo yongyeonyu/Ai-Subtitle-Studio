@@ -1,98 +1,62 @@
-# Documentation Guide
+# Developer Documentation Hub
 
-이 폴더는 `AI Subtitle Studio` 저장소를 사람이든 AI 에이전트든 빠르게 안전하게 탐색할 수 있도록 돕는 운영 문서 모음입니다. 내용은 실제 저장소 구조, 현재 커밋에 존재하는 코드, 테스트, 릴리스 문서를 기준으로 정리합니다.
+이 폴더는 `AI Subtitle Studio` 개발 문서 허브입니다. Taption식 역할 폴더 구조를 참고하되, 이 저장소의 기존 부트스트랩과 자동화 호환성을 지키기 위해 root canonical 문서는 물리적으로 이동하지 않습니다.
 
-이 프로젝트는 현재 저장소 기준으로 macOS Apple Silicon 우선의 Python/PyQt6 데스크톱 자막 제작 앱입니다. 자막 생성, 편집기/타임라인, 프로젝트 저장, 러프컷, STT/VAD/LLM 보정 계층, 검증 스크립트가 함께 존재합니다. 구체 기능 범위는 과장하지 말고 `docs/PROJECT_STATE.md`와 `docs/FEATURE_REGISTRY.md`에서 다시 확인해야 합니다.
+현재 제품 라인은 macOS Apple Silicon 우선의 Python/PyQt6 source app입니다. Native migration, Swift rewrite, QML/GPU timeline default, App Store packaging/signing/upload는 owner가 명시적으로 다시 열기 전까지 active direction이 아닙니다.
 
-이 문서 폴더의 목적은 다음과 같습니다.
+## Start Here
 
-- 현재 제품 상태를 짧게 요약합니다.
-- 주요 기능의 소유 파일과 검증 경로를 찾게 합니다.
-- 구조 경계와 편집 금지선을 문서화합니다.
-- 세션 종료 전 어떤 검증과 handoff가 필요한지 고정합니다.
+1. `../AGENTS.md`
+2. `../ACTION_ITEMS.md`
+3. `../COMPLETED_ACTION_ITEMS.md`
+4. `../File_structure.txt`
+5. `docs/README.md`
+6. `docs/PROJECT_STATE.md`
+7. `docs/FEATURE_REGISTRY.md`
+8. `docs/ARCHITECTURE.md`
+9. `docs/VALIDATION.md`
+10. `docs/HANDOFF.md`
 
-## AI agent read order
+없는 파일은 건너뛰되, root `ACTION_ITEMS.md`와 `COMPLETED_ACTION_ITEMS.md`는 위치를 바꾸지 않습니다.
 
-1. `AGENTS.md`
-2. `ACTION_ITEMS.md`
-3. `COMPLETED_ACTION_ITEMS.md`
-4. `check_list.md`
-5. `File_structure.txt`
-6. `docs/README.md`
-7. `docs/PROJECT_STATE.md`
-8. `docs/FEATURE_REGISTRY.md`
-9. `docs/ARCHITECTURE.md`
-10. `docs/VALIDATION.md`
-11. `docs/HANDOFF.md`
+## Current Snapshot
 
-현재 체크아웃에는 `check_list.md`가 없습니다. 없는 파일은 건너뛰되, 위 순서를 기본 진입 순서로 유지합니다. 위 문서를 다 본 뒤에는 저장소 상황에 따라 `CODEMAP.md`, 최신 `RELEASE_v*.md`, `README.md`, `COMPLETED_ACTION_ITEMS.md`, `test_case.md`, `test_result.md`, `waste_action_item.md`, `lesson_n_learned.md`를 추가로 읽는 것이 안전합니다.
+- App checkpoint: `04.00.18` / `v04.00.18`
+- Active queue: `../ACTION_ITEMS.md`
+- Completed archive: `../COMPLETED_ACTION_ITEMS.md`
+- Handoff: `HANDOFF.md`
+- Validation: `VALIDATION.md`
+- NLE plan: `../NLE_Action.md`
+- App Store readiness: `APP_STORE_SUBMISSION_READINESS.md`
+- Jammini mapping: `agent_communication/README.md`
 
-## Document map
+## Folder Map
 
-| Group | Files | Purpose |
+| Folder | Role | Canonical pointers |
 | --- | --- | --- |
-| Bootstrap | `AGENTS.md`, `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/README.md`, `docs/PROJECT_STATE.md`, `docs/HANDOFF.md` | 다음 세션이 가장 먼저 읽어야 하는 운영 문서입니다. |
-| Product and structure reference | `README.md`, `docs/FEATURE_REGISTRY.md`, `docs/ARCHITECTURE.md`, `docs/VALIDATION.md`, `CODEMAP.md`, `LONG_FILE_OWNERSHIP_MAP.md` | 제품 범위, 구조 경계, owner 파일, 검증 경로를 찾을 때 사용합니다. |
-| Checkpoint and validation record | 최신 `RELEASE_v*.md`, `test_case.md`, `test_result.md` | 최근 릴리스 상태와 검증 기대치/결과를 확인할 때 사용합니다. |
-| Delegation and idea scratchpad | `anti_agents.md`, `cooperation.md`, `docs/agent_communication/README.md`, `.agents/sentinel/BRIEFING.md`, `.agents/sentinel/agents/*.md`, `idea.md` | Antigravity 역할 분담, `잼민이` 위임 규칙, Taption Jammini pack mapping, 현재 Jammini orientation, 역할 카드, 실행 전 아이디어 토론 메모를 남길 때 사용합니다. |
-| Learning and rejects | `lesson_n_learned.md`, `waste_action_item.md` | 반복 금지 실수와 폐기된 아이디어를 다시 확인할 때 사용합니다. |
+| `planning_queue/` | Active queue and completed-action navigation. | `../ACTION_ITEMS.md`, `../COMPLETED_ACTION_ITEMS.md`, `../waste_action_item.md`, `../lesson_n_learned.md` |
+| `workflow_operations/` | Handoff, agent route, watchdog, and operational workflow docs. | `HANDOFF.md`, `agent_communication/README.md`, `../cooperation.md`, `.agents/sentinel/` |
+| `project_reference/` | Product state, feature ownership, repo structure, and architecture references. | `PROJECT_STATE.md`, `FEATURE_REGISTRY.md`, `ARCHITECTURE.md`, `../README.md` |
+| `quality_validation/` | Validation commands, fixture rules, and test-result pointers. | `VALIDATION.md`, `../test_case.md`, `../test_result.md` |
+| `product_behavior/` | User-visible behavior, submission readiness, UI/UX guardrails, and product policy. | `APP_STORE_SUBMISSION_READINESS.md`, `../README.md`, `../AGENTS.md` |
+| `nle_engine/` | NLE/source-app transition contracts, runtime projection, and Taption parity evidence. | `../NLE_Action.md`, `../COMPLETED_ACTION_ITEMS.md`, `HANDOFF.md` |
+| `speech_stt/` | STT/VAD/LLM generation policy, latency gates, and cache/default evidence. | `../ACTION_ITEMS.md`, `../COMPLETED_ACTION_ITEMS.md`, `../test_result.md` |
+| `validation_evidence/` | Pointers to generated local proof artifacts. | `../output/manual_verification/latest/`, `../.codex_work/benchmarks/` |
+| `agent_communication/` | Taption-derived Jammini communication mapping for this repo. | `.agents/sentinel/handoffs/`, `.agents/sentinel/handoff.md` |
+| `release_notes/` | Release-note navigation and retention policy. | `../RELEASE_v04.00.07.md` and newer |
+| `DECISIONS/` | Durable architecture decisions. | `DECISIONS/README.md` |
+| `archive_legacy/` | Historical or deprecated docs only. | Do not use for active queue or current proof. |
 
-## Stable project docs
+## Write Rules
 
-다음 문서는 저장소 구조와 작업 규칙을 설명하는 안정 문서입니다.
+- Keep `ACTION_ITEMS.md` active-only: remaining work, current acceptance gates, rollback rules, and short archive pointers.
+- Move completed action-item summaries to `COMPLETED_ACTION_ITEMS.md`; do not duplicate completed histories back into the active queue.
+- Keep detailed proof in `test_result.md`, release notes, `output/manual_verification/latest/`, or specific audit reports when future decisions need it.
+- Treat docs, handoffs, and review packets as navigation and rationale. They are not behavior proof without tests, runtime artifacts, or generated evidence.
+- Put new development docs in the role folder that matches their owner area, then update this hub if a new category is created.
+- Do not copy Taption prompts/scripts/code into this repo. Taption is a reference project; this lane must remain labeled `AI Subtitle Studio`.
+- Do not move root canonical docs unless the owner explicitly asks and the automation/Jammini compatibility risk is handled.
 
-- `README.md`
-- `RELEASE_v*.md`
-- `docs/PROJECT_STATE.md`
-- `docs/FEATURE_REGISTRY.md`
-- `docs/ARCHITECTURE.md`
-- `docs/VALIDATION.md`
-- `docs/DECISIONS/README.md`
+## Temporary Working Memory
 
-다음 문서는 커밋 대상이지만 운영 상태와 세션 연결성이 더 강한 작업 문서입니다.
-
-- `AGENTS.md`
-- `ACTION_ITEMS.md`
-- `COMPLETED_ACTION_ITEMS.md`
-- `docs/HANDOFF.md`
-- `anti_agents.md`
-- `cooperation.md`
-- `docs/agent_communication/README.md`
-- `.agents/sentinel/BRIEFING.md`
-- `.agents/sentinel/agents/*.md`
-- `idea.md`
-- `test_case.md`
-- `test_result.md`
-- `lesson_n_learned.md`
-
-## Internal or temporary files
-
-다음 항목은 로컬 작업 보조물로 취급하고, 의도 없이 커밋하지 않아야 합니다.
-
-- `.codex_work/`
-- `output/` 아래 수동 검증 산출물
-- 로컬 가상환경, 빌드 산출물, 캐시 파일
-- 개인 메모, 비공개 경로, 임시 스크립트
-
-## Before coding
-
-AI 에이전트는 코드를 수정하기 전에 아래 순서를 따라야 합니다.
-
-1. 위 read order 문서를 읽습니다.
-2. 수정 대상 기능의 소유 디렉터리와 핵심 owner 파일을 식별합니다.
-3. 현재 동작을 문서, 테스트, 필요 시 실제 앱 검증 기준으로 확인합니다.
-4. 넓은 리팩터링 대신 요청 범위에 맞는 최소 수정 범위를 정합니다.
-5. 편집 전에 어떤 검증을 할지 `docs/VALIDATION.md` 기준으로 정합니다.
-6. 의미 있는 작업을 끝내기 전 `docs/HANDOFF.md`를 업데이트합니다.
-
-추가로 아래 규칙을 지켜야 합니다.
-
-- 기존 기능을 추정으로 다시 설계하지 않습니다.
-- STT/VAD/Whisper/LLM/타임라인/프로젝트 저장 흐름은 owner 파일을 읽기 전에는 손대지 않습니다.
-- 구조 설명이 바뀌면 `docs/ARCHITECTURE.md`를 같이 갱신합니다.
-- 검증 명령이 바뀌면 `docs/VALIDATION.md`를 같이 갱신합니다.
-- 기능 소유 경계가 바뀌면 `docs/FEATURE_REGISTRY.md`를 같이 갱신합니다.
-
-## Temporary working memory
-
-`.codex_work/`는 로컬 Codex scratch 공간으로 사용할 수 있습니다. 예를 들면 세션 중간 메모, 비교용 임시 출력, 에이전트 전용 체크리스트를 둘 수 있습니다. 다만 이 디렉터리는 영구 산출물이 아니며 커밋 대상이 아닙니다.
+Use `.codex_work/` for local Codex scratch output and `output/manual_verification/latest/` for generated validation artifacts. These are proof surfaces, not a place to hide active queue state.

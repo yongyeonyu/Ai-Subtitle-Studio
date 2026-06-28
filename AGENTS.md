@@ -205,6 +205,17 @@ Completed item rule:
 - When an item in `ACTION_ITEMS.md` is completed normally, remove it from the active queue and move the completed action-item summary to `COMPLETED_ACTION_ITEMS.md`.
 - Preserve detailed completion evidence in release notes, `test_result.md`, `output/manual_verification/latest/`, `waste_action_item.md`, or `lesson_n_learned.md` only when it is needed for future decisions.
 
+## Development Documentation Organization
+
+- Use Taption-style role folders under `docs/` as navigation buckets only; root canonical files remain authoritative for compatibility.
+- Do not move `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `test_case.md`, `test_result.md`, `waste_action_item.md`, `lesson_n_learned.md`, or root `RELEASE_v*.md` unless the owner explicitly asks and automation compatibility is checked first.
+- Put new development docs in the matching role folder: `planning_queue/`, `workflow_operations/`, `project_reference/`, `quality_validation/`, `product_behavior/`, `nle_engine/`, `speech_stt/`, `validation_evidence/`, `release_notes/`, `archive_legacy/`, or `DECISIONS/`.
+- `docs/README.md` is the development-documentation hub. Update it when adding a new document category or changing canonical pointers.
+- `ACTION_ITEMS.md` must stay active-only: remaining work, current acceptance gates, rollback rules, and short archive pointers. Completed slices must move to `COMPLETED_ACTION_ITEMS.md`.
+- Docs, handoffs, and review packets are not behavior proof by themselves. Pair behavior claims with tests, runtime artifacts, generated evidence, or release validation.
+- Physical Jammini handoff files remain authoritative. Chat `ACK` / `WORKING` messages are diagnostic only until `덱스` reads and classifies the handoff file.
+- Clean-room reference rule: Taption docs and AGENTS may inform local structure, but do not copy external prompts/scripts/code or label this repo, delegated scope, artifact path, or proof target as Taption.
+
 ## Current Continuation State
 
 - One-command QA runner is the official real-app test entrypoint:

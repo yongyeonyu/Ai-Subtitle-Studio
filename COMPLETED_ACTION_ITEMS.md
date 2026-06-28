@@ -19,6 +19,17 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## Development Documentation Organization And Active Queue Hygiene
+
+Source request: owner asked to delete completed action items from `ACTION_ITEMS.md` and organize development docs by referencing Taption docs/AGENTS rules.
+
+1. `ACTION_ITEMS.md` was tightened back to active gates: completed NLE regression proof bullets were removed from the active STT2 item and the migration status section now keeps only current source-app/native-migration guardrails.
+2. Completed proof remains discoverable through `COMPLETED_ACTION_ITEMS.md`, `test_result.md`, `docs/HANDOFF.md`, and `output/manual_verification/latest/` instead of being duplicated in the active queue.
+3. `docs/README.md` was rewritten as the development-documentation hub, with Taption-style role folders adapted to AI Subtitle Studio.
+4. Role README files were added under `docs/planning_queue/`, `docs/workflow_operations/`, `docs/project_reference/`, `docs/quality_validation/`, `docs/product_behavior/`, `docs/nle_engine/`, `docs/speech_stt/`, `docs/validation_evidence/`, `docs/release_notes/`, and `docs/archive_legacy/`.
+5. `AGENTS.md` now documents development-documentation organization rules, root canonical document preservation, active-only queue policy, physical Jammini handoff priority, and clean-room Taption reference handling.
+6. Runtime code, UI/UX, STT/default-cache policy, App Store packaging/signing/upload, and persisted NLE disk format were not changed.
+
 ## STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim
 
 Source item: `ACTION_ITEMS.md` item `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`.
