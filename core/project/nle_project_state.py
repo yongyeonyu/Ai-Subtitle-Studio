@@ -280,7 +280,51 @@ def record_nle_operation_journal_entry(
         "operation_journal_last_operation_id": entry.operation_id,
         "operation_journal_max_entries": limit,
     }
+    _trace_nle_operation_journal_entry(state, entry, operation, max_entries=limit)
     return entry
+
+
+def _trace_nle_operation_journal_entry(
+    state: NLEProjectState,
+    entry: NLEOperationJournalEntry,
+    operation: Any,
+    *,
+    max_entries: int,
+) -> bool:
+    try:
+        from core.runtime.trace_logger import current_app_trace_logger
+
+        logger = current_app_trace_logger()
+        if logger is None:
+            return False
+        return bool(
+            logger.log_event(
+                "nle_operation_journal_append",
+                stage="nle-operation",
+                level="INFO",
+                event_type="nle_operation_commit",
+                operation_id=entry.operation_id,
+                operation_kind=entry.operation_kind,
+                operation_family=entry.operation_family,
+                time_domain=str(getattr(operation, "time_domain", "") or ""),
+                sequence=entry.sequence,
+                target_count=len(entry.target_ids),
+                commit_boundary=entry.commit_boundary,
+                commit_source=entry.commit_source,
+                undo_snapshot_id=entry.undo_snapshot_id,
+                projected_count=entry.projected_count,
+                after_invalid_duration_count=entry.after_invalid_duration_count,
+                after_non_monotonic_count=entry.after_non_monotonic_count,
+                after_overlap_count=entry.after_overlap_count,
+                after_max_active_segments=entry.after_max_active_segments,
+                runtime_journal_count=len(state.operation_journal),
+                runtime_journal_max_entries=max(1, int(max_entries or NLE_OPERATION_JOURNAL_MAX_ENTRIES)),
+                runtime_only=True,
+                state_schema=state.schema,
+            )
+        )
+    except Exception:
+        return False
 
 
 def project_segments_from_nle_state(project: dict[str, Any], *, project_path: str = "") -> list[dict[str, Any]]:

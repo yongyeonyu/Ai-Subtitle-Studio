@@ -1,5 +1,7 @@
 import copy
+import json
 import unittest
+from unittest.mock import patch
 
 from core.project.nle_operations import (
     NLE_OPERATION_KINDS,
@@ -12,6 +14,15 @@ from core.project.nle_operations import (
 from core.project.nle_projection_parity import build_project_nle_projection_parity_report
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.nle_project_state import build_project_nle_state, record_nle_operation_journal_entry
+
+
+class _FakeTraceLogger:
+    def __init__(self):
+        self.events = []
+
+    def log_event(self, event, **fields):
+        self.events.append({"event": event, **fields})
+        return True
 
 
 def _project_with_segments(segments):
@@ -240,29 +251,31 @@ class NLEOperationModelTests(unittest.TestCase):
         state = build_project_nle_state(project)
         report = build_project_nle_projection_parity_report(project)
         rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        fake_logger = _FakeTraceLogger()
 
-        for index in range(5):
-            operation_id = f"op_caption_move_{index}"
-            undo = build_nle_undo_snapshot(
-                operation_id=operation_id,
-                editor_rows=rows,
-                ui_state_ref={"commit_boundary": "release", "commit_source": "center"},
-            )
-            operation = build_nle_editor_operation(
-                operation_id=operation_id,
-                kind="caption_move",
-                target_ids=["caption_1"],
-                before_projection=report,
-                after_projection=report,
-                time_domain="sequence",
-                undo_snapshot=undo,
-                metadata={
-                    "operation_family": "caption_move",
-                    "commit_boundary": "release",
-                    "commit_source": "center",
-                },
-            )
-            record_nle_operation_journal_entry(state, operation, projected_count=len(rows), max_entries=3)
+        with patch("core.runtime.trace_logger.current_app_trace_logger", return_value=fake_logger):
+            for index in range(5):
+                operation_id = f"op_caption_move_{index}"
+                undo = build_nle_undo_snapshot(
+                    operation_id=operation_id,
+                    editor_rows=rows,
+                    ui_state_ref={"commit_boundary": "release", "commit_source": "center"},
+                )
+                operation = build_nle_editor_operation(
+                    operation_id=operation_id,
+                    kind="caption_move",
+                    target_ids=["caption_1"],
+                    before_projection=report,
+                    after_projection=report,
+                    time_domain="sequence",
+                    undo_snapshot=undo,
+                    metadata={
+                        "operation_family": "caption_move",
+                        "commit_boundary": "release",
+                        "commit_source": "center",
+                    },
+                )
+                record_nle_operation_journal_entry(state, operation, projected_count=len(rows), max_entries=3)
 
         self.assertEqual([entry.sequence for entry in state.operation_journal], [3, 4, 5])
         self.assertEqual([entry.operation_id for entry in state.operation_journal], [
@@ -279,6 +292,26 @@ class NLEOperationModelTests(unittest.TestCase):
         self.assertEqual(state.metadata["operation_journal_runtime_only"], True)
         self.assertEqual(state.metadata["operation_journal_count"], 3)
         self.assertEqual(state.metadata["operation_journal_max_entries"], 3)
+        trace_events = [row for row in fake_logger.events if row["event"] == "nle_operation_journal_append"]
+        self.assertEqual(len(trace_events), 5)
+        self.assertEqual(trace_events[-1]["event_type"], "nle_operation_commit")
+        self.assertEqual(trace_events[-1]["operation_id"], "op_caption_move_4")
+        self.assertEqual(trace_events[-1]["operation_kind"], "caption_move")
+        self.assertEqual(trace_events[-1]["operation_family"], "caption_move")
+        self.assertEqual(trace_events[-1]["time_domain"], "sequence")
+        self.assertEqual(trace_events[-1]["target_count"], 1)
+        self.assertEqual(trace_events[-1]["commit_boundary"], "release")
+        self.assertEqual(trace_events[-1]["commit_source"], "center")
+        self.assertEqual(trace_events[-1]["after_overlap_count"], 0)
+        self.assertEqual(trace_events[-1]["runtime_journal_count"], 3)
+        self.assertEqual(trace_events[-1]["runtime_journal_max_entries"], 3)
+        self.assertNotIn("text", trace_events[-1])
+        self.assertNotIn("target_ids", trace_events[-1])
+        self.assertNotIn("source_project_path", trace_events[-1])
+        event_text = json.dumps(trace_events, ensure_ascii=False, sort_keys=True)
+        self.assertNotIn("first raw", event_text)
+        self.assertNotIn("second raw", event_text)
+        self.assertNotIn("source_project_path", event_text)
 
 
 if __name__ == "__main__":

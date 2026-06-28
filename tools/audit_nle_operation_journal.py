@@ -44,6 +44,8 @@ from core.project.project_io import (
     read_project_storage_payload,
     write_project_file,
 )
+import core.runtime.trace_logger as trace_logger_module
+from core.runtime.trace_logger import TraceLogger
 from tools.audit_nle_persistence_cutover import _legacy_project, _three_caption_project
 
 
@@ -69,6 +71,41 @@ def _contains_value(payload: Any, wanted: str) -> bool:
     if isinstance(payload, (list, tuple)):
         return any(_contains_value(item, wanted) for item in payload)
     return str(payload) == wanted
+
+
+def _jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _operation_cases_with_trace(output_dir: Path) -> tuple[list[tuple[str, dict[str, Any], Any]], list[dict[str, Any]]]:
+    previous_logger = getattr(trace_logger_module, "_APP_TRACE_LOGGER", None)
+    logger = TraceLogger(root=output_dir / "_trace", run_id="nle-operation-journal-trace")
+    trace_logger_module._APP_TRACE_LOGGER = logger
+    try:
+        cases = _operation_cases()
+        logger.flush(timeout_sec=2.0)
+        events = [
+            row
+            for row in _jsonl_rows(logger.events_path)
+            if row.get("event") == "nle_operation_journal_append"
+        ]
+    finally:
+        trace_logger_module._APP_TRACE_LOGGER = previous_logger
+        logger.close(timeout_sec=1.0)
+    return cases, events
 
 
 def _operation_cases() -> list[tuple[str, dict[str, Any], Any]]:
@@ -425,7 +462,23 @@ def _audit_case(work_dir: Path, family: str, project: dict[str, Any], result: An
 def build_nle_operation_journal_report(*, output_dir: Path) -> dict[str, Any]:
     work_dir = output_dir / "_work"
     work_dir.mkdir(parents=True, exist_ok=True)
-    rows = [_audit_case(work_dir, family, project, result) for family, project, result in _operation_cases()]
+    cases, trace_events = _operation_cases_with_trace(output_dir)
+    rows = [_audit_case(work_dir, family, project, result) for family, project, result in cases]
+    operation_ids = {row["operation_id"] for row in rows}
+    trace_operation_ids = {str(row.get("operation_id") or "") for row in trace_events}
+    trace_text = json.dumps(trace_events, ensure_ascii=False, sort_keys=True)
+    trace_contract_ok = (
+        len(trace_events) == len(rows)
+        and operation_ids == trace_operation_ids
+        and all(str(row.get("event_type") or "") == "nle_operation_commit" for row in trace_events)
+        and all(str(row.get("stage") or "") == "nle-operation" for row in trace_events)
+        and all("target_ids" not in row for row in trace_events)
+        and all("text" not in row for row in trace_events)
+        and all("source_project_path" not in row for row in trace_events)
+        and "first raw" not in trace_text
+        and "second raw" not in trace_text
+        and "source_project_path" not in trace_text
+    )
     all_passed = all(
         row["operation_schema_ok"]
         and row["target_count"] > 0
@@ -452,7 +505,7 @@ def build_nle_operation_journal_report(*, output_dir: Path) -> dict[str, Any]:
         and not row["journal_schema_persisted"]
         and not row["runtime_state_persisted"]
         for row in rows
-    )
+    ) and trace_contract_ok
     return {
         "schema": SCHEMA,
         "audit_id": AUDIT_ID,
@@ -463,8 +516,11 @@ def build_nle_operation_journal_report(*, output_dir: Path) -> dict[str, Any]:
         "release_metadata_count": sum(1 for row in rows if row["release_metadata"] and row["undo_release_metadata"]),
         "undo_snapshot_count": sum(1 for row in rows if row["undo_snapshot_schema_ok"]),
         "runtime_journal_count": sum(1 for row in rows if row["runtime_journal_count"] == 1),
+        "operation_trace_event_count": len(trace_events),
+        "operation_trace_event_contract_ok": trace_contract_ok,
         "storage_clean_count": sum(1 for row in rows if row["storage_clean"]),
         "checks": rows,
+        "trace_events": trace_events,
         "blocked_scope": list(BLOCKED_SCOPE),
     }
 
@@ -486,6 +542,8 @@ def _markdown_report(report: dict[str, Any]) -> str:
         f"- Release metadata count: `{report['release_metadata_count']}`",
         f"- Undo snapshot count: `{report['undo_snapshot_count']}`",
         f"- Runtime journal count: `{report['runtime_journal_count']}`",
+        f"- Operation trace event count: `{report.get('operation_trace_event_count', 0)}`",
+        f"- Operation trace event contract ok: `{report.get('operation_trace_event_contract_ok')}`",
         f"- Storage clean count: `{report['storage_clean_count']}`",
         "",
         "## Operation Matrix",

@@ -19,6 +19,8 @@ def test_nle_operation_journal_audit_covers_release_undo_contracts():
     assert report["release_metadata_count"] == 12
     assert report["undo_snapshot_count"] == 12
     assert report["runtime_journal_count"] == 12
+    assert report["operation_trace_event_count"] == 12
+    assert report["operation_trace_event_contract_ok"] is True
     assert report["storage_clean_count"] == 12
     families = {row["operation_family"] for row in report["checks"]}
     assert families == {
@@ -61,6 +63,13 @@ def test_nle_operation_journal_audit_covers_release_undo_contracts():
         assert row["undo_schema_persisted"] is False
         assert row["journal_schema_persisted"] is False
         assert row["runtime_state_persisted"] is False
+    trace_event_ids = {row["operation_id"] for row in report["trace_events"]}
+    assert trace_event_ids == {row["operation_id"] for row in report["checks"]}
+    assert all(row["event_type"] == "nle_operation_commit" for row in report["trace_events"])
+    assert all(row["stage"] == "nle-operation" for row in report["trace_events"])
+    assert all("target_ids" not in row for row in report["trace_events"])
+    assert all("text" not in row for row in report["trace_events"])
+    assert all("source_project_path" not in row for row in report["trace_events"])
 
 
 def test_nle_operation_journal_audit_writes_json_and_markdown_reports():
@@ -79,6 +88,8 @@ def test_nle_operation_journal_audit_writes_json_and_markdown_reports():
         assert "## Operation Matrix" in markdown
         assert "Runtime NLE journal applied: `True`" in markdown
         assert "Runtime journal count: `12`" in markdown
+        assert "Operation trace event count: `12`" in markdown
+        assert "Operation trace event contract ok: `True`" in markdown
         assert "| caption_move | caption_move | sequence | True | True | True |" in markdown
         assert "| marker_edit | marker_edit | sequence | True | True | True |" in markdown
         assert "| roughcut_range_edit | roughcut_range_edit | output | True | True | True |" in markdown

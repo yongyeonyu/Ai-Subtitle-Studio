@@ -235,6 +235,19 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_
 
 The persistence cutover audit must also report provisional `marker_edit` save/reopen preservation plus render/export parity before any future persisted NLE format proposal: all 12 current dual-write operation families pass, including output-domain `roughcut_range_edit`; marker rows are preserved after reopen, stable `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, and `exported_assets` surfaces; final invalid/non-monotonic/overlap `0/0/0`; global max active `1`; and disk storage clean of unapproved NLE runtime fields.
 
+## NLE operation journal trace validation
+
+Runtime-only operation journal trace changes should prove one safe event per commit-family append, no raw caption text or project path leakage, no raw target id list, and unchanged legacy storage/final-surface stability.
+
+```bash
+./venv/bin/python -m py_compile core/project/nle_project_state.py tools/audit_nle_operation_journal.py tests/test_project_nle_operations.py tests/test_nle_operation_journal_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_nle_operation_journal_audit.py -k "operation_journal"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py
+./venv/bin/python tools/audit_nle_operation_journal.py --output-dir output/manual_verification/latest/nle_operation_journal_trace_audit_YYYYMMDD
+```
+
+The audit must report operation trace event count `12`, trace event contract ok `True`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, clean legacy storage, and no emitted caption text, raw project path, or raw `target_ids`.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.

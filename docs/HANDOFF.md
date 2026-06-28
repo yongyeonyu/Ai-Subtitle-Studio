@@ -33,6 +33,50 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Operation Journal Trace Events
+
+### Scope
+
+- Added best-effort async trace events for runtime-only NLE operation journal appends.
+- Updated `core/project/nle_project_state.py`, `tools/audit_nle_operation_journal.py`, `tests/test_project_nle_operations.py`, `tests/test_nle_operation_journal_audit.py`, and NLE/status docs.
+- Trace payloads include operation metadata, commit provenance, undo snapshot id, projected count, final stability counts, and runtime journal counts.
+- Trace payloads omit caption text, raw project paths, and raw `target_ids`.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_operation_journal_trace_audit_20260628/nle_operation_journal_audit.md`
+- `ready=true`; operation families `12`.
+- Runtime journal count `12`; operation trace event count `12`.
+- Operation trace event contract ok `true`.
+- Storage clean count `12`.
+- Final invalid/non-monotonic/overlap `0/0/0`; global max-active `1`.
+- NAS preflight: `output/manual_verification/latest/nle_operation_journal_trace_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`.
+- NAS acceptance: `output/manual_verification/latest/nle_operation_journal_trace_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`; accepted `true`, elapsed `52.699s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`.
+- NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_operation_trace_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-160200-nle-operation-journal-trace.md`
+- Dex classification: accept the bounded recommendation. Keep trace fields to safe operation/provenance/stability metadata and exclude text, raw paths, and raw target lists.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_project_state.py tools/audit_nle_operation_journal.py tests/test_project_nle_operations.py tests/test_nle_operation_journal_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_nle_operation_journal_audit.py -k "operation_journal"` -> `3 passed, 5 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `43 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py` -> `18 passed`.
+- `./venv/bin/python tools/audit_nle_operation_journal.py --output-dir output/manual_verification/latest/nle_operation_journal_trace_audit_20260628` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_operation_journal_trace_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> wrote `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_151123/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_151123/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_operation_journal_trace_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_151123/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_operation_trace_nas_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Use the current NAS HeyDealer first-180s fixture again for the next generation-affecting or STT/runtime timing slice.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, and App Store packaging/submission work blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 Project IO Trace Contract
 
 ### Scope

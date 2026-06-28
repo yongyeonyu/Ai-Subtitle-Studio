@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-160200-nle-operation-journal-trace.md`
 - `.agents/sentinel/handoffs/20260628-155100-project-io-save-load-trace.md`
 - `.agents/sentinel/handoffs/20260628-153300-nle-roughcut-range-edit-owner-map.md`
 - `.agents/sentinel/handoffs/20260628-152200-nle-preserved-marker-policy.md`

@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Operation Journal Trace Event Audit - 2026-06-28 KST
+
+- 실행 모드: source-app runtime-only NLE operation journal trace contract.
+- 결과: pass for runtime journal append trace events, safe payload contract, clean legacy storage, and final-surface stability. No UI/UX, subtitle quality, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, runtime undo/redo UI, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_operation_journal_trace_audit_20260628/nle_operation_journal_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_operation_journal_trace_audit_20260628/nle_operation_journal_audit.json`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-160200-nle-operation-journal-trace.md`
+- 실제 결과:
+  - `ready=true`; operation family count `12`.
+  - Runtime journal count `12`; operation trace event count `12`; operation trace event contract ok `true`.
+  - Storage clean count `12`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; global max-active `1`.
+  - Trace payloads include operation/provenance/stability metadata and exclude caption text, raw project paths, and raw `target_ids`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_project_state.py tools/audit_nle_operation_journal.py tests/test_project_nle_operations.py tests/test_nle_operation_journal_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_nle_operation_journal_audit.py -k "operation_journal"` -> `3 passed, 5 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `43 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py` -> `18 passed`.
+  - `./venv/bin/python tools/audit_nle_operation_journal.py --output-dir output/manual_verification/latest/nle_operation_journal_trace_audit_20260628` -> pass.
+- NAS 상태:
+  - Preflight: `output/manual_verification/latest/nle_operation_journal_trace_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`, media exists `true`, reference SRT exists `true`, clipped reference rows `89`.
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_151123/benchmark_results.json`.
+  - Acceptance: `output/manual_verification/latest/nle_operation_journal_trace_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`; accepted `true`, elapsed `52.699s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`, STT1/STT2/word selected `21/37/7`.
+  - Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_operation_trace_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+  - This remains regression evidence only. It does not promote collect-cache defaults or change STT/STT2/word precision policy.
+
 ## Project IO Trace Contract - 2026-06-28 KST
 
 - 실행 모드: source-app NLE save/load diagnostic trace contract.
