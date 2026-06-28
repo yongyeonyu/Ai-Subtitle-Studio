@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -18,6 +19,7 @@ from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail, thumbna
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.runtime.preview_frame_cache import ensure_preview_frame, nearest_cached_preview_frame
+from core.runtime.trace_logger import current_app_trace_logger, fps_parts
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
 from core.video_preview_proxy import existing_preview_proxy_for, preview_proxy_is_valid, preview_proxy_path_for, register_preview_proxy_created
 from ui.editor.video_overlay_widgets import (
@@ -764,6 +766,56 @@ class VideoPlayerSurfaceMixin:
             normalized = str(path or "")
         return f"{normalized}|{int(frame)}|{int(width)}"
 
+    def _preview_frame_trace_fields(self, path: str, sec: float, *, width: int) -> dict:
+        try:
+            fps = normalize_fps(getattr(self, "frame_rate", 30.0))
+        except Exception:
+            fps = 30.0
+        try:
+            frame = self.frame_for_sec(sec)
+        except Exception:
+            frame = int(round(max(0.0, float(sec or 0.0)) * fps))
+        try:
+            normalized = os.path.normpath(str(path or ""))
+        except Exception:
+            normalized = str(path or "")
+        fps_num, fps_den = fps_parts(fps)
+        return {
+            "stage": "preview-skimming",
+            "widget": "VideoPlayerSurface",
+            "action": "preview_frame_cache",
+            "source": "editor_preview_skimming",
+            "cache_kind": "nle_preview_skimming_frame",
+            "evidence_role": "user_preview_only",
+            "cut_boundary_evidence": False,
+            "ui_thread_decode_allowed": False,
+            "source_basename": os.path.basename(normalized),
+            "media_id": hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:16],
+            "time_sec": round(max(0.0, float(sec or 0.0)), 6),
+            "requested_sec": round(max(0.0, float(sec or 0.0)), 6),
+            "snapped_sec": round(max(0.0, float(sec or 0.0)), 6),
+            "playhead_sec": round(max(0.0, float(sec or 0.0)), 6),
+            "frame": int(frame),
+            "fps": fps,
+            "fps_num": fps_num,
+            "fps_den": fps_den,
+            "width": max(160, int(width or 320)),
+        }
+
+    def _trace_preview_frame_cache_event(self, event: str, path: str, sec: float, *, width: int = 320, **fields) -> bool:
+        try:
+            logger = current_app_trace_logger()
+        except Exception:
+            return False
+        if logger is None:
+            return False
+        try:
+            payload = self._preview_frame_trace_fields(path, sec, width=width)
+            payload.update(fields)
+            return bool(logger.log_event(event, **payload))
+        except Exception:
+            return False
+
     def _show_nearest_preview_frame_at(self, path: str, sec: float, *, width: int = 320) -> bool:
         try:
             thumb_path = nearest_cached_preview_frame(
@@ -775,7 +827,17 @@ class VideoPlayerSurfaceMixin:
         except Exception as exc:
             self._log_video_surface_nonfatal("nearest_preview_frame", exc)
             return False
-        return self._show_thumbnail_from_cache_path(thumb_path)
+        shown = self._show_thumbnail_from_cache_path(thumb_path)
+        self._trace_preview_frame_cache_event(
+            "nle_preview_frame_cache_hit" if shown else "nle_preview_frame_cache_miss",
+            path,
+            sec,
+            width=width,
+            cache_path=thumb_path if shown else "",
+            cache_hit=bool(shown),
+            status="hit" if shown else "miss",
+        )
+        return shown
 
     def _schedule_preview_frame_cache_prepare(self, path: str, sec: float, *, width: int = 320) -> None:
         if not self._is_video_file(path):
@@ -797,6 +859,16 @@ class VideoPlayerSurfaceMixin:
         self._preview_frame_worker_request_key = request_key
         self._preview_frame_last_request_at = now
         self._preview_frame_worker_active = True
+        self._trace_preview_frame_cache_event(
+            "nle_preview_frame_cache_schedule",
+            path,
+            snapped,
+            width=width,
+            request_key=request_key,
+            worker_active=True,
+            cache_hit=False,
+            status="decoding",
+        )
 
         def _worker() -> None:
             try:
@@ -808,6 +880,17 @@ class VideoPlayerSurfaceMixin:
                 )
                 if result.status not in ("cached", "created") or not result.path:
                     return
+                self._trace_preview_frame_cache_event(
+                    "nle_preview_frame_cache_ready",
+                    path,
+                    snapped,
+                    width=width,
+                    request_key=request_key,
+                    cache_path=str(result.path),
+                    cache_hit=True,
+                    cache_status=str(result.status or ""),
+                    status="ready",
+                )
                 try:
                     self.preview_thumbnail_ready.emit(request_key, str(result.path))
                 except RuntimeError:

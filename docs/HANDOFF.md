@@ -33,6 +33,44 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Preview Skimming Trace Events
+
+### Scope
+
+- Continued the source-app NLE preview/skimming plus trace-log workstream by adding best-effort preview cache trace events.
+- Modified `ui/editor/video_player_surface.py`, `tools/audit_nle_preview_skimming_cache.py`, `tests/test_video_player_widget.py`, and `tests/test_nle_preview_skimming_cache_audit.py`.
+- No UI layout, labels, colors, menus, popups, QML/GPU timeline surface, cut-boundary detection policy, STT/STT2 policy, App Store packaging/signing/upload, DMG, persisted NLE disk fields, or timeline interaction behavior changed.
+
+### Results
+
+- Evidence: `output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628/nle_preview_skimming_cache_audit.md`
+- Audit ready: `true`.
+- Trace event contract: `true`.
+- Events covered: `nle_preview_frame_cache_hit`, `nle_preview_frame_cache_miss`, `nle_preview_frame_cache_schedule`, `nle_preview_frame_cache_ready`.
+- Trace transport: async `TraceLogger` queue, best-effort/no-op when unavailable.
+- Provenance fields: `source=editor_preview_skimming`, `evidence_role=user_preview_only`, `cut_boundary_evidence=false`, `ui_thread_decode_allowed=false`.
+- Exact fps fields: `fps_num/fps_den` preserved.
+- Existing preview seek throttle remains present.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-115539-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-115600-nle-preview-trace-event-scout.md`
+- Dex classification: accept the trace-event slice. Keep the scout's high-frequency logging risk covered by the existing preview seek throttle and async TraceLogger queue.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/editor/video_player_surface.py tools/audit_nle_preview_skimming_cache.py tests/test_video_player_widget.py tests/test_nle_preview_skimming_cache_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player_widget.py -k "preview_frame_cache or paused_preview_seek or processing_thumbnail or nearest_preview_frame_trace"` -> `7 passed, 75 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_skimming_cache_audit.py tests/test_preview_frame_cache.py` -> `5 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_runtime_memory_manager.py tests/test_trace_log_bundle_audit.py -k "preview_cache or trace_log_bundle"` -> `3 passed, 25 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_preview_skimming_cache.py --output-dir output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628` -> pass, `ready=true`.
+
+### Next Recommended Action
+
+- Keep preview/skimming trace events diagnostic only; do not put raw trace events into UDP status/ping responses.
+- Continue cut-boundary accuracy work through the scorer/trace path, not preview thumbnail cache artifacts.
+
 ## Current Handoff - 2026-06-28 NLE Preview Skimming Cache Contract
 
 ### Scope

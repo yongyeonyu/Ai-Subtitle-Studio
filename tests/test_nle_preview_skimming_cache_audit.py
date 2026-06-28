@@ -30,6 +30,13 @@ def test_nle_preview_skimming_cache_audit_proves_user_preview_only_contract():
     assert contract["cache_miss_worker_schedule_present"] is True
     assert contract["preview_worker_uses_ensure_preview_frame"] is True
     assert contract["legacy_sync_thumbnail_helper_not_called_by_unprimed_preview"] is True
+    trace = report["trace_event_contract"]
+    assert trace["uses_trace_logger_queue"] is True
+    assert trace["best_effort_trace_failure"] is True
+    assert trace["events_present"] is True
+    assert trace["preview_only_fields_present"] is True
+    assert trace["exact_fps_fields_present"] is True
+    assert trace["preview_seek_throttle_present"] is True
 
 
 def test_nle_preview_skimming_cache_audit_writes_json_and_markdown_reports():
@@ -48,3 +55,5 @@ def test_nle_preview_skimming_cache_audit_writes_json_and_markdown_reports():
         assert "Preview cache contract applied: `True`" in markdown
         assert "Manifest cut-boundary evidence: `False`" in markdown
         assert "| ui.editor.video_player_surface.VideoPlayerSurfaceMixin | True | True | True | True |" in markdown
+        assert "## Trace Event Contract" in markdown
+        assert "| ui.editor.video_player_surface.VideoPlayerSurfaceMixin | True | True | True | True | True | True |" in markdown

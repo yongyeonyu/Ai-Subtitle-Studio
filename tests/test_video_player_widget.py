@@ -1643,6 +1643,91 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_nearest_preview_frame_trace_marks_user_preview_only_hit(self):
+        class FakeTraceLogger:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event, **fields):
+                self.events.append((event, fields))
+                return True
+
+        widget = VideoPlayerWidget()
+        try:
+            widget._rebuild_frame_time_map(duration=10.0, fps=60000 / 1001)
+            logger = FakeTraceLogger()
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch("ui.editor.video_player_surface.nearest_cached_preview_frame", return_value="/tmp/preview.jpg"), \
+                 patch.object(widget, "_show_thumbnail_from_cache_path", return_value=True), \
+                 patch("ui.editor.video_player_surface.current_app_trace_logger", return_value=logger):
+                result = widget._show_nearest_preview_frame_at(f.name, 1.0, width=320)
+
+            self.assertTrue(result)
+            self.assertEqual(logger.events[0][0], "nle_preview_frame_cache_hit")
+            fields = logger.events[0][1]
+            self.assertEqual(fields["stage"], "preview-skimming")
+            self.assertEqual(fields["source"], "editor_preview_skimming")
+            self.assertEqual(fields["evidence_role"], "user_preview_only")
+            self.assertIs(fields["cut_boundary_evidence"], False)
+            self.assertIs(fields["ui_thread_decode_allowed"], False)
+            self.assertIs(fields["cache_hit"], True)
+            self.assertEqual(fields["status"], "hit")
+            self.assertEqual(fields["requested_sec"], 1.0)
+            self.assertEqual(fields["frame"], 60)
+            self.assertEqual((fields["fps_num"], fields["fps_den"]), (60000, 1001))
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_preview_frame_cache_prepare_traces_schedule_and_ready(self):
+        class FakeTraceLogger:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event, **fields):
+                self.events.append((event, fields))
+                return True
+
+        class ImmediateThread:
+            def __init__(self, *, target, daemon, name):
+                self.target = target
+                self.daemon = daemon
+                self.name = name
+
+            def start(self):
+                self.target()
+
+        widget = VideoPlayerWidget()
+        try:
+            widget._rebuild_frame_time_map(duration=10.0, fps=30.0)
+            logger = FakeTraceLogger()
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch("ui.editor.video_player_surface.threading.Thread", side_effect=lambda **kwargs: ImmediateThread(**kwargs)), \
+                 patch("ui.editor.video_player_surface.ensure_preview_frame", return_value=SimpleNamespace(status="created", path="/tmp/preview.jpg")), \
+                 patch("ui.editor.video_player_surface.current_app_trace_logger", return_value=logger):
+                widget._schedule_preview_frame_cache_prepare(f.name, 3.0, width=320)
+
+            event_names = [event for event, _fields in logger.events]
+            self.assertEqual(event_names, ["nle_preview_frame_cache_schedule", "nle_preview_frame_cache_ready"])
+            for event, fields in logger.events:
+                self.assertEqual(fields["stage"], "preview-skimming")
+                self.assertEqual(fields["source"], "editor_preview_skimming")
+                self.assertEqual(fields["cache_kind"], "nle_preview_skimming_frame")
+                self.assertIs(fields["cut_boundary_evidence"], False)
+                self.assertIs(fields["ui_thread_decode_allowed"], False)
+                self.assertEqual(fields["frame"], 90)
+                self.assertEqual((fields["fps_num"], fields["fps_den"]), (30, 1))
+            self.assertIs(logger.events[0][1]["cache_hit"], False)
+            self.assertEqual(logger.events[0][1]["status"], "decoding")
+            self.assertIs(logger.events[-1][1]["cache_hit"], True)
+            self.assertEqual(logger.events[-1][1]["status"], "ready")
+            self.assertEqual(logger.events[-1][1]["cache_status"], "created")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_primed_preview_seek_uses_video_surface_instead_of_thumbnail(self):
         widget = VideoPlayerWidget()
         try:

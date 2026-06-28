@@ -44,6 +44,40 @@ def _video_surface_contract() -> dict[str, Any]:
     }
 
 
+def _trace_event_contract() -> dict[str, Any]:
+    source_path = ROOT / "ui" / "editor" / "video_player_surface.py"
+    text = source_path.read_text(encoding="utf-8")
+    return {
+        "owner": "ui.editor.video_player_surface.VideoPlayerSurfaceMixin",
+        "uses_trace_logger_queue": "current_app_trace_logger()" in text and "logger.log_event(event" in text,
+        "best_effort_trace_failure": "except Exception:\n            return False" in text,
+        "events_present": all(
+            event in text
+            for event in (
+                "nle_preview_frame_cache_hit",
+                "nle_preview_frame_cache_miss",
+                "nle_preview_frame_cache_schedule",
+                "nle_preview_frame_cache_ready",
+            )
+        ),
+        "preview_only_fields_present": all(
+            field in text
+            for field in (
+                "\"source\": \"editor_preview_skimming\"",
+                "\"evidence_role\": \"user_preview_only\"",
+                "\"cut_boundary_evidence\": False",
+                "\"ui_thread_decode_allowed\": False",
+                "cache_hit=",
+                "status=",
+                "\"requested_sec\"",
+                "\"snapped_sec\"",
+            )
+        ),
+        "exact_fps_fields_present": "fps_parts(fps)" in text and "\"fps_num\"" in text and "\"fps_den\"" in text,
+        "preview_seek_throttle_present": "elapsed < 0.18" in text,
+    }
+
+
 def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, Any]:
     work_dir = output_dir / "_work"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -80,6 +114,7 @@ def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, An
     manifest = preview_cache.read_preview_frame_manifest(cached_path)
     manifest_path = preview_cache.preview_frame_manifest_path(cached_path)
     video_surface = _video_surface_contract()
+    trace_events = _trace_event_contract()
     preview_workspace_isolated = (
         "Preview" in str(frame_cache_dir)
         and "FrameThumbnails" in str(frame_cache_dir)
@@ -102,6 +137,7 @@ def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, An
         and manifest_ok
         and source_fps_grid_ok
         and all(bool(value) for key, value in video_surface.items() if key != "owner")
+        and all(bool(value) for key, value in trace_events.items() if key != "owner")
     )
     return {
         "schema": SCHEMA,
@@ -122,6 +158,7 @@ def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, An
         "manifest_frame": manifest.get("frame"),
         "manifest_fps": manifest.get("fps"),
         "video_surface_contract": video_surface,
+        "trace_event_contract": trace_events,
         "blocked_scope": list(BLOCKED_SCOPE),
     }
 
@@ -156,6 +193,20 @@ def write_nle_preview_skimming_cache_report(output_dir: Path, report: dict[str, 
             schedule=report["video_surface_contract"]["cache_miss_worker_schedule_present"],
             worker=report["video_surface_contract"]["preview_worker_uses_ensure_preview_frame"],
             legacy=report["video_surface_contract"]["legacy_sync_thumbnail_helper_not_called_by_unprimed_preview"],
+        ),
+        "",
+        "## Trace Event Contract",
+        "",
+        "| owner | trace_queue | best_effort | events | preview_only_fields | exact_fps | throttle |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| {owner} | {trace_queue} | {best_effort} | {events} | {preview_fields} | {exact_fps} | {throttle} |".format(
+            owner=report["trace_event_contract"]["owner"],
+            trace_queue=report["trace_event_contract"]["uses_trace_logger_queue"],
+            best_effort=report["trace_event_contract"]["best_effort_trace_failure"],
+            events=report["trace_event_contract"]["events_present"],
+            preview_fields=report["trace_event_contract"]["preview_only_fields_present"],
+            exact_fps=report["trace_event_contract"]["exact_fps_fields_present"],
+            throttle=report["trace_event_contract"]["preview_seek_throttle_present"],
         ),
         "",
         "## Blocked Scope",

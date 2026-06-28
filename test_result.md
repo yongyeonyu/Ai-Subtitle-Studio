@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Preview Skimming Trace Events - 2026-06-28 KST
+
+- 실행 모드: source-app NLE preview/skimming trace-event contract audit.
+- 결과: pass; preview cache hit/miss/schedule/ready states now emit best-effort async trace events with preview-only provenance and exact fps fields.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628/nle_preview_skimming_cache_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628/nle_preview_skimming_cache_audit.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-115539-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-115600-nle-preview-trace-event-scout.md`
+- 수정 요약:
+  - `VideoPlayerSurfaceMixin` now emits `nle_preview_frame_cache_hit`, `nle_preview_frame_cache_miss`, `nle_preview_frame_cache_schedule`, and `nle_preview_frame_cache_ready`.
+  - Events use the existing async `TraceLogger` queue and safely no-op when tracing is unavailable.
+  - Trace fields include `source=editor_preview_skimming`, `evidence_role=user_preview_only`, `cut_boundary_evidence=false`, `ui_thread_decode_allowed=false`, cache status, frame, fps, and `fps_num/fps_den`.
+  - No UI layout/labels/colors/menus/popups, QML/GPU timeline surface, cut-boundary policy, STT/STT2 policy, App Store packaging/signing/upload, DMG behavior, persisted NLE disk fields, or timeline interaction behavior changed.
+- 실제 감사 결과:
+  - `ready=true`, `ui_runtime_change_applied=false`, `preview_cache_contract_applied=true`.
+  - Trace event contract: trace queue `true`, best-effort `true`, events `true`, preview-only fields `true`, exact fps `true`, throttle `true`.
+  - Preview workspace and manifest contract from the previous slice still pass in the same audit.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/video_player_surface.py tools/audit_nle_preview_skimming_cache.py tests/test_video_player_widget.py tests/test_nle_preview_skimming_cache_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player_widget.py -k "preview_frame_cache or paused_preview_seek or processing_thumbnail or nearest_preview_frame_trace"` -> `7 passed, 75 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_skimming_cache_audit.py tests/test_preview_frame_cache.py` -> `5 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_runtime_memory_manager.py tests/test_trace_log_bundle_audit.py -k "preview_cache or trace_log_bundle"` -> `3 passed, 25 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_preview_skimming_cache.py --output-dir output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628` -> pass.
+
 ## NLE Preview Skimming Cache Contract - 2026-06-28 KST
 
 - 실행 모드: source-app NLE preview/skimming frame-cache provenance contract audit.
