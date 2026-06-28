@@ -252,6 +252,36 @@ ORDER_RULES: tuple[dict[str, Any], ...] = (
 )
 
 
+def _playhead_dirty_rect_gate(issues: list[dict[str, Any]], inventory: list[dict[str, Any]]) -> dict[str, Any]:
+    owner = next(
+        (item for item in inventory if item.get("owner") == "TimelineSingleOwnerPlayheadInvalidation"),
+        {},
+    )
+    owner_issues = [
+        issue
+        for issue in issues
+        if str(issue.get("owner") or "") == "TimelineSingleOwnerPlayheadInvalidation"
+    ]
+    protected = bool(owner) and not owner_issues and str(owner.get("backend") or "") == "qwidget-2d-full-canvas-repaint"
+    return {
+        "candidate": "playhead_only_dirty_rect_repaint",
+        "status": "hold_full_canvas_repaint" if protected else "blocked_audit_failed",
+        "protected_by": "TimelineSingleOwnerPlayheadInvalidation",
+        "current_backend": str(owner.get("backend") or ""),
+        "runtime_change_allowed": False,
+        "required_before_experiment": [
+            "fresh_macau_visual_smoke_no_residue",
+            "focused_playhead_shadow_playhead_repaint_tests",
+            "owner_approval_before_default_change",
+        ],
+        "reason": (
+            "single_owner_2d_full_canvas_repaint_protects_against_timeline_residue"
+            if protected
+            else "single_owner_2d_full_canvas_repaint_guard_failed"
+        ),
+    }
+
+
 def audit_editor_rendering_ownership(root: Path | None = None) -> dict[str, Any]:
     root = root or ROOT
     issues: list[dict[str, Any]] = []
@@ -319,21 +349,72 @@ def audit_editor_rendering_ownership(root: Path | None = None) -> dict[str, Any]
             if index <= cursor:
                 issues.append({"path": rel_path, "owner": rule["owner"], "reason": "order_regression", "pattern": str(pattern)})
             cursor = max(cursor, index)
+    playhead_gate = _playhead_dirty_rect_gate(issues, inventory)
     return {
         "ok": not issues,
         "schema": "ai_subtitle_studio.editor_rendering_ownership_audit.v1",
         "inventory": inventory,
         "issues": issues,
+        "playhead_dirty_rect_candidate": playhead_gate,
     }
+
+
+def render_markdown(report: dict[str, Any]) -> str:
+    gate = dict(report.get("playhead_dirty_rect_candidate") or {})
+    lines = [
+        "# Editor Rendering Ownership Audit",
+        "",
+        f"- Schema: `{report.get('schema', '')}`",
+        f"- OK: `{bool(report.get('ok', False))}`",
+        f"- Inventory count: `{len(list(report.get('inventory') or []))}`",
+        f"- Issue count: `{len(list(report.get('issues') or []))}`",
+        "",
+        "## Playhead Dirty-Rect Candidate Gate",
+        "",
+        f"- Candidate: `{gate.get('candidate', '')}`",
+        f"- Status: `{gate.get('status', '')}`",
+        f"- Runtime change allowed: `{bool(gate.get('runtime_change_allowed', False))}`",
+        f"- Protected by: `{gate.get('protected_by', '')}`",
+        f"- Current backend: `{gate.get('current_backend', '')}`",
+        f"- Reason: `{gate.get('reason', '')}`",
+        "",
+        "## Required Before Experiment",
+        "",
+    ]
+    for item in list(gate.get("required_before_experiment") or []):
+        lines.append(f"- `{item}`")
+    lines.extend(["", "## Issues", ""])
+    issues = list(report.get("issues") or [])
+    if not issues:
+        lines.append("- none")
+    for issue in issues:
+        lines.append(
+            f"- `{issue.get('path', '')}` owner=`{issue.get('owner', '')}` reason=`{issue.get('reason', '')}` pattern=`{issue.get('pattern', '')}`"
+        )
+    lines.extend(["", "## Inventory", ""])
+    for item in list(report.get("inventory") or []):
+        lines.append(f"- `{item.get('owner', '')}`: `{item.get('backend', '')}` in `{item.get('path', '')}`")
+    return "\n".join(lines) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit editor/timeline rendering ownership defaults.")
     parser.add_argument("--json", action="store_true", help="print JSON output")
+    parser.add_argument("--output-dir", default="", help="write audit JSON and Markdown to this directory")
     args = parser.parse_args(argv)
     report = audit_editor_rendering_ownership(ROOT)
+    output_dir = Path(str(args.output_dir or "")).expanduser() if args.output_dir else None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "editor_rendering_ownership_audit.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (output_dir / "editor_rendering_ownership_audit.md").write_text(render_markdown(report), encoding="utf-8")
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif output_dir is not None:
+        print(output_dir / "editor_rendering_ownership_audit.md")
     else:
         print("OK" if report["ok"] else "FAIL")
         for issue in report["issues"]:

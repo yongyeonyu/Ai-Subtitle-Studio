@@ -149,10 +149,8 @@ Rollback:
 
 ## Parked Candidates
 
-These are not active queue items. Before executing one, create a fresh quality
-gate and rollback branch.
-
-- Playhead-only dirty-rect repaint: 현재 single-owner 2D full-canvas repaint가 잔상을 막는다. Macau visual smoke로 잔상 없음이 증명될 때만 별도 실험.
+No parked candidates are currently open. Any new candidate must create a fresh
+quality gate and rollback branch before execution.
 
 ## Waste And Lessons
 

@@ -1,6 +1,6 @@
 import unittest
 
-from tools.audit_editor_rendering_ownership import audit_editor_rendering_ownership
+from tools.audit_editor_rendering_ownership import audit_editor_rendering_ownership, render_markdown
 
 
 class EditorRenderingOwnershipAuditTests(unittest.TestCase):
@@ -45,6 +45,19 @@ class EditorRenderingOwnershipAuditTests(unittest.TestCase):
         self.assertTrue(report["ok"], report["issues"])
         owners = {item["owner"] for item in report["inventory"]}
         self.assertIn("TimelineSingleOwnerPlayheadInvalidation", owners)
+        gate = report["playhead_dirty_rect_candidate"]
+        self.assertEqual(gate["status"], "hold_full_canvas_repaint")
+        self.assertFalse(gate["runtime_change_allowed"])
+        self.assertIn("fresh_macau_visual_smoke_no_residue", gate["required_before_experiment"])
+
+    def test_render_markdown_includes_playhead_dirty_rect_gate(self):
+        report = audit_editor_rendering_ownership()
+
+        markdown = render_markdown(report)
+
+        self.assertIn("Playhead Dirty-Rect Candidate Gate", markdown)
+        self.assertIn("hold_full_canvas_repaint", markdown)
+        self.assertIn("fresh_macau_visual_smoke_no_residue", markdown)
 
 
 if __name__ == "__main__":

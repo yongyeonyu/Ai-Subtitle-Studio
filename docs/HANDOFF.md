@@ -33,7 +33,43 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 App Command/Snapshot Acknowledgement Cleanup
+## Current Handoff - 2026-06-28 Playhead Dirty-Rect Candidate Gate
+
+### Scope
+
+- Executed the parked `Playhead-only dirty-rect repaint` candidate as a fresh quality gate, not as a runtime optimization.
+- Created rollback branch `codex/rollback-playhead-dirty-rect-gate-20260628-0925` before editing.
+- Strengthened `tools/audit_editor_rendering_ownership.py` so it reports `playhead_dirty_rect_candidate` status and can write JSON/Markdown evidence with `--output-dir`.
+- Current result is `hold_full_canvas_repaint`; runtime dirty-rect repaint remains disallowed until fresh Macau visual smoke proves no residue and the owner approves a default change.
+- Removed the parked candidate from `ACTION_ITEMS.md`, archived it in `COMPLETED_ACTION_ITEMS.md`, and recorded the rejected runtime-optimization direction in `waste_action_item.md`.
+- No runtime repaint behavior, UI/UX, timeline drawing, NLE state, subtitle generation, STT/STT2, App Store readiness, packaging, signing, upload, notarization, or DMG behavior changed.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-092519-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-092600-nle-playhead-dirty-rect-scout.md`
+- Dex classification: accept the Defer/Reject recommendation for runtime dirty-rect optimization, and keep only the non-destructive audit/evidence strengthening.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_editor_rendering_ownership.py tests/test_editor_rendering_ownership_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_rendering_ownership_audit.py tests/test_timeline_playhead_fit.py -k "single_owner_playhead_invalidation or playhead_canvas_repaints_full_2d_owner or shadow_playhead_repaints_canvas_full_2d_owner"` -> `3 passed, 194 deselected`.
+- `./venv/bin/python tools/audit_editor_rendering_ownership.py --output-dir output/manual_verification/latest/playhead_dirty_rect_gate_20260628` -> pass.
+
+### Results
+
+- Evidence artifact: `output/manual_verification/latest/playhead_dirty_rect_gate_20260628/editor_rendering_ownership_audit.md`
+- Audit `ok=true`, issue count `0`.
+- `playhead_dirty_rect_candidate.status=hold_full_canvas_repaint`.
+- `runtime_change_allowed=false`.
+- `current_backend=qwidget-2d-full-canvas-repaint`.
+- No parked candidates remain open in `ACTION_ITEMS.md`.
+
+### Next Recommended Action
+
+- Continue from `ACTION_ITEMS.md` active queue. STT cache default promotion still waits for NAS HeyDealer real-media write/hit backfill, and App Store packaging/signing/upload remains owner-gated.
+
+## Previous Handoff - 2026-06-28 App Command/Snapshot Acknowledgement Cleanup
 
 ### Scope
 

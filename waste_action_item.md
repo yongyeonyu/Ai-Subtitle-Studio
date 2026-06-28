@@ -2,6 +2,14 @@
 
 ## 2026-06-28
 
+- `playhead_only_dirty_rect_repaint_without_visual_smoke`: timeline playhead/shadow-playhead repaint를 full canvas repaint 대신 narrow dirty-rect로 기본 전환하는 방향
+  hypothesis: playhead 이동만 작은 dirty strip으로 repaint하면 편집 중 repaint 비용을 줄일 수 있다.
+  change: runtime repaint behavior는 변경하지 않았다. 대신 `tools/audit_editor_rendering_ownership.py`에 `playhead_dirty_rect_candidate` gate와 JSON/Markdown evidence output을 추가해 현재 full-canvas guard를 증거화했다.
+  metrics: `output/manual_verification/latest/playhead_dirty_rect_gate_20260628/editor_rendering_ownership_audit.md` reports `ok=true`, issue count `0`, candidate status `hold_full_canvas_repaint`, `runtime_change_allowed=false`, and current backend `qwidget-2d-full-canvas-repaint`.
+  quality: focused guards kept `TimelineSingleOwnerPlayheadInvalidation` full-canvas repaint: `tests/test_editor_rendering_ownership_audit.py tests/test_timeline_playhead_fit.py -k "single_owner_playhead_invalidation or playhead_canvas_repaints_full_2d_owner or shadow_playhead_repaints_canvas_full_2d_owner"` -> `3 passed, 194 deselected`.
+  artifact: `output/manual_verification/latest/playhead_dirty_rect_gate_20260628/editor_rendering_ownership_audit.md`
+  rejection reason: Macau visual smoke without residue is not available in this slice, and prior lessons identify narrow playhead dirty-rect repaint as a timeline ghosting/overlap risk. Keep the default full-canvas repaint until fresh visual evidence and owner approval exist.
+
 - `recheck_prepared_clip_metadata_reuse_cache_hit`: exact collect-cache hit에서 준비된 STT2/word WAV clip을 metadata sidecar로 재사용하는 방향
   hypothesis: STT2/word collect provider 출력은 캐시로 건너뛰어도 recheck clip 준비 시간이 남으므로, 준비 WAV까지 재사용하면 cache-hit elapsed를 더 줄일 수 있다.
   change: `_stt_word_precision`/`_fast_stt2_recheck` 디렉터리를 collect-cache enabled 조건에서 보존하고, metadata-matched prepared clip 재사용 경로와 단위 테스트를 임시 적용했다.

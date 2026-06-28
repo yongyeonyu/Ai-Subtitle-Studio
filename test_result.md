@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Playhead Dirty-Rect Candidate Gate - 2026-06-28 KST
+
+- 실행 모드: parked candidate fresh quality gate; no runtime repaint behavior change.
+- 결과: pass; playhead-only dirty-rect runtime optimization remains held.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/playhead_dirty_rect_gate_20260628/editor_rendering_ownership_audit.md`
+  - Audit JSON: `output/manual_verification/latest/playhead_dirty_rect_gate_20260628/editor_rendering_ownership_audit.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-092519-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-092600-nle-playhead-dirty-rect-scout.md`
+- 수정 요약:
+  - `tools/audit_editor_rendering_ownership.py` now emits `playhead_dirty_rect_candidate` gate data.
+  - The audit CLI now supports `--output-dir` and writes JSON/Markdown evidence.
+  - `tests/test_editor_rendering_ownership_audit.py` now asserts `hold_full_canvas_repaint`, `runtime_change_allowed=false`, and the required `fresh_macau_visual_smoke_no_residue` gate.
+  - Removed the parked candidate from `ACTION_ITEMS.md`, archived it in `COMPLETED_ACTION_ITEMS.md`, and recorded the rejected runtime-optimization direction in `waste_action_item.md`.
+  - No runtime repaint behavior, UI/UX, timeline drawing, NLE state, subtitle generation, STT/STT2, App Store readiness, packaging, signing, upload, notarization, or DMG behavior changed.
+- 실제 감사 결과:
+  - `ok=true`, issue count `0`.
+  - `playhead_dirty_rect_candidate.status=hold_full_canvas_repaint`.
+  - `runtime_change_allowed=false`.
+  - `current_backend=qwidget-2d-full-canvas-repaint`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_editor_rendering_ownership.py tests/test_editor_rendering_ownership_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_rendering_ownership_audit.py tests/test_timeline_playhead_fit.py -k "single_owner_playhead_invalidation or playhead_canvas_repaints_full_2d_owner or shadow_playhead_repaints_canvas_full_2d_owner"` -> `3 passed, 194 deselected`.
+  - `./venv/bin/python tools/audit_editor_rendering_ownership.py --output-dir output/manual_verification/latest/playhead_dirty_rect_gate_20260628` -> pass.
+
 ## App Command/Snapshot Acknowledgement Cleanup - 2026-06-28 KST
 
 - 실행 모드: parked candidate artifact-trust cleanup; no runtime bridge handler behavior change.

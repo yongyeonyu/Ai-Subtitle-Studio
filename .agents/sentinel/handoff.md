@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-092600-nle-playhead-dirty-rect-scout.md`
+- `.agents/sentinel/handoffs/20260628-092519-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-091900-app-command-ack-cleanup-scout.md`
 - `.agents/sentinel/handoffs/20260628-091814-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-090900-app-store-submission-contents-audit-review.md`

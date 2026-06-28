@@ -76,6 +76,17 @@ Source section: previous `ACTION_ITEMS.md` parked candidate `App command/snapsho
 5. Jammini scout: `.agents/sentinel/handoffs/20260628-091900-app-command-ack-cleanup-scout.md`; Dex classified the slice as accepted with a narrower implementation scope than the scout's runtime-handler suggestion.
 6. Verification: `./venv/bin/python -m py_compile tools/appctl.py tests/test_appctl.py` passed; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_appctl.py tests/test_automation_command_client.py tests/test_remote_verify_actions.py` -> `14 passed`; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "guided_subtitle_run or capture_snapshot or command_timeout"` -> `7 passed, 71 deselected`.
 
+## Playhead-Only Dirty-Rect Repaint Candidate Gate
+
+Source section: previous `ACTION_ITEMS.md` parked candidate `Playhead-only dirty-rect repaint`.
+
+1. A rollback branch was created before execution: `codex/rollback-playhead-dirty-rect-gate-20260628-0925`.
+2. The candidate was closed as `hold_full_canvas_repaint`, not implemented. Current `TimelineSingleOwnerPlayheadInvalidation` remains `qwidget-2d-full-canvas-repaint`, and `runtime_change_allowed=false` until fresh Macau visual smoke proves no residue and the owner approves a default change.
+3. `tools/audit_editor_rendering_ownership.py` now writes JSON/Markdown evidence with a `playhead_dirty_rect_candidate` gate. Evidence: `output/manual_verification/latest/playhead_dirty_rect_gate_20260628/editor_rendering_ownership_audit.md`; result `ok=true`, issue count `0`, candidate status `hold_full_canvas_repaint`.
+4. Runtime repaint behavior, UI/UX, timeline drawing, NLE state, subtitle generation, STT/STT2, App Store readiness, packaging, signing, and upload behavior were not changed.
+5. Jammini scout: `.agents/sentinel/handoffs/20260628-092600-nle-playhead-dirty-rect-scout.md`; verdict recommends Defer/Reject for runtime dirty-rect optimization before Macau visual smoke.
+6. Verification: `./venv/bin/python -m py_compile tools/audit_editor_rendering_ownership.py tests/test_editor_rendering_ownership_audit.py` passed; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_rendering_ownership_audit.py tests/test_timeline_playhead_fit.py -k "single_owner_playhead_invalidation or playhead_canvas_repaints_full_2d_owner or shadow_playhead_repaints_canvas_full_2d_owner"` -> `3 passed, 194 deselected`; `./venv/bin/python tools/audit_editor_rendering_ownership.py --output-dir output/manual_verification/latest/playhead_dirty_rect_gate_20260628` wrote the evidence artifact.
+
 ## Trace Log Bundle Diagnostics
 
 Source section: `NLE_Action.md` Trace Log Bundle.
