@@ -1,5 +1,24 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## App Command/Snapshot Acknowledgement Cleanup - 2026-06-28 KST
+
+- 실행 모드: parked candidate artifact-trust cleanup; no runtime bridge handler behavior change.
+- 결과: pass; direct `appctl` output now carries stronger evidence for queued snapshot artifacts and guided-run timeout follow-up status.
+- Jammini:
+  - Route probe: `.agents/sentinel/handoffs/20260628-091814-watchdog-handoff-probe.md`
+  - Scout: `.agents/sentinel/handoffs/20260628-091900-app-command-ack-cleanup-scout.md`
+  - Dex classification: accept the artifact-trust goal, but narrow implementation to `tools/appctl.py` reporting because `tools/remote_verify.py` already validates saved capture artifacts.
+- 수정 요약:
+  - `tools/appctl.py` now annotates `capture-snapshot` / `snapshot` results with `data.artifact` and `data.artifact_ready`.
+  - `tools/appctl.py` now annotates `guided-subtitle-run` `command_timeout` results with `post_timeout_status` and `post_timeout_evidence` while preserving the original timeout as non-ok.
+  - `tests/test_appctl.py` now covers ready artifact, missing artifact, and guided-run timeout follow-up evidence.
+  - Removed the parked candidate from `ACTION_ITEMS.md` and archived the completion in `COMPLETED_ACTION_ITEMS.md`.
+  - No runtime bridge handler behavior, UI/UX, subtitle generation, STT/STT2, NLE state, App Store readiness, packaging, signing, upload, notarization, or DMG behavior changed.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/appctl.py tests/test_appctl.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_appctl.py tests/test_automation_command_client.py tests/test_remote_verify_actions.py` -> `14 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "guided_subtitle_run or capture_snapshot or command_timeout"` -> `7 passed, 71 deselected`.
+
 ## Completed Action Item Archive Separation - 2026-06-28 KST
 
 - 실행 모드: documentation-only action-item archive separation.

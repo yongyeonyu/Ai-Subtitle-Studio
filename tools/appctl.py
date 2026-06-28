@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from pathlib import Path
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -18,6 +21,88 @@ from tools.automation_command_client import (
     result_is_waiting_for_app,
     send_app_command_with_readiness_retry,
 )
+
+
+def _file_artifact_state(path: str) -> dict[str, Any]:
+    target = str(path or "").strip()
+    exists = bool(target) and os.path.isfile(target)
+    size = int(os.path.getsize(target)) if exists else 0
+    return {
+        "path": target,
+        "path_exists": exists,
+        "path_size": size,
+    }
+
+
+def _wait_for_file_artifact(path: str, *, timeout_sec: float) -> dict[str, Any]:
+    target = str(path or "").strip()
+    deadline = time.monotonic() + max(0.0, float(timeout_sec or 0.0))
+    while target and time.monotonic() < deadline:
+        state = _file_artifact_state(target)
+        if state["path_exists"] and int(state["path_size"] or 0) > 0:
+            return state
+        time.sleep(0.1)
+    return _file_artifact_state(target)
+
+
+def _snapshot_artifact_path(payload: dict[str, Any], result: dict[str, Any]) -> str:
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    return str(data.get("path") or payload.get("path") or "").strip()
+
+
+def _guided_timeout_evidence(payload: dict[str, Any], status_result: dict[str, Any]) -> dict[str, Any]:
+    requested_path = str(payload.get("path") or "").strip()
+    data = status_result.get("data") if isinstance(status_result.get("data"), dict) else {}
+    guided = data.get("guided_snapshot_run") if isinstance(data.get("guided_snapshot_run"), dict) else {}
+    editor_media_path = str(data.get("editor_media_path") or "").strip()
+    editor_state = str(data.get("editor_state") or "").strip()
+    backend_active = bool(data.get("backend_active", False))
+    guided_active = bool(guided.get("active", False))
+    matched_path = bool(requested_path and editor_media_path and requested_path == editor_media_path)
+    return {
+        "requested_path": requested_path,
+        "editor_media_path": editor_media_path,
+        "matched_path": matched_path,
+        "editor_state": editor_state,
+        "backend_active": backend_active,
+        "guided_active": guided_active,
+        "work_may_have_started": bool(matched_path or guided_active or backend_active or editor_state == "ST_PROC"),
+    }
+
+
+def _finalize_appctl_result(
+    payload: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    timeout_sec: float,
+    sender: Callable[..., dict[str, Any]] = send_app_command_with_readiness_retry,
+) -> dict[str, Any]:
+    command = str(payload.get("command") or "").strip()
+    finalized = dict(result or {})
+    data = dict(finalized.get("data") or {}) if isinstance(finalized.get("data"), dict) else {}
+
+    if command in {"capture-snapshot", "snapshot"}:
+        artifact_path = _snapshot_artifact_path(payload, finalized)
+        if artifact_path:
+            if finalized.get("ok") and (finalized.get("queued") or finalized.get("message") == "snapshot_queued"):
+                artifact = _wait_for_file_artifact(artifact_path, timeout_sec=max(0.5, min(6.0, float(timeout_sec or 0.0))))
+            else:
+                artifact = _file_artifact_state(artifact_path)
+            data["artifact"] = artifact
+            data["artifact_ready"] = bool(artifact["path_exists"] and int(artifact["path_size"] or 0) > 0)
+            finalized["data"] = data
+
+    if command == "guided-subtitle-run" and str(finalized.get("error") or "") == "command_timeout":
+        status_payload = build_command_payload("guided-subtitle-status")
+        try:
+            status = sender(status_payload, timeout_sec=max(0.5, min(3.0, float(timeout_sec or 0.0))))
+        except OSError as exc:
+            status = {"ok": False, "error": "app_unreachable", "message": str(exc), "data": {}}
+        data["post_timeout_status"] = status
+        data["post_timeout_evidence"] = _guided_timeout_evidence(payload, status)
+        finalized["data"] = data
+
+    return finalized
 
 
 def _add_editor_selection_args(parser: argparse.ArgumentParser) -> None:
@@ -336,6 +421,7 @@ def main() -> int:
     except OSError as exc:
         print(json.dumps({"ok": False, "error": "app_unreachable", "message": str(exc)}, ensure_ascii=False))
         return 1
+    result = _finalize_appctl_result(payload, result, timeout_sec=float(args.timeout or 8.0))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     command = str(payload.get("command", "") or "")
     if command_is_read_only(command) and result_is_waiting_for_app(result):

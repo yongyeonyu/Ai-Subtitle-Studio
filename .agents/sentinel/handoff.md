@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-091900-app-command-ack-cleanup-scout.md`
+- `.agents/sentinel/handoffs/20260628-091814-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-090900-app-store-submission-contents-audit-review.md`
 - `.agents/sentinel/handoffs/20260628-085900-stt-cache-backfill-readiness-plan-review.md`
 - `.agents/sentinel/handoffs/20260628-085829-watchdog-handoff-probe.md`

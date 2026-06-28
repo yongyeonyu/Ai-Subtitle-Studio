@@ -33,7 +33,41 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 Completed Action Item Archive Separation
+## Current Handoff - 2026-06-28 App Command/Snapshot Acknowledgement Cleanup
+
+### Scope
+
+- Executed the parked `App command/snapshot acknowledgement cleanup` candidate as an artifact-trust slice only.
+- Created rollback branch `codex/rollback-app-command-ack-20260628-0918` before editing.
+- Added direct CLI result annotations in `tools/appctl.py`:
+  - `capture-snapshot` / `snapshot` now reports `data.artifact` and `data.artifact_ready` after a queued/saved response.
+  - `guided-subtitle-run` `command_timeout` now keeps `ok=false` but attaches `post_timeout_status` and `post_timeout_evidence` from safe follow-up `guided-subtitle-status`.
+- Updated `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, and `test_result.md`.
+- No runtime bridge handler behavior, UI/UX, subtitle generation, STT/STT2, NLE state, App Store readiness, packaging, signing, upload, notarization, or DMG behavior changed.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-091814-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-091900-app-command-ack-cleanup-scout.md`
+- Dex classification: accept the artifact-trust goal, but narrow implementation to `tools/appctl.py` reporting because `tools/remote_verify.py` already verifies saved capture artifacts and runtime handler behavior did not need to change.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/appctl.py tests/test_appctl.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_appctl.py tests/test_automation_command_client.py tests/test_remote_verify_actions.py` -> `14 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "guided_subtitle_run or capture_snapshot or command_timeout"` -> `7 passed, 71 deselected`.
+
+### Results
+
+- Direct `appctl capture-snapshot` output can now distinguish queued acknowledgement from actual PNG artifact readiness.
+- Direct `appctl guided-subtitle-run` timeout output can now carry follow-up status evidence without turning the timeout into a false success.
+- The parked candidate was removed from `ACTION_ITEMS.md` and archived in `COMPLETED_ACTION_ITEMS.md`.
+
+### Next Recommended Action
+
+- Continue from `ACTION_ITEMS.md` active queue. STT cache default promotion still waits for NAS HeyDealer real-media write/hit backfill, and App Store packaging/signing/upload remains owner-gated.
+
+## Previous Handoff - 2026-06-28 Completed Action Item Archive Separation
 
 ### Scope
 

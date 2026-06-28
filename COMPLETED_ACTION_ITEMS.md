@@ -65,6 +65,17 @@ Source item: `ACTION_ITEMS.md` item `Mac App Store Submission Readiness`.
 2. The submission target was locked to Mac App Store `.pkg`, and Developer ID beta `.dmg` was documented as a separate opt-in track that cannot count as App Store submission proof.
 3. The readiness audit now itemizes non-code submission contents with per-item `status`, `draft`, `owner_decision_required`, and `acceptance_gate` fields for privacy policy URL, App Privacy answers, export compliance, screenshots, support URL, app review notes, age rating, and release notes. Evidence: `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.md`; current result remains `app_store_submission_ready=false`, blocker count `14`, submission content status `blocked`, and pending owner-input items `8/8`.
 
+## App Command/Snapshot Acknowledgement Cleanup
+
+Source section: previous `ACTION_ITEMS.md` parked candidate `App command/snapshot acknowledgement cleanup`.
+
+1. A rollback branch was created before execution: `codex/rollback-app-command-ack-20260628-0918`.
+2. `tools/appctl.py` now annotates direct `capture-snapshot` / `snapshot` CLI responses with `data.artifact` and `data.artifact_ready` so a queued/ok response cannot be mistaken for saved PNG proof without checking the file path and size.
+3. `tools/appctl.py` now annotates `guided-subtitle-run` `command_timeout` responses with a safe follow-up `guided-subtitle-status` result plus `post_timeout_evidence`; the original timeout remains non-ok, but the CLI output can show whether the requested media path, processing state, backend activity, or guided snapshot run suggests work may have started.
+4. Runtime bridge handlers, UI/UX behavior, subtitle generation, STT/STT2, NLE state, App Store readiness, packaging, signing, and upload behavior were not changed.
+5. Jammini scout: `.agents/sentinel/handoffs/20260628-091900-app-command-ack-cleanup-scout.md`; Dex classified the slice as accepted with a narrower implementation scope than the scout's runtime-handler suggestion.
+6. Verification: `./venv/bin/python -m py_compile tools/appctl.py tests/test_appctl.py` passed; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_appctl.py tests/test_automation_command_client.py tests/test_remote_verify_actions.py` -> `14 passed`; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "guided_subtitle_run or capture_snapshot or command_timeout"` -> `7 passed, 71 deselected`.
+
 ## Trace Log Bundle Diagnostics
 
 Source section: `NLE_Action.md` Trace Log Bundle.

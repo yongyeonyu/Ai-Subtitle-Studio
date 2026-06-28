@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.appctl import _parser, _payload_from_args
+from tools.appctl import _finalize_appctl_result, _parser, _payload_from_args
 
 
 class AppCtlTests(unittest.TestCase):
@@ -81,6 +81,78 @@ class AppCtlTests(unittest.TestCase):
             payload = _payload_from_args(args)
 
         self.assertEqual(payload["options"]["reuse_existing"], "ask")
+
+    def test_capture_snapshot_queued_result_reports_ready_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "snapshot.png"
+            target.write_bytes(b"png")
+            payload = {"command": "capture-snapshot", "path": str(target)}
+            result = {
+                "ok": True,
+                "queued": True,
+                "message": "snapshot_queued",
+                "data": {"path": str(target)},
+            }
+
+            finalized = _finalize_appctl_result(payload, result, timeout_sec=0.1)
+
+        self.assertTrue(finalized["ok"])
+        self.assertTrue(finalized["queued"])
+        self.assertTrue(finalized["data"]["artifact_ready"])
+        self.assertTrue(finalized["data"]["artifact"]["path_exists"])
+        self.assertGreater(finalized["data"]["artifact"]["path_size"], 0)
+
+    def test_capture_snapshot_queued_result_keeps_missing_artifact_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "missing.png"
+            payload = {"command": "capture-snapshot", "path": str(target)}
+            result = {
+                "ok": True,
+                "queued": True,
+                "message": "snapshot_queued",
+                "data": {"path": str(target)},
+            }
+
+            finalized = _finalize_appctl_result(payload, result, timeout_sec=0.1)
+
+        self.assertTrue(finalized["ok"])
+        self.assertTrue(finalized["queued"])
+        self.assertFalse(finalized["data"]["artifact_ready"])
+        self.assertFalse(finalized["data"]["artifact"]["path_exists"])
+        self.assertEqual(finalized["data"]["artifact"]["path_size"], 0)
+
+    def test_guided_subtitle_run_timeout_reports_follow_up_status_evidence(self):
+        media_path = "/tmp/demo.mp4"
+        payload = {"command": "guided-subtitle-run", "path": media_path}
+        result = {
+            "ok": False,
+            "accepted": False,
+            "queued": False,
+            "error": "command_timeout",
+            "data": {},
+        }
+
+        def _fake_sender(status_payload, *, timeout_sec):
+            self.assertEqual(status_payload["command"], "guided-subtitle-status")
+            self.assertGreaterEqual(timeout_sec, 0.5)
+            return {
+                "ok": True,
+                "data": {
+                    "editor_media_path": media_path,
+                    "editor_state": "ST_PROC",
+                    "backend_active": True,
+                    "guided_snapshot_run": {"active": True},
+                },
+            }
+
+        finalized = _finalize_appctl_result(payload, result, timeout_sec=0.1, sender=_fake_sender)
+
+        self.assertFalse(finalized["ok"])
+        self.assertEqual(finalized["error"], "command_timeout")
+        self.assertTrue(finalized["data"]["post_timeout_status"]["ok"])
+        evidence = finalized["data"]["post_timeout_evidence"]
+        self.assertTrue(evidence["matched_path"])
+        self.assertTrue(evidence["work_may_have_started"])
 
 
 if __name__ == "__main__":
