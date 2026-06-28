@@ -66,6 +66,8 @@ The preview frame cache is not cut-boundary proof, subtitle timing evidence, sav
 
 UI는 상태를 보여주고 사용자 입력을 core 호출로 연결해야 하며, STT/VAD/LLM 정책을 UI 내부에서 직접 재구현하면 안 됩니다.
 
+Timeline wheel zoom and global-canvas wheel scroll are viewport-only interactions. `TimelineWidget.wheelEvent`, `TimelineWidget._apply_zoom`, `GlobalCanvas.wheelEvent`, and `TimelineCanvas.set_zoom` may update pixels-per-second, scroll position, viewport sync, and repaint regions, but they must not rewrite primary subtitle rows, append NLE operation journals, save projects, or trigger editor mutation commit paths.
+
 ## Data/project layer
 
 프로젝트 저장/복원 경계는 주로 `core/project/`에 있습니다.

@@ -33,6 +33,39 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Viewport Zoom Decoupling Guard
+
+### Scope
+
+- Added focused tests and static audit for timeline wheel zoom/global wheel scroll as viewport-only interactions.
+- Updated `tests/test_timeline_wheel_zoom_decoupling.py`, `tools/audit_nle_viewport_zoom_decoupling.py`, `tests/test_nle_viewport_zoom_decoupling_audit.py`, NLE/status docs, and completed action history.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, subtitle generation, final rows, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_viewport_zoom_decoupling_20260628/nle_viewport_zoom_decoupling.md`
+- `ready=true`; viewport-only contract `true`.
+- Model write allowed `false`; NLE write allowed `false`.
+- Method contracts cover `TimelineWidget.wheelEvent`, `TimelineWidget._apply_zoom`, `GlobalCanvas.wheelEvent`, and `TimelineCanvas.set_zoom`; forbidden calls/assignments are `0`.
+- Focused tests prove Ctrl-wheel zoom and global-canvas wheel scroll preserve canvas/global subtitle rows and do not append runtime NLE operation journals.
+- NAS HeyDealer generation validation was not run because this view-only slice does not touch STT/VAD/subtitle generation/final rows.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-164700-next-nle-taption-runtime-contract-scout.md`
+- Dex classification: accepted with narrower scope as test/audit hardening only. The scout's owner files were correct; no runtime zoom behavior or UI design change was adopted.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_viewport_zoom_decoupling.py tests/test_timeline_wheel_zoom_decoupling.py tests/test_nle_viewport_zoom_decoupling_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_wheel_zoom_decoupling.py tests/test_nle_viewport_zoom_decoupling_audit.py` -> `4 passed`.
+- `./venv/bin/python tools/audit_nle_viewport_zoom_decoupling.py --output-dir output/manual_verification/latest/nle_viewport_zoom_decoupling_20260628` -> ready `true`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md`, using owner-map/audit proof before adopting any new mutation source.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Preview Cache-Miss Block-Free Guard
 
 ### Scope

@@ -272,6 +272,18 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_runtime_
 
 The audit must report runtime owner map ready `True`, covered owners `24/24`, commit-boundary guards `1/1`, missing commit-boundary guards `0`, and `timeline_center_drag_preview_only_until_release` covered. The focused PyQt test must prove NLE move call count `0` during mouse move, call count `1` on release, unchanged editor rows until release, and updated canvas preview rows before release. Broader drag validation should also keep left/right diamond shared-boundary drags gap-free.
 
+## NLE viewport zoom decoupling validation
+
+Timeline wheel zoom/scroll changes must prove they update viewport scale or scroll only. They must not rewrite primary subtitle rows, append runtime NLE operation journals, save projects, or change UI layout/labels/menus.
+
+```bash
+./venv/bin/python -m py_compile tools/audit_nle_viewport_zoom_decoupling.py tests/test_timeline_wheel_zoom_decoupling.py tests/test_nle_viewport_zoom_decoupling_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_wheel_zoom_decoupling.py tests/test_nle_viewport_zoom_decoupling_audit.py
+./venv/bin/python tools/audit_nle_viewport_zoom_decoupling.py --output-dir output/manual_verification/latest/nle_viewport_zoom_decoupling_YYYYMMDD
+```
+
+Acceptance requires audit `ready=true`, viewport-only contract `true`, model/NLE writes allowed `false/false`, forbidden wheel-method calls/assignments `0`, and focused tests proving canvas/global subtitle rows are unchanged after wheel interactions. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.

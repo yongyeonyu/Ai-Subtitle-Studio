@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Viewport Zoom Decoupling Guard - 2026-06-28 KST
+
+- 실행 모드: source-app NLE viewport-only wheel zoom/global scroll contract guard.
+- 결과: pass for timeline Ctrl-wheel zoom and global-canvas wheel scroll preserving primary subtitle rows, avoiding runtime NLE operation journal appends, and passing static viewport-only audit. No UI/UX layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, subtitle generation, final rows, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, runtime undo/redo UI, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_viewport_zoom_decoupling_20260628/nle_viewport_zoom_decoupling.md`
+  - Audit JSON: `output/manual_verification/latest/nle_viewport_zoom_decoupling_20260628/nle_viewport_zoom_decoupling.json`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-164700-next-nle-taption-runtime-contract-scout.md`
+- 실제 결과:
+  - Audit `ready=true`.
+  - Viewport-only contract `true`.
+  - Model/NLE writes allowed `false/false`.
+  - Method contracts: `TimelineWidget.wheelEvent`, `TimelineWidget._apply_zoom`, `GlobalCanvas.wheelEvent`, `TimelineCanvas.set_zoom`.
+  - Forbidden wheel-method calls/assignments `0`.
+  - Focused tests prove canvas/global subtitle rows are unchanged after wheel interactions and runtime NLE journal append is not called.
+- NAS 상태:
+  - Not run. This is a view-only timeline contract and does not touch STT/VAD/subtitle generation/final rows.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_viewport_zoom_decoupling.py tests/test_timeline_wheel_zoom_decoupling.py tests/test_nle_viewport_zoom_decoupling_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_wheel_zoom_decoupling.py tests/test_nle_viewport_zoom_decoupling_audit.py` -> `4 passed`.
+  - `./venv/bin/python tools/audit_nle_viewport_zoom_decoupling.py --output-dir output/manual_verification/latest/nle_viewport_zoom_decoupling_20260628` -> ready `true`.
+
 ## NLE Preview Cache-Miss Block-Free Guard - 2026-06-28 KST
 
 - 실행 모드: source-app NLE preview/skimming cache-miss UI-thread block-prevention guard.
