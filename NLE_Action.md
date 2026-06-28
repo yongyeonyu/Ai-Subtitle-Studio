@@ -30,6 +30,7 @@ Current NLE status:
 - Latest preview/skimming trace-event audit: `output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628/nle_preview_skimming_cache_audit.md`; preview cache hit/miss/schedule/ready events now flow through the async `TraceLogger` queue with `editor_preview_skimming`, `user_preview_only`, `cut_boundary_evidence=false`, exact `fps_num/fps_den`, and the existing preview seek throttle preserved.
 - Latest confirmed cut-boundary decision trace audit: `output/manual_verification/latest/nle_confirmed_cut_trace_audit_20260628/trace_log_bundle_audit.md`; confirmed visual-cut split/snap/drop decisions now emit async `confirmed_cut_split_snap` events with `event_type=cut_boundary_decision`, `decision`, `provisional_frame`, `drop_reason`, exact `fps_num/fps_den`, and no detector-threshold, UI, or persisted-NLE behavior change. NAS HeyDealer first-180s regression after this slice is accepted at `output/manual_verification/latest/nle_confirmed_cut_trace_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`.
 - Latest fixed cut-boundary visual evidence gate: `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628/source_fps_scout.md`; decoder-based frame extraction now succeeds on the local 60000/1001fps fixture, target frames `2766` and `2677` are preserved on the exact frame grid, and the verifier separates `preserved_only` from `detected`. Current evidence reports `strict_visual_detection_passed=false`, `visual_candidate_missing_count=2`, and the strict `--require-visual-detection` artifact at `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628_strict/source_fps_scout.md` fails as expected, so visual detector tuning remains open.
+- Latest cut-boundary visual window audit: `output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`; the read-only ±3 frame ranking keeps runtime behavior unchanged and shows target frames `2766` and `2677` are not the strongest visual transitions in their local windows. Frame `2766` ranks `4` with score `2.059` and best nearby frame `2769` score `2.715`; frame `2677` ranks `2` with score `1.997`, while frame `2676` scores `71.932` and is detected. Treat this as frame-semantics/detector-tuning evidence, not a threshold-change approval.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
@@ -417,6 +418,22 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
 ```
 
 The second command is expected to fail until the detector itself finds frames `2766` and `2677`. A preserved-only pass must not be reported as visual detection proof.
+
+To inspect whether the target frame or a neighbor owns the strongest visual transition before tuning detector thresholds, run the read-only window audit:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_window.py \
+  "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+  --targets 2766,2677 \
+  --radius 3 \
+  --pipe-max-fps 60 \
+  --fps-override 60000/1001 \
+  --probe-timeout-sec 5 \
+  --frame-extract-timeout-sec 45 \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_visual_window_audit_YYYYMMDD
+```
+
+This command returns exit `1` while any target is not detected. That failure is expected evidence, not a runtime regression.
 
 Trace:
 

@@ -1,5 +1,29 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Cut-Boundary Visual Window Audit - 2026-06-28 KST
+
+- 실행 모드: source-app fixed cut-boundary frame `2766`/`2677` read-only visual transition window ranking.
+- 결과: pass for diagnostic tooling; strict target detection intentionally fails because neither requested target is the strongest detected transition in its local window.
+- 저장 위치:
+  - Visual window audit: `output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`
+  - Visual window JSON: `output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628/cut_boundary_visual_window_audit.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-132057-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-132100-cut-boundary-visual-window-audit.md`
+- 수정 요약:
+  - Added `tools/audit_cut_boundary_visual_window.py` to rank visual transition scores around fixed target frames.
+  - Added `tests/test_cut_boundary_visual_window_audit.py`.
+  - Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `docs/HANDOFF.md`.
+  - No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI/UX, QML/GPU defaults, App Store packaging/signing/upload, DMG behavior, or persisted NLE disk fields changed.
+- 실제 고정 fixture 결과:
+  - Strict targets detected `false`; target best count `0/2`; window radius `3`.
+  - Frame `2766`: target detected `false`, rank `4`, target score `2.059`, best nearby frame `2769`, best score `2.715`, best detected `false`.
+  - Frame `2677`: target detected `false`, rank `2`, target score `1.997`, best nearby frame `2676`, best score `71.932`, best detected `true`.
+  - The audit exits `1` while strict targets are not detected; this is expected diagnostic evidence and blocks visual-detection claims.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_cut_boundary_visual_window.py tests/test_cut_boundary_visual_window_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_visual_window_audit.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_window.py ... --targets 2766,2677 --radius 3 --output-dir output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628` -> expected fail, exit `1`.
+
 ## NLE Fixed Cut-Boundary Visual Evidence Gate - 2026-06-28 KST
 
 - 실행 모드: source-app fixed cut-boundary frame `2766`/`2677` decoder visual-evidence classification plus strict visual-detection gate.

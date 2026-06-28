@@ -33,6 +33,42 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Cut-Boundary Visual Window Audit
+
+### Scope
+
+- Continued the source-app NLE cut-boundary accuracy workstream by adding read-only visual transition window ranking around fixed frames `2766` and `2677`.
+- Added `tools/audit_cut_boundary_visual_window.py`.
+- Added `tests/test_cut_boundary_visual_window_audit.py`.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Visual window audit: `output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`
+- Strict targets detected: `false`.
+- Target best count: `0/2`.
+- Frame `2766`: detected `false`, rank `4`, target score `2.059`, best nearby frame `2769`, best score `2.715`, best detected `false`.
+- Frame `2677`: detected `false`, rank `2`, target score `1.997`, best nearby frame `2676`, best score `71.932`, best detected `true`.
+- The audit exits `1` while any target is not detected. Treat that exit as expected diagnostic evidence, not as a runtime regression.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-132057-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-132100-cut-boundary-visual-window-audit.md`
+- Dex classification: accept the read-only tooling direction. The scout recommended window ranking and explicitly deferred threshold changes, STT/model changes, UI/QML, App Store, and persisted NLE fields.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_cut_boundary_visual_window.py tests/test_cut_boundary_visual_window_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_visual_window_audit.py` -> `3 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_window.py ... --targets 2766,2677 --radius 3 --output-dir output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628` -> expected fail, exit `1`.
+
+### Next Recommended Action
+
+- Investigate the frame semantics around `2676 -> 2677` before tuning detector thresholds: the strongest visual transition is currently ranked at frame `2676`, while the requested target frame is `2677`.
+- Do not relax thresholds, change STT policy, promote cache defaults, alter UI, persist NLE disk fields, or perform App Store work from this slice.
+
 ## Current Handoff - 2026-06-28 NLE Fixed Cut-Boundary Visual Evidence Gate
 
 ### Scope

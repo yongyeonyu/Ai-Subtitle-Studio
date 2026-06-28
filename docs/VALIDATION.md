@@ -141,6 +141,22 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
 
 The strict command must fail while the frames are only `preserved_only`; that failure is useful evidence and blocks visual-detection claims until detector tuning is separately proven.
 
+Before changing detector thresholds, rank the target frame against its neighboring transitions:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_window.py \
+  "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+  --targets 2766,2677 \
+  --radius 3 \
+  --pipe-max-fps 60 \
+  --fps-override 60000/1001 \
+  --probe-timeout-sec 5 \
+  --frame-extract-timeout-sec 45 \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_visual_window_audit_YYYYMMDD
+```
+
+This audit is read-only and exits `1` while any target is not detected. Use it to decide whether the next slice is detector tuning or frame-semantics correction; do not use it to relax thresholds by itself.
+
 ## Preview frame cache validation
 
 Preview/skimming cache changes should prove temp-workspace cache lookup, nonblocking preview seek behavior, and unchanged timeline scrub routing.
