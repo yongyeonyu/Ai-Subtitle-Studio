@@ -259,6 +259,18 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_
 
 The audit must report operation trace event count `12`, trace event contract ok `True`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, clean legacy storage, and no emitted caption text, raw project path, or raw `target_ids`.
 
+## NLE gap-delete sequence policy validation
+
+Gap-delete dual-write changes must prove the current AI Subtitle Studio contract: explicit gap delete removes the gap row and preserves adjacent caption timing. It must not silently ripple the timeline unless the owner approves a separate ripple/absorb operation.
+
+```bash
+./venv/bin/python -m py_compile core/project/nle_dual_write.py tools/audit_nle_gap_delete_sequence_policy.py tests/test_project_nle_dual_write.py tests/test_nle_gap_delete_sequence_policy_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_gap_delete_sequence_policy_audit.py -k "gap_delete or sequence_policy"
+./venv/bin/python tools/audit_nle_gap_delete_sequence_policy.py --output-dir output/manual_verification/latest/nle_gap_delete_sequence_policy_YYYYMMDD
+```
+
+Acceptance requires audit `ready=true`, sequence policy `remove_gap_row_no_ripple`, adjacent caption bounds preserved in legacy rows, runtime NLE rows, and raw vector storage, clean legacy project storage, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`. Run NAS HeyDealer first-180s regression when this runtime dual-write contract changes.
+
 ## NLE drag commit-boundary validation
 
 Timeline body drag changes must prove Taption-style preview-only behavior until release. Mouse-move previews may update the canvas insertion/neighbor preview, but runtime NLE dual-write must stay at `0` calls until the release commit.

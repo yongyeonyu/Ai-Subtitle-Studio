@@ -31,6 +31,9 @@ from core.project.project_context import (
 from core.project.project_format import project_primary_fps
 
 
+GAP_DELETE_SEQUENCE_POLICY = "remove_gap_row_no_ripple"
+
+
 @dataclass(frozen=True, slots=True)
 class NLEDualWritePilotResult:
     operation_family: str
@@ -1957,10 +1960,19 @@ def apply_gap_delete_dual_write_pilot(
             "target_id": target_id,
             "commit_boundary": commit_boundary,
             "commit_source": commit_source,
+            "sequence_policy": GAP_DELETE_SEQUENCE_POLICY,
         },
-        metadata={"pilot": "dual_write_gap_delete"},
+        metadata={
+            "pilot": "dual_write_gap_delete",
+            "gap_delete_sequence_policy": GAP_DELETE_SEQUENCE_POLICY,
+        },
     )
-    metadata = {"pilot": "dual_write", "operation_family": "gap_delete"}
+    metadata = {
+        "pilot": "dual_write",
+        "operation_family": "gap_delete",
+        "gap_delete_sequence_policy": GAP_DELETE_SEQUENCE_POLICY,
+        "gap_delete_ripple_applied": False,
+    }
     if commit_boundary:
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
@@ -1983,6 +1995,8 @@ def apply_gap_delete_dual_write_pilot(
         "dual_write_pilot_family": "gap_delete",
         "dual_write_last_operation_id": operation.operation_id,
         "dual_write_projected_count": len(after_rows),
+        "dual_write_gap_delete_sequence_policy": GAP_DELETE_SEQUENCE_POLICY,
+        "dual_write_gap_delete_ripple_applied": False,
         **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))

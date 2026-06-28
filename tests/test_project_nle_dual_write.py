@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from core.project.nle_dual_write import (
+    GAP_DELETE_SEQUENCE_POLICY,
     apply_candidate_confirm_dual_write_pilot,
     apply_caption_delete_dual_write_pilot,
     apply_caption_merge_dual_write_pilot,
@@ -1117,9 +1118,25 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assertEqual(result.after_projection.max_active_segments, 1)
         self.assertEqual([row.get("text", "") for row in result.projected_rows], ["first", "second"])
         self.assertFalse(any(row.get("is_gap") for row in legacy_rows))
+        self.assertEqual(
+            [(row.get("text", ""), row["start"], row["end"]) for row in legacy_rows],
+            [("first", 0.0, 1.0), ("second", 2.0, 3.0)],
+        )
         self.assertEqual([(row["start_frame"], row["end_frame"]) for row in legacy_rows], [(0, 30), (60, 90)])
         self.assertEqual([(row["start_frame"], row["end_frame"]) for row in nle_rows], [(0, 30), (60, 90)])
+        self.assertEqual(result.operation.metadata["gap_delete_sequence_policy"], GAP_DELETE_SEQUENCE_POLICY)
+        self.assertFalse(result.operation.metadata["gap_delete_ripple_applied"])
+        self.assertEqual(result.operation.undo_snapshot.ui_state_ref["sequence_policy"], GAP_DELETE_SEQUENCE_POLICY)
+        self.assertEqual(
+            result.operation.undo_snapshot.metadata["gap_delete_sequence_policy"],
+            GAP_DELETE_SEQUENCE_POLICY,
+        )
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "gap_delete")
+        self.assertEqual(
+            project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_gap_delete_sequence_policy"],
+            GAP_DELETE_SEQUENCE_POLICY,
+        )
+        self.assertFalse(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_gap_delete_ripple_applied"])
         self.assertEqual(len(result.operation.undo_snapshot.silence_gaps), 1)
         self.assertGreaterEqual(len(result.operation.undo_snapshot.candidate_lanes), 2)
 
