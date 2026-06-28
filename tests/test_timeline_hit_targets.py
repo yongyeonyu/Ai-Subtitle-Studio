@@ -2562,6 +2562,81 @@ class TimelineHitTargetTests(unittest.TestCase):
         finally:
             canvas.deleteLater()
 
+    def test_center_segment_move_prefers_subtitle_boundary_beyond_voice_silence(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.pps = 100.0
+            canvas.total_duration = 6.0
+            canvas.segments = [
+                {"start": 2.0, "end": 3.0, "text": "이동", "line": 0},
+                {"start": 4.0, "end": 5.0, "text": "다음", "line": 1},
+            ]
+            canvas.voice_activity_segments = [
+                {"start": 3.0, "end": 4.0, "kind": "silence", "label": "무음구간"}
+            ]
+            native_candidates = [
+                {"time": 2.0, "kind": "subtitle", "sourceLine": 0},
+                {"time": 3.0, "kind": "subtitle", "sourceLine": 0},
+                {"time": 4.0, "kind": "subtitle", "sourceLine": 1},
+                {"time": 5.0, "kind": "subtitle", "sourceLine": 1},
+                {"time": 3.0, "kind": "voice_activity"},
+                {"time": 4.0, "kind": "voice_activity"},
+            ]
+            moving = canvas.segments[0]
+            with patch(
+                "ui.editor.ux.timeline_subtitle_segment_editing.build_subtitle_drag_snap_base_via_swift",
+                return_value=native_candidates,
+            ), patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_timing_drag_via_swift",
+                return_value=None,
+            ):
+                canvas._setup_drag(moving, "center", canvas._x(2.5))
+                canvas._apply_drag(1.0)
+
+            self.assertAlmostEqual(moving["start"], 3.0)
+            self.assertAlmostEqual(moving["end"], 4.0)
+            self.assertTrue(bool(getattr(canvas, "_drag_suppresses_gap_candidate_attachment", False)))
+            self.assertEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "subtitle")
+        finally:
+            canvas.deleteLater()
+
+    def test_center_segment_move_suppresses_voice_silence_snap_without_subtitle_target(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.pps = 100.0
+            canvas.total_duration = 6.0
+            canvas.segments = [
+                {"start": 2.0, "end": 3.0, "text": "이동", "line": 0},
+            ]
+            canvas.voice_activity_segments = [
+                {"start": 3.0, "end": 4.0, "kind": "silence", "label": "무음구간"}
+            ]
+            native_candidates = [
+                {"time": 2.0, "kind": "subtitle", "sourceLine": 0},
+                {"time": 3.0, "kind": "subtitle", "sourceLine": 0},
+                {"time": 3.0, "kind": "voice_activity"},
+                {"time": 4.0, "kind": "voice_activity"},
+            ]
+            moving = canvas.segments[0]
+            with patch(
+                "ui.editor.ux.timeline_subtitle_segment_editing.build_subtitle_drag_snap_base_via_swift",
+                return_value=native_candidates,
+            ), patch(
+                "ui.editor.ux.timeline_canvas_editing.apply_timing_drag_via_swift",
+                return_value=None,
+            ):
+                canvas._setup_drag(moving, "center", canvas._x(2.5))
+                canvas._apply_drag(0.95)
+
+            self.assertAlmostEqual(moving["start"], canvas._snap_to_frame(2.95))
+            self.assertAlmostEqual(moving["end"], canvas._snap_to_frame(3.95))
+            self.assertTrue(bool(getattr(canvas, "_drag_suppresses_gap_candidate_attachment", False)))
+            self.assertNotEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "voice_activity")
+        finally:
+            canvas.deleteLater()
+
     def test_boundary_release_emits_visible_snapped_boundary(self):
         canvas = TimelineCanvas()
         try:

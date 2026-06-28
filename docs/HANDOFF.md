@@ -33,7 +33,52 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Final/Preview Isolation
+## Current Handoff - 2026-06-28 NLE Voice-Silence Magnet Parity
+
+### Scope
+
+- Continued the owner goal to import Taption-style subtitle segment editing behavior into the AI Subtitle Studio source-app NLE path.
+- `ui.editor.ux.timeline_subtitle_segment_editing.TimelineSubtitleSegmentEditingMixin` now reattaches local source metadata to native `gap`/`vad`/`voice_activity` snap candidates before Python candidate filtering.
+- Silence-like `voice_activity`/`vad` rows now participate in center body-drag gap-attachment suppression, so dragging a subtitle across a silent row does not auto-stick to that silence edge when Taption would prefer a real subtitle boundary or free placement.
+- Gap suppression removes only explicit gap or silence-like `vad`/`voice_activity` candidates. Real subtitle boundary snap candidates remain available beyond the silence row.
+- No UI layout/labels/colors/menus/popups, subtitle generation policy, STT/STT2/default-cache policy, persisted `.aissproj` NLE fields, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- NAS HeyDealer preflight: `output/manual_verification/latest/nle_voice_silence_magnet_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`, media/SRT exist `true/true`, clipped reference rows `89`.
+- NAS HeyDealer current-head regression: `output/manual_verification/latest/nle_voice_silence_magnet_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_201007/benchmark_results.json`: accepted `true`, elapsed `348.171s`, raw/final/reference `55/57/89`, quality/text/timing `93.955/94.867/0.5536s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_voice_silence_magnet_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `true`, timeout elapsed `330.059168s`, compared against non-timeout baseline `20260628_195502`, and production change/default-cache promotion allowed `false`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-200258-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-110359-next-nle-taption-runtime-contract-scout.md`
+- Dex classification: deferred the scout's neighbor-collision validation recommendation because this turn was focused on the owner-reported silence/gap magnet behavior. Neighbor collision validation remains a reasonable future bounded candidate.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/editor/ux/timeline_subtitle_segment_editing.py tests/test_timeline_hit_targets.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "voice_silence or center_segment_move_prefers_subtitle_boundary_snap_beyond_gap or center_segment_move_suppresses_single_gap_snap_without_subtitle_target"` -> `4 passed, 152 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "gap or magnet or drag or boundary_release"` -> `58 passed, 98 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_drag_over_single_gap_absorbs_gap_without_final_overlap or gap_generate or overwrite_trim"` -> `4 passed, 189 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --output-dir output/manual_verification/latest/nle_voice_silence_magnet_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_201007/benchmark_results.json`.
+- `./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_201007/benchmark_results.json --output-dir output/manual_verification/latest/nle_voice_silence_magnet_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_195502/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_201007/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_voice_silence_magnet_nas_20260628` -> timeout detected `true`.
+
+### Known Notes
+
+- The NAS run accepted final quality/stability gates but is not a latency improvement proof because STT1, Fast-STT2, and word precision hit worker timeout/fallback paths.
+- Do not promote STT collect caches, downgrade models, skip STT2/word precision, or relax quality gates from this evidence.
+- Persisted NLE disk fields, UI redesign, automatic relink UI/dialog behavior, per-pixel writes, QML/GPU default timeline surfaces, detector-threshold changes, App Store packaging/submission work, and STT/default-cache policy changes remain blocked until explicit owner approval and compatibility proof exist.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`. The deferred neighbor-collision validation scout is a reasonable candidate if kept bounded to runtime validation/tests and no UI redesign.
+- If the next slice touches generation or performance, keep using the NAS HeyDealer first-180s MP4/SRT preflight plus strict acceptance and timeout audit.
+
+## Previous Handoff - 2026-06-28 NLE Final/Preview Isolation
 
 ### Scope
 

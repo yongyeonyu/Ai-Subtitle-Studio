@@ -784,6 +784,68 @@ class TimelineSubtitleSegmentEditingMixin(TimelineLiveCutDetectionMixin, _Legacy
             return
         candidates.append({"time": value, "kind": kind, "source": source})
 
+    def _snap_row_is_silence_gap(self, row) -> bool:
+        if not isinstance(row, dict):
+            return False
+        if bool(row.get("is_gap")) or bool(row.get("_explicit_gap")):
+            return True
+        quality = row.get("quality")
+        if isinstance(quality, dict) and bool(quality.get("linked_silence")):
+            return True
+        if row.get("linked_silence_for_line") is not None:
+            return True
+        text = " ".join(
+            str(row.get(key, "") or "").lower()
+            for key in ("kind", "source", "label", "text", "lane")
+        )
+        if "무음" in text:
+            return True
+        silence_tokens = (
+            "silence",
+            "silent",
+            "non_speech",
+            "non-speech",
+            "generation_silence",
+            "linked_silence",
+        )
+        if any(token in text for token in silence_tokens):
+            return True
+        return str(row.get("kind", "") or "").lower() == "gap"
+
+    def _snap_source_for_candidate(self, kind: str, time_value: float):
+        if kind not in {"gap", "vad", "voice_activity"}:
+            return None
+        source_name = {
+            "gap": "gap_segments",
+            "vad": "vad_segments",
+            "voice_activity": "voice_activity_segments",
+        }.get(kind)
+        if not source_name:
+            return None
+        try:
+            target = self._snap_to_frame(float(time_value or 0.0))
+        except Exception:
+            return None
+        fps = max(1.0, float(self._get_fps() if hasattr(self, "_get_fps") else 30.0))
+        epsilon = max(0.001, 0.5 / fps)
+        matches: list[dict] = []
+        for row in list(getattr(self, source_name, []) or []):
+            if not isinstance(row, dict):
+                continue
+            try:
+                start = self._snap_to_frame(float(row.get("start", 0.0) or 0.0))
+                end = self._snap_to_frame(float(row.get("end", start) or start))
+            except Exception:
+                continue
+            if abs(start - target) <= epsilon or abs(end - target) <= epsilon:
+                matches.append(row)
+        if not matches:
+            return None
+        for row in matches:
+            if self._snap_row_is_silence_gap(row):
+                return row
+        return matches[0]
+
     def _drag_snap_base_key(self) -> tuple:
         segment_key = self._segment_index_cache_key() if hasattr(self, "_segment_index_cache_key") else (
             id(getattr(self, "segments", None)),
@@ -867,6 +929,8 @@ class TimelineSubtitleSegmentEditingMixin(TimelineLiveCutDetectionMixin, _Legacy
                         row["source"] = self._segment_for_line(int(source_line))
                     except Exception:
                         row["source"] = None
+                if row["source"] is None:
+                    row["source"] = self._snap_source_for_candidate(row["kind"], time_value)
                 prepared.append(row)
             shadow_sec = getattr(self, "shadow_playhead_sec", None)
             if shadow_sec is not None:
@@ -992,6 +1056,12 @@ class TimelineSubtitleSegmentEditingMixin(TimelineLiveCutDetectionMixin, _Legacy
         for seg in list(getattr(self, "segments", []) or []):
             if isinstance(seg, dict) and bool(seg.get("is_gap")):
                 gap_rows.append(dict(seg))
+        for row in list(getattr(self, "voice_activity_segments", []) or []):
+            if isinstance(row, dict) and self._snap_row_is_silence_gap(row):
+                gap_rows.append(dict(row))
+        for row in list(getattr(self, "vad_segments", []) or []):
+            if isinstance(row, dict) and self._snap_row_is_silence_gap(row):
+                gap_rows.append(dict(row))
 
         def _bounds(row: dict) -> tuple[float, float] | None:
             try:
@@ -1043,10 +1113,19 @@ class TimelineSubtitleSegmentEditingMixin(TimelineLiveCutDetectionMixin, _Legacy
         self._drag_suppresses_gap_candidate_attachment = bool(suppress_gap)
         if not suppress_gap:
             return list(candidates or [])
+
+        def _is_suppressed_gap_candidate(candidate: dict) -> bool:
+            kind = str((candidate or {}).get("kind", "") or "")
+            if kind == "gap":
+                return True
+            if kind in {"vad", "voice_activity"}:
+                return self._snap_row_is_silence_gap((candidate or {}).get("source"))
+            return False
+
         return [
             candidate
             for candidate in list(candidates or [])
-            if str((candidate or {}).get("kind", "") or "") != "gap"
+            if not _is_suppressed_gap_candidate(candidate or {})
         ]
 
     def _iter_live_cut_snap_owners(self):

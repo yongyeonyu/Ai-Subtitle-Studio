@@ -1,5 +1,28 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Voice-Silence Magnet Parity - 2026-06-28 KST
+
+- 실행 모드: Taption-style subtitle center-drag magnet parity for silence-like `voice_activity`/`vad` rows returned through native snap candidates.
+- 결과: pass for subtitle-boundary snap beyond a voice-silence row, no automatic voice-silence attachment when no subtitle target exists, existing explicit gap suppression, and strict NAS HeyDealer first-180s final stability. The NAS run was accepted, but STT worker timeout/fallback occurred and is recorded as diagnostic evidence only.
+- 저장 위치:
+  - NAS preflight: `output/manual_verification/latest/nle_voice_silence_magnet_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_201007/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_voice_silence_magnet_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_voice_silence_magnet_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-110359-next-nle-taption-runtime-contract-scout.md` (deferred adjacent neighbor-collision recommendation)
+- 실제 결과:
+  - Native snap candidates now regain local `gap`/`vad`/`voice_activity` source metadata before Python filtering.
+  - Silence-like `voice_activity`/`vad` rows join the Taption gap-attachment suppression check for center body moves.
+  - Suppression removes only gap-like snap candidates and keeps real subtitle boundary candidates available beyond the silence row.
+  - NAS acceptance `accepted=true`, elapsed `348.171s`, raw/final/reference `55/57/89`, quality/text/timing `93.955/94.867/0.5536s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - Timeout audit `timeout_detected=true`; compared non-timeout run `20260628_195502` with timeout run `20260628_201007`, timeout elapsed `330.059168s`, and production change/default-cache promotion allowed `false`.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/ux/timeline_subtitle_segment_editing.py tests/test_timeline_hit_targets.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "voice_silence or center_segment_move_prefers_subtitle_boundary_snap_beyond_gap or center_segment_move_suppresses_single_gap_snap_without_subtitle_target"` -> `4 passed, 152 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_hit_targets.py -k "gap or magnet or drag or boundary_release"` -> `58 passed, 98 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_drag_over_single_gap_absorbs_gap_without_final_overlap or gap_generate or overwrite_trim"` -> `4 passed, 189 deselected`.
+
 ## NLE Final/Preview Isolation - 2026-06-28 KST
 
 - 실행 모드: Taption-style final subtitle surface isolation for video overlay/global canvas/save-style feeds while keeping STT/subtitle drafts in timeline/editor candidate lanes.
