@@ -20,6 +20,7 @@ from core.project.nle_projection_parity import (
     build_project_nle_projection_parity_report,
 )
 from core.project.nle_snapshot import build_project_nle_snapshot
+from core.cut_boundary import normalize_cut_boundaries
 from core.project.project_context import (
     build_editor_state,
     project_clip_boundaries,
@@ -32,6 +33,34 @@ from core.project.project_format import project_primary_fps
 
 
 GAP_DELETE_SEQUENCE_POLICY = "remove_gap_row_no_ripple"
+CUT_MARKER_POINT_EVIDENCE_POLICY = "point_evidence_no_clip_span"
+_CUT_MARKER_SPAN_KEYS = frozenset(
+    {
+        "start",
+        "end",
+        "timeline_start",
+        "timeline_end",
+        "start_frame",
+        "end_frame",
+        "timeline_start_frame",
+        "timeline_end_frame",
+        "duration",
+        "duration_sec",
+        "span",
+        "clip_span",
+        "clip_range",
+        "clip_boundary",
+        "clip_boundary_id",
+        "clip_id",
+        "frame_range",
+        "range",
+        "timeline_range",
+        "source_range",
+        "source_start",
+        "source_end",
+        "source_frame_range",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +95,20 @@ def _analysis_cut_boundaries(project: dict[str, Any]) -> list[dict[str, Any]]:
     return [deepcopy(row) for row in rows or [] if isinstance(row, dict)]
 
 
+def _point_evidence_cut_marker_rows(rows: list[dict[str, Any]] | tuple[dict[str, Any], ...], *, primary_fps: float) -> list[dict[str, Any]]:
+    normalized = normalize_cut_boundaries(
+        [deepcopy(row) for row in rows if isinstance(row, dict)],
+        primary_fps=primary_fps,
+    )
+    point_rows: list[dict[str, Any]] = []
+    for row in normalized:
+        point_row = dict(row)
+        for key in _CUT_MARKER_SPAN_KEYS:
+            point_row.pop(key, None)
+        point_rows.append(point_row)
+    return point_rows
+
+
 def _shadow_project_with_rows_and_provisional_markers(
     project: dict[str, Any],
     rows: list[dict[str, Any]],
@@ -77,6 +120,7 @@ def _shadow_project_with_rows_and_provisional_markers(
     if not media_files:
         media_files = list(editor_state.get("media_files") or [])
     mode = str(editor_state.get("mode") or shadow.get("mode") or "single")
+    primary_fps = project_primary_fps(shadow)
     shadow["editor_state"] = build_editor_state(
         mode=mode,
         media_files=media_files,
@@ -84,9 +128,9 @@ def _shadow_project_with_rows_and_provisional_markers(
         workspace=editor_state.get("workspace") if isinstance(editor_state.get("workspace"), dict) else shadow.get("workspace"),
         clip_boundaries=project_clip_boundaries(shadow),
         stt_preview_segments=_stt_preview_segments(shadow),
-        cut_boundaries=_analysis_cut_boundaries(shadow),
-        provisional_cut_boundaries=[deepcopy(row) for row in markers if isinstance(row, dict)],
-        primary_fps=project_primary_fps(shadow),
+        cut_boundaries=_point_evidence_cut_marker_rows(_analysis_cut_boundaries(shadow), primary_fps=primary_fps),
+        provisional_cut_boundaries=_point_evidence_cut_marker_rows(markers, primary_fps=primary_fps),
+        primary_fps=primary_fps,
         preserve_segment_identity=True,
     )
     shadow["analysis"] = dict((shadow["editor_state"].get("analysis") or {}))
@@ -127,6 +171,7 @@ def _shadow_project_with_rows(project: dict[str, Any], rows: list[dict[str, Any]
     if not media_files:
         media_files = list(editor_state.get("media_files") or [])
     mode = str(editor_state.get("mode") or project.get("mode") or "single")
+    primary_fps = project_primary_fps(project)
     shadow["editor_state"] = build_editor_state(
         mode=mode,
         media_files=media_files,
@@ -134,8 +179,8 @@ def _shadow_project_with_rows(project: dict[str, Any], rows: list[dict[str, Any]
         workspace=editor_state.get("workspace") if isinstance(editor_state.get("workspace"), dict) else project.get("workspace"),
         clip_boundaries=project_clip_boundaries(project),
         stt_preview_segments=_stt_preview_segments(project),
-        cut_boundaries=_analysis_cut_boundaries(project),
-        primary_fps=project_primary_fps(project),
+        cut_boundaries=_point_evidence_cut_marker_rows(_analysis_cut_boundaries(project), primary_fps=primary_fps),
+        primary_fps=primary_fps,
         preserve_segment_identity=True,
     )
     return shadow
@@ -2027,20 +2072,21 @@ def apply_marker_edit_dual_write_pilot(
     action_key = str(action or "").strip().lower()
     if action_key not in {"create", "delete"}:
         raise ValueError("nle_marker_edit_action_invalid")
-    marker_row = dict(marker or {})
-    if not marker_row:
+    raw_marker_row = dict(marker or {})
+    if not raw_marker_row:
         raise ValueError("nle_marker_edit_marker_required")
+    primary_fps = project_primary_fps(project)
+    point_marker_rows = _point_evidence_cut_marker_rows([raw_marker_row], primary_fps=primary_fps)
+    marker_row = point_marker_rows[0] if point_marker_rows else raw_marker_row
     before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
-    before_marker_rows = [
-        dict(row)
-        for row in (before_markers if before_markers is not None else project_cut_boundary_provisional_segments(project))
-        if isinstance(row, dict)
-    ]
-    after_marker_rows = [
-        dict(row)
-        for row in (after_markers if after_markers is not None else before_marker_rows)
-        if isinstance(row, dict)
-    ]
+    before_marker_rows = _point_evidence_cut_marker_rows(
+        list(before_markers if before_markers is not None else project_cut_boundary_provisional_segments(project)),
+        primary_fps=primary_fps,
+    )
+    after_marker_rows = _point_evidence_cut_marker_rows(
+        list(after_markers if after_markers is not None else before_marker_rows),
+        primary_fps=primary_fps,
+    )
     marker_id = _marker_identity(marker_row, len(before_marker_rows))
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
@@ -2059,14 +2105,22 @@ def apply_marker_edit_dual_write_pilot(
             "action": action_key,
             "commit_boundary": "release",
             "commit_source": commit_source_key,
+            "marker_projection_policy": CUT_MARKER_POINT_EVIDENCE_POLICY,
+            "clip_span_mapping_allowed": False,
         },
-        metadata={"pilot": "dual_write_marker_edit"},
+        metadata={
+            "pilot": "dual_write_marker_edit",
+            "marker_projection_policy": CUT_MARKER_POINT_EVIDENCE_POLICY,
+            "clip_span_mapping_allowed": False,
+        },
     )
     metadata: dict[str, Any] = {
         "pilot": "dual_write",
         "operation_family": "marker_edit",
         "marker_id": marker_id,
         "marker_kind": "cut_boundary",
+        "marker_projection_policy": CUT_MARKER_POINT_EVIDENCE_POLICY,
+        "clip_span_mapping_allowed": False,
         "action": action_key,
         "commit_boundary": "release",
         "commit_source": commit_source_key,
@@ -2092,6 +2146,8 @@ def apply_marker_edit_dual_write_pilot(
         "dual_write_last_operation_id": operation.operation_id,
         "dual_write_marker_action": action_key,
         "dual_write_marker_count": len(after_marker_rows),
+        "dual_write_marker_projection_policy": CUT_MARKER_POINT_EVIDENCE_POLICY,
+        "dual_write_marker_clip_span_mapping_allowed": False,
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(before_rows))
     project["editor_state"] = shadow_after["editor_state"]
@@ -2257,6 +2313,7 @@ def apply_roughcut_range_edit_dual_write_pilot(
 
 
 __all__ = [
+    "CUT_MARKER_POINT_EVIDENCE_POLICY",
     "NLEDualWritePilotResult",
     "apply_candidate_confirm_dual_write_pilot",
     "apply_caption_delete_dual_write_pilot",

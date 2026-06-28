@@ -271,6 +271,18 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_
 
 Acceptance requires audit `ready=true`, sequence policy `remove_gap_row_no_ripple`, adjacent caption bounds preserved in legacy rows, runtime NLE rows, and raw vector storage, clean legacy project storage, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`. Run NAS HeyDealer first-180s regression when this runtime dual-write contract changes.
 
+## NLE cut marker point projection validation
+
+Marker-edit dual-write changes must prove confirmed/provisional cut markers stay point evidence and do not leak clip-span mapping into legacy editor context.
+
+```bash
+./venv/bin/python -m py_compile core/project/nle_dual_write.py tools/audit_nle_cut_marker_point_projection.py tests/test_project_nle_dual_write.py tests/test_nle_cut_marker_point_projection_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_cut_marker_point_projection_audit.py -k "marker_edit or cut_marker_point"
+./venv/bin/python tools/audit_nle_cut_marker_point_projection.py --output-dir output/manual_verification/latest/nle_cut_marker_point_projection_YYYYMMDD
+```
+
+Acceptance requires audit `passed=true`, observed frames `2766,2676`, marker policy `point_evidence_no_clip_span`, span leak count `0`, clip boundaries unchanged, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, and clip-span mapping allowed `false`. Run NAS HeyDealer first-180s regression when this runtime marker projection contract changes.
+
 ## NLE projection metadata preservation validation
 
 Runtime dual-write projection metadata changes must prove existing product metadata survives NLE-to-legacy projection without adding new persisted NLE fields or arbitrary legacy custom schema expansion.

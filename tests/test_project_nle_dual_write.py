@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from core.project.nle_dual_write import (
+    CUT_MARKER_POINT_EVIDENCE_POLICY,
     GAP_DELETE_SEQUENCE_POLICY,
     apply_candidate_confirm_dual_write_pilot,
     apply_caption_delete_dual_write_pilot,
@@ -26,7 +27,7 @@ from core.project.nle_project_state import (
     NLE_PROJECT_STATE_RUNTIME_KEY,
     project_segments_from_nle_state,
 )
-from core.project.project_context import build_editor_state, project_segments_to_editor
+from core.project.project_context import build_editor_state, project_clip_boundaries, project_segments_to_editor
 from core.project.project_io import (
     clear_project_file_cache,
     read_project_file,
@@ -1323,6 +1324,97 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "marker_edit")
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_marker_action"], "create")
         self.assertEqual(len(result.projected_rows), len(project_segments_to_editor(project, include_analysis_candidates=False)))
+
+    def test_marker_edit_dual_write_keeps_cut_markers_as_point_evidence_without_clip_spans(self):
+        media_files = ["/tmp/a.mp4", "/tmp/b.mp4"]
+        confirmed = {
+            "timeline_frame": 2766,
+            "timeline_sec": 92.2,
+            "fps": 30.0,
+            "status": "confirmed",
+            "source": "visual",
+            "start": 91.5,
+            "end": 92.8,
+            "clip_span": {"clip_id": "clip_a", "start": 91.5, "end": 92.8},
+            "clip_boundary_id": "clip_a_to_b",
+        }
+        marker = {
+            "timeline_frame": 2676,
+            "timeline_sec": 89.2,
+            "fps": 30.0,
+            "status": "provisional",
+            "start": 88.8,
+            "end": 90.1,
+            "timeline_start": 88.8,
+            "timeline_end": 90.1,
+            "source_start": 1.0,
+            "source_end": 2.3,
+            "clip_span": {"clip_id": "clip_b", "start": 88.8, "end": 90.1},
+            "clip_boundary_id": "clip_b_internal",
+        }
+        project = {
+            "project_name": "nle_cut_marker_point_projection",
+            "mode": "multiclip",
+            "video": {"duration_sec": 120.0, "primary_fps": 30.0},
+            "editor_state": build_editor_state(
+                mode="multiclip",
+                media_files=media_files,
+                segments=[
+                    {"id": "caption_1", "start": 88.0, "end": 89.0, "text": "before"},
+                    {"id": "caption_2", "start": 90.0, "end": 92.0, "text": "after"},
+                ],
+                clip_boundaries=[
+                    {"start": 0.0, "end": 60.0, "file": media_files[0], "name": "a.mp4"},
+                    {"start": 60.0, "end": 120.0, "file": media_files[1], "name": "b.mp4"},
+                ],
+                cut_boundaries=[confirmed],
+                primary_fps=30.0,
+                preserve_segment_identity=True,
+            ),
+        }
+        before_clip_boundaries = copy.deepcopy(project_clip_boundaries(project))
+
+        result = apply_marker_edit_dual_write_pilot(
+            project,
+            action="create",
+            marker=marker,
+            before_markers=[],
+            after_markers=[marker],
+            commit_source="provisional_cut_boundary_create",
+        )
+
+        span_keys = {
+            "start",
+            "end",
+            "timeline_start",
+            "timeline_end",
+            "source_start",
+            "source_end",
+            "clip_span",
+            "clip_boundary_id",
+        }
+        confirmed_rows = project["editor_state"]["analysis"]["cut_boundaries"]
+        provisional_rows = project["editor_state"]["analysis"]["cut_boundary_provisional_boundaries"]
+        self.assertEqual([row["timeline_frame"] for row in confirmed_rows], [2766])
+        self.assertEqual([row["timeline_frame"] for row in provisional_rows], [2676])
+        for row in confirmed_rows + provisional_rows:
+            self.assertFalse(span_keys & set(row), row)
+            self.assertEqual(row["timeline_sec"], row["timeline_frame"] / 30.0)
+            self.assertTrue(row["absolute"])
+            self.assertTrue(row["locked"])
+        self.assertEqual(project_clip_boundaries(project), before_clip_boundaries)
+        self.assertEqual(result.operation.metadata["marker_projection_policy"], CUT_MARKER_POINT_EVIDENCE_POLICY)
+        self.assertFalse(result.operation.metadata["clip_span_mapping_allowed"])
+        self.assertEqual(
+            result.operation.undo_snapshot.ui_state_ref["marker_projection_policy"],
+            CUT_MARKER_POINT_EVIDENCE_POLICY,
+        )
+        self.assertFalse(result.operation.undo_snapshot.metadata["clip_span_mapping_allowed"])
+        self.assertEqual(
+            project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_marker_projection_policy"],
+            CUT_MARKER_POINT_EVIDENCE_POLICY,
+        )
+        self.assertFalse(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_marker_clip_span_mapping_allowed"])
 
     def test_marker_edit_dual_write_records_provisional_cut_boundary_delete(self):
         marker = {"timeline_sec": 1.5, "timeline_frame": 45, "fps": 30.0, "status": "provisional"}
