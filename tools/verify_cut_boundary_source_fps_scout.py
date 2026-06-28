@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 import subprocess
+from collections import Counter
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -218,6 +219,65 @@ def _parse_pairs(text: str) -> list[tuple[int, int]]:
     return pairs
 
 
+def _visual_candidate_status(row: dict[str, Any]) -> str:
+    if bool(row.get("candidate_detected")):
+        return "detected"
+    if str(row.get("acceptance_basis") or "") == "metadata_frame_grid_preserved":
+        return "metadata_only"
+    if bool(row.get("frame_preserved")):
+        return "preserved_only"
+    return "missing"
+
+
+def _visual_detection_summary(
+    rows: list[dict[str, Any]],
+    *,
+    require_visual_detection: bool = False,
+) -> dict[str, Any]:
+    statuses = Counter(str(row.get("visual_candidate_status") or _visual_candidate_status(row)) for row in rows)
+    detected_frames = [int(row.get("right_frame") or 0) for row in rows if bool(row.get("candidate_detected"))]
+    preserved_frames = [int(row.get("right_frame") or 0) for row in rows if bool(row.get("frame_preserved"))]
+    preserved_only_frames = [
+        int(row.get("right_frame") or 0)
+        for row in rows
+        if str(row.get("visual_candidate_status") or _visual_candidate_status(row)) == "preserved_only"
+    ]
+    metadata_only_frames = [
+        int(row.get("right_frame") or 0)
+        for row in rows
+        if str(row.get("visual_candidate_status") or _visual_candidate_status(row)) == "metadata_only"
+    ]
+    visual_evidence_rows = [row for row in rows if bool(row.get("visual_evidence_available"))]
+    pair_count = len(rows)
+    strict_visual_detection_passed = bool(pair_count > 0 and len(detected_frames) == pair_count)
+    frame_grid_preservation_passed = bool(pair_count > 0 and len(preserved_frames) == pair_count)
+    if strict_visual_detection_passed:
+        acceptance_claim = "visual_detection"
+    elif visual_evidence_rows:
+        acceptance_claim = "frame_grid_preservation_with_visual_candidate_gap"
+    elif metadata_only_frames:
+        acceptance_claim = "metadata_frame_grid_only"
+    else:
+        acceptance_claim = "missing"
+    return {
+        "pair_count": pair_count,
+        "status_counts": dict(statuses),
+        "detected_frames": detected_frames,
+        "preserved_frames": preserved_frames,
+        "preserved_only_frames": preserved_only_frames,
+        "metadata_only_frames": metadata_only_frames,
+        "visual_evidence_available": bool(visual_evidence_rows),
+        "visual_evidence_pair_count": len(visual_evidence_rows),
+        "candidate_detected_count": len(detected_frames),
+        "frame_preserved_count": len(preserved_frames),
+        "visual_candidate_missing_count": len(preserved_only_frames),
+        "strict_visual_detection_required": bool(require_visual_detection),
+        "strict_visual_detection_passed": strict_visual_detection_passed,
+        "frame_grid_preservation_passed": frame_grid_preservation_passed,
+        "acceptance_claim": acceptance_claim,
+    }
+
+
 def verify_source_fps_scout(
     media_path: Path,
     *,
@@ -230,6 +290,7 @@ def verify_source_fps_scout(
     frame_extract_timeout_sec: float = 180.0,
     fps_override: float = 0.0,
     allow_metadata_only: bool = False,
+    require_visual_detection: bool = False,
 ) -> dict[str, Any]:
     import cv2
 
@@ -246,6 +307,10 @@ def verify_source_fps_scout(
         "scan_cut_pioneer_pipe_motion_threshold": 6.0,
     }
     pipe_fps = resolve_pioneer_pipe_fps(settings, source_fps=fps, fallback_fps=1.0)
+    score_threshold = float(settings["scan_cut_pioneer_pipe_score_threshold"])
+    region_hits_threshold = int(settings["scan_cut_pioneer_pipe_regions_required"])
+    pixel_ratio_threshold = float(settings["scan_cut_pioneer_pipe_pixel_ratio_threshold"])
+    motion_jump_threshold = float(settings["scan_cut_pioneer_pipe_motion_threshold"])
     all_frames = [frame for pair in pairs for frame in pair]
     frame_map = {}
     frame_extract_error = ""
@@ -276,6 +341,8 @@ def verify_source_fps_scout(
                 "frame_preserved": bool(frame_preserved),
                 "pair_passed": bool(allow_metadata_only and frame_preserved),
                 "acceptance_basis": "metadata_frame_grid_preserved" if allow_metadata_only and frame_preserved else "missing",
+                "visual_candidate_status": "metadata_only" if allow_metadata_only and frame_preserved else "missing",
+                "visual_evidence_available": False,
                 "reason": "metadata_only" if allow_metadata_only else "frame_extract_missing",
             })
             continue
@@ -286,9 +353,14 @@ def verify_source_fps_scout(
         region_hits = int(metrics.get("region_hits", 0) or 0)
         pixel_ratio = float(metrics.get("pixel_ratio", 0.0) or 0.0)
         motion_jump = float(metrics.get("motion_jump", 0.0) or 0.0)
-        detected = score >= 40.0 and region_hits >= 2 and (pixel_ratio >= 0.18 or motion_jump >= 6.0)
+        detected = (
+            score >= score_threshold
+            and region_hits >= region_hits_threshold
+            and (pixel_ratio >= pixel_ratio_threshold or motion_jump >= motion_jump_threshold)
+        )
         timing = precise_cut_boundary_timing(right_frame / fps, 0.0, fps, sec_to_frame)
         frame_preserved = int(timing["timeline_frame"]) == int(right_frame)
+        candidate_status = "detected" if detected else "preserved_only" if frame_preserved else "missing"
         rows.append({
             "left_frame": left_frame,
             "right_frame": right_frame,
@@ -298,6 +370,14 @@ def verify_source_fps_scout(
             "frame_preserved": frame_preserved,
             "pair_passed": bool(detected or frame_preserved),
             "acceptance_basis": "detected" if detected else "preserved" if frame_preserved else "missing",
+            "visual_candidate_status": candidate_status,
+            "visual_evidence_available": True,
+            "thresholds": {
+                "score": score_threshold,
+                "region_hits": region_hits_threshold,
+                "pixel_ratio": pixel_ratio_threshold,
+                "motion_jump": motion_jump_threshold,
+            },
             "score": round(score, 3),
             "region_hits": region_hits,
             "pixel_ratio": round(pixel_ratio, 6),
@@ -309,7 +389,10 @@ def verify_source_fps_scout(
             "backend": str(metrics.get("backend", "") or ""),
             "metrics_backend": str(metrics.get("metrics_backend", "") or ""),
         })
+    visual_summary = _visual_detection_summary(rows, require_visual_detection=require_visual_detection)
     passed = all(bool(row.get("pair_passed")) for row in rows)
+    if require_visual_detection:
+        passed = bool(passed and visual_summary.get("strict_visual_detection_passed"))
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "schema": "ai_subtitle_studio.cut_boundary_source_fps_scout.v1",
@@ -325,9 +408,11 @@ def verify_source_fps_scout(
             "frame_extract_timeout_sec": max(30.0, float(frame_extract_timeout_sec or 180.0)),
         },
         "allow_metadata_only": bool(allow_metadata_only),
+        "require_visual_detection": bool(require_visual_detection),
         "frame_extract_status": "metadata_only" if allow_metadata_only else "ok" if not frame_extract_error else "failed",
         "frame_extract_error": frame_extract_error,
         "pairs": rows,
+        "visual_detection_summary": visual_summary,
         "passed": passed,
         "elapsed_sec": round(time.time() - started, 3),
     }
@@ -340,6 +425,7 @@ def verify_source_fps_scout(
 
 def _write_markdown_report(path: Path, manifest: dict[str, Any]) -> None:
     pairs = manifest.get("pairs") if isinstance(manifest.get("pairs"), list) else []
+    visual_summary = manifest.get("visual_detection_summary") if isinstance(manifest.get("visual_detection_summary"), dict) else {}
     lines = [
         "# Cut Boundary Source-FPS Scout",
         "",
@@ -350,25 +436,33 @@ def _write_markdown_report(path: Path, manifest: dict[str, Any]) -> None:
         f"- Probe source: `{(manifest.get('media') or {}).get('probe_source', '')}`",
         f"- Frame extract status: `{manifest.get('frame_extract_status')}`",
         f"- Metadata-only fallback: `{bool(manifest.get('allow_metadata_only'))}`",
+        f"- Require visual detection: `{bool(manifest.get('require_visual_detection'))}`",
+        f"- Visual evidence available: `{bool(visual_summary.get('visual_evidence_available'))}`",
+        f"- Strict visual detection passed: `{bool(visual_summary.get('strict_visual_detection_passed'))}`",
+        f"- Visual candidate missing count: `{visual_summary.get('visual_candidate_missing_count', 0)}`",
+        f"- Acceptance claim: `{visual_summary.get('acceptance_claim', '')}`",
         f"- Elapsed: `{manifest.get('elapsed_sec')}`",
         "",
-        "| Left frame | Boundary frame | Candidate frame | Detected | Frame preserved | Passed | Basis | Score | Pixel ratio | Motion jump |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Left frame | Boundary frame | Candidate frame | Status | Detected | Frame preserved | Passed | Basis | Score | Regions | Pixel ratio | Edge ratio | Motion jump |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in pairs:
         if not isinstance(row, dict):
             continue
         lines.append(
-            "| {left} | {right} | {candidate} | {detected} | {preserved} | {passed} | {basis} | {score} | {pixel} | {motion} |".format(
+            "| {left} | {right} | {candidate} | {status} | {detected} | {preserved} | {passed} | {basis} | {score} | {regions} | {pixel} | {edge} | {motion} |".format(
                 left=row.get("left_frame"),
                 right=row.get("right_frame"),
                 candidate=row.get("candidate_frame", ""),
+                status=row.get("visual_candidate_status", ""),
                 detected=bool(row.get("candidate_detected")),
                 preserved=bool(row.get("frame_preserved")),
                 passed=bool(row.get("pair_passed")),
                 basis=row.get("acceptance_basis", ""),
                 score=row.get("score", ""),
+                regions=row.get("region_hits", ""),
                 pixel=row.get("pixel_ratio", ""),
+                edge=row.get("edge_ratio", ""),
                 motion=row.get("motion_jump", ""),
             )
         )
@@ -385,6 +479,7 @@ def main() -> int:
     parser.add_argument("--pipe-max-fps", type=float, default=60.0)
     parser.add_argument("--fps-override", default="")
     parser.add_argument("--allow-metadata-only", action="store_true")
+    parser.add_argument("--require-visual-detection", action="store_true")
     parser.add_argument("--probe-timeout-sec", type=float, default=120.0)
     parser.add_argument("--frame-extract-timeout-sec", type=float, default=180.0)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -400,6 +495,7 @@ def main() -> int:
         frame_extract_timeout_sec=float(args.frame_extract_timeout_sec or 180.0),
         fps_override=_parse_ratio(args.fps_override),
         allow_metadata_only=bool(args.allow_metadata_only),
+        require_visual_detection=bool(args.require_visual_detection),
     )
     print(dumps_json_bytes(manifest, indent=2, sort_keys=True).decode("utf-8"))
     return 0 if manifest.get("passed") else 1

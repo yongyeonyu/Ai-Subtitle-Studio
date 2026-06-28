@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-131100-nle-fixed-cut-boundary-visual-evidence.md`
+- `.agents/sentinel/handoffs/20260628-131045-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-125000-stt-worker-timeout-scout.md`
 - `.agents/sentinel/handoffs/20260628-124750-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-131900-nle-fixed-cut-boundary-fixture-proof.md`

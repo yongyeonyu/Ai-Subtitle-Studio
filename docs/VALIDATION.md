@@ -116,6 +116,31 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps
 
 This verifier records whether target frames `2766` and `2677` are newly detected or at least preserved on the exact source-fps frame grid. If `candidate_detected=false`, report that as a remaining false-negative tuning risk even when `frame_preserved=true`. The `--allow-metadata-only` path is allowed only when decoder access to the fixed fixture stalls; it proves frame-grid preservation and split/snap guardability, not visual cut detection.
 
+When decoder access is available, run the visual-evidence path without `--allow-metadata-only` and keep the strict detector gate separate:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
+  "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+  --pairs 2765:2766,2676:2677 \
+  --pipe-max-fps 60 \
+  --fps-override 60000/1001 \
+  --probe-timeout-sec 5 \
+  --frame-extract-timeout-sec 45 \
+  --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_YYYYMMDD
+
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
+  "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+  --pairs 2765:2766,2676:2677 \
+  --pipe-max-fps 60 \
+  --fps-override 60000/1001 \
+  --probe-timeout-sec 5 \
+  --frame-extract-timeout-sec 45 \
+  --require-visual-detection \
+  --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_YYYYMMDD_strict
+```
+
+The strict command must fail while the frames are only `preserved_only`; that failure is useful evidence and blocks visual-detection claims until detector tuning is separately proven.
+
 ## Preview frame cache validation
 
 Preview/skimming cache changes should prove temp-workspace cache lookup, nonblocking preview seek behavior, and unchanged timeline scrub routing.

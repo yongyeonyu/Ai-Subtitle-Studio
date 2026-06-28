@@ -33,6 +33,51 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Fixed Cut-Boundary Visual Evidence Gate
+
+### Scope
+
+- Continued the source-app NLE cut-boundary accuracy workstream by separating visual detector proof from frame-grid preservation for fixed frames `2766` and `2677`.
+- Modified `tools/verify_cut_boundary_source_fps_scout.py`.
+- Modified `tests/test_cut_boundary_fixture_2766_2677.py`.
+- Modified `tests/test_pipeline_cut_boundary_cache.py` to use the official project storage reader for current binary/json project I/O.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Visual evidence scout: `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628/source_fps_scout.md`
+- Strict visual gate: `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628_strict/source_fps_scout.md`
+- Decoder frame extraction status: `ok`.
+- Probe source: `ffprobe`.
+- Pipe fps: `60000/1001`.
+- Visual evidence available: `true`.
+- Strict visual detection passed: `false`.
+- Visual candidate missing count: `2`.
+- Frame `2766`: `preserved_only`, score `2.059`, region hits `0`, pixel ratio `0.029392`, edge ratio `0.048021`, frame preserved `true`.
+- Frame `2677`: `preserved_only`, score `1.997`, region hits `0`, pixel ratio `0.029288`, edge ratio `0.046615`, frame preserved `true`.
+- Strict `--require-visual-detection` command exits `1` as expected. Treat this as a blocker for visual-detection claims, not as a regression in frame-grid preservation.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-131045-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-131100-nle-fixed-cut-boundary-visual-evidence.md`
+- Dex classification: accept the bounded verifier-gate direction. The scout recommended visual evidence checker integration and explicitly deferred threshold changes, STT/model changes, UI/QML, App Store, and persisted NLE fields.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/verify_cut_boundary_source_fps_scout.py tests/test_cut_boundary_fixture_2766_2677.py tests/test_pipeline_cut_boundary_cache.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `5 passed, 1 skipped`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py ... --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628` -> pass, `strict_visual_detection_passed=false`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py ... --require-visual-detection --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628_strict` -> expected fail, exit `1`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py tests/test_cut_boundary_auto_scan_backend.py tests/test_subtitle_boundary_alignment.py tests/test_pipeline_cut_boundary_cache.py` -> `78 passed, 1 skipped`.
+- `git diff --check -- .` -> pass.
+
+### Next Recommended Action
+
+- Continue cut-boundary tuning only by improving detector evidence for frames `2766` and `2677` under `--require-visual-detection`; do not call preserved-only evidence visual detection proof.
+- Do not relax thresholds, change STT policy, promote cache defaults, alter UI, persist NLE disk fields, or perform App Store work from this slice.
+
 ## Current Handoff - 2026-06-28 STT Worker Timeout Audit
 
 ### Scope

@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Fixed Cut-Boundary Visual Evidence Gate - 2026-06-28 KST
+
+- 실행 모드: source-app fixed cut-boundary frame `2766`/`2677` decoder visual-evidence classification plus strict visual-detection gate.
+- 결과: pass for frame-grid preservation and validator clarity; strict visual detection intentionally fails because both target frames are still `preserved_only`, not `detected`.
+- 저장 위치:
+  - Visual evidence scout: `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628/source_fps_scout.md`
+  - Strict visual gate: `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628_strict/source_fps_scout.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-131045-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-131100-nle-fixed-cut-boundary-visual-evidence.md`
+- 수정 요약:
+  - `tools/verify_cut_boundary_source_fps_scout.py` now emits `visual_candidate_status`, `visual_evidence_available`, `visual_detection_summary`, and optional `--require-visual-detection`.
+  - `tests/test_cut_boundary_fixture_2766_2677.py` now covers metadata-only, preserved-only, strict-fail, and strong detected visual candidates.
+  - `tests/test_pipeline_cut_boundary_cache.py` now reads saved project payloads through `read_project_storage_payload(...)`, matching current binary/json project I/O.
+  - No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI/UX, QML/GPU defaults, App Store packaging/signing/upload, DMG behavior, or persisted NLE disk fields changed.
+- 실제 고정 fixture 결과:
+  - Decoder extraction status `ok`; probe source `ffprobe`; pipe fps `60000/1001`.
+  - Visual evidence available `true`; strict visual detection passed `false`; visual candidate missing count `2`.
+  - Frame `2766`: status `preserved_only`, score `2.059`, region hits `0`, pixel ratio `0.029392`, edge ratio `0.048021`, frame preserved `true`.
+  - Frame `2677`: status `preserved_only`, score `1.997`, region hits `0`, pixel ratio `0.029288`, edge ratio `0.046615`, frame preserved `true`.
+  - Strict command with `--require-visual-detection` returns exit `1`; this blocks visual cut detection claims until a separate detector-tuning slice is proven.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/verify_cut_boundary_source_fps_scout.py tests/test_cut_boundary_fixture_2766_2677.py tests/test_pipeline_cut_boundary_cache.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `5 passed, 1 skipped`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py ... --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628` -> pass, `strict_visual_detection_passed=false`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py ... --require-visual-detection --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628_strict` -> expected fail, exit `1`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py tests/test_cut_boundary_auto_scan_backend.py tests/test_subtitle_boundary_alignment.py tests/test_pipeline_cut_boundary_cache.py` -> `78 passed, 1 skipped`.
+  - `git diff --check -- .` -> pass.
+
 ## STT Worker Timeout Audit - 2026-06-28 KST
 
 - 실행 모드: NAS HeyDealer first-180s benchmark artifacts read-only STT worker timeout audit.

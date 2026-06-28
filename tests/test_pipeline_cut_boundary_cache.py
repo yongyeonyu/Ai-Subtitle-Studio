@@ -9,6 +9,7 @@ from unittest import mock
 
 import core.cut_boundary as cut_boundary
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin
+from core.project.project_io import read_project_storage_payload
 from core.runtime import config
 
 
@@ -81,8 +82,7 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
                 backend._save_cut_boundary_cache_for_start([media_path], {}, rows)
 
                 cached = backend._load_cut_boundary_cache_for_start(project_path, [media_path], {})
-                with open(project_path, "r", encoding="utf-8") as f:
-                    saved = json.load(f)
+                saved = read_project_storage_payload(project_path)
             finally:
                 config.OUTPUT_DIR = old_output_dir
 
@@ -283,8 +283,7 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
                 reviewed_rows=[{"timeline_sec": 10.0, "time": 10.0, "status": "checked"}],
             )
 
-            with open(project_path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
+            saved = read_project_storage_payload(project_path)
 
         self.assertEqual(saved["analysis"]["cut_boundary_provisional_boundaries"], [])
         self.assertEqual(saved["analysis"]["cut_boundary_reviewed_rows"][0]["timeline_sec"], 10.0)
@@ -338,8 +337,7 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
                 ],
             )
 
-            with open(project_path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
+            saved = read_project_storage_payload(project_path)
 
         cut_rows = saved["analysis"]["cut_boundaries"]
         self.assertEqual([round(row["timeline_sec"], 1) for row in cut_rows], [10.0])
@@ -418,8 +416,7 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
                     if follower is not None:
                         follower.join(timeout=2.0)
 
-                with open(project_path, "r", encoding="utf-8") as f:
-                    saved = json.load(f)
+                saved = read_project_storage_payload(project_path)
             finally:
                 config.OUTPUT_DIR = old_output_dir
 
@@ -594,8 +591,7 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
             self.assertEqual(backend._cut_boundary_provisional_rows, [])
             self.assertIsNone(backend._cut_boundary_pipeline_cache)
             self.assertIn(("_sig_preview_cut_boundary_scan_lines", ([],)), backend.emitted)
-            with open(project_path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
+            saved = read_project_storage_payload(project_path)
             self.assertEqual(saved["analysis"]["cut_boundary_provisional_boundaries"], [])
             self.assertEqual(saved["editor_state"]["analysis"]["cut_boundary_provisional_boundaries"], [])
             self.assertEqual(saved["editor_state"]["multiclip"]["cut_boundary_provisional_boundaries"], [])
