@@ -33,7 +33,46 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Cut Marker Point Projection
+## Current Handoff - 2026-06-28 NLE Relink Preview Cache Contract
+
+### Scope
+
+- Added the AI Subtitle Studio NLE relink/proxy preview-cache non-destructive contract.
+- Updated `core/runtime/preview_frame_cache.py`, `tests/test_preview_frame_cache.py`, `tools/audit_nle_relink_preview_cache_contract.py`, `tests/test_nle_relink_preview_cache_contract_audit.py`, NLE/status docs, completed action history, and the Jammini scout handoff classification.
+- Direct path cache lookup remains first. A bounded relink manifest scan runs only after miss and reuses an existing preview thumbnail only when media identity, fps, frame, width, preview-only provenance, and cut-boundary exclusion all match.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, detector thresholds, project-storage relink schema, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_relink_preview_cache_contract_20260628/nle_relink_preview_cache_contract.md`
+- `ready=true`; relink identity matches `true`; relink hit reuses original cache `true`; proxy identity blocked `true`; proxy hit blocked `true`; cached still exists `true`.
+- NAS HeyDealer acceptance: `output/manual_verification/latest/nle_relink_preview_cache_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_174547/benchmark_results.json`: accepted `true`, elapsed `45.515s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_relink_preview_cache_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-083937-next-nle-taption-runtime-contract-scout.md`
+- Dex classification: accepted the relink/proxy preview-cache continuity direction, narrowed implementation to runtime preview-cache manifest identity plus bounded lookup fallback, and deferred persisted project relink schemas/UI flow changes.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/runtime/preview_frame_cache.py tools/audit_nle_relink_preview_cache_contract.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_frame_cache.py tests/test_nle_relink_preview_cache_contract_audit.py` -> `8 passed`.
+- `./venv/bin/python tools/audit_nle_relink_preview_cache_contract.py --output-dir output/manual_verification/latest/nle_relink_preview_cache_contract_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_skimming_cache_audit.py tests/test_video_player_widget.py -k "preview_frame_cache"` -> `3 passed, 82 deselected`.
+- `git diff --check -- core/runtime/preview_frame_cache.py tests/test_preview_frame_cache.py tools/audit_nle_relink_preview_cache_contract.py tests/test_nle_relink_preview_cache_contract_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_relink_preview_cache_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_174547/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_174547/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_relink_preview_cache_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_174547/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_relink_preview_cache_nas_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`.
+- Treat persisted NLE disk fields, project-storage relink schemas, dynamic proxy mapping without source identity, per-pixel writes, QML/GPU default surfaces, detector-threshold changes, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes as blocked until explicit owner approval and compatibility proof exist.
+
+## Previous Handoff - 2026-06-28 NLE Cut Marker Point Projection
 
 ### Scope
 

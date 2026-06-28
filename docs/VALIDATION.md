@@ -75,6 +75,19 @@ AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/path/to/audi
 ./venv/bin/python -m pytest -q tests/test_roughcut_*.py
 ```
 
+## NLE preview-cache relink validation
+
+Preview/skimming frame-cache relink or proxy-switch contract changes should prove same-media relink reuse, proxy/different-media blocking, and unchanged preview-cache worker behavior before any broader QA.
+
+```bash
+./venv/bin/python -m py_compile core/runtime/preview_frame_cache.py tools/audit_nle_relink_preview_cache_contract.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_frame_cache.py tests/test_nle_relink_preview_cache_contract_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_skimming_cache_audit.py tests/test_video_player_widget.py -k "preview_frame_cache"
+./venv/bin/python tools/audit_nle_relink_preview_cache_contract.py --output-dir output/manual_verification/latest/nle_relink_preview_cache_contract_YYYYMMDD
+```
+
+For runtime regression evidence when NAS is available, use the HeyDealer first-180s reference path and require `evaluate_reference_benchmark_acceptance.py` accepted `true`, final invalid/non-monotonic/overlap `0/0/0`, and global max-active `1`. This contract must not approve persisted project relink schemas, UI relink flow changes, dynamic proxy mapping without source identity, or cut-boundary evidence reuse from preview thumbnails.
+
 ## Trace workspace validation
 
 Trace/temp-workspace changes should first prove syntax, focused trace behavior, then the startup/app-command diagnostic guard.

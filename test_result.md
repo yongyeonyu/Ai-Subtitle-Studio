@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Relink Preview Cache Contract - 2026-06-28 KST
+
+- 실행 모드: source-app NLE preview/skimming frame-cache relink/proxy non-destructive contract.
+- 결과: pass for same-media relink preview-cache reuse, proxy/different-media reuse blocking, existing preview-cache worker behavior, strict NAS HeyDealer first-180s acceptance, and no STT worker timeout. No UI/UX layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, detector threshold, project-storage relink schema, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, runtime undo/redo UI, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_relink_preview_cache_contract_20260628/nle_relink_preview_cache_contract.md`
+  - Audit JSON: `output/manual_verification/latest/nle_relink_preview_cache_contract_20260628/nle_relink_preview_cache_contract.json`
+  - NAS preflight: `output/manual_verification/latest/nle_relink_preview_cache_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_174547/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_relink_preview_cache_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_relink_preview_cache_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-083937-next-nle-taption-runtime-contract-scout.md`
+- 실제 결과:
+  - Audit `ready=true`, relink identity matches `true`, relink hit reuses original cache `true`.
+  - Proxy identity blocked `true`, proxy hit blocked `true`, cached still exists `true`.
+  - NAS acceptance `accepted=true`, elapsed `45.515s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - STT1/STT2/word selected `21/37/7`; timeout audit `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/preview_frame_cache.py tools/audit_nle_relink_preview_cache_contract.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_frame_cache.py tests/test_nle_relink_preview_cache_contract_audit.py` -> `8 passed`.
+  - `./venv/bin/python tools/audit_nle_relink_preview_cache_contract.py --output-dir output/manual_verification/latest/nle_relink_preview_cache_contract_20260628` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_skimming_cache_audit.py tests/test_video_player_widget.py -k "preview_frame_cache"` -> `3 passed, 82 deselected`.
+  - `git diff --check -- core/runtime/preview_frame_cache.py tests/test_preview_frame_cache.py tools/audit_nle_relink_preview_cache_contract.py tests/test_nle_relink_preview_cache_contract_audit.py` -> pass.
+
 ## NLE Cut Marker Point Projection - 2026-06-28 KST
 
 - 실행 모드: source-app NLE marker-edit cut-boundary point-evidence projection guard.
