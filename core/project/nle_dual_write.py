@@ -384,6 +384,8 @@ def apply_gap_generate_dual_write_pilot(
     sub_end: float,
     mode: str = "",
     text: str = "새자막",
+    commit_boundary: str = "",
+    commit_source: str = "",
     project_path: str = "",
 ) -> NLEDualWritePilotResult:
     if not isinstance(project, dict):
@@ -435,6 +437,8 @@ def apply_gap_generate_dual_write_pilot(
         raise ValueError("nle_gap_generate_caption_duration_invalid")
     if caption_start < target_start - 0.001 or caption_end > target_end + 0.001:
         raise ValueError("nle_gap_generate_caption_outside_gap")
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
 
     generated_rows: list[dict[str, Any]] = []
     if caption_start > target_start + 0.001:
@@ -489,9 +493,24 @@ def apply_gap_generate_dual_write_pilot(
             "sub_start": caption_start,
             "sub_end": caption_end,
             "mode": str(mode or ""),
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
         },
         metadata={"pilot": "dual_write_gap_generate"},
     )
+    metadata = {
+        "pilot": "dual_write",
+        "operation_family": "gap_generate",
+        "gap_id": target_id,
+        "generated_caption_id": caption_id,
+        "mode": str(mode or ""),
+        "left_gap_preserved": caption_start > target_start + 0.001,
+        "right_gap_preserved": caption_end < target_end - 0.001,
+    }
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="gap_generate",
@@ -500,15 +519,7 @@ def apply_gap_generate_dual_write_pilot(
         after_projection=after_projection,
         time_domain="sequence",
         undo_snapshot=undo,
-        metadata={
-            "pilot": "dual_write",
-            "operation_family": "gap_generate",
-            "gap_id": target_id,
-            "generated_caption_id": caption_id,
-            "mode": str(mode or ""),
-            "left_gap_preserved": caption_start > target_start + 0.001,
-            "right_gap_preserved": caption_end < target_end - 0.001,
-        },
+        metadata=metadata,
     )
 
     state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)
@@ -537,6 +548,8 @@ def apply_caption_merge_dual_write_pilot(
     left_caption_id: str,
     right_caption_id: str,
     merged_text: str = "",
+    commit_boundary: str = "",
+    commit_source: str = "",
     project_path: str = "",
 ) -> NLEDualWritePilotResult:
     if not isinstance(project, dict):
@@ -576,6 +589,8 @@ def apply_caption_merge_dual_write_pilot(
     text = _merged_caption_text(keep_row, remove_row, merged_text)
     if not text:
         raise ValueError("nle_caption_merge_text_required")
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
 
     merged_row = _retime_row(keep_row, merged_start, merged_end)
     merged_row["id"] = keep_id
@@ -606,9 +621,24 @@ def apply_caption_merge_dual_write_pilot(
             "right_caption_id": right_id,
             "kept_caption_id": keep_id,
             "removed_caption_id": remove_id,
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
         },
         metadata={"pilot": "dual_write_caption_merge"},
     )
+    metadata = {
+        "pilot": "dual_write",
+        "operation_family": "caption_merge",
+        "kept_caption_id": keep_id,
+        "removed_caption_id": remove_id,
+        "merged_text": text,
+        "merged_start": merged_start,
+        "merged_end": merged_end,
+    }
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_merge",
@@ -617,15 +647,7 @@ def apply_caption_merge_dual_write_pilot(
         after_projection=after_projection,
         time_domain="sequence",
         undo_snapshot=undo,
-        metadata={
-            "pilot": "dual_write",
-            "operation_family": "caption_merge",
-            "kept_caption_id": keep_id,
-            "removed_caption_id": remove_id,
-            "merged_text": text,
-            "merged_start": merged_start,
-            "merged_end": merged_end,
-        },
+        metadata=metadata,
     )
 
     state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)
@@ -849,6 +871,8 @@ def apply_candidate_confirm_dual_write_pilot(
     candidate: dict[str, Any],
     candidate_source: str,
     candidate_lanes: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    commit_boundary: str = "",
+    commit_source: str = "",
     project_path: str = "",
 ) -> NLEDualWritePilotResult:
     if not isinstance(project, dict):
@@ -863,6 +887,8 @@ def apply_candidate_confirm_dual_write_pilot(
     after_rows = _canonicalize_confirmed_caption_identities(before_rows, after_rows)
     if not after_rows:
         raise ValueError("nle_candidate_confirm_rows_required")
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
 
     candidate_id = _candidate_confirm_id(candidate, source)
     target_ids = _overlapping_caption_ids_for_candidate(before_rows, candidate)
@@ -886,9 +912,26 @@ def apply_candidate_confirm_dual_write_pilot(
             "candidate_id": candidate_id,
             "candidate_source": source,
             "target_ids": list(target_ids),
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
         },
         metadata={"pilot": "dual_write_candidate_confirm"},
     )
+    metadata = {
+        "pilot": "dual_write",
+        "operation_family": "candidate_confirm",
+        "candidate_id": candidate_id,
+        "candidate_source": source,
+        "candidate_text": str(candidate.get("text", "") or ""),
+        "candidate_start": _row_start(candidate),
+        "candidate_end": _row_end(candidate, _row_start(candidate)),
+        "confirmed_row_count": len(after_rows),
+        "replaced_target_ids": list(target_ids),
+    }
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="candidate_confirm",
@@ -897,17 +940,7 @@ def apply_candidate_confirm_dual_write_pilot(
         after_projection=after_projection,
         time_domain="sequence",
         undo_snapshot=undo,
-        metadata={
-            "pilot": "dual_write",
-            "operation_family": "candidate_confirm",
-            "candidate_id": candidate_id,
-            "candidate_source": source,
-            "candidate_text": str(candidate.get("text", "") or ""),
-            "candidate_start": _row_start(candidate),
-            "candidate_end": _row_end(candidate, _row_start(candidate)),
-            "confirmed_row_count": len(after_rows),
-            "replaced_target_ids": list(target_ids),
-        },
+        metadata=metadata,
     )
 
     state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)
@@ -936,6 +969,8 @@ def apply_caption_delete_dual_write_pilot(
     *,
     caption_id: str,
     replacement_gap_id: str = "",
+    commit_boundary: str = "",
+    commit_source: str = "",
     project_path: str = "",
 ) -> NLEDualWritePilotResult:
     if not isinstance(project, dict):
@@ -949,6 +984,8 @@ def apply_caption_delete_dual_write_pilot(
     )
     target_id = _caption_identity(target_row, target_index)
     gap_id = str(replacement_gap_id or f"gap_from_{target_id}")
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
     after_rows = [dict(row) for row in before_rows]
     after_rows[target_index] = _caption_row_to_gap(after_rows[target_index], caption_id=target_id, gap_id=gap_id)
     after_rows = _sorted_editor_rows(after_rows)
@@ -965,9 +1002,22 @@ def apply_caption_delete_dual_write_pilot(
             "operation_family": "caption_delete",
             "target_id": target_id,
             "replacement_gap_id": gap_id,
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
         },
         metadata={"pilot": "dual_write_caption_delete"},
     )
+    metadata = {
+        "pilot": "dual_write",
+        "operation_family": "caption_delete",
+        "caption_id": target_id,
+        "replacement_gap_id": gap_id,
+        "delete_mode": "replace_with_silence_gap",
+    }
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_delete",
@@ -976,13 +1026,7 @@ def apply_caption_delete_dual_write_pilot(
         after_projection=after_projection,
         time_domain="sequence",
         undo_snapshot=undo,
-        metadata={
-            "pilot": "dual_write",
-            "operation_family": "caption_delete",
-            "caption_id": target_id,
-            "replacement_gap_id": gap_id,
-            "delete_mode": "replace_with_silence_gap",
-        },
+        metadata=metadata,
     )
 
     state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)
@@ -1015,6 +1059,8 @@ def apply_caption_resize_dual_write_pilot(
     linked_caption_id: str = "",
     linked_new_start: float | None = None,
     linked_new_end: float | None = None,
+    commit_boundary: str = "",
+    commit_source: str = "",
     project_path: str = "",
 ) -> NLEDualWritePilotResult:
     if not isinstance(project, dict):
@@ -1034,6 +1080,8 @@ def apply_caption_resize_dual_write_pilot(
         raise ValueError("nle_caption_resize_time_invalid") from exc
     if target_end <= target_start:
         raise ValueError("nle_caption_resize_duration_invalid")
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
 
     after_rows = [dict(row) for row in before_rows]
     after_rows[moving_index] = _retime_row(after_rows[moving_index], target_start, target_end)
@@ -1076,6 +1124,10 @@ def apply_caption_resize_dual_write_pilot(
         "deleted_neighbor_count": deleted_count,
         "linked_caption_id": linked_id,
     }
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
     undo = build_nle_undo_snapshot(
         operation_id=f"dual_write_caption_resize:{target_id}",
         editor_rows=before_rows,
@@ -1088,6 +1140,8 @@ def apply_caption_resize_dual_write_pilot(
             "new_end": target_end,
             "edge": str(edge or "boundary"),
             "linked_caption_id": linked_id,
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
         },
         metadata={"pilot": "dual_write_caption_resize"},
     )
@@ -1722,6 +1776,8 @@ def apply_gap_delete_dual_write_pilot(
     project: dict[str, Any],
     *,
     gap_id: str = "",
+    commit_boundary: str = "",
+    commit_source: str = "",
     project_path: str = "",
 ) -> NLEDualWritePilotResult:
     if not isinstance(project, dict):
@@ -1743,6 +1799,8 @@ def apply_gap_delete_dual_write_pilot(
         else:
             raise ValueError(f"nle_gap_delete_target_missing:{gap_id}")
     target_id = _gap_identity(target_gap, target_index)
+    commit_boundary = str(commit_boundary or "").strip()
+    commit_source = str(commit_source or "").strip()
     after_rows = [
         dict(row)
         for index, row in enumerate(before_rows)
@@ -1757,9 +1815,19 @@ def apply_gap_delete_dual_write_pilot(
         editor_rows=before_rows,
         candidate_lanes=_candidate_lanes(project, before_rows),
         silence_gaps=[row for _index, row in gap_rows],
-        ui_state_ref={"operation_family": "gap_delete", "target_id": target_id},
+        ui_state_ref={
+            "operation_family": "gap_delete",
+            "target_id": target_id,
+            "commit_boundary": commit_boundary,
+            "commit_source": commit_source,
+        },
         metadata={"pilot": "dual_write_gap_delete"},
     )
+    metadata = {"pilot": "dual_write", "operation_family": "gap_delete"}
+    if commit_boundary:
+        metadata["commit_boundary"] = commit_boundary
+    if commit_source:
+        metadata["commit_source"] = commit_source
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="gap_delete",
@@ -1768,7 +1836,7 @@ def apply_gap_delete_dual_write_pilot(
         after_projection=after_projection,
         time_domain="sequence",
         undo_snapshot=undo,
-        metadata={"pilot": "dual_write", "operation_family": "gap_delete"},
+        metadata=metadata,
     )
 
     state = sync_project_nle_state_from_editor_rows(project, after_rows, project_path=project_path)

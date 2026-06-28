@@ -88,6 +88,8 @@ class EditorSegmentsSttSelectionFlowMixin:
                     for row in list(getattr(self, "_live_stt_preview_segments", []) or [])
                     if isinstance(row, dict)
                 ],
+                commit_boundary="release",
+                commit_source="stt_candidate_confirm",
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
             if not self._nle_candidate_confirm_preserves_confirmed_rows(

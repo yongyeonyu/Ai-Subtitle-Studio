@@ -1105,6 +1105,8 @@ class EditorTimelineVideoMixin(
                 new_start=float(new_start),
                 new_end=float(new_end),
                 edge=str(edge_type or "diamond"),
+                commit_boundary="release",
+                commit_source=str(edge_type or "boundary_resize"),
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
         except Exception:
@@ -1479,6 +1481,8 @@ class EditorTimelineVideoMixin(
             return apply_caption_delete_dual_write_pilot(
                 project,
                 caption_id=caption_id,
+                commit_boundary="release",
+                commit_source="segment_delete_to_gap",
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
         except Exception:
@@ -1531,6 +1535,8 @@ class EditorTimelineVideoMixin(
                 left_caption_id=left_caption_id,
                 right_caption_id=right_caption_id,
                 merged_text=str(merged_text or ""),
+                commit_boundary="release",
+                commit_source="live_editor_caption_merge",
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
         except Exception:
@@ -1704,6 +1710,8 @@ class EditorTimelineVideoMixin(
                 sub_start=float(sub_start),
                 sub_end=float(sub_end),
                 mode=str(mode or ""),
+                commit_boundary="release",
+                commit_source="gap_generate",
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
         except Exception:

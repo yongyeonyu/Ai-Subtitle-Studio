@@ -33,6 +33,49 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Operation Journal Contract Audit
+
+### Scope
+
+- Continued the source-app NLE editor-structure goal with a non-destructive NLE operation journal/undo contract audit.
+- Added `tools/audit_nle_operation_journal.py` and `tests/test_nle_operation_journal_audit.py`.
+- Added release commit provenance to the remaining NLE dual-write operation builders and their current UI call sites for `gap_generate`, `caption_merge`, `candidate_confirm`, `caption_delete`, `caption_resize`, and `gap_delete`.
+- No persisted NLE disk fields, runtime undo/redo UI behavior, per-pixel drag writes, QML/GPU timeline default surface, App Store packaging/signing/upload, DMG, STT/STT2 policy, or user-visible UI/UX behavior changed.
+
+### Results
+
+- NLE evidence: `output/manual_verification/latest/nle_operation_journal_audit_20260628/nle_operation_journal_audit.md`
+- NAS HeyDealer regression evidence: `output/manual_verification/latest/nle_operation_journal_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Benchmark run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_112647/benchmark_results.json`
+- Audit ready: `true`.
+- Operation families covered: `11/11`.
+- Release metadata count: `11`.
+- Undo snapshot count: `11`.
+- Storage clean count: `11`.
+- NLE audit final invalid/non-monotonic/overlap `0/0/0`; global max-active `1`.
+- NAS HeyDealer accepted: `true`; elapsed `45.846s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, global max-active `1`, STT1/STT2/word selected `21/37/7`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-111733-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-111900-nle-operation-journal-undo-scout.md`
+- Dex classification: accept the operation schema, undo snapshot, release metadata, final-overlap, and blocked-scope guidance; defer persisted journal storage, runtime undo/redo UI changes, per-pixel NLE writes, and QML/UI conversion.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/editor_segments_stt_selection_flow.py ui/editor/editor_segments_block_surgery.py tools/audit_nle_operation_journal.py tests/test_nle_operation_journal_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_operation_journal_audit.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py` -> `37 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_operation_journal.py --output-dir output/manual_verification/latest/nle_operation_journal_audit_20260628` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_operation_journal_nas_heydealer_20260628/preflight` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_112647/benchmark_results.json --output-dir output/manual_verification/latest/nle_operation_journal_nas_heydealer_20260628/acceptance` -> `accepted=true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py tests/test_native_subtitle_segments.py tests/test_native_subtitle_stt_segments.py` -> `203 passed`.
+
+### Next Recommended Action
+
+- Keep persisted NLE disk fields, persisted operation journals, runtime undo/redo UI changes, per-pixel NLE writes, and QML/GPU default changes blocked until explicit owner approval and compatibility proof exist.
+- The next safe NLE slice should start from `ACTION_ITEMS.md` migration status and avoid redoing completed owner-map, adapter/cache, or operation-journal audits unless new mutation sources are added.
+
 ## Current Handoff - 2026-06-28 NLE Adapter Cache Consistency Audit
 
 ### Scope

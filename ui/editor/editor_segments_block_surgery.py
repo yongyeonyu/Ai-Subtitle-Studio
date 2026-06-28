@@ -232,6 +232,8 @@ class EditorSegmentsBlockSurgeryMixin:
                 new_start=target_new_start,
                 new_end=target_new_end,
                 edge=edge,
+                commit_boundary="release",
+                commit_source=commit_source,
                 project_path=str(getattr(self, "_linked_project_path_for_srt", "") or ""),
             )
         except Exception:

@@ -1,5 +1,40 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Operation Journal Contract Audit - 2026-06-28 KST
+
+- 실행 모드: source-app NLE operation journal/undo contract audit plus NAS HeyDealer first-180s regression.
+- 결과: pass; all current NLE operation families carry release commit provenance and undo metadata without persisting operation journal schemas.
+- 저장 위치:
+  - NLE report: `output/manual_verification/latest/nle_operation_journal_audit_20260628/nle_operation_journal_audit.md`
+  - NLE JSON: `output/manual_verification/latest/nle_operation_journal_audit_20260628/nle_operation_journal_audit.json`
+  - NAS preflight: `output/manual_verification/latest/nle_operation_journal_nas_heydealer_20260628/preflight/reference_fixture_availability.md`
+  - NAS acceptance: `output/manual_verification/latest/nle_operation_journal_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_112647/benchmark_results.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-111733-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-111900-nle-operation-journal-undo-scout.md`
+- 수정 요약:
+  - Added `tools/audit_nle_operation_journal.py`.
+  - Added `tests/test_nle_operation_journal_audit.py`.
+  - Added release commit provenance to NLE dual-write builders and current UI call sites for `gap_generate`, `caption_merge`, `candidate_confirm`, `caption_delete`, `caption_resize`, and `gap_delete`.
+  - No persisted NLE disk fields, runtime undo/redo UI behavior, per-pixel drag writes, QML/GPU timeline defaults, App Store packaging/signing/upload, DMG behavior, STT/STT2 policy, or user-visible UI/UX behavior changed.
+- 실제 감사 결과:
+  - `ready=true`, `runtime_change_applied=false`.
+  - Operation families `11`, release metadata count `11`, undo snapshot count `11`, storage clean count `11`.
+  - Every audited operation had final invalid/non-monotonic/overlap `0/0/0`, max active `1`, clean legacy storage, and no persisted operation/undo/runtime NLE schema.
+  - Blocked scope remains persisted operation journal, runtime undo/redo UI behavior changes, per-pixel NLE writes, and QML/GPU timeline defaults.
+- NAS HeyDealer regression:
+  - Preflight ready `true`; media and reference SRT exist; clipped reference rows `89`.
+  - Acceptance `true`; elapsed `45.846s`; raw/final/reference `58/56/89`.
+  - Quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; final short/long `0/0`; global max active `1`.
+  - STT1/STT2/word selected `21/37/7`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py ui/editor/ux/editor_timeline_video.py ui/editor/editor_segments_stt_selection_flow.py ui/editor/editor_segments_block_surgery.py tools/audit_nle_operation_journal.py tests/test_nle_operation_journal_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_operation_journal_audit.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py` -> `37 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_operation_journal.py --output-dir output/manual_verification/latest/nle_operation_journal_audit_20260628` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_112647/benchmark_results.json --output-dir output/manual_verification/latest/nle_operation_journal_nas_heydealer_20260628/acceptance` -> `accepted=true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py tests/test_subtitle_live_editor_feed_facade.py tests/test_native_subtitle_segments.py tests/test_native_subtitle_stt_segments.py` -> `203 passed`.
+
 ## NLE Adapter Cache Consistency Audit - 2026-06-28 KST
 
 - 실행 모드: source-app NLE adapter/cache consistency audit plus current NAS HeyDealer preflight.
