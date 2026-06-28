@@ -33,7 +33,52 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Relink Preview Cache Contract
+## Current Handoff - 2026-06-28 Direct SRT Runtime NLE Precedence Contract
+
+### Scope
+
+- Added the direct SRT versus linked-project/runtime-NLE precedence contract for AI Subtitle Studio.
+- Updated `core/project/nle_project_state.py`, `ui/editor/editor_project_open_native.py`, `tests/test_project_segment_reload.py`, `tests/test_direct_srt_precedence_audit.py`, `tools/audit_direct_srt_precedence_contract.py`, NLE/status docs, completed action history, and the Jammini scout handoff classification.
+- Linked-project direct SRT open now syncs runtime `NLEProjectState` from the exact direct SRT editor rows after metadata merge, records `last_editor_sync_source=direct_srt_open`, and marks `direct_srt_precedence_contract=srt_timing_text_wins`.
+- Direct SRT timing/text remain the source of truth. Project metadata is restored only as auxiliary metadata, and persisted project storage remains clean of runtime NLE fields.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/direct_srt_precedence_contract_20260628/direct_srt_precedence_contract.md`
+- Passed `true`; editor/NLE text both use `latest direct SRT text`; editor/NLE start/end both use `[1.2, 2.4]`; NLE sync source `direct_srt_open`; NLE precedence contract `srt_timing_text_wins`; project metadata restored `true`; storage clean of runtime NLE `true`.
+- NAS HeyDealer preflight: `output/manual_verification/latest/direct_srt_precedence_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`, media/SRT exist `true/true`, clipped reference rows `89`.
+- NAS HeyDealer current-head regression: `output/manual_verification/latest/direct_srt_precedence_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_181354/benchmark_results.json`: accepted `true`, elapsed `45.785s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_direct_srt_precedence_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-090453-srt-precedence-contract-scout.md`
+- Dex classification: accepted the direct SRT precedence contract and implemented it in the runtime NLE sync path, while deferring UI flow changes, persisted NLE disk fields, STT/default-cache policy, App Store packaging, DMG, and per-pixel writes.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_project_state.py ui/editor/editor_project_open_native.py tools/audit_direct_srt_precedence_contract.py tests/test_project_segment_reload.py tests/test_direct_srt_precedence_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "linked_srt_mode or direct_srt_rows_to_runtime_nle_state or open_project_file_passes_resolved_external_srt_path"` -> `3 passed, 86 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_direct_srt_precedence_audit.py` -> `1 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_direct_srt_precedence_audit.py tests/test_project_segment_reload.py -k "direct_srt_precedence or direct_srt_rows_to_runtime_nle_state or linked_srt_mode"` -> `3 passed, 87 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_direct_srt_precedence_contract.py --output-dir output/manual_verification/latest/direct_srt_precedence_contract_20260628` -> passed `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_srt_open_refresh.py tests/test_project_segment_reload.py -k "srt or linked_srt or direct_srt"` -> `26 passed, 80 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py -k "direct_srt or runtime_nle_project_state or persistence_guard or storage_builders or reading_raw_project"` -> `7 passed, 12 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/direct_srt_precedence_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_181354/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_181354/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/direct_srt_precedence_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_181354/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_direct_srt_precedence_nas_20260628` -> timeout detected `false`.
+- `git diff --check -- core/project/nle_project_state.py ui/editor/editor_project_open_native.py tools/audit_direct_srt_precedence_contract.py tests/test_project_segment_reload.py tests/test_direct_srt_precedence_audit.py` -> pass.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`.
+- For any generation-affecting or performance/default-cache step, use the now-available NAS HeyDealer first-180s MP4/SRT preflight plus strict acceptance and timeout audit again.
+- Treat persisted NLE disk fields, UI flow changes, project-storage relink schemas, per-pixel writes, QML/GPU default surfaces, detector-threshold changes, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes as blocked until explicit owner approval and compatibility proof exist.
+
+## Previous Handoff - 2026-06-28 NLE Relink Preview Cache Contract
 
 ### Scope
 

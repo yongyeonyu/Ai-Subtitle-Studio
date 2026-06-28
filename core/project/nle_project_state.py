@@ -223,6 +223,7 @@ def sync_project_nle_state_from_editor_rows(
     rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     *,
     project_path: str = "",
+    sync_source: str = "save_project",
 ) -> NLEProjectState:
     state = project_nle_state(project, project_path=project_path)
     fps = normalize_fps(project_primary_fps(project) or state.primary_fps)
@@ -234,7 +235,7 @@ def sync_project_nle_state_from_editor_rows(
     ]
     state.metadata = {
         **dict(state.metadata or {}),
-        "last_editor_sync_source": "save_project",
+        "last_editor_sync_source": str(sync_source or "save_project"),
         "last_editor_sync_count": len(state.captions),
     }
     return state

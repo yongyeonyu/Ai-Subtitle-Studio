@@ -1014,6 +1014,31 @@ def open_project_segments_in_editor(
             stt_preview_subtitle_drafts=False,
             mark_dirty=False,
         )
+        if direct_srt_edit_mode:
+            try:
+                from core.project.nle_project_state import (
+                    assert_nle_editor_rows_consistent,
+                    sync_project_nle_state_from_editor_rows,
+                )
+
+                nle_state = sync_project_nle_state_from_editor_rows(
+                    project,
+                    [dict(row) for row in list(segments or []) if isinstance(row, dict)],
+                    project_path=filepath,
+                    sync_source="direct_srt_open",
+                )
+                nle_state.metadata = {
+                    **dict(nle_state.metadata or {}),
+                    "direct_srt_precedence_contract": "srt_timing_text_wins",
+                    "direct_srt_source_basename": os.path.basename(str(source_srt_path or "")),
+                }
+                assert_nle_editor_rows_consistent(
+                    [dict(row) for row in list(segments or []) if isinstance(row, dict)],
+                    nle_state.editor_rows(),
+                    primary_fps=primary_fps,
+                )
+            except Exception as sync_exc:
+                get_logger().log(f"⚠️ direct SRT NLE runtime sync skipped: {sync_exc}")
         for obj in (owner, editor, timeline, canvas, global_canvas):
             if obj is None:
                 continue

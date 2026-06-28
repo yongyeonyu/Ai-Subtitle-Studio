@@ -23,6 +23,7 @@ from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData, SubtitleTextEdit
 from ui.editor.undo_manager import UndoManager
+from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY, NLEProjectState
 from core.project.project_manager import get_boundary_times
 from ui.editor import editor_project_open_native as project_open_native_module
 from ui.project.project_panel import ProjectUIMixin
@@ -789,6 +790,69 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertTrue(getattr(editor, "_direct_srt_edit_mode"))
         self.assertEqual(getattr(editor, "_linked_project_path_for_srt"), "/tmp/sample_project.aissproj")
         self.assertEqual(editor.timeline.waveform_paths, [("/tmp/sample.mp4", True)])
+
+    def test_project_open_helper_syncs_direct_srt_rows_to_runtime_nle_state(self):
+        editor = _ProjectOpenEditor()
+        window = _ProjectOpenWindow(editor)
+        segments = [
+            {
+                "id": "srt-new",
+                "start": 1.2,
+                "end": 2.4,
+                "start_frame": 36,
+                "end_frame": 72,
+                "timeline_start_frame": 36,
+                "timeline_end_frame": 72,
+                "text": "최신 SRT 텍스트",
+                "speaker": "00",
+                "quality": {"confidence_label": "yellow"},
+            }
+        ]
+        project = {
+            "project_name": "linked-srt-runtime",
+            "video": {"primary_fps": 30.0},
+            "timeline": {
+                "timebase": {"primary_fps": 30.0},
+                "tracks": [{"clips": [{"source_path": "/tmp/sample.mp4", "fps": 30.0}]}],
+            },
+            "subtitles": {
+                "segments": [
+                    {
+                        "id": "project-old",
+                        "start": 0.0,
+                        "end": 1.0,
+                        "start_frame": 0,
+                        "end_frame": 30,
+                        "text": "프로젝트 구버전 텍스트",
+                        "speaker": "09",
+                    }
+                ]
+            },
+            "editor_state": {},
+            "analysis": {},
+        }
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            opened = window._open_project_segments_in_editor(
+                "/tmp/sample_project.aissproj",
+                project,
+                ["/tmp/sample.mp4"],
+                segments,
+                source_srt_path="/tmp/sample.assets/subtitles/final.srt",
+                direct_srt_edit_mode=True,
+            )
+
+        state = project.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+        nle_rows = state.editor_rows() if isinstance(state, NLEProjectState) else []
+
+        self.assertTrue(opened)
+        self.assertIsInstance(state, NLEProjectState)
+        self.assertEqual([row["text"] for row in editor._cached_segs], ["최신 SRT 텍스트"])
+        self.assertEqual([row["text"] for row in nle_rows], ["최신 SRT 텍스트"])
+        self.assertEqual((nle_rows[0]["start_frame"], nle_rows[0]["end_frame"]), (36, 72))
+        self.assertEqual(state.metadata["last_editor_sync_source"], "direct_srt_open")
+        self.assertEqual(state.metadata["direct_srt_precedence_contract"], "srt_timing_text_wins")
+        self.assertEqual(state.metadata["direct_srt_source_basename"], "final.srt")
 
     def test_open_project_file_passes_resolved_external_srt_path_to_editor(self):
         window = _ProjectOpenWindow(_ProjectOpenEditor())

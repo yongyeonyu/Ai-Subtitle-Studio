@@ -122,6 +122,10 @@ Stop conditions:
 - NLE-to-legacy projection drops frame-quantized fields or custom metadata required for reopen.
 - direct SRT timing/text precedence is overwritten by linked project or NLE-derived metadata.
 
+Latest direct SRT precedence proof:
+
+- `output/manual_verification/latest/direct_srt_precedence_contract_20260628/direct_srt_precedence_contract.md`; linked-project direct SRT open now syncs runtime `NLEProjectState` from the direct SRT editor rows, records `last_editor_sync_source=direct_srt_open` and `direct_srt_precedence_contract=srt_timing_text_wins`, preserves project metadata only as auxiliary metadata, and keeps persisted storage clean of runtime NLE fields. This closes the stop condition where linked project or NLE-derived subtitle rows could overwrite directly opened SRT timing/text. NAS HeyDealer current-head regression after the slice accepted at `output/manual_verification/latest/direct_srt_precedence_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md` with final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`, and timeout detected `false`.
+
 ### Cut Boundary Accuracy
 
 Goal: stop missing short visual cuts caused by coarse stride plus rollback-only recovery.

@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-090453-srt-precedence-contract-scout.md`
 - `.agents/sentinel/handoffs/20260628-085515-next-nle-taption-runtime-contract-scout.md`
 - `.agents/sentinel/handoffs/20260628-083937-next-nle-taption-runtime-contract-scout.md`
 - `.agents/sentinel/handoffs/20260628-082222-next-nle-taption-runtime-contract-scout.md`
