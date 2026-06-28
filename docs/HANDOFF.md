@@ -33,7 +33,38 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 STT Cache Backfill Command Plan Gate
+## Current Handoff - 2026-06-28 App Store Submission Contents Audit
+
+### Scope
+
+- Continued active `ACTION_ITEMS.md` item 2 without running packaging, signing, upload, notarization, release, or DMG commands.
+- Extended `tools/audit_app_store_readiness.py` so non-code App Store submission contents are itemized with `status`, `draft`, `owner_decision_required`, and `acceptance_gate`.
+- The audit now tracks privacy policy URL, App Privacy answers, export compliance, screenshots, support URL, app review notes, age rating, and release notes as structured owner-input blockers.
+- Updated `docs/APP_STORE_SUBMISSION_READINESS.md`, `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, and `test_result.md` with the latest evidence.
+- No runtime behavior, UI/UX, subtitle generation, STT/STT2, word precision, save/load, render/export, packaging, signing, upload, notarization, App Store Connect state, or DMG behavior changed.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tests/test_app_store_readiness_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py` -> `5 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_submission_contents_audit_20260628` -> pass.
+
+### Results
+
+- Audit artifact: `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.md`
+- `local_packaging_ready=true`.
+- `app_store_submission_ready=false`, `status=blocked`, blocker count `14`.
+- `submission_content_audit.status=blocked`.
+- Pending owner-input items `8/8`; drafted item count `8`.
+- Mac App Store `.pkg` remains the primary submission target; Developer ID beta `.dmg` remains `opt_in_hold` and not submission evidence.
+- Jammini review: `.agents/sentinel/handoffs/20260628-090900-app-store-submission-contents-audit-review.md`
+
+### Next Recommended Action
+
+- Collect owner-approved privacy policy URL, App Privacy answers, export compliance answers, screenshots, support URL, app review notes, age rating answers, and release notes before clearing the non-code submission blocker.
+- Do not run packaging/signing/upload/notarization/DMG steps without explicit owner approval.
+
+## Previous Handoff - 2026-06-28 STT Cache Backfill Command Plan Gate
 
 ### Scope
 

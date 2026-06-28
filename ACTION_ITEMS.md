@@ -110,9 +110,10 @@ Current baseline:
 - `packaging/macos/AI Subtitle Studio.entitlements` enables App Sandbox, user-selected read/write, app-scope bookmarks, network client, and audio input entitlements.
 - Readiness audit evidence: `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.md`
 - Submission target lock evidence: `output/manual_verification/latest/app_store_readiness_target_lock_20260628/app_store_readiness_audit.md`
+- Submission contents audit evidence: `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.md`
 - Non-code submission draft: `docs/APP_STORE_SUBMISSION_READINESS.md`
 - Current target decision: Mac App Store `.pkg` is the primary submission target; Developer ID beta `.dmg` is a separate opt-in track and is not App Store submission proof.
-- Current audit result: `local_packaging_ready=true`, `app_store_submission_ready=false`; the latest target-lock audit reports blocker count `14`.
+- Current audit result: `local_packaging_ready=true`, `app_store_submission_ready=false`; the latest submission contents audit reports blocker count `14`, submission content status `blocked`, pending owner-input items `8/8`, and drafted item count `8`.
 - There is no current checked App Store `.app` / `.pkg` artifact in `dist/macos/`.
 - Current blockers include missing signed `.app`, signed `.pkg`, sandbox smoke, App Store Connect validation artifact, Apple Distribution codesign identity, installer identity, privacy answers, export compliance answers, screenshots, support URL, review notes, age rating, and release notes.
 - App Store packaging, notarization, DMG, upload, and release work remain opt-in.

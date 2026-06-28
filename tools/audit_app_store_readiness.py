@@ -59,6 +59,65 @@ NON_CODE_SUBMISSION_ITEMS = (
     "release_notes",
 )
 
+SUBMISSION_CONTENT_DRAFTS = {
+    "privacy_policy_url": {
+        "draft": "Pending owner-provided public privacy policy URL.",
+        "owner_decision": "Provide the final public URL to enter in App Store Connect.",
+        "acceptance_gate": "URL is owner-approved and reachable before submission metadata entry.",
+    },
+    "privacy_data_type_answers": {
+        "draft": (
+            "AI Subtitle Studio handles user-selected media, subtitle, audio, and project files; "
+            "supports optional STT/model/network workflows; and writes local diagnostics/trace artifacts. "
+            "Owner must confirm analytics, crash-reporting, third-party model, and data-linkage policy."
+        ),
+        "owner_decision": (
+            "Confirm App Store Connect App Privacy answers for files, audio/STT, optional network/model calls, "
+            "diagnostics, analytics, and crash collection."
+        ),
+        "acceptance_gate": "All App Privacy answers are owner-approved and match the shipped sandboxed app behavior.",
+    },
+    "export_compliance_answers": {
+        "draft": "Pending owner/legal confirmation for encryption/export compliance answers.",
+        "owner_decision": (
+            "Confirm whether the shipped app's networking, TLS use, model downloads, or account/API features "
+            "require a specific export compliance answer."
+        ),
+        "acceptance_gate": "Export compliance answers are owner-approved before App Store Connect submission.",
+    },
+    "mac_app_store_screenshots": {
+        "draft": (
+            "Capture screenshots only from the signed/sandboxed App Store candidate, covering generation, "
+            "editor timeline, subtitle review/editing, and export/save workflow."
+        ),
+        "owner_decision": "Approve the final screenshot set and captions/crop after the signed candidate exists.",
+        "acceptance_gate": "Screenshot files exist, match the submitted binary UI, and are owner-approved.",
+    },
+    "support_url": {
+        "draft": "Pending owner-provided public support URL.",
+        "owner_decision": "Provide the final support URL.",
+        "acceptance_gate": "Support URL is owner-approved and reachable before metadata entry.",
+    },
+    "app_review_notes": {
+        "draft": (
+            "Explain sandboxed user-selected file access, app-scope bookmarks, audio/STT workflow, optional "
+            "local/remote model behavior, network entitlement purpose, and any review fixture or account notes."
+        ),
+        "owner_decision": "Approve review notes after the signed/sandboxed smoke proves the exact submitted behavior.",
+        "acceptance_gate": "Review notes are owner-approved and reference only behavior present in the submitted build.",
+    },
+    "age_rating_answers": {
+        "draft": "Pending owner confirmation for App Store age-rating questionnaire answers.",
+        "owner_decision": "Confirm all age-rating answers for the actual submitted feature set.",
+        "acceptance_gate": "Age-rating answers are owner-approved before submission.",
+    },
+    "release_notes": {
+        "draft": "Pending owner-approved version copy for the App Store release notes.",
+        "owner_decision": "Approve final release notes for the submitted version.",
+        "acceptance_gate": "Release notes are owner-approved, match the submitted version, and avoid unsupported performance or quality claims.",
+    },
+}
+
 SUBMISSION_TARGET = "mac_app_store_pkg"
 
 NON_DESTRUCTIVE_NEXT_STEPS = (
@@ -219,6 +278,35 @@ def _check_artifacts(app_path: Path, pkg_path: Path, output_dir: Path) -> dict[s
     }
 
 
+def _submission_content_items(root: Path) -> dict[str, dict[str, Any]]:
+    doc_path = root / "docs" / "APP_STORE_SUBMISSION_READINESS.md"
+    doc_status = _path_status(doc_path)
+    items: dict[str, dict[str, Any]] = {}
+    for name in NON_CODE_SUBMISSION_ITEMS:
+        draft = dict(SUBMISSION_CONTENT_DRAFTS.get(name) or {})
+        items[name] = {
+            "status": "owner_input_required",
+            "source_doc": str(doc_path),
+            "source_doc_exists": bool(doc_status["is_file"]),
+            "draft_available": bool(str(draft.get("draft") or "").strip()),
+            "draft": draft.get("draft", ""),
+            "owner_decision_required": draft.get("owner_decision", "Owner confirmation required."),
+            "acceptance_gate": draft.get("acceptance_gate", "Owner-approved value is required before submission."),
+        }
+    return items
+
+
+def _submission_content_summary(items: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    pending = [name for name, item in items.items() if item.get("status") != "ready"]
+    return {
+        "status": "blocked" if pending else "ready",
+        "item_count": len(items),
+        "pending_owner_input_count": len(pending),
+        "draft_available_count": sum(1 for item in items.values() if item.get("draft_available")),
+        "pending_items": pending,
+    }
+
+
 def _distribution_tracks(*, app_store_submission_ready: bool, pkg_path: Path) -> dict[str, Any]:
     return {
         "mac_app_store_pkg": {
@@ -285,7 +373,8 @@ def build_readiness_report(
     if not environment["app_store_connect_auth_configured"]:
         blockers.append("app_store_connect_auth_not_configured")
 
-    non_code = {name: {"status": "owner_input_required"} for name in NON_CODE_SUBMISSION_ITEMS}
+    non_code = _submission_content_items(root)
+    submission_content = _submission_content_summary(non_code)
     blockers.extend(f"non_code_submission_item_pending:{name}" for name in NON_CODE_SUBMISSION_ITEMS)
 
     local_packaging_ready = not (
@@ -311,6 +400,7 @@ def build_readiness_report(
         "info_plist_template": info,
         "environment": environment,
         "artifacts": artifacts,
+        "submission_content_audit": submission_content,
         "non_code_submission_items": non_code,
         "non_destructive_next_steps": list(NON_DESTRUCTIVE_NEXT_STEPS),
         "owner_approval_required_actions": list(OWNER_APPROVAL_REQUIRED_ACTIONS),
@@ -342,6 +432,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     entitlements = payload.get("entitlements") or {}
     tracks = payload.get("distribution_tracks") or {}
     non_code = payload.get("non_code_submission_items") or {}
+    submission_content = payload.get("submission_content_audit") or {}
     lines = [
         "# Mac App Store Readiness Audit",
         "",
@@ -375,7 +466,27 @@ def _markdown_report(payload: dict[str, Any]) -> str:
             "",
         ]
     )
-    lines.extend(f"- `{key}`: `{value.get('status')}`" for key, value in sorted(non_code.items()))
+    lines.extend(
+        [
+            f"- Submission content status: `{submission_content.get('status')}`",
+            f"- Pending owner-input items: `{submission_content.get('pending_owner_input_count')}` / `{submission_content.get('item_count')}`",
+            f"- Drafted item count: `{submission_content.get('draft_available_count')}`",
+            "",
+        ]
+    )
+    for key, value in sorted(non_code.items()):
+        lines.extend(
+            [
+                f"### {key}",
+                "",
+                f"- Status: `{value.get('status')}`",
+                f"- Draft available: `{bool(value.get('draft_available'))}`",
+                f"- Draft: {value.get('draft')}",
+                f"- Owner decision required: {value.get('owner_decision_required')}",
+                f"- Acceptance gate: {value.get('acceptance_gate')}",
+                "",
+            ]
+        )
     lines.extend(
         [
         "",

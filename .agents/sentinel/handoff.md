@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-090900-app-store-submission-contents-audit-review.md`
 - `.agents/sentinel/handoffs/20260628-085900-stt-cache-backfill-readiness-plan-review.md`
 - `.agents/sentinel/handoffs/20260628-085829-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-085200-trace-log-bundle-retention.md`

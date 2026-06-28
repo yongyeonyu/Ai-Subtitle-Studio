@@ -48,6 +48,14 @@ This document tracks the non-code and release-proof material needed before AI Su
 - Age rating answers: owner input required.
 - Release notes: owner input required.
 
+## Submission Contents Audit
+
+- Latest audit: `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.md`
+- Submission content status: blocked.
+- Pending owner-input items: `8/8`.
+- Drafted item count: `8`.
+- The audit itemizes each non-code submission field with `status`, `draft`, `owner_decision_required`, and `acceptance_gate` so metadata work stays separate from packaging/signing/upload proof.
+
 ## Non-Code Submission Metadata Draft
 
 - Privacy policy URL: pending owner URL.

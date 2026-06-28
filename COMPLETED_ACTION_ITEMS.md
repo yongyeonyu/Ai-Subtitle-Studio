@@ -63,6 +63,7 @@ Source item: `ACTION_ITEMS.md` item `Mac App Store Submission Readiness`.
 
 1. `tools/audit_app_store_readiness.py`, `tests/test_app_store_readiness_audit.py`, and `docs/APP_STORE_SUBMISSION_READINESS.md` were added to keep App Store submission readiness evidence separate from source-app pytest/QA.
 2. The submission target was locked to Mac App Store `.pkg`, and Developer ID beta `.dmg` was documented as a separate opt-in track that cannot count as App Store submission proof.
+3. The readiness audit now itemizes non-code submission contents with per-item `status`, `draft`, `owner_decision_required`, and `acceptance_gate` fields for privacy policy URL, App Privacy answers, export compliance, screenshots, support URL, app review notes, age rating, and release notes. Evidence: `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.md`; current result remains `app_store_submission_ready=false`, blocker count `14`, submission content status `blocked`, and pending owner-input items `8/8`.
 
 ## Trace Log Bundle Diagnostics
 

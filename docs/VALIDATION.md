@@ -208,7 +208,7 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_app_store_readiness.py -
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py
 ```
 
-Do not claim App Store submission readiness unless the audit and separate artifacts prove a signed sandboxed `.app`, strict `codesign` validation, signed App Store `.pkg`, package signature check, sandbox smoke, App Store Connect validation output, and owner-approved App Store Connect metadata.
+Do not claim App Store submission readiness unless the audit and separate artifacts prove a signed sandboxed `.app`, strict `codesign` validation, signed App Store `.pkg`, package signature check, sandbox smoke, App Store Connect validation output, and owner-approved App Store Connect metadata. The non-code metadata gate must itemize privacy policy URL, App Privacy answers, export compliance, screenshots, support URL, app review notes, age rating, and release notes with `status`, `draft`, `owner_decision_required`, and `acceptance_gate` fields.
 
 ## PyQt / offscreen UI validation
 

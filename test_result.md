@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Mac App Store Submission Contents Audit - 2026-06-28 KST
+
+- 실행 모드: non-destructive App Store submission contents readiness audit; no packaging, signing, notarization, upload, tag, release, or DMG command was run.
+- 결과: pass for submission content itemization; App Store submission remains blocked.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.md`
+  - JSON: `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.json`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-090900-app-store-submission-contents-audit-review.md`
+- 수정 요약:
+  - `tools/audit_app_store_readiness.py` now emits `submission_content_audit` plus per-item `status`, `draft`, `owner_decision_required`, and `acceptance_gate` fields for privacy policy URL, App Privacy answers, export compliance, screenshots, support URL, app review notes, age rating, and release notes.
+  - `docs/APP_STORE_SUBMISSION_READINESS.md` now points to the latest submission contents audit and records pending owner-input status `8/8`.
+  - No runtime behavior, UI/UX, subtitle generation, STT/STT2, word precision, save/load, render/export, packaging, signing, upload, notarization, App Store Connect state, or DMG behavior changed.
+- 실제 감사 결과:
+  - `local_packaging_ready=true`.
+  - `app_store_submission_ready=false`, `status=blocked`, blocker count `14`.
+  - `submission_content_audit.status=blocked`.
+  - pending owner-input items `8/8`; drafted item count `8`.
+  - Mac App Store `.pkg` remains the primary submission target; Developer ID beta `.dmg` remains `opt_in_hold` and not submission evidence.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tests/test_app_store_readiness_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py` -> `5 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_submission_contents_audit_20260628` -> pass.
+- 다음 gate:
+  - Owner must provide/approve privacy policy URL, App Privacy answers, export compliance answers, screenshots, support URL, app review notes, age rating answers, and release notes before the non-code submission blocker can clear.
+  - Packaging/signing/upload/notarization/DMG steps still require explicit owner approval.
+
 ## STT Cache Backfill Command Plan Gate - 2026-06-28 KST
 
 - 실행 모드: NAS-off analysis-only readiness audit hardening for STT collect-cache real-media backfill.
