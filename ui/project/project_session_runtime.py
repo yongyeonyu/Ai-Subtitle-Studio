@@ -145,6 +145,62 @@ def set_runtime_multiclip_state(
     return runtime_boundaries
 
 
+def sync_runtime_nle_state_from_editor_rows(
+    owner: Any,
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+    *,
+    project_path: str = "",
+    primary_fps: float = 30.0,
+    sync_source: str = "editor_runtime",
+) -> Any | None:
+    if owner is None:
+        return None
+    editor_rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    try:
+        from core.project.nle_project_state import (
+            NLE_PROJECT_STATE_RUNTIME_KEY,
+            NLEProjectState,
+            assert_nle_editor_rows_consistent,
+            sync_project_nle_state_from_editor_rows,
+        )
+        from core.project.project_context import build_editor_state
+
+        fps = float(primary_fps or 30.0)
+        runtime_project: dict[str, Any] = {
+            "project_name": "editor_runtime_nle_state",
+            "video": {"primary_fps": fps},
+            "timeline": {"timebase": {"primary_fps": fps}, "tracks": [{"clips": []}]},
+            "editor_state": build_editor_state(
+                mode="single",
+                media_files=[],
+                segments=editor_rows,
+                primary_fps=fps,
+                preserve_segment_identity=True,
+            ),
+        }
+        current_state = getattr(owner, NLE_PROJECT_STATE_RUNTIME_KEY, None)
+        if isinstance(current_state, NLEProjectState):
+            runtime_project[NLE_PROJECT_STATE_RUNTIME_KEY] = current_state
+        state = sync_project_nle_state_from_editor_rows(
+            runtime_project,
+            editor_rows,
+            project_path=str(project_path or ""),
+            sync_source=str(sync_source or "editor_runtime"),
+        )
+        assert_nle_editor_rows_consistent(editor_rows, state.editor_rows(), primary_fps=fps)
+        state.metadata = {
+            **dict(state.metadata or {}),
+            "runtime_owner_surface": "editor_session",
+            "runtime_storage_policy": "object_attribute_only",
+        }
+        setattr(owner, NLE_PROJECT_STATE_RUNTIME_KEY, state)
+        setattr(owner, "_last_nle_runtime_sync_source", str(sync_source or "editor_runtime"))
+        setattr(owner, "_last_nle_runtime_sync_count", len(editor_rows))
+        return state
+    except Exception:
+        return None
+
+
 def sorted_project_media_paths(project: dict[str, Any] | None) -> list[str]:
     media_files = project_media_files(project or {})
     if media_files:

@@ -33,7 +33,51 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Selection View-State Isolation
+## Current Handoff - 2026-06-28 NLE Undo/Redo Runtime-State Restore
+
+### Scope
+
+- Continued the owner goal to move AI Subtitle Studio toward a video-editor/NLE structure by syncing undo/redo restored editor rows into session-only runtime `NLEProjectState`.
+- Added `ui.project.project_session_runtime.sync_runtime_nle_state_from_editor_rows(...)` and called it from `ui.editor.undo_manager.UndoManager._restore(...)` after cached segment restore.
+- Added `tools/audit_nle_undo_redo_runtime_state.py`, audit tests, and focused PyQt assertions that split undo/redo restore NLE rows match visible restored captions while live preview rows stay out of the runtime NLE state.
+- No UI layout/labels/colors/menus/popups, subtitle generation policy, STT/STT2/default-cache policy, persisted `.aissproj` NLE fields, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_undo_redo_runtime_state_20260628/nle_undo_redo_runtime_state.md`
+- `ready=true`; restore sync source `undo_redo_restore`; operation journal count `0`; storage clean of `_nle_project_state`, `nle`, and `nle_snapshot`.
+- NAS HeyDealer preflight: `output/manual_verification/latest/nle_undo_redo_runtime_state_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`, media/SRT exist `true/true`, clipped reference rows `89`.
+- NAS HeyDealer current-head regression: `output/manual_verification/latest/nle_undo_redo_runtime_state_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_184504/benchmark_results.json`: accepted `true`, elapsed `45.497s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`, STT1/STT2/word selected `21/37/7`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_undo_redo_runtime_state_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-093842-next-nle-taption-runtime-contract-scout.md`
+- Dex classification: deferred the scout's roughcut sidecar compatibility proposal as a possible future candidate, and implemented the narrower undo/redo runtime-state restore sync found in current owner files.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/project/project_session_runtime.py ui/editor/undo_manager.py tools/audit_nle_undo_redo_runtime_state.py tests/test_nle_undo_redo_runtime_state_audit.py tests/test_editor_split_undo.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_undo_redo_runtime_state_audit.py tests/test_editor_split_undo.py::EditorSplitUndoTests::test_text_split_undo_and_redo_follow_snapshot_history_with_text_focus tests/test_editor_split_undo.py::EditorSplitUndoTests::test_text_split_uses_legacy_fallback_when_live_preview_lane_exists` -> `4 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py -k "runtime_nle or save_project or undo or storage or save_export or final_overlay"` -> `10 passed, 19 deselected`.
+- `./venv/bin/python tools/audit_nle_undo_redo_runtime_state.py --output-dir output/manual_verification/latest/nle_undo_redo_runtime_state_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_undo_redo_runtime_state_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_184504/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_184504/benchmark_results.json --output-dir output/manual_verification/latest/nle_undo_redo_runtime_state_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_175938/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_184504/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_undo_redo_runtime_state_nas_20260628` -> timeout detected `false`.
+
+### Known Notes
+
+- Running the entire `tests/test_editor_split_undo.py` file still exposes the pre-existing `test_smart_split_undo_and_redo_follow_snapshot_history_with_text_focus` route issue where `_route_undo()` can follow the focus-widget undo path instead of the snapshot route. This slice did not change that route; it focused on restore-time NLE state sync after `UndoManager._restore(...)`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`. The deferred Jammini roughcut sidecar compatibility proposal is a reasonable future scout target if it is kept test/audit-only and avoids persisted NLE fields.
+- For generation-affecting or performance/default-cache work, use the available NAS HeyDealer first-180s MP4/SRT preflight plus strict acceptance and timeout audit again.
+- Treat persisted NLE disk fields, UI flow changes, project-storage relink schemas, per-pixel writes, QML/GPU default surfaces, detector-threshold changes, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes as blocked until explicit owner approval and compatibility proof exist.
+
+## Previous Handoff - 2026-06-28 NLE Selection View-State Isolation
 
 ### Scope
 

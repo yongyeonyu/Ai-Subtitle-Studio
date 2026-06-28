@@ -370,6 +370,18 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_selectio
 
 Acceptance requires audit `ready=true`, selection view-state-only contract `true`, model validation/project save/NLE writes allowed `false/false/false`, primary row rewrite allowed `false`, forbidden method calls/assignments `0`, and focused tests proving canvas/global subtitle rows are unchanged after selection/highlight interactions. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows; if NAS is available and a current-head regression is run, it must be accepted by `tools/evaluate_reference_benchmark_acceptance.py` and report final invalid/non-monotonic/overlap `0/0/0` plus global max-active `1`.
 
+## NLE undo/redo runtime-state restore validation
+
+Undo/redo snapshot restore changes must prove restored editor rows and session-only runtime NLE rows stay aligned. They must not append operation journals, persist `_nle_project_state`, mix live STT preview rows into restored runtime NLE state, change UI layout/labels/menus, or alter runtime undo/redo UI behavior.
+
+```bash
+./venv/bin/python -m py_compile ui/project/project_session_runtime.py ui/editor/undo_manager.py tools/audit_nle_undo_redo_runtime_state.py tests/test_nle_undo_redo_runtime_state_audit.py tests/test_editor_split_undo.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_undo_redo_runtime_state_audit.py tests/test_editor_split_undo.py::EditorSplitUndoTests::test_text_split_undo_and_redo_follow_snapshot_history_with_text_focus tests/test_editor_split_undo.py::EditorSplitUndoTests::test_text_split_uses_legacy_fallback_when_live_preview_lane_exists
+./venv/bin/python tools/audit_nle_undo_redo_runtime_state.py --output-dir output/manual_verification/latest/nle_undo_redo_runtime_state_YYYYMMDD
+```
+
+Acceptance requires audit `ready=true`, undo restore sync source `undo_redo_restore`, before/after runtime NLE signatures matching restored editor rows, operation journal count `0`, storage clean of `_nle_project_state`/`nle`/`nle_snapshot`, and focused PyQt proof that live preview rows stay outside restored runtime NLE state. NAS HeyDealer generation validation is not required for the contract itself unless subtitle generation/final rows change; if NAS is available and a current-head regression is run, it must be accepted by `tools/evaluate_reference_benchmark_acceptance.py` and report final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`, and timeout audit `timeout_detected=false`.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.

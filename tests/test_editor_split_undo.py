@@ -2,6 +2,7 @@ import unittest
 
 from PyQt6.QtWidgets import QApplication
 
+from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
@@ -37,6 +38,15 @@ class EditorSplitUndoTests(unittest.TestCase):
             rows.append((block.text(), float(ud.start_sec), str(ud.spk_id)))
         return rows
 
+    def _runtime_nle_snapshot(self, editor: EditorWidget) -> list[tuple[str, int, int]]:
+        state = getattr(editor, NLE_PROJECT_STATE_RUNTIME_KEY, None)
+        self.assertIsInstance(state, NLEProjectState)
+        self.assertEqual(state.metadata["last_editor_sync_source"], "undo_redo_restore")
+        return [
+            (str(row.get("text", "")), int(row.get("start_frame", -1)), int(row.get("end_frame", -1)))
+            for row in state.editor_rows()
+        ]
+
     def test_text_split_undo_and_redo_follow_snapshot_history_with_text_focus(self):
         editor = self._make_editor()
         try:
@@ -59,10 +69,14 @@ class EditorSplitUndoTests(unittest.TestCase):
             editor._route_undo()
             self.app.processEvents()
             self.assertEqual(self._block_snapshot(editor), before)
+            self.assertEqual(self._runtime_nle_snapshot(editor), [("오늘은 여기", 30, 90)])
+            self.assertEqual(getattr(editor, "_last_nle_runtime_sync_count"), 1)
 
             editor._route_redo()
             self.app.processEvents()
             self.assertEqual(self._block_snapshot(editor), after_split)
+            self.assertEqual(self._runtime_nle_snapshot(editor), [("오늘은", 30, 60), ("여기", 60, 90)])
+            self.assertEqual(getattr(editor, "_last_nle_runtime_sync_count"), 2)
         finally:
             editor.close()
 
@@ -81,6 +95,8 @@ class EditorSplitUndoTests(unittest.TestCase):
             editor._route_undo()
             self.app.processEvents()
             self.assertEqual(self._block_snapshot(editor), [("오늘은 여기", 1.0, "00")])
+            self.assertEqual(self._runtime_nle_snapshot(editor), [("오늘은 여기", 30, 90)])
+            self.assertFalse(any("preview" in text for text, _start, _end in self._runtime_nle_snapshot(editor)))
         finally:
             editor.close()
 

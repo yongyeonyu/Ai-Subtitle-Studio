@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 from ui.editor.subtitle_text_edit import SubtitleBlockData
-from ui.project.project_session_runtime import set_runtime_multiclip_state
+from ui.project.project_session_runtime import (
+    set_runtime_multiclip_state,
+    sync_runtime_nle_state_from_editor_rows,
+)
 
 
 @dataclass
@@ -215,6 +218,7 @@ class UndoManager:
             editor._rebuild_subtitle_memory_cache(cached_segments)
         else:
             editor._cached_segs = cached_segments
+        self._sync_runtime_nle_state_after_restore(cached_segments)
         if hasattr(editor, "timeline") and hasattr(editor.timeline, "update_segments"):
             confirmed = [dict(seg) for seg in list(state.cached_segments or []) if not seg.get("is_gap")]
             preview = [dict(seg) for seg in list(editor._live_stt_preview_segments or [])]
@@ -240,6 +244,36 @@ class UndoManager:
         if hasattr(editor, '_schedule_timeline'):
             editor._schedule_timeline()
         self._is_restoring = False
+
+    def _sync_runtime_nle_state_after_restore(self, rows: list[dict]) -> None:
+        editor = self._editor
+        try:
+            owner = editor.window() if hasattr(editor, "window") else None
+        except Exception:
+            owner = None
+        project_path = str(
+            getattr(owner, "_current_project_path", "")
+            or getattr(editor, "_linked_project_path_for_srt", "")
+            or ""
+        )
+        primary_fps = float(
+            getattr(editor, "video_fps", 0.0)
+            or getattr(getattr(editor, "timeline", None), "fps", 0.0)
+            or 30.0
+        )
+        targets = []
+        if owner is not None:
+            targets.append(owner)
+        if editor not in targets:
+            targets.append(editor)
+        for target in targets:
+            sync_runtime_nle_state_from_editor_rows(
+                target,
+                rows,
+                project_path=project_path,
+                primary_fps=primary_fps,
+                sync_source="undo_redo_restore",
+            )
 
     @staticmethod
     def _is_same(a: SnapshotState, b: SnapshotState) -> bool:

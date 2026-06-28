@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Undo/Redo Runtime-State Restore - 2026-06-28 KST
+
+- 실행 모드: source-app NLE undo/redo restored-row runtime-state sync contract.
+- 결과: pass for session-only `NLEProjectState` sync after undo/redo restore, live STT preview isolation from restored runtime NLE state, clean persisted storage, strict NAS HeyDealer first-180s acceptance, and no STT worker timeout. No UI/UX layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, runtime undo/redo UI, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_undo_redo_runtime_state_20260628/nle_undo_redo_runtime_state.md`
+  - NAS preflight: `output/manual_verification/latest/nle_undo_redo_runtime_state_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_184504/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_undo_redo_runtime_state_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_undo_redo_runtime_state_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-093842-next-nle-taption-runtime-contract-scout.md` (deferred for roughcut sidecar compatibility)
+- 실제 결과:
+  - Audit `ready=true`; sync source `undo_redo_restore`; operation journal count `0`; storage runtime NLE key `false`.
+  - Runtime before/after signatures: `[("before", 30, 90)]` -> `[("after left", 30, 60), ("after right", 60, 90)]`.
+  - NAS acceptance `accepted=true`, elapsed `45.497s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - STT1/STT2/word selected `21/37/7`; timeout audit `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/project/project_session_runtime.py ui/editor/undo_manager.py tools/audit_nle_undo_redo_runtime_state.py tests/test_nle_undo_redo_runtime_state_audit.py tests/test_editor_split_undo.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_undo_redo_runtime_state_audit.py tests/test_editor_split_undo.py::EditorSplitUndoTests::test_text_split_undo_and_redo_follow_snapshot_history_with_text_focus tests/test_editor_split_undo.py::EditorSplitUndoTests::test_text_split_uses_legacy_fallback_when_live_preview_lane_exists` -> `4 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_runtime_cutover.py -k "runtime_nle or save_project or undo or storage or save_export or final_overlay"` -> `10 passed, 19 deselected`.
+
 ## NLE Relink Preview Cache Contract - 2026-06-28 KST
 
 - 실행 모드: source-app NLE preview/skimming frame-cache relink/proxy non-destructive contract.
