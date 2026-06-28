@@ -157,6 +157,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_wind
 
 This audit is read-only and exits `1` while any target is not detected. Use it to decide whether the next slice is detector tuning or frame-semantics correction; do not use it to relax thresholds by itself.
 
+When the window audit shows a detected neighbor instead of the requested target frame, freeze the frame-semantics classification before changing detector thresholds:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_frame_semantics.py \
+  output/manual_verification/latest/nle_cut_boundary_visual_window_audit_YYYYMMDD/cut_boundary_visual_window_audit.json \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_YYYYMMDD
+```
+
+This audit reads the previous window JSON only. It exits `1` while a target detection gap or neighbor-frame semantic conflict remains, and that failure must be treated as review evidence. Do not use it to approve threshold relaxation, subtitle/STT policy changes, UI/QML work, persisted NLE fields, or App Store work.
+
 ## Preview frame cache validation
 
 Preview/skimming cache changes should prove temp-workspace cache lookup, nonblocking preview seek behavior, and unchanged timeline scrub routing.

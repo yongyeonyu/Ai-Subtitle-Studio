@@ -33,6 +33,55 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Cut-Boundary Frame Semantics Audit
+
+### Scope
+
+- Continued the source-app NLE cut-boundary accuracy workstream by adding a read-only frame-semantics classifier for the existing visual-window audit JSON.
+- Added `tools/audit_cut_boundary_frame_semantics.py`.
+- Added `tests/test_cut_boundary_frame_semantics_audit.py`.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Frame semantics audit: `output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`
+- `frame_semantics_review_required=true`.
+- Semantic mismatch count `1`; target detection gap count `2`; detected-neighbor conflict count `1`; detector-tuning candidate count `1`.
+- Frame `2766`: classification `target_detection_gap`; expected transition `2765->2766`; strongest local transition `2768->2769`; strongest detected `false`.
+- Frame `2677`: classification `detected_neighbor_before_target`; expected transition `2676->2677`; strongest detected transition `2675->2676`; offset `-1`; score `71.932`.
+- The audit exits `1` while review is required. Treat that exit as expected diagnostic evidence, not a runtime regression.
+
+### NAS Regression
+
+- NAS preflight: `output/manual_verification/latest/heydealer_nas_preflight_current_20260628_latest/reference_fixture_availability.md`
+- NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_133307/benchmark_results.json`
+- NAS acceptance: `output/manual_verification/latest/nle_frame_semantics_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Accepted `true`; elapsed `179.579s`; raw/final/reference `58/56/89`; quality/text/timing `93.766/94.267/0.5808s`.
+- Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+- STT worker compare: `output/manual_verification/latest/stt_worker_timeout_compare_frame_semantics_nas_20260628/stt_worker_timeout_audit.md`
+- Timeout detected `false`. The run is slow STT1 collect evidence (`152.487713s`), not timeout/fallback proof or speed approval.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-132944-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-133000-cut-boundary-frame-semantics-audit.md`
+- Dex classification: accept the scout direction to freeze a frame-semantics artifact and defer threshold changes, STT/model changes, UI/QML, App Store, and persisted NLE fields. Use Dex-generated JSON values as source truth where the scout summary differs.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_cut_boundary_frame_semantics.py tests/test_cut_boundary_frame_semantics_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_frame_semantics_audit.py tests/test_cut_boundary_visual_window_audit.py` -> `6 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_frame_semantics.py ... --output-dir output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_20260628` -> expected fail, exit `1`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_133307/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_frame_semantics_nas_heydealer_20260628/acceptance` -> `accepted=true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_133307/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_frame_semantics_nas_20260628` -> pass, `timeout_detected=false`.
+
+### Next Recommended Action
+
+- Verify fixture label/boundary-frame convention for the `2676 -> 2677` target before tuning detector thresholds.
+- Continue detector-evidence work for frame `2766`, which remains a target detection gap without a detected neighbor in the local window.
+- Do not relax thresholds, change STT policy, promote cache defaults, alter UI, persist NLE disk fields, or perform App Store work from this slice.
+
 ## Current Handoff - 2026-06-28 NLE Cut-Boundary Visual Window Audit
 
 ### Scope

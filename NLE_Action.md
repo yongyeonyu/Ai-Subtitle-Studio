@@ -31,6 +31,7 @@ Current NLE status:
 - Latest confirmed cut-boundary decision trace audit: `output/manual_verification/latest/nle_confirmed_cut_trace_audit_20260628/trace_log_bundle_audit.md`; confirmed visual-cut split/snap/drop decisions now emit async `confirmed_cut_split_snap` events with `event_type=cut_boundary_decision`, `decision`, `provisional_frame`, `drop_reason`, exact `fps_num/fps_den`, and no detector-threshold, UI, or persisted-NLE behavior change. NAS HeyDealer first-180s regression after this slice is accepted at `output/manual_verification/latest/nle_confirmed_cut_trace_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`.
 - Latest fixed cut-boundary visual evidence gate: `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628/source_fps_scout.md`; decoder-based frame extraction now succeeds on the local 60000/1001fps fixture, target frames `2766` and `2677` are preserved on the exact frame grid, and the verifier separates `preserved_only` from `detected`. Current evidence reports `strict_visual_detection_passed=false`, `visual_candidate_missing_count=2`, and the strict `--require-visual-detection` artifact at `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628_strict/source_fps_scout.md` fails as expected, so visual detector tuning remains open.
 - Latest cut-boundary visual window audit: `output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`; the read-only ±3 frame ranking keeps runtime behavior unchanged and shows target frames `2766` and `2677` are not the strongest visual transitions in their local windows. Frame `2766` ranks `4` with score `2.059` and best nearby frame `2769` score `2.715`; frame `2677` ranks `2` with score `1.997`, while frame `2676` scores `71.932` and is detected. Treat this as frame-semantics/detector-tuning evidence, not a threshold-change approval.
+- Latest cut-boundary frame-semantics audit: `output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`; the read-only classifier reports `frame_semantics_review_required=true`, semantic mismatch count `1`, target detection gaps `2`, detected-neighbor conflict count `1`, detector-tuning candidate count `1`, and `runtime_change_allowed=false`. Frame `2766` remains a target detection gap, while frame `2677` is classified as `detected_neighbor_before_target` because the strongest detected transition is `2675 -> 2676`; verify fixture label/boundary-frame convention before threshold tuning. NAS HeyDealer first-180s regression after this slice accepted at `output/manual_verification/latest/nle_frame_semantics_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`, but elapsed `179.579s` is a slow STT1 collect run, not a speed approval.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
@@ -434,6 +435,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_visual_wind
 ```
 
 This command returns exit `1` while any target is not detected. That failure is expected evidence, not a runtime regression.
+
+Then freeze target-vs-neighbor frame semantics from that window artifact:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_frame_semantics.py \
+  output/manual_verification/latest/nle_cut_boundary_visual_window_audit_YYYYMMDD/cut_boundary_visual_window_audit.json \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_YYYYMMDD
+```
+
+This command returns exit `1` while target detection gaps or neighbor-frame semantic conflicts remain. Treat that as a fixture/convention review gate before detector threshold tuning.
 
 Trace:
 

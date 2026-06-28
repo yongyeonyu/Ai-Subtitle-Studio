@@ -1,5 +1,39 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Cut-Boundary Frame Semantics Audit - 2026-06-28 KST
+
+- 실행 모드: existing visual-window JSON을 입력으로 하는 source-app fixed cut-boundary frame semantics read-only classification.
+- 결과: pass for diagnostic tooling; audit command intentionally exits `1` because review is required before detector threshold tuning.
+- 저장 위치:
+  - Frame semantics audit: `output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`
+  - Frame semantics JSON: `output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_frame_semantics_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - STT worker timeout compare: `output/manual_verification/latest/stt_worker_timeout_compare_frame_semantics_nas_20260628/stt_worker_timeout_audit.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_133307/benchmark_results.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-132944-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-133000-cut-boundary-frame-semantics-audit.md`
+- 수정 요약:
+  - Added `tools/audit_cut_boundary_frame_semantics.py`.
+  - Added `tests/test_cut_boundary_frame_semantics_audit.py`.
+  - Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `docs/HANDOFF.md`.
+  - No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI/UX, QML/GPU defaults, App Store packaging/signing/upload, DMG behavior, or persisted NLE disk fields changed.
+- 실제 frame-semantics 결과:
+  - `frame_semantics_review_required=true`, semantic mismatch count `1`, target detection gap count `2`, detected-neighbor conflict count `1`, detector-tuning candidate count `1`.
+  - Frame `2766`: classification `target_detection_gap`; expected transition `2765->2766`, strongest local transition `2768->2769`, strongest detected `false`, offset `+3`.
+  - Frame `2677`: classification `detected_neighbor_before_target`; expected transition `2676->2677`, strongest detected transition `2675->2676`, offset `-1`, score `71.932`.
+- NAS HeyDealer regression:
+  - Acceptance `true`; elapsed `179.579s`; raw/final/reference `58/56/89`.
+  - Quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - STT stages: STT1 `152.487713s`, STT2 `14.151725s`, word precision `12.359951s`, subtitle postprocess `0.498793s`.
+  - Timeout audit `timeout_detected=false`; this is slow STT1 collect evidence, not timeout/fallback proof or a speed approval.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_cut_boundary_frame_semantics.py tests/test_cut_boundary_frame_semantics_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_frame_semantics_audit.py tests/test_cut_boundary_visual_window_audit.py` -> `6 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_frame_semantics.py ... --output-dir output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_20260628` -> expected fail, exit `1`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_133307/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_frame_semantics_nas_heydealer_20260628/acceptance` -> `accepted=true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_133307/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_frame_semantics_nas_20260628` -> pass, `timeout_detected=false`.
+
 ## NLE Cut-Boundary Visual Window Audit - 2026-06-28 KST
 
 - 실행 모드: source-app fixed cut-boundary frame `2766`/`2677` read-only visual transition window ranking.
