@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-133100-cut-boundary-fixture-contact-sheet.md`
+- `.agents/sentinel/handoffs/20260628-134307-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-133000-cut-boundary-frame-semantics-audit.md`
 - `.agents/sentinel/handoffs/20260628-132944-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-132100-cut-boundary-visual-window-audit.md`

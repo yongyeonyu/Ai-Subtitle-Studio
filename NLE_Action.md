@@ -32,6 +32,7 @@ Current NLE status:
 - Latest fixed cut-boundary visual evidence gate: `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628/source_fps_scout.md`; decoder-based frame extraction now succeeds on the local 60000/1001fps fixture, target frames `2766` and `2677` are preserved on the exact frame grid, and the verifier separates `preserved_only` from `detected`. Current evidence reports `strict_visual_detection_passed=false`, `visual_candidate_missing_count=2`, and the strict `--require-visual-detection` artifact at `output/manual_verification/latest/nle_fixed_cut_boundary_visual_evidence_gate_20260628_strict/source_fps_scout.md` fails as expected, so visual detector tuning remains open.
 - Latest cut-boundary visual window audit: `output/manual_verification/latest/nle_cut_boundary_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`; the read-only ±3 frame ranking keeps runtime behavior unchanged and shows target frames `2766` and `2677` are not the strongest visual transitions in their local windows. Frame `2766` ranks `4` with score `2.059` and best nearby frame `2769` score `2.715`; frame `2677` ranks `2` with score `1.997`, while frame `2676` scores `71.932` and is detected. Treat this as frame-semantics/detector-tuning evidence, not a threshold-change approval.
 - Latest cut-boundary frame-semantics audit: `output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`; the read-only classifier reports `frame_semantics_review_required=true`, semantic mismatch count `1`, target detection gaps `2`, detected-neighbor conflict count `1`, detector-tuning candidate count `1`, and `runtime_change_allowed=false`. Frame `2766` remains a target detection gap, while frame `2677` is classified as `detected_neighbor_before_target` because the strongest detected transition is `2675 -> 2676`; verify fixture label/boundary-frame convention before threshold tuning. NAS HeyDealer first-180s regression after this slice accepted at `output/manual_verification/latest/nle_frame_semantics_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`, but elapsed `179.579s` is a slow STT1 collect run, not a speed approval.
+- Latest cut-boundary fixture convention/contact-sheet audit: `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.md`; the read-only verifier materialized actual fixed-fixture frames into `target_2677_frame_contact_sheet.png` and `target_2766_frame_contact_sheet.png`. Frame `2677` remains a label/boundary-frame convention review gate because expected pair `2676 -> 2677` has mean delta `2.381499`, while strongest pair `2675 -> 2676` has mean delta `72.849699` and ratio `30.589851`. Frame `2766` remains detector-evidence work, not a convention correction. Current NAS fixture preflight after the slice is ready at `output/manual_verification/latest/nle_fixture_convention_nas_preflight_20260628/reference_fixture_availability.md`; runtime generation behavior was not changed.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
@@ -445,6 +446,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_frame_seman
 ```
 
 This command returns exit `1` while target detection gaps or neighbor-frame semantic conflicts remain. Treat that as a fixture/convention review gate before detector threshold tuning.
+
+When frame-semantics review remains required, materialize actual fixture frames into PNG contact sheets before changing detector thresholds:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_convention.py \
+  output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_YYYYMMDD/cut_boundary_frame_semantics_audit.json \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_YYYYMMDD
+```
+
+This command also returns exit `1` while fixture label/boundary convention review remains required. Treat that as visual evidence that blocks threshold tuning until the target-frame convention is decided.
 
 Trace:
 

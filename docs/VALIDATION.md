@@ -167,6 +167,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_frame_seman
 
 This audit reads the previous window JSON only. It exits `1` while a target detection gap or neighbor-frame semantic conflict remains, and that failure must be treated as review evidence. Do not use it to approve threshold relaxation, subtitle/STT policy changes, UI/QML work, persisted NLE fields, or App Store work.
 
+If the frame-semantics audit still requires convention review, create actual fixture-frame contact sheets before tuning the detector:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_convention.py \
+  output/manual_verification/latest/nle_cut_boundary_frame_semantics_audit_YYYYMMDD/cut_boundary_frame_semantics_audit.json \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_YYYYMMDD
+```
+
+This command materializes PNG contact sheets for the target and strongest neighbor transitions, then exits `1` while fixture label/boundary-frame convention review remains required. The report is visual evidence only; it must not approve threshold relaxation, subtitle/STT policy changes, UI/QML work, persisted NLE fields, or App Store work.
+
 ## Preview frame cache validation
 
 Preview/skimming cache changes should prove temp-workspace cache lookup, nonblocking preview seek behavior, and unchanged timeline scrub routing.

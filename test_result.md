@@ -1,5 +1,36 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Cut-Boundary Fixture Convention Contact Sheet Audit - 2026-06-28 KST
+
+- 실행 모드: source-app fixed cut-boundary frame convention read-only visual evidence generation.
+- 결과: pass for diagnostic tooling and visual artifact generation; audit command intentionally exits `1` because fixture label/boundary convention review remains required before detector threshold tuning.
+- 저장 위치:
+  - Fixture convention audit: `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.md`
+  - Fixture convention JSON: `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.json`
+  - Frame `2677` contact sheet: `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/target_2677_frame_contact_sheet.png`
+  - Frame `2766` contact sheet: `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/target_2766_frame_contact_sheet.png`
+  - NAS preflight: `output/manual_verification/latest/nle_fixture_convention_nas_preflight_20260628/reference_fixture_availability.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-134307-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-133100-cut-boundary-fixture-contact-sheet.md`
+- 수정 요약:
+  - Added `tools/audit_cut_boundary_fixture_convention.py`.
+  - Added `tests/test_cut_boundary_fixture_convention_audit.py`.
+  - Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `docs/HANDOFF.md`.
+  - No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI/UX, QML/GPU defaults, App Store packaging/signing/upload, DMG behavior, or persisted NLE disk fields changed.
+- 실제 fixed-fixture 결과:
+  - `fixture_label_or_boundary_convention_review_required=true`, label/boundary review count `1`, detector evidence required count `1`, contact sheet count `2`, runtime change allowed `false`.
+  - Frame `2677`: classification `detected_neighbor_before_target`; expected pair `2676->2677`, mean delta `2.381499`; strongest pair `2675->2676`, mean delta `72.849699`; ratio `30.589851`.
+  - Frame `2766`: classification `target_detection_gap`; expected pair `2765->2766`, mean delta `2.506516`; strongest pair `2768->2769`, mean delta `3.251852`; ratio `1.297359`.
+  - Visual inspection of `target_2677_frame_contact_sheet.png` shows the hard visual change between frames `2675` and `2676`, while frames `2676`, `2677`, and `2678` stay within the same shot.
+- NAS fixture:
+  - Current NAS HeyDealer first-180s preflight `ready_for_reference_scored_benchmark=true`; media and SRT both exist; clipped reference rows `89`.
+  - No new subtitle-generation benchmark was run because this slice is read-only fixture evidence generation and does not change runtime behavior.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_cut_boundary_fixture_convention.py tests/test_cut_boundary_fixture_convention_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_convention_audit.py tests/test_cut_boundary_frame_semantics_audit.py` -> `6 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_convention.py ... --output-dir output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628` -> expected fail, exit `1`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_fixture_convention_nas_preflight_20260628` -> pass, ready `true`.
+
 ## NLE Cut-Boundary Frame Semantics Audit - 2026-06-28 KST
 
 - 실행 모드: existing visual-window JSON을 입력으로 하는 source-app fixed cut-boundary frame semantics read-only classification.

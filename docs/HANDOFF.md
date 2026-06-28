@@ -33,6 +33,53 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Cut-Boundary Fixture Convention Contact Sheet Audit
+
+### Scope
+
+- Continued the source-app NLE cut-boundary accuracy workstream by materializing actual fixed-fixture frames into contact-sheet PNG evidence.
+- Added `tools/audit_cut_boundary_fixture_convention.py`.
+- Added `tests/test_cut_boundary_fixture_convention_audit.py`.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Fixture convention audit: `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.md`
+- Contact sheets:
+  - `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/target_2677_frame_contact_sheet.png`
+  - `output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628/target_2766_frame_contact_sheet.png`
+- `fixture_label_or_boundary_convention_review_required=true`.
+- Label/boundary convention review count `1`; detector evidence required count `1`; contact sheet count `2`.
+- Frame `2677`: expected pair `2676->2677` mean delta `2.381499`; strongest pair `2675->2676` mean delta `72.849699`; ratio `30.589851`. Visual inspection shows the hard visual change occurs between frames `2675` and `2676`, not `2676` and `2677`.
+- Frame `2766`: expected pair `2765->2766` mean delta `2.506516`; strongest pair `2768->2769` mean delta `3.251852`; ratio `1.297359`. Treat this as detector-evidence work, not a fixture-convention correction.
+- The audit exits `1` while convention review remains required. Treat that exit as expected diagnostic evidence, not a runtime regression.
+
+### NAS
+
+- NAS preflight: `output/manual_verification/latest/nle_fixture_convention_nas_preflight_20260628/reference_fixture_availability.md`
+- Ready `true`; media and reference SRT exist; clipped reference rows `89`.
+- No new subtitle-generation benchmark was run because this slice is read-only fixture evidence generation and does not change runtime behavior. Latest runtime subtitle stability proof remains the previous accepted NAS benchmark referenced in `ACTION_ITEMS.md`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-134307-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-133100-cut-boundary-fixture-contact-sheet.md`
+- Dex classification: accept the contact-sheet direction, but Dex implemented fresh frame extraction/contact-sheet artifacts rather than only mapping cached thumbnail paths.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_cut_boundary_fixture_convention.py tests/test_cut_boundary_fixture_convention_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_convention_audit.py tests/test_cut_boundary_frame_semantics_audit.py` -> `6 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_convention.py ... --output-dir output/manual_verification/latest/nle_cut_boundary_fixture_convention_audit_20260628` -> expected fail, exit `1`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_fixture_convention_nas_preflight_20260628` -> pass, ready `true`.
+
+### Next Recommended Action
+
+- Decide or correct the `2676 -> 2677` fixture label/boundary-frame convention before detector threshold tuning.
+- Continue detector-evidence work for frame `2766`, which remains a target detection gap without a strong target/neighbor delta.
+- Do not relax thresholds, change STT policy, promote cache defaults, alter UI, persist NLE disk fields, or perform App Store work from this slice.
+
 ## Current Handoff - 2026-06-28 NLE Cut-Boundary Frame Semantics Audit
 
 ### Scope
