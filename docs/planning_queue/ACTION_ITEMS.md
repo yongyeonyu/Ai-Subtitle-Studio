@@ -34,7 +34,7 @@ completed proof logs back into this active queue.
 
 Goal: Make the current macOS source app releasable through the Mac App Store by closing packaging, signing, sandbox, App Store Connect validation, and owner-metadata gates without weakening subtitle quality or changing UI/UX.
 
-Status: active planning and blocker-closure group. Packaging/signing/upload/submission execution still requires explicit owner approval for each external action.
+Status: active blocker-closure group. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28; final App Store `.pkg`, validation, upload, and submission remain blocked until the required Apple Distribution/Installer identities and owner metadata values are available.
 
 Current baseline:
 
@@ -43,8 +43,9 @@ Current baseline:
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
 - Current readiness doc: `docs/APP_STORE_SUBMISSION_READINESS.md`.
-- Latest audit artifact: `output/manual_verification/latest/app_store_readiness_v040100_20260628/app_store_readiness_audit.md`.
-- Current audit state: `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `14`.
+- Latest audit artifact: `output/manual_verification/latest/app_store_owner_approval_readiness_after_packaging_fix_20260628_2250/app_store_readiness_audit.md`.
+- Latest packaging evidence: `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/`.
+- Current audit state: `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `13`; local Apple Development `.app` signing smoke passed, but App Store Distribution `.app`, signed `.pkg`, sandbox workflow smoke, App Store Connect validation, and owner metadata remain incomplete.
 - Developer ID beta `.dmg` remains a separate opt-in track and is not App Store submission proof.
 
 Detailed plan:
@@ -57,7 +58,7 @@ Detailed plan:
 
 2. Runtime sandbox compatibility
    - Run current source quick QA before packaging to freeze behavior baseline.
-   - Build a local app bundle only after owner approval.
+   - Build a local app bundle only after owner approval. The 2026-06-28 owner-approved local bundle/signing smoke completed with Apple Development identity only; rerun with Apple Distribution identity for submission proof.
    - Smoke sandboxed launch, user-selected media open, subtitle generation path, audio/STT access, network/model behavior, save/reopen, SRT export, rendered subtitle output, and cleanup/quit.
    - If sandbox breaks normal editor workflows, stop release packaging and create a separate sandbox-compatibility fix item.
 
@@ -70,7 +71,7 @@ Detailed plan:
 4. App Store Connect validation
    - Run Transporter/App Store Connect validation with `packaging/macos/upload_app_store_build.sh validate`.
    - Treat validation output as proof only when it names the exact package and exits cleanly.
-   - Do not upload the build until the owner explicitly approves the upload step.
+   - Upload approval has been granted by the owner for this App Store lane, but do not upload until the exact signed `.pkg`, validation output, and owner metadata package are ready.
 
 5. Submission assembly
    - Attach screenshots, release notes, privacy answers, export compliance, sandbox entitlement explanation, and review notes.
@@ -86,7 +87,7 @@ Acceptance gates:
 
 - Do not claim App Store readiness from source-app pytest or QA alone.
 - Required proof for readiness: signed `.app`, strict `codesign`, signed `.pkg`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation output, and completed owner metadata.
-- Do not submit, upload, notarize, tag, build DMG, or release externally without explicit owner approval.
+- Do not submit, notarize, tag, build DMG, or release externally beyond the owner-approved Mac App Store lane without explicit owner approval; upload still requires an exact signed `.pkg` and validation artifact.
 - Keep user-visible UI/UX and subtitle quality behavior unchanged unless the owner explicitly approves submission-driven changes.
 
 Rollback:

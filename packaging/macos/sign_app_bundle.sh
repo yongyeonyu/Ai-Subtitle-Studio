@@ -19,9 +19,11 @@ if [[ ! -f "$ENTITLEMENTS" ]]; then
   exit 66
 fi
 
-SIGN_ARGS=(--force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$IDENTITY")
+SIGN_ARGS=(--force --timestamp --options runtime --sign "$IDENTITY")
+APP_SIGN_ARGS=(--force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$IDENTITY")
 if [[ "$IDENTITY" == "-" ]]; then
   SIGN_ARGS=(--force --sign -)
+  APP_SIGN_ARGS=(--force --sign -)
 fi
 
 while IFS= read -r -d '' item; do
@@ -30,6 +32,33 @@ done < <(
   find "$APP_PATH/Contents" -type f \( -perm -111 -o -name "*.so" -o -name "*.dylib" \) -print0
 )
 
-codesign "${SIGN_ARGS[@]}" "$APP_PATH"
+NESTED_CODE_LIST="$(mktemp)"
+trap 'rm -f "$NESTED_CODE_LIST"' EXIT
+"$ROOT_DIR/venv/bin/python" - <<PY > "$NESTED_CODE_LIST"
+from pathlib import Path
+
+root = Path("$APP_PATH") / "Contents"
+def has_bundle_plist(path: Path) -> bool:
+    if path.suffix == ".app":
+        return (path / "Contents" / "Info.plist").is_file()
+    if path.suffix == ".framework":
+        return any(path.glob("**/Info.plist"))
+    return False
+
+items = [
+    path
+    for path in root.rglob("*")
+    if path.is_dir() and path.suffix in {".app", ".framework"} and has_bundle_plist(path)
+]
+for path in sorted(items, key=lambda item: len(item.parts), reverse=True):
+    print(path)
+PY
+
+while IFS= read -r item; do
+  [[ -n "$item" ]] || continue
+  codesign "${SIGN_ARGS[@]}" "$item"
+done < "$NESTED_CODE_LIST"
+
+codesign "${APP_SIGN_ARGS[@]}" "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 echo "Signed and verified: $APP_PATH"

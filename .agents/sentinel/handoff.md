@@ -1,5 +1,9 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-221446-app-store-packaging-gap-triage-jammini.md`
+- `.agents/sentinel/handoffs/20260628-221446-persisted-nle-architecture-scout-hangyeol.md`
+- `.agents/sentinel/handoffs/20260628-221446-app-store-nle-qe-gates-seorin.md`
+- `.agents/sentinel/handoffs/20260628-221446-nle-ui-workflow-scout-yujin.md`
 - `.agents/sentinel/handoffs/20260628-211046-docs-relocation-risk-scout.md`
 - `.agents/sentinel/handoffs/20260628-211017-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-120244-release-architecture-review-hangyeol.md`

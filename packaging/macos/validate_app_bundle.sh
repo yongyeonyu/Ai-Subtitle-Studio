@@ -37,6 +37,25 @@ if find "$APP_PATH" -path "*/.git/*" -print -quit | grep -q .; then
   echo "Git metadata leaked into bundle." >&2
   exit 65
 fi
+while IFS= read -r -d '' link_path; do
+  target="$(readlink "$link_path")"
+  if [[ "$target" == /* ]]; then
+    if ! resolved="$(realpath "$target" 2>/dev/null)"; then
+      echo "Broken symlink leaked into bundle: $link_path -> $target" >&2
+      exit 65
+    fi
+    case "$resolved" in
+      "$APP_PATH"/*) ;;
+      *)
+        echo "External symlink leaked into bundle: $link_path -> $target" >&2
+        exit 65
+        ;;
+    esac
+  elif [[ ! -e "$(dirname "$link_path")/$target" ]]; then
+    echo "Broken symlink leaked into bundle: $link_path -> $target" >&2
+    exit 65
+  fi
+done < <(find "$APP_PATH" -type l -print0)
 for forbidden in "__pycache__" ".codex_work" ".build" ".swiftpm" "output" "projects" "dataset/video_preview_cache" "dataset/lora_personalization"; do
   if find "$APP_PATH/Contents/Resources/app" -path "*/$forbidden" -print -quit | grep -q .; then
     echo "Runtime-only path leaked into bundle: $forbidden" >&2

@@ -3,10 +3,15 @@ from pathlib import Path
 from tools.audit_app_store_readiness import build_readiness_report
 
 
-def test_app_store_readiness_audit_blocks_without_submission_artifacts():
+def test_app_store_readiness_audit_blocks_without_submission_artifacts(tmp_path):
     root = Path(__file__).resolve().parents[1]
 
-    report = build_readiness_report(root=root)
+    report = build_readiness_report(
+        root=root,
+        app_path=tmp_path / "missing" / "AI Subtitle Studio.app",
+        pkg_path=tmp_path / "missing" / "AI Subtitle Studio.pkg",
+        output_dir=tmp_path / "audit",
+    )
 
     assert report["local_packaging_ready"] is True
     assert report["app_store_submission_ready"] is False

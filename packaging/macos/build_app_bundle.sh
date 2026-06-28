@@ -95,6 +95,8 @@ if [[ "${INCLUDE_LOCAL_VENV:-0}" == "1" ]]; then
     echo "INCLUDE_LOCAL_VENV=1 was set, but $ROOT_DIR/venv/bin/python is missing." >&2
     exit 66
   fi
+  command -v otool >/dev/null
+  command -v install_name_tool >/dev/null
   mkdir -p "$PYTHON_PAYLOAD_DIR"
   if command -v rsync >/dev/null; then
     rsync -a --delete "$ROOT_DIR/venv/" "$PYTHON_PAYLOAD_DIR/"
@@ -109,6 +111,9 @@ if dst.exists():
 shutil.copytree(src, dst)
 PY
   fi
+  "$ROOT_DIR/venv/bin/python" "$ROOT_DIR/packaging/macos/fix_bundled_python_runtime.py" \
+    --source-venv "$ROOT_DIR/venv" \
+    --bundle-python-dir "$PYTHON_PAYLOAD_DIR"
 fi
 
 sed "s/__APP_VERSION__/$VERSION/g" \
@@ -125,6 +130,11 @@ export WHISPERKIT_PERSISTENT_WORKER="$RESOURCES_DIR/WhisperKitPersistentWorker"
 export AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES="$RESOURCES_DIR"
 export PYTHONDONTWRITEBYTECODE=1
 export PATH="/opt/homebrew/bin:/opt/homebrew/opt/python@3.11/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+
+if [[ -d "$RESOURCES_DIR/python/Frameworks/Python.framework/Versions/3.11" ]]; then
+  export PYTHONHOME="$RESOURCES_DIR/python/Frameworks/Python.framework/Versions/3.11"
+  export PYTHONPATH="$RESOURCES_DIR/python/lib/python3.11/site-packages:$APP_PAYLOAD${PYTHONPATH:+:$PYTHONPATH}"
+fi
 
 PYTHON="$RESOURCES_DIR/python/bin/python"
 if [[ ! -x "$PYTHON" ]]; then

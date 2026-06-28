@@ -33,36 +33,63 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 G1 NAS Collect-Cache Backfill Refresh
+## Current Handoff - 2026-06-28 App Store Packaging Runtime Fix
 
 ### Scope
 
-- The owner reported NAS was connected at `192.168.0.5`; Dex verified SMB mounts and found `/Volumes/photo` mounted.
-- Refreshed the G1 HeyDealer first-180s real-media collect-cache backfill on the current source-app head.
-- No runtime code, UI/UX, STT/default-cache policy, App Store packaging/signing/upload, DMG, or persisted NLE disk-format change was made.
+- The owner approved App Store packaging/signing/upload/metadata work and persisted NLE/UI structure scope on 2026-06-28.
+- Dex completed the first App Store packaging blocker slice: local app bundle Python runtime self-containment, nested signing order, bundle symlink validation, focused tests, and local Apple Development signing smoke.
+- No App Store `.pkg`, upload, submission, metadata entry, DMG, runtime subtitle-generation, UI/UX, STT/default-cache policy, or persisted NLE disk-format change was completed in this slice.
+
+### Modified Files
+
+- `packaging/macos/build_app_bundle.sh`
+- `packaging/macos/fix_bundled_python_runtime.py`
+- `packaging/macos/sign_app_bundle.sh`
+- `packaging/macos/validate_app_bundle.sh`
+- `tests/test_macos_bundle_runtime_paths.py`
+- `tests/test_app_store_readiness_audit.py`
+- `docs/APP_STORE_SUBMISSION_READINESS.md`
+- `docs/planning_queue/ACTION_ITEMS.md`
+- `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`
+- `docs/HANDOFF.md`
 
 ### Verification
 
-- `git status --short --branch` before execution -> `## main...origin/main`.
-- `ping -c 1 -W 1000 192.168.0.5` -> reachable.
-- `smbutil statshares -a` -> `action6` and `photo` SMB shares mounted; `/Volumes/photo` contains the required HeyDealer MP4/SRT.
-- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media /Volumes/photo/.../헤이딜러_최종.MP4 --reference-srt /Volumes/photo/.../헤이딜러_최종.srt --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/preflight` -> `ready_for_reference_scored_benchmark=true`, clipped reference rows `89`.
-- Cache write benchmark `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_220327/benchmark_results.json` -> elapsed `177.888s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, STT1/STT2/word collect provider calls `true`.
-- Cache hit benchmark `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_220718/benchmark_results.json` -> elapsed `1.183s`, same quality/final gates, STT1/STT2/word collect hits `true`, provider calls `false`, collect elapsed `0.0s`.
-- Acceptance write/hit: `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/acceptance_write/reference_benchmark_acceptance.md` and `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/acceptance_hit/reference_benchmark_acceptance.md` -> both `Accepted: True`.
-- Readiness refresh: `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/readiness_refresh/stt_cache_backfill_readiness.md` -> `current_real_inputs_available=true`, strict real hits `2`, defaults `false/false`, production recommendation `hold_default_off`.
-- Timeout audit: `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/timeout_audit/stt_worker_timeout_audit.md` -> `timeout_detected=false`.
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_app_store_owner_approval_20260628_2218` -> pass, `failed_count=0`.
+- Baseline readiness audit: `output/manual_verification/latest/app_store_owner_approval_readiness_20260628_2218/app_store_readiness_audit.md` -> blocked, blocker count `14`.
+- App bundle build: `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/build_app_bundle_after_python_app_dependency_fix.log` -> prepared `dist/macos/AI Subtitle Studio.app`.
+- Pre-sign validation: `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/validate_app_bundle_after_python_app_dependency_fix_presign.log` -> bundle validation passed.
+- Symlink scans: `external_symlink_scan_after_python_app_dependency_fix.log` and `broken_symlink_scan_after_python_app_dependency_fix.log` -> no external/broken symlinks.
+- Otool evidence: `python_launcher_otool_after_python_app_dependency_fix.log` -> bundled Python launchers point at internal framework paths.
+- Local Apple Development signing smoke: `sign_app_bundle_apple_development_after_python_app_dependency_fix.log` -> exit `0`, signed and verified.
+- Strict codesign verify: `codesign_verify_final_after_python_app_dependency_fix.log` -> exit `0`.
+- Final bundle validation: `validate_app_bundle_after_python_app_dependency_fix.log` -> codesign verification ok, bundle validation passed.
+- Bundled Python smoke: `bundled_python_import_smoke_after_python_app_dependency_fix.log` -> exit `0`, Python `3.11.15`, executable and prefix inside the app bundle.
+- Focused tests: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_macos_bundle_runtime_paths.py tests/test_app_store_readiness_audit.py` -> `9 passed`.
+- Refreshed readiness audit: `output/manual_verification/latest/app_store_owner_approval_readiness_after_packaging_fix_20260628_2250/app_store_readiness_audit.md` -> blocked, blocker count `13`.
 
-### Jammini Review
+### Jammini / Agent Review
 
-- Route status and handoff probe were verified before dispatching support work.
-- `한결`, `서린`, and `유진` review-prep handoffs were read directly by Dex and folded into the gate: default policy remains false, write/hit must both be accepted, final gates must stay `0/0/0`, global max active must stay `1`, save/reopen/global-canvas stability must remain true, and UI/UX must remain unchanged.
+- Route status and handoff probe were verified before dispatch.
+- Jammini app-store packaging triage: `.agents/sentinel/handoffs/20260628-221446-app-store-packaging-gap-triage-jammini.md`.
+- `한결` persisted NLE architecture scout: `.agents/sentinel/handoffs/20260628-221446-persisted-nle-architecture-scout-hangyeol.md`.
+- `서린` QE gate review: `.agents/sentinel/handoffs/20260628-221446-app-store-nle-qe-gates-seorin.md`.
+- `유진` NLE workflow scout: `.agents/sentinel/handoffs/20260628-221446-nle-ui-workflow-scout-yujin.md`.
+- All four handoffs were read directly by Dex before final classification.
+- Accepted findings: do not count local Apple Development smoke as App Store Distribution proof; keep `.pkg`/validation/upload/metadata blockers separate; preserve legacy project compatibility for future persisted NLE work.
+
+### Remaining Blockers
+
+- Local machine has only `Apple Development: axony99@gmail.com (5M6F7NN5SW)` available; Apple Distribution and `3rd Party Mac Developer Installer` identities are not configured.
+- `packaging/macos/build_app_store_pkg.sh` still exits `64` until `INSTALLER_IDENTITY` is set.
+- App Store Connect validation/upload has not run because there is no signed `.pkg`.
+- Sandboxed editor workflow smoke and owner metadata values remain missing.
 
 ### Next Recommended Action
 
-- Do not enable `stt_primary_collect_cache_enabled` or `stt_recheck_collect_cache_enabled` by default without explicit owner review.
-- If the owner approves default promotion, promote one cache at a time with a rollback boundary and focused proof.
-- If the owner asks for the next non-G1 item, return to `docs/planning_queue/ACTION_ITEMS.md` and pick from G0/G2 without treating this G1 evidence as App Store or persisted NLE approval.
+- Install/configure the Apple Distribution and 3rd Party Mac Developer Installer certificates, then rerun app signing, `.pkg` build, `pkgutil --check-signature`, App Store Connect validation, and sandbox workflow smoke.
+- If certificate work is not immediately available, take the next owner-approved persisted NLE/UI slice from `docs/planning_queue/ACTION_ITEMS.md` G2 while keeping legacy save/reopen compatibility mandatory.
 
 ## Previous Handoff - 2026-06-28 Documentation Relocation And App Store Launch Plan
 
